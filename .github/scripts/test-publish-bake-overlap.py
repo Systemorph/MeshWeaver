@@ -439,6 +439,79 @@ class FakeShare:
         return md, f.stat().st_size
 
 
+    # ── the publication lock (MeshWeaver#6877): a file lease, modelled ACROSS PROCESSES ──
+    # The lease is a sidecar created with O_EXCL — the one filesystem write that two processes
+    # cannot both win — holding the lease id, exactly the "one id holds it, a matching id may
+    # re-acquire" rule of an Azure Files file lease.
+    #
+    # MOCK_LEASE_IGNORE=1 makes THIS process a publisher that takes no lease at all: a writer whose
+    # scripts ref predates the lock. Every pre-existing interleaving case runs its hooked second
+    # publisher that way — that is the only way it can still interleave, and the byte-level
+    # postconditions those cases prove are exactly the guard that remains against such a writer.
+    def _lease(self, path):
+        return ROOT / ".lease" / self.root.relative_to(ROOT) / path
+
+    def _missing(self):
+        if os.environ.get("MOCK_SHARE_MISSING") == "1":
+            raise FileNotFoundError("ShareNotFound: the specified share does not exist")
+
+    def lease_acquire(self, path, lease_id):
+        self._missing()
+        f = self.root / path
+        f.parent.mkdir(parents=True, exist_ok=True)
+        if not f.exists():
+            f.touch()
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return True
+        lp = self._lease(path)
+        lp.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(lp, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            try:
+                return lp.read_text() == lease_id
+            except FileNotFoundError:
+                return False
+        with os.fdopen(fd, "w") as fh:
+            fh.write(lease_id)
+        return True
+
+    def lease_state(self, path):
+        f = self.root / path
+        if not f.exists():
+            return False, False, {}, None
+        mp = self._meta(path)
+        md = json.loads(mp.read_text()) if mp.exists() else {}
+        return True, self._lease(path).exists(), md, f.stat().st_mtime
+
+    def lease_set_metadata(self, path, lease_id, metadata):
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return
+        lp = self._lease(path)
+        if not lp.exists() or lp.read_text() != lease_id:
+            raise RuntimeError("LeaseIdMissing: %s is not leased by %s" % (path, lease_id))
+        mp = self._meta(path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(json.dumps(dict(metadata)))
+
+    def lease_release(self, path, lease_id):
+        if os.environ.get("MOCK_LEASE_IGNORE") == "1":
+            return True
+        lp = self._lease(path)
+        if not lp.exists() or lp.read_text() != lease_id:
+            return False
+        lp.unlink()
+        return True
+
+    def lease_break(self, path):
+        lp = self._lease(path)
+        if lp.exists():
+            lp.unlink()
+
+    def share_exists(self):
+        return os.environ.get("MOCK_SHARE_MISSING") != "1" and self.root.is_dir()
+
+
 def make_backend(account, share):
     return FakeShare(account, share)
 '''
@@ -612,6 +685,8 @@ class Harness:
             "PUBLISH_BAKE_UPLOAD_WORKERS": "1",
             "BAKE_PUBLISH_TARGETS": TARGET,
             "GITHUB_RUN_ATTEMPT": "1",
+            # A waiting publisher re-polls the lock this often; the production default is 5 s.
+            "PUBLISH_BAKE_LOCK_POLL_SECONDS": "0.2",
         }
 
     def publish(self, bake: Bake, publisher: str, run_id: str, env_extra: dict | None = None,
@@ -628,7 +703,8 @@ class Harness:
                   "MOCK_AZ_FAIL_UPLOADS_AFTER", "MOCK_AZ_UPLOAD_COUNTER", "MOCK_AZ_SHOW_FAILS",
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
-                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD"):
+                  "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD",
+                  "MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "PUBLISH_BAKE_LOCK_WAIT_SECONDS"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -642,14 +718,24 @@ class Harness:
         )
 
     def publish_command(self, bake: Bake, publisher: str, run_id: str,
-                        env_extra: dict | None = None, release: str | None = None) -> str:
-        """The same publication, as a shell command a backend hook can run mid-upload."""
+                        env_extra: dict | None = None, release: str | None = None,
+                        takes_lock: bool = False) -> str:
+        """The same publication, as a shell command a backend hook can run mid-upload.
+
+        By default the hooked publisher takes NO lease (MOCK_LEASE_IGNORE): run synchronously inside
+        the outer publication's upload, a lock-respecting one would wait on the outer run forever —
+        and an unlocked writer (a scripts ref older than MeshWeaver#6877) is precisely what the
+        interleaving cases still have to defend against. `takes_lock=True` is the CURRENT publisher;
+        a hook must then start it in the background.
+        """
         assigns = {"PATH": f"{self.bin}:$PATH"}
         assigns.update(self.base_env())
         assigns.update({
             "GITHUB_REPOSITORY": publisher,
             "GITHUB_RUN_ID": run_id,
         })
+        if not takes_lock:
+            assigns["MOCK_LEASE_IGNORE"] = "1"
         assigns.update({k: str(v) for k, v in (env_extra or {}).items()})
         prefix = " ".join(f'{k}="{v}"' for k, v in assigns.items())
         # The content sha may be EMPTY (the framework-producer shape); quoted, so a release
@@ -1976,6 +2062,161 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
               f"rc={r.returncode}, {denominator(s)}")
         check("the refusal names same-lane concurrency, not only the other repo",
               "WITHIN one lane" in r.stdout)
+
+    run_lock_cases(h, work, expect_defect)
+
+
+LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
+
+
+def plant_lease(h: "Harness", holder: str, acquired: float) -> None:
+    """A lease some OTHER publisher holds — written exactly where the fake backend keeps one."""
+    lock = h.shelf_root / ACCOUNT / SHARE / LOCK_PATH
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.touch()
+    lease = h.shelf_root / ".lease" / ACCOUNT / SHARE / LOCK_PATH
+    lease.parent.mkdir(parents=True, exist_ok=True)
+    lease.write_text(f"lease-of-{holder}")
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / (LOCK_PATH + ".json")
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps({"holder": holder, "acquired": str(int(acquired))}))
+
+
+def leases_held(h: "Harness") -> list[str]:
+    root = h.shelf_root / ".lease"
+    return sorted(str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+
+
+def wait_for_receipt(log: Path, bound_seconds: float) -> str:
+    """The text of a BACKGROUND publication's log once it has finished (receipt or failure), or
+    whatever it holds when the bound runs out — the bound is the case's own deadline, and running
+    out of it fails the case rather than passing it."""
+    deadline = time.monotonic() + bound_seconds
+    while time.monotonic() < deadline:
+        text = log.read_text() if log.is_file() else ""
+        if "bake published:" in text or "bake publication FAILED" in text:
+            return text
+        time.sleep(0.2)
+    return log.read_text() if log.is_file() else ""
+
+
+def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
+    # ── MeshWeaver#6877: two CURRENT publishers of the SAME content, both over an OLDER seal. ──
+    # The incident, measured: core CD runs 38916358387 (push) and 38916674091 (schedule) both baked
+    # source 945d3faf for identity c003e001, both read "sealed from a3cba298, republish", the push
+    # run removed `_complete`, and the schedule run's own unseal then failed `ResourceNotFound` —
+    # a red CD over a live, correctly-sealed target. Here the second publisher is started IN THE
+    # BACKGROUND from inside the first one's upload, so the two genuinely overlap; with the lease it
+    # must WAIT (proved by its own log line), then re-read the shelf and find the publication there.
+    print("\n#6877: two current publishers of the same content over an older seal:")
+    h.reset()
+    older = Bake(work, "older-content", "1111111111111111111111111111111111111111")
+    h.publish(older, "Systemorph/MeshWeaver", "6870")
+    push = Bake(work, "cd-push", "2222222222222222222222222222222222222222")
+    schedule = Bake(work, "cd-schedule", "2222222222222222222222222222222222222222")
+    inner = h.publish_command(schedule, "Systemorph/MeshWeaver", "6872", takes_lock=True)
+    inner_log = work / "inner-6872.log"
+    if inner_log.exists():
+        inner_log.unlink()
+    waiting = "lock: waiting for publication"
+    # The hook returns once the second publisher is SEEN waiting (or after 20 s, which is then a
+    # failed case below, never a pass): the first publication only continues once the overlap is real.
+    hook = (f'( {inner} ) & '
+            f'for i in $(seq 1 100); do grep -q "{waiting}" "{inner_log}" 2>/dev/null && break; '
+            f'sleep 0.2; done')
+    r = h.publish(push, "Systemorph/MeshWeaver", "6871", {
+        "MOCK_AZ_HOOK_ON": f"{DEST}/architecture.txt",
+        "MOCK_AZ_HOOK_WHEN": "before",
+        "MOCK_AZ_HOOK_ONCE": work / "fired-6877",
+        "MOCK_AZ_HOOK_CMD": hook,
+    })
+    second = wait_for_receipt(inner_log, 60)
+    s = h.shelf()
+    second_receipt = next((l for l in second.splitlines() if l.startswith("bake published:")),
+                          "<no receipt>")
+    if expect_defect:
+        check("PRE-FIX: two overlapping publishers of one prefix cannot both succeed",
+              r.returncode != 0 or "FAILED" in second or "bake published:" not in second,
+              f"first rc={r.returncode}; second: {second_receipt}; {denominator(s)}")
+        return
+    check("the second publisher WAITED for the first (the two runs really overlapped)",
+          waiting in second, "its own log names the lease it waited on")
+    check("the first publisher republished and sealed",
+          r.returncode == 0 and "targets-published=1" in r.stdout,
+          f"rc={r.returncode}")
+    check("the second publisher re-read the shelf under the lease and found this content ALREADY "
+          "sealed — green, nothing written",
+          "FAILED" not in second and "targets-already=1" in second_receipt, second_receipt)
+    check("the shelf is sealed and holds exactly ONE bake's bytes (the first's)",
+          s.sealed() and set(s.bakes_present()) - {"<marker>"} == {"cd-push"}, denominator(s))
+    check("no lease is left behind", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+    # ── An ABANDONED lease (its holder provably gone) is broken, loudly, and the run publishes. ──
+    print("\nan abandoned publication lock is broken on evidence:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-dead-1", time.time() - 2 * 3600)
+    r = h.publish(push, "Systemorph/MeshWeaver", "6873")
+    s = h.shelf()
+    out = r.stdout + r.stderr
+    check("a lease older than any CI job can live is broken, named, and the run seals",
+          r.returncode == 0 and s.sealed() and "breaking the publication lock" in out
+          and "Systemorph-MeshWeaver-dead-1" in out, f"rc={r.returncode}, {denominator(s)}")
+    check("…and the run releases its own lease afterwards", leases_held(h) == [],
+          " ".join(leases_held(h)) or "none")
+
+    # ── A LIVE holder is waited for — bounded — and running out of the bound is RED, not a skip. ──
+    print("\na live publication lock is waited for, and the wait is bounded and red:")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-live-1", time.time())
+    r = h.publish(push, "Systemorph/MeshWeaver", "6874", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    s = h.shelf()
+    out = r.stdout + r.stderr
+    check("a lock held by a live publisher is NOT broken; the run goes red naming it",
+          r.returncode != 0 and "Publication lock not acquired" in out
+          and "Systemorph-MeshWeaver-live-1" in out and leases_held(h) != [],
+          f"rc={r.returncode}")
+    check("…having written nothing under the prefix", len(s.files()) == 0 and not s.sealed(),
+          denominator(s))
+    check("…and the failure does NOT advise removing the (live) target",
+          "EXISTS and answers" in out and "does NOT exist" not in out)
+
+    # ── A workflow that holds the lock ACROSS steps hands its token over; the script proves it. ──
+    print("\na lock held across steps by the calling workflow (BAKE_PUBLISH_LOCK_HOLDER):")
+    h.reset()
+    env = dict(os.environ)
+    env.update(h.base_env())
+    env.update({"GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": "6876"})
+    held = "Systemorph-MeshWeaver.Plugins-6876-1"
+    a = subprocess.run([sys.executable, str(HELPER), "lock", "acquire", "--account", ACCOUNT,
+                        "--share", SHARE, "--path", LOCK_PATH, "--holder", held],
+                       capture_output=True, text=True, env=env)
+    r = h.publish(push, "Systemorph/MeshWeaver.Plugins", "6876", {"BAKE_PUBLISH_LOCK_HOLDER": held})
+    s = h.shelf()
+    check("a run told it holds the lock PROVES it, publishes, and leaves the release to its caller",
+          a.returncode == 0 and r.returncode == 0 and s.sealed()
+          and "is held by this publication" in (r.stdout + r.stderr) and leases_held(h) != [],
+          f"acquire rc={a.returncode}, publish rc={r.returncode}, leases {leases_held(h)}")
+    rel = subprocess.run([sys.executable, str(HELPER), "lock", "release", "--account", ACCOUNT,
+                          "--share", SHARE, "--path", LOCK_PATH, "--holder", held],
+                         capture_output=True, text=True, env=env)
+    check("…and the caller's release frees it", rel.returncode == 0 and leases_held(h) == [],
+          f"release rc={rel.returncode}")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver.Plugins", "6877",
+                  {"BAKE_PUBLISH_LOCK_HOLDER": "Systemorph-MeshWeaver.Plugins-never-1"})
+    s = h.shelf()
+    check("a run told it holds a lock it does NOT hold refuses, writing nothing",
+          r.returncode != 0 and "but it does not" in (r.stdout + r.stderr) and len(s.files()) == 0,
+          f"rc={r.returncode}, {denominator(s)}")
+
+    # ── The removal advice is for a share that is really gone, and only for that. ──
+    print("\nthe remove-the-target advice is reserved for a share that does not exist:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6875", {"MOCK_SHARE_MISSING": "1"})
+    out = r.stdout + r.stderr
+    check("a missing share is named as missing, with the removal advice",
+          r.returncode != 0 and "does NOT exist" in out and "EXISTS and answers" not in out,
+          f"rc={r.returncode}")
 
 
 def main() -> int:

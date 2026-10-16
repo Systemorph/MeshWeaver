@@ -89,8 +89,10 @@ against:
 | `az storage directory` | create · delete · exists · list · show |
 
 There is **no `rename`** in either, `directory delete` is documented *"Delete the specified **empty**
-directory"*, and there is no `lease` command under either group — so a lease per identity is not
-reachable from this lane either. And even in the REST API, where `Rename Directory` has existed
+directory"*, and there is no `lease` command under either group. (The Azure SDK the publisher's
+helper runs on *does* offer a file lease, and since #6877 every publication takes one — see
+*One publisher per prefix* below — but a lease
+orders WRITERS; it does not make a multi-file replace atomic for READERS.) And even in the REST API, where `Rename Directory` has existed
 since API version 2021-04-10, a rename cannot **replace** an existing directory: the swap would be
 rename-away plus rename-in, two operations with a gap in which the live path does not exist at all.
 
@@ -117,6 +119,53 @@ size — from "a sealed mix nobody can detect" to "read it again". Where the bac
 rename (Azure Files' `Rename File`, present in the REST API since 2021-04-10 though not exposed by
 every `az storage file` build), the writer phase should publish the pointer that way and remove even
 that.
+
+### One publisher per prefix — the publication lock (#6877)
+
+Everything above keeps READERS safe from a writer. It does not keep two WRITERS from each other: the
+byte-level postcondition (`verify_publication`) and the convergence verdict can only *refuse* an
+interleaving after the fact, so two overlapping runs could never both succeed — one of them went red
+over a target that was perfectly alive.
+
+**Measured (core CD, 2026-10-16):** push run 38916358387 and scheduled reconcile 38916674091 both
+baked `meshweaver-content` at the same source for identity `c003e001` and published to the same two
+shares. On the second share both read *"sealed from an older source — republish"*; the push run
+removed `_complete` at 14:57:04.7Z, and the reconcile's own unseal 1.6 s later failed
+`ResourceNotFound`. The failure message then told the reader to remove the target from
+`BAKE_PUBLISH_TARGETS` — while the other run was sealing that very share successfully.
+
+**The fix is mutual exclusion, not another postcondition.** `publish-bake-bundles.sh` takes a lease
+on ONE file per prefix, `prebuilt-bundles/<identity>/_publishing.<source>`, BEFORE its first read of
+the prefix and releases it on every exit path. Every decision — which publication is live, is it
+sealed, from which source, skip / supersede / republish — is therefore made on a shelf no other
+current publisher is changing, and the second run of the incident simply reads the first one's seal
+and reports `targets-already=1`.
+
+| property | how |
+|---|---|
+| primitive | an Azure Files **file lease** (`ShareLeaseClient`, in `publish-bake-files.py lock`) — not reachable through `az storage`, which is why the earlier design had none |
+| where | beside the source directories, outside every publication and generation: no reader lists it (readers resolve `<identity>/<source>/`; retention attributes only files under a source directory) |
+| lease id | derived from the publication token (uuid5), so a later step of the same run can prove possession and release it |
+| waiting | bounded (`PUBLISH_BAKE_LOCK_WAIT_SECONDS`, default 900 s) and **red** when exceeded, naming the holder — never a silent proceed, never a cancelled run |
+| abandoned holder | broken only on evidence: the holder's own workflow run attempt has COMPLETED (asked of the GitHub API when a token is present), or the lease is older than any CI job can live (every job is hard-capped at 45 minutes) |
+| holding across steps | a workflow that must read the prefix before the script runs (a carry-forward) takes the lock itself and passes its token as `BAKE_PUBLISH_LOCK_HOLDER`; the script then PROVES possession instead of acquiring, and leaves the release to the workflow's `if: always()` step |
+
+**Why not a GitHub `concurrency:` group.** A group keeps ONE pending run and cancels the older
+pending one on every arrival, so a third overlapping run would silently cancel a queued publication
+(and its release marker) — the shape `main-cd.yml` already documents as having starved delivery.
+Runs on `main` are never cancelled; the lease makes the second one wait and then re-read.
+
+**What it does not change.** The postconditions stay: they are the guard against a writer that takes
+no lease (a satellite whose scripts ref predates it) and against a lease broken as abandoned. And
+the failure summary now probes each failed target's SHARE before advising anything: *"does NOT
+exist"* is the only case that recommends removing a target from `BAKE_PUBLISH_TARGETS`; a share that
+answers is named as live, with the target's own failure to fix instead.
+
+The regression is `test-publish-bake-overlap.py` → *"#6877: two current publishers of the same
+content over an older seal"*: the second publisher is started in the background from inside the
+first one's upload, must log that it waited, and must end `targets-already=1` with the shelf sealed
+over exactly one bake's bytes. Against the pre-fix script the same case ends with the first run red
+and the shelf UNSEALED.
 
 ## The reader contract
 
