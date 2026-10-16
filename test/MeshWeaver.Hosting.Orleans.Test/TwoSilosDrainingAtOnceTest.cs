@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -103,9 +104,9 @@ public class TwoSilosDrainingAtOnceTest(ThreeSiloDrainFixture fixture) : IClassF
         var silos = new[] { siloA, siloB, siloC };
 
         var ns = $"drain-two-{Guid.NewGuid():N}";
-        var singletons = new List<string>();
+        var singletons = ImmutableList<string>.Empty;
         for (var i = 0; i < 8; i++)
-            singletons.Add(await DrainTestSteps.NodeOn(siloB, ns, $"Singleton{i}", ct));
+            singletons = singletons.Add(await DrainTestSteps.NodeOn(siloB, ns, $"Singleton{i}", ct));
         // What RelocateOnDrain registers, on EVERY silo — a hand-off lands the hub on another silo,
         // which must know it is a singleton too.
         foreach (var silo in silos)
