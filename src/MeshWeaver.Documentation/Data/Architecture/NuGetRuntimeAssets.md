@@ -209,22 +209,30 @@ answer (#6863):
   framework, which is what a feed's dependency info would have returned. No feed is contacted, so the
   same closure resolves online and offline.
 - **Complete** means NuGet's own completion marker is present: `.nupkg.metadata`, or the older
-  `{id}.{version}.nupkg.sha512`. Both are written after extraction, so a half-extracted folder, an
-  empty directory or a folder whose nuspec names another identity is not trusted. The resolver then
-  asks the feed for that one identity.
+  `{id}.{version}.nupkg.sha512`. Both are written after extraction. The `.nuspec` must also declare
+  exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
+  AND for the install step. A folder it refuses (half-extracted, empty, or holding another package)
+  is never handed to asset selection: it is deleted and the package is installed again, from the
+  persistent cache first and then the feed.
 - **A floating or ranged ROOT request** (`#r "nuget: Id"`, `#r "nuget: Id, [1.0,2.0)"`) still asks the
   feed which version to take. Answering it from the folder would make the version depend on what the
   reading process happens to hold, so the feed stays authoritative for the choice. Pin a version for a
   build that must load without a feed.
-- **When the folder cannot answer and the feed fails**, resolution fails with an
-  `InvalidOperationException` naming the package and version, the package folder it was missing from,
-  and each feed tried. A feed failure never surfaces when the folder could answer, because no feed is
-  asked.
+- **When the folder cannot answer**, every configured feed the source mapping allows is asked in
+  turn. A failing feed does not stop the search: the next feed is asked, and the failure is logged
+  against that feed when a later one answers. If no feed supplies the package and at least one
+  failed, resolution fails with an `InvalidOperationException`. The error names the package and
+  version, the package folder, and each failing feed with what it reported. A feed failure never
+  surfaces when the folder could answer, because no feed is asked.
 
-The pins: `NuGetOfflineFirstResolutionTest` (offline) lays out a two-package closure in a private
-package folder, configures one feed that refuses every connection, and resolves the closure with a
-fresh resolver. Its negative control removes the dependency from the folder and requires the named
-error. Without the folder read, the warm case fails with that error too, because the feed is asked.
+The pins: `NuGetOfflineFirstResolutionTest` (offline) lays out packages in a private package folder.
+The first configured feed refuses every connection, and some cases add a local folder feed behind it.
+- A two-package closure resolves with a fresh resolver and no feed call. Without the folder read,
+  this case fails with the named error, because the feed is asked.
+- Negative control: with the dependency removed from the folder, resolution fails with the named error.
+- With the unreachable feed first, the local feed behind it still supplies the missing package.
+- A half-extracted folder, and a folder whose nuspec and assembly belong to another package, are both
+  reinstalled from the feed. The wrong assembly never reaches the compile set.
 
 ## What pins it
 

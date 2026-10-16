@@ -312,76 +312,105 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         // Each package id is restricted to its mapped source(s) too, so a transitive
         // MeshWeaver.* dependency can't silently slip in from nuget.org either.
         var candidates = FilterSourcesForPackage(current.Id, sources, mapping);
-        try
+        // Every configured feed gets its turn: one failing feed is not the answer while another
+        // may hold the package. Each failure is kept with the feed it came from, so the error
+        // below names which feed failed and why, never "all unreachable".
+        var failures = ImmutableList<(string Feed, Exception Error)>.Empty;
+        foreach (var src in candidates)
         {
-            foreach (var src in candidates)
+            try
             {
                 var resource = await src.GetResourceAsync<DependencyInfoResource>(ct);
                 if (resource is null) continue;
                 var info = await resource.ResolvePackage(current, framework, _sourceCache, _nugetLogger, ct);
-                if (info is not null) return info;
+                if (info is null) continue;
+                foreach (var (feed, error) in failures)
+                    MsLogging.LoggerExtensions.LogWarning(logger, error,
+                        "NuGet feed {Feed} failed resolving {Id} {Version}; resolved from {Source} instead",
+                        feed, current.Id, current.Version.ToNormalizedString(), src.PackageSource.Source);
+                return info;
             }
-            return null;
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                failures = failures.Add((src.PackageSource.Source, ex));
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // The folder could not answer, so the feed is the only way left — and it failed.
-            // Name both halves: what was missing locally, and which feeds were tried.
-            throw new InvalidOperationException(
-                $"NuGet package {current.Id} {current.Version.ToNormalizedString()} is not installed in the "
-                + $"package folder '{packagesRoot}', and the feed(s) "
-                + $"{string.Join(", ", candidates.Select(c => $"'{c.PackageSource.Source}'"))} could not be "
-                + $"reached to resolve it: {ex.Message}", ex);
-        }
+        if (failures.IsEmpty) return null;
+
+        // The folder could not answer, no feed supplied the package, and at least one feed
+        // failed. Name what was missing locally and what each failing feed reported.
+        var detail = string.Join("; ", failures.Select(f => $"'{f.Feed}': {f.Error.Message}"));
+        throw new InvalidOperationException(
+            $"NuGet package {current.Id} {current.Version.ToNormalizedString()} is not installed complete in "
+            + $"the package folder '{packagesRoot}', and resolving it from the configured feed(s) failed — {detail}",
+            failures.Count == 1 ? failures[0].Error : new AggregateException(failures.Select(f => f.Error)));
     }
 
     /// <summary>
     /// Reads the dependency info of <paramref name="identity"/> from the package folder when the
-    /// package is installed there COMPLETE — the completion markers NuGet's own restore trusts
-    /// (<c>.nupkg.metadata</c>, or the older <c>.nupkg.sha512</c>), written after extraction —
-    /// and its <c>.nuspec</c> declares exactly that identity. Dependencies come from the nuspec's
-    /// group nearest to <paramref name="framework"/>, as a feed's dependency info would.
-    /// Returns <c>null</c> when the folder cannot answer, which sends the caller to the feed.
+    /// package is installed there complete (<see cref="ReadCompleteInstall"/>). Dependencies come
+    /// from the nuspec's group nearest to <paramref name="framework"/>, as a feed's dependency info
+    /// would. Returns <c>null</c> when the folder cannot answer, which sends the caller to the feed.
     /// </summary>
     private SourcePackageDependencyInfo? ReadInstalledDependencyInfo(
         PackageIdentity identity, string packagesRoot, NuGetFramework framework)
     {
+        var nuspec = ReadCompleteInstall(identity, packagesRoot);
+        if (nuspec is null) return null;
+        var group = NuGetFrameworkUtility.GetNearest(
+            nuspec.GetDependencyGroups(), framework, g => g.TargetFramework);
+        var dependencies = group?.Packages ?? [];
+        MsLogging.LoggerExtensions.LogDebug(logger,
+            "NuGet package {Id} {Version} resolved from the package folder (no feed call)",
+            identity.Id, identity.Version.ToNormalizedString());
+        return new SourcePackageDependencyInfo(
+            new PackageIdentity(nuspec.GetId(), identity.Version), dependencies, listed: true,
+            source: null, downloadUri: null, packageHash: null);
+    }
+
+    /// <summary>
+    /// The ONE test of whether <paramref name="identity"/> is installed in the package folder and may
+    /// be used as it stands — by the offline dependency walk AND by the install fast path, so a folder
+    /// the walk refuses is never handed to asset selection either. Installed means: the v3 folder
+    /// exists, carries a completion marker NuGet's own restore trusts (<c>.nupkg.metadata</c>, or the
+    /// older <c>.nupkg.sha512</c>, both written after extraction), and its <c>.nuspec</c> declares
+    /// exactly that id and version. Returns the nuspec, or <c>null</c> (with the reason logged when a
+    /// folder exists but is refused).
+    /// </summary>
+    private NuspecReader? ReadCompleteInstall(PackageIdentity identity, string packagesRoot)
+    {
         var pathResolver = new VersionFolderPathResolver(packagesRoot);
         var installPath = pathResolver.GetInstallPath(identity.Id, identity.Version);
         if (!Directory.Exists(installPath)) return null;
+        var version = identity.Version.ToNormalizedString();
         var complete = File.Exists(pathResolver.GetNupkgMetadataPath(identity.Id, identity.Version))
             || File.Exists(pathResolver.GetHashPath(identity.Id, identity.Version));
         var nuspecPath = pathResolver.GetManifestFilePath(identity.Id, identity.Version);
-        if (!complete || !File.Exists(nuspecPath)) return null;
+        if (!complete || !File.Exists(nuspecPath))
+        {
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Package folder {Path} for {Id} {Version} is incomplete (no completion marker or no nuspec); not using it",
+                installPath, identity.Id, version);
+            return null;
+        }
 
         try
         {
             var nuspec = new NuspecReader(nuspecPath);
             var declared = nuspec.GetIdentity();
-            if (!string.Equals(declared.Id, identity.Id, StringComparison.OrdinalIgnoreCase)
-                || declared.Version != identity.Version)
-            {
-                MsLogging.LoggerExtensions.LogWarning(logger,
-                    "Installed package folder {Path} declares {DeclaredId} {DeclaredVersion}, not {Id} {Version}; asking the feed",
-                    installPath, declared.Id, declared.Version.ToNormalizedString(), identity.Id,
-                    identity.Version.ToNormalizedString());
-                return null;
-            }
-
-            var group = NuGetFrameworkUtility.GetNearest(
-                nuspec.GetDependencyGroups(), framework, g => g.TargetFramework);
-            var dependencies = group?.Packages ?? [];
-            MsLogging.LoggerExtensions.LogDebug(logger,
-                "NuGet package {Id} {Version} resolved from the package folder (no feed call)",
-                identity.Id, identity.Version.ToNormalizedString());
-            return new SourcePackageDependencyInfo(
-                new PackageIdentity(declared.Id, identity.Version), dependencies, listed: true, source: null, downloadUri: null, packageHash: null);
+            if (string.Equals(declared.Id, identity.Id, StringComparison.OrdinalIgnoreCase)
+                && declared.Version == identity.Version)
+                return nuspec;
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Package folder {Path} declares {DeclaredId} {DeclaredVersion}, not {Id} {Version}; not using it",
+                installPath, declared.Id, declared.Version.ToNormalizedString(), identity.Id, version);
+            return null;
         }
         catch (Exception ex) when (ex is InvalidDataException or System.Xml.XmlException or PackagingException)
         {
             MsLogging.LoggerExtensions.LogWarning(logger, ex,
-                "Installed package {Id} {Version} has an unreadable nuspec at {Path}; asking the feed",
-                identity.Id, identity.Version.ToNormalizedString(), nuspecPath);
+                "Package folder {Path} for {Id} {Version} has an unreadable nuspec; not using it",
+                installPath, identity.Id, version);
             return null;
         }
     }
@@ -392,8 +421,19 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         // The v3 layout lower-cases the id AND the version folder — the same path the install
         // below writes and the offline walk reads (VersionFolderPathResolver).
         var installedPath = new VersionFolderPathResolver(packagesRoot).GetInstallPath(info.Id, info.Version);
-        if (Directory.Exists(installedPath) && Directory.EnumerateFileSystemEntries(installedPath).Any())
+        if (ReadCompleteInstall(new PackageIdentity(info.Id, info.Version), packagesRoot) is not null)
             return installedPath;
+        // A folder exists but is refused — half-extracted, or holding another identity. Asset
+        // selection must never read it, so it is removed and the package installed afresh below
+        // (persistent cache first, then the feed). Leaving it would hand partial or WRONG
+        // assemblies to the compile and the load.
+        if (Directory.Exists(installedPath))
+        {
+            MsLogging.LoggerExtensions.LogWarning(logger,
+                "Reinstalling NuGet package {Id} {Version}: the folder {Path} is incomplete or holds another package",
+                info.Id, versionString, installedPath);
+            Directory.Delete(installedPath, recursive: true);
+        }
 
         // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
         // After hydration, validate that the package's own .nuspec (the
