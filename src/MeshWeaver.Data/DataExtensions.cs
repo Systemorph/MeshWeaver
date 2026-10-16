@@ -2631,6 +2631,9 @@ public static class DataExtensions
         // Detaches the owner-disposing NACK once the gate is claimed here (#3432) — see
         // RegisterOwnerDisposingNack's return value.
         var ownerNackDetach = new SingleAssignmentDisposable();
+        // The version the entity carries once this patch is committed — minted by the merge, or the
+        // live version for a patch that changed nothing. -1 until the merge turn decides.
+        long committedVersion = -1;
         void AckOnce(bool success, MeshNodeError? error = null)
         {
             if (System.Threading.Interlocked.Exchange(ref ackPosted, 1) != 0) return;
@@ -2639,6 +2642,10 @@ public static class DataExtensions
             hub.NoteRequestStage(request.Id,
                 success ? "PATCH_ACK ok" : $"PATCH_ACK nack={error?.Code}");
             var resp = new PatchDataResponse(success, hub.Version);
+            // The entity's committed version rides on a success (#6856), so the writer's
+            // acknowledged node names what the owner holds rather than the writer's base.
+            if (success && System.Threading.Interlocked.Read(ref committedVersion) is var cv and >= 0)
+                resp = resp with { CommittedVersion = cv };
             if (error is not null)
                 resp = resp with { Error = error.Message, NodeError = error };
             // Claim-then-VERIFY (#3196): claiming the gate above is what disables
@@ -2962,7 +2969,11 @@ public static class DataExtensions
                                 $"cross-hub write refused: {refusedKeys} field(s) changed on the owner "
                                 + "since the writer's base and nothing was applied — re-read and re-apply"));
                         else
+                        {
+                            System.Threading.Interlocked.Exchange(
+                                ref committedVersion, NextMeshNodeVersion(preMergeNode, versionKey) - 1);
                             AckOnce(true);
+                        }
                         return null;
                     }
 
@@ -3009,6 +3020,7 @@ public static class DataExtensions
                     // write, so a load echo / sibling emission can never ack it.
                     System.Threading.Volatile.Write(ref stampedId, entityId);
                     System.Threading.Interlocked.Exchange(ref stampedVersion, minted);
+                    System.Threading.Interlocked.Exchange(ref committedVersion, minted);
                     hub.NoteRequestStage(request.Id, $"PATCH_MERGE_STAMPED v={minted} refused={refusedKeys}");
 
                     var newStore = s.Update(collectionName, c => c.Update(entityId, merged));

@@ -65,4 +65,16 @@ public record PatchDataResponse(bool Success, long Version)
     /// keep working.</para>
     /// </summary>
     public MeshNodeError? NodeError { get; init; }
+
+    /// <summary>
+    /// The version the patched ENTITY carries after this patch, as the OWNER committed it — the
+    /// version it minted for an applied patch, or the live version when the patch changed nothing.
+    /// Set on a successful MeshNode patch; <c>null</c> otherwise, and from an owner on an image that
+    /// predates it. Not <see cref="PatchDataResponse.Version"/>, which is the hub's message version.
+    /// <para>The writer's acknowledged node carries this version, so it can be named as a
+    /// precondition (<c>DeleteNodeRequest.ExpectedVersion</c>) without a re-read (#6856). Before, the
+    /// acknowledged node carried the writer's BASE version — one behind the owner — and naming it
+    /// was refused as a conflict that never happened.</para>
+    /// </summary>
+    public long? CommittedVersion { get; init; }
 }

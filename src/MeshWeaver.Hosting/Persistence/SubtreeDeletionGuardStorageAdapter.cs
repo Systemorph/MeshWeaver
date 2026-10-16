@@ -248,6 +248,11 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
 
     /// <inheritdoc />
+    /// <remarks>Forwarded: the interface default is a non-atomic read-compare-delete (#6856).</remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => inner.DeleteIfVersionAtMost(path, maxVersion, options);
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         => inner.DeleteMany(paths);
 

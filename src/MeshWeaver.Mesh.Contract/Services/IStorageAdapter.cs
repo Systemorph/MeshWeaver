@@ -199,6 +199,56 @@ public interface IStorageAdapter
         => System.Reactive.Linq.Observable.Select(Delete(path), _ => true);
 
     /// <summary>
+    /// COMPARE-AND-DELETE — the DELETE-side twin of <see cref="WriteIfVersion"/> (#6856). Removes the
+    /// row at <paramref name="path"/> only while its stored version is AT MOST
+    /// <paramref name="maxVersion"/>, and emits whether THIS call removed it:
+    ///
+    /// <list type="bullet">
+    /// <item><c>true</c> — REMOVED. The row was at or below <paramref name="maxVersion"/>.</item>
+    /// <item><c>false</c> — nothing removed: either a row NEWER than <paramref name="maxVersion"/> is
+    /// stored (somebody changed the node after the caller read it), or no row is stored at all. The
+    /// caller tells the two apart with a <see cref="Read"/> — the DECISION was atomic, only the
+    /// explanation is read afterwards.</item>
+    /// </list>
+    ///
+    /// <para>🚨 <b>Why "at most", not "equal".</b> The caller names the version the OWNING hub
+    /// confirmed (<see cref="DeleteNodeRequest.ExpectedVersion"/>). An own write is acknowledged from
+    /// the owner's in-memory commit one persistence-sampler interval before it is stored, so the store
+    /// may still hold an OLDER version than the one confirmed — that row is the same node the deleter
+    /// read, one flush behind, and removing it is right. Only a NEWER stored row means a write the
+    /// deleter never saw, and that is the one outcome this primitive refuses. Versions are minted
+    /// monotonically per path, so "newer than what I confirmed" is exactly "changed after I looked".</para>
+    ///
+    /// <para><b>Why it exists.</b> The version check of a guarded delete used to be the owner's alone,
+    /// followed by an UNCONDITIONAL row delete, and the only thing holding the two together was a seal
+    /// in the deleting process. A writer in another process — or anything that writes the store without
+    /// passing the owner — could land a newer row between the check and the delete, and the delete
+    /// removed it. With the condition in the delete statement itself the guarantee no longer depends on
+    /// any process's in-memory state.</para>
+    ///
+    /// <para>Backends that can express the condition MUST override — Postgres via
+    /// <c>DELETE … WHERE path = $1 AND version &lt;= $2</c> and the row count, in-memory via a
+    /// conditional remove under its mutation lock. The default below is a NON-ATOMIC
+    /// read-compare-delete, correct only for single-writer backends (a FileSystem dev host) — the same
+    /// contract, and the same caveat, as <see cref="DeleteIfExists"/> and <see cref="WriteIfVersion"/>.
+    /// 🚨 Decorators MUST forward, or the atomicity is silently lost at the outermost decorator that
+    /// falls back to the default.</para>
+    /// </summary>
+    /// <param name="path">The node to remove.</param>
+    /// <param name="maxVersion">The newest stored version the caller is entitled to remove.</param>
+    /// <param name="options">Serializer options for the default's comparison read.</param>
+    /// <returns>Whether this call removed a stored row.</returns>
+    IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        // 🚨 Deferred: the comparison read runs per SUBSCRIPTION. Some Reads start their I/O eagerly
+        // and replay it (the file-system adapter's I/O pool), so a read taken when the delete was
+        // BUILT could compare a version that was overwritten before the delete ran.
+        => System.Reactive.Linq.Observable.Defer(() => System.Reactive.Linq.Observable.SelectMany(
+            System.Reactive.Linq.Observable.Take(Read(path, options), 1),
+            stored => stored is null || stored.Version > maxVersion
+                ? System.Reactive.Linq.Observable.Return(false)
+                : DeleteIfExists(path)));
+
+    /// <summary>
     /// Deletes many nodes in as few round-trips as the backend allows, emitting the paths this
     /// adapter actually removed. The DELETE-side twin of <see cref="WriteMany"/>: the default is
     /// correct everywhere, and a backend that can do better overrides it (Postgres windows by
