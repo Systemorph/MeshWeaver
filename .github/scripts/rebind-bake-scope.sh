@@ -97,6 +97,12 @@ lock_path_of() { # <target> → "<account> <share> <lock path>"
   printf '%s %s %s\n' "$account" "$share" "${base:+$base/}prebuilt-bundles/$IDENTITY/_publishing.$SOURCE"
 }
 
+# 🚨 ONE GLOBAL LOCK ORDER (Copilot's review of #6878). BAKE_PUBLISH_TARGETS is caller configuration,
+# and two overlapping runs whose callers list the same targets as `A B` and `B A` would each take
+# their first lease and wait on the other until both bounds ran out. Every acquisition — and the
+# release, for symmetry — walks the targets in ONE canonical order: sorted, de-duplicated.
+TARGETS_IN_LOCK_ORDER=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u)
+
 if [ "${1:-}" = "--release" ]; then
   if [ ! -s "$HOLDER_FILE" ]; then
     # No holder was ever minted: the acquire step never reached its first lock, so there is nothing
@@ -104,12 +110,12 @@ if [ "${1:-}" = "--release" ]; then
     echo "publication lock: no holder recorded at $HOLDER_FILE — this run acquired nothing; nothing to release."
     exit 0
   fi
-  # Releases what THIS run recorded as held — and, when the record is missing (the acquire step died
-  # before writing it), every target: releasing a lease this run does not hold is a named no-op.
-  targets="$BAKE_PUBLISH_TARGETS"
-  if [ -s "$LOCKS_HELD" ]; then targets=$(cat "$LOCKS_HELD"); fi
+  # 🚨 EVERY configured target, never only the ledger (Copilot's review of #6878): a cancellation
+  # between a lease landing and its ledger line would otherwise leave that lease — infinite — behind
+  # a successful release. The release names THIS holder's lease id, so releasing a target this run
+  # never locked, or one somebody else holds, is a named no-op; the ledger is only what the log says.
   rc=0
-  for target in $targets; do
+  for target in $TARGETS_IN_LOCK_ORDER; do
     read -r account share path < <(lock_path_of "$target") || { rc=1; continue; }
     "$PYTHON" "$HELPER" lock release --account "$account" --share "$share" --path "$path" \
       --holder "$HOLDER" < /dev/null || rc=1
@@ -125,17 +131,37 @@ case "$ORIGINAL_SCOPE" in
   *) echo "::error::ORIGINAL_SCOPE='$ORIGINAL_SCOPE' — only a bake that RAN (narrowed or full) has anything to carry or publish."; exit 1 ;;
 esac
 
-# ── 1. the lock, on every target, in one fixed order ─────────────────────────────────────────────
+# ── 1. the lock, on every target, in the ONE canonical order ─────────────────────────────────────
+# 🚨 PER-TARGET ISOLATION SURVIVES THE LOCK (Copilot's review of #6878). publish-bake-bundles.sh
+# publishes every target in its own subshell so one dead or busy target cannot starve the live ones
+# (Plugins #2682). A target whose lock cannot be taken here — a share that is gone, a holder that
+# outlasts the bound — is therefore RECORDED, not fatal: the run goes on with the targets it does
+# hold, and the publish step's `lock check` fails exactly the unlocked targets by name, so the run
+# still ends RED. Only "no target locked at all" stops here.
 printf '%s\n' "$HOLDER" > "$HOLDER_FILE"
 : > "$LOCKS_HELD"
-for target in $BAKE_PUBLISH_TARGETS; do
-  read -r account share path < <(lock_path_of "$target")
-  "$PYTHON" "$HELPER" lock acquire --account "$account" --share "$share" --path "$path" \
-    --holder "$HOLDER" < /dev/null
-  echo "$target" >> "$LOCKS_HELD"
+LOCKS_FAILED=""
+for target in $TARGETS_IN_LOCK_ORDER; do
+  if ! lock_line=$(lock_path_of "$target"); then
+    LOCKS_FAILED="$LOCKS_FAILED $target"
+    continue
+  fi
+  read -r account share path <<< "$lock_line"
+  if "$PYTHON" "$HELPER" lock acquire --account "$account" --share "$share" --path "$path" \
+       --holder "$HOLDER" < /dev/null; then
+    echo "$target" >> "$LOCKS_HELD"
+  else
+    LOCKS_FAILED="$LOCKS_FAILED $target"
+    echo "::error::the publication lock on $target could not be taken (see above) — that target will NOT be published by this run, and the publish step fails it by name; the other targets go ahead."
+  fi
 done
+held=$(grep -c . "$LOCKS_HELD" || true)
+if [ "${held:-0}" -eq 0 ]; then
+  echo "::error title=No publication lock taken::not one target of '$BAKE_PUBLISH_TARGETS' could be locked (failed:$LOCKS_FAILED) — nothing can be carried or published safely. Nothing has been written."
+  exit 1
+fi
 if [ -n "${GITHUB_ENV:-}" ]; then echo "BAKE_PUBLISH_LOCK_HOLDER=$HOLDER" >> "$GITHUB_ENV"; fi
-echo "publication lock held on $(grep -c . "$LOCKS_HELD") target(s) as $HOLDER — held through the publish step."
+echo "publication lock held on $held target(s) as $HOLDER — held through the publish step.${LOCKS_FAILED:+ NOT held on:$LOCKS_FAILED}"
 
 out() { # <key> <value>
   echo "$1=$2"
@@ -152,28 +178,58 @@ if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="" GITHUB_STEP_S
   echo "::error title=Refusing to publish — the live publication could not be re-read under the lock::bake-scope.sh failed while re-reading the publication under the lock (see above). Nothing has been written."
   exit 1
 fi
+# 🚨 THE LIVE BASELINE MAY BE NEWER THAN THIS CHECKOUT (Copilot's review of #6878). A sibling can
+# seal a commit pushed AFTER this runner checked out — fetch-depth 0 cannot contain the future — and
+# bake-scope.sh then cannot see that it contains this one: it answers `full` ("not present in this
+# checkout"), and a narrowed bake would be REFUSED instead of recognised as superseded. So a live
+# commit this checkout lacks is fetched (objects only — the working tree is not touched) and the
+# decision is taken again. A fetch that fails is said, and the decision stands on what is known.
+live_commit=""
+if [ -f "$FRESH/published-commit.txt" ]; then live_commit=$(tr -d '[:space:]' < "$FRESH/published-commit.txt"); fi
+if [ -n "$live_commit" ] && [ -n "${REPO_DIR:-}" ] \
+   && ! git -C "$REPO_DIR" cat-file -e "${live_commit}^{commit}" 2>/dev/null; then
+  if git -C "$REPO_DIR" fetch --quiet --no-tags origin "$live_commit" < /dev/null; then
+    echo "the live publication's commit $live_commit was not in this checkout — fetched it (objects only) and re-deciding."
+    rm -rf "$FRESH"; mkdir -p "$FRESH"
+    if ! fresh_out=$(STATE_DIR="$FRESH" GITHUB_OUTPUT="" GITHUB_ENV="" GITHUB_STEP_SUMMARY="" \
+                     bash "$HERE/bake-scope.sh" 2>&1); then
+      printf '%s\n' "$fresh_out" | sed 's/^/    /'
+      echo "::error title=Refusing to publish — the live publication could not be re-read under the lock::bake-scope.sh failed on the second reading (see above). Nothing has been written."
+      exit 1
+    fi
+  else
+    echo "::warning::the live publication's commit $live_commit is not in this checkout and could not be fetched from origin — whether it contains this commit cannot be established, so the decision below is taken without it."
+  fi
+fi
 printf '%s\n' "$fresh_out" | sed 's/^/    [re-read under the lock] /'
 NEW_SCOPE=$(printf '%s\n' "$fresh_out" | sed -n 's/^scope=//p' | tail -n 1)
 NEW_REASON=$(printf '%s\n' "$fresh_out" | sed -n 's/^reason=//p' | tail -n 1)
+
+# An OPTIONAL state file: bake-scope.sh writes these only when it read a sealed publication, so an
+# absent one is a legitimate state ("nothing sealed then"), told apart by an existence test rather
+# than by swallowing a failed read — a file that EXISTS and cannot be read still fails loudly.
+optional_file() { # <path> <text when absent>
+  if [ -e "$1" ]; then cat "$1"; else printf '%s' "$2"; fi
+}
 
 # What identifies "the publication the scope read": its stamp, its commit and its bundle listing.
 # A missing file reads as empty in both, so "no publication then, none now" is unchanged.
 publication_of() { # <state-dir>
   local f
   for f in published-publication.txt published-commit.txt published-bundles.txt; do
-    printf '%s:' "$f"; cat "$1/$f" 2>/dev/null || true; printf '\n'
+    printf '%s:' "$f"; optional_file "$1/$f" ""; printf '\n'
   done
 }
 if [ "$(publication_of "$STATE_DIR")" = "$(publication_of "$FRESH")" ]; then
   rm -rf "$FRESH"
   out rebind unchanged
   out publish true
-  echo "the live publication is the one this bake's scope read ($(cat "$STATE_DIR/published-publication.txt" 2>/dev/null || echo 'none sealed')) — carrying and publishing as decided."
+  echo "the live publication is the one this bake's scope read ($(optional_file "$STATE_DIR/published-publication.txt" 'none sealed')) — carrying and publishing as decided."
   exit 0
 fi
 
-was="$(cat "$STATE_DIR/published-publication.txt" 2>/dev/null || true) at $(cat "$STATE_DIR/published-commit.txt" 2>/dev/null || echo '<none>')"
-now="$(cat "$FRESH/published-publication.txt" 2>/dev/null || true) at $(cat "$FRESH/published-commit.txt" 2>/dev/null || echo '<none>')"
+was="$(optional_file "$STATE_DIR/published-publication.txt" "") at $(optional_file "$STATE_DIR/published-commit.txt" '<none>')"
+now="$(optional_file "$FRESH/published-publication.txt" "") at $(optional_file "$FRESH/published-commit.txt" '<none>')"
 echo "::notice title=The publication moved while this run baked::the scope was read from publication ${was}; the live one is now ${now}. Re-deciding under the lock (MeshWeaver.Plugins#1785)."
 
 # ── 3a. the live publication already holds this content ──────────────────────────────────────────
@@ -181,6 +237,11 @@ if [ "$NEW_SCOPE" = "none" ]; then
   out rebind superseded
   out publish false
   out reason "$NEW_REASON"
+  if [ -n "$LOCKS_FAILED" ]; then
+    # Nothing will be published, so no later step would fail the unlocked targets: say it HERE.
+    echo "::error::superseded, but the publication lock could not be taken on:$LOCKS_FAILED — whether those targets hold this content was not established under the lock."
+    exit 1
+  fi
   echo "::notice title=Superseded — nothing to publish::$NEW_REASON This run's bake is not published: the live publication ($now) already serves this content."
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     printf '### ✅ Superseded while baking\n\nThe publication moved from %s to %s while this run baked, and it already holds this content: %s\n' \
@@ -201,7 +262,7 @@ adopt() {
   mv "$FRESH" "$STATE_DIR"
   out rebind rebound
   out publish true
-  echo "::notice title=Re-bound to the live publication::$1 The carry now takes the live publication's bundles, bound to its stamp $(cat "$STATE_DIR/published-publication.txt" 2>/dev/null || echo '<unstamped>')."
+  echo "::notice title=Re-bound to the live publication::$1 The carry now takes the live publication's bundles, bound to its stamp $(optional_file "$STATE_DIR/published-publication.txt" '<unstamped>')."
 }
 if [ "$ORIGINAL_SCOPE" = "full" ]; then
   adopt "This bake was FULL, so every module was rebuilt and none is carried from the moved publication's compile; only its sealed listing (the per-package carry) is re-read."

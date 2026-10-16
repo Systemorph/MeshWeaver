@@ -333,6 +333,29 @@ if [ "$SKIP_IF_PUBLISHED" -eq 1 ]; then
     elif [ -z "$published_commit" ]; then
       echo "$PUB_REPO:$IDENTITY resolves to $existing but its source commit could not be read ($(tr '\n' ' ' < "$WORK/fetch.err")) — publishing, since a push is idempotent and a skip without proof is not"
     else
+      # 🚨 NEVER MOVE THE TAG BACKWARDS (Copilot's review of #6878). The share publisher refuses to
+      # seal an OLDER commit over a NEWER one (publish-bake-bundles.sh, `superseded`) — but it still
+      # materialises this run's publication for the registry, so without the same question here the
+      # shares stayed newer while the registry tag rolled back. Asked of the compare API exactly as
+      # the share side asks it (GH_TOKEN + BAKE_CONTENT_REPOSITORY); `ahead` = the published commit
+      # is newer and contains this one. The release identity is still recorded — it describes the
+      # RELEASE, not which content the tag names. An unorderable pair keeps today's behaviour
+      # (republish) and says why.
+      order=""
+      if [ -n "${GH_TOKEN:-}" ] && [ -n "${BAKE_CONTENT_REPOSITORY:-}" ]; then
+        if ! order=$(gh api "repos/$BAKE_CONTENT_REPOSITORY/compare/$local_commit...$published_commit" --jq .status 2>"$WORK/compare.err"); then
+          echo "::warning::the compare API refused to order $local_commit against $published_commit: $(tail -c 400 "$WORK/compare.err" | tr '\n' ' ')"
+          order=""
+        fi
+      fi
+      if [ "$order" = "ahead" ]; then
+        echo "::notice title=Not moving the registry tag backwards::$PUB_REPO:$IDENTITY names a publication from $published_commit, which is NEWER than this one's $local_commit and contains it — leaving the tag where it is."
+        publish_release_identity
+        echo "bundle-publication: index=$existing bundles=${#BUNDLES[@]} tag=$IDENTITY registry=$REGISTRY source=$SOURCE repository=plugins/$SOURCE_LC skipped=superseded"
+        record_outputs "$existing" "${#BUNDLES[@]}"
+        exit 0
+      fi
+      [ -n "$order" ] || echo "::warning::could not order the published $published_commit against this publication's $local_commit (no GH_TOKEN / BAKE_CONTENT_REPOSITORY, or the compare API refused) — republishing as before."
       echo "$PUB_REPO:$IDENTITY names a publication from source '$published_commit' but this one is from '$local_commit' — republishing (the tag moves last; the previous generation stays resident by digest)"
     fi
   else

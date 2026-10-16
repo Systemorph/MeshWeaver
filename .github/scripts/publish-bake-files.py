@@ -527,31 +527,52 @@ def holder_record(holder: str) -> dict[str, str]:
     }
 
 
-def holder_run_completed(md: dict[str, str]) -> str | None:
-    """A sentence when the holder's run attempt is PROVABLY over, else None (unknown is not over)."""
+# 🚨 THE RUN-STATUS QUESTION IS THROTTLED SEPARATELY FROM THE LEASE POLL (Copilot's review of
+# #6878). The lease is re-tried every few seconds; asking GitHub that often would cost ~180 requests
+# per waiting publisher over the default bound, multiplied by every concurrent waiter, against the
+# repository's token quota. So a holder's run is asked about at most once per RUN_CHECK_SECONDS, and
+# after a refusal (rate limit, auth, network) not before RUN_CHECK_BACKOFF_SECONDS — or the server's
+# own Retry-After, when it names a longer one. The lease poll is never delayed by it.
+RUN_CHECK_SECONDS = 60
+RUN_CHECK_BACKOFF_SECONDS = 300
+
+
+def holder_run_completed(md: dict[str, str]) -> tuple[str | None, float]:
+    """(a sentence when the holder's run attempt is PROVABLY over, else None; seconds until the
+    question may be asked again). Unknown is not over."""
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
     repo, run_id, attempt = md.get("repository"), md.get("runid"), md.get("runattempt")
     if not (token and repo and run_id and attempt):
-        return None
+        return None, RUN_CHECK_SECONDS
     import json
+    import urllib.error
     import urllib.request
-    url = f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
+    api = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
+    url = f"{api}/repos/{repo}/actions/runs/{run_id}/attempts/{attempt}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
                                                "Accept": "application/vnd.github+json"})
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             run = json.load(resp)
     except Exception as exc:  # noqa: BLE001 — "could not ask" is NOT "over"; the age rule remains
+        backoff = float(RUN_CHECK_BACKOFF_SECONDS)
+        if isinstance(exc, urllib.error.HTTPError):
+            try:
+                backoff = max(backoff, float(exc.headers.get("Retry-After") or 0))
+            except ValueError:
+                pass
         log(f"lock: could not ask whether {repo} run {run_id} attempt {attempt} is still running "
-            f"({type(exc).__name__}: {exc}) — only the age rule can release its lease")
-        return None
+            f"({type(exc).__name__}: {exc}) — not asking again for {int(backoff)} s; the age rule "
+            f"still applies meanwhile")
+        return None, backoff
     if run.get("status") == "completed":
         return (f"its run {repo}#{run_id} attempt {attempt} has COMPLETED "
-                f"(conclusion {run.get('conclusion')}) without releasing it")
-    return None
+                f"(conclusion {run.get('conclusion')}) without releasing it"), RUN_CHECK_SECONDS
+    return None, RUN_CHECK_SECONDS
 
 
-def abandoned_because(md: dict[str, str], modified: float | None) -> str | None:
+def abandoned_because(md: dict[str, str], modified: float | None,
+                      run_check: "RunCheckThrottle | None" = None) -> str | None:
     """A sentence when the RECORDED holder is provably gone, else None.
 
     🚨 Only a NAMED holder can be judged — and only its own lease can then be released (see the
@@ -571,7 +592,24 @@ def abandoned_because(md: dict[str, str], modified: float | None) -> str | None:
         if age > STALE_AFTER_SECONDS:
             return (f"it has been held for {int(age)} s, longer than any CI job can live (every job "
                     f"is hard-capped at 45 minutes, so its holder is provably gone)")
-    return holder_run_completed(md)
+    if run_check is None or not run_check.due(md["holder"]):
+        return None
+    reason, again = holder_run_completed(md)
+    run_check.asked(md["holder"], again)
+    return reason
+
+
+class RunCheckThrottle:
+    """When each holder's run may next be asked about — per process, per holder."""
+
+    def __init__(self) -> None:
+        self._next: dict[str, float] = {}
+
+    def due(self, holder: str) -> bool:
+        return time.monotonic() >= self._next.get(holder, 0.0)
+
+    def asked(self, holder: str, again_in: float) -> None:
+        self._next[holder] = time.monotonic() + again_in
 
 
 def cmd_lock(args: argparse.Namespace) -> int:
@@ -614,6 +652,7 @@ def cmd_lock(args: argparse.Namespace) -> int:
     started = time.monotonic()
     last_note = -1e9
     handed_off: set[str] = set()
+    run_check = RunCheckThrottle()
     while True:
         if backend.lease_acquire(args.path, lease_id):
             try:
@@ -636,7 +675,7 @@ def cmd_lock(args: argparse.Namespace) -> int:
             except Exception:  # noqa: BLE001 — not ours after all; treated as any other holder
                 pass
         if exists and leased:
-            reason = abandoned_because(md, modified)
+            reason = abandoned_because(md, modified, run_check)
             if reason:
                 # 🚨 RECOVERY IS CONDITIONAL ON THE OBSERVED HOLDER'S OWN LEASE — never a break.
                 # The evidence above describes the holder the RECORD names, read a moment ago; by

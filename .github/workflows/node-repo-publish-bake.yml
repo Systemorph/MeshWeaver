@@ -2306,6 +2306,10 @@ jobs:
           BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
           SOURCE: ${{ inputs.bake-source }}
           IDENTITY: ${{ steps.identity.outputs.identity }}
+          # The same pair the publish step orders commits with: the registry tag never moves to an
+          # OLDER commit than the one it names (push-bundle-publication.sh).
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to $BUNDLE_REGISTRY. (A platform-ref older than the publisher does not write it: move platform-ref forward.)"; exit 1; }

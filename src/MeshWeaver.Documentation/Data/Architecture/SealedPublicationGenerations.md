@@ -190,7 +190,24 @@ the live publication, which is right exactly when the selector — same edges, s
 call it affected from the live baseline. The lock is taken on every target in
 `BAKE_PUBLISH_TARGETS` order under an invocation-unique holder (persisted beside the scope's state
 directory, since the release is another process), handed to the publish step as
-`BAKE_PUBLISH_LOCK_HOLDER`, and released by an `if: always()` step after it.
+`BAKE_PUBLISH_LOCK_HOLDER`, and released by an `if: always()` step after it. Four properties the
+review of #6878 made explicit:
+
+- **One global lock order.** Targets are locked sorted and de-duplicated, never in the caller's
+  order, so two runs listing `A B` and `B A` cannot each hold one lease and wait on the other.
+- **Per-target isolation survives.** A target whose lock cannot be taken (a share that is gone, a
+  holder that outlasts the bound) is recorded, not fatal: the healthy targets are still published,
+  the publish step fails the unlocked one by name, and the run ends red.
+- **The release covers every configured target**, not only those the ledger recorded — a
+  cancellation between a lease and its ledger line must not leave an infinite lease behind; the
+  release names this holder's lease id, so it is a no-op wherever this run holds nothing.
+- **A live baseline newer than the checkout is fetched** (objects only) before the decision, so a
+  sibling that sealed a commit pushed after this runner checked out is recognised as `superseded`
+  instead of refusing as an unreachable baseline.
+
+The registry follows the same ordering: `push-bundle-publication.sh` never moves the identity tag to
+an OLDER commit than the one it names (`skipped=superseded`, the release identity still recorded),
+so a run the share publisher skipped as superseded cannot roll the registry back.
 
 `main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
 comparison can order two commits instead of reporting *"could not order … republishing as before"*

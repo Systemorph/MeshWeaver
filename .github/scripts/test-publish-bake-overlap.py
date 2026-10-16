@@ -470,8 +470,12 @@ class FakeShare:
     def _lease(self, path):
         return ROOT / ".lease" / self.root.relative_to(ROOT) / path
 
+    def _gone(self):
+        named = os.environ.get("MOCK_SHARE_MISSING_NAMES", "").split()
+        return os.environ.get("MOCK_SHARE_MISSING") == "1" or self.root.name in named
+
     def _missing(self):
-        if os.environ.get("MOCK_SHARE_MISSING") == "1":
+        if self._gone():
             raise FileNotFoundError("ShareNotFound: the specified share does not exist")
 
     def lease_acquire(self, path, lease_id):
@@ -533,7 +537,7 @@ class FakeShare:
             lp.unlink()
 
     def share_exists(self):
-        return os.environ.get("MOCK_SHARE_MISSING") != "1" and self.root.is_dir()
+        return not self._gone() and self.root.is_dir()
 
 
 def make_backend(account, share):
@@ -2091,6 +2095,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
     run_lock_cases(h, work, expect_defect)
     if not expect_defect:
         run_rebind_cases(h, work)
+        run_round5_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2428,8 +2433,8 @@ class Lane:
         env = dict(os.environ)
         env["PATH"] = f"{self.h.bin}{os.pathsep}{env['PATH']}"
         env.update(self.h.base_env())
-        for k in ("MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "GITHUB_STEP_SUMMARY", "RUNNER_TEMP",
-                  "WITHHOLD_PACKAGES"):
+        for k in ("MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "MOCK_SHARE_MISSING_NAMES",
+                  "GITHUB_STEP_SUMMARY", "RUNNER_TEMP", "WITHHOLD_PACKAGES"):
             env.pop(k, None)
         env.update({
             "MOCK_AZ_ALLOW_SHOW": "1",
@@ -2441,9 +2446,10 @@ class Lane:
         env.update(extra)
         return env
 
-    def scope(self) -> tuple[subprocess.CompletedProcess, str]:
+    def scope(self, **extra: str) -> tuple[subprocess.CompletedProcess, str]:
         self.output.write_text("")
-        r = subprocess.run(["bash", str(BAKE_SCOPE)], capture_output=True, text=True, env=self.env())
+        r = subprocess.run(["bash", str(BAKE_SCOPE)], capture_output=True, text=True,
+                           env=self.env(**extra))
         return r, self.outputs().get("scope", "")
 
     def bake_what_scope_rebuilt(self, scope: str) -> None:
@@ -2453,14 +2459,19 @@ class Lane:
         for m in rebuilt:
             (self.bake / f"{m}.zip").write_text(f"{m}.zip baked by run {self.run_id} at {self.head}\n")
 
-    def rebind(self, original_scope: str) -> subprocess.CompletedProcess:
+    def rebind(self, original_scope: str, **extra: str) -> subprocess.CompletedProcess:
         self.output.write_text("")
         return subprocess.run(["bash", str(REBIND)], capture_output=True, text=True,
-                              env=self.env(ORIGINAL_SCOPE=original_scope))
+                              env=self.env(ORIGINAL_SCOPE=original_scope, **extra))
 
-    def release(self) -> subprocess.CompletedProcess:
+    def release(self, **extra: str) -> subprocess.CompletedProcess:
         return subprocess.run(["bash", str(REBIND), "--release"], capture_output=True, text=True,
-                              env=self.env())
+                              env=self.env(**extra))
+
+    def handed_holder(self) -> str:
+        text = self.genv.read_text() if self.genv.is_file() else ""
+        return next((l.split("=", 1)[1] for l in text.splitlines()
+                     if l.startswith("BAKE_PUBLISH_LOCK_HOLDER=")), "")
 
     def carry(self) -> subprocess.CompletedProcess:
         return subprocess.run(
@@ -2612,6 +2623,131 @@ def run_rebind_cases(h: "Harness", work: Path) -> None:
     o = lane.outputs()
     check("a full bake follows the live publication: rebind=rebound, publish=true",
           r.returncode == 0 and o.get("rebind") == "rebound" and o.get("publish") == "true",
+          f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+    lane.release()
+
+
+def lease_on(h: "Harness", share: str) -> Path:
+    return h.shelf_root / ".lease" / ACCOUNT / share / LOCK_PATH
+
+
+def run_round5_cases(h: "Harness", work: Path) -> None:
+    """Copilot's third round on #6878: the run-status throttle, release of every target, per-target
+    isolation, one global lock order, and a live baseline newer than the checkout."""
+    import importlib.util
+    import io
+
+    # ── the run-status question is throttled apart from the lease poll ──
+    print("\nthe holder's run is asked about at most once a minute, whatever the lease poll does:")
+    h.reset()
+    lock = h.shelf_root / ACCOUNT / SHARE / LOCK_PATH
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.touch()
+    lease = lease_on(h, SHARE)
+    lease.parent.mkdir(parents=True, exist_ok=True)
+    lease.write_text(lease_id_of("Systemorph-MeshWeaver-busy-1"))
+    meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / (LOCK_PATH + ".json")
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(json.dumps({"holder": "Systemorph-MeshWeaver-busy-1", "acquired": str(int(time.time())),
+                                "repository": "Systemorph/MeshWeaver", "runid": "1", "runattempt": "1"}))
+    spec = importlib.util.spec_from_file_location("publish_bake_files_under_test", HELPER)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    import urllib.request
+    calls = {"n": 0}
+    real_urlopen = urllib.request.urlopen
+
+    def counting_urlopen(req, timeout=None):
+        calls["n"] += 1
+        return io.BytesIO(b'{"status": "in_progress"}')
+
+    saved = {k: os.environ.get(k) for k in ("MOCK_AZ_ROOT", "PUBLISH_BAKE_FAKE_SHARE_BACKEND", "GH_TOKEN")}
+    os.environ.update({"MOCK_AZ_ROOT": str(h.shelf_root), "PUBLISH_BAKE_FAKE_SHARE_BACKEND": str(h.backend),
+                       "GH_TOKEN": "harness-token"})
+    urllib.request.urlopen = counting_urlopen
+    try:
+        rc = helper.main(["lock", "acquire", "--account", ACCOUNT, "--share", SHARE, "--path", LOCK_PATH,
+                          "--holder", "Systemorph-MeshWeaver-waiter-1", "--wait-seconds", "3",
+                          "--poll-seconds", "0.05"])
+    finally:
+        urllib.request.urlopen = real_urlopen
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    check("~60 lease polls in 3 s ask GitHub about the holder's run ONCE, not once per poll",
+          rc == 1 and calls["n"] == 1, f"rc={rc}, run-status requests={calls['n']}")
+
+    repo, (c0, c1, c2) = content_repo(work, "content-r5", [("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n")])
+    two = f"{ACCOUNT}/zeta-share {ACCOUNT}/{SHARE}"   # deliberately NOT in sorted order
+
+    # ── one global lock order ──
+    print("\nthe targets are locked in ONE canonical order, whatever order the caller lists them in:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    lane = Lane(h, work, repo, c2, "7101")
+    lane.scope(BAKE_PUBLISH_TARGETS=two)
+    lane.bake_what_scope_rebuilt("full")
+    r = lane.rebind("full", BAKE_PUBLISH_TARGETS=two)
+    err = r.stderr
+    first, second = err.find(f"lock: acquired {ACCOUNT}/{SHARE}/"), err.find(f"lock: acquired {ACCOUNT}/zeta-share/")
+    check("listed `zeta-share memex-data`, locked `memex-data` then `zeta-share` (sorted)",
+          r.returncode == 0 and 0 <= first < second, f"rc={r.returncode}, positions {first} < {second}")
+
+    # ── release every configured target, not only the ledger ──
+    print("\nthe release frees EVERY configured target, even one the ledger never recorded:")
+    ledger = Path(str(lane.state) + ".locks-held")
+    ledger.write_text(f"{ACCOUNT}/{SHARE}\n")      # as if cancelled before zeta-share's ledger line
+    rel = lane.release(BAKE_PUBLISH_TARGETS=two)
+    check("a lease missing from the ledger is still released (holder-specific, so safe for every target)",
+          rel.returncode == 0 and not lease_on(h, SHARE).exists() and not lease_on(h, "zeta-share").exists(),
+          f"rc={rel.returncode}, left: {leases_held(h)}")
+
+    # ── per-target isolation survives the lock ──
+    print("\na target whose lock cannot be taken does not stop the healthy ones:")
+    h.reset()
+    plant_publication(h, c0, "Plugins-run-P0")
+    gone = f"{ACCOUNT}/gone-share {ACCOUNT}/{SHARE}"
+    lane = Lane(h, work, repo, c2, "7102")
+    lane.scope(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+    lane.bake_what_scope_rebuilt("full")
+    r = lane.rebind("full", BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+    o = lane.outputs()
+    check("the re-bind goes on with the target it DID lock, naming the one it could not",
+          r.returncode == 0 and o.get("publish") == "true" and "NOT held on" in r.stdout
+          and "gone-share" in r.stdout, f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-300:]!r}")
+    pub = subprocess.run(["bash", str(DEFAULT_SCRIPT), str(lane.bake), SOURCE, c2], capture_output=True,
+                         text=True, env=lane.env(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share",
+                                                 BAKE_PUBLISH_LOCK_HOLDER=lane.handed_holder()))
+    out = pub.stdout + pub.stderr
+    check("…the publish seals the healthy target and fails the gone one by name: the run is still RED",
+          pub.returncode != 0 and (h.shelf_root / ACCOUNT / SHARE / DEST / SENTINEL).is_file()
+          and "gone-share does NOT exist" in out, f"rc={pub.returncode}")
+    lane.release(BAKE_PUBLISH_TARGETS=gone, MOCK_SHARE_MISSING_NAMES="gone-share")
+
+    # ── a live baseline newer than the checkout is fetched, and recognised as superseding ──
+    print("\na sibling sealed a commit pushed AFTER this runner checked out:")
+    origin, (o0, o1, o2) = content_repo(work, "content-origin", [("Alpha", "Alpha v1\n"), ("Beta", "Beta v2\n")])
+    checkout = work / "content-checkout"
+    if checkout.exists():
+        shutil.rmtree(checkout)
+    subprocess.run(["git", "clone", "-q", str(origin), str(checkout)], check=True)
+    (origin / "Gamma" / "module.txt").write_text("Gamma v3\n")
+    git(origin, "commit", "-q", "-am", "Gamma v3")
+    o3 = git(origin, "rev-parse", "HEAD")
+    h.reset()
+    plant_publication(h, o0, "Plugins-run-P0")
+    lane = Lane(h, work, checkout, o2, "7103")
+    _, scope = lane.scope()
+    lane.bake_what_scope_rebuilt(scope)
+    plant_publication(h, o3, "Plugins-run-P3")
+    check("the fixture is honest: the checkout does NOT hold the live commit before the re-bind",
+          subprocess.run(["git", "-C", str(checkout), "cat-file", "-e", f"{o3}^{{commit}}"]).returncode != 0)
+    r = lane.rebind(scope)
+    o = lane.outputs()
+    check("the re-bind fetches the live commit and sees it contains this one: superseded, green",
+          r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
           f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
     lane.release()
 

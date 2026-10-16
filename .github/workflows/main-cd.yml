@@ -3602,6 +3602,10 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           EXPECTED_DB_VERSION: ${{ needs.portal-image.outputs.expected_db_version }}
           BAKE_PUBLICATION_DIR: ${{ runner.temp }}/publication
+          # Read-only: push-bundle-publication.sh refuses to move the identity tag to an OLDER commit
+          # than the one it names, exactly as the share publisher refuses to seal backwards.
+          GH_TOKEN: ${{ github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
