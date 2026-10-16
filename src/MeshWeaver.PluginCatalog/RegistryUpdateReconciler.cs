@@ -615,7 +615,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// module reload that CRASHED (<see cref="ModuleReloadStatus.Faulted"/>) and whose backoff is due
     /// (<see cref="ModuleReload.RetryFaulted"/>). The backoff unit IS this pass's cadence — the
     /// safety-net interval — doubled per attempt, so a retry needs no timer of its own: the pass
-    /// that already runs asks. With the safety net off, the boot pass is the retry. Never faults —
+    /// that already runs asks. With the safety net off, the boot pass is the retry. After the re-arm,
+    /// the owner of every reboot request that looks STALLED past its declared execution window is asked to end it as Failed,
+    /// naming the stall (<see cref="InstanceReboot.FailStalled"/>, MeshWeaver#6625). Never faults —
     /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
     /// </summary>
     private IObservable<Unit> RetryFaultedReloads(PluginCatalogOptions options)
@@ -636,6 +638,17 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             {
                 if (!paths.IsEmpty)
                     logger.LogInformation("[RegistryUpdate] re-armed {Count} faulted reboot(s): {Paths}",
+                        paths.Count, string.Join(", ", paths));
+            })
+            // AFTER the re-arm, so a faulted reboot due for its retry is retried, never ended: a reboot
+            // that recorded no progress within its declared execution window is ended as Failed, naming
+            // the stall — it never stays open, holding every pod's self-reboot back (MeshWeaver#6625).
+            .SelectMany(_ => InstanceReboot.FailStalled(hub,
+                (hub.ServiceProvider.GetService<InstanceRebootOptions>() ?? new InstanceRebootOptions()).ExecutionWindow, unit, now))
+            .Do(paths =>
+            {
+                if (!paths.IsEmpty)
+                    logger.LogWarning("[RegistryUpdate] asked the owners of {Count} stalled-looking reboot(s) to end them as Failed: {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
             .Select(_ => Unit.Default)

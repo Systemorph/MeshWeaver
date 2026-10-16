@@ -380,6 +380,22 @@ public static class ModuleReloadExecutor
     /// <param name="hub">A hub of the mesh whose services land the modules.</param>
     /// <param name="module">The module or package to land, or null for every installed module.</param>
     public static IObservable<ModuleReloadLanding> ResolveAndLand(IMessageHub hub, string? module) =>
+        ResolveAndLandReporting(hub, module, (_, _) => Observable.Return(true));
+
+    /// <summary>
+    /// <see cref="ResolveAndLand"/>, reporting each module through <paramref name="onLanded"/> the moment
+    /// its reload has ended, before the next module starts (MeshWeaver#6625 review): a caller whose
+    /// progress is judged against a window — the reboot's declared execution window — records it there,
+    /// so a long batch of healthy reloads is progress all the way through. <paramref name="onLanded"/>
+    /// answers whether to GO ON: <c>false</c> reloads no further module (the caller's work ended) and the
+    /// landing reports only the modules that ran. A fault from it, or an answer that never comes (it
+    /// completes empty), faults the returned observable — it is the caller's to handle.
+    /// </summary>
+    /// <param name="hub">A hub of the mesh.</param>
+    /// <param name="module">One module (or package) to reload, or null for every installed one.</param>
+    /// <param name="onLanded">Called once per module whose reload ended, with its outcome; emits whether to go on.</param>
+    public static IObservable<ModuleReloadLanding> ResolveAndLandReporting(
+        IMessageHub hub, string? module, Func<string, ModuleAdoptOutcome, IObservable<bool>> onLanded) =>
         Targets(hub, module)
             .SelectMany(targets =>
             {
@@ -390,10 +406,7 @@ public static class ModuleReloadExecutor
                 if (reconciler is null || landing is null)
                     return Observable.Return(new ModuleReloadLanding(ImmutableList<ModuleReloadItem>.Empty,
                         "this host registers no registry reconciler or module landing service — nothing can be resolved or landed here"));
-                return targets.Modules.ToObservable()
-                    .Select(t => reconciler.ReloadModule(t.Package, t.Module).Select(outcome => (t.Package, t.Module, Outcome: outcome)))
-                    .Concat()
-                    .ToList()
+                return ReloadEach(reconciler, targets.Modules, onLanded)
                     .SelectMany(outcomes => landing.GetActivation().Take(1)
                         .Select(activation =>
                         {
@@ -405,6 +418,26 @@ public static class ModuleReloadExecutor
                                 agent?.LoadedNames() ?? ModuleActivationStatus.LoadedAssemblyNames()), null);
                         }));
             });
+
+    /// <summary>Reloads the modules one after another, reporting each as it ends; stops when the report
+    /// answers <c>false</c>. The answer is REQUIRED (FirstAsync): an empty one faults to the caller.</summary>
+    private static IObservable<ImmutableList<(string Package, string Module, ModuleAdoptOutcome Outcome)>> ReloadEach(
+        RegistryUpdateReconciler reconciler, ImmutableList<(string Package, string Module)> rest,
+        Func<string, ModuleAdoptOutcome, IObservable<bool>> onLanded)
+    {
+        if (rest.IsEmpty)
+            return Observable.Return(ImmutableList<(string Package, string Module, ModuleAdoptOutcome Outcome)>.Empty);
+        var (package, module) = rest[0];
+        return reconciler.ReloadModule(package, module)
+            .Select(outcome => (Package: package, Module: module, Outcome: outcome))
+            .ToList()
+            .SelectMany(done => (done.Count == 0
+                    ? Observable.Return(true)
+                    : onLanded(module, done[^1].Outcome).FirstAsync())
+                .SelectMany(goOn => goOn
+                    ? ReloadEach(reconciler, rest.RemoveAt(0), onLanded).Select(later => later.InsertRange(0, done))
+                    : Observable.Return(done.ToImmutableList())));
+    }
 
     private static IObservable<(ImmutableList<(string Package, string Module)> Modules, string? Problem)> Targets(IMessageHub hub, string? wanted) =>
         ModuleDependencyFloor.ReadInstalled(hub)
