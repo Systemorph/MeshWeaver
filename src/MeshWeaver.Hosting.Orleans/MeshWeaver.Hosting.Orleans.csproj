@@ -5,6 +5,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.Test" />
+    <!-- FaultInjectionCluster.HandOffTarget computes the production hand-off rule (DrainHandOffTarget). -->
+    <InternalsVisibleTo Include="MeshWeaver.Hosting.Orleans.TestBase" />
   </ItemGroup>
 
     <ItemGroup>

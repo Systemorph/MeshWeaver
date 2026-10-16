@@ -1516,6 +1516,43 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     internal IObservable<Unit>? PodHubClaimSettled(Address address) =>
         podHubClaimSettled.TryGetValue(address, out var settled) ? settled : null;
 
+    /// <summary>
+    /// Tells <paramref name="recipient"/> that <paramref name="drainingSilo"/> has begun to drain
+    /// (<see cref="ISiloDrainNoticeGrain"/>, #6865). Cold: the grain call is made on Subscribe.
+    ///
+    /// <para>Behind the same gate as every other bookkeeping call this process makes
+    /// (<see cref="GrainWhileRunning{TGrain}"/>): a host that has begun STOPPING asks Orleans for
+    /// nothing, and answers <c>false</c> here. A pod in its preStop drain has not begun stopping —
+    /// that is the window this announcement exists for.</para>
+    ///
+    /// <para>The activation is placed ON the recipient by a placement hint naming it, restored
+    /// immediately after the call is issued (Orleans snapshots <see cref="RequestContext"/>
+    /// synchronously), exactly as <see cref="AttachPodHubOnOwner"/> does for the owner.</para>
+    /// </summary>
+    /// <param name="recipient">The silo that must learn of the drain.</param>
+    /// <param name="drainingSilo">The silo that is draining — this one.</param>
+    /// <returns><c>true</c> when the recipient recorded the drain.</returns>
+    internal IObservable<bool> AnnounceDrainTo(SiloAddress recipient, SiloAddress drainingSilo) =>
+        Observable.Defer(() =>
+        {
+            var grain = GrainWhileRunning<ISiloDrainNoticeGrain>(recipient.ToParsableString());
+            if (grain is null)
+                return Observable.Return(false);
+            var previous = RequestContext.Get(IPlacementDirector.PlacementHintKey);
+            try
+            {
+                RequestContext.Set(IPlacementDirector.PlacementHintKey, recipient);
+                return grain.Draining(drainingSilo.ToParsableString()).ToObservable();
+            }
+            finally
+            {
+                if (previous is null)
+                    RequestContext.Remove(IPlacementDirector.PlacementHintKey);
+                else
+                    RequestContext.Set(IPlacementDirector.PlacementHintKey, previous);
+            }
+        });
+
     private IObservable<bool> AttachPodHubOnOwner(IPodHubGrain grain)
     {
         var localSilo = serviceProvider.GetService<ILocalSiloDetails>();

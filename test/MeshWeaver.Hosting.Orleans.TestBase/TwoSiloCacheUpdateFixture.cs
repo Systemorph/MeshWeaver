@@ -61,6 +61,13 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
     /// </summary>
     protected virtual bool ShareStorageChanges => false;
 
+    /// <summary>
+    /// Subclass hook: how many silos the cluster starts with. Two by default — the cross-silo shape
+    /// every test here needs; a test that needs a survivor beside TWO draining silos (#6865) asks for
+    /// three.
+    /// </summary>
+    protected virtual short SiloCount => 2;
+
     public async ValueTask InitializeAsync()
     {
         if (ShareStorageChanges)
@@ -76,7 +83,7 @@ public class TwoSiloCacheUpdateFixture : IAsyncLifetime
                 // them; cache.Update from the OTHER silo issues a cross-silo grain
                 // call. The realistic shape — a single silo can't test the
                 // cross-silo routing path.
-                builder.Options.InitialSilosCount = 2;
+                builder.Options.InitialSilosCount = SiloCount;
                 // By TYPE NAME, so a repo shipping a module can supply a derived configurator
                 // (see SharedOrleansFixture for the same seam and why it exists).
                 builder.Options.SiloBuilderConfiguratorTypes.Add(
