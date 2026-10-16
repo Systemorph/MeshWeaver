@@ -201,7 +201,15 @@ internal sealed class CellSurfaceAssemblyProvider(
                         node.Path, definition.LastCompiledVersion);
                     return Observable.Return<CellSurfaceAssembly?>(null);
                 }
-                return pool.InvokeBlocking(_ => LoadLeased(node.Path, localPath!, cacheService));
+                // The build's recorded #r "nuget:" closure, armed for this path before the load —
+                // a kernel session can join a pack this process never compiled (BuildPackageProbing).
+                var bound = serviceProvider.GetService<Microsoft.Extensions.Options.IOptions<CompilationCacheOptions>>()
+                    ?.Value?.AssemblyLoadTimeout ?? TimeSpan.FromMinutes(2);
+                return BuildPackageProbing.Arm(
+                        localPath!, BuildPackageProbing.RecordedReferences(localPath),
+                        cacheService, serviceProvider.GetService<MeshWeaver.NuGet.INuGetAssemblyResolver>(),
+                        pool, bound, logger)
+                    .SelectMany(_ => pool.InvokeBlocking(_ => LoadLeased(node.Path, localPath!, cacheService)));
             })
             // A single pack's failure (evicted context, corrupt bytes) must not take the whole
             // cell surface down — skip it loudly; the rest of the set still resolves.

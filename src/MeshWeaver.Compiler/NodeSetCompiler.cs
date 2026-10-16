@@ -199,6 +199,10 @@ public static class NodeSetCompiler
         var nugetRefs = extractedRefs.ToList();
         GeneratorPipeline.StripBuiltInScopeGeneratorRef(
             nugetRefs, builtInPresent: GeneratorPipeline.BuiltInGeneratorPaths.Count > 0);
+        // The package references ride IN the bytes, so whoever loads this build — a portal adopting
+        // the bake, on any replica — can resolve the closure it needs (NuGetBuildRecord). The same
+        // stamp as the runtime compile's PrepareGeneratedSource: the content key is this text.
+        source = NuGetBuildRecord.Stamp(source, nugetRefs);
 
         return new CompileInputs(
             nodePath,
