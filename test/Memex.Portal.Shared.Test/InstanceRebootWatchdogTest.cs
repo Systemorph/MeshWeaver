@@ -172,6 +172,63 @@ public class InstanceRebootWatchdogRulesTest
         InstanceReboot.Stalled(faulted with { Attempt = 0 }, Now, Options.ExecutionWindow, RetryUnit)
             .Should().Contain("nothing re-armed it when its retry was due");
     }
+
+    /// <summary>
+    /// #6625 review: a long Sync batch is progress all the way through — each finished source stamps
+    /// <see cref="InstanceRebootRequest.ProgressAt"/>, so a step that has been Running for longer than the
+    /// window is NOT stalled while its sources keep finishing. Control: the same step with no per-source
+    /// stamp is.
+    /// </summary>
+    [Fact]
+    public void ASyncBatchLongerThanTheWindow_IsNotStalled_WhileItsSourcesKeepFinishing()
+    {
+        var batch = new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-4),
+            Status = InstanceRebootStatus.Preparing,
+            ExecutionWindow = TimeSpan.FromHours(3),
+            Steps = InstanceReboot.WithStep(InstanceReboot.FreshSteps(), InstanceRebootSteps.Sync, InstanceRebootStepOutcome.Running,
+                "importing", Now.AddHours(-4)),
+            ProgressAt = Now.AddMinutes(-9), // the 21st 9-minute import just finished
+        };
+        InstanceReboot.Stalled(batch, Now, Options.ExecutionWindow, RetryUnit).Should().BeNull();
+        InstanceReboot.Stalled(batch with { ProgressAt = Now.AddHours(-4) }, Now, Options.ExecutionWindow, RetryUnit)
+            .Should().Contain("its last step is Sync (Running)");
+    }
+
+    /// <summary>
+    /// #6625 review: the end is decided by the OWNER, against its current state. A replica report that
+    /// landed after a reader judged the request stalled keeps it open; without it, the owner ends it.
+    /// </summary>
+    [Fact]
+    public void TheOwnerEndsOnlyWhatIsStillStalled_AndAlwaysClearsTheQuestion()
+    {
+        var asked = new InstanceRebootRequest
+        {
+            Reason = "x",
+            RequestedAt = Now.AddHours(-5),
+            Status = InstanceRebootStatus.AwaitingRestart,
+            RestartRequestedAt = Now.AddHours(-4),
+            ProgressAt = Now.AddHours(-4),
+            ExecutionWindow = TimeSpan.FromHours(3),
+            RequestedEndIfStalledAt = Now.AddSeconds(-1),
+        };
+        var ended = InstanceReboot.EndIfStalled(asked, Now, Options.ExecutionWindow, RetryUnit);
+        ended.Status.Should().Be(InstanceRebootStatus.Failed);
+        ended.Failure.Should().StartWith("stalled:");
+        ended.RequestedEndIfStalledAt.Should().BeNull();
+
+        var reported = asked with
+        {
+            Replicas = ImmutableDictionary<string, InstanceRebootReplica>.Empty.Add("p",
+                new InstanceRebootReplica { Process = "p", StartedAt = Now.AddMinutes(-2), ReportedAt = Now.AddSeconds(-1) }),
+        };
+        var kept = InstanceReboot.EndIfStalled(reported, Now, Options.ExecutionWindow, RetryUnit);
+        kept.Status.Should().Be(InstanceRebootStatus.AwaitingRestart);
+        kept.RequestedEndIfStalledAt.Should().BeNull();
+        kept.ProgressAt.Should().Be(asked.ProgressAt, "answering the question is not progress");
+    }
 }
 
 /// <summary>
@@ -389,6 +446,46 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
         after.Failure.Should().Contain("stalled:").And.Contain("declared execution window of 180 min")
             .And.Contain("nothing re-armed it");
         after.CompletedAt.Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review — a report lands BETWEEN the reader's evaluation and the commit: the reader saw the
+    /// request stalled, a replica then reported, and only then is the end asked for. The owner judges its
+    /// own current state, so the request stays open; the question is answered (cleared) either way.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AReportLandingAfterTheEvaluation_KeepsTheRequestOpen()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = await FileFaulted("reported-6625", DateTimeOffset.UtcNow.AddHours(-5), ct);
+
+        // The reader's evaluation: stalled.
+        var seen = await Read(path, _ => true);
+        InstanceReboot.Stalled(seen, DateTimeOffset.UtcNow, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30)).Should().NotBeNull();
+
+        // A replica reports after that evaluation…
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<InstanceRebootRequest>(r => r with
+            {
+                Replicas = r.Replicas.SetItem("late-pod", new InstanceRebootReplica
+                {
+                    Process = "late-pod", StartedAt = DateTimeOffset.UtcNow.AddMinutes(-1), ReportedAt = DateTimeOffset.UtcNow,
+                }),
+            }))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // …and only then is the end asked for.
+        var asked = await InstanceReboot.RequestEndIfStalled(Mesh, path, DateTimeOffset.UtcNow)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // The owner's ANSWER is the version after the question that clears it.
+        var answered = await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path))
+            .Where(n => n.Version > asked.Version)
+            .Select(n => n.ContentAs<InstanceRebootRequest>(Mesh.JsonSerializerOptions))
+            .Where(r => r is not null && r.RequestedEndIfStalledAt is null)
+            .Select(r => r!)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        answered.Status.Should().Be(InstanceRebootStatus.Faulted, "the owner saw the late report — not stalled");
+        answered.Failure.Should().NotContain("stalled:");
+        answered.Replicas.Should().ContainKey("late-pod");
     }
 
     /// <summary>The control: the same request, faulted a minute ago (its re-arm still ahead), IS in progress —

@@ -616,7 +616,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// (<see cref="ModuleReload.RetryFaulted"/>). The backoff unit IS this pass's cadence — the
     /// safety-net interval — doubled per attempt, so a retry needs no timer of its own: the pass
     /// that already runs asks. With the safety net off, the boot pass is the retry. After the re-arm,
-    /// every reboot request that has STALLED past its declared execution window is ended as Failed,
+    /// the owner of every reboot request that looks STALLED past its declared execution window is asked to end it as Failed,
     /// naming the stall (<see cref="InstanceReboot.FailStalled"/>, MeshWeaver#6625). Never faults —
     /// a pass that cannot read the requests re-arms nothing, and the next pass asks again.
     /// </summary>
@@ -648,7 +648,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .Do(paths =>
             {
                 if (!paths.IsEmpty)
-                    logger.LogWarning("[RegistryUpdate] ended {Count} stalled reboot(s) as Failed: {Paths}",
+                    logger.LogWarning("[RegistryUpdate] asked the owners of {Count} stalled-looking reboot(s) to end them as Failed: {Paths}",
                         paths.Count, string.Join(", ", paths));
             })
             .Select(_ => Unit.Default)

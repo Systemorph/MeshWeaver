@@ -54,7 +54,9 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
     private GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
     private GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
 
-    private async Task<string> GivenAHungModuleSource(string prefix, CancellationToken ct)
+    private Task<string> GivenAHungModuleSource(string prefix, CancellationToken ct) => GivenASource(prefix, moduleSource: true, ct);
+
+    private async Task<string> GivenASource(string prefix, bool moduleSource, CancellationToken ct)
     {
         var space = prefix + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(space)
@@ -76,6 +78,8 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
         await Credentials
             .Save(WellKnownUsers.System, new GitHubToken("ghp_test_token", null, "bearer", "repo", null), "octocat")
             .Timeout(TestTimeouts.Convergence).Await(ct);
+        if (!moduleSource)
+            return space;
         // A MODULE source: it has recorded a module-bearing tree, so a reboot re-imports it.
         await Mesh.GetWorkspace().GetMeshNodeStream(GitHubSyncService.ConfigPath(space))
             .Update(node => node with
@@ -118,6 +122,45 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
             .Should().Within(TestTimeouts.Convergence)
             .Match(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions)?.RequestedStatus == ActivityStatus.Cancelled,
                 because: "the timed-out import's cancellation is requested on its activity", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review: the reboot's progress is judged against its declared execution window, and the
+    /// Sync step imports its sources one after another — so each source's row is REPORTED the moment it
+    /// ends, before the next source starts (<see cref="ModuleSourceUpdate.UpdateAllReporting"/>). The
+    /// first row is reported before the second source's fetch began; every row is reported, in order,
+    /// before the batch emits.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task EachSourceIsReported_AsItEnds_BeforeTheNextStarts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await GivenASource("ProgA", moduleSource: false, ct);
+        var second = await GivenAHungModuleSource("ProgB", ct);
+        var fetchCount = 0;
+        using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+        var reported = ImmutableList<(ModuleSourceUpdateRow Row, int FetchesThen)>.Empty;
+
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromSeconds(3),
+                activity => Mesh.GetMeshNodeStream(activity)
+                    .Select(n => n.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
+                    .Where(log => log is not null)
+                    .Select(log => log!),
+                row => Observable.Defer(() =>
+                {
+                    ImmutableInterlocked.Update(ref reported, r => r.Add((row, Volatile.Read(ref fetchCount))));
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the batch ends once the hung import outlived its budget", ct);
+
+        var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
+        mine.Should().HaveCount(2);
+        var mineReported = reported.Where(x => x.Row.Space == first || x.Row.Space == second).ToArray();
+        mineReported.Select(x => x.Row).Should().Equal(mine, "every finished source is reported, in order, before the batch emits");
+        mineReported[0].Row.Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
+        mineReported[0].FetchesThen.Should().Be(0, "the first source is reported before the next source's import started");
+        mineReported[1].Row.Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
     }
 
     /// <summary>

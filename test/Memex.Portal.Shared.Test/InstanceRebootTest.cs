@@ -548,6 +548,75 @@ public class InstanceRebootControlSelfHandoverTest(ITestOutputHelper output) : I
     }
 }
 
+/// <summary>
+/// 🚨 MeshWeaver#6625 review: a request that ENDED (here: ended while its Modules step was in flight, as
+/// the owner does for a stalled request) must not start the steps after the one in flight. A write that
+/// meets a terminal request changes nothing AND emits nothing, so the late Modules result does not go on
+/// to the Image step — nor, beyond it, to the restart.
+/// </summary>
+public class InstanceRebootEndedMidStepTest(ITestOutputHelper output) : InstanceRebootScenario(output)
+{
+    private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> imageSelected = new();
+
+    protected override IInstanceRebootActivation CreateActivation(IServiceProvider sp) =>
+        new Watched(base.CreateActivation(sp), imageSelected);
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARequestEndedWhileAStepRuns_StartsNoLaterStep()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await RunningVersionOne(ct);
+        await PolicyExists(ct);
+        await Mesh.ServiceProvider.GetRequiredService<RegistryUpdateReconciler>().BootReconciled
+            .DefaultIfEmpty().Timeout(TestTimeouts.Convergence).Await(ct);
+        Registry.Serve("1.2.0", floor: FloorFixture.Below);
+        Registry.ParkNextIndex();
+        try
+        {
+            var path = await Reboot(ct);
+            await Registry.IndexParked.Should().Within(TestTimeouts.Convergence)
+                .Emit("the Modules step reads the bundle index — parked there", ct);
+            await AwaitReboot(path, r => r.Steps.Any(s => s.Name == InstanceRebootSteps.Modules && s.Outcome == InstanceRebootStepOutcome.Running), ct);
+
+            // The request ends while the Modules step is in flight.
+            await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update<InstanceRebootRequest>(r => r with
+                {
+                    Status = InstanceRebootStatus.Failed,
+                    Failure = "ended while the Modules step ran",
+                    CompletedAt = DateTimeOffset.UtcNow,
+                }))
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            await AwaitReboot(path, r => r.Status == InstanceRebootStatus.Failed, ct);
+            Registry.ReleaseIndex();
+
+            await imageSelected.Should().NotEmit(TestTimeouts.Quick,
+                "a step that ends after its request ended must not start the next step", ct);
+            var after = await AwaitReboot(path, _ => true, ct);
+            after.Status.Should().Be(InstanceRebootStatus.Failed);
+            after.Failure.Should().Be("ended while the Modules step ran");
+            InstanceRebootTest.Step(after, InstanceRebootSteps.Image).Outcome.Should().Be(InstanceRebootStepOutcome.Pending);
+            Updater.Restarts.Should().Be(0);
+        }
+        finally
+        {
+            Registry.ReleaseIndex();
+        }
+    }
+
+    private sealed class Watched(IInstanceRebootActivation inner, System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> selected)
+        : IInstanceRebootActivation
+    {
+        public IObservable<RebootImageChoice> SelectImage(bool wedged) => Observable.Defer(() =>
+        {
+            selected.OnNext(System.Reactive.Unit.Default);
+            selected.OnCompleted();
+            return inner.SelectImage(wedged);
+        });
+
+        public IObservable<RebootActivationOutcome> Activate(RebootImageChoice choice, string reason) => inner.Activate(choice, reason);
+    }
+}
+
 /// <summary>The rollout rule, pure — each refusal with its control.</summary>
 public class RolloutStrategyRuleTest
 {

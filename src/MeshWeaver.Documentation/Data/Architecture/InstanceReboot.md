@@ -44,7 +44,8 @@ System. This is the same trust rule as [Module Reload](../ModuleReload).
 | `replicas{process}` | what each process that booted after the stamp reported from its own checks |
 | `failure`, `completedAt`, `log[]` | the red steps by name, when it ended, and the audit trail |
 | `executionWindow` | DECLARED when the request is filed (`Reboot:ExecutionWindow`, default 3 h): the longest the request may go without recording progress and still count as in progress. See "A request that stops moving" |
-| `progressAt` | when it last recorded progress: stamped on every executor write and on a re-arm |
+| `progressAt` | when it last recorded progress: stamped on every executor write (including each finished sync source) and on a re-arm |
+| `requestedEndIfStalledAt` | a reader that saw the request stalled asks its owner to end it; the owner answers and clears it |
 
 ## The five steps
 
@@ -157,20 +158,31 @@ Two readers act on that, and neither runs a timer of its own:
   `Critical` line names it, its trigger and why it stalled, once per request per process. The rate
   limit's other two rules still hold. The read also activates the request's own hub, which resumes
   its executor if the process that drove it is gone.
-- **The plugin catalog's reconcile pass** ends a stalled request as `Failed`, naming the stall
-  (`InstanceReboot.FailStalled`). It runs right after the faulted-restart re-arm, so a `Faulted`
-  request due for its retry is retried, not ended. The write re-judges inside the update, so a
-  request that moved meanwhile is left alone. A terminal request is final: the executor writes
-  nothing on it afterwards, so a step still in flight cannot re-open it.
+- **The plugin catalog's reconcile pass** asks the OWNER of every request that looks stalled to end
+  it (`InstanceReboot.FailStalled`, which writes the `requestedEndIfStalledAt` control field). It
+  runs right after the faulted-restart re-arm, so a `Faulted` request due for its retry is retried,
+  not ended. 🚨 The decision is never made on the reconcile pass's own copy of the node. A
+  cross-hub write is a merge patch, and the owner guards only the keys it carries, so a replica
+  report landing between that evaluation and the commit would not stop a `Failed` from landing.
+  The request's own hub answers instead (`InstanceReboot.EndIfStalled`): in ONE update, against its
+  own current state, it ends the request as `Failed` naming the stall, or leaves it open. Either
+  way it clears the field. That answer runs on its own subscription, so a step that never returns
+  cannot hold it back.
+- **A terminal request is final.** An executor write that meets one changes nothing AND emits
+  nothing, so the step chain behind it ends there. A late Sync result cannot start the module
+  landing, and a request ended before the restart stamp cannot go on to ask for the restart.
 
 The common ways a request stops moving, each now ended by name: the restart handed to the control
 lane never happened, so no process booted after the stamp and nothing reported (`AwaitingRestart`);
 a `Faulted` restart that nothing re-armed (the reconcile safety net is off); a step that never
 returned. The Sync step's own per-import bound is described under step 1.
 
-The window is longer than any step's own wait: one source import is bounded at 10 minutes, and the
+The window is longer than any single wait: one source import is bounded at 10 minutes, and the
 verification after a restart waits at most `SingletonResumeBudget` (35 minutes) beside the bake
-settle (15 minutes).
+settle (15 minutes). The Sync step imports its sources one after another, so a long batch could
+exceed the window as a whole. Each source's row is therefore recorded on the request as progress
+the moment that import ends, before the next one starts (`ModuleSourceUpdate.UpdateAllReporting`).
+A batch of many healthy imports is progress all the way through.
 
 ## Who can start one
 

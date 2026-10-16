@@ -201,6 +201,11 @@ public record InstanceRebootRequest
     /// re-arm. Read with every other instant the request carries (<see cref="InstanceReboot.LastProgressAt"/>).</summary>
     public DateTimeOffset? ProgressAt { get; init; }
 
+    /// <summary>A reader that saw the request as stalled asks its OWNER to end it (the control-plane
+    /// <c>RequestedX</c> shape): the request's own hub re-judges against its own state and either ends it
+    /// or clears this field (<see cref="InstanceReboot.EndIfStalled"/>). Null when nothing is asked.</summary>
+    public DateTimeOffset? RequestedEndIfStalledAt { get; init; }
+
     /// <summary>Every step, in order — the audit trail. Executor-owned.</summary>
     public ImmutableList<string> Log { get; init; } = ImmutableList<string>.Empty;
 }
@@ -460,14 +465,57 @@ public static class InstanceReboot
     }
 
     /// <summary>
+    /// 🚨 The owner-side END of a stalled request — pure. Applied INSIDE the request's own hub's update
+    /// (<c>InstanceRebootExecutor</c>), against the owner's CURRENT state, so the stall is judged and the
+    /// terminal transition is made in one serialized step: a replica report or an executor step that
+    /// landed after a reader saw the request as stalled keeps it open. Stalled ⇒
+    /// <see cref="InstanceRebootStatus.Failed"/> naming the stall; otherwise the request is unchanged
+    /// except that <see cref="InstanceRebootRequest.RequestedEndIfStalledAt"/> is cleared (asked and
+    /// answered). Never touches <see cref="InstanceRebootRequest.ProgressAt"/>: answering is not progress.
+    /// </summary>
+    /// <param name="current">The request as the OWNER holds it.</param>
+    /// <param name="now">The owner's clock.</param>
+    /// <param name="defaultWindow">The window for a request that declares none.</param>
+    /// <param name="retryUnit">The backoff unit (<see cref="RetryDueAt"/>).</param>
+    public static InstanceRebootRequest EndIfStalled(InstanceRebootRequest current, DateTimeOffset now, TimeSpan defaultWindow, TimeSpan retryUnit) =>
+        Stalled(current, now, defaultWindow, retryUnit) is { } why
+            ? current with
+            {
+                Status = InstanceRebootStatus.Failed,
+                Failure = current.Failure is null ? $"stalled: {why}" : $"{current.Failure}; stalled: {why}",
+                CompletedAt = now,
+                RequestedEndIfStalledAt = null,
+                Log = current.Log.Add($"{now:u} ended as Failed — stalled: {why}"),
+            }
+            : current with { RequestedEndIfStalledAt = null };
+
+    /// <summary>
+    /// Asks the owner of the request at <paramref name="path"/> to end it if it is stalled: writes
+    /// <see cref="InstanceRebootRequest.RequestedEndIfStalledAt"/> (a <c>RequestedX</c> field — the
+    /// control-plane shape), which the request's own hub answers with <see cref="EndIfStalled"/> against
+    /// its own state. Writing the request is harmless at any moment: the decision is never made on this
+    /// caller's mirror. The write also activates the owner. Cold; emits once.
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="path">The request.</param>
+    /// <param name="now">When it was asked.</param>
+    public static IObservable<MeshNode> RequestEndIfStalled(IMessageHub hub, string path, DateTimeOffset now)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return access.RunAsSystem(() => hub.GetMeshNodeStream(path)
+                .Update<InstanceRebootRequest>(r => InstanceRebootStatus.IsTerminal(r.Status) ? r : r with { RequestedEndIfStalledAt = now }))
+            .Take(1);
+    }
+
+    /// <summary>
     /// 🚨 The END of a stalled request (MeshWeaver#6625): lists the reboot requests, reads each one the
-    /// listing does not show as finished from its OWN node stream, and makes every one that is
-    /// <see cref="Stalled"/> <see cref="InstanceRebootStatus.Failed"/>, naming the stall, through a
-    /// <c>GetMeshNodeStream(path).Update</c> as System that re-judges inside the write, so a request
-    /// that moved meanwhile is left alone. A terminal request is final: the executor writes nothing on
-    /// it afterwards. Called by the plugin catalog's reconcile pass right after <see cref="RetryFaulted"/>
-    /// (so a faulted request due for its re-arm is re-armed, never ended); no timer of its own. Emits
-    /// the paths it ended, once; never faults, and a read it cannot make is logged at Warning.
+    /// listing does not show as finished from its OWN node stream, and for every one that looks
+    /// <see cref="Stalled"/> ASKS its owner to end it (<see cref="RequestEndIfStalled"/>). The owner
+    /// re-judges against its own current state and makes the transition itself (<see cref="EndIfStalled"/>),
+    /// so a request that moved meanwhile stays open. Called by the plugin catalog's reconcile pass right
+    /// after <see cref="RetryFaulted"/> (so a faulted request due for its re-arm is re-armed, never
+    /// ended); no timer of its own. Emits the paths it asked about, once; never faults, and a read it
+    /// cannot make is logged at Warning.
     /// </summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="defaultWindow">The window for a request that declares none.</param>
@@ -489,31 +537,20 @@ public static class InstanceReboot
                             || !InstanceRebootStatus.IsTerminal(listed.Status))
                 .Select(n => n.Path)
                 .ToObservable()
-                .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                // FirstAsync, never Take(1): a stream that completes empty must reach the Catch below.
+                .Select(path => access.RunAsSystem(() => hub.GetMeshNodeStream(path).FirstAsync().Timeout(ActivationRecycle.ReadBudget))
                     .Select(node => node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions))
                     .SelectMany(current => current is not null && Stalled(current, now, defaultWindow, retryUnit) is { } why
-                        ? access.RunAsSystem(() => hub.GetMeshNodeStream(path)
-                                .Update<InstanceRebootRequest>(r => Stalled(r, now, defaultWindow, retryUnit) is { } still
-                                    ? r with
-                                    {
-                                        Status = InstanceRebootStatus.Failed,
-                                        Failure = r.Failure is null ? $"stalled: {still}" : $"{r.Failure}; stalled: {still}",
-                                        CompletedAt = now,
-                                        Log = r.Log.Add($"{now:u} ended as Failed — stalled: {still}"),
-                                    }
-                                    : r))
-                            .Take(1)
-                            .Select(node => node.ContentAs<InstanceRebootRequest>(hub.JsonSerializerOptions))
-                            .Where(after => after is not null && InstanceRebootStatus.IsTerminal(after.Status))
+                        ? RequestEndIfStalled(hub, path, now)
                             .Do(_ => logger?.LogWarning(
-                                "[Reboot] {Path}: ended as Failed — it stalled ({Why}); it no longer holds any self-reboot back",
+                                "[Reboot] {Path}: looks stalled ({Why}) — its owner is asked to end it as Failed if it still is",
                                 path, why))
                             .Select(_ => path)
                         : Observable.Empty<string>())
                     .Catch((Exception ex) =>
                     {
                         logger?.LogWarning(ex,
-                            "[Reboot] {Path}: whether it stalled could not be read or ended this pass ({Reason}) — the next pass asks again",
+                            "[Reboot] {Path}: whether it stalled could not be read or asked this pass ({Reason}) — the next pass asks again",
                             path, ex.Message);
                         return Observable.Empty<string>();
                     }))

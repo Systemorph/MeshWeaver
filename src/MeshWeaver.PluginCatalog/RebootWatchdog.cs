@@ -225,7 +225,10 @@ public sealed class RebootWatchdog
                 // A terminal status is final, so a listing that says so is right; anything else is read live.
                 .Select(x => InstanceRebootStatus.IsTerminal(x.Request!.Status)
                     ? Observable.Return(Record(x.Path, x.Request))
-                    : access.RunAsSystem(() => meshHub.GetMeshNodeStream(x.Path).Take(1).Timeout(ActivationRecycle.ReadBudget))
+                    // FirstAsync, never Take(1): a stream that COMPLETES empty (a synchronization stream
+                    // disposed during teardown) must reach the Catch below and count the request as
+                    // open — Take(1) would complete normally and ToList would silently drop it.
+                    : access.RunAsSystem(() => meshHub.GetMeshNodeStream(x.Path).FirstAsync().Timeout(ActivationRecycle.ReadBudget))
                         .Select(node => node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions) is { } live
                             ? Record(x.Path, live)
                             : Record(x.Path, x.Request) with { Stalled = null })
