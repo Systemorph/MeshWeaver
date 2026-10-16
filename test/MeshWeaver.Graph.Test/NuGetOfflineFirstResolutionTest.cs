@@ -273,4 +273,98 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             .And.OnlyContain(p => File.Exists(p));
         secondResult.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal));
     }
+
+    private int readerRefused;
+
+    /// <summary>
+    /// A persistent-cache hydration is paused after it has written the nuspec AND the completion
+    /// marker but before the assembly, which is the order an archive can deliver them in. A second
+    /// resolver reading the package folder in that window must not accept the half-written folder
+    /// through the lock-free path. It must find no install yet, wait for the install lock, and get
+    /// the finished package, with every returned path present.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ConcurrentReader_NeverAcceptsAHydrationInProgress()
+    {
+        WriteConfig(withLocalFeed: true);
+        Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0");
+        Publish("Acme.Offline.B", "1.0.0"); // metadata for the walk; the bytes come from the cache
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var cache = new PausingPackageCache();
+        var hydrating = new NuGetAssemblyResolver(
+            NullLogger<NuGetAssemblyResolver>.Instance,
+            Settings.LoadSpecificSettings(root, "nuget.config"),
+            PackagesFolder,
+            cache);
+        var reader = ColdResolver();
+        reader.OnInstallFolderRefused = identity =>
+        {
+            if (identity.Id == "Acme.Offline.B") Volatile.Write(ref readerRefused, 1);
+        };
+
+        var hydration = Task.Run(() => hydrating.ResolveAsync(request, targetFramework: null, ct: ct), ct);
+        Task<ResolvedPackageSet>? reading = null;
+        try
+        {
+            SpinWait.SpinUntil(() => cache.Paused, TimeSpan.FromSeconds(60))
+                .Should().BeTrue("the hydration reaches the window after its marker and before its assembly");
+            reading = Task.Run(() => reader.ResolveAsync(request, targetFramework: null, ct: ct), ct);
+            // The reader either refuses the folder (and will queue on the install lock) or, if the
+            // half-written folder is visible, completes with it. Either way the hydration resumes.
+            SpinWait.SpinUntil(() => Volatile.Read(ref readerRefused) == 1 || reading.IsCompleted,
+                TimeSpan.FromSeconds(60));
+        }
+        finally
+        {
+            cache.Resume();
+        }
+
+        var hydrated = await hydration;
+        var read = await reading!;
+
+        hydrated.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal));
+        read.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.B.dll", StringComparison.Ordinal))
+            .And.OnlyContain(p => File.Exists(p));
+    }
+
+    /// <summary>
+    /// A persistent cache that writes a package's entries nuspec first, completion marker second, and
+    /// the assembly last, parking between the marker and the assembly until the test resumes it.
+    /// </summary>
+    private sealed class PausingPackageCache : INuGetPackageCache
+    {
+        private int paused;
+        private int resume;
+
+        public bool Paused => Volatile.Read(ref paused) == 1;
+
+        public void Resume() => Volatile.Write(ref resume, 1);
+
+        public Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct)
+        {
+            Directory.CreateDirectory(Path.Combine(targetPackageFolder, "lib", "net10.0"));
+            File.WriteAllText(Path.Combine(targetPackageFolder, packageId.ToLowerInvariant() + ".nuspec"), $"""
+                <?xml version="1.0" encoding="utf-8"?>
+                <package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">
+                  <metadata>
+                    <id>{packageId}</id>
+                    <version>{version}</version>
+                    <authors>test</authors>
+                    <description>hydrated fixture</description>
+                  </metadata>
+                </package>
+                """);
+            File.WriteAllText(Path.Combine(targetPackageFolder, ".nupkg.metadata"),
+                """{ "version": 2, "contentHash": "fixture", "source": null }""");
+            Volatile.Write(ref paused, 1);
+            SpinWait.SpinUntil(() => Volatile.Read(ref resume) == 1, TimeSpan.FromSeconds(60));
+            File.WriteAllBytes(Path.Combine(targetPackageFolder, "lib", "net10.0", packageId + ".dll"), [0x4D, 0x5A]);
+            return Task.FromResult(true);
+        }
+
+        public Task SaveAsync(string packageId, string version, string sourcePackageFolder, CancellationToken ct) =>
+            Task.CompletedTask;
+    }
 }

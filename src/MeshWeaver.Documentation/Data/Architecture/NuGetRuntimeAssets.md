@@ -213,8 +213,10 @@ answer (#6863):
   exactly that id and version. ONE check (`ReadCompleteInstall`) decides this for the dependency walk
   AND for the install step. A folder it refuses (half-extracted, empty, or holding another package)
   is never handed to asset selection: it is deleted and the package is installed again, from the
-  persistent cache first and then the feed. A folder hydrated from the persistent cache must pass
-  the same check before it is used.
+  persistent cache first and then the feed. A persistent-cache hydration is extracted into a STAGING
+  folder beside the install path, checked there by the same rule, and published with one directory
+  rename. A cache writes entries in archive order, so extracting in place could expose the nuspec and
+  the marker before the assemblies. The install path therefore either does not exist or is complete.
 - **Repair runs under one lock per package**, shared by every resolution in the process and every
   process on the same package folder. The lock is NuGet's own file lock
   (`ConcurrencyUtilities.ExecuteWithFileLockedAsync`, named by the install directory), the primitive
@@ -243,6 +245,9 @@ The first configured feed refuses every connection, and some cases add a local f
 - Two resolvers share a dependency whose folder starts incomplete. One is parked between its check
   and the lock while the other installs the package and returns. The parked one then resumes and
   must use that install, never reinstall it.
+- A cache hydration is paused after writing the nuspec and the marker but before the assembly. A
+  second resolver reading in that window must not accept the half-written folder, and it ends with
+  the finished package.
 
 ## What pins it
 

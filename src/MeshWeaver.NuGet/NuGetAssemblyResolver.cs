@@ -377,15 +377,22 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     /// exactly that id and version. Returns the nuspec, or <c>null</c> (with the reason logged when a
     /// folder exists but is refused).
     /// </summary>
-    private NuspecReader? ReadCompleteInstall(PackageIdentity identity, string packagesRoot)
+    private NuspecReader? ReadCompleteInstall(PackageIdentity identity, string packagesRoot) =>
+        ReadCompleteFolder(identity, packagesRoot,
+            new VersionFolderPathResolver(packagesRoot).GetInstallPath(identity.Id, identity.Version));
+
+    /// <summary>
+    /// <see cref="ReadCompleteInstall"/> over an explicit <paramref name="installPath"/>, so a staging
+    /// folder can be checked by the same rule before it is published to the install path.
+    /// </summary>
+    private NuspecReader? ReadCompleteFolder(PackageIdentity identity, string packagesRoot, string installPath)
     {
-        var pathResolver = new VersionFolderPathResolver(packagesRoot);
-        var installPath = pathResolver.GetInstallPath(identity.Id, identity.Version);
         if (!Directory.Exists(installPath)) return null;
+        var pathResolver = new VersionFolderPathResolver(packagesRoot);
         var version = identity.Version.ToNormalizedString();
-        var complete = File.Exists(pathResolver.GetNupkgMetadataPath(identity.Id, identity.Version))
-            || File.Exists(pathResolver.GetHashPath(identity.Id, identity.Version));
-        var nuspecPath = pathResolver.GetManifestFilePath(identity.Id, identity.Version);
+        var complete = File.Exists(Path.Combine(installPath, PackagingCoreConstants.NupkgMetadataFileExtension))
+            || File.Exists(Path.Combine(installPath, pathResolver.GetHashFileName(identity.Id, identity.Version)));
+        var nuspecPath = Path.Combine(installPath, pathResolver.GetManifestFileName(identity.Id, identity.Version));
         if (!complete || !File.Exists(nuspecPath))
         {
             MsLogging.LoggerExtensions.LogWarning(logger,
@@ -471,34 +478,8 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         }
 
         // Try to hydrate from the persistent cache (e.g., Azure Blob) before hitting the feed.
-        // The hydrated folder must pass the SAME check as any installed folder: the package's own
-        // .nuspec (the canonical NuGet source of truth) declares the (id, version) we expected, and
-        // the completion marker is there. A poisoned cache — different package stored under the
-        // wrong key, accidental cross-tenant blob, drift after a manual copy — would otherwise
-        // silently load wrong assemblies into a NodeType compile; and a folder returned without the
-        // marker would be refused, and replaced, by the next resolution while this one loads it.
-        Directory.CreateDirectory(installedPath);
-        if (await _packageCache.TryHydrateAsync(info.Id, versionString, installedPath, ct))
-        {
-            if (ReadCompleteInstall(identity, packagesRoot) is not null)
-            {
-                MsLogging.LoggerExtensions.LogInformation(logger,
-                    "Hydrated NuGet package {Id} {Version} from persistent cache", info.Id, versionString);
-                return installedPath;
-            }
-
-            MsLogging.LoggerExtensions.LogWarning(logger,
-                "Hydrated package at {Path} is not a complete install of {Id} {Version}; discarding and falling back to feed",
-                installedPath, info.Id, versionString);
-            try { Directory.Delete(installedPath, recursive: true); }
-            catch (Exception delEx)
-            {
-                MsLogging.LoggerExtensions.LogWarning(logger, delEx,
-                    "Failed to delete poisoned cache contents at {Path}", installedPath);
-            }
-            // Recreate the empty directory for the v3 install below to land into.
-            Directory.CreateDirectory(installedPath);
-        }
+        if (await TryHydrateFromCacheAsync(identity, packagesRoot, installedPath, ct))
+            return installedPath;
 
         if (info.Source is null)
             throw new InvalidOperationException(
@@ -567,6 +548,56 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         }, CancellationToken.None);
 
         return installedPath;
+    }
+
+    /// <summary>
+    /// Hydrates <paramref name="identity"/> from the persistent cache into a STAGING folder beside the
+    /// install path, checks it there by the same rule as any installed folder, and only then
+    /// publishes it to <paramref name="installedPath"/> with one directory rename. A cache writes
+    /// entries in archive order, so extracting in place could expose the nuspec and the completion
+    /// marker before the assemblies: a resolver taking the lock-free fast path would then accept a
+    /// half-written folder. The install path therefore either does not exist or is complete.
+    /// The staged folder must also pass the identity check: a poisoned cache (a different package
+    /// under the wrong key, a cross-tenant blob, drift after a manual copy) would otherwise load
+    /// wrong assemblies into a NodeType compile. Runs under the package's install lock.
+    /// </summary>
+    private async Task<bool> TryHydrateFromCacheAsync(
+        PackageIdentity identity, string packagesRoot, string installedPath, CancellationToken ct)
+    {
+        var versionString = identity.Version.ToNormalizedString();
+        // Same parent as the install path, so the publish is a rename on one volume. The name is
+        // not a version, so NuGet's own folder enumeration never mistakes it for an install.
+        var staging = Path.Combine(
+            Path.GetDirectoryName(installedPath)!, $".hydrating-{versionString}-{Guid.NewGuid():N}");
+        try
+        {
+            Directory.CreateDirectory(staging);
+            if (!await _packageCache.TryHydrateAsync(identity.Id, versionString, staging, ct))
+                return false;
+            if (ReadCompleteFolder(identity, packagesRoot, staging) is null)
+            {
+                MsLogging.LoggerExtensions.LogWarning(logger,
+                    "Hydrated package {Id} {Version} is not a complete install; discarding it and falling back to the feed",
+                    identity.Id, versionString);
+                return false;
+            }
+            Directory.Move(staging, installedPath);
+            MsLogging.LoggerExtensions.LogInformation(logger,
+                "Hydrated NuGet package {Id} {Version} from persistent cache", identity.Id, versionString);
+            return true;
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+            {
+                try { Directory.Delete(staging, recursive: true); }
+                catch (Exception delEx)
+                {
+                    MsLogging.LoggerExtensions.LogWarning(logger, delEx,
+                        "Failed to delete the hydration staging folder {Path}", staging);
+                }
+            }
+        }
     }
 
     private static string BuildCacheKey(IReadOnlyCollection<NuGetPackageReference> requested, NuGetFramework framework)
