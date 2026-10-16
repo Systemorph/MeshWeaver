@@ -365,6 +365,24 @@
     <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
     <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
   </ItemGroup>
+  <!-- MessagePack GHSA-qhrr-8q5h-9q3h (vulnerable < 2.5.303) arrives transitively as 2.5.302 through
+       Aspire.Hosting -> StreamJsonRpc 2.25.29, and no parent ships a patched dependency yet. Scoped
+       to the projects whose graph carries it (measured with `dotnet nuget why` and the
+       vulnerable-package listing), so no other project gains a package. A new project taking
+       Aspire.Hosting reports NU1902 and belongs here. Drop both blocks (and the PackageVersion) once
+       StreamJsonRpc ships against a patched MessagePack.
+       🚨 Memex.Aspire.Hosting is PACKED (MeshWeaver.Aspire.Hosting.Memex) and its consumers'
+       AppHosts take the same vulnerable chain, so its reference is EXPORTED — no PrivateAssets —
+       and the nuspec declares MessagePack >= 2.5.303, which lifts every consumer's graph. That is
+       the one deliberate exception to the PrivateAssets="all" rule below: here the override IS
+       what the package must hand on. Memex.Deploy.AppHost is never packed, so its own reference
+       stays private (it also receives the exported one across its ProjectReference). -->
+  <ItemGroup Condition=" '$(MSBuildProjectName)' == 'Memex.Aspire.Hosting' ">
+    <PackageReference Include="MessagePack" />
+  </ItemGroup>
+  <ItemGroup Condition=" '$(MSBuildProjectName)' == 'Memex.Deploy.AppHost' ">
+    <PackageReference Include="MessagePack" PrivateAssets="all" />
+  </ItemGroup>
   <!-- Overrides are the exception, not the rule.
        This block used to force patched versions of System.Security.Cryptography.Xml,
        Microsoft.AspNetCore.DataProtection, OpenTelemetry.Api and AngleSharp. Every one of those
