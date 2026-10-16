@@ -736,6 +736,112 @@ its index, so such an N+1 is `RestartRequired` with N serving
 mutation-checked — without the index the swap answers `Live`). An addition AFTER the forwarded
 registrations (the hosted-service case above) still swaps live.
 
+**The class is loud now, not only the instance refused.** The swap refusal above is the root fix; what
+let the incident run six and a half hours is that nothing READ the broken state — `/health` said
+Degraded (the exception quoted inside two unrelated entries), every pod stayed READY, nothing paged.
+Three pieces close that, each built on the refusal rather than beside it:
+
+- **The layout is explicit.** `ModuleServices.ForwarderLayout` is the boot generation's forwarded
+  registrations (index + shape) and every swapped-in generation INHERITS it
+  (`ModuleContexts.PrepareServices`); the swap compares N+1's shape against that layout — the
+  forwarders the root actually holds — never merely against the generation it replaces.
+- **Readiness reads it.** `ModuleContexts.UnresolvableForwarders` asks each current generation, for
+  every forwarder in its layout, whether it can answer: the registration at that index exists, is the
+  forwarded one the forwarder was laid out for, and its container holds the scope key. The
+  `module_forwarders` health check (`ModuleForwarderHealthCheck`, readiness + roll-gate + census tags
+  in `Memex.Portal.ServiceDefaults`, so it holds `/ready` and never fails the startup probe) is Unhealthy on any gap, naming module, generation, key and service,
+  and prints its clean census otherwise. One reading is enough — a built container never changes —
+  so it cannot flap on a transient lease failure and needs no window
+  (`ModuleRootServicesSwapTest.AGenerationWhoseForwarderMoved_FailsReadiness_NamingTheModuleAndTheService`,
+  arranged as the pre-refusal swap committed it and mutation-checked; its negative control
+  `EveryForwarderResolves_AfterBootAndAfterALiveSwap_SoReadinessHolds`). Each generation is read under
+  the same context and services leases a forwarder's resolve takes, currency re-checked, so a live swap
+  that retires it mid-scan defers the disposal to the scan's release
+  (`ModuleRootServicesSwapTest.ARetirementDuringTheForwarderScan_IsDeferredToTheScansRelease`).
+- **The fleet watch alarms on it.** `Hosting/Issue/Source/ModuleLeaseAlarms` (MeshWeaver.Plugins) reads
+  every replica's `/health` — unready ones included, since this check is what makes them unready —
+  for a `module_forwarders` finding or the raw `mw-module-service:… has not been registered` text an
+  older image quotes, and raises `ModuleServiceLease`: a Warning on the first pass, Critical (a platform
+  notification to global admins) once it holds on the next.
+
+### An optional module that cannot serve a service costs that feature — never sign-in (MeshWeaver#6847)
+
+The shape check closes the road the incident came by. It does not answer the question the incident
+raised: **why could an optional chat module stop people signing in at all?** The chain, read from the
+code the 2026-10-16 build ran:
+
+1. A per-node hub activation resolves its node first (`MessageHubGrain` → `PathResolutionService`), and
+   that resolution is a query.
+2. The query fan-out (`MeshQuery.SelectMatchingProviders`) sends EVERY query to EVERY provider — it
+   deliberately does not pre-filter by `Matches`, because storage providers answer `false` for an
+   unscoped query they must still serve. WhatsApp's `WhatsAppChatQueryProvider` is one of them, forwarded
+   to the root as a `ModuleServiceProxy`.
+3. Each module provider's leg takes a lease on subscribe (`ModuleServiceProxy.Leased` →
+   `ModuleContexts.TryLeaseModuleService`), and the lease RESOLVES the registration in the module's
+   current generation. That resolve threw `mw-module-service:10 (IWhatsAppRecentChats) has not been
+   registered`, the lease rethrew, the leg errored, and the merge errors the whole query on any leg's
+   error.
+4. So node resolution faulted for every hub that activated (the `[ACTIVATE] … activation faulted`
+   lines), and `UserIdentityCache`'s directory query (`nodeType:User`, unscoped, as System) faulted with
+   it — the "We could not check your account just now" every user saw. (The OAuth authorization code
+   itself is written storage-direct by `OAuthCodeStore` and touches no hub or query; what failed around
+   it was the identity and every hub-backed read.)
+
+The same lease guards the access-rule set (`NodeTypeAccessRuleSet` takes one per rule) and, since this
+change, the options setups a module forwards. **The rule is now that a registration the module's current
+generation cannot PRODUCE is ABSENT, never a fault in a consumer that leases it:**
+
+| Where | What changed |
+|---|---|
+| `ModuleContexts.TryLeaseModuleService` | A resolve that faults answers null, which every leasing consumer already reads as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542) — except the caller's own scope ending, which propagates: a disposal in the causes (also when the container wrapped it in a resolution exception) AND a caller scope that has actually ended. A constructor that ran into a disposed dependency of its OWN under a live caller is a construction fault like any other. Only a **generation-wide** fault is a durable verdict: a registration the generation does not lay out the way the root forwards it — nothing registered under the forwarded key, or an instance that is not what the forwarder forwards — is recorded in `ModuleServices.Unservable` for THAT generation and reported once (stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and why). A later generation starts clean. Any other construction fault — one caller's scope, one attempt at a singleton — is that lease's alone: nothing is recorded, the next lease resolves afresh, and it is logged once per registration and exception type. |
+| `ModuleServiceProxy.Serves` | False for a recorded unservable registration, so a set built over the root's `IEnumerable<T>` leaves it out. |
+| `MeshQuery.WithMembers` | A module's provider is leased ONCE when a fan-out is SUBSCRIBED; that lease is its membership and the instance its leg runs on, and it is released when THAT LEG terminates or is unsubscribed — a module leg that answered and completed holds nothing while the merged query stays live on its storage legs, so it never keeps a retirement waiting. A resubscribed leg (the transient-connect retry) takes a lease of its own; a lease no leg took is released with the subscription. A provider that cannot be leased is not in the set whose Initial frames the merge awaits, so not even the first query after the break faults — and a generation change between building a query and subscribing it, or a transient provider whose next construction fails, can no longer err the merged query through a second resolve. A module provider whose lease failed when the fan-out was BUILT is retained (its name read when a subscription leases it) instead of dropped for the mesh's life; `NodeTypeAccessRuleSet` retains such a rule the same way, reading its node type at lookup. |
+| `ModuleConfigureOptionsForwarder` | Leased instead of resolved. The options factory runs every setup of an options type for EVERY name, so a module's `AddHttpClient(name)` forwarder runs when the sign-in's OIDC handler builds its own `HttpClientFactoryOptions`; a forwarder that threw there made one module's broken registration a fault in every named build of that type. A module that is not held, or cannot produce the setup, now configures nothing. A TEMPORARY construction fault also configures nothing for that build — no name's build fails — but the monitor-cache entry that build fills is removed (the cache inserts it before building), so the incomplete options are never cached and the next build of the name carries the module's setup again. Throwing instead would be worse: the monitor cache keeps a build that threw and rethrows it for that name until invalidated. |
+
+A DIRECT call through a forwarder still throws the real error: that call IS the feature, and failing it is
+correct. This is not a catch-and-continue: the fault is turned into a recorded, reported verdict about
+one generation of one module, and the only thing that stops working is what that module contributed.
+
+`ABrokenOptionalModuleNeverBreaksSignInTest` pins it. A module forwards a query provider and a named
+setup of a platform options type; the test then makes the held generation the incident's — a
+module-owned registration inserted ahead of both, committed past the shape check — and runs what
+sign-in runs: the identity directory query, a node write, a hub-activating read of it, and a named
+options build of the type the module also configures. Controls: before the break the module's provider
+answers its own node and its setup configures its own name; after it a direct resolve of the broken
+registration still throws "has not been registered". On the pre-fix code the identity query errors with
+exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same. The same class
+pins a query BUILT while the module was healthy and SUBSCRIBED after the break.
+
+**Access rules fail CLOSED, not absent.** The isolation above is right for a query provider, an options
+setup or a health check — a feature that is missing is the safe reading. It is NOT right for an access
+rule: a rule that is skipped makes the validator fall back to the ordinary path permission, so a caller
+holding an ordinary Update grant would pass a write the module's rule exists to refuse. The lease
+therefore says WHY it answered null (`ModuleLeaseFault`: the module is not held or is retiring — absent;
+or it is held and could not produce the registration this time, or in this generation at all — faulted),
+and `NodeTypeAccessRuleSet` hands out a rule that DENIES for the type a faulted rule governs. Other types
+never meet it. A rule retained because its binding failed when the set was built fails closed for the
+type it last named; one that has never been produced in the process is unknown, and fails closed for
+every lookup while it faults, because nothing says which type it governs. The lease is held through the
+fault's classification and report, so a retirement overlapping the fault waits for it instead of
+disposing the container under the classification.
+
+`AModuleConstructionFaultStaysLocalTest` pins the rest with transient module services whose
+constructions it fails on demand: a provider constructed once per query subscription; a completed module
+leg releasing its lease while the merged identity query stays live, so a retirement unloads the module;
+a failing caller scope followed by a healthy one; a constructor's own disposed dependency isolated under
+a live caller, while a caller whose scope has ended still sees its `ObjectDisposedException`; a provider
+and an access rule whose lease failed while the fan-out and the rule set were built serving afterwards;
+a temporary options-setup fault that is never cached as complete options; a duplicate provider
+registration run once per query; a provider name that throws after a failed binding releasing its lease;
+a denying access rule that cannot be constructed failing closed for its type only; and a construction
+fault overlapping a retirement.
+
+**Not established:** a module provider whose OWN `Query` faults (as opposed to one that cannot be
+produced) still fails every unscoped query it is asked — including the identity directory — because the
+merge errors on any leg's error and the fan-out does not pre-filter. That is the next isolation seam
+(scoping the identity and node-resolution reads to the providers that can hold them), not done here.
+`/health` does not yet list unservable registrations; the error log line is the report.
+
 **Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
 Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
 published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations

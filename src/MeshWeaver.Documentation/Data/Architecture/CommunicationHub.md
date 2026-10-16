@@ -422,9 +422,26 @@ unread items in one leg (a mailbox read from its provider) says so per item inst
 reads `isRead`, `from` (the sender, shown in the From column — else the source's name) and
 `webLink` (an https address in the provider's own client) from its content.
 
-**A click on a row opens it** (`DataGridControl.WithClickAction` → `InboxLayoutArea.OpenTarget`):
-an item with a `webLink` opens there (a full page load — it leaves the portal), any other at its
-node's page. Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
+**A click on a row opens it — always INSIDE the portal** (`DataGridControl.WithClickAction` →
+`InboxLayoutArea.OpenTarget` → `InboxReadingView`; owner, 2026-10-16: *"when clicking, it should
+always give me a memex view with the content, not redirect me"*). The row goes to the owner's
+reading view, `/{owner}/Inbox/{item}`, where `{item}` is the row's node path base64url-encoded into
+one segment (`InboxReadingView.ItemId`). There:
+
+- an item whose path an **`IInboxItemReader`** handles (`Handles(path)` — a live mailbox or chat
+  row, which no store holds) is READ LIVE by that reader as the owner — subject, sender, account,
+  received time in the viewer's zone, the body and a conversation's messages. Everything a reader
+  returns is PLAIN TEXT and rendered escaped; nothing is stored. A package registers its reader as
+  a singleton service beside its `InboxQueryLeg` and `IInboxItemHandler`;
+- any other (stored) item is shown by its own page, embedded (`Overview`);
+- the provider's own client (`webLink`, https only) is a secondary **Open in …** link under the
+  content — never where the click goes. The one transitional exception: a row with an https
+  `webLink` whose path NO reader handles (its package predates `IInboxItemReader`) still opens in
+  the provider's client, because no store holds it and the reading view would have nothing to show;
+  it opens inside the portal as soon as its package ships a reader;
+- only the owner's own items open: a path outside the owner's partition reads "not in your inbox".
+
+Ticking a box, and shift/cmd-clicks, are selection gestures the grid keeps to itself.
 The grid is paged (50 a page, the size selectable). A source without a symbol is toggled by a
 button that shows its NAME — never a single letter, which the icon renderer read as an icon name
 and drew as an empty button.

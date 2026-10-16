@@ -164,6 +164,7 @@ public class RendererParityTest
             .PreInstall("MeshWeaver.Plugins/Hosting")
             .DefaultGrants("Plugins/*").AsPluginRegistry()
             .WithRegistryUrl("https://registry.example.com")
+            .WithBundles("cr.example.test", ["plugins"])
             .WithRequiredModule("MeshWeaver.Hosting.Postgres").WithRequiredModulesAuthoritative(true)
             .WithReplicas(2).WithOrleansClustering("AdoNet").WithHttpPort(8080)
             .WithResources("500m", "2Gi", "2", "8Gi")
