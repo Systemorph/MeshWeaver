@@ -412,7 +412,7 @@ fi
 # lease, no lock, and no staleness heuristic that could deadlock the prefix behind a cancelled run.
 # (Since MeshWeaver#6877 publishers DO take a per-prefix lease first — so two current publishers no
 # longer interleave at all — and this postcondition stays as the guard against any writer that does
-# not: a satellite whose scripts ref predates the lease, or a lease broken as abandoned.)
+# not: a satellite whose scripts ref predates the lease, or a lease recovered as abandoned.)
 #
 # 🚨 What it does NOT close, stated so the next session does not re-derive it: the interval between
 # the last verification read and the `_complete` upload. A publisher that overwrites a file inside
@@ -1415,6 +1415,20 @@ publish_publication() { # <account> <share> <dest> <live-was-sealed>
 # their blast radius shrinks from "the whole publication" to "this target".
 OUTCOMES="$SENTINEL_LOCAL_DIR/outcomes"
 : > "$OUTCOMES"
+# The per-target subshell's EXIT trap (MeshWeaver#6877). 🚨 A release that FAILS fails the target
+# (Copilot's review of #6878): a lease left behind is infinite, every later publisher of the prefix
+# would wait out its whole bound on it, and a receipt that reads "published" over that is exactly
+# the silent shape this lane refuses. The ORIGINAL failure, when there was one, is preserved.
+release_lock_on_exit() {
+  local rc=$?
+  if ! "$PYTHON" "$HELPER" lock release --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
+       --holder "$PUBLICATION" < /dev/null; then
+    echo "::error::the publication lock $ACCOUNT/$SHARE/$LOCK_PATH could not be released — failing this target: until it is released or recovered as abandoned, every other publisher of this prefix waits on it."
+    [ "$rc" -ne 0 ] || rc=1
+  fi
+  exit "$rc"
+}
+
 publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `exit 1` fails this target only
   local target="$1"
   ACCOUNT="${target%%/*}"
@@ -1449,7 +1463,7 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   # The lock is a lease on ONE file beside the source directories, `<identity>/_publishing.<source>`:
   # outside the publication (no reader lists it: readers resolve `<identity>/<source>/`, retention
   # attributes only files under a source directory) and outside every generation. Waiting is
-  # bounded and red when exceeded; an abandoned lease is broken only on evidence — see `cmd_lock` in
+  # bounded and red when exceeded; an abandoned lease is recovered only on evidence, by releasing THAT holder's lease — see `cmd_lock` in
   # publish-bake-files.py. Released by this subshell's EXIT trap on every path out of this function.
   #
   # A workflow that must hold the prefix ACROSS steps (a carry-forward reads the live publication
@@ -1463,8 +1477,7 @@ publish_to_target() { # <target> — called in a SUBSHELL by the loop below: `ex
   else
     "$PYTHON" "$HELPER" lock acquire --account "$ACCOUNT" --share "$SHARE" --path "$LOCK_PATH" \
       --holder "$PUBLICATION" < /dev/null
-    # shellcheck disable=SC2064 # expanded NOW, on purpose: the trap must release THIS target's lock
-    trap "\"$PYTHON\" \"$HELPER\" lock release --account \"$ACCOUNT\" --share \"$SHARE\" --path \"$LOCK_PATH\" --holder \"$PUBLICATION\" < /dev/null || true" EXIT
+    trap release_lock_on_exit EXIT
   fi
   # 🚨 WHICH DIRECTORY IS ALREADY PUBLISHED, resolved by the SAME rules the portal readers use
   # (MeshWeaver#3461). Every question below — which architecture published, is it sealed, from which

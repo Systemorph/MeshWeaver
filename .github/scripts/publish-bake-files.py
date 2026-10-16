@@ -77,7 +77,7 @@ THE PHASES
 `lock`     acquire / check / release the per-prefix PUBLICATION LOCK (MeshWeaver#6877): a file lease
            on `<identity>/_publishing.<source>`, so two publishers of one prefix never interleave
            their read-decide-write. Waiting is bounded and red when exceeded; an abandoned lease is
-           broken only on evidence. See the long note above `cmd_lock`.
+           recovered only on evidence, by releasing that holder's OWN lease. See `cmd_lock`.
 
 `share-exists` true / false / unknown for the share itself — what a failure message needs before it
            advises removing a target from BAKE_PUBLISH_TARGETS.
@@ -154,7 +154,6 @@ class ShareBackend(Protocol):
     def lease_release(self, path: str, lease_id: str) -> bool:
         """True when released, False when `lease_id` does not hold it. Raises on any other failure."""
         ...
-    def lease_break(self, path: str) -> None: ...
     def share_exists(self) -> bool:
         """Whether the share answers at all. Raises when that cannot be established."""
         ...
@@ -282,11 +281,6 @@ class AzureFilesBackend:
                 return False
             raise
         return True
-
-    def lease_break(self, path: str) -> None:
-        from azure.storage.fileshare import ShareLeaseClient
-
-        ShareLeaseClient(self.share.get_file_client(path)).break_lease()
 
     def share_exists(self) -> bool:
         """Whether the SHARE itself answers. Raises when that cannot be established."""
@@ -503,8 +497,9 @@ def cmd_stamp(args: argparse.Namespace) -> int:
 #   * RELEASE is the caller's job, on every exit path (publish-bake-bundles.sh releases from an EXIT
 #     trap in the per-target subshell; a workflow that holds the lock across steps releases in an
 #     `if: always()` step, which GitHub runs on cancellation too).
-#   * An ABANDONED holder — a runner that died without running either — is broken ONLY on evidence,
-#     never on impatience: (1) the holder's own workflow run attempt has COMPLETED (asked of the
+#   * An ABANDONED holder — a runner that died without running either — is recovered ONLY on
+#     evidence, never on impatience, and only by releasing THAT holder's own lease (never a break,
+#     which could revoke whoever holds it now): (1) the holder's own workflow run attempt has COMPLETED (asked of the
 #     GitHub API when a token is available), or (2) the lease is older than any CI job can live:
 #     every job in the fleet is hard-capped at 45 minutes (check-workflow-timeouts.py), so a holder
 #     acquired more than STALE_AFTER_SECONDS ago is provably not running. Waiting is BOUNDED by
@@ -557,12 +552,19 @@ def holder_run_completed(md: dict[str, str]) -> str | None:
 
 
 def abandoned_because(md: dict[str, str], modified: float | None) -> str | None:
+    """A sentence when the RECORDED holder is provably gone, else None.
+
+    🚨 Only a NAMED holder can be judged — and only its own lease can then be released (see the
+    recovery in `cmd_lock`). A lock file with no recorded holder (its first holder is between its
+    acquire and its record write) is never judged abandoned: there is no lease id to release, and
+    breaking an unidentified lease could revoke a live one (Copilot's review of #6878).
+    """
+    if not md.get("holder"):
+        return None
     acquired: float | None = None
     try:
         acquired = float(md["acquired"])
     except (KeyError, ValueError):
-        # Leased but the record is not written yet (the holder is between its acquire and its
-        # metadata write) or was written by nothing we know: the file's own write time is the age.
         acquired = modified
     if acquired is not None:
         age = time.time() - acquired
@@ -582,7 +584,7 @@ def cmd_lock(args: argparse.Namespace) -> int:
             released = backend.lease_release(args.path, lease_id)
         except Exception as exc:  # noqa: BLE001 — named and fatal: a stuck lock blocks the prefix
             log(f"::error::could not release the publication lock {where}: {type(exc).__name__}: "
-                f"{exc} — the next publisher of this prefix waits until it is broken as abandoned")
+                f"{exc} — the next publisher of this prefix waits until it is recovered as abandoned")
             return 1
         if released:
             log(f"lock: released {where} (publication {args.holder})")
@@ -611,6 +613,7 @@ def cmd_lock(args: argparse.Namespace) -> int:
         backend.ensure_directory(level)
     started = time.monotonic()
     last_note = -1e9
+    handed_off: set[str] = set()
     while True:
         if backend.lease_acquire(args.path, lease_id):
             try:
@@ -635,16 +638,32 @@ def cmd_lock(args: argparse.Namespace) -> int:
         if exists and leased:
             reason = abandoned_because(md, modified)
             if reason:
-                log(f"::warning::breaking the publication lock {where} held by '{holder}': {reason}.")
-                backend.lease_break(args.path)
-                continue
+                # 🚨 RECOVERY IS CONDITIONAL ON THE OBSERVED HOLDER'S OWN LEASE — never a break.
+                # The evidence above describes the holder the RECORD names, read a moment ago; by
+                # now another waiter may have recovered it and taken a lease of its own, or a fresh
+                # holder may be between its acquire and its record write (the record still names
+                # the previous one). An unconditional break would revoke THAT live lease and let two
+                # publishers in again. Lease ids are derived from the holder token, so releasing
+                # exactly `lease_id_of(<recorded holder>)` succeeds only while the recorded holder
+                # still holds it; anything else is a mismatch, and this run waits (within its bound) and re-reads.
+                if backend.lease_release(args.path, lease_id_of(holder)):
+                    log(f"::warning::released the abandoned publication lock {where} of '{holder}': "
+                        f"{reason}.")
+                    continue
+                # A mismatch is an ordinary wait, NOT a retry: falling through keeps it inside the
+                # wait bound below (a `continue` here would spin on the same stale record forever).
+                if holder not in handed_off:
+                    handed_off.add(holder)
+                    log(f"lock: {where} changed hands since '{holder}' was judged abandoned — "
+                        f"waiting instead of revoking a lease this run did not observe")
         elapsed = time.monotonic() - started
         if elapsed >= args.wait_seconds:
             log(f"::error title=Publication lock not acquired::{where} is still held by publication "
                 f"'{holder}' after {int(elapsed)} s. That publisher is writing this prefix right now, "
-                f"so this run must not; nothing of this run has been written. It is NOT abandoned "
-                f"(its run has not been shown to be over, and it is younger than the 45-minute job "
-                f"cap), so it is not broken. Re-run once '{holder}' has finished.")
+                f"so this run must not; nothing of this run has been written. It has NOT been shown to be "
+                f"abandoned (the lease is not the recorded holder's, or that holder's run is not shown "
+                f"to be over and is younger than the 45-minute job cap), so it is not recovered. "
+                f"Re-run once '{holder}' has finished.")
             return 1
         if elapsed - last_note >= 60:
             log(f"lock: waiting for publication '{holder}' to release {where} "
@@ -847,7 +866,7 @@ def cmd_sdk_check(args: argparse.Namespace) -> int:
                                "set_file_metadata")),
                        (directory, ("exists", "create_directory", "list_directories_and_files",
                                     "delete_directory")),
-                       (lease, ("acquire", "release", "break_lease"))):
+                       (lease, ("acquire", "release"))):
         for a in attrs:
             if not callable(getattr(obj, a, None)):
                 raise SystemExit(f"::error::{type(obj).__name__}.{a} is missing — the SDK surface "

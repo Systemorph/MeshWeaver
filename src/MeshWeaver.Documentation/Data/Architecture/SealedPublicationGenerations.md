@@ -147,7 +147,7 @@ and reports `targets-already=1`.
 | where | beside the source directories, outside every publication and generation: no reader lists it (readers resolve `<identity>/<source>/`; retention attributes only files under a source directory) |
 | lease id | derived from the publication token (uuid5), so a later step of the same run can prove possession and release it |
 | waiting | bounded (`PUBLISH_BAKE_LOCK_WAIT_SECONDS`, default 900 s) and **red** when exceeded, naming the holder — never a silent proceed, never a cancelled run |
-| abandoned holder | broken only on evidence: the holder's own workflow run attempt has COMPLETED (asked of the GitHub API when a token is present), or the lease is older than any CI job can live (every job is hard-capped at 45 minutes) |
+| abandoned holder | recovered only on evidence, and only by releasing THAT holder's own lease (ids derive from the holder token) — never a break, which could revoke whoever holds it now; a lease with no recorded holder is never judged abandoned. Evidence: the holder's own workflow run attempt has COMPLETED (asked of the GitHub API when a token is present), or the lease is older than any CI job can live (every job is hard-capped at 45 minutes) |
 | holding across steps | a workflow that must read the prefix before the script runs (a carry-forward) takes the lock itself and passes its token as `BAKE_PUBLISH_LOCK_HOLDER`; the script then PROVES possession instead of acquiring, and leaves the release to the workflow's `if: always()` step |
 
 **Why not a GitHub `concurrency:` group.** A group keeps ONE pending run and cancels the older
@@ -156,7 +156,7 @@ pending one on every arrival, so a third overlapping run would silently cancel a
 Runs on `main` are never cancelled; the lease makes the second one wait and then re-read.
 
 **What it does not change.** The postconditions stay: they are the guard against a writer that takes
-no lease (a satellite whose scripts ref predates it) and against a lease broken as abandoned. And
+no lease (a satellite whose scripts ref predates it) and against a lease recovered as abandoned. And
 the failure summary now probes each failed target's SHARE before advising anything: *"does NOT
 exist"* is the only case that recommends removing a target from `BAKE_PUBLISH_TARGETS`; a share that
 answers is named as live, with the target's own failure to fix instead.

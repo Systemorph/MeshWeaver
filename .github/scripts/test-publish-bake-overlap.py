@@ -497,6 +497,8 @@ class FakeShare:
     def lease_release(self, path, lease_id):
         if os.environ.get("MOCK_LEASE_IGNORE") == "1":
             return True
+        if os.environ.get("MOCK_LEASE_RELEASE_FAILS") == "1":
+            raise RuntimeError("simulated service refusal of the lease release for %s" % path)
         lp = self._lease(path)
         if not lp.exists() or lp.read_text() != lease_id:
             return False
@@ -504,6 +506,9 @@ class FakeShare:
         return True
 
     def lease_break(self, path):
+        # Not used by the current helper (recovery releases the recorded holder's OWN lease). Kept so
+        # the hand-off cases can be run against the PRE-review helper, which broke unconditionally,
+        # and shown to fail there (`--script` at that commit).
         lp = self._lease(path)
         if lp.exists():
             lp.unlink()
@@ -704,7 +709,8 @@ class Harness:
                   "MOCK_AZ_EAT_STDIN", "MOCK_AZ_DELETE_LOG", "MOCK_AZ_DISPOSAL_PREFIX",
                   "MOCK_AZ_DELETE_FAILS", "MOCK_AZ_FAIL_UPLOAD_PATH", "MOCK_AZ_FAIL_UPLOAD_OF",
                   "MOCK_AZ_DROP_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_OF", "MOCK_AZ_AFTER_UPLOAD_CMD",
-                  "MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "PUBLISH_BAKE_LOCK_WAIT_SECONDS"):
+                  "MOCK_LEASE_IGNORE", "MOCK_SHARE_MISSING", "PUBLISH_BAKE_LOCK_WAIT_SECONDS",
+                  "MOCK_LEASE_RELEASE_FAILS"):
             env.pop(k, None)
         for k, v in (env_extra or {}).items():
             if v is None:
@@ -2069,17 +2075,37 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
 
 
-def plant_lease(h: "Harness", holder: str, acquired: float) -> None:
-    """A lease some OTHER publisher holds — written exactly where the fake backend keeps one."""
+def lease_id_of(holder: str) -> str:
+    """The helper's derivation (publish-bake-files.py `lease_id_of`), so a planted lease is one the
+    helper could release by naming its holder."""
+    import uuid
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"meshweaver-bake-publication:{holder}"))
+
+
+def plant_lease(h: "Harness", holder: str, acquired: float | None,
+                leased_by: str | None = None) -> None:
+    """A lease some OTHER publisher holds — written exactly where the fake backend keeps one.
+
+    `holder`/`acquired` is the RECORD on the lock file (None: no record at all); `leased_by` is who
+    ACTUALLY holds the lease, when that differs from the record — the hand-off windows Copilot named
+    on #6878: a recovered lock re-taken by another waiter, or a fresh holder whose record write has
+    not landed, while the file still carries the previous holder's record.
+    """
     lock = h.shelf_root / ACCOUNT / SHARE / LOCK_PATH
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.touch()
     lease = h.shelf_root / ".lease" / ACCOUNT / SHARE / LOCK_PATH
     lease.parent.mkdir(parents=True, exist_ok=True)
-    lease.write_text(f"lease-of-{holder}")
+    lease.write_text(lease_id_of(leased_by or holder))
     meta = h.shelf_root / ".meta" / ACCOUNT / SHARE / (LOCK_PATH + ".json")
     meta.parent.mkdir(parents=True, exist_ok=True)
-    meta.write_text(json.dumps({"holder": holder, "acquired": str(int(acquired))}))
+    if acquired is None:
+        if meta.exists():
+            meta.unlink()
+        old = time.time() - 2 * 3600
+        os.utime(lock, (old, old))
+    else:
+        meta.write_text(json.dumps({"holder": holder, "acquired": str(int(acquired))}))
 
 
 def leases_held(h: "Harness") -> list[str]:
@@ -2158,11 +2184,45 @@ def run_lock_cases(h: "Harness", work: Path, expect_defect: bool) -> None:
     r = h.publish(push, "Systemorph/MeshWeaver", "6873")
     s = h.shelf()
     out = r.stdout + r.stderr
-    check("a lease older than any CI job can live is broken, named, and the run seals",
-          r.returncode == 0 and s.sealed() and "breaking the publication lock" in out
+    check("a lease older than any CI job can live is recovered (its OWN lease released), named, and the run seals",
+          r.returncode == 0 and s.sealed() and "released the abandoned publication lock" in out
           and "Systemorph-MeshWeaver-dead-1" in out, f"rc={r.returncode}, {denominator(s)}")
     check("…and the run releases its own lease afterwards", leases_held(h) == [],
           " ".join(leases_held(h)) or "none")
+
+    # ── Copilot on #6878: the evidence describes the RECORDED holder, and the lease may have changed
+    # ── hands since. Recovery must release THAT holder's lease or nothing — never revoke another. ──
+    print("\nrecovery never revokes a lease it did not observe (the two hand-off windows):")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-dead-2", time.time() - 2 * 3600,
+                leased_by="Systemorph-MeshWeaver-live-2")
+    r = h.publish(push, "Systemorph/MeshWeaver", "6878", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    lease_file = h.shelf_root / ".lease" / ACCOUNT / SHARE / LOCK_PATH
+    out = r.stdout + r.stderr
+    check("a stale RECORD over a LIVE lease (re-taken, or record not yet written) is not revoked: red, live lease intact",
+          r.returncode != 0 and not h.shelf().sealed() and lease_file.is_file()
+          and lease_file.read_text() == lease_id_of("Systemorph-MeshWeaver-live-2")
+          and "changed hands" in out, f"rc={r.returncode}")
+    h.reset()
+    plant_lease(h, "Systemorph-MeshWeaver-unrecorded", None)
+    r = h.publish(push, "Systemorph/MeshWeaver", "6879", {"PUBLISH_BAKE_LOCK_WAIT_SECONDS": "1"})
+    check("a lease with NO recorded holder is never judged abandoned, however old the file: red, lease intact",
+          r.returncode != 0 and not h.shelf().sealed() and lease_file.is_file()
+          and "Publication lock not acquired" in (r.stdout + r.stderr), f"rc={r.returncode}")
+
+    # ── Copilot on #6878: a release the service refuses must fail the target, never print a receipt. ──
+    print("\na publication lock that cannot be released fails the target:")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6880", {"MOCK_LEASE_RELEASE_FAILS": "1"})
+    out = r.stdout + r.stderr
+    check("a refused release fails the target (the publication sealed, but the lease is left behind)",
+          r.returncode != 0 and "could not be released" in out and "bake publication FAILED" in out,
+          f"rc={r.returncode}")
+    h.reset()
+    r = h.publish(push, "Systemorph/MeshWeaver", "6881",
+                  {"MOCK_LEASE_RELEASE_FAILS": "1", "MOCK_AZ_FAIL_UPLOAD_PATH": "architecture.txt"})
+    check("…and an ORIGINAL failure is preserved, not replaced, when the release fails too",
+          r.returncode != 0 and "FAILED" in (r.stdout + r.stderr), f"rc={r.returncode}")
 
     # ── A LIVE holder is waited for — bounded — and running out of the bound is RED, not a skip. ──
     print("\na live publication lock is waited for, and the wait is bounded and red:")
