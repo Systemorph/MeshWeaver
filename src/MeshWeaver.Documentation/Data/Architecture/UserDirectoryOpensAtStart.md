@@ -51,7 +51,16 @@ a health check. The portal's service defaults register it (`AddDefaultHealthChec
   replica because the shared read stalled would turn degraded identity into an outage.
 - **A probe is also a caller.** A pod held out of the Service receives no lookups, so the check
   calls `UserIdentityCache.EnsureOpen()` on every probe. A read that failed before its first
-  snapshot is retried that way, with no timer and no retry loop.
+  snapshot is retried that way, with no timer and no retry loop. An **open that threw** at
+  ApplicationStarted is retried the same way: the next probe after ApplicationStarted opens the
+  directory again and clears the recorded failure once that succeeds, so one transient fault while
+  resolving the directory cannot keep a replica Unhealthy for the life of the process.
+- **An incomplete snapshot is not a snapshot.** An `Initial` or `Reset` frame that names
+  `SilentProviders` or carries `SnapshotIncomplete` is a floor: a provider did not answer, or
+  dropped part of its read, so users may be missing and a miss would be a false "no such user".
+  The directory read rejects such a frame in its pipeline, before it is applied. The rejection is
+  recorded as the read's failure (Unhealthy before the first snapshot), the read is dropped, and the
+  next probe or lookup opens a fresh one.
 - A host that registers no directory (the migration job, a setup-only boot) reports Healthy with
   *"nothing to measure"*.
 
@@ -60,14 +69,20 @@ a health check. The portal's service defaults register it (`AddDefaultHealthChec
 `UserDirectoryOpensAtStartTest` (`test/Memex.Portal.Shared.Test`) runs a real mesh. Its directory
 provider holds the snapshot until the test releases it:
 
-- Starting the readiness service opens the directory read before any lookup.
+- The host's lifetime is the real `ApplicationLifetime`. Before `NotifyStarted` the directory is
+  not open, and a probe does not open it. After it, the directory read opens before any lookup.
 - Readiness is Unhealthy while the snapshot is held, and Healthy once it lands.
 - The **first** lookup the process makes is then Found, and it reads the same directory instance.
+- An open that throws once is retried by the next probe, and readiness reaches Healthy.
+- An incomplete first snapshot leaves the directory unhydrated with the failure recorded; the next
+  probe opens a second read, whose complete snapshot hydrates it.
 - The negative control is the old shape: with no readiness, the first lookup builds the directory
   and gets Unavailable.
 
-With the open removed from `StartAsync`, the first test fails: *"starting the host must open the
-user directory read before any request asks it"*.
+With the open removed from ApplicationStarted, the first test fails: *"ApplicationStarted must open
+the user directory read before any request asks it"*. Without the probe's retry, the open-failure
+test fails on *"could not be opened"*. Without the rejection, the incomplete snapshot hydrates the
+directory, no failure is recorded, and the incomplete-snapshot test times out waiting for one.
 
 ## Related
 

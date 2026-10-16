@@ -10,10 +10,14 @@ using MeshWeaver.Hosting.AspNetCore.Portal;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -39,24 +43,62 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
 
     private readonly HeldDirectoryProvider provider = new(UserId, Email);
 
+    /// <summary>How many more times resolving the directory THROWS — the open-failure leg.</summary>
+    private int failingOpens;
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder)
         .ConfigureServices(services => services
             .AddSingleton<IMeshQueryProvider>(provider)
-            // Registered exactly as the portal host registers it (MeshWeaver.Plugins,
-            // BlazorHostingExtensions): a plain singleton, built on first resolve.
-            .AddSingleton<UserIdentityCache>());
+            // Registered as the portal host registers it (MeshWeaver.Plugins,
+            // BlazorHostingExtensions): a plain singleton, built on first resolve. The factory only
+            // adds the switch that makes a resolve throw; the DI container does not cache a
+            // factory's exception, so the next resolve builds the real instance.
+            .AddSingleton<UserIdentityCache>(sp =>
+                System.Threading.Interlocked.Decrement(ref failingOpens) >= 0
+                    ? throw new InvalidOperationException("injected: the directory could not be built")
+                    : ActivatorUtilities.CreateInstance<UserIdentityCache>(sp)));
+
+    /// <summary>
+    /// The host's view of the readiness service: the mesh hub plus the REAL generic-host lifetime,
+    /// so ApplicationStarted has production semantics — registered callbacks run when
+    /// <see cref="ApplicationLifetime.NotifyStarted"/> fires, and not before
+    /// (pattern: <c>ModuleGcOffReadinessPathTest</c>).
+    /// </summary>
+    private (UserDirectoryReadiness Readiness, ApplicationLifetime Lifetime, ServiceProvider Host) StartableReadiness()
+    {
+        var lifetime = new ApplicationLifetime(NullLogger<ApplicationLifetime>.Instance);
+        var host = new ServiceCollection()
+            .AddSingleton<IMessageHub>(Mesh)
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .BuildServiceProvider();
+        var readiness = new UserDirectoryReadiness(
+            host,
+            Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<UserDirectoryReadiness>());
+        return (readiness, lifetime, host);
+    }
+
+    private static Task<HealthCheckResult> Probe(UserDirectoryReadiness readiness, CancellationToken ct)
+        => readiness.CheckHealthAsync(new HealthCheckContext(), ct);
 
     [Fact(Timeout = 240_000)]
     public async Task ReadinessOpensTheDirectoryAtStart_AndTheFirstLookupIsHydrated()
     {
         var ct = TestContext.Current.CancellationToken;
-        var readiness = new UserDirectoryReadiness(
-            Mesh.ServiceProvider,
-            Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger<UserDirectoryReadiness>());
-
-        provider.DirectoryReads.Should().Be(0, "nothing has opened the directory before the host starts");
+        var (readiness, lifetime, host) = StartableReadiness();
+        await using var _ = host;
 
         await readiness.StartAsync(ct);
+
+        // ── StartAsync runs BEFORE the host has started, so it only registers: the directory is
+        //    not open, and a probe in this window does not open it either. (cache == null is what
+        //    "not open yet" reports — deterministic, unlike counting reads on the query pool.)
+        var beforeStart = await Probe(readiness, ct);
+        beforeStart.Status.Should().Be(HealthStatus.Unhealthy);
+        beforeStart.Description.Should().Contain("not open yet",
+            "the directory must open on ApplicationStarted, never in StartAsync or on a probe before it");
+        provider.DirectoryReads.Should().Be(0);
+
+        lifetime.NotifyStarted();
 
         // ── The directory read is OPEN before any request has asked it. This is the fix: with the
         //    old shape nothing opened it until the first lookup.
@@ -64,10 +106,10 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
             .Select(_ => provider.DirectoryReads)
             .Where(n => n >= 1)
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("starting the host must open the user directory read before any request asks it", ct);
+            .Emit("ApplicationStarted must open the user directory read before any request asks it", ct);
 
         // ── Not ready while the first snapshot is held.
-        (await readiness.CheckHealthAsync(new HealthCheckContext(), ct)).Status
+        (await Probe(readiness, ct)).Status
             .Should().Be(HealthStatus.Unhealthy, "a replica whose directory has no first snapshot cannot identify anyone");
 
         provider.Release();
@@ -80,7 +122,7 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
             .Where(r => r.EverHydrated)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the released snapshot must reach the directory", ct);
-        (await readiness.CheckHealthAsync(new HealthCheckContext(), ct)).Status
+        (await Probe(readiness, ct)).Status
             .Should().Be(HealthStatus.Healthy, "the first snapshot turns readiness Healthy");
 
         // ── THE PROPERTY: the FIRST lookup this process makes is a verdict, not Unavailable.
@@ -89,6 +131,94 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
             $"the first lookup on a ready replica must meet a hydrated index, got: {first.UnavailableReason}");
         first.Node!.Id.Should().Be(UserId);
         provider.DirectoryReads.Should().Be(1, "the lookup asked the read readiness opened — not a second one");
+
+        await readiness.StopAsync(ct);
+    }
+
+    /// <summary>
+    /// An open that THROWS at ApplicationStarted is retried by the next probe — never left to keep
+    /// the replica Unhealthy for the life of the process. Without the retry the second probe
+    /// still reports "could not be opened" and no directory read is ever issued.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnOpenThatThrows_IsRetriedByTheNextProbe_AndTheFailureClears()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (readiness, lifetime, host) = StartableReadiness();
+        await using var _ = host;
+        System.Threading.Volatile.Write(ref failingOpens, 1);
+
+        await readiness.StartAsync(ct);
+        lifetime.NotifyStarted();   // the open runs — and throws
+
+        var failed = await Probe(readiness, ct);
+        // This probe already retried (and the retry succeeded), so it must NOT report the stale
+        // failure: the directory is open and waiting for its first snapshot.
+        failed.Description.Should().NotContain("could not be opened",
+            "a probe after ApplicationStarted must retry the failed open and clear its failure on success");
+        failed.Status.Should().Be(HealthStatus.Unhealthy, "the directory is open but has no first snapshot yet");
+
+        await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
+            .Select(_ => provider.DirectoryReads)
+            .Where(n => n >= 1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the retried open must issue the directory read", ct);
+
+        provider.Release();
+        var cache = Mesh.ServiceProvider.GetRequiredService<UserIdentityCache>();
+        await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
+            .Select(_ => cache.Reading)
+            .Where(r => r.EverHydrated)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the released snapshot must reach the directory the retry opened", ct);
+        (await Probe(readiness, ct)).Status.Should().Be(HealthStatus.Healthy);
+
+        await readiness.StopAsync(ct);
+    }
+
+    /// <summary>
+    /// An INCOMPLETE first snapshot (a provider dropped part of its read) must not hydrate the
+    /// directory or release readiness: users may be missing, and a miss would be a false
+    /// "no such user". It is recorded as the read's failure, and the next probe opens a fresh read
+    /// whose complete snapshot does hydrate it. Without the rejection the floor hydrates the index,
+    /// no failure is ever recorded, and the wait below for one times out.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AnIncompleteFirstSnapshot_DoesNotHydrate_AndTheNextProbeReopens()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (readiness, lifetime, host) = StartableReadiness();
+        await using var _ = host;
+        provider.IncompleteReads = 1;
+        provider.Release();
+
+        await readiness.StartAsync(ct);
+        lifetime.NotifyStarted();
+
+        var cache = Mesh.ServiceProvider.GetRequiredService<UserIdentityCache>();
+        var rejected = await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
+            .Select(_ => cache.Reading)
+            .Where(r => r.Failure is not null)
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        rejected.Failure.Should().Contain("INCOMPLETE");
+        rejected.EverHydrated.Should().BeFalse("a floor must never count as the first snapshot");
+        rejected.Hydrated.Should().BeFalse();
+
+        // The probe re-opens the terminated read; the replacement's snapshot is complete.
+        (await Probe(readiness, ct)).Status.Should().Be(HealthStatus.Unhealthy,
+            "no complete snapshot has landed yet");
+        await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
+            .Select(_ => cache.Reading)
+            .Where(r => r.EverHydrated)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the probe must re-open the read and its complete snapshot must hydrate the directory", ct);
+        provider.DirectoryReads.Should().Be(2, "one rejected read, one replacement opened by the probe");
+        (await Probe(readiness, ct)).Status.Should().Be(HealthStatus.Healthy);
+        cache.Lookup(Email).Node!.Id.Should().Be(UserId);
+
+        await readiness.StopAsync(ct);
     }
 
     /// <summary>
@@ -133,6 +263,10 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
     {
         private readonly AsyncSubject<Unit> _release = new();
         private int _reads;
+        private int _incompleteReads;
+
+        /// <summary>How many directory reads (from the next one on) answer an INCOMPLETE snapshot.</summary>
+        public int IncompleteReads { set => System.Threading.Volatile.Write(ref _incompleteReads, value); }
 
         public string Name => nameof(HeldDirectoryProvider);
         public int DirectoryReads => System.Threading.Volatile.Read(ref _reads);
@@ -149,6 +283,11 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
             if (!request.EffectiveQueries.Any(q => string.Equals(q.Trim(), "nodeType:User", StringComparison.OrdinalIgnoreCase)))
                 return Observable.Return(Frame<T>([]));
             System.Threading.Interlocked.Increment(ref _reads);
+            if (System.Threading.Interlocked.Decrement(ref _incompleteReads) >= 0)
+                // A provider that dropped part of its read: the frame carries NO user, which is
+                // exactly the lie a floor would tell if it were applied.
+                return _release.Select(_ => Frame<T>([]) with { SnapshotIncomplete = true })
+                    .Concat(Observable.Never<QueryResultChange<T>>());
             var node = new MeshNode(userId)
             {
                 Name = userId, NodeType = "User", State = MeshNodeState.Active,

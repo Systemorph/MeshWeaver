@@ -387,6 +387,15 @@ public sealed class UserIdentityCache : IDisposable
         _connections.Add(subscription);
         subscription.Disposable = _mesh
             .Query<MeshNode>(DirectoryQuery)
+            // 🚨 A snapshot that is a FLOOR is not a snapshot (#6850 review). The fan-in folds a
+            // provider that completed without answering, and a provider's own dropped read
+            // (SnapshotIncomplete), into SilentProviders; Apply would treat such an Initial/Reset
+            // as authoritative, raise _hydrated/_everHydrated and release readiness while users
+            // may be missing — and a miss off it is a definitive "no such user", the false verdict
+            // #974 exists to prevent. Refuse it HERE, in the pipeline, so it reaches the error
+            // handler below: the failure is recorded and named, the chain is dropped, and the
+            // next lookup or readiness probe opens a fresh read.
+            .SelectMany(change => RejectIncompleteSnapshot(change))
             .Subscribe(
                 change =>
                 {
@@ -418,6 +427,29 @@ public sealed class UserIdentityCache : IDisposable
                         + "— dropped, so the next lookup opens a fresh directory read");
                     ReleaseSubscription(subscription);
                 });
+    }
+
+    /// <summary>
+    /// Passes every frame through EXCEPT an <c>Initial</c>/<c>Reset</c> that is a floor — one naming
+    /// <see cref="QueryResultChange{T}.SilentProviders"/> or carrying
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/> — which becomes an error, so the
+    /// directory never hydrates off a snapshot that may be missing users.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteSnapshot(
+        QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType is not (QueryChangeType.Initial or QueryChangeType.Reset))
+            return Observable.Return(change);
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the directory snapshot is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] "
+                + $"did not answer, so its {change.Items.Count} user(s) are a floor and a miss would "
+                + "be a false \"no such user\""));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the directory snapshot is INCOMPLETE: a provider dropped part of its read, so its "
+                + $"{change.Items.Count} user(s) are a floor and a miss would be a false \"no such user\""));
+        return Observable.Return(change);
     }
 
     /// <summary>Retires a terminated directory chain and re-arms <see cref="_opening"/> so the next

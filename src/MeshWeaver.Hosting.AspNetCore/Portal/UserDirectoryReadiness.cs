@@ -57,6 +57,7 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
     private UserIdentityCache? cache;
     private string? absent;
     private string? openFailure;
+    private int started;
     private CancellationTokenRegistration startedRegistration;
 
     /// <inheritdoc />
@@ -64,9 +65,9 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
     {
         var lifetime = services.GetService<IHostApplicationLifetime>();
         if (lifetime is null)
-            Open();
+            OnStarted();
         else
-            startedRegistration = lifetime.ApplicationStarted.Register(Open);
+            startedRegistration = lifetime.ApplicationStarted.Register(OnStarted);
         return Task.CompletedTask;
     }
 
@@ -75,6 +76,14 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
     {
         startedRegistration.Dispose();
         return Task.CompletedTask;
+    }
+
+    /// <summary>The host has started: from here on, opening the directory is allowed — now, and
+    /// again on a later probe if this attempt throws.</summary>
+    private void OnStarted()
+    {
+        Volatile.Write(ref started, 1);
+        Open();
     }
 
     /// <summary>
@@ -98,6 +107,9 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
                 return;
             }
             Volatile.Write(ref cache, resolved);
+            // A probe-driven retry that succeeded: the earlier failure no longer describes this
+            // replica, so it must stop holding readiness.
+            Volatile.Write(ref openFailure, null);
             logger.LogInformation(
                 "User directory opened at application start; readiness waits for its first snapshot");
         }
@@ -112,6 +124,15 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context, CancellationToken cancellationToken = default)
     {
+        // 🚨 An open that THREW is retried by the next probe, never left to stand: a replica held out
+        // of the Service receives no requests, so without this one transient fault in resolving the
+        // directory would keep it Unhealthy for the life of the process. Only after
+        // ApplicationStarted — before it, opening early is exactly what the deferral prevents.
+        // No timer and no retry loop: the probe is the trigger, as Lookup is for the cache.
+        if (Volatile.Read(ref cache) is null
+            && Volatile.Read(ref openFailure) is not null
+            && Volatile.Read(ref started) == 1)
+            Open();
         var current = Volatile.Read(ref cache);
         current?.EnsureOpen();
         return Task.FromResult(Classify(
@@ -132,7 +153,7 @@ public sealed class UserDirectoryReadiness(IServiceProvider services, ILogger<Us
             return HealthCheckResult.Healthy(absent);
         if (openFailure is not null)
             return HealthCheckResult.Unhealthy(
-                $"the user directory could not be opened ({openFailure}) — this replica cannot identify a signed-in user");
+                $"the user directory could not be opened ({openFailure}) — this replica cannot identify a signed-in user; the next probe retries");
         if (reading is not { } r)
             return HealthCheckResult.Unhealthy(
                 "the user directory is not open yet (it opens when the application has started) — not ready");
