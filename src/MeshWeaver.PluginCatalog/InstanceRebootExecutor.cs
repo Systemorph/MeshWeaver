@@ -240,12 +240,17 @@ public static class InstanceRebootExecutor
                         "this host registers no GitSync service — no module source can be synced here")
                     // Each finished source is recorded as progress on the request at once (MeshWeaver#6625): a
                     // batch of many healthy imports must not read as one silence longer than the window.
+                    // A write REFUSED because the request ended emits nothing → false: no further source is
+                    // imported beside whatever replaced this reboot (#6625 review).
                     : ModuleSourceUpdate.UpdateAllReporting(hub, row => Write(r => r, Line($"sync {row.ConfigPath}: {row.Outcome} — {row.Detail}"))
+                        .Select(_ => true)
+                        .DefaultIfEmpty(false)
                         .Catch((Exception ex) =>
                         {
+                            // The progress could not be recorded, but the request has not ended: the batch goes on.
                             logger?.LogWarning(ex, "[Reboot] {Path}: the progress of {Source} could not be recorded ({Reason})",
                                 ModuleReloadExecutor.PathOf(hub), row.ConfigPath, ex.Message);
-                            return Observable.Return(Unit.Default);
+                            return Observable.Return(true);
                         })).SelectMany(rows =>
                     {
                         var updated = rows.Where(r => r.Outcome == ModuleSourceUpdateOutcome.Updated).ToImmutableList();

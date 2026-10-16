@@ -99,20 +99,20 @@ public class InstanceRebootWatchdogRulesTest
     }
 
     /// <summary>
-    /// 🚨 MeshWeaver#6625: an open request holds the self-reboot back only while it is PROGRESSING. A
-    /// stalled one (no progress within its declared execution window) does not — and its control, an
-    /// open request that is still moving, still does.
+    /// 🚨 MeshWeaver#6625 (+ review): a stalled request releases the self-reboot only once its OWNER ended
+    /// it. While it is still open — stalled-looking or not — it holds the self-reboot back, because it could
+    /// still be re-armed and roll beside a replacement.
     /// </summary>
     [Fact]
-    public void AStalledOpenReboot_DoesNotHoldTheSelfRebootBack_AProgressingOneDoes()
+    public void AStalledReboot_ReleasesTheSelfRebootOnlyOnceItsOwnerEndedIt()
     {
         var verdict = new WedgeVerdict("e", "fp1");
-        var stalled = new RebootRecord("Admin/_Reboot/a", InstanceRebootTrigger.Person, Now.AddHours(-21), null, Terminal: false)
+        var ended = new RebootRecord("Admin/_Reboot/a", InstanceRebootTrigger.Person, Now.AddHours(-21), null, Terminal: true)
         {
-            Stalled = "status AwaitingRestart, no progress since …",
+            Stalled = "status Faulted, no progress since …",
         };
-        RebootWatchdogRules.Admit(verdict, [stalled], Now, Options).Fire.Should().BeTrue();
-        RebootWatchdogRules.Admit(verdict, [stalled with { Stalled = null }], Now, Options).Why.Should().Contain("already in progress");
+        RebootWatchdogRules.Admit(verdict, [ended], Now, Options).Fire.Should().BeTrue();
+        RebootWatchdogRules.Admit(verdict, [ended with { Terminal = false }], Now, Options).Why.Should().Contain("already in progress");
     }
 
     private static readonly TimeSpan RetryUnit = TimeSpan.FromMinutes(30);
@@ -436,16 +436,25 @@ public class InstanceRebootWatchdogTest(ITestOutputHelper output) : MonolithMesh
                 new MissingMethodException("MeshWeaver.AI.ThreadPreparation", "set_Group")).Should().BeTrue();
         var pass = await Watchdog.Evaluate(Mesh).Timeout(TestTimeouts.Convergence).Await(ct);
         pass.Decision.Should().Be(RebootWatchdogDecision.Fired,
-            "a request that recorded no progress within its declared window is not in progress: " + pass.Detail);
+            "a request that recorded no progress within its declared window is ended by its owner, then released: " + pass.Detail);
 
-        var ended = await InstanceReboot.FailStalled(Mesh, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30), DateTimeOffset.UtcNow)
-            .Timeout(TestTimeouts.Convergence).Await(ct);
-        ended.Should().Equal([stalled], "only the stalled request is ended — the watchdog's fresh one is progressing");
-        var after = await Read(stalled, r => InstanceRebootStatus.IsTerminal(r.Status));
+        // The original was ENDED by its owner before the replacement was filed — not merely ignored.
+        var after = await Read(stalled, _ => true);
         after.Status.Should().Be(InstanceRebootStatus.Failed);
         after.Failure.Should().Contain("stalled:").And.Contain("declared execution window of 180 min")
             .And.Contain("nothing re-armed it");
         after.CompletedAt.Should().NotBeNull();
+
+        // 🚨 The ordering the review named: the next reconcile pass — re-arm, then the stall pass — must not
+        // revive the original beside its replacement. Its re-arm is long due, so only its END prevents it.
+        var now = DateTimeOffset.UtcNow;
+        var rearmed = await InstanceReboot.RetryFaulted(Mesh, TimeSpan.FromMinutes(30), now)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        rearmed.Should().NotContain(stalled, "an ended request is never re-armed, so it cannot roll beside the replacement");
+        var asked = await InstanceReboot.FailStalled(Mesh, TimeSpan.FromHours(3), TimeSpan.FromMinutes(30), now)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        asked.Should().NotContain(stalled);
+        (await Read(stalled, _ => true)).Status.Should().Be(InstanceRebootStatus.Failed);
     }
 
     /// <summary>

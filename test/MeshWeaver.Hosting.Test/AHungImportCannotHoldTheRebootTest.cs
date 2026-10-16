@@ -149,7 +149,7 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
                 row => Observable.Defer(() =>
                 {
                     ImmutableInterlocked.Update(ref reported, r => r.Add((row, Volatile.Read(ref fetchCount))));
-                    return Observable.Return(System.Reactive.Unit.Default);
+                    return Observable.Return(true);
                 }))
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the batch ends once the hung import outlived its budget", ct);
@@ -161,6 +161,58 @@ public class AHungImportCannotHoldTheRebootTest(ITestOutputHelper output) : Mono
         mineReported[0].Row.Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
         mineReported[0].FetchesThen.Should().Be(0, "the first source is reported before the next source's import started");
         mineReported[1].Row.Outcome.Should().Be(ModuleSourceUpdateOutcome.Failed);
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review: the caller's work ENDED (a reboot that is no longer running) while a source was
+    /// still pending — its answer is <c>false</c>, and no further import starts beside whatever replaced
+    /// it. The pending source reads Skipped, saying so, and its fetch never starts (the control).
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ACallerThatEnded_StartsNoFurtherImport()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = await GivenASource("StopA", moduleSource: false, ct);
+        var second = await GivenAHungModuleSource("StopB", ct);
+        var fetchCount = 0;
+        using var counting = repoClient.Fetches.Subscribe(_ => Interlocked.Increment(ref fetchCount));
+
+        var rows = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromSeconds(3),
+                _ => Observable.Never<ActivityLog>(),
+                row => Observable.Return(row.Space != first))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the batch ends when the caller stops it", ct);
+
+        var mine = rows.Where(r => r.Space == first || r.Space == second).ToArray();
+        mine.Should().HaveCount(2);
+        mine[1].Outcome.Should().Be(ModuleSourceUpdateOutcome.Skipped);
+        mine[1].Detail.Should().Contain("the caller stopped the batch");
+        Volatile.Read(ref fetchCount).Should().Be(0, "no import starts after the caller's work ended");
+    }
+
+    /// <summary>
+    /// 🚨 #6625 review: a fault from the caller's reporting reaches the caller — it is never folded into
+    /// the "could not be listed — NOTHING was synced" row over a source that did run.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task AReportingFault_ReachesTheCaller_NotTheListingFallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await GivenASource("FaultR", moduleSource: false, ct);
+
+        var outcome = await ModuleSourceUpdate.UpdateAllWithin(Mesh, TimeSpan.FromSeconds(3),
+                _ => Observable.Never<ActivityLog>(),
+                _ => Observable.Throw<bool>(new InvalidOperationException("progress could not be recorded")))
+            .Materialize()
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        outcome.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+            outcome.Kind == System.Reactive.NotificationKind.OnNext
+                ? string.Join(" | ", outcome.Value.Select(r => r.Detail))
+                : "");
+        outcome.Exception!.Message.Should().Be("progress could not be recorded");
     }
 
     /// <summary>

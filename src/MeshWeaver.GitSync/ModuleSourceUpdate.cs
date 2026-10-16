@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using MeshWeaver.Data;
@@ -106,13 +107,18 @@ public static class ModuleSourceUpdate
     /// that source's import has ended — before the next source starts. A caller whose progress is judged
     /// against a window (the reboot's declared execution window, MeshWeaver#6625) records it there, so a
     /// batch of many healthy imports is progress all the way through, not one silence as long as the
-    /// whole batch. The next source starts once <paramref name="onRow"/>'s observable has ended; a fault
-    /// from it is the caller's to handle and is not caught here.
+    /// whole batch. <paramref name="onRow"/> answers whether the batch may GO ON: <c>true</c> starts the
+    /// next source, <c>false</c> starts no further import (the caller's work ended — a reboot that is no
+    /// longer running must not import beside its replacement), and every remaining source reads
+    /// <see cref="ModuleSourceUpdateOutcome.Skipped"/>, saying so. The import that already ran keeps its
+    /// own completion and cancellation handling. 🚨 A fault from <paramref name="onRow"/>, or an answer
+    /// that never comes (it completes empty), FAULTS the returned observable: it is the caller's to
+    /// handle, and is never folded into the "could not be listed" row.
     /// </summary>
     /// <param name="hub">A hub of the mesh; it must outlive the imports (the request's own hub does).</param>
-    /// <param name="onRow">Called once per finished source's row; its observable is awaited.</param>
+    /// <param name="onRow">Called once per finished source's row; emits whether to go on.</param>
     public static IObservable<ImmutableList<ModuleSourceUpdateRow>> UpdateAllReporting(
-        IMessageHub hub, Func<ModuleSourceUpdateRow, IObservable<System.Reactive.Unit>> onRow)
+        IMessageHub hub, Func<ModuleSourceUpdateRow, IObservable<bool>> onRow)
     {
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
@@ -143,9 +149,9 @@ public static class ModuleSourceUpdate
     /// (<see cref="UpdateAllReporting"/>).</param>
     internal static IObservable<ImmutableList<ModuleSourceUpdateRow>> UpdateAllWithin(
         IMessageHub hub, TimeSpan activityBudget, Func<string, IObservable<ActivityLog>> watchActivity,
-        Func<ModuleSourceUpdateRow, IObservable<System.Reactive.Unit>>? onRow = null)
+        Func<ModuleSourceUpdateRow, IObservable<bool>>? onRow = null)
     {
-        var report = onRow ?? (_ => Observable.Return(System.Reactive.Unit.Default));
+        var report = onRow ?? (_ => Observable.Return(true));
         // Refused HERE, before any source is listed or any import started: a non-positive budget
         // would otherwise surface only once the first import's activity exists.
         if (activityBudget <= TimeSpan.Zero)
@@ -153,6 +159,8 @@ public static class ModuleSourceUpdate
                 "the per-source import budget must be positive");
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        // The listing fallback covers the LISTING only (#6625 review): a fault from the sequence — a
+        // caller's onRow — reaches the caller, never reads as "nothing was synced" over sources that were.
         return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(
                     MeshWideQuery.OfType(GitHubSyncService.ConfigNodeType)))
                 .Take(1)
@@ -163,11 +171,15 @@ public static class ModuleSourceUpdate
                 .Distinct(StringComparer.Ordinal)
                 .OrderBy(p => p, StringComparer.Ordinal)
                 .ToImmutableList())
-            .SelectMany(paths => Sequence(hub, access, paths, activityBudget, watchActivity, report))
-            .Catch((Exception ex) => Observable.Return(ImmutableList.Create(new ModuleSourceUpdateRow(
-                GitHubSyncService.ConfigNodeType, "", null, ModuleSourceUpdateOutcome.Failed,
-                $"the sync sources could not be listed ({ex.GetType().Name}: {ex.Message}) — NOTHING was synced, "
-                + "and this is not a statement that there is nothing to sync"))));
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnCompleted)
+            .Take(1)
+            .SelectMany(listed => listed.Kind == NotificationKind.OnError
+                ? Observable.Return(ImmutableList.Create(new ModuleSourceUpdateRow(
+                    GitHubSyncService.ConfigNodeType, "", null, ModuleSourceUpdateOutcome.Failed,
+                    $"the sync sources could not be listed ({listed.Exception!.GetType().Name}: {listed.Exception.Message}) — NOTHING was synced, "
+                    + "and this is not a statement that there is nothing to sync")))
+                : Sequence(hub, access, listed.Value, activityBudget, watchActivity, report));
     }
 
     /// <summary>
@@ -181,7 +193,7 @@ public static class ModuleSourceUpdate
     /// </summary>
     private static IObservable<ImmutableList<ModuleSourceUpdateRow>> Sequence(
         IMessageHub hub, AccessService access, ImmutableList<string> paths, TimeSpan activityBudget,
-        Func<string, IObservable<ActivityLog>> watchActivity, Func<ModuleSourceUpdateRow, IObservable<System.Reactive.Unit>> report)
+        Func<string, IObservable<ActivityLog>> watchActivity, Func<ModuleSourceUpdateRow, IObservable<bool>> report)
     {
         if (paths.IsEmpty)
             return Observable.Return(ImmutableList<ModuleSourceUpdateRow>.Empty);
@@ -192,19 +204,27 @@ public static class ModuleSourceUpdate
         if (SpaceOf(path) is not { } parsed)
             return Sequence(hub, access, rest, activityBudget, watchActivity, report);
         return One(hub, access, path, parsed.Space, parsed.SourceId, activityBudget, watchActivity)
-            // Each source's row is reported as soon as its import ended, before the next one starts.
-            .SelectMany(result => report(result.Row).DefaultIfEmpty(System.Reactive.Unit.Default).LastAsync().Select(_ => result))
-            .SelectMany(result => result.StillRunning is { } activity
-                ? Observable.Return(rest
-                    .SelectMany(p => SpaceOf(p) is { } later
-                        ? [new ModuleSourceUpdateRow(p, later.Space, later.SourceId, ModuleSourceUpdateOutcome.Skipped,
-                            $"not started: the import of {path} (activity {activity}) was not seen to end and may "
-                            + "still be running, and a later import could write the same tree concurrently")]
-                        : Array.Empty<ModuleSourceUpdateRow>())
-                    .Prepend(result.Row)
-                    .ToImmutableList())
-                : Sequence(hub, access, rest, activityBudget, watchActivity, report).Select(rows => rows.Insert(0, result.Row)));
+            // Each source's row is reported as soon as its import ended, before the next one starts. The
+            // answer is REQUIRED (FirstAsync): an empty one faults to the caller, never reads as "go on".
+            .SelectMany(result => report(result.Row).FirstAsync().SelectMany(goOn =>
+                !goOn
+                    // The caller's work ended: no further import starts beside whatever replaced it.
+                    ? Observable.Return(SkipRest(rest, $"not started: the caller stopped the batch after {path} (its work ended)")
+                        .Insert(0, result.Row))
+                    : result.StillRunning is { } activity
+                        ? Observable.Return(SkipRest(rest,
+                                $"not started: the import of {path} (activity {activity}) was not seen to end and may "
+                                + "still be running, and a later import could write the same tree concurrently")
+                            .Insert(0, result.Row))
+                        : Sequence(hub, access, rest, activityBudget, watchActivity, report).Select(rows => rows.Insert(0, result.Row))));
     }
+
+    /// <summary>One Skipped row, saying <paramref name="why"/>, for every remaining source. Pure.</summary>
+    private static ImmutableList<ModuleSourceUpdateRow> SkipRest(ImmutableList<string> rest, string why) =>
+        rest.SelectMany(p => SpaceOf(p) is { } later
+                ? [new ModuleSourceUpdateRow(p, later.Space, later.SourceId, ModuleSourceUpdateOutcome.Skipped, why)]
+                : Array.Empty<ModuleSourceUpdateRow>())
+            .ToImmutableList();
 
     /// <summary>One source's row, and the activity of an import whose end was not observed (else null).</summary>
     private sealed record OneResult(ModuleSourceUpdateRow Row, string? StillRunning);

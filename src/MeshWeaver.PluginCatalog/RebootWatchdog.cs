@@ -116,7 +116,7 @@ public sealed class RebootWatchdog
                 {
                     // 🚨 A stalled request no longer holds the self-reboot back (MeshWeaver#6625) — and that is
                     // never silent: each one is a Critical line naming it and why.
-                    foreach (var stalled in previous.Where(r => !r.Terminal && r.Stalled is not null))
+                    foreach (var stalled in previous.Where(r => r.Terminal && r.Stalled is not null))
                         AlarmStalled(logger, stalled);
                     var (fire, why) = RebootWatchdogRules.Admit(verdict, previous, now, options);
                     if (!fire)
@@ -159,8 +159,8 @@ public sealed class RebootWatchdog
         if (!stalledAlarmed.TryAdd(stalled.Path, 0))
             return;
         logger?.LogCritical(
-            "[RebootWatchdog] the reboot request {Path} ({Trigger}, requested {RequestedAt:u}) has STALLED and no longer counts as "
-            + "in progress — it does not hold a self-reboot back: {Why}. The reconcile pass ends it as Failed.",
+            "[RebootWatchdog] the reboot request {Path} ({Trigger}, requested {RequestedAt:u}) had STALLED and its owner ended it "
+            + "as Failed — it no longer holds a self-reboot back: {Why}.",
             stalled.Path, stalled.Trigger, stalled.RequestedAt, stalled.Stalled);
     }
 
@@ -203,6 +203,28 @@ public sealed class RebootWatchdog
     /// be read answers one OPEN placeholder, which refuses the firing — the safe side for a reboot; a
     /// single request that cannot be read counts as open (not stalled), for the same reason.
     /// </summary>
+    /// <summary>
+    /// 🚨 A request that looks stalled is never simply IGNORED (#6625 review): it would stay eligible for
+    /// the faulted-restart re-arm, and the original and its replacement could both roll. The watchdog asks
+    /// the request's OWNER to end it (<see cref="InstanceReboot.RequestEndIfStalled"/>) and waits for the
+    /// owner's answer — the version after the question, with the question cleared. Only an owner-confirmed
+    /// terminal transition releases the self-reboot; a request the owner kept open, or an answer that did
+    /// not come within the read budget, still counts as in progress.
+    /// </summary>
+    private static IObservable<RebootRecord> OwnerConfirmed(IMessageHub meshHub, AccessService? access, string path,
+        RebootRecord stalled, DateTimeOffset now, Func<string, InstanceRebootRequest, RebootRecord> record) =>
+        InstanceReboot.RequestEndIfStalled(meshHub, path, now)
+            .SelectMany(asked => access.RunAsSystem(() => meshHub.GetMeshNodeStream(path))
+                .Where(n => n.Version > asked.Version)
+                .Select(n => n.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions))
+                .Where(r => r is not null && (r.RequestedEndIfStalledAt is null || InstanceRebootStatus.IsTerminal(r.Status)))
+                .FirstAsync()
+                .Timeout(ActivationRecycle.ReadBudget))
+            .Select(answered => InstanceRebootStatus.IsTerminal(answered!.Status)
+                ? record(path, answered) with { Stalled = stalled.Stalled }
+                : record(path, answered) with { Stalled = null })
+            .Catch((Exception _) => Observable.Return(stalled with { Stalled = null }));
+
     private static IObservable<ImmutableList<RebootRecord>> PreviousReboots(IMessageHub meshHub, DateTimeOffset now, InstanceRebootOptions options)
     {
         var mesh = meshHub.ServiceProvider.GetRequiredService<IMeshService>();
@@ -229,9 +251,11 @@ public sealed class RebootWatchdog
                     // disposed during teardown) must reach the Catch below and count the request as
                     // open — Take(1) would complete normally and ToList would silently drop it.
                     : access.RunAsSystem(() => meshHub.GetMeshNodeStream(x.Path).FirstAsync().Timeout(ActivationRecycle.ReadBudget))
-                        .Select(node => node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions) is { } live
-                            ? Record(x.Path, live)
-                            : Record(x.Path, x.Request) with { Stalled = null })
+                        .SelectMany(node => node.ContentAs<InstanceRebootRequest>(meshHub.JsonSerializerOptions) is { } live
+                            ? Record(x.Path, live) is { Stalled: not null } stalled
+                                ? OwnerConfirmed(meshHub, access, x.Path, stalled, now, Record)
+                                : Observable.Return(Record(x.Path, live))
+                            : Observable.Return(Record(x.Path, x.Request) with { Stalled = null }))
                         .Catch((Exception _) => Observable.Return(Record(x.Path, x.Request) with { Stalled = null })))
                 .Concat()
                 .ToList()

@@ -97,9 +97,9 @@ public sealed record WedgeVerdict(string Evidence, string Fingerprint);
 /// <summary>A previous reboot the rate limit reads: when, what started it, its fingerprint, whether it ended.</summary>
 public sealed record RebootRecord(string Path, string Trigger, DateTimeOffset RequestedAt, string? Fingerprint, bool Terminal)
 {
-    /// <summary>For a request that is not terminal but has STALLED (<see cref="InstanceReboot.Stalled"/>):
-    /// why, as one sentence. A stalled request is not "in progress" and does not hold a self-reboot back
-    /// (MeshWeaver#6625). Null when it is terminal or still progressing.</summary>
+    /// <summary>For a request its OWNER ended because it had STALLED (<see cref="InstanceReboot.Stalled"/>,
+    /// <see cref="InstanceReboot.EndIfStalled"/>): why, as one sentence — what the watchdog alarms on. Null
+    /// otherwise. An open request holds the self-reboot back whatever this says (MeshWeaver#6625).</summary>
     public string? Stalled { get; init; }
 }
 
@@ -284,16 +284,17 @@ public static class RebootWatchdogRules
     /// <summary>
     /// The rate limit: whether a wedge <paramref name="verdict"/> may file a self-reboot now, given the
     /// reboots already on record, and if not, why (the alarm's sentence). Refuses when a reboot is
-    /// still in progress (open and not <see cref="RebootRecord.Stalled"/>), when a self-reboot was taken within <see cref="InstanceRebootOptions.WatchdogMinInterval"/>,
+    /// still open (a stalled one is first ENDED by its owner — never merely ignored), when a self-reboot was taken within <see cref="InstanceRebootOptions.WatchdogMinInterval"/>,
     /// or when the SAME evidence already survived a self-reboot within <see cref="InstanceRebootOptions.WatchdogRepeatWindow"/>
     /// (a reboot does not clear it — a person must act). Pure.
     /// </summary>
     public static (bool Fire, string? Why) Admit(
         WedgeVerdict verdict, IReadOnlyCollection<RebootRecord> previous, DateTimeOffset now, InstanceRebootOptions options)
     {
-        // A request that STALLED is not in progress (MeshWeaver#6625): its mere existence must not hold
-        // every pod's self-reboot back. The watchdog alarms on each one by name.
-        if (previous.FirstOrDefault(r => !r.Terminal && r.Stalled is null) is { } open)
+        // An OPEN request holds the self-reboot back — including one that looks stalled: until its owner
+        // has ENDED it, it can still be re-armed and roll beside a replacement (MeshWeaver#6625 review).
+        // The watchdog asks the owner to end a stalled one first (RebootWatchdog.OwnerConfirmed).
+        if (previous.FirstOrDefault(r => !r.Terminal) is { } open)
             return (false, $"a reboot is already in progress ({open.Path}, {open.Trigger}, requested {open.RequestedAt:u})");
         var selfReboots = previous.Where(r => r.Trigger == InstanceRebootTrigger.Watchdog).OrderByDescending(r => r.RequestedAt).ToImmutableList();
         if (selfReboots.FirstOrDefault(r => now - r.RequestedAt < options.WatchdogMinInterval) is { } recent)

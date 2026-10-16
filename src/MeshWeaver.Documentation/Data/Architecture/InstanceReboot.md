@@ -154,10 +154,15 @@ critical NodeTypes stayed in compile Error). A request now counts as "in progres
 Two readers act on that, and neither runs a timer of its own:
 
 - **The watchdog** reads each open request from its own node stream (never a stale listing deciding
-  a reboot). A stalled request does not hold the self-reboot back, and that is never silent: a
-  `Critical` line names it, its trigger and why it stalled, once per request per process. The rate
-  limit's other two rules still hold. The read also activates the request's own hub, which resumes
-  its executor if the process that drove it is gone.
+  a reboot). 🚨 A stalled request is never simply ignored. It would stay eligible for the
+  faulted-restart re-arm, and then the original and its replacement could both roll. The watchdog
+  asks the request's OWNER to end it (the same `requestedEndIfStalledAt` question as below) and
+  waits, within the read budget, for the owner's answer. Only an owner-confirmed `Failed` releases
+  the self-reboot, and that is never silent: a `Critical` line names the request, its trigger and
+  why it stalled, once per request per process. A request the owner kept open, or an answer that did
+  not come in time, still holds the self-reboot back. The rate limit's other two rules still hold.
+  The read also activates the request's own hub, which resumes its executor if the process that
+  drove it is gone.
 - **The plugin catalog's reconcile pass** asks the OWNER of every request that looks stalled to end
   it (`InstanceReboot.FailStalled`, which writes the `requestedEndIfStalledAt` control field). It
   runs right after the faulted-restart re-arm, so a `Faulted` request due for its retry is retried,
@@ -182,7 +187,11 @@ verification after a restart waits at most `SingletonResumeBudget` (35 minutes) 
 settle (15 minutes). The Sync step imports its sources one after another, so a long batch could
 exceed the window as a whole. Each source's row is therefore recorded on the request as progress
 the moment that import ends, before the next one starts (`ModuleSourceUpdate.UpdateAllReporting`).
-A batch of many healthy imports is progress all the way through.
+A batch of many healthy imports is progress all the way through. The reboot's answer to each row
+also says whether the batch may go on: a request that has ended starts no further import, so
+nothing is imported beside its replacement, and the remaining sources read `Skipped`, saying so. A
+fault from that reporting reaches the reboot. It is never folded into the "could not be listed"
+row.
 
 ## Who can start one
 
@@ -215,8 +224,8 @@ holds when EITHER leg holds:
 
 The rate limit is `RebootWatchdogRules.Admit`. It refuses to fire in three cases:
 
-- while any reboot is still open AND progressing. A stalled request does not count; see "A request
-  that stops moving";
+- while any reboot is still open. A stalled one is first ended by its owner (see "A request that
+  stops moving"); until then it counts as open;
 - when a self-reboot was taken within `WatchdogMinInterval` (default 6 hours). The process also
   remembers its own last firing, so a pass right after a firing never fires again;
 - when the SAME evidence, by fingerprint, already survived a self-reboot within
