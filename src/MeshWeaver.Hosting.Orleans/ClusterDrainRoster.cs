@@ -34,16 +34,16 @@ internal sealed class ClusterDrainRoster(ILogger<ClusterDrainRoster> logger) : I
     public bool IsDraining(SiloAddress silo) => Current.Contains(silo);
 
     /// <summary>
-    /// The roster now and on every change — the current set is emitted on Subscribe, after the
-    /// change subscription is in place, so no change between the two can be missed.
+    /// The roster now and on every change. The change subscription is made FIRST and the initial
+    /// trigger merged in after it, so no change between the two is missed; both pass one per-subscriber
+    /// gate before <see cref="Current"/> is read, so an observer is never called concurrently and never
+    /// receives an older snapshot after a newer one (#6875 review).
     /// </summary>
     public IObservable<ImmutableHashSet<SiloAddress>> Changes =>
-        Observable.Create<ImmutableHashSet<SiloAddress>>(observer =>
-        {
-            var subscription = changed.Subscribe(_ => observer.OnNext(Current));
-            observer.OnNext(Current);
-            return subscription;
-        });
+        Observable.Defer(() => changed
+            .Merge(Observable.Return(Unit.Default))
+            .Synchronize()
+            .Select(_ => Current));
 
     /// <summary>Records that <paramref name="silo"/> has begun to drain.</summary>
     /// <param name="silo">The draining silo.</param>

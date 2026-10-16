@@ -50,7 +50,11 @@ internal sealed class ClusterDrainAnnouncer(
             ex => logger.LogWarning(ex, "[DRAIN] the membership feed faulted — the drain roster is no longer pruned"));
 
         var announcing = signal.WhenBegun
-            .SelectMany(_ => membershipChanges.StartWith(Unit.Default))
+            // Membership FIRST, then the initial trigger (Merge subscribes in order): the feed is hot
+            // and does not replay, so a peer that turns Active between the initial peer snapshot and a
+            // later subscription would otherwise never be told (#6875 review). The pod-hub claim's
+            // ClaimTriggers composes its triggers the same way.
+            .SelectMany(_ => membershipChanges.Merge(Observable.Return(Unit.Default)))
             .SelectMany(_ => AnnounceToEveryPeer(membership, local.SiloAddress))
             .Subscribe(
                 _ => { },

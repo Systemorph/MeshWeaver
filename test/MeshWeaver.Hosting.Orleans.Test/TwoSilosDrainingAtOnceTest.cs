@@ -232,3 +232,51 @@ public class DrainHandOffTargetTest
         DrainHandOffTarget.Choose("k", []).Should().BeNull("no candidate, no target — the address stays put");
     }
 }
+
+/// <summary>
+/// #6875 review: <see cref="ClusterDrainRoster.Changes"/> must serialise its initial emission with the
+/// change stream — an observer is never called concurrently, and never receives an older snapshot after
+/// a newer one, even when drain notices arrive while it is subscribing.
+/// </summary>
+public class ClusterDrainRosterChangesTest
+{
+    /// <summary>Notices race the subscription; every observer sees serial, never-shrinking snapshots.</summary>
+    [Fact]
+    public void Changes_AreSerialAndInOrder_WhileNoticesRaceTheSubscription()
+    {
+        var silos = Enumerable.Range(1, 40)
+            .Select(i => SiloAddress.FromParsableString($"10.1.0.{i}:11111@1"))
+            .ToArray();
+        var overlaps = 0;
+        var regressions = 0;
+        for (var round = 0; round < 300; round++)
+        {
+            using var roster = new ClusterDrainRoster(
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<ClusterDrainRoster>.Instance);
+            var inFlight = 0;
+            var lastSize = -1;
+            IDisposable? subscription = null;
+            Parallel.Invoke(
+                () => subscription = roster.Changes.Subscribe(set =>
+                {
+                    if (Interlocked.Increment(ref inFlight) > 1)
+                        Interlocked.Increment(ref overlaps);
+                    // Widen the window an overlapping call would need.
+                    Thread.SpinWait(200);
+                    if (set.Count < Volatile.Read(ref lastSize))
+                        Interlocked.Increment(ref regressions);
+                    Volatile.Write(ref lastSize, set.Count);
+                    Interlocked.Decrement(ref inFlight);
+                }),
+                () =>
+                {
+                    foreach (var silo in silos)
+                        roster.MarkDraining(silo);
+                });
+            subscription!.Dispose();
+            Volatile.Read(ref lastSize).Should().Be(silos.Length, "the last snapshot an observer sees is the complete roster");
+        }
+        overlaps.Should().Be(0, "an observer of the roster is never called concurrently");
+        regressions.Should().Be(0, "an observer never receives an older (smaller) snapshot after a newer one");
+    }
+}
