@@ -209,6 +209,11 @@ serving, no restart event is announced, and the verdict names the roll; and the 
 nothing newer, nothing handed over — takes the module half as before. Mutation check: reverting
 `ConsiderRestart` makes the first test fail with N still serving.
 
+The activation marker outlives a successful live swap until the next boot, so every LATER
+handed-over check still takes the live half and finds nothing pending in this process. That pass
+says so — *nothing landed is pending in this process* — and keeps the `HandedOver` outcome; it never
+reports an activation as still pending (`ALaterHandedOverCheck_AfterTheLiveSwap_SaysNothingIsPendingHere`).
+
 **Not addressed here:** a module that cannot go live waits for the handed-over roll, and if that roll
 waits for an approval, so does the module. Whether the control plane should then run the unattended
 Restart in its place is the control plane's decision (it sees the Roll it opened), not this
