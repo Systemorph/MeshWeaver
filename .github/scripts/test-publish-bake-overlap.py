@@ -2792,7 +2792,7 @@ def run_registry_lock_cases(h: "Harness", work: Path) -> None:
             e.pop(k, None)
         return e
 
-    def overlap(locked: bool) -> tuple[str, str, str]:
+    def overlap(locked: bool, targets_a: str = TARGET, targets_b: str = TARGET) -> tuple[str, str, str]:
         h.reset()
         tag = h.shelf_root / "registry-tag"
         tag.write_text("C0\n")
@@ -2804,12 +2804,14 @@ def run_registry_lock_cases(h: "Harness", work: Path) -> None:
         log_a, log_b = work / "tagger-a.log", work / "tagger-b.log"
         pre = [str(LOCK_WRAPPER), "--"] if locked else []
         a = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "A", "C1", str(go_a)],
-                             stdout=open(log_a, "w"), stderr=subprocess.STDOUT, env=env("8001"))
+                             stdout=open(log_a, "w"), stderr=subprocess.STDOUT,
+                             env=dict(env("8001"), BAKE_PUBLISH_TARGETS=targets_a))
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and "A read" not in (log_a.read_text() if log_a.exists() else ""):
             time.sleep(0.05)
         b = subprocess.Popen(["bash", *pre, str(tagger), str(tag), "B", "C2", str(go_b)],
-                             stdout=open(log_b, "w"), stderr=subprocess.STDOUT, env=env("8002"))
+                             stdout=open(log_b, "w"), stderr=subprocess.STDOUT,
+                             env=dict(env("8002"), BAKE_PUBLISH_TARGETS=targets_b))
         # Locked: B must be SEEN waiting on A's lease. Unlocked: B simply runs to completion.
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
@@ -2828,6 +2830,15 @@ def run_registry_lock_cases(h: "Harness", work: Path) -> None:
           final == "C1", f"final tag {final}")
     final, la, lb = overlap(locked=True)
     check("under bake-publication-lock.sh the newer publisher WAITS, re-reads C1, and the tag ends on C2",
+          final == "C2" and "lock: waiting for publication" in lb and "B read C1" in lb and leases_held(h) == [],
+          f"final tag {final}; leases {leases_held(h)}")
+    # Copilot on #6878: two callers with DIFFERENT target sets — a list change in flight (`A B` then
+    # `B`), or two repositories publishing one prefix. "The first sorted target" was alpha-share for
+    # one and memex-data for the other, so both walked in; locking EVERY target makes the shared one
+    # (memex-data) exclude them.
+    both = f"{ACCOUNT}/alpha-share {TARGET}"
+    final, la, lb = overlap(locked=True, targets_a=both, targets_b=TARGET)
+    check("callers with DIFFERENT target sets (`alpha memex` vs `memex`) still exclude each other on the shared target: C2",
           final == "C2" and "lock: waiting for publication" in lb and "B read C1" in lb and leases_held(h) == [],
           f"final tag {final}; leases {leases_held(h)}")
     h.reset()

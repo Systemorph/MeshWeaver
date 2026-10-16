@@ -211,7 +211,10 @@ so a run the share publisher skipped as superseded cannot roll the registry back
 comparison is only as fresh as the tag it READ, the registry's whole read–decide–tag runs under the
 same prefix lock (`bake-publication-lock.sh`, around the push in both `main-cd.yml` and the lane,
 which holds its re-bind lock through the registry push): two overlapping publishers can no longer
-each read the tag before the other moves it.
+each read the tag before the other moves it. The wrapper locks EVERY configured target (sorted), not
+the first one, so callers whose target lists differ — a list change in flight, or two repositories
+publishing one prefix — still exclude each other on any share they have in common; two publishers
+with DISJOINT target sets share no lease and are not excluded.
 
 **The superseded path does not stay green over a stale registry.** A run superseded under the lock
 publishes nothing, so if the sibling that sealed the shares failed its registry push, a green here

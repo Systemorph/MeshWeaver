@@ -3,7 +3,7 @@
 #
 # Runs <command> while holding the per-prefix PUBLICATION LOCK (MeshWeaver#6877) for
 # prebuilt-bundles/<IDENTITY>/<SOURCE> — the same lease publish-bake-bundles.sh and
-# rebind-bake-scope.sh take — on the FIRST target in the one canonical lock order (sorted,
+# rebind-bake-scope.sh take — on EVERY target, in the one canonical lock order (sorted,
 # de-duplicated BAKE_PUBLISH_TARGETS).
 #
 # WHY (Copilot's review of #6878). The registry publisher (push-bundle-publication.sh) reads the
@@ -49,21 +49,43 @@ else
   "$PYTHON" "$HELPER" sdk-check --pins "$PINS"
 fi
 
-# The FIRST target in the canonical order — the same order rebind-bake-scope.sh locks in, so a
-# caller holding every target holds this one.
-target=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u | head -n 1)
-account="${target%%/*}"; rest="${target#*/}"; share="${rest%%/*}"; base=""
-case "$rest" in */*) base="${rest#*/}";; esac
-if [ -z "$account" ] || [ -z "$share" ] || [ "$account" = "$target" ]; then
-  echo "::error::malformed BAKE_PUBLISH_TARGETS entry '$target' — expected <account>/<share>[/<base-path>]"
-  exit 1
-fi
-# Must match LOCK_PATH in publish-bake-bundles.sh and rebind-bake-scope.sh.
-LOCK_PATH="${base:+$base/}prebuilt-bundles/$IDENTITY/_publishing.$SOURCE"
+# 🚨 EVERY configured target, in the ONE canonical order — not "the first one" (Copilot's review of
+# #6878). Two callers can configure DIFFERENT target sets for the same source × identity: a list
+# change in flight (an older run with `A B`, a newer one with `B`), or two repositories publishing
+# one prefix with their own variables. "The first sorted target" is then A for one and B for the
+# other, both enter the read–decide–tag, and the slower, older one moves the tag back. Locking every
+# target means any two publishers whose target sets SHARE a share exclude each other on it; sorted,
+# so differently ordered lists cannot wait on each other (rebind-bake-scope.sh locks the same way).
+# A target that cannot be locked (a share that is gone, a holder that outlasts the bound) is named
+# and skipped — a dead target must not starve the registry push — but at least ONE must be held.
+# The one case this cannot exclude is two publishers with DISJOINT target sets: they share no share
+# to hold a lease on, and that would need a declared lock location outside the portal shares.
+TARGETS=$(printf '%s\n' $BAKE_PUBLISH_TARGETS | sed '/^[[:space:]]*$/d' | LC_ALL=C sort -u)
+lock_of() { # <target> → "<account> <share> <lock path>" (must match publish-bake-bundles.sh)
+  local t="$1" a r s b
+  a="${t%%/*}"; r="${t#*/}"; s="${r%%/*}"; b=""
+  case "$r" in */*) b="${r#*/}";; esac
+  if [ -z "$a" ] || [ -z "$s" ] || [ "$a" = "$t" ]; then
+    echo "::error::malformed BAKE_PUBLISH_TARGETS entry '$t' — expected <account>/<share>[/<base-path>]" >&2
+    return 1
+  fi
+  printf '%s %s %s\n' "$a" "$s" "${b:+$b/}prebuilt-bundles/$IDENTITY/_publishing.$SOURCE"
+}
 
+HELD=()
 if [ -n "${BAKE_PUBLISH_LOCK_HOLDER:-}" ]; then
-  "$PYTHON" "$HELPER" lock check --account "$account" --share "$share" --path "$LOCK_PATH" \
-    --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null
+  # The caller holds the prefix across steps: PROVE it, target by target; the release stays with it.
+  for t in $TARGETS; do
+    line=$(lock_of "$t") || continue
+    read -r account share path <<< "$line"
+    if "$PYTHON" "$HELPER" lock check --account "$account" --share "$share" --path "$path" \
+         --holder "$BAKE_PUBLISH_LOCK_HOLDER" < /dev/null; then
+      HELD+=("$t")
+    else
+      echo "::warning::the caller does not hold the publication lock on $t — that target does not take part in excluding other publishers from this step."
+    fi
+  done
+  [ "${#HELD[@]}" -gt 0 ] || { echo "::error::the caller holds the publication lock on none of '$BAKE_PUBLISH_TARGETS' (as $BAKE_PUBLISH_LOCK_HOLDER) — refusing to run '$1' unserialised."; exit 1; }
   "$@"
   exit $?
 fi
@@ -71,16 +93,29 @@ fi
 HOLDER="$(printf '%s-%s-%s' \
   "${GITHUB_REPOSITORY:-local}" "${GITHUB_RUN_ID:-$$}" "${GITHUB_RUN_ATTEMPT:-$(date -u +%s)}" \
   | tr -c 'A-Za-z0-9._-' '-')-registry-pid$$-r$RANDOM$RANDOM"
-"$PYTHON" "$HELPER" lock acquire --account "$account" --share "$share" --path "$LOCK_PATH" \
-  --holder "$HOLDER" < /dev/null
 release_on_exit() {
-  local rc=$?
-  if ! "$PYTHON" "$HELPER" lock release --account "$account" --share "$share" --path "$LOCK_PATH" \
-       --holder "$HOLDER" < /dev/null; then
-    echo "::error::the publication lock $account/$share/$LOCK_PATH could not be released — every other publisher of this prefix waits on it until it is recovered as abandoned."
-    [ "$rc" -ne 0 ] || rc=1
-  fi
+  local rc=$? t line account share path
+  for t in ${HELD[@]+"${HELD[@]}"}; do
+    line=$(lock_of "$t") || continue
+    read -r account share path <<< "$line"
+    if ! "$PYTHON" "$HELPER" lock release --account "$account" --share "$share" --path "$path" \
+         --holder "$HOLDER" < /dev/null; then
+      echo "::error::the publication lock $account/$share/$path could not be released — every other publisher of this prefix waits on it until it is recovered as abandoned."
+      [ "$rc" -ne 0 ] || rc=1
+    fi
+  done
   exit "$rc"
 }
 trap release_on_exit EXIT
+for t in $TARGETS; do
+  line=$(lock_of "$t") || continue
+  read -r account share path <<< "$line"
+  if "$PYTHON" "$HELPER" lock acquire --account "$account" --share "$share" --path "$path" \
+       --holder "$HOLDER" < /dev/null; then
+    HELD+=("$t")
+  else
+    echo "::error::the publication lock on $t could not be taken (see above) — going ahead under the targets that ARE held, so a dead target cannot starve this step."
+  fi
+done
+[ "${#HELD[@]}" -gt 0 ] || { echo "::error::not one publication lock of '$BAKE_PUBLISH_TARGETS' could be taken — refusing to run '$1' unserialised."; exit 1; }
 "$@"
