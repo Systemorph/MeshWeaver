@@ -335,7 +335,7 @@ checked against it:
 | `DataChangeNotification.NodeType/Version` + `StorageChangeFeedRelay` | **implemented in the first core slice**; the compatibility read coalesced per path and overtaken by anything newer in the second (#4139) | relay owns the mixed-version reread through `ReReadCoalescing`; tests pin the logical/invalidation boundary, old-payload recovery, per-event failure isolation, two independent replica feeds, one read per burst, no read for a burst that ends self-contained, overtaking by a hinted update / a delete / a newer burst, and reads that never overlap on a path |
 | `notify_mesh_node_changes()` emits `nodeType`, `version` | **landed** — `node_type` since V55, `prior_node_type` since V60 | PostgreSql adapter (MeshWeaver.Plugins) |
 | delete `OrleansMeshChangeFeed` broadcast + `PathCacheInvalidatorGrain` | **landed** — #4802 slice 1 | the memory stream now carries routing fallback only; pinned by `ACommitReachesTheOtherSiloAfterItsWriterDiesTest` (three silos, the writer KILLED with its commit in flight, and a negative control whose carrier dies with the writer) |
-| multi-silo is PostgreSQL-only, DECLARED: `CrossProcessChangeDelivery` | type **landed** — #4802 slice 1; the PostgreSQL registration declares it next (MeshWeaver.Plugins); then a silo that declares more than one process (a durable `PubSubStore`) refuses to start without it | see *Multi-silo is PostgreSQL-only* below |
+| multi-silo is PostgreSQL-only, DECLARED: `CrossProcessChangeDelivery` | type **landed** — #4802 slice 1; the PostgreSQL registration declares it (MeshWeaver.Plugins, slice 2); a silo with a durable `PubSubStore` **refuses to start** without it (slice 3) | see *Multi-silo is PostgreSQL-only* below; pinned by `MultiSiloRequiresCrossProcessChangeDeliveryTest` |
 | NACK gets a non-stream carrier | **landed** — #4802 slice 4 | `RoutingGrain.PostFailure` routes a NACK like any message to its sender: the directed call to `GetHostAddress(sender)` — `IPodHubGrain` for a pod-process host, `IMessageHubGrain` for a node — with `DeliverToGrainObservable`'s transient retry; undeliverable is an Error, never a stream publish. Pinned by `ANackReachesTheSenderWhenASiloDiesMidFlightTest` (three multi-silo silos, no memory stream, the NACK held in flight while a third silo is KILLED) and its negative control `ANackIsLostWhenItsCarrierDiesWithTheSiloTest` |
 | `StreamMessageSizeGuard` retarget onto `MaxMessageBodySize` | optional, not blocking | the directed call already THROWS at that wall, which is the outcome the guard produces — see the bullet above |
 | `AddMemoryStreams` deleted from multi-silo hosts | **landed** — #4802 slice 4 | `ConfigureMeshWeaverServer` registers the stream only when NO durable PubSubStore is supplied (Monolith, localhost and bake silos, in-process test clusters); `OrleansRoutingService.RegisterStream` subscribes nothing where no stream is registered. The reader-side `SiloUnavailableException` site this issue tracks cannot fire on a multi-silo host. There the pod-hub CLAIM is the hub's only inbound transport, so outbound dispatch from a fresh hub is gated on the claim instead of the stream attach (`podHubOutboundReady`): an answer that overtook the claim would meet `PodHubNotHere` and be lost. The gate always ends — the claim lands, its initial budget is spent, it gives up, or the registration is disposed. Pinned by `AFreshHubsFirstAnswerWaitsForItsClaimTest` and its negative control `AnAnswerThatOvertakesTheClaimIsLostTest` |
@@ -360,6 +360,13 @@ silo refusing to start when it was configured as more than one process — a dur
 which is the existing declaration of a multi-silo host — and nothing declared cross-process delivery.
 Enforcing before the PostgreSQL registration declares would stop every portal roll, so the order is
 not optional.
+
+The refusal is an Orleans `IConfigurationValidator` (`CrossProcessChangeDeliveryValidator`), which
+`ConfigureMeshWeaverServer` registers only when a durable `PubSubStore` is supplied. Orleans runs it
+while constructing the silo, before the silo joins the cluster, so a refused silo never takes
+traffic; it throws `OrleansConfigurationException` naming the fix. The configuration it refuses is
+real: a portal on AdoNet clustering whose storage backend is not PostgreSQL (SQLite, say) would
+otherwise come up and serve stale caches on every silo but the writer.
 
 ## How to check a live cluster
 

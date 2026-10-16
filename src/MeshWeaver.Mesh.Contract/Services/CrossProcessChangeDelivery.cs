@@ -16,14 +16,12 @@ namespace MeshWeaver.Mesh.Services;
 /// pre-commit caches for the life of the process — no error, nothing to grep.</para>
 ///
 /// <para>So the property is DECLARED by the backend that has it, never inferred from which adapter
-/// happens to be registered. 🚨 <b>This type is the declaration SURFACE only, and nothing enforces it
-/// yet</b> (#4802 rolls out in slices): today only the test rigs that model LISTEN/NOTIFY call
-/// <see cref="CrossProcessChangeDeliveryExtensions.DeclareCrossProcessChangeDelivery"/>. A later
-/// slice makes the PostgreSQL persistence registration declare it, and only after that does a
-/// multi-silo host check for it at boot — enforcing first would refuse every portal that has not
-/// yet picked up the declaration. Until then its ABSENCE proves nothing about a host. Multi-silo
-/// is PostgreSQL-only; single-process hosts (the Monolith, a localhost silo, the bake silo) need
-/// nothing.</para>
+/// happens to be registered: the PostgreSQL persistence registration declares it beside its
+/// LISTEN session. 🚨 <b>It is ENFORCED at silo start</b> (#4802): a silo configured as one of several
+/// — it supplied a durable Orleans <c>PubSubStore</c> — refuses to start when nothing declares it
+/// (<c>CrossProcessChangeDeliveryValidator</c> in <c>MeshWeaver.Hosting.Orleans</c>). Multi-silo is
+/// PostgreSQL-only; single-process hosts (the Monolith, a localhost silo, the bake silo) need
+/// nothing and are never checked.</para>
 /// </summary>
 /// <param name="Source">What delivers the commits, for the boot log and the refusal message —
 /// e.g. <c>"PostgreSQL LISTEN/NOTIFY"</c>.</param>
