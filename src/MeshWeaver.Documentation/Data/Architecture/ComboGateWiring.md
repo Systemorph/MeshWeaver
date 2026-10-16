@@ -727,6 +727,30 @@ the verdict — so the merge rule exists once, in the portal, instead of being r
 over a raw mesh patch. A 401 from any of the three calls names both halves above for that instance;
 the portal does not tell a refused caller which half is missing.
 
+#### A landing that does not finish in time is a 504 naming the phase
+
+The recording route gives the write and its confirmation **one** 30-second deadline. When it
+expires, the route answers **504** with
+`{ "error": "Timed out: …", "phase": "write" | "confirm", "candidateTag": "…" }` and logs one
+Warning naming the verdict, the candidate, the build's repository and run, and the phase:
+
+- **`write`**: the write to `Admin/UpdatePolicy` had not completed. The verdict is **not** recorded.
+- **`confirm`**: the write completed, but `Admin/UpdatePolicy` never showed this exact verdict. It
+  may not be recorded; read the node before re-running.
+
+Any other fault still reaches the portal's exception handler as a 500. Only the deadline is an
+answer. A fault that is not a deadline is a defect, and mapping it here would hide it.
+
+Before this change the deadline escaped as a bare `TimeoutException`. Rx creates that exception
+without throwing it, so it carries no stack frames. The result was an unhandled 500 whose log line
+named neither the route nor the phase (#6790). In that incident the verifier's POST answered 500
+after 31 s. The node's version history shows no write of that verdict: the versions on either
+side of the POST differ only in the poller's `lastCheckedAt`, and the tag kept an earlier run's
+verdict. So the write was the phase that stalled, and nothing in the response could say so. The
+endpoint's composition (`ReleaseGateEndpoints.RecordAndConfirm`) is pinned on virtual time by
+`ComboVerificationDeadlineTest`, which includes both controls: a confirmed write is answered, and a
+fault that is not a deadline still propagates.
+
 `check-combo-verify.py` holds this shape: it requires the token request, the audience, the recording
 route, the confirmed landing and a mint before every call, refuses any return of the instance key,
 the admin token or the raw patch, and executes the lander once without an OIDC request URL to prove
