@@ -396,8 +396,11 @@ public partial class QueryParser
             if (i >= input.Length || input[i] == ')')
                 break;
 
-            // Skip OR keyword
-            if (i + 2 <= input.Length && input.Substring(i, 2).Equals("OR", StringComparison.OrdinalIgnoreCase))
+            // Skip OR keyword — only a WHOLE word (#6844). Matching the two letters alone ate the
+            // head of every value that merely starts with them: `-namespace:(acme/a OR orders)`
+            // excluded `acme/a` and `ders`, so the second namespace was never excluded, on every
+            // executor (the mangled value is what the parser hands them all).
+            if (IsListOrKeyword(input, i))
             {
                 i += 2;
                 continue;
@@ -416,6 +419,21 @@ public partial class QueryParser
             i++; // consume )
 
         return values.ToArray();
+    }
+
+    /// <summary>
+    /// Whether the list separator <c>OR</c> (any case) starts at <paramref name="i"/> as a whole word:
+    /// followed by the end of input, whitespace, a parenthesis or a quote. <c>orders</c>,
+    /// <c>Oracle/x</c> and <c>or-x</c> are values, never a separator plus a remainder.
+    /// </summary>
+    private static bool IsListOrKeyword(string input, int i)
+    {
+        if (i + 2 > input.Length || !input.AsSpan(i, 2).Equals("OR", StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (i + 2 == input.Length)
+            return true;
+        var next = input[i + 2];
+        return char.IsWhiteSpace(next) || next is '(' or ')' or '"' or '\'';
     }
 
     /// <summary>
