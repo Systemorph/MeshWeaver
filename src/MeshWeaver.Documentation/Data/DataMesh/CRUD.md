@@ -346,7 +346,14 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   that writes the store without passing the owner). The store refuses to remove it, and the delete
   answers `Conflict` naming the stored version. A row at or below the confirmed version is the node
   the deleter read, one sampler flush behind, so it is removed. The guarantee therefore no longer
-  depends on the seal alone, which is held only in the deleting process.
+  depends on the seal alone, which is held only in the deleting process. Only a row in **writable**
+  storage counts as a survivor. Shipped content that a read-only provider serves under a removed
+  writable row is not this delete's to remove, so it is no conflict.
+- **When the same path has copies in several writable providers,** a copy newer than the confirmed
+  version refuses the whole delete and nothing is removed. The version the conflict names is the
+  first copy a read finds, which can be the older one. Removals across separate stores are not
+  atomic: a newer copy written into a second provider while the delete runs is refused there, but
+  an older copy already removed is not restored.
 - **Root only.** For a recursive delete, only the node at `Path` is checked. The cascade's
   per-descendant requests never carry the value. The cascade removes children before their parent,
   so when the store refuses the root, the descendants are already gone. The response names them, and
@@ -377,7 +384,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   the delete has reported success for a node that exists again. Postgres implements
   `DeleteIfVersionAtMost` in the MeshWeaver.Plugins repository. Until it does, a Postgres deployment
   uses the interface default: it reads, compares, then deletes. The default checks the version, but
-  not atomically.
+  not atomically. And when the store refuses a delete because of a write from another process, the
+  owner here adopts that write only when its change notification, or a declared feed gap, arrives.
+  Until then the node stream can still show the older version, and a retry naming it is refused
+  again. That is safe, because nothing is removed, and the conflict names the stored version.
 - **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---

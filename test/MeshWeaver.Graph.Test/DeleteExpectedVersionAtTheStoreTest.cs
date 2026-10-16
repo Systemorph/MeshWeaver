@@ -170,6 +170,35 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
             "no notification will tell this process the row is gone, so the delete itself must tear the owner down");
     }
 
+    /// <summary>
+    /// A writable override over a READ-ONLY fallback: the writable row is removed by another process,
+    /// so the guarded delete removes nothing — and the plain read then finds the shipped fallback.
+    /// That is not a survivor of this delete (it could never touch a read-only provider, and the
+    /// drain's completion contract counts writable rows only), so the answer is success, never a
+    /// Conflict naming the fallback's version. Control: ARowRemovedByAnotherProcess_GetsTheSameLocalCleanup
+    /// is the same delete with no fallback.
+    /// </summary>
+    [Fact]
+    public async Task AReadOnlyFallbackUnderTheRemovedRow_IsNotAConflict()
+    {
+        var node = await Seed("store-guard-overlay");
+        await OwnerOf(node.Path);
+        var read = (await Stored(node.Path))!.Version;
+
+        var response = await PausedGuardedDelete(node.Path, read, async () =>
+        {
+            var current = (await Stored(node.Path))!;
+            (await OtherProcess.DeleteIfExists(node.Path)
+                .Should().Within(TestTimeouts.Convergence).Emit("the other process removes the row", cancellationToken: Ct))
+                .Should().BeTrue();
+            Storage.ServeReadOnlyFallback(current with { Name = "shipped", Version = read + 5 });
+        });
+
+        response.Success.Should().BeTrue(
+            response.Error ?? "no WRITABLE row survives; the shipped fallback is not this delete's to remove");
+        (await Stored(node.Path)).Should().BeNull("no writable row exists");
+    }
+
     /// <summary>The node's own hub, activated by reading the node and started.</summary>
     private async Task<IMessageHub> OwnerOf(string path)
     {

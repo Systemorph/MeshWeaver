@@ -5546,13 +5546,21 @@ public static class MeshExtensions
                 .Take(1)
                 .SelectMany(removed => removed
                     ? Observable.Return(path)
-                    : storage.Read(path, meshHub.JsonSerializerOptions)
+                    // Only a WRITABLE survivor is a conflict: a read-only provider's row (shipped
+                    // content under a writable override) is never this delete's to remove, and the
+                    // drain's completion contract counts writable rows only. So writable existence
+                    // decides, and the plain read only supplies the version for the message.
+                    : storage.ExistsInWritableStorage(path)
                         .Take(1)
-                        .DefaultIfEmpty(null)
-                        .SelectMany(stored => stored is null
+                        .SelectMany(survives => !survives
                             ? Observable.Return(path)
-                            : Observable.Throw<string>(
-                                new DeleteVersionConflictException(path, confirmedVersion, stored.Version))))
+                            : storage.Read(path, meshHub.JsonSerializerOptions)
+                                .Take(1)
+                                .DefaultIfEmpty(null)
+                                .SelectMany(stored => stored is null
+                                    ? Observable.Return(path)
+                                    : Observable.Throw<string>(
+                                        new DeleteVersionConflictException(path, confirmedVersion, stored.Version)))))
                 .Do(_ =>
                 {
                     changeFeed?.Publish(MeshChangeEvent.Deleted(path));
