@@ -419,14 +419,19 @@ ShutDown phase runs four pieces of other people's code inline on the action bloc
 
 | Step (`ShutDownStep(…)`) | What runs inline | Who to look for |
 |---|---|---|
-| `erroring pending callbacks` | each pending response subject's `OnError`, and with it every subscriber's error continuation | a subscriber of one of the `PendingCallbacks` |
-| `reactive dispose actions` | each `RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)` factory, then the subscription to their merged chain | an action doing synchronous work before it returns its observable |
-| `registrant walk` | each registered synchronous cleanup's `Dispose`, in registration order | the registrant named in `DisposingRegistrant(…)` |
+| `erroring pending callbacks` | each pending response subject's `OnError`, and with it every subscriber's error continuation | a subscriber of the callback named in `ErroringCallback(type → target, ms)`. The registry is cleared *before* the callbacks are errored, so `PendingCallbacks` cannot list it. |
+| `reactive dispose actions` | each `RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)` factory, then the subscription to their merged chain | two sites, either of which can block: an action's factory before it returns its observable, and the synchronous body of that observable's subscription (an `Observable.Create` / `Defer` chain runs when the merged chain subscribes) |
+| `registrant walk` | each registered synchronous cleanup's `Dispose`, in registration order | the registrant named in `DisposingRegistrant(…)`. Innermost comes first; an outer entry is a cleanup that registered the inner one while it ran. |
 | `messageService.Dispose` | opening the init gates, answering the deferred deliveries, stopping the timers | the message service, not a registrant |
 
 The verdict printed "find the registrant" for all four. It now records the step it entered (one
-immutable mark the ShutdownRequest turn swaps, read by the detector from its own thread), and each
-guarded registrant stamps itself while its `Dispose` runs, so the line says which. The registrant is
+immutable mark the ShutdownRequest turn swaps, read by the detector from its own thread). Each
+guarded registrant the walk runs pushes itself on a stack while its `Dispose` runs, so the line says
+which. The stack belongs to the walk thread alone. Once the composite is disposed, a late
+`RegisterForDisposal` runs its cleanup inline on the *registering* thread, which holds no part of
+the block. A single shared stamp let such a cleanup overwrite the blocked entry's stamp and clear it
+on return, and a nested registration's return erased its outer cleanup the same way. Both read as
+"between entries" while the entry still blocked. The registrant is
 described by the delegate it was registered as — `RegisterForDisposal(Action<IMessageHub>)` keeps the
 delegate, so a lambda prints as its declaring class and enclosing method rather than as Rx's
 anonymous disposable — or by its own type. "Find the registrant" is printed only when one is running.

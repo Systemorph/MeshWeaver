@@ -3394,7 +3394,8 @@ public sealed class MessageHub : IMessageHub
     private string DescribeShutDownBlock()
     {
         var step = shutDownStep;
-        var running = registrantOnBlock;
+        var running = registrantsOnBlock.IsEmpty ? null : registrantsOnBlock.Peek();
+        var callback = callbackOnBlock;
         if (step is null)
             return "The phase recorded no step, so which of its inline steps holds the block was not "
                    + "measured; read the snapshot below.";
@@ -3406,26 +3407,47 @@ public sealed class MessageHub : IMessageHub
                 + $"been disposing for {(long)Stopwatch.GetElapsedTime(running.StartedAt).TotalMilliseconds}ms: "
                 + "its Dispose is what blocks — find what it waits on (a lock, a synchronous wait, a teardown "
                 + "joining a turn this block is itself occupying). Registrants=0 below is expected: the "
-                + "composite zeroes its count before it disposes an entry.",
+                + "composite zeroes its count before it disposes an entry."
+                + DescribeOuterRegistrants(),
             ShutDownSteps.RegistrantWalk =>
                 $"It entered the registrant walk {stepMs}ms ago but no registrant is running at this instant "
                 + "— the walk is between entries, so the time is going to the walk itself, not one cleanup; "
                 + "Registrants=0 below is expected once the walk has begun.",
-            ShutDownSteps.CancelCallbacks =>
+            ShutDownSteps.CancelCallbacks when callback is not null =>
                 $"NO registrant has run yet: for {stepMs}ms it has been erroring out this hub's pending "
-                + "response callbacks, and each subscriber's onError continuation runs INLINE on this turn — "
-                + "the blocking code is a subscriber of one of the PendingCallbacks below, not a registrant.",
+                + $"response callbacks, and the one on the block now is ({callback.Describe()}) — a subscriber "
+                + "of THAT callback runs its onError continuation INLINE on this turn and is what blocks. "
+                + "The registry was cleared before the callbacks were errored, so PendingCallbacks below "
+                + "no longer lists it; this line is the record.",
+            ShutDownSteps.CancelCallbacks =>
+                $"NO registrant has run yet: for {stepMs}ms it has been in the pending-callback "
+                + "cancellation, between callbacks at this instant. The registry was cleared before the "
+                + "callbacks were errored, so PendingCallbacks below cannot list them.",
             ShutDownSteps.ReactiveDisposeActions =>
                 $"NO registered synchronous cleanup has run yet: for {stepMs}ms it has been invoking the "
-                + "reactive dispose actions (RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)), "
-                + "whose factories and subscriptions run INLINE on this turn — one of them does synchronous "
-                + "work before handing back its observable.",
+                + "reactive dispose actions (RegisterForDisposal(Func<IMessageHub, IObservable<Unit>>)). "
+                + "Two sites run INLINE on this turn and either can block: an action's factory, before it "
+                + "returns its observable, and the synchronous body of that observable's subscription "
+                + "(an Observable.Create / Defer / Return chain runs when the merged chain subscribes). "
+                + "Look in both.",
             ShutDownSteps.MessageServiceDispose =>
                 $"Every registrant has already run: for {stepMs}ms it has been in messageService.Dispose "
                 + "(opening the init gates, answering deferred deliveries, stopping timers) — the blocking "
                 + "call is in the message service, not a registrant.",
             _ => $"It is in step '{step.Step}' ({stepMs}ms)."
         };
+    }
+
+    /// <summary>
+    /// The cleanups a blocked registrant is nested inside (registered while their own Dispose ran),
+    /// outermost last — or the empty string when it is not nested.
+    /// </summary>
+    private string DescribeOuterRegistrants()
+    {
+        var outer = registrantsOnBlock.Skip(1).Select(r => r.Registrant.Describe()).ToArray();
+        return outer.Length == 0
+            ? string.Empty
+            : $" It is nested inside the cleanup(s) [{string.Join(" ← ", outer)}], each still running.";
     }
 
     private void DisposeImpl()
@@ -3476,9 +3498,17 @@ public sealed class MessageHub : IMessageHub
         // 2. Synchronous teardown of every registered subscription / Action cleanup —
         //    normal Rx subscription logic, no bag. Every registrant went in wrapped by
         //    GuardRegistrant, so one that throws is named and the walk continues — and each one
-        //    stamps itself on `registrantOnBlock` while it runs, so one that BLOCKS is named too.
+        //    pushes itself on `registrantsOnBlock` while it runs, so one that BLOCKS is named too.
         MarkShutDownStep(ShutDownSteps.RegistrantWalk);
-        disposables.Dispose();
+        Volatile.Write(ref walkThreadId, Environment.CurrentManagedThreadId);
+        try
+        {
+            disposables.Dispose();
+        }
+        finally
+        {
+            Volatile.Write(ref walkThreadId, 0);
+        }
     }
 
     /// <summary>
@@ -3504,7 +3534,7 @@ public sealed class MessageHub : IMessageHub
     /// <summary>
     /// One registered cleanup, wrapped so that a fault in it is NAMED and the walk continues (see
     /// <see cref="GuardRegistrant"/>), and so that one that BLOCKS is named too: while its
-    /// <c>Dispose</c> runs it is stamped on <see cref="registrantOnBlock"/>, which the stall
+    /// <c>Dispose</c> runs ON THE WALK it is pushed on <see cref="registrantsOnBlock"/>, which the stall
     /// detector reads.
     ///
     /// <para>🚨 <b>Why the hub's own count could never name it (#6883).</b> Rx's
@@ -3541,8 +3571,13 @@ public sealed class MessageHub : IMessageHub
         {
             if (Interlocked.Exchange(ref disposed, 1) != 0)
                 return;
-            var mark = new RegistrantOnBlock(this, Stopwatch.GetTimestamp());
-            hub.registrantOnBlock = mark;
+            // Only the walk's own thread records: a late registrant disposed inline on another thread
+            // holds no part of the action block, and recording it is what used to hide the entry
+            // that does (see `registrantsOnBlock`).
+            var onWalk = Volatile.Read(ref hub.walkThreadId) == Environment.CurrentManagedThreadId;
+            var outer = hub.registrantsOnBlock;
+            if (onWalk)
+                hub.registrantsOnBlock = outer.Push(new RegistrantOnBlock(this, Stopwatch.GetTimestamp()));
             try { registrant.Dispose(); }
             catch (Exception e)
             {
@@ -3557,10 +3592,10 @@ public sealed class MessageHub : IMessageHub
             }
             finally
             {
-                // Clear only OUR stamp: a late registrant disposed on another thread (the composite
-                // disposes one added after its own disposal inline, on the adder's thread) may have
-                // stamped over it, and wiping that one would hide a registrant that is running.
-                Interlocked.CompareExchange(ref hub.registrantOnBlock, null, mark);
+                // Back to exactly what was there before this entry — the outer cleanup when nested,
+                // empty between walk entries. Only the walk thread writes the stack, so no race.
+                if (onWalk)
+                    hub.registrantsOnBlock = outer;
             }
         }
     }
@@ -3721,9 +3756,12 @@ public sealed class MessageHub : IMessageHub
         if (shutDownStep is { } step)
             sb.Append(" ShutDownStep(").Append(step.Step).Append(", ")
               .Append((long)Stopwatch.GetElapsedTime(step.StartedAt).TotalMilliseconds).Append("ms)");
-        if (registrantOnBlock is { } running)
+        // Innermost first; an outer entry is a cleanup that registered the inner one while it ran.
+        foreach (var running in registrantsOnBlock)
             sb.Append(" DisposingRegistrant(").Append(running.Registrant.Describe()).Append(", ")
               .Append((long)Stopwatch.GetElapsedTime(running.StartedAt).TotalMilliseconds).Append("ms)");
+        if (callbackOnBlock is { } callback)
+            sb.Append(" ErroringCallback(").Append(callback.Describe()).Append(')');
     }
 
     private void AppendDiagnostics(System.Text.StringBuilder sb, int depth)
@@ -4489,6 +4527,9 @@ public sealed class MessageHub : IMessageHub
 
         foreach (var (_, entry) in pending)
         {
+            // Recorded for the stall verdict: the registry above is already empty, so this is the
+            // only place that can still say WHICH callback's subscriber is running (#6883).
+            callbackOnBlock = new CallbackOnBlock(entry.RequestType, entry.Target, Stopwatch.GetTimestamp());
             try
             {
                 // 🚨 TYPED, so callers can classify it (#3148). This is a teardown fact — the hub
@@ -4502,6 +4543,10 @@ public sealed class MessageHub : IMessageHub
             catch
             {
                 // Subject may already be terminated — ignore.
+            }
+            finally
+            {
+                callbackOnBlock = null;
             }
         }
     }
@@ -4672,10 +4717,45 @@ public sealed class MessageHub : IMessageHub
     private volatile ShutDownStepMark? shutDownStep;
 
     /// <summary>
-    /// The registered cleanup whose <c>Dispose</c> is running right now, and since when — or
-    /// <c>null</c> between registrants. Stamped and cleared by <see cref="GuardedRegistrant"/>.
+    /// The registered cleanups whose <c>Dispose</c> is running ON THE SHUTDOWN TURN right now,
+    /// innermost on top, each with the time it started — empty between registrants. Pushed and
+    /// popped by <see cref="GuardedRegistrant"/>, and only on the thread running the walk.
+    ///
+    /// <para>🚨 <b>A stack, and the walk's alone.</b> Once the composite is disposed, a LATE
+    /// <c>RegisterForDisposal</c> runs its cleanup inline on whichever thread registered it. A single
+    /// shared stamp let that off-turn cleanup overwrite the blocked walk entry's stamp and then clear
+    /// it on return, so the verdict said the walk was "between entries" while the entry was still
+    /// blocking. A cleanup that registers another one while it runs nests the same way, and the inner
+    /// one's return wiped the outer one's stamp. Off-turn cleanups hold no part of the action block,
+    /// so they are not recorded here at all; nested ones push on top and pop back to the outer one.</para>
     /// </summary>
-    private volatile RegistrantOnBlock? registrantOnBlock;
+    private volatile ImmutableStack<RegistrantOnBlock> registrantsOnBlock = ImmutableStack<RegistrantOnBlock>.Empty;
+
+    /// <summary>
+    /// The managed thread id running the registrant walk, or 0 outside it. Read by
+    /// <see cref="GuardedRegistrant"/> to tell a cleanup the walk is running from one a late
+    /// registration is running inline on some other thread.
+    /// </summary>
+    private int walkThreadId;
+
+    /// <summary>
+    /// The pending response callback whose subscribers' <c>OnError</c> is running on the ShutDown
+    /// turn right now, or <c>null</c>. <c>CancelCallbacks</c> clears the registry BEFORE it errors the
+    /// entries, so without this the snapshot's <c>PendingCallbacks</c> could never name the one a
+    /// blocking subscriber belongs to.
+    /// </summary>
+    private volatile CallbackOnBlock? callbackOnBlock;
+
+    /// <summary>A pending callback being errored out on the ShutDown turn.</summary>
+    /// <param name="RequestType">The request the callback was waiting to have answered.</param>
+    /// <param name="Target">Where that request was sent.</param>
+    /// <param name="StartedAt">A <see cref="Stopwatch.GetTimestamp"/> reading.</param>
+    private sealed record CallbackOnBlock(string RequestType, Address? Target, long StartedAt)
+    {
+        public string Describe() =>
+            $"{RequestType} → {Target?.ToString() ?? "(no target)"}, "
+            + $"{(long)Stopwatch.GetElapsedTime(StartedAt).TotalMilliseconds}ms";
+    }
 
     /// <summary>One step of the ShutDown phase and the timestamp it began at.</summary>
     /// <param name="Step">One of the <see cref="ShutDownSteps"/> names.</param>

@@ -177,6 +177,151 @@ public class ShutDownPhaseStallVerdictTest : HubTestBase
             cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    /// <summary>A late cleanup, registered after the walk began: the composite runs it inline on the
+    /// REGISTERING thread, which holds no part of the action block.</summary>
+    private static void LateOffTurnCleanup() { }
+
+    /// <summary>A cleanup registered by another cleanup while that one is disposing.</summary>
+    private static void NestedInnerCleanup(IMessageHub _) { }
+
+    /// <summary>
+    /// A late registration while the walk is blocked must not hide the blocker. Once the composite is
+    /// disposed, <c>RegisterForDisposal</c> disposes the newcomer inline on the caller's thread; with
+    /// one shared stamp that off-turn cleanup overwrote the blocked entry's stamp and cleared it on
+    /// return, and the verdict read "between entries" while the entry still held the block.
+    ///
+    /// <para><b>Control, measured:</b> with the single CompareExchange-cleared stamp this verdict reads
+    /// "the walk is between entries" and names neither cleanup.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ALateOffTurnRegistrant_DoesNotHideTheBlockedWalkEntry()
+    {
+        var hub = (MessageHub)Mesh.GetHostedHub(new Address("victim", Guid.NewGuid().AsString()),
+            c => c.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        hub.RegisterForDisposal(ParkTheRegistrantWalk);
+
+        try
+        {
+            hub.Dispose();
+            await parked.Should().Within(TestTimeouts.Convergence).Emit(
+                "the walk entry must actually park before the late registration races it",
+                cancellationToken: TestContext.Current.CancellationToken);
+            // Runs inline HERE, on the test thread, because the composite is already disposed.
+            hub.RegisterForDisposal(_ => LateOffTurnCleanup());
+
+            var verdict = await Verdict(ShutDownPhaseBlocked, hub.Address);
+            Output.WriteLine(verdict);
+            verdict.Should().Contain(nameof(ParkTheRegistrantWalk),
+                "the entry still holding the block is the finding, whatever ran off-turn meanwhile");
+            verdict.Should().NotContain("between entries",
+                "a cleanup IS running on the walk; an off-turn cleanup's return must not erase it");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+
+        await hub.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "released, the walk finishes", cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// A cleanup that registers another cleanup while it runs, then blocks. The inner one runs inline
+    /// on the walk thread and returns; the outer one must still be named as the blocker.
+    ///
+    /// <para><b>Control, measured:</b> with the single stamp, the inner cleanup's return cleared the
+    /// outer one's stamp and the verdict read "between entries".</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANestedRegistrantsReturn_DoesNotEraseTheOuterBlocker()
+    {
+        var hub = (MessageHub)Mesh.GetHostedHub(new Address("victim", Guid.NewGuid().AsString()),
+            c => c.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        hub.RegisterForDisposal(h =>
+        {
+            // Disposed inline, on this (the walk) thread, because the composite is disposed.
+            h.RegisterForDisposal(NestedInnerCleanup);
+            ParkTheRegistrantWalk(h);
+        });
+
+        try
+        {
+            hub.Dispose();
+            await parked.Should().Within(TestTimeouts.Convergence).Emit(
+                "the outer cleanup must park after its nested registration returned",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var verdict = await Verdict(ShutDownPhaseBlocked, hub.Address);
+            Output.WriteLine(verdict);
+            verdict.Should().Contain(nameof(ANestedRegistrantsReturn_DoesNotEraseTheOuterBlocker),
+                "the outer cleanup — a lambda declared in this test method — is still on the block");
+            verdict.Should().NotContain("between entries");
+            verdict.Should().NotContain(nameof(NestedInnerCleanup) + ",",
+                "the inner cleanup returned; it must not be reported as running");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+
+        await hub.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "released, the walk finishes", cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>Posted to a hub that handles it without ever answering.</summary>
+    private record NeverAnswered;
+
+    /// <summary>
+    /// A subscriber of a pending callback blocking in its <c>onError</c> while the ShutDown phase
+    /// errors the callbacks out. <c>CancelCallbacks</c> empties the registry BEFORE it errors the
+    /// entries, so the snapshot's PendingCallbacks cannot name the one being errored; the verdict must.
+    ///
+    /// <para>The callback is registered in the owner's <c>DisposeHostedHubs</c> phase — by its
+    /// child's cleanup — so the owner's quiescing has already drained and the callback is still
+    /// pending when the owner reaches ShutDown.</para>
+    ///
+    /// <para><b>Control, measured:</b> on the previous revision the verdict pointed at
+    /// "one of the PendingCallbacks below" over a snapshot that listed none.</para>
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ASubscriberBlockingInCancelCallbacks_IsNamedThoughTheRegistryIsCleared()
+    {
+        var id = Guid.NewGuid().AsString();
+        var silent = Mesh.GetHostedHub(new Address("silent", id),
+            c => c.WithPostingIdentity(PostingIdentity.System)
+                  .WithHandler<NeverAnswered>((_, d) => d.Processed()), HostedHubCreation.Always)!;
+        var owner = (MessageHub)Mesh.GetHostedHub(new Address("owner", id),
+            c => c.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        var child = owner.GetHostedHub(new Address("child", id),
+            c => c.WithPostingIdentity(PostingIdentity.System), HostedHubCreation.Always)!;
+        child.RegisterForDisposal(_ =>
+            owner.Observe(new NeverAnswered(), o => o.WithTarget(silent.Address))
+                .Subscribe(_ => { }, _ => ParkTheRegistrantWalk(owner)));
+
+        try
+        {
+            owner.Dispose();
+            await parked.Should().Within(TestTimeouts.Convergence).Emit(
+                "the subscriber must park inside the owner's callback cancellation",
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            var verdict = await Verdict(ShutDownPhaseBlocked, owner.Address);
+            Output.WriteLine(verdict);
+            verdict.Should().Contain("erroring pending callbacks");
+            verdict.Should().Contain(nameof(NeverAnswered) + " → " + silent.Address,
+                "the callback whose subscriber blocks is named, with its target — the registry no longer can");
+            verdict.Should().Contain("ErroringCallback(",
+                "the snapshot carries the same record");
+        }
+        finally
+        {
+            Volatile.Write(ref release, 1);
+        }
+
+        await owner.DisposalCompleted.Should().Within(TestTimeouts.Convergence).Emit(
+            "released, the owner runs to Dead", cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     /// <summary>
     /// The first Error with <paramref name="eventId"/> about <paramref name="address"/>. Polls the
     /// capture: the producer is a logger on the detector's own thread, with no signal of its own.
