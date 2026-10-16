@@ -7,6 +7,7 @@ using MeshWeaver.Hosting.Monolith;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
 using Xunit;
 
@@ -42,20 +43,20 @@ public class DocNodeTypesAreKnownToActivationRecycleTest(ITestOutputHelper outpu
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder).AddDocumentation();
 
-    private Task<ActivationRecycleTicket> Recycle(params string[] types) =>
-        ActivationRecycle.Request(Mesh, new ActivationRecycleRequest
+    private static Task<ActivationRecycleTicket> Recycle(IMessageHub mesh, System.Threading.CancellationToken ct, params string[] types) =>
+        ActivationRecycle.Request(mesh, new ActivationRecycleRequest
             {
                 NodeTypes = types.ToImmutableList(),
                 Reason = "test: #6826 — the shipped Doc NodeTypes are known",
                 RequestedBy = nameof(DocNodeTypesAreKnownToActivationRecycleTest),
             })
             .Should().Within(TestTimeouts.Convergence)
-            .Emit("the request answers", TestContext.Current.CancellationToken);
+            .Emit("the request answers", ct);
 
     [Fact(Timeout = 120_000)]
     public async Task EveryShippedDocNodeType_IsKnown()
     {
-        var ticket = await Recycle(
+        var ticket = await Recycle(Mesh, TestContext.Current.CancellationToken,
             "Doc/Architecture/ATypicalNodeType/Budget",
             "Doc/Architecture/BusinessRules/Cession",
             "Doc/DataMesh/PythonPandasNode/PandasExplorer",
@@ -70,11 +71,11 @@ public class DocNodeTypesAreKnownToActivationRecycleTest(ITestOutputHelper outpu
     [Fact(Timeout = 120_000)]
     public async Task ADocPage_AndAnAbsentDocPath_AreRefusedAsUnknown()
     {
-        var page = await Recycle("Doc/DataMesh/SocialMedia/LinkedInPublishing");
+        var page = await Recycle(Mesh, TestContext.Current.CancellationToken, "Doc/DataMesh/SocialMedia/LinkedInPublishing");
         page.Path.Should().BeNull("a Markdown page is a node, not a NodeType");
         page.Refusal.Should().Contain("unknown NodeType");
 
-        var absent = await Recycle("Doc/DataMesh/SocialMedia/NoSuchType");
+        var absent = await Recycle(Mesh, TestContext.Current.CancellationToken, "Doc/DataMesh/SocialMedia/NoSuchType");
         absent.Path.Should().BeNull("nothing is served at that path");
         absent.Refusal.Should().Contain("unknown NodeType");
     }
