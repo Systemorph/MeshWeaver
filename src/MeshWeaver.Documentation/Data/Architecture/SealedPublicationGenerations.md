@@ -213,14 +213,14 @@ same prefix lock (`bake-publication-lock.sh`, around the push in both `main-cd.y
 which holds its re-bind lock through the registry push): two overlapping publishers can no longer
 each read the tag before the other moves it.
 
-**A run that publishes nothing still owes the registry.** A lane run whose content is already sealed
-(`scope=none`) or that was superseded under the lock used to skip the registry too, reasoning from
-the shares alone — so a sibling that sealed the shares and then failed its registry push left the
-tag stale for every later run of that content, its own re-run included. Those runs now execute
-`deliver-live-publication.sh` under the lock: it reads which commit the tag names (one read on the
-every-poll path) and, when that is neither the live share publication's commit nor a newer one
-containing it, downloads the LIVE share publication, verifies every file against its own digest stamp
-and that it is ONE publication, and pushes that — never the run's local bake.
+**The superseded path does not stay green over a stale registry.** A run superseded under the lock
+publishes nothing, so if the sibling that sealed the shares failed its registry push, a green here
+would hide it. Under the lock it still holds, that run reads the tag
+(`push-bundle-publication.sh --published-commit`) and `check-registry-names-live.sh` goes RED unless
+the tag names the live share publication's commit in the current layout, or a newer commit
+containing it. It repairs nothing. The older `scope=none` path has the same blind spot and predates
+this work; delivering the live share publication from a run that did not bake it is a separate
+change, filed to triage rather than folded in here.
 
 `main-cd.yml`'s platform publish now carries a read-only `GH_TOKEN`, so the never-seal-backwards
 comparison can order two commits instead of reporting *"could not order … republishing as before"*

@@ -237,6 +237,9 @@ if [ "$NEW_SCOPE" = "none" ]; then
   out rebind superseded
   out publish false
   out reason "$NEW_REASON"
+  # The commit the live share publication records — what the superseded path's registry guard
+  # (check-registry-names-live.sh) holds the registry tag to.
+  out live-commit "$(tr -d '[:space:]' < "$FRESH/published-commit.txt")"
   if [ -n "$LOCKS_FAILED" ]; then
     # Nothing will be published, so no later step would fail the unlocked targets: say it HERE.
     echo "::error::superseded, but the publication lock could not be taken on:$LOCKS_FAILED — whether those targets hold this content was not established under the lock."

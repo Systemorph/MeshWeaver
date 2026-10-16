@@ -4,7 +4,7 @@
 #                            [--tag-run <run id>] [--release <version>] [--skip-if-published]
 #                            [--registry-config <docker config.json>] [--plain-http] [--oras <binary>]
 # push-bundle-publication.sh --registry <host> --source <name> --identity <id> --published-commit
-#                            (read only: print the source commit <source>:<identity> names, or nothing)
+#                            (read only: print "<commit> <layout> <current layout>" for the tag, or nothing)
 #
 # Publishes ONE sealed publication — the directory publish-bake-bundles.sh writes for one source
 # and one framework identity (`<package>.zip` per bundle, `modules/<package>.module.nupkg` beside
@@ -109,12 +109,13 @@ case "$PUBLICATION_LAYOUT" in ''|*[!0-9]*) fail "publication layout '$PUBLICATIO
 [ -n "$IDENTITY" ] || fail "--identity <id> is required"
 command -v "$ORAS" >/dev/null 2>&1 || fail "oras is not on PATH (or --oras/\$ORAS does not name a binary) — install a pinned release: https://github.com/oras-project/oras/releases"
 
-# ---- --published-commit: READ ONLY — which source commit does <source>:<identity> name? ----------
-# The question a lane asks when IT publishes nothing (its content is already sealed on the shares,
-# or a newer publication superseded it) but must still prove the REGISTRY carries what the shares
-# serve (deliver-live-publication.sh, Copilot's review of #6878). Prints the commit, or nothing
-# when the tag is absent; exit 0 either way. Any other failure to read is exit 1 — an unreadable
-# registry is never "absent". Reads exactly what the sealed-skip below reads, in the same shapes.
+# ---- --published-commit: READ ONLY — what does <source>:<identity> name? ----------------------
+# Asked by a lane run that was SUPERSEDED under the publication lock (MeshWeaver.Plugins#1785): it
+# publishes nothing, so it must at least prove the registry names the live share publication
+# (check-registry-names-live.sh) rather than turn green over a stale tag. Prints
+# "<commit> <layout> <the layout this publisher writes>", or nothing when the tag is absent; exit 0
+# either way. Any other failure to read is exit 1 — an unreadable registry is never "absent". Reads
+# exactly what the sealed-skip below reads, in the same shapes.
 if [ "$PUBLISHED_COMMIT_ONLY" -eq 1 ]; then
   SOURCE_LC_RO=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
   ROFLAGS=()
@@ -134,7 +135,11 @@ if [ "$PUBLISHED_COMMIT_ONLY" -eq 1 ]; then
   [ -n "$sidecar" ] || fail "$repo:$IDENTITY names an index with no sidecar manifest — its source commit cannot be read"
   "$ORAS" manifest fetch-config "${ROFLAGS[@]}" "$repo@$sidecar" > "$RO/config.json" \
     || fail "could not fetch the sidecar config of $repo@$sidecar"
-  tr -d '\n' < "$RO/config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p'
+  ro_commit=$(tr -d '\n' < "$RO/config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p')
+  ro_layout=$(tr -d '\n' < "$RO/config.json" | sed -n 's/.*"layout":\([0-9]\{1,\}\).*/\1/p')
+  # "<commit> <layout> <the layout this publisher writes>" — a same-commit tag of an OLDER layout is
+  # not the current publication (the sealed-skip below republishes it), and a reader must see that.
+  printf '%s %s %s\n' "${ro_commit:--}" "${ro_layout:--}" "$PUBLICATION_LAYOUT"
   exit 0
 fi
 

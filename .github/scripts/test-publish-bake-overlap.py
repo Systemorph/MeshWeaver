@@ -2097,7 +2097,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         run_rebind_cases(h, work)
         run_round5_cases(h, work)
         run_registry_lock_cases(h, work)
-        run_delivery_cases(h, work)
+        run_superseded_guard_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2577,6 +2577,8 @@ def run_rebind_cases(h: "Harness", work: Path) -> None:
         check(f"a live publication of {label} supersedes this run: green, publish=false",
               r.returncode == 0 and o.get("rebind") == "superseded" and o.get("publish") == "false",
               f"rc={r.returncode}, outputs={o}; {(r.stdout + r.stderr)[-400:]!r}")
+        check("…and it hands the registry guard the LIVE publication's commit",
+              o.get("live-commit") == live, f"live-commit={o.get('live-commit')!r}")
         check("…and the state the scope read is left as it was (nothing is carried or published)",
               (lane.state / "published-commit.txt").read_text().strip() == c0)
         lane.release()
@@ -2843,93 +2845,66 @@ def run_registry_lock_cases(h: "Harness", work: Path) -> None:
           bad_run.returncode != 0 and "but it does not" in bad_run.stderr, f"rc={bad_run.returncode}")
 
 
-DELIVER = HERE / "deliver-live-publication.sh"
+GUARD = HERE / "check-registry-names-live.sh"
 
-# A recorder in place of push-bundle-publication.sh: `--published-commit` answers from a file (the
-# registry's tag), a push copies the directory it was handed (what would reach the registry) and
-# moves the "tag" to that directory's source commit.
-REGISTRY_RECORDER = """#!/usr/bin/env bash
+# A recorder in place of push-bundle-publication.sh --published-commit: answers the tag from a file,
+# "<commit> <layout> <current layout>", or nothing when the tag is absent.
+REGISTRY_TAG_READER = """#!/usr/bin/env bash
 set -euo pipefail
-dir=""; ro=0
-while [ $# -gt 0 ]; do
-  case "$1" in --dir) dir="$2"; shift 2 ;; --published-commit) ro=1; shift ;; *) shift ;; esac
-done
-if [ "$ro" -eq 1 ]; then
-  [ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
-  exit 0
-fi
-rm -rf "$MOCK_REGISTRY_DELIVERED"; cp -R "$dir" "$MOCK_REGISTRY_DELIVERED"
-tr -d '[:space:]' < "$dir/source-commit.txt" > "$MOCK_REGISTRY_TAG"
-echo "bundle-publication: index=sha256:recorded"
+case " $* " in *" --published-commit "*) ;; *) echo "recorder: only --published-commit is modelled" >&2; exit 64 ;; esac
+[ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
+exit 0
 """
 
 
-def run_delivery_cases(h: "Harness", work: Path) -> None:
-    # Copilot on #6878: a lane run that publishes NOTHING (scope=none, or superseded under the lock)
-    # used to skip the registry too, reasoning from the shares alone — so a sibling that sealed the
-    # shares and then failed its registry push left the tag stale for every later run of that
-    # content, its own re-run included. deliver-live-publication.sh verifies the tag and, when it is
-    # behind, delivers the LIVE SHARE publication itself (never the run's local bake).
-    recorder = work / "registry-recorder.sh"
-    recorder.write_text(REGISTRY_RECORDER)
-    recorder.chmod(0o755)
+def run_superseded_guard_cases(h: "Harness", work: Path) -> None:
+    # The superseded path (MeshWeaver.Plugins#1785) publishes nothing, so a sibling that sealed the
+    # shares and then failed its registry push would leave it GREEN over a stale tag. Its guard reads
+    # the tag under the lock and goes red unless the tag names the live commit in the current layout
+    # (or a newer commit containing it).
+    reader = work / "registry-tag-reader.sh"
+    reader.write_text(REGISTRY_TAG_READER)
+    reader.chmod(0o755)
     tag = work / "registry-tag"
-    delivered = work / "registry-delivered"
-    live_commit = "c" * 40
-    older = "b" * 40
+    live = "c" * 40
 
-    def deliver(run_id: str) -> subprocess.CompletedProcess:
-        e = dict(os.environ)
-        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
-        e.update(h.base_env())
-        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE", "GH_TOKEN"):
-            e.pop(k, None)
-        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BUNDLE_REGISTRY": "registry.example",
-                  "PUSH_BUNDLE_PUBLICATION": str(recorder), "MOCK_REGISTRY_TAG": str(tag),
-                  "MOCK_REGISTRY_DELIVERED": str(delivered), "MOCK_AZ_ALLOW_SHOW": "1",
-                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": run_id})
-        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(DELIVER)], capture_output=True,
-                              text=True, env=e)
-
-    def reset(registry_names: str | None) -> None:
+    def guard(names: str | None, **extra: str) -> subprocess.CompletedProcess:
         h.reset()
-        plant_publication(h, live_commit, "Plugins-run-sibling")
-        if delivered.exists():
-            shutil.rmtree(delivered)
-        if registry_names is None:
+        if names is None:
             if tag.exists():
                 tag.unlink()
         else:
-            tag.write_text(registry_names + "\n")
+            tag.write_text(names + "\n")
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE", "GH_TOKEN", "MOCK_GH_AHEAD"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BUNDLE_REGISTRY": "registry.example",
+                  "LIVE_COMMIT": live, "PUSH_BUNDLE_PUBLICATION": str(reader), "MOCK_REGISTRY_TAG": str(tag),
+                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": "9100"})
+        e.update(extra)
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(GUARD)], capture_output=True, text=True, env=e)
 
-    print("\na run that publishes nothing still proves — or completes — the registry delivery:")
-    reset(live_commit)
-    r = deliver("9001")
-    check("the registry already names the live commit: verified, nothing downloaded or pushed",
-          r.returncode == 0 and "Verified" in r.stdout and not delivered.exists(),
-          f"rc={r.returncode}; {(r.stdout + r.stderr)[-200:]!r}")
-
-    for label, names in (("stale (an older commit)", older), ("absent", None)):
-        reset(names)
-        before = tag.read_text().strip() if tag.exists() else ""
-        r = deliver("9002")
-        share = h.shelf_root / ACCOUNT / SHARE / DEST
-        want = {p.name: p.read_bytes() for p in share.iterdir() if p.is_file()}
-        got = {p.name: p.read_bytes() for p in delivered.iterdir() if p.is_file()} if delivered.exists() else {}
-        check(f"NEGATIVE CONTROL: the registry tag is {label} before the delivery — the state a skip used to leave",
-              before != live_commit, f"tag before: {before or '<none>'}")
-        check(f"a registry tag that is {label} gets the LIVE SHARE publication, byte for byte, and the tag moves",
-              r.returncode == 0 and got == want and tag.read_text().strip() == live_commit,
-              f"rc={r.returncode}; delivered {sorted(got)} vs share {sorted(want)}; {(r.stdout + r.stderr)[-200:]!r}")
-    check("…under the lock, which it released", leases_held(h) == [], " ".join(leases_held(h)) or "none")
-
-    reset(older)
-    damaged = h.shelf_root / ACCOUNT / SHARE / DEST / "Beta.zip"
-    damaged.write_text("bytes no publisher stamped\n")
-    r = deliver("9003")
-    check("a share file that does not match its own digest stamp is NOT delivered: red, nothing pushed",
-          r.returncode != 0 and "Refusing to deliver" in (r.stdout + r.stderr) and not delivered.exists()
-          and tag.read_text().strip() == older, f"rc={r.returncode}")
+    print("\nthe superseded path does not stay green over a registry that lacks the live publication:")
+    r = guard(f"{live} 2 2")
+    check("the tag names the live commit in the current layout: green", r.returncode == 0 and "Verified" in r.stdout,
+          f"rc={r.returncode}")
+    newer = "d" * 40
+    r = guard(f"{newer} 2 2", GH_TOKEN="stub", BAKE_CONTENT_REPOSITORY="Systemorph/MeshWeaver.Plugins",
+              MOCK_GH_AHEAD=newer)
+    check("the tag names a NEWER commit containing the live one: green", r.returncode == 0 and "NEWER" in r.stdout,
+          f"rc={r.returncode}")
+    for label, names in (("a stale commit", f"{'b' * 40} 2 2"), ("an ABSENT tag", None),
+                         ("the live commit in an OLDER layout", f"{live} 1 2")):
+        r = guard(names)
+        out = r.stdout + r.stderr
+        # NEGATIVE CONTROL, by construction: before this guard the superseded path ran no step at all,
+        # so each of these states ended green.
+        check(f"{label}: RED, naming the tag and the live commit (the superseded path used to be green here)",
+              r.returncode != 0 and "registry does not carry the live publication" in out and live in out,
+              f"rc={r.returncode}")
+    check("…and the guard ran under the lock and released it", leases_held(h) == [], " ".join(leases_held(h)) or "none")
 
 
 def main() -> int:
