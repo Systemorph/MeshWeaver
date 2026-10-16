@@ -105,7 +105,7 @@ public sealed class ModulesGoLiveWhileARollIsHandedOverTest : MonolithMeshTestBa
                 // The secret the hand-over signs with is read off the mesh's configuration at
                 // delivery time, exactly as in production.
                 services.AddSingleton<IConfiguration>(new ConfigurationBuilder()
-                    .AddInMemoryCollection(new Dictionary<string, string?> { [SelfUpdateHandover.SecretKey] = Secret })
+                    .AddInMemoryCollection(ImmutableDictionary<string, string?>.Empty.Add(SelfUpdateHandover.SecretKey, Secret))
                     .Build());
                 services.RemoveAll<ModuleLandingService>();
                 services.AddSingleton(_ => new ModuleLandingService(baseDirectory: root));
