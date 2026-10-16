@@ -736,6 +736,59 @@ its index, so such an N+1 is `RestartRequired` with N serving
 mutation-checked — without the index the swap answers `Live`). An addition AFTER the forwarded
 registrations (the hosted-service case above) still swaps live.
 
+### An optional module that cannot serve a service costs that feature — never sign-in (MeshWeaver#6847)
+
+The shape check closes the road the incident came by. It does not answer the question the incident
+raised: **why could an optional chat module stop people signing in at all?** The chain, read from the
+code the 2026-10-16 build ran:
+
+1. A per-node hub activation resolves its node first (`MessageHubGrain` → `PathResolutionService`), and
+   that resolution is a query.
+2. The query fan-out (`MeshQuery.SelectMatchingProviders`) sends EVERY query to EVERY provider — it
+   deliberately does not pre-filter by `Matches`, because storage providers answer `false` for an
+   unscoped query they must still serve. WhatsApp's `WhatsAppChatQueryProvider` is one of them, forwarded
+   to the root as a `ModuleServiceProxy`.
+3. Each module provider's leg takes a lease on subscribe (`ModuleServiceProxy.Leased` →
+   `ModuleContexts.TryLeaseModuleService`), and the lease RESOLVES the registration in the module's
+   current generation. That resolve threw `mw-module-service:10 (IWhatsAppRecentChats) has not been
+   registered`, the lease rethrew, the leg errored, and the merge errors the whole query on any leg's
+   error.
+4. So node resolution faulted for every hub that activated (the `[ACTIVATE] … activation faulted`
+   lines), and `UserIdentityCache`'s directory query (`nodeType:User`, unscoped, as System) faulted with
+   it — the "We could not check your account just now" every user saw. (The OAuth authorization code
+   itself is written storage-direct by `OAuthCodeStore` and touches no hub or query; what failed around
+   it was the identity and every hub-backed read.)
+
+The same lease guards the access-rule set (`NodeTypeAccessRuleSet` takes one per rule) and, since this
+change, the options setups a module forwards. **The rule is now that a registration the module's current
+generation cannot PRODUCE is ABSENT, never a fault in a consumer that leases it:**
+
+| Where | What changed |
+|---|---|
+| `ModuleContexts.TryLeaseModuleService` | A resolve that faults (anything but the caller's own scope ending), or that yields an instance which is not what the root's forwarder forwards, records the registration in `ModuleServices.Unservable` for THAT generation and reports it once — stderr and an error log `[MeshWeaver.Mesh.UnservableModuleService]` naming the module, the registration, the generation and the exception. The lease answers null, which every leasing consumer already read as "this module's feature is absent" (the shape a module withdrawn at boot has had since #6542). A later generation starts clean; until then the feature stays absent — a durable, named verdict, never a retry. |
+| `ModuleServiceProxy.Serves` | False for a recorded unservable registration, so a set built over the root's `IEnumerable<T>` leaves it out. |
+| `MeshQuery.SelectMatchingProviders` | A module's provider is a member of a query only if a lease can be taken NOW (taken and released at selection — the same resolve the leg would make, a cache read for a built singleton). A broken one is recorded and leaves the query before any leg exists, so not even the first query after the break faults. |
+| `ModuleConfigureOptionsForwarder` | Leased instead of resolved. The options factory runs every setup of an options type for EVERY name, so a module's `AddHttpClient(name)` forwarder runs when the sign-in's OIDC handler builds its own `HttpClientFactoryOptions`; a forwarder that threw there made one module's broken registration a fault in every named build of that type. A module that is not held, or cannot produce the setup, now configures nothing. |
+
+A DIRECT call through a forwarder still throws the real error: that call IS the feature, and failing it is
+correct. This is not a catch-and-continue: the fault is turned into a recorded, reported verdict about
+one generation of one module, and the only thing that stops working is what that module contributed.
+
+`ABrokenOptionalModuleNeverBreaksSignInTest` pins it. A module forwards a query provider and a named
+setup of a platform options type; the test then makes the held generation the incident's — a
+module-owned registration inserted ahead of both, committed past the shape check — and runs what
+sign-in runs: the identity directory query, a node write, a hub-activating read of it, and a named
+options build of the type the module also configures. Controls: before the break the module's provider
+answers its own node and its setup configures its own name; after it a direct resolve of the broken
+registration still throws "has not been registered". On the pre-fix code the identity query errors with
+exactly the memex message; with `TryLeaseModuleService` rethrowing the fault, the same.
+
+**Not established:** a module provider whose OWN `Query` faults (as opposed to one that cannot be
+produced) still fails every unscoped query it is asked — including the identity directory — because the
+merge errors on any leg's error and the fan-out does not pre-filter. That is the next isolation seam
+(scoping the identity and node-resolution reads to the providers that can hold them), not done here.
+`/health` does not yet list unservable registrations; the error log line is the report.
+
 **Measured over all 41 shipped modules** (Plugins with its slice converting the view packs and fixing
 Acp, built against this core; the three whose Debug output lacks NuGet dependencies measured from a
 published closure; measured in an ASP.NET Core test host): **41 live, 0 blocked, 0 declarations

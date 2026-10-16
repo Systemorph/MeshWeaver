@@ -131,6 +131,15 @@ public class MeshQuery : IMeshQueryCore
         private IObservable<TResult> Leased<TResult>(Func<IMeshQueryProvider, IObservable<TResult>> use)
             => ModuleServiceProxy.Leased(forwarder, use, $"the query provider '{name}'");
 
+        // Whether a lease can be taken NOW — the fan-out's membership test (SelectMatchingProviders). A
+        // registration the current generation cannot produce answers false here, recorded and reported
+        // once by the registry, instead of faulting the query's leg.
+        public bool CanBeLeased()
+        {
+            using var lease = ModuleServiceProxy.TryLease(forwarder);
+            return lease is not null;
+        }
+
         // The synchronous member: the lease spans the call, which is all of its use.
         private TResult Call<TResult>(Func<IMeshQueryProvider, TResult> call)
         {
@@ -489,10 +498,21 @@ public class MeshQuery : IMeshQueryCore
     /// outside its scope. The legacy <c>IMeshQueryProvider.Matches</c>
     /// predicate was a centralised pre-filter; removing it lets each
     /// provider own the "is this mine?" decision in one place.
+    ///
+    /// <para>🚨 <b>A module's provider is a member only while it can be LEASED</b> (MeshWeaver#6847). Every
+    /// query reaches every provider — node resolution for every hub activation and the sign-in's
+    /// identity directory included — so a module provider whose current generation cannot produce its
+    /// registration used to fault EVERY query: memex, 2026-10-16, WhatsApp's forwarded provider resolved
+    /// <c>mw-module-service:10 (IWhatsAppRecentChats)</c>, which was not registered, and no hub could
+    /// activate and nobody could sign in. Membership is decided by taking (and releasing) a lease here —
+    /// the same lease the leg takes when it subscribes — so such a provider is recorded unservable and
+    /// reported once (<see cref="ModuleContexts.TryLeaseModuleService"/>) and leaves THIS query before
+    /// any leg exists, exactly as a module withdrawn at boot does. A built singleton's resolve is a cache
+    /// read; the probe adds no I/O.</para>
     /// </remarks>
     private IReadOnlyList<IMeshQueryProvider> SelectMatchingProviders(IReadOnlyList<string> _)
         => providers
-            .Where(p => p is not ModuleQueryProvider module || ModuleServiceProxy.Serves(module.Forwarder))
+            .Where(p => p is not ModuleQueryProvider module || module.CanBeLeased())
             .ToList();
 
     /// <summary>
