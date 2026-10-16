@@ -66,7 +66,7 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
     private void FailWithOwnDisposal(string type) => ModuleType(type).GetField("FailDisposed")!.SetValue(null, true);
 
     private int Index<TService>() =>
-        Held().Services!.Registrations.Single(r => r.Descriptor.ServiceType == typeof(TService)).Index;
+        Held().Services!.Registrations.First(r => r.Descriptor.ServiceType == typeof(TService)).Index;
 
     private IObservable<QueryResultChange<MeshNode>> CoreQuery(string query) =>
         Mesh.ServiceProvider.GetRequiredService<IMeshQueryCore>()
@@ -208,6 +208,31 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
     }
 
     /// <summary>
+    /// The module registers its provider TWICE — one logical provider, one name. The first registration's
+    /// lease fails while the fan-out is built, so it is held under its forwarder's label while the second is
+    /// bound under the real name; once the first can be leased, a subscription sees two members with the
+    /// same name. The provider must still run ONCE per query (one change feed), the first registration
+    /// winning, the duplicate's lease released at once.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ADuplicateRegistration_WhoseFirstBindingFailed_RunsOncePerQuery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        FailConstruction(ProviderType, Constructions(ProviderType) + 1);
+        var query = new MeshWeaver.Hosting.Persistence.Query.MeshQuery(
+            Mesh.ServiceProvider.GetServices<IMeshQueryProvider>(), Mesh);
+
+        var queried = Queries();
+        await query.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{ChatsPath}").AsSystem())
+            .Where(change => change.Items.Any(node => node.Path == ChatsPath))
+            .Should().Within(Budget)
+            .Emit("the recovered provider answers", cancellationToken: ct);
+        (Queries() - queried).Should().Be(1, "one logical provider is queried once per query, never once per registration");
+    }
+
+    private int Queries() => (int)ModuleType(ProviderType).GetField("Queries")!.GetValue(null)!;
+
+    /// <summary>
     /// A temporary construction fault of a module's options setup costs THAT build the module's setup —
     /// the name still builds, as every other name does — but is never cached as complete options: the
     /// next build of the name carries the setup again.
@@ -257,16 +282,17 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
         {{Fault}}
             private static readonly MeshWeaver.Mesh.MeshNode Answer =
                 new("answer", "TransientProviderChats") { Name = "answered by the module", NodeType = "Markdown" };
+            public static int Queries;
             public TransientChatsProvider() => Construct();
             public string Name => "{{ProviderType}}";
             public bool Matches(System.Collections.Generic.IReadOnlyList<string> queryNamespaces) => true;
             public System.IObservable<MeshWeaver.Mesh.QueryResultChange<T>> Query<T>(
                 MeshWeaver.Mesh.Services.MeshQueryRequest request, System.Text.Json.JsonSerializerOptions options) =>
-                System.Reactive.Linq.Observable.Return(new MeshWeaver.Mesh.QueryResultChange<T>
+                System.Reactive.Linq.Observable.Defer(() => { System.Threading.Interlocked.Increment(ref Queries); return System.Reactive.Linq.Observable.Return(new MeshWeaver.Mesh.QueryResultChange<T>
                 {
                     ChangeType = MeshWeaver.Mesh.QueryChangeType.Initial,
                     Items = (request.Query ?? "").Contains("TransientProviderChats") && Answer is T answer ? [answer] : [],
-                });
+                }); });
             public System.IObservable<System.Collections.Generic.IReadOnlyCollection<MeshWeaver.Mesh.QueryResult>> Autocomplete(
                 string basePath, string prefix, System.Text.Json.JsonSerializerOptions options,
                 MeshWeaver.Mesh.Services.AutocompleteMode mode = MeshWeaver.Mesh.Services.AutocompleteMode.RelevanceFirst,
@@ -302,6 +328,8 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
                     .WithGlobalServiceRegistry(services =>
                     {
                         services.AddTransient<MeshWeaver.Mesh.Services.IMeshQueryProvider, TransientChatsProvider>();
+                        // The same logical provider registered again — one name, two registrations.
+                        services.AddTransient<MeshWeaver.Mesh.Services.IMeshQueryProvider>(_ => new TransientChatsProvider());
                         services.AddTransient<MeshWeaver.Mesh.Services.INodeTypeAccessRule, TransientRule>();
                         // A factory: a type registration would be refused, since the setup also implements
                         // IConfigureNamedOptions, which a forwarding proxy hides — the options forwarder serves it.

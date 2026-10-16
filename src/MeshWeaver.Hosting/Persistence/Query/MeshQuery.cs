@@ -219,21 +219,38 @@ public class MeshQuery : IMeshQueryCore
     {
         private readonly System.Reactive.Disposables.CompositeDisposable pinned = new();
 
+        // 🚨 Members are distinct by RESOLVED name, first registration wins (review of #6854). The fan-out
+        // dedupes by name when it is built, but a module provider whose lease failed then is held under its
+        // forwarder's label until a subscription reads its real name — so a duplicate registration of the
+        // same logical provider can surface here under the name another member already has. Running both
+        // would execute the provider twice and open two change feeds for one query (the exactly-once
+        // contract of IMeshQueryProvider). A later duplicate is dropped and its lease released at once.
         public QueryMembers(IReadOnlyList<IMeshQueryProvider> registered)
         {
-            var members = new List<IMeshQueryProvider>(registered.Count);
+            var members = System.Collections.Immutable.ImmutableList.CreateBuilder<IMeshQueryProvider>();
+            var names = System.Collections.Immutable.ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
             try
             {
                 foreach (var provider in registered)
                 {
                     if (provider is not ModuleQueryProvider module)
                     {
+                        if (names.Contains(provider.Name))
+                            continue;
+                        names = names.Add(provider.Name);
                         members.Add(provider);
                         continue;
                     }
                     if (module.TryLease() is not { } lease)
                         continue;
-                    var member = new PinnedModuleProvider(module.Forwarder, lease, module.BoundName ?? lease.Service.Name);
+                    var name = module.BoundName ?? lease.Service.Name;
+                    if (names.Contains(name))
+                    {
+                        lease.Dispose();
+                        continue;
+                    }
+                    names = names.Add(name);
+                    var member = new PinnedModuleProvider(module.Forwarder, lease, name);
                     pinned.Add(member);
                     members.Add(member);
                 }
@@ -243,7 +260,7 @@ public class MeshQuery : IMeshQueryCore
                 pinned.Dispose();
                 throw;
             }
-            Providers = members;
+            Providers = members.ToImmutable();
         }
 
         public IReadOnlyList<IMeshQueryProvider> Providers { get; }
