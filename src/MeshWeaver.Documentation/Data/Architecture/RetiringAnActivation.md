@@ -162,6 +162,7 @@ answer:
 | a request marked `[ReaskedOnShutdown]` (`SubscribeRequest`) | Debug | every producer rides the transient NACK out and asks the next activation (#4888, #5424, #5589) |
 | a request whose producer stamped `ReasksOnShutdown` on it (`PostOptions.ReaskingOnShutdown()`: the node point read's `GetDataRequest`, every node write's `PatchDataRequest`) | Debug | that producer rides the transient NACK out and asks the next activation (#5718, #6733). A reply never inherits the stamp: `ResponseFor` / `WithRequestIdFrom` drop it (#6717) |
 | a REPLY (carries `PostOptions.RequestId`, e.g. a `GetDataResponse` answering this address's own read) | Debug | its only reader is this hub's pending-response registry: a reply with a live callback passes every gate (`MessageHub.IsAwaitedResponse`), so a parked one had none, and the registry is cancelled by the same disposal. The replier awaits nothing, so nothing is posted to it (#6791) |
+| a RELEASE of state this hub holds (`IReleasesRemoteState`: `UnsubscribeRequest`) | Debug | the teardown that discards it releases everything the hub holds (its `sync/{id}` sub-hubs go in `DisposeHostedHubs`), and a release is fire-and-forget, so no NACK is posted to its sender (#6890) |
 | a message the routing layer may not answer: `[CanBeIgnored]` (`StreamEndedEvent`, `HeartBeatEvent`) or a `DeliveryFailure` | Debug | no sender awaits a reply, and `NackThroughParent` posts none (`AnswerPolicy`). Dropping it for a hub that is going away is what the declaration asks for (#5718) |
 | anything else, from another sender | **Error** | the waiter may take the NACK as final. That is the report worth an issue |
 
@@ -187,6 +188,16 @@ sentence was false: an on-target delivery is unpacked before the deferral decisi
 reply was typed, not an `IRequest`, and `NackThroughParent` declined it (`not-awaited`). Nobody
 was stranded and nobody was answered. The undeclared-REQUEST case in the same test class stays the
 Error control.
+
+The release row was measured as well (#6890). That incident opened on a module live-update burst:
+every per-node hub of one pod discarding a deferred `GetDataRequest`, attributed to a
+`RecycleCascade` from a NodeType definition. The wave reaching every per-node hub was correct, since
+the swapped module registers a module-owned service, which is forwarded into every per-node hub's
+scope (`ModuleLiveUpdater.HubsToRecycle`). The over-reach was each NodeType definition in the wave
+running its own cascade and tearing down successors still in bring-up. That has been gone since the wave stopped
+cascading (`ModuleLiveUpdater.WaveOrigin`, #6729). What kept folding into the incident afterwards
+was `UnsubscribeRequest`s from `cache/{id}` subscribers, discarded by an Orleans `DirectoryFailure`
+deactivation. That is a release whose work the teardown itself does, and so it is reported at Debug.
 
 ## Reading a refusal in the field
 

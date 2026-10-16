@@ -486,6 +486,66 @@ public class DeferredDeliveryNackedOnDisposeTest : HubTestBase
             + "That stays an Error; only the declaration moves it");
     }
 
+    /// <summary>A release of state the receiver holds, the shape of <c>UnsubscribeRequest</c>.</summary>
+    private record ReleaseNotice : IReleasesRemoteState;
+
+    private static readonly Address ReleaseReceiverAddress = new("release-receiver", "1");
+
+    /// <summary>
+    /// #6890, the shape still folding into the log site: an <c>UnsubscribeRequest</c> from a
+    /// <c>cache/{id}</c> subscriber parked behind <c>[DataContextInit,MeshNodeInit]</c> on a hub
+    /// Orleans deactivated mid-bring-up — reported at Error as stranded work with "the sender is
+    /// answered ShuttingDown".
+    ///
+    /// <para><b>Why nobody is stranded.</b> A release asks its RECEIVER to let go of state the
+    /// receiver holds; the receiver here is being disposed, and its disposal releases everything it
+    /// holds. The release is fire-and-forget (posted with no callback), so a NACK answers no
+    /// question and lands at the subscriber as a stray DeliveryFailure.</para>
+    ///
+    /// <para><b>Controls.</b> The Debug line is asserted POSITIVELY (still reported, gate named).
+    /// The stray-failure check is read off the host's FIFO queue via a marker read posted after
+    /// disposal. <see cref="AnUndeclaredMessageDiscardedByTheSameTeardown_IsStillAnError"/> is the
+    /// same teardown over a message that releases nothing, which stays an Error.</para>
+    /// </summary>
+    [Fact]
+    public async Task AReleaseDiscardedByATeardown_IsTeardownNormal_AndItsSenderIsNotNacked()
+    {
+        var host = GetHost();
+        var gated = host.GetHostedHub(
+            ReleaseReceiverAddress,
+            c => c.WithTypes(typeof(ReleaseNotice))
+                .WithInitializationGate("release-gate-never-opens", _ => false)
+                .WithHandler<ReleaseNotice>((_, d) => d.Processed()));
+        gated.Should().NotBeNull();
+
+        host.Post(new ReleaseNotice(), o => o.WithTarget(ReleaseReceiverAddress));
+        await WaitForDeferredBacklog(host);
+
+        ((MessageHub)gated!).NoteDirectDisposalBy(
+            "Orleans deactivating grain release-receiver/1", "DirectoryFailure");
+        gated.Dispose();
+        await gated.DisposalCompleted.FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        // FIFO marker: any NACK the disposal posted to the host is queued ahead of this read.
+        await host.Observe<GatedResponse>(new OutboundRead(), o => o.WithTarget(host.Address))
+            .FirstAsync().Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+
+        log.At(LogLevel.Debug).Should().Contain(
+            m => m.Contains("release-gate-never-opens", StringComparison.Ordinal)
+                 && m.Contains(nameof(ReleaseNotice), StringComparison.Ordinal)
+                 && m.Contains("Orleans deactivating grain", StringComparison.Ordinal),
+            "the discard must STILL be reported, naming the release, its gate and the teardown");
+        log.At(LogLevel.Error).Should().NotContain(
+            m => m.Contains("release-gate-never-opens", StringComparison.Ordinal),
+            "the release asked the disposing hub to let go of state its own disposal releases; "
+            + "nobody is stranded (#6890)");
+        strayFailuresAtHost.Should().NotContain(
+            f => f.Message != null && f.Message.Contains("release-gate-never-opens", StringComparison.Ordinal),
+            "a release is fire-and-forget: a ShuttingDown NACK to its sender answers no question (#6890)");
+    }
+
     /// <summary>A request whose payload names the read it is — the shape of a GetDataRequest's reference.</summary>
     private record ReferencedRead(string Reference) : IRequest<GatedResponse>, IDescribedForDiagnostics
     {
