@@ -204,6 +204,23 @@ The fix makes the closure part of the BUILD, not of the process that built it:
    the record carries. A version-less `#r "nuget: Id"` re-resolves to whatever is newest on the reading
    process; pin a version when the build must load the same package everywhere.
 
+### Reading it in a log
+
+- **`Armed the package probe for <dll>: <Id, Version> → N probing directories`** (Information) is
+  written each time a build that records a package is loaded on a process. Its absence on a replica
+  that fails `Could not load file or assembly '<package>'` is the first thing to read.
+- **`Failed to extract NodeTypeConfigurations from <dll>: … [NuGet: …]`** names the build's recorded
+  packages and the context's probe state: `the build records no package` means the bytes predate the
+  record (or were built by an image without it); `probe NOT armed` means the record never reached that
+  context; `armed from the build's record` with the failure still standing is a resolution or binding
+  problem.
+- **Check the IMAGE, not the CD run's head.** Measured 2026-10-16: CD run 11001 was triggered with
+  head `746e341d4` (which contains this fix) but resolved its build target to `10cefbe5`, the commit
+  before it, and published 3.1.11001 from that; the portal's version stamp (`10cefbe5`) was right. A
+  portal on 3.1.11001 therefore ran without the lane, and the load failed exactly as before. Read the
+  run's `Resolve the target commit` log (`Target: <sha>`) or the portal's version stamp, and test THAT
+  commit with `git merge-base --is-ancestor`.
+
 ## What pins it
 
 - `NuGetRuntimeAssetTest` (offline): RID chains; the SqlClient layout selects `runtimes/unix` on
@@ -227,7 +244,8 @@ The fix makes the closure part of the BUILD, not of the process that built it:
   this process never loaded (the store copy another replica reads), and loaded through a FRESH
   compilation cache + compilation service — an empty probing registry and resolver memo, which is what a
   replica or a restart has. The configuration scan succeeds, `SqlConnection` is constructed and
-  SqlClient is the `runtimes/` asset. Red before the fix with the production message.
+  SqlClient is the `runtimes/` asset, and the replica logs `Armed the package probe` at Information.
+  Red before the fix with the production message.
   `NuGetBuildRecordTest` (offline): no package ⇒ byte-identical source; each reference round-trips
   through an emitted image.
 

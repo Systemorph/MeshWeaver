@@ -1756,6 +1756,10 @@ internal class MeshNodeCompilationService(
     {
 
             var nodeName = cacheService.SanitizeNodeName(node.Path);
+            // The context the scan ran in, kept for the failure verdict: whether its package probe
+            // was armed is exactly what tells "the build's packages never reached this process"
+            // from "they did and still do not bind".
+            NodeAssemblyLoadContext? scanned = null;
 
             try
             {
@@ -1787,6 +1791,7 @@ internal class MeshNodeCompilationService(
                         : assemblyLocation,
                     publishesTheBuild);
                 var context = pinned.Context;
+                scanned = context;
                 var assembly = context.LoadNodeAssembly();
                 if (assembly == null)
                 {
@@ -1904,14 +1909,37 @@ internal class MeshNodeCompilationService(
                     ? " — " + EmitPipeline.ProbeEmittedImageLoads()
                     : "";
                 logger.LogWarning(ex,
-                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe}",
-                    assemblyLocation, detail, processProbe);
+                    "Failed to extract NodeTypeConfigurations from {AssemblyLocation}: {Detail}{ProcessProbe} "
+                    + "[NuGet: {PackageProbe}]",
+                    assemblyLocation, detail, processProbe, DescribePackageProbe(assemblyLocation, scanned));
                 return new NodeCompilationResult(null, [],
                     AppendError(log, $"Failed to load the compiled assembly — {detail}",
                         // The loader's own exception text rides verbatim behind a translated lead.
                         "activity.compile.assemblyLoadFailed", ("detail", detail)),
                     compiledSources);
             }
+    }
+
+    /// <summary>
+    /// The package-probe state of a failed scan, for its log line: which <c>#r "nuget:"</c> packages
+    /// the build records (<see cref="NuGetBuildRecord"/>) and where the context's probing directories
+    /// came from. "records none" on a build that needs a package means the bytes predate the record;
+    /// "probe NOT armed" on one that records packages means the probe never reached this context.
+    /// </summary>
+    private static string DescribePackageProbe(string assemblyLocation, NodeAssemblyLoadContext? context)
+    {
+        var recorded = BuildPackageProbing.RecordedReferences(assemblyLocation);
+        var packages = recorded.Count == 0
+            ? "the build records no package"
+            : "the build records " + string.Join("; ", recorded.Select(NuGetBuildRecord.Format));
+        var probe = context switch
+        {
+            null => "no load context",
+            { HasBuildProbingDirectories: true } => "probe armed from the build's record",
+            { HasProbingDirectories: true } => "probe armed from the node-wide registration only",
+            _ => "probe NOT armed",
+        };
+        return packages + "; " + probe;
     }
 
     /// <summary>
