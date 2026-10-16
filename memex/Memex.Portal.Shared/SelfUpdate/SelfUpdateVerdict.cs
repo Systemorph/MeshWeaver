@@ -595,7 +595,10 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
     /// The live half after a platform release was HANDED to the control lane (MeshWeaver#6829): the
     /// outcome stays <paramref name="after"/>'s (<see cref="SelfUpdateOutcome.HandedOver"/> — the roll
     /// is still the event), and the message says what went live in the process and what waits for the
-    /// handed-over roll. No restart is requested in either case.
+    /// handed-over roll. No restart is requested in any case. A pass that swapped nothing in and left
+    /// nothing for a restart — the activation marker outlives a successful live swap until the next
+    /// boot, so every later handed-over check finds it set with nothing pending here — says that
+    /// nothing is pending in this process, never that an activation is still pending.
     /// </summary>
     /// <param name="after">The platform verdict (the hand-over).</param>
     /// <param name="wentLive">How many landed modules were swapped in live.</param>
@@ -606,7 +609,9 @@ public sealed record SelfUpdateVerdict(SelfUpdateOutcome Outcome, string Message
         {
             Message = after.Message + (wentLive > 0
                     ? $" A landed module generation was pending activation and went LIVE without a restart ({detail})."
-                    : $" A landed module generation is pending activation and nothing went live in the process ({detail}).")
+                    : needsRestart
+                        ? $" A landed module generation is pending activation and nothing went live in the process ({detail})."
+                        : $" A landed module generation is marked for activation, but nothing landed is pending in this process: nothing went live and the handed-over roll would load nothing new for it ({detail}).")
                 + (needsRestart
                     ? " What did not go live is activated by the handed-over roll, which re-creates the pods; no separate restart is requested, as it would only race that roll."
                     : ""),

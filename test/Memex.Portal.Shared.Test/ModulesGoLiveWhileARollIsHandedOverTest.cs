@@ -143,6 +143,36 @@ public sealed class ModulesGoLiveWhileARollIsHandedOverTest : MonolithMeshTestBa
         AssertNothingStuck();
     }
 
+    /// <summary>
+    /// The activation marker outlives a successful live swap until the next boot, so every LATER
+    /// handed-over check still finds it set — with nothing pending in this process. That check must
+    /// say nothing is pending here (still <see cref="SelfUpdateOutcome.HandedOver"/>), never that an
+    /// activation is still pending, and must announce nothing.
+    /// </summary>
+    [Fact(Timeout = 300_000)]
+    public async Task ALaterHandedOverCheck_AfterTheLiveSwap_SaysNothingIsPendingHere()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Seed(ct);
+        await Land(ModuleSource(2), "2", ct);
+        var first = await RunOneCheck(new RecordingUpdater(), new FakeControlInbox(), NewerPlatform, ct);
+        first.Should().Contain("went LIVE", "the arrangement: the first handed-over check swapped M@N+1 in");
+        AssertNothingStuck();
+
+        var inbox = new FakeControlInbox();
+        var updater = new RecordingUpdater();
+        var verdict = await RunOneCheck(updater, inbox, NewerPlatform, ct);
+
+        verdict.Should().Contain("handed to the control lane", "the outcome is still the hand-over");
+        verdict.Should().Contain("nothing landed is pending in this process",
+            "the live swap already happened — the marker alone is not a pending activation");
+        verdict.Should().NotContain("is pending activation", "nothing is pending in this process");
+        verdict.Should().NotContain("went LIVE");
+        inbox.Events.Should().Equal(new[] { SelfUpdateHandover.ReleaseEvent });
+        updater.Restarts.Should().Be(0);
+        (await NameAt(ProbePath, ct)).Should().Be("v2");
+    }
+
     [Fact(Timeout = 300_000)]
     public async Task ARestartRequiredModule_WaitsForTheHandedOverRoll_AndNoSecondRestartIsAnnounced()
     {
@@ -319,10 +349,14 @@ public sealed class ModulesGoLiveWhileARollIsHandedOverTest : MonolithMeshTestBa
             new AlwaysAvailable(Mesh, new ConfigurationBuilder().Build()),
             new SeamedHandover(Mesh, inbox));
         var before = DateTimeOffset.UtcNow;
+        // 🚨 Subscribe BEFORE StartAsync: Await subscribes on call, ChecksReported is a non-replaying
+        // Subject, and StartAsync schedules the startup check on the task pool and returns at once — a
+        // check that finished before a later subscription would be lost and the wait would time out.
+        var evaluated = service.Evaluations.FirstAsync().Timeout(Budget).Await(ct);
         await service.StartAsync(CancellationToken.None);
         try
         {
-            await service.Evaluations.FirstAsync().Timeout(Budget).Await(ct);
+            await evaluated;
             return await Observable.Create<UpdatePolicyContent>(observer =>
                 {
                     using (Access.ImpersonateAsSystem())
