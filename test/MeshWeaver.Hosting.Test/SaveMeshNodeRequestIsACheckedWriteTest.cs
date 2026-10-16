@@ -148,11 +148,38 @@ public class SaveMeshNodeRequestIsACheckedWriteTest(ITestOutputHelper output) : 
         Mesh.DeliverMessage(AsReceivedByAnIngress(new Address(target.Path), Hijack(target), rawJson: false)
             .FromParticipant(TestUsers.Admin, "test-ingress"));
 
-        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick,
+        // 🚨 The spoofed delivery's refusal goes to the address it CLAIMS — the target itself — so
+        // nobody here can observe it. The settled signal is a second stamped save to the SAME hub,
+        // delivered after it from a sender that is answered: the hub judges its deliveries in
+        // order, so once the second is refused the first has been judged too (#6817). A fixed
+        // NotEmit here spent 36 s of CI per run and still could not say the hub had looked.
+        var client = GetClient();
+        var follower = AsReceivedByAnIngress(client.Address, Hijack(target), rawJson: false)
+            .FromParticipant(TestUsers.Admin, "test-ingress");
+        var followerAnswer = client.Observe(follower)
+            .Select(_ => (Exception?)null)
+            .Catch((Exception ex) => Observable.Return<Exception?>(ex))
+            .Take(1)
+            .Replay();
+        using var connect = followerAnswer.Connect();
+        Mesh.DeliverMessage(follower);
+        var settled = await followerAnswer.Should().Within(TestTimeouts.Convergence)
+            .Emit("the follower is answered once the hub has judged both deliveries",
+                cancellationToken: TestContext.Current.CancellationToken);
+        settled.Should().BeOfType<DeliveryFailureException>(
+            "the follower is refused like the spoofed save, or it settles nothing");
+
+        // 🚨 The settle proves the hub has JUDGED the spoofed save, not that a raw write it let
+        // through has reached storage: HandleSaveMeshNode starts that write and returns, and nothing
+        // outside the hub can observe its completion. Measured while writing #6817 with the refusal
+        // broken for this one shape: a single read right after the settle still showed the old name,
+        // and the overwrite landed ~0.1 s later. So the remaining window covers ONLY that storage
+        // write — it opens after the positive settle, which is what licenses it being short.
+        await Overwrote(target.Path).Should().NotEmit(TestTimeouts.Quick / 10,
+            "a stamped save is refused even when its sender claims to be the hub itself",
+            TestContext.Current.CancellationToken);
+        (await StoredAt(target.Path))!.Name.Should().Be(target.Name,
             "a stamped save is refused even when its sender claims to be the hub itself");
-        var stored = await Storage.Read(target.Path, Mesh.JsonSerializerOptions).DefaultIfEmpty(null)
-            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
-        stored!.Name.Should().Be(target.Name);
     }
 
     /// <summary>Legitimate persistence still works: the canonical write of a node — routed to its

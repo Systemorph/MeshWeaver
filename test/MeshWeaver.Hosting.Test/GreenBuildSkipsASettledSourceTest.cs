@@ -174,24 +174,29 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
 
         // ── 2. THE MEASURED SHAPE. The same green build arrives again — three workflows go green on
         //       one merge, and a `*/15` cron probe re-delivers the unchanged tip 96 times a day.
-        var noSecondClone = repoClient.Fetches.Should().NotEmit(TestTimeouts.Quick,
-            "a delivery at a commit this source has already reached a FINAL verdict on must not "
-            + "reach GitHub at all — the clone is unconditional (fetch first, diff second) and a "
-            + "subdirectory scopes only the parse, so an attempt that can change nothing still "
-            + "transfers the whole repository (#3945)");
-
-        var again = await DeliverGreenBuild(BuiltSha, TestContext.Current.CancellationToken);
-        again.Should().Be(0, "the delivery triggers no import — the source is settled at this commit");
-        await noSecondClone;
-
-        // ── 3. THE CONTROL THAT KEEPS THIS FROM BEING 'NEVER SYNC AGAIN'. The repository moves.
+        //    🚨 Ended by a POSITIVE signal, not a window (#6817): step 3's clone of the NEXT commit,
+        //    delivered after this one returned, is the point by which a second clone of BuiltSha
+        //    would already have been seen. A fixed NotEmit spent 36 s of CI per run here.
         var newCommitClones = repoClient.Fetches.Should().Within(TestTimeouts.Convergence * 2)
             .Emit("a source that is genuinely behind must still import: the skip is scoped to the "
                 + "ONE commit already judged, never to the source");
+        var noSecondClone = repoClient.Fetches.Where(sha => sha != NextSha)
+            .Should().Within(TestTimeouts.Convergence * 2)
+            .NotEmitBefore(repoClient.Fetches.Where(sha => sha == NextSha),
+                "a delivery at a commit this source has already reached a FINAL verdict on must not "
+                + "reach GitHub at all — the clone is unconditional (fetch first, diff second) and a "
+                + "subdirectory scopes only the parse, so an attempt that can change nothing still "
+                + "transfers the whole repository (#3945)",
+                TestContext.Current.CancellationToken);
 
+        var again = await DeliverGreenBuild(BuiltSha, TestContext.Current.CancellationToken);
+        again.Should().Be(0, "the delivery triggers no import — the source is settled at this commit");
+
+        // ── 3. THE CONTROL THAT KEEPS THIS FROM BEING 'NEVER SYNC AGAIN'. The repository moves.
         repoClient.Sha = NextSha;
         await DeliverGreenBuild(NextSha, TestContext.Current.CancellationToken);
 
+        await noSecondClone;
         (await newCommitClones).Should().Be(NextSha,
             "and it must ask for the commit THAT BUILD proved, not the branch (MeshWeaver.Plugins#1430)");
     }
