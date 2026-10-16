@@ -240,7 +240,10 @@ answer (#6863):
   for that candidate. This covers a diamond: A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0.
   Online resolution installs only B 2.0, never the B 1.0 candidate the walk also met. The installed
   versions are what the feed would have offered next, and the resolver still chooses among them by
-  the same rules. With nothing installed in range, the feed failure is the answer.
+  the same rules. A stand-in is only a candidate the resolver MAY pick. If a dependency below it
+  cannot be resolved, that stand-in leaves the candidates; the resolution does not fail. The feed
+  failure is the answer when nothing is installed in range, or when every stand-in has been ruled
+  out.
 - **When the folder cannot answer**, every configured feed the source mapping allows is asked in
   turn. A failing feed does not stop the search: the next feed is asked, and the failure is logged
   against that feed when a later one answers. If no feed supplies the package and at least one
@@ -263,7 +266,8 @@ The first configured feed refuses every connection, and some cases add a local f
   second resolver reading in that window must not accept the half-written folder, and it ends with
   the finished package.
 - The diamond above is resolved online from a local feed, then by a fresh resolver with only the
-  unreachable feed. It gives the same versions and assembly paths.
+  unreachable feed. It gives the same versions and assembly paths. It still does so when C pins B
+  exactly and the folder also holds an unrelated B 3.0.0 whose dependency exists nowhere.
 - A folder that passes the existence checks and is deleted by a concurrent repair before its
   manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
   install lock.

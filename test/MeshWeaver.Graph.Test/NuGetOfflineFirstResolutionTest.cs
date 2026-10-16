@@ -355,6 +355,38 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         offline.AssemblyPaths.Should().Equal(online.AssemblyPaths);
     }
 
+    /// <summary>
+    /// The same diamond with an EXACT pin (C needs B [2.0.0]) and, in the package folder, an unrelated
+    /// B 3.0.0 whose dependency D is absent. Both installed B versions stand in for the missing B 1.0.0
+    /// candidate, but B 3.0.0 can never be selected, and its unresolvable D must not abort the
+    /// resolution. It drops out of the candidates and the result is the one online resolution chose.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task InstalledDiamond_AnUnselectableStandInWithAMissingDependency_DoesNotBreakIt()
+    {
+        Publish("Acme.Offline.A", "1.0.0", ("Acme.Offline.B", "1.0.0"), ("Acme.Offline.C", "1.0.0"));
+        Publish("Acme.Offline.B", "1.0.0");
+        Publish("Acme.Offline.B", "2.0.0");
+        Publish("Acme.Offline.C", "1.0.0", ("Acme.Offline.B", "[2.0.0]"));
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        var online = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
+        online.ResolvedVersions.Should().ContainKey("Acme.Offline.B").WhoseValue.Should().Be("2.0.0");
+
+        // Installed by something else; never published, and its dependency D exists nowhere.
+        Install("Acme.Offline.B", "3.0.0", "Acme.Offline.D", "1.0.0");
+        WriteConfig(withLocalFeed: false, withUnreachableFeed: true);
+        var offline = await ColdResolver().ResolveAsync(request, targetFramework: null, ct: ct);
+
+        offline.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(kv => $"{kv.Key} {kv.Value}")
+            .Should().Equal(online.ResolvedVersions.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kv => $"{kv.Key} {kv.Value}"));
+        offline.AssemblyPaths.Should().Equal(online.AssemblyPaths);
+    }
+
     private int readerRefused;
 
     /// <summary>

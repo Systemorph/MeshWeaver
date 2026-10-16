@@ -281,13 +281,19 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         NuGetFramework framework, HashSet<SourcePackageDependencyInfo> collected, CancellationToken ct)
     {
         // Each candidate carries the range that asked for it (null for the root), so a candidate the
-        // feed cannot supply can still be answered by an installed version within that range.
-        var queue = new Queue<(PackageIdentity Identity, VersionRange? Range)>();
-        queue.Enqueue((root, null));
+        // feed cannot supply can still be answered by an installed version within that range. It also
+        // carries its SUBSTITUTE origin: the installed stand-in it was reached through, or null on a
+        // required path. A stand-in is only a candidate the resolver MAY pick, so a failure below one
+        // drops that stand-in instead of failing the whole resolution.
+        var queue = new Queue<(PackageIdentity Identity, VersionRange? Range, PackageIdentity? Origin)>();
+        queue.Enqueue((root, null, null));
+        var dropped = new HashSet<PackageIdentity>(PackageIdentityComparer.Default);
+        var substitutions = ImmutableList<(InvalidOperationException Failure, ImmutableArray<PackageIdentity> StandIns)>.Empty;
 
         while (queue.Count > 0)
         {
-            var (current, range) = queue.Dequeue();
+            var (current, range, origin) = queue.Dequeue();
+            if (origin is not null && dropped.Contains(origin)) continue;
             if (collected.Any(c => PackageIdentityComparer.Default.Equals(c, current))) continue;
 
             // OFFLINE FIRST (#6863): an identity the package folder already holds complete is
@@ -304,18 +310,33 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
                     // in the same range and installed only that one — a diamond where another
                     // package raises the floor. Those installed versions are what the feed would
                     // have offered next, so they stand in as the candidates; the resolver below
-                    // still chooses among them by the same rules. With nothing installed in range
-                    // the feed failure IS the answer.
+                    // still chooses among them by the same rules.
                     var installed = range is null
                         ? ImmutableArray<PackageIdentity>.Empty
                         : InstalledVersionsInRange(current.Id, range, packagesRoot, framework);
-                    if (installed.IsEmpty) throw failure;
+                    if (!installed.IsEmpty)
+                    {
+                        MsLogging.LoggerExtensions.LogWarning(logger, failure,
+                            "NuGet package {Id} {Version} is not in the package folder and no feed could supply it; "
+                            + "using the installed version(s) {Installed} within {Range}",
+                            current.Id, current.Version.ToNormalizedString(),
+                            string.Join(", ", installed.Select(i => i.Version.ToNormalizedString())),
+                            range!.ToNormalizedString());
+                        substitutions = substitutions.Add((failure, installed));
+                        // A stand-in reached on a substitute path stays on that path's origin.
+                        foreach (var candidate in installed) queue.Enqueue((candidate, range, origin ?? candidate));
+                        continue;
+                    }
+                    // Nothing can answer this candidate. On a REQUIRED path that is the answer. Below a
+                    // stand-in it only rules that stand-in out: it leaves the candidate set, and the
+                    // resolver picks among the others — never a version whose closure cannot be built.
+                    if (origin is null) throw failure;
                     MsLogging.LoggerExtensions.LogWarning(logger, failure,
-                        "NuGet package {Id} {Version} is not in the package folder and no feed could supply it; "
-                        + "using the installed version(s) {Installed} within {Range}",
-                        current.Id, current.Version.ToNormalizedString(),
-                        string.Join(", ", installed.Select(i => i.Version.ToNormalizedString())), range!.ToNormalizedString());
-                    foreach (var candidate in installed) queue.Enqueue((candidate, range));
+                        "Installed stand-in {Id} {Version} is not usable offline (its dependency {DependencyId} {DependencyVersion} "
+                        + "cannot be resolved); leaving it out of the candidates",
+                        origin.Id, origin.Version.ToNormalizedString(), current.Id, current.Version.ToNormalizedString());
+                    dropped.Add(origin);
+                    collected.RemoveWhere(c => PackageIdentityComparer.Default.Equals(c, origin));
                     continue;
                 }
                 info = fromFeed;
@@ -323,13 +344,21 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             if (info is null) continue;
 
             collected.Add(info);
+            // Reached again on a required path: it is no longer only a stand-in.
+            if (origin is null) dropped.Remove(current);
             foreach (var dep in info.Dependencies)
             {
                 var depIdentity = new PackageIdentity(dep.Id, dep.VersionRange.MinVersion);
                 if (!collected.Any(c => PackageIdentityComparer.Default.Equals(c, depIdentity)))
-                    queue.Enqueue((depIdentity, dep.VersionRange));
+                    queue.Enqueue((depIdentity, dep.VersionRange, origin));
             }
         }
+
+        // Every stand-in for a candidate was ruled out: the feed failure for that candidate is the
+        // answer after all, named, rather than the resolver's "unable to resolve".
+        foreach (var (failure, standIns) in substitutions)
+            if (standIns.All(dropped.Contains))
+                throw failure;
     }
 
     /// <summary>
