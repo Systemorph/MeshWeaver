@@ -436,6 +436,15 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         });
 
     /// <inheritdoc />
+    /// <remarks>Forwarded, and forgets the mark only when THIS call removed the row — a refused
+    /// compare-and-delete left the newer row in place, and its mark must stay (#6856).</remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => inner.DeleteIfVersionAtMost(path, maxVersion, options).Do(removed =>
+        {
+            if (removed) Forget(path);
+        });
+
+    /// <inheritdoc />
     /// <remarks>Every path the batch removed is forgotten, exactly as the single-path
     /// <see cref="Delete"/> does — a mark left behind would refuse the next write to that path.</remarks>
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)

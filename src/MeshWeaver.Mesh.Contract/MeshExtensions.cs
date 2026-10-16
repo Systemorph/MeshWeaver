@@ -4764,6 +4764,61 @@ public static class MeshExtensions
                     // Which of the pipeline's six bounded stages ran out of time. Unset means the
                     // exception came from somewhere that is not one of them (a nested Timeout — e.g.
                     // a leaf's own ValidateDeleteRequest read — surfacing through this handler).
+                    // 🚨 The STORE refused the root's compare-and-delete (#6856): a row newer than the
+                    // version the owner confirmed was written after that check. The same Conflict the
+                    // owner's own refusal answers — the deleter re-reads and decides again. What the
+                    // cascade removed before reaching the root (a recursive delete removes children
+                    // first) is named, because it is not restored.
+                    if (ex is DeleteVersionConflictException conflict)
+                    {
+                        var removedFirst = partial
+                            .Where(p => !string.Equals(p, path, StringComparison.OrdinalIgnoreCase))
+                            .ToImmutableList();
+                        logger.LogInformation(
+                            "[DeleteNode] version-conflict-at-store path={Path} expected={Expected} stored={Stored} "
+                            + "descendants-removed={Removed} — the root row was not deleted",
+                            path, conflict.ExpectedVersion, conflict.StoredVersion, removedFirst.Count);
+                        // The delete pass tombstoned the root BEFORE its commit ("delete wins"),
+                        // and the commit was refused: the row lives on at StoredVersion. Left as it
+                        // is, the tombstone keeps the surviving node "gone for good" for its whole
+                        // TTL and every save to it is refused as NotFound — unless a change
+                        // notification for the newer row happens to arrive AFTER the mark, which a
+                        // write from another process need not do. Superseding at the stored
+                        // version is the fact itself: a durable row exists there. Descendant
+                        // tombstones stay — those rows really were removed.
+                        recentlyDeleted?.Supersede(path, conflict.StoredVersion);
+                        // Nothing removed ⇒ the same sentence (and key) as the owner's refusal.
+                        // Descendants already removed ⇒ "nothing was deleted" would be false, so the
+                        // sentence says only the ROOT was kept and the partial note below names the rest.
+                        var conflictMsg = removedFirst.Count == 0
+                            ? $"Did not delete '{path}': it changed since it was read "
+                              + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "
+                              + "Nothing was deleted; re-read the node and decide again."
+                            : $"Did not delete '{path}': it changed since it was read "
+                              + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "
+                              + "The node itself was kept; re-read it and decide again.";
+                        var conflictLog = collectedMessages.ToImmutable().Add(
+                            new LogMessage(conflictMsg, LogLevel.Warning)
+                                .WithKey(removedFirst.Count == 0
+                                        ? "activity.delete.versionConflict"
+                                        : "activity.delete.versionConflictRootKept",
+                                    ("path", path),
+                                    ("expected", conflict.ExpectedVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                                    ("actual", conflict.StoredVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+                        var tornNote = removedFirst.Count > 0
+                            ? $"{removedFirst.Count} node(s) under '{path}' were already removed before this failure, "
+                              + "so the subtree is partially deleted; the delete is idempotent - retrying it is "
+                              + "meaningful and removes what is left."
+                            : null;
+                        if (tornNote is not null)
+                            conflictLog = conflictLog.Add(new LogMessage(tornNote, LogLevel.Warning)
+                                .WithKey("activity.delete.partialRetriable",
+                                    ("path", path), ("count", removedFirst.Count)));
+                        PostFailed(tornNote is null ? conflictMsg : $"{conflictMsg} {tornNote}",
+                            NodeDeletionRejectionReason.Conflict, conflictLog,
+                            removedFirst.IsEmpty ? ImmutableList.Create(path) : removedFirst);
+                        return;
+                    }
                     var stage = ex.Data[DeleteStageDataKey] as string ?? "unattributed";
                     var unanswered = ex.Data[DeleteUnansweredDataKey] as IReadOnlyList<string>
                         ?? Array.Empty<string>();
@@ -5486,6 +5541,50 @@ public static class MeshExtensions
                     return Observable.Throw<IReadOnlyList<string>>(ex);
                 }));
 
+        // The root's compare-and-delete (#6856). Removed ⇒ publish, invalidate and dispose exactly as
+        // the unconditional branch does. Not removed ⇒ the store says which: no row is the
+        // postcondition already holding (idempotent, as DeleteIfExists is on a drain pass); a row is a
+        // write the deleter never saw, and the delete answers Conflict naming its version.
+        // 🚨 "Removed here" and "already gone" get the SAME local cleanup: in both the row is absent
+        // when this delete answers. Gone by another process's hand, its notification need not have
+        // reached this one, so without the publish, the stream-cache invalidation and the owner's
+        // disposal a live stream here would go on replaying the pre-delete node.
+        IObservable<string> GuardedRootDelete(string path, long confirmedVersion)
+            => storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
+                .Take(1)
+                .SelectMany(removed => removed
+                    ? Observable.Return(path)
+                    // Only a WRITABLE survivor is a conflict: a read-only provider's row (shipped
+                    // content under a writable override) is never this delete's to remove, and the
+                    // drain's completion contract counts writable rows only. So writable existence
+                    // decides, and the plain read only supplies the version for the message.
+                    : storage.ExistsInWritableStorage(path)
+                        .Take(1)
+                        .SelectMany(survives => !survives
+                            ? Observable.Return(path)
+                            : storage.Read(path, meshHub.JsonSerializerOptions)
+                                .Take(1)
+                                .DefaultIfEmpty(null)
+                                .SelectMany(stored => stored is null
+                                    ? Observable.Return(path)
+                                    : Observable.Throw<string>(
+                                        new DeleteVersionConflictException(path, confirmedVersion, stored.Version)))))
+                .Do(_ =>
+                {
+                    changeFeed?.Publish(MeshChangeEvent.Deleted(path));
+                    streamCache?.Invalidate(path);
+                    try
+                    {
+                        meshHub.GetHostedHub(new Address(path), c => c, HostedHubCreation.Never)?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex,
+                            "[DeleteNode] best-effort hub disposal failed for {Path}", path);
+                    }
+                })
+                .Do(RecordDeleted);
+
         IObservable<IReadOnlyList<string>> PerNodeWalk() => HierarchicalPathDeletion.DeleteSubtreeBounded(
             rootPath,
             perNode,
@@ -5504,6 +5603,16 @@ public static class MeshExtensions
                     // Descendant deletes re-enter this same handler and hit this
                     // branch for THEIR own path, so each leaf publishes once.
                     logger.LogDebug("[DeleteNode] storage.Delete (root) {Path}", path);
+
+                    // 🚨 A version-guarded delete removes the root ONLY while its stored row is
+                    //    still at or below the version the owner confirmed (#6856). The condition
+                    //    is in the storage delete itself, so a newer row written between the
+                    //    owner's check and this commit — by another process, or by any writer
+                    //    that never passed this process's seal — is refused here instead of
+                    //    removed. On every pass, drain passes included: a row re-created NEWER
+                    //    than the confirmed version mid-flight is a change the deleter never saw.
+                    if (baseRequest.ExpectedVersion is { } confirmedVersion)
+                        return GuardedRootDelete(path, confirmedVersion);
 
                     if (rootAlreadyDeleted)
                         // Drain pass: the root row was deleted in pass 1. DeleteIfExists

@@ -111,11 +111,30 @@ internal sealed class HeldWriteStorageAdapter(InMemoryStorageAdapter inner) : IS
     public IObservable<bool> DeleteIfExists(string path) => HoldDelete([path], () => inner.DeleteIfExists(path));
 
     /// <inheritdoc />
+    /// <remarks>Held like every delete, then decided ATOMICALLY by the inner store once released —
+    /// the default would read before the hold and delete after it.</remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => HoldDelete([path], () => inner.DeleteIfVersionAtMost(path, maxVersion, options));
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         => HoldDelete(paths, () => ((IStorageAdapter)inner).DeleteMany(paths));
 
     /// <inheritdoc />
-    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options) => inner.Read(path, options);
+    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
+        => Volatile.Read(ref _fallback) is { } fallback
+           && string.Equals(fallback.Path, path, StringComparison.OrdinalIgnoreCase)
+            ? inner.Read(path, options).Select(stored => stored ?? fallback)
+            : inner.Read(path, options);
+
+    private MeshNode? _fallback;
+
+    /// <summary>
+    /// Serves <paramref name="shipped"/> on <see cref="Read"/> whenever no writable row exists at its
+    /// path — the shape of a READ-ONLY provider (shipped content) under a writable override. Writable
+    /// existence (<see cref="ExistsInWritableStorage"/>) is untouched, as a read-only provider's is.
+    /// </summary>
+    public void ServeReadOnlyFallback(MeshNode shipped) => Volatile.Write(ref _fallback, shipped);
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path) => inner.Exists(path);

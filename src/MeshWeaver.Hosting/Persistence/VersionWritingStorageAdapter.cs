@@ -201,6 +201,22 @@ internal class VersionWritingStorageAdapter(
     }
 
     /// <inheritdoc />
+    /// <remarks>Forwarded (the default would read-compare-delete through <c>this</c>). History is
+    /// purged only when the row was actually removed: a refused compare-and-delete left the node — and
+    /// so its history — in place (#6856).</remarks>
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+    {
+        Invalidate(path);
+        if (versionQuery is null)
+            return inner.DeleteIfVersionAtMost(path, maxVersion, options);
+        return PathsWithoutHistory([path])
+            .SelectMany(purge => inner.DeleteIfVersionAtMost(path, maxVersion, options)
+                .SelectMany(removed => removed
+                    ? PurgeAll(purge).Select(_ => removed)
+                    : Observable.Return(removed)));
+    }
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
     {
         foreach (var path in paths)
