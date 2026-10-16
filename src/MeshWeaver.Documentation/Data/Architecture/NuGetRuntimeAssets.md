@@ -181,7 +181,15 @@ The fix makes the closure part of the BUILD, not of the process that built it:
    a warm package folder answers without the network), and registers the probing directories for THAT
    path (`ICompilationCacheService.RegisterBuildProbingDirectories`). The build's closure REPLACES
    directories a context got from the node-wide registration (whatever this process last compiled,
-   possibly another generation) and is never displaced by it. The metadata read runs on a blocking
+   possibly another generation) and is never displaced by it. Reading a registration never CONSUMES
+   it: a context evicted between the arming and the load (hub teardown, a superseding publish, a
+   scan-pin retry) is re-created from it, and a `GetOrAdd` factory that loses its race cannot strip it
+   from the winner. An entry lives as long as its build FILE. Build files are deleted mostly outside
+   the process (the store's retention sweep runs on a shared volume, from any replica), so the bound
+   is an AMORTIZED sweep on the file-system pool: once the registry has doubled since the last sweep,
+   the entries whose file is gone are dropped — O(1) existence checks per new registration, none on a
+   re-arm, never on the arming caller's thread. The sweep removes an entry only while it is still the
+   registration it checked, so a republish of the same path re-armed mid-sweep survives. The metadata read runs on a blocking
    pool, never the caller's signalling thread; the resolution runs on the HTTP lane through the pool's
    cold `Invoke`, so its bound cancels the wait and frees the slot, and it never queues behind the
    Compile lane a kernel script holds while waiting for a NodeType to activate. Resolution still asks
