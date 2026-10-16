@@ -322,6 +322,14 @@ public class BuildProbingPrecedenceTest
             // …and the node-wide registration never displaces it again.
             cache.RegisterProbingDirectories("type_Probe", [Path.Combine(root, "yet-another")]);
             cache.GetOrCreateLoadContextForPath("type_Probe", dll).HasBuildProbingDirectories.Should().BeTrue();
+
+            // A hand-off, not a registry: once taken, nothing is retained for the path, so a context
+            // re-created after an eviction starts on the fallback until the next load re-arms it.
+            cache.UnloadNodeContexts("type_Probe");
+            var recreated = cache.GetOrCreateLoadContextForPath("type_Probe", dll);
+            recreated.HasBuildProbingDirectories.Should().BeFalse("the entry was consumed by the first context");
+            cache.RegisterBuildProbingDirectories(dll, [Path.Combine(root, "this-build")]);
+            recreated.HasBuildProbingDirectories.Should().BeTrue("re-arming hands it to the live context");
         }
         finally
         {
