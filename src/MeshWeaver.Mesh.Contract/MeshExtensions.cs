@@ -5537,24 +5537,15 @@ public static class MeshExtensions
         // the unconditional branch does. Not removed ⇒ the store says which: no row is the
         // postcondition already holding (idempotent, as DeleteIfExists is on a drain pass); a row is a
         // write the deleter never saw, and the delete answers Conflict naming its version.
+        // 🚨 "Removed here" and "already gone" get the SAME local cleanup: in both the row is absent
+        // when this delete answers. Gone by another process's hand, its notification need not have
+        // reached this one, so without the publish, the stream-cache invalidation and the owner's
+        // disposal a live stream here would go on replaying the pre-delete node.
         IObservable<string> GuardedRootDelete(string path, long confirmedVersion)
             => storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
                 .Take(1)
                 .SelectMany(removed => removed
-                    ? Observable.Return(path).Do(_ =>
-                    {
-                        changeFeed?.Publish(MeshChangeEvent.Deleted(path));
-                        streamCache?.Invalidate(path);
-                        try
-                        {
-                            meshHub.GetHostedHub(new Address(path), c => c, HostedHubCreation.Never)?.Dispose();
-                        }
-                        catch (Exception ex)
-                        {
-                            logger.LogDebug(ex,
-                                "[DeleteNode] best-effort hub disposal failed for {Path}", path);
-                        }
-                    })
+                    ? Observable.Return(path)
                     : storage.Read(path, meshHub.JsonSerializerOptions)
                         .Take(1)
                         .DefaultIfEmpty(null)
@@ -5562,6 +5553,20 @@ public static class MeshExtensions
                             ? Observable.Return(path)
                             : Observable.Throw<string>(
                                 new DeleteVersionConflictException(path, confirmedVersion, stored.Version))))
+                .Do(_ =>
+                {
+                    changeFeed?.Publish(MeshChangeEvent.Deleted(path));
+                    streamCache?.Invalidate(path);
+                    try
+                    {
+                        meshHub.GetHostedHub(new Address(path), c => c, HostedHubCreation.Never)?.Dispose();
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogDebug(ex,
+                            "[DeleteNode] best-effort hub disposal failed for {Path}", path);
+                    }
+                })
                 .Do(RecordDeleted);
 
         IObservable<IReadOnlyList<string>> PerNodeWalk() => HierarchicalPathDeletion.DeleteSubtreeBounded(

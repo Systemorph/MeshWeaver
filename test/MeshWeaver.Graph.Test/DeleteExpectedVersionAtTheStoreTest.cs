@@ -134,6 +134,7 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
     public async Task ThePausedGuardedDelete_WithNoForeignWrite_Deletes()
     {
         var node = await Seed("store-guard-control");
+        await OwnerOf(node.Path);
         var read = (await Stored(node.Path))!.Version;
 
         var response = await PausedGuardedDelete(node.Path, read, () => Task.CompletedTask);
@@ -141,6 +142,62 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         response.Success.Should().BeTrue(response.Error ?? "nothing changed after the owner's check");
         response.AlreadyAbsent.Should().BeFalse();
         (await Stored(node.Path)).Should().BeNull("the node is gone");
+        OwnerIsGone(node.Path).Should().BeTrue("the delete tears down the owner that held the node");
+    }
+
+    /// <summary>
+    /// Another process removes the row after the owner's check, and its notification never reaches
+    /// this one (the second adapter has its own feed). The guarded delete finds nothing to remove and
+    /// answers success — and must still do the local cleanup a removal does: before, that branch
+    /// skipped it, so the owner kept serving the pre-delete node. The control above is the same
+    /// assertion on the branch that removed the row itself.
+    /// </summary>
+    [Fact]
+    public async Task ARowRemovedByAnotherProcess_GetsTheSameLocalCleanup()
+    {
+        var node = await Seed("store-guard-removed-elsewhere");
+        await OwnerOf(node.Path);
+        var read = (await Stored(node.Path))!.Version;
+
+        var response = await PausedGuardedDelete(node.Path, read, async () =>
+            (await OtherProcess.DeleteIfExists(node.Path)
+                .Should().Within(TestTimeouts.Convergence).Emit("the other process removes the row", cancellationToken: Ct))
+            .Should().BeTrue());
+
+        response.Success.Should().BeTrue(response.Error ?? "the postcondition holds: the node is gone");
+        (await Stored(node.Path)).Should().BeNull();
+        OwnerIsGone(node.Path).Should().BeTrue(
+            "no notification will tell this process the row is gone, so the delete itself must tear the owner down");
+    }
+
+    /// <summary>The node's own hub, activated by reading the node and started.</summary>
+    private async Task<IMessageHub> OwnerOf(string path)
+    {
+        await Mesh.GetMeshNodeStream(path).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the node is readable", cancellationToken: Ct);
+        return await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never))
+            .Where(h => h is { IsDisposing: false } && h.Started.IsCompletedSuccessfully)
+            .Select(h => h!)
+            .Should().Within(TestTimeouts.Convergence).Emit("the node's own hub is hosted", cancellationToken: Ct);
+    }
+
+    private bool OwnerIsGone(string path)
+        => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never) is not { IsDisposing: false };
+
+    /// <summary>
+    /// An ack's committed version is read through <c>.As&lt;T&gt;()</c>: an ack that arrives as JSON
+    /// still yields it. Control: the typed ack yields the same.
+    /// </summary>
+    [Fact]
+    public void ACommittedVersion_IsReadFromAnAckThatArrivedAsJson()
+    {
+        var ack = new PatchDataResponse(true, 0) { CommittedVersion = 7 };
+        var asJson = System.Text.Json.JsonSerializer.SerializeToElement(ack, Mesh.JsonSerializerOptions);
+
+        MeshNodeStreamHandle.CommittedVersionOf(ack, Mesh.JsonSerializerOptions).Should().Be(7L);
+        MeshNodeStreamHandle.CommittedVersionOf(asJson, Mesh.JsonSerializerOptions).Should().Be(7L,
+            "the field is present on the JSON payload; a cast would drop it");
     }
 
     /// <summary>

@@ -612,6 +612,18 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                     : node);
 
     /// <summary>
+    /// The owner's committed version off a patch ack's object-typed payload (#6856). Read through
+    /// <see cref="ObjectAsExtensions.As{T}"/>, never a cast: an ack that arrives as JSON
+    /// (<c>JsonElement</c> / <c>JsonObject</c>) still carries the field, and a cast would drop it and
+    /// emit the writer's base version.
+    /// </summary>
+    /// <param name="message">The ack's payload, as delivered.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <param name="logger">Optional; names an unconvertible payload.</param>
+    internal static long? CommittedVersionOf(object? message, JsonSerializerOptions options, ILogger? logger = null)
+        => message.As<PatchDataResponse>(options, logger, nameof(PatchDataResponse))?.CommittedVersion;
+
+    /// <summary>
     /// 🚨 The base a re-attempt spawned by a <b>"the patch NEVER applied"</b> NACK is allowed to
     /// diff against — issue #3477, and the last fail-open exit of this write path.
     ///
@@ -2742,7 +2754,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                         // Owner posted a structured rejection (deserialization /
                                         // validation gate) as PatchDataResponse.NodeError, or a
                                         // non-success ack → surface as a typed exception (fail-fast).
-                                        if (d.Message is PatchDataResponse resp
+                                        if (d.Message.As<PatchDataResponse>(_jsonOptions, diagLogger, "PatchDataResponse") is { } resp
                                             && (resp.NodeError is not null || !resp.Success))
                                         {
                                             var err = resp.NodeError ?? new MeshNodeError(
@@ -2873,7 +2885,7 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                             // the successor waits on the hand-off, which is issued
                                             // right here, on the ack.
                                             onLocalState?.Invoke(updated);
-                                            EmitTerminal((d.Message as PatchDataResponse)?.CommittedVersion);
+                                            EmitTerminal(CommittedVersionOf(d.Message, _jsonOptions, diagLogger));
                                         }
                                     },
                                     ex =>

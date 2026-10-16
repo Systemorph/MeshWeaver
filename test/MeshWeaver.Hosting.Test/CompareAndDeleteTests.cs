@@ -240,10 +240,18 @@ public sealed class CompareAndDeleteTests : IDisposable
         await Seed(newer, 4);
         IStorageAdapter composite = new PersistenceService(
             [new WritableProvider("older", older), new WritableProvider("newer", newer)]);
+        var deletions = new ConcurrentBag<string>();
+        using var feed = composite.Changes
+            .Where(c => c.Kind == DataChangeKind.Deleted)
+            .Subscribe(c => deletions.Add(c.Path));
 
         (await Guarded(composite, 3)).Should().BeFalse(
             "the v4 copy survives, so the node was not deleted whatever the other provider removed");
         (await Stored(newer))!.Version.Should().Be(4, "the newer copy was refused and kept");
+        // The composite's feed is what a live owner listens to: a Deleted event here marks its own
+        // node deleted although the node still exists. So the older copy must not be removed either.
+        deletions.Should().BeEmpty("the node still exists, so no copy's removal may be announced");
+        (await Stored(older))!.Version.Should().Be(3, "nothing is removed while a newer copy exists");
 
         var a = new InMemoryStorageAdapter();
         var b = new InMemoryStorageAdapter();
