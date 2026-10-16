@@ -99,7 +99,8 @@ public static class PrebuiltAssemblySeeder
         var finding = offered
             ? $"the prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type but was DECLINED: its source fingerprint disagrees with the "
-              + "files this mesh holds, and nothing syncs those files"
+              + "files this mesh holds (either side may be the newer one), and nothing syncs "
+              + "those files"
             : $"no prebuilt bundle for framework {LiveFrameworkMvid}/{ReleaseArchitecture.Live} "
               + "names this type";
         return $"Untracked module content: NodeType '{nodeTypePath}' is a module's content, but "
@@ -1383,6 +1384,9 @@ public static class PrebuiltAssemblySeeder
                             // Null from a producer that recorded none is carried as null: the
                             // rule then answers UNKNOWN, which never refuses.
                             AdoptedModuleVersion = moduleVersion,
+                            // #6832 — new bytes; the owner's stamp re-judges whether a hold stands
+                            // and, if so, writes its own reason.
+                            DeliveryHoldReason = null,
                             // The producer's dependency record (#1707 slice 2) — validated
                             // above; stamped so ongoing validity checks judge the adopted
                             // build like a locally-compiled one. Legacy bundles (null)

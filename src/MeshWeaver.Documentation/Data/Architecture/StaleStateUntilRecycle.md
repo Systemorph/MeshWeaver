@@ -220,6 +220,30 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
 - **Only System's requests are acted on.** Each process re-validates what it reads and refuses a
   request node not created by System — a platform admin, who holds `Admin`, cannot bypass the checks
   by writing `Admin/_Recycle` directly.
+- **The audit is kept for a declared window, then pruned (#6813).** Every NodeType definition recycle
+  issues a request, so without a retention the rows under `Admin/_Recycle` grow with every recycle,
+  module landing and deploy. `ActivationRecycleRetention` is the policy, read from configuration:
+
+  | Key | Default | Meaning |
+  |---|---|---|
+  | `ActivationRecycle:Retention:Enabled` | `true` | `false` turns the prune off (no query is issued) |
+  | `ActivationRecycle:Retention:MaxAge` | `30.00:00:00` | a request untouched for this long is removed with its reports; a configured value below one day — zero and negative included — is clamped to one day; only an absent or unparseable value keeps the default |
+  | `ActivationRecycle:Retention:MaxDeletionsPerRun` | `50` | the most requests one prune removes, so a backlog drains over several requests |
+
+  Thirty days is long enough that the audit of a recent deploy or incident is still there when it
+  is read, whether for a post-incident review or to check which silos recycled after last week's
+  release, and it reaches back a full monthly release cycle. It is short enough that the rows stay
+  bounded by one month of recycle traffic rather than the portal's whole history. **The writer
+  prunes, and no timer does.** Right after `ActivationRecycle.Request` writes a new request it
+  removes the expired ones, as System, through `DeleteNode`. The delete cascades, so each
+  `{request}/{process}` report leaves with its request. This is the same owner-prunes-on-write shape
+  the compile activities use (`CompileActivityRetention`, in
+  [NodeType Compilation](../NodeTypeCompilation)). The rows grow only through that write, so pruning
+  on it bounds them. The request just written is never pruned. The decision is fail-closed: a row
+  that is undated, not a request, or not directly under `Admin/_Recycle` is kept. A failed listing
+  or delete costs that prune only. It is logged, and the next request retries; the caller's ticket
+  never depends on it — nor waits for it: the prune is a subscription of its own, started once the
+  request is committed, so the ticket is answered as soon as the write lands.
 
 - **A recycle of a NodeType DEFINITION is one of these requests (#6520).** A routed `DisposeRequest`
   on a definition hub (the direct `recycle` verb on a NodeType, a package install, a control-lane
@@ -242,7 +266,10 @@ not the admin, holds the rights. The direct `recycle` verb above is unchanged an
 
 Pinned by `ActivationRecycleTest` (monolith: two live activations of T and one of U, exactly the two
 disposed, re-activation on a fresh hub, redelivery, refusals) and `TwoSiloActivationRecycleTest` (both silos' activations,
-one report per silo whose counts match what each hosted).
+one report per silo whose counts match what each hosted). The retention is pinned by
+`ActivationRecycleRetentionTest`: an expired request goes with its report when the next one is
+written, a request inside the window survives with its report, and the decision is oldest first,
+capped and fail-closed.
 
 ### Three rules for posting one, each paid for
 

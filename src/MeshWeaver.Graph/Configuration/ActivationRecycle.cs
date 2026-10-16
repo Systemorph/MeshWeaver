@@ -7,6 +7,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -129,6 +130,10 @@ public static class ActivationRecycle
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<ActivationRecycleReport>()),
             });
+        // Mesh-scoped singleton, read once from the host's configuration: how long a request and its
+        // reports are kept (Doc/Architecture/StaleStateUntilRecycle → "Recycling a type").
+        builder.ConfigureServices(services => services
+            .AddSingleton(sp => ActivationRecycleRetention.FromConfiguration(sp.GetService<IConfiguration>())));
         builder.ConfigureHub(c => c
             .WithType<ActivationRecycleRequest>(nameof(ActivationRecycleRequest))
             .WithType<ActivationRecycleReport>(nameof(ActivationRecycleReport))
@@ -228,12 +233,92 @@ public static class ActivationRecycle
                     Content = request with { RequestedAt = request.RequestedAt == default ? DateTimeOffset.UtcNow : request.RequestedAt },
                 };
                 // The id is the dedupe key: an existing request is the answer, never a second write.
+                // A NEW request is the moment the rows grow, so it is also when the expired ones go
+                // (ActivationRecycleRetention): the writer prunes, no timer does. The prune is its
+                // OWN subscription, started once the request is committed: the ticket is answered
+                // the moment the write lands and never waits for the listing or the deletes.
                 return Exists().SelectMany(there => there
                     ? Observable.Return(new ActivationRecycleTicket(path, null))
                     : access.RunAsSystem(() => mesh.CreateNode(node).Take(1))
+                        .Do(_ => StartPrune(hub, path))
                         .Select(_ => new ActivationRecycleTicket(path, null)));
             })
             .Take(1);
+    }
+
+    /// <summary>
+    /// Starts the prune that follows a newly committed request as a subscription of its own, so the
+    /// request's ticket never waits for it. <see cref="Prune"/> already maps every fault to a logged
+    /// zero; the error handler here is the backstop for anything that escapes it.
+    /// </summary>
+    private static void StartPrune(IMessageHub hub, string keepPath)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
+        Prune(hub, hub.ServiceProvider.GetRequiredService<ActivationRecycleRetention>(), DateTimeOffset.UtcNow, keepPath)
+            .Subscribe(
+                _ => { },
+                ex => logger?.LogWarning(ex,
+                    "[ActivationRecycle] retention: the prune after {Path} faulted; expired requests stay until the next request prunes them",
+                    keepPath));
+    }
+
+    /// <summary>
+    /// Removes the requests <paramref name="retention"/> calls expired at <paramref name="now"/>,
+    /// each with its per-process reports, never <paramref name="keepPath"/>. Cold; emits once, the
+    /// number of requests removed.
+    ///
+    /// <para>The listing is a QUERY, which is a valid use here: it lists children, and a stale answer
+    /// is harmless — a row the index has not seen yet is a NEWER row and is kept, a row already gone
+    /// is an idempotent delete. Each removal goes through <see cref="IMeshService.DeleteNode"/>,
+    /// which cascades, so the <c>{request}/{process}</c> reports leave with their request. It runs as
+    /// System, as the request's own create did: infrastructure acting on records it wrote.</para>
+    ///
+    /// <para>A failed removal is per ROW, and a failed listing costs this prune only: each is logged,
+    /// the rows stay, and the next request's prune tries again. The request that triggered the prune
+    /// is already written and acted on, so its caller's ticket never depends on the prune.</para>
+    /// </summary>
+    /// <param name="hub">Any surviving hub of the mesh.</param>
+    /// <param name="retention">The policy to prune to.</param>
+    /// <param name="now">The cutoff instant.</param>
+    /// <param name="keepPath">The request just written; always kept.</param>
+    public static IObservable<int> Prune(IMessageHub hub, ActivationRecycleRetention retention, DateTimeOffset now, string? keepPath = null)
+    {
+        if (!retention.Enabled)
+            return Observable.Return(0);
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(ActivationRecycle));
+        return access.RunAsSystem(() => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(retention.WindowQuery))
+                .Where(change => change.ChangeType == QueryChangeType.Initial)
+                .Take(1)
+                .Timeout(ReadBudget))
+            .Select(change => retention.SelectForPruning(change.Items, now, keepPath))
+            .SelectMany(paths =>
+            {
+                if (paths.IsEmpty)
+                    return Observable.Return(0);
+                // Information on purpose: the platform is removing audit rows, and an operator must be
+                // able to see that. One line per prune, and only when something is removed.
+                logger?.LogInformation(
+                    "[ActivationRecycle] retention: removing {Count} recycle request(s) older than {MaxAge}, with their reports",
+                    paths.Count, retention.MaxAge);
+                return paths
+                    .Select(p => access.RunAsSystem(() => mesh.DeleteNode(p))
+                        .Take(1)
+                        .Select(removed => removed ? 1 : 0)
+                        .Catch((Exception ex) =>
+                        {
+                            logger?.LogWarning(ex, "[ActivationRecycle] retention: {Path} was not removed; the next request's prune retries it", p);
+                            return Observable.Return(0);
+                        }))
+                    .Concat()
+                    .Sum();
+            })
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "[ActivationRecycle] retention: the request window could not be read; nothing was pruned, the next request retries");
+                return Observable.Return(0);
+            });
     }
 
     /// <summary>The reports written so far for a request, read as System. Cold; one snapshot.</summary>
