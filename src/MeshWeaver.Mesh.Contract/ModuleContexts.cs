@@ -216,13 +216,32 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
     /// before it waits for quiescence, so a lease taken while it was still current is one the unload
     /// waits for. Its services are leased the same way (<see cref="ModuleServices.TryLease"/>): a
     /// <see cref="ModuleServices.Dispose"/> that comes after the lease is deferred to its release.</para>
+    ///
+    /// <para>🚨 <b>A registration the current generation cannot PRODUCE is absent, never a fault in the
+    /// caller</b> (MeshWeaver#6847). The root's forwarders were laid out at boot; when the current
+    /// generation's registration at that index cannot be resolved, or resolves to something that is not
+    /// what the forwarder forwards (<paramref name="expected"/>), every consumer that leased it used to
+    /// fault — and the query fan-out leases EVERY module's provider for EVERY query, so one optional
+    /// module's broken service failed node resolution, and with it every hub activation and the
+    /// sign-in's identity lookup (memex, 2026-10-16: WhatsApp's <c>mw-module-service:10</c>). Such a
+    /// registration is recorded as UNSERVABLE in that generation (<see cref="ModuleServices.Unservable"/>)
+    /// and reported once — on stderr and as an error log naming the module, the registration and the
+    /// exception — and the lease answers null, which every leasing consumer already reads as "the
+    /// module's feature is absent" (the shape a module withdrawn at boot has had since #6542). It is a
+    /// durable, named verdict, not a retry: the module's feature stays absent until a new generation is
+    /// installed or the process restarts. A direct call through the forwarder still throws the real
+    /// error — that call IS the feature. Only the caller's own scope ending
+    /// (<see cref="ObjectDisposedException"/>) is the caller's fault and propagates.</para>
     /// </summary>
     /// <param name="module">The module's entry-assembly name.</param>
     /// <param name="index">The registration's index.</param>
     /// <param name="caller">The root-side scope resolving, or null.</param>
-    internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller)
+    /// <param name="expected">What the root's forwarder forwards — the leased instance must be one; null
+    /// when the caller does not know.</param>
+    internal (object Instance, IDisposable Release)? TryLeaseModuleService(string module, int index, Autofac.ILifetimeScope? caller, Type? expected = null)
     {
-        if (Current(module) is not { Services: { } services } generation)
+        if (Current(module) is not { Services: { } services } generation
+            || services.Unservable.ContainsKey(index))
             return null;
         var context = Leases.Enter(generation.Context);
         var held = services.TryLease();
@@ -235,15 +254,55 @@ public sealed class ModuleContexts : IDisposable, MeshWeaver.Layout.Client.IView
         // Released in this order: the services first — their disposal, when this is the last lease of a
         // retiring generation, runs module code — and the context lease after it.
         var release = new System.Reactive.Disposables.CompositeDisposable(held, context);
+        object instance;
         try
         {
-            return (services.Resolve(Root, index, caller), release);
+            instance = services.Resolve(Root, index, caller);
+        }
+        catch (Exception exception) when (exception is not ObjectDisposedException)
+        {
+            release.Dispose();
+            Unservable(generation, services, index, exception.ToString(), Innermost(exception));
+            return null;
         }
         catch
         {
             release.Dispose();
             throw;
         }
+        if (expected is null || expected.IsInstanceOfType(instance))
+            return (instance, release);
+        release.Dispose();
+        var mismatch = $"it resolved a {instance.GetType().FullName} where the root's forwarder forwards {expected.FullName} — "
+                       + "this generation does not lay out its forwarded registrations the way the root's forwarders were laid out at boot";
+        Unservable(generation, services, index, mismatch, mismatch);
+        return null;
+    }
+
+    private static string Innermost(Exception exception)
+    {
+        var cause = exception;
+        while (cause.InnerException is not null)
+            cause = cause.InnerException;
+        return $"{cause.GetType().Name}: {cause.Message}";
+    }
+
+    // Records registration `index` of `generation` as unservable and reports it ONCE (MeshWeaver#6847).
+    private void Unservable(ModuleGeneration generation, ModuleServices services, int index, string detail, string why)
+    {
+        var registration = services.Registrations.ElementAtOrDefault(index);
+        var named = registration is null
+            ? $"registration #{index}"
+            : $"registration #{index} ({registration.Descriptor.ServiceType.Name}, route {registration.Route})";
+        var reason = $"{named} of module {generation.Name} could not be served by its current generation "
+                     + $"'{generation.Context.Name}' ({generation.Location}): {why}";
+        if (!services.MarkUnservable(index, reason))
+            return;
+        var report = reason + ". It is left out by every consumer that leases it (the query fan-out, the access-rule set, "
+                     + "the options it configures) — the module's feature is ABSENT, the rest of the mesh keeps serving — "
+                     + "until a new generation of the module is installed or the process restarts.";
+        Console.Error.WriteLine($"[MeshWeaver.Mesh.UnservableModuleService] {report}");
+        logger?.LogError("[MeshWeaver.Mesh.UnservableModuleService] {Report} {Detail}", report, detail);
     }
 
     /// <summary>The scope of <paramref name="module"/>'s CURRENT generation.</summary>

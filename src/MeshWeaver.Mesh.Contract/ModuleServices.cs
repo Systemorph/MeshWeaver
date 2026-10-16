@@ -114,6 +114,23 @@ public sealed class ModuleServices : IDisposable
     /// <summary>Why these services cannot be served from a module scope — empty when they can.</summary>
     public ImmutableList<string> Blockers { get; }
 
+    private ImmutableDictionary<int, string> unservable = ImmutableDictionary<int, string>.Empty;
+
+    /// <summary>
+    /// The forwarded registrations THIS generation could not produce when a consumer leased them, by
+    /// index, each with why (MeshWeaver#6847). A verdict about this generation, never about the module:
+    /// a later generation starts with none. Every consumer that leases a module's service — the query
+    /// fan-out, the access-rule set, the options forwarders — reads such a registration as ABSENT
+    /// (<see cref="ModuleContexts.TryLeaseModuleService"/>), so an optional module that cannot serve one
+    /// of its services costs exactly that feature and never a caller that never asked for it.
+    /// </summary>
+    public ImmutableDictionary<int, string> Unservable => Volatile.Read(ref unservable);
+
+    /// <summary>Records registration <paramref name="index"/> as unservable in this generation; true the
+    /// first time, so the verdict is reported once.</summary>
+    internal bool MarkUnservable(int index, string reason) =>
+        ImmutableInterlocked.TryAdd(ref unservable, index, reason);
+
     /// <summary>The shape a swap must preserve (see <see cref="ModuleServiceRegistration.Shape"/>), each
     /// forwarded registration prefixed with its <see cref="ModuleServiceRegistration.Index"/>.</summary>
     public ImmutableList<string> Shape => Registrations

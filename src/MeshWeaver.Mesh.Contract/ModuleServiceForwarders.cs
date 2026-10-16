@@ -23,6 +23,7 @@ public class ModuleServiceProxy : DispatchProxy
     private string module = "";
     private int index;
     private string service = "";
+    private Type? serviceType;
     private Autofac.ILifetimeScope? caller;
 
     /// <summary>Creates the proxy for <paramref name="serviceType"/>.</summary>
@@ -48,6 +49,7 @@ public class ModuleServiceProxy : DispatchProxy
         proxy.module = module;
         proxy.index = index;
         proxy.service = serviceType.Name;
+        proxy.serviceType = serviceType;
         proxy.caller = caller;
         return proxy;
     }
@@ -102,13 +104,17 @@ public class ModuleServiceProxy : DispatchProxy
     /// exactly as the installed-module set does (<see cref="InstalledModules"/>): the feature is absent
     /// and the withdrawal is reported, never a fault in every caller of the index. Reads the registry
     /// only; never resolves the instance behind the proxy.</para>
+    ///
+    /// <para>False, too, for a registration the module's current generation was found unable to produce
+    /// (<see cref="ModuleServices.Unservable"/>, MeshWeaver#6847) — a member that can only fault is absent.</para>
     /// </summary>
     /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
     public static bool Serves(object service)
     {
         ArgumentNullException.ThrowIfNull(service);
         return service is not ModuleServiceProxy proxy
-               || proxy.contexts?.Current(proxy.module)?.Services is not null;
+               || proxy.contexts?.Current(proxy.module)?.Services is { } services
+                  && !services.Unservable.ContainsKey(proxy.index);
     }
 
     /// <summary>
@@ -123,6 +129,12 @@ public class ModuleServiceProxy : DispatchProxy
     /// instead of <see cref="Serves"/> followed by a call through the proxy: the check and the call can
     /// no longer be separated by a retirement. Hold it for the call only — a lease that is never
     /// released keeps a retired generation loaded.</para>
+    ///
+    /// <para>Null, too, when the current generation cannot produce this registration — it does not
+    /// resolve, or resolves to something that is not <typeparamref name="T"/> — which is recorded and
+    /// reported once and makes the module's feature absent (<see cref="ModuleContexts.TryLeaseModuleService"/>,
+    /// MeshWeaver#6847): an optional module's broken service never faults a consumer of the set it
+    /// belongs to.</para>
     /// </summary>
     /// <typeparam name="T">The platform interface.</typeparam>
     /// <param name="service">A resolved platform service — an instance, or a module's forwarding proxy.</param>
@@ -131,7 +143,7 @@ public class ModuleServiceProxy : DispatchProxy
         ArgumentNullException.ThrowIfNull(service);
         if (service is not ModuleServiceProxy proxy)
             return new ModuleServiceLease<T>(service, null);
-        return proxy.contexts?.TryLeaseModuleService(proxy.module, proxy.index, proxy.caller) is { } leased
+        return proxy.contexts?.TryLeaseModuleService(proxy.module, proxy.index, proxy.caller, proxy.serviceType ?? typeof(T)) is { } leased
             ? new ModuleServiceLease<T>((T)leased.Instance, leased.Release)
             : null;
     }
@@ -382,13 +394,23 @@ internal sealed class ModuleConfigureOptionsForwarder<TOptions>(
     : IConfigureNamedOptions<TOptions>
     where TOptions : class
 {
+    // 🚨 LEASED, and a registration the module cannot serve contributes NOTHING (MeshWeaver#6847). The
+    // options factory runs EVERY setup of TOptions for EVERY name, so a module's setup is called for
+    // names it never configured — a WhatsApp AddHttpClient's forwarder runs when the sign-in's OIDC
+    // handler builds its own HttpClientFactoryOptions. A forwarder that threw there made one optional
+    // module's broken registration a fault in every named options build of that type, sign-in's
+    // included. A module that is not held (withdrawn, retired) or whose current generation cannot
+    // produce this registration (recorded and reported by TryLeaseModuleService) configures nothing:
+    // its feature is absent, every other name is built as if it had never registered.
     public void Configure(string? name, TOptions options)
     {
-        var target = contexts.ResolveModuleService(module, index, caller);
-        if (target is IConfigureNamedOptions<TOptions> named)
+        if (contexts.TryLeaseModuleService(module, index, caller, typeof(IConfigureOptions<TOptions>)) is not { } leased)
+            return;
+        using var release = leased.Release;
+        if (leased.Instance is IConfigureNamedOptions<TOptions> named)
             named.Configure(name, options);
         else if (name == Options.DefaultName)
-            ((IConfigureOptions<TOptions>)target).Configure(options);
+            ((IConfigureOptions<TOptions>)leased.Instance).Configure(options);
     }
 
     public void Configure(TOptions options) => Configure(Options.DefaultName, options);
