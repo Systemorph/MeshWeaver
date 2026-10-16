@@ -145,16 +145,27 @@ public static class ReleaseGateEndpoints
                 ct)!;
     }
 
-    private static IObservable<IResult> Choose(HttpContext http, string? current) =>
-        http.RequestServices.GetRequiredService<ReleaseAvailabilityService>()
-            // 🚨 The running version is READ HERE, not taken from the caller: "different from
-            // current ⇒ update" is a claim about what this instance runs, and a caller that could
-            // assert it could ask for a rollback by lying. The query parameter is a diagnostic
-            // override for an operator asking "what would you pick from there", never the default.
-            .SelectRollTarget(
-                string.IsNullOrWhiteSpace(current)
-                    ? ShippedReleaseSeed.InstalledPlatformVersion
-                    : current)
+    /// <summary>
+    /// 🚨 The answer is the POLLER's own selection (#4413) — the registry's portal tag listing under
+    /// this instance's update policy, walked by the availability gate — never a second selection
+    /// over the published root's <c>_releases</c> markers. A marker exists for a set the fleet has
+    /// not armed yet, so that universe named releases with no portal image, and combo verification
+    /// (the route's one automated caller) then pulled an image that does not exist. A host without
+    /// the poller has no roll target and says so as <see cref="RollSelectionKind.Indeterminate"/>.
+    /// </summary>
+    internal static IObservable<IResult> Choose(HttpContext http, string? current) =>
+        (http.RequestServices.GetService<SelfUpdateHostedService>() is { } poller
+            // 🚨 The running version is READ by the poller, not taken from the caller: "different
+            // from current ⇒ update" is a claim about what this instance runs, and a caller that
+            // could assert it could ask for a rollback by lying. The query parameter is a
+            // diagnostic override for an operator asking "what would you pick from there", never
+            // the default.
+            ? poller.SelectRollTarget(current)
+            : Observable.Return(new RollSelectionOutcome(
+                RollSelectionKind.Indeterminate, null,
+                string.IsNullOrWhiteSpace(current) ? ShippedReleaseSeed.InstalledPlatformVersion : current,
+                0, 0, [],
+                "this host runs no self-update poller, so it has no roll target to name.")))
             .Select(outcome => Results.Json(new
             {
                 environment = outcome.Summary,

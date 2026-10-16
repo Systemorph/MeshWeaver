@@ -182,6 +182,43 @@ reproduces the share by restoring the three directories' timestamps after a seco
 pending module where 3 are pending without the fix and 3 with it, while an unchanged volume is still
 read once.
 
+### A platform hand-over does not skip the live swap (MeshWeaver#6829)
+
+The module half of a check follows the platform half, and `SelfUpdateVerdict.MayRestartAfter`
+decides whether a restart may follow it. A release HANDED to the control lane is not followed by a
+restart: the routed Roll it opens re-creates the pods, and a second request would only race it.
+Until this change the same rule also skipped the LIVE swap, which is not a restart — it happens in
+this process and races nothing. On an install that sees a newer platform build on nearly every check
+(each `BuildCompletion` is one), that meant a proposed module set waited for the next roll even where
+it could go live at once, and waited indefinitely behind a roll that waits for an approval.
+
+Measured on memex.systemorph.com, 2026-10-16, with the listing fix above already running: three
+replicas booted 08:19–08:26Z onto module set 1986; set 1987 was proposed at 08:38:57Z; every later
+check on those replicas was a `BuildCompletion` answering *update available — handed to the control
+lane*; `/health` read *20 module(s) are landed but not yet loaded* on all three until the handed-over
+roll's first pod booted at 08:56Z — and that pod read no pending activation. The roll did activate the
+set; nothing before it tried.
+
+Now `SelfUpdateVerdict.MayActivateLiveAfter` admits a hand-over, and `ConsiderRestart` takes the live
+half alone there (`LiveOnly`): what can go live goes live, what needs a restart is left to the roll,
+and the verdict keeps its `HandedOver` outcome and says which. No restart is announced in either case.
+`ModulesGoLiveWhileARollIsHandedOverTest` (`Memex.Portal.Shared.Test`, the real landing path and the
+real decision, a control-lane install, a newer platform build in the registry): a live-updatable
+module goes live and only the release event reaches the inbox; a restart-required module keeps N
+serving, no restart event is announced, and the verdict names the roll; and the negative control —
+nothing newer, nothing handed over — takes the module half as before. Mutation check: reverting
+`ConsiderRestart` makes the first test fail with N still serving.
+
+The activation marker outlives a successful live swap until the next boot, so every LATER
+handed-over check still takes the live half and finds nothing pending in this process. That pass
+says so — *nothing landed is pending in this process* — and keeps the `HandedOver` outcome; it never
+reports an activation as still pending (`ALaterHandedOverCheck_AfterTheLiveSwap_SaysNothingIsPendingHere`).
+
+**Not addressed here:** a module that cannot go live waits for the handed-over roll, and if that roll
+waits for an approval, so does the module. Whether the control plane should then run the unattended
+Restart in its place is the control plane's decision (it sees the Roll it opened), not this
+instance's.
+
 ### One landing, one recycle wave (MeshWeaver#6729)
 
 **A landing recycles each owner address ONCE.** `ModuleLiveActivation` hands every pending module of a

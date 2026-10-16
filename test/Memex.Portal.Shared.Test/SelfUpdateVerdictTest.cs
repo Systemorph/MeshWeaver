@@ -317,6 +317,44 @@ public class SelfUpdateVerdictTest
     public void MayRestartAfter_OnlyWhenTheCheckPatchedNothing(SelfUpdateOutcome outcome, bool expected)
         => Assert.Equal(expected, SelfUpdateVerdict.MayRestartAfter(new SelfUpdateVerdict(outcome, "…")));
 
+    /// <summary>
+    /// MeshWeaver#6829: the LIVE half may follow a hand-over even though the restart may not — a live
+    /// swap races no roll. Everywhere else it follows exactly the restart rule: an applied roll, a
+    /// refused migration, a failed or absent check and a disabled policy take neither.
+    /// </summary>
+    [Theory]
+    [InlineData(SelfUpdateOutcome.HandedOver, true)]
+    [InlineData(SelfUpdateOutcome.NoNewerRelease, true)]
+    [InlineData(SelfUpdateOutcome.HandoverFailed, true)]
+    [InlineData(SelfUpdateOutcome.Applied, false)]
+    [InlineData(SelfUpdateOutcome.MigrationFailed, false)]
+    [InlineData(SelfUpdateOutcome.CheckFailed, false)]
+    [InlineData(SelfUpdateOutcome.UpdatesDisabled, false)]
+    [InlineData(SelfUpdateOutcome.NoOutcome, false)]
+    public void MayActivateLiveAfter_AlsoAfterAHandOver(SelfUpdateOutcome outcome, bool expected)
+        => Assert.Equal(expected, SelfUpdateVerdict.MayActivateLiveAfter(new SelfUpdateVerdict(outcome, "…")));
+
+    /// <summary>
+    /// MeshWeaver#6829: the hand-over's live verdict keeps the <see cref="SelfUpdateOutcome.HandedOver"/>
+    /// outcome in all three cases, and a pass that swapped nothing in and left nothing for a restart
+    /// (the marker outlives a successful swap until boot) says nothing is pending here — never that an
+    /// activation is still pending.
+    /// </summary>
+    [Theory]
+    [InlineData(1, false, "went LIVE", "nothing landed is pending")]
+    [InlineData(0, true, "is pending activation and nothing went live", "nothing landed is pending")]
+    [InlineData(0, false, "nothing landed is pending in this process", "generation is pending activation")]
+    public void LiveWhileRollHandedOver_SaysWhatHappened(int wentLive, bool needsRestart, string says, string neverSays)
+    {
+        var handedOver = SelfUpdateVerdict.HandedOver("3.0.1", "https://control.example/api/hooks/Hosting/PlatformBuilds", "accepted (200)");
+        var verdict = SelfUpdateVerdict.LiveWhileRollHandedOver(handedOver, wentLive, needsRestart, "detail");
+
+        Assert.Equal(SelfUpdateOutcome.HandedOver, verdict.Outcome);
+        Assert.Contains(says, verdict.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(neverSays, verdict.Message, StringComparison.Ordinal);
+        Assert.Equal(needsRestart, verdict.Message.Contains("activated by the handed-over roll", StringComparison.Ordinal));
+    }
+
     /// <summary>Inside the floor the restart is deferred, naming how long ago the install rolled
     /// and the floor it sits inside — the same sentence shape a deferred roll uses.</summary>
     [Fact]
