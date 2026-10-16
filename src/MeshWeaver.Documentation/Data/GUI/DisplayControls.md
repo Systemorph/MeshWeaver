@@ -110,6 +110,51 @@ Controls.Stack
 
 ---
 
+# QR Code, Share Link & Install
+
+Three controls for a page a person carries on their phone — first used by the action-link phone
+card (MeshWeaver.Plugins#2062). All three take a literal or a data-binding pointer for every value,
+so a template emits them at once and the values arrive bound.
+
+**`QrCodeControl`** draws a QR code from a module matrix the SERVER computed: `Controls.QrCodeOf(text)`
+encodes on the spot, and `QrCodes.Encode(text)` returns the matrix (rows of `'1'`/`'0'`) for a
+projection to bind (`Controls.QrCode(pointer)`). Every renderer — Blazor, React, React Native — only
+paints squares, so none needs a QR library and no third-party service sees the text. It is always
+black on white with the standard four-module quiet zone, in the dark theme too (cameras need the
+contrast), and nothing is drawn over it. `Size` is the rendered width in CSS pixels (default 240),
+`Label` the accessible name; `QrCodes.Encode` takes a `QrErrorCorrection` level (default `Medium`)
+and refuses one it does not know by name. An empty matrix draws nothing, so clearing the bound value
+removes the code. 🚨 Everything encoded is readable by any camera that sees the screen: encode a
+public address, never a credential or a personal detail, and always show the same address as text
+beside it.
+
+**`ShareLinkControl`** is **Copy link** and **Share** for `Url`. Copy writes to the clipboard inside
+the click (Safari refuses a write that has left the gesture). Share opens the device's share sheet
+and is offered only where the browser has one; elsewhere Copy stands alone. The outcome is
+announced in a polite live region. An empty `Url` disables both.
+
+**`InstallAppControl`** is **Install on iPhone / Android** for the page it is on. It adds nothing by
+itself. Opened, it guides iPhone and iPad through Share → *Add to Home Screen* (Safari has no
+programmatic prompt). On Android it raises the browser's own install prompt when the browser offered
+one, and shows the browser-menu steps when it did not. An in-app browser is told to open the page in
+Safari or Chrome first, a page already opened from the home screen says so, and a desktop browser
+shows the address to open on the phone. The detected platform can be switched by hand. While it is
+rendered, the page's manifest is `ManifestHref`, so each page installs under its own identity and
+scope. The previous manifest comes back when the control goes away.
+
+```csharp
+Controls.Stack
+    .WithView(Controls.QrCode(new JsonPointerReference("qrModules")).WithLabel("Invitation"))  // QrCodes.Encode(url)
+    .WithView(Controls.Body(new JsonPointerReference("url")))          // the address, readable
+    .WithView(Controls.ShareLink(new JsonPointerReference("url")).WithTitle("Welcome"))
+    .WithView(Controls.InstallApp("/a/0123/manifest.webmanifest").WithAppName("Course card"))
+```
+
+The labels and install steps are the platform's own (`qr.*`, `share.*`, `install.*` in the string
+catalog), in the viewer's language.
+
+---
+
 # See Also
 
 - [Container Controls](../ContainerControl) — stacks, tabs, toolbars, splitters
