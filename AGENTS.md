@@ -157,8 +157,10 @@ Full reference: <!--slot:reference-->[/gui](.claude/skills/gui/SKILL.md) · [GUI
 (a primary path broken, an intermittent user-visible failure, or silently WRONG results anywhere) must
 both be **zero** to cut a release; `sev:M` and `sev:L` are a priority conversation and never gate one.
 That is policy [`release-blocker-gate`](src/MeshWeaver.Documentation/Data/Architecture/PolicyNotProse.md),
-which carries when it took effect and who set it — this page carries only the rule. An `enhancement`,
-`documentation` or `chore` carries no severity at all.
+which carries when it took effect and who set it — this page carries only the rule. **Every open issue
+carries exactly one severity, an `enhancement`, `documentation` or `chore` included** — a non-bug takes
+`sev:M` or `sev:L`, and `sev:B`/`sev:H` are reserved for defects (policy `every-issue-has-a-severity`;
+`scripts/check-issue-taxonomy.py` reds on either breach).
 
 **So work the queue in that order** — `sev:B`, then `sev:H`, and treat `sev:M`/`sev:L` as backlog
 unless asked. Before starting on an issue, check it is actually classified: an unlabelled issue has not
