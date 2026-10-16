@@ -24,6 +24,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
+    <ProjectReference Include="..\..\..\src\MeshWeaver.Hosting.AspNetCore\MeshWeaver.Hosting.AspNetCore.csproj" />
     <ProjectReference Include="..\..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 </Project>

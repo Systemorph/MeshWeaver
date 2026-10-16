@@ -174,9 +174,11 @@ restarted pod of the serving image had to pass the same probe. The control insta
   defaults (`ServiceDefaults.TagRollGates`, a `PostConfigure` over every host's registrations) add
   it to the checks named in `ServiceDefaults.RollGateChecks` and strip any `live` tag from them.
   Those are `NodeTypeBakeGateExtensions.HealthCheckName` (`nodetype_bake`),
-  `ProbeEndpoints.RequiredModulesCheckName` (`required_modules`) and
-  `ModuleForwarderHealthCheck.HealthCheckName` (`module_forwarders`, MeshWeaver#6847). The host
-  registers the first two in MeshWeaver.Plugins, by name; the service defaults register the third. The rule holds whatever tags those registrations carry, so no
+  `ProbeEndpoints.RequiredModulesCheckName` (`required_modules`),
+  `ModuleForwarderHealthCheck.HealthCheckName` (`module_forwarders`, MeshWeaver#6847) and
+  `UserDirectoryReadiness.HealthCheckName` (`user_directory`). The host registers the first two
+  in MeshWeaver.Plugins, by name. The service defaults register the other two
+  ([The User Directory Opens at Start](../UserDirectoryOpensAtStart)). The rule holds whatever tags those registrations carry, so no
   host can put a roll gate back on a killing probe by forgetting a tag.
 - **`/ready`** reads checks tagged `ready` plus the roll gates. Its body names every check that is
   not Healthy, so the kubelet's probe-failure event says why.
@@ -232,6 +234,7 @@ the check belongs on readiness.
 | `db_version` (+ `DbVersionGate`) | Plugins host | Yes | A portal ahead of its schema must not serve. A restart is the right retry once the migration Job has run. `DbVersionGate` stops the process itself at startup. |
 | `required_modules` | Plugins host | **No: roll gate, `/ready` only** (policy [`required-modules-readiness-only`](../PolicyNotProse)) | A declared-required module that the image should ship is absent from the pod's shelf, or a present one did not install against this platform (both Unhealthy). A store-delivered module not here yet is Degraded, a 200 that holds nothing, as before. If the registry cannot serve a module, it is missing for every image, so on the startup probe it would kill the previous image's restarted pods too, the same failure as the bake gate. As a roll gate a missing module stalls the roll and keeps the pod out of the Service. The cost: a restart no longer re-runs the bundle-fetch init container by itself. A pod whose modules arrive later needs a governed `Restart`. |
 | `module_forwarders` | core service defaults | **No: roll gate, `/ready` only** (MeshWeaver#6847) | A root forwarder cannot be resolved in its module's current generation, so every activation that leases it fails on this replica. The replica leaves the Service; whether to restart it is the governed `Restart`'s decision, never a probe's — on the startup probe a live swap that reached every replica alike would have the kubelet kill them all. |
+| `user_directory` | core service defaults | **No: roll gate, `/ready` only** | Unhealthy until the user directory has its first snapshot: a pod that cannot identify anyone must not take traffic. The directory read is shared, so a restart would not fill it. After the first snapshot the check is Degraded at worst ([The User Directory Opens at Start](../UserDirectoryOpensAtStart)). |
 | `process_progress` (`live`) | Plugins host | Yes, and it restarts via `/alive` | A GC-bound process is fixed by a restart. |
 | `PostgreSql` | Plugins host | Yes | No database, no portal. |
 | `self` (`live`, `ready`) | core | Never fails | The process can run a delegate. |
