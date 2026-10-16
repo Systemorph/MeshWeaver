@@ -142,6 +142,12 @@ public static class OrleansServerRegistryExtensions
             // IClusterMembershipFeed and OrleansRoutingService.AttachPodHub. Absent on a client or
             // a monolith, where membership cannot change under this process at all.
             services.TryAddSingleton<IClusterMembershipFeed, OrleansClusterMembershipFeed>();
+            // #6865: the cluster-wide DRAIN signal membership cannot give (a draining pod stays
+            // Active). The roster is what MessageHubGrain's singleton hand-off reads so it never picks
+            // a draining peer; the announcer is how a draining silo fills its peers' rosters.
+            // Silo-only for the same reason as the two above.
+            services.TryAddSingleton<ClusterDrainRoster>();
+            services.AddHostedService<ClusterDrainAnnouncer>();
             // 🚨 Issue #5037. Placing a [StatelessWorker] (routing/default above all) must never wait
             // on a REMOTE directory partition for an answer that can only be "not registered" — see
             // StatelessWorkerGrainDirectoryResolver. Silo-only for the same reason as the two above:
