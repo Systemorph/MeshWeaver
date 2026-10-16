@@ -52,6 +52,26 @@ Consuming a bake is checked **before the mesh boots**, and a problem there is a 
 (exit 2), not a red gate — precisely so "I could not consume this" can never be mistaken for
 "I consumed it and all is well".
 
+### What the tester reads from the mount
+
+Before it discovers a single package, `mw-plugin-test` sweeps the mounted tree into one snapshot
+(`LocalNodeRepo.LoadSync` — the gate and the mesh-free bake read the SAME sweep). The rule for what
+that sweep reads is explicit, so it cannot drift between a developer's checkout and CI:
+
+- **It skips VCS, CI and build internals by name**: `.git`, `.github`, `.claude`, `node_modules`,
+  `bin`, `obj` — and **`.worktrees`**, the conventional home of a checkout's linked worktrees.
+- **It skips every nested git tree**: any directory *below* the mount root that holds a `.git`
+  entry — a FILE (a linked worktree or a submodule) or a DIRECTORY (a nested repository) — is a
+  different checkout, never content of this one. The mount root itself may be a linked worktree
+  and is swept; its own `.git` pointer file is plumbing and is not part of the snapshot.
+
+Why it matters: a local checkout that keeps its worktrees inside itself made the sweep read every
+other branch's tree before discovery — minutes with nothing printed — and a linked worktree at the
+top level whose root carries a node-typed `index.json` was discovered as a package of its own. A
+clean CI checkout holds no nested trees, and GitSync's GitHub fetch never sees one's files (a
+submodule is a gitlink), so skipping them keeps a local run equal to what CI and a mesh read.
+`LocalNodeRepoSweepSkipsNestedTreesTest` pins the rule.
+
 ---
 
 ## Measured state, 2026-08-27
