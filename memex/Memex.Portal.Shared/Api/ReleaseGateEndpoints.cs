@@ -391,7 +391,7 @@ public static class ReleaseGateEndpoints
                         }),
                         VerificationDeadline,
                         Scheduler.Default,
-                        (phase, ex) => VerificationTimedOut(phase, ex, verdict, build, logger));
+                        phase => VerificationTimedOut(phase, verdict, build, logger));
             })
             .Catch<IResult, JsonException>(_ => Observable.Return(Results.BadRequest(new
                 { error = "The combo verification body is not valid JSON." })));
@@ -414,17 +414,26 @@ public static class ReleaseGateEndpoints
     /// without throwing it, so it has no frames, and the endpoint's <see cref="Task"/> faulted into
     /// an unhandled 500 that named neither the route nor which of the two waits had stalled. Measured
     /// on 2026-10-15: the CI verifier's POST for one candidate answered 500 after 31 s, and the
-    /// node's version history shows the verdict was never written — the stall was in the write, which
+    /// node's version history shows the verdict was not written — the stall was in the write, which
     /// nothing in the response or the log could say. The expiry is now a 504 carrying
-    /// <c>phase</c> = <see cref="WritePhase"/> or <see cref="ConfirmPhase"/>. Every other fault
-    /// still propagates to the exception handler: a fault that is not a deadline is a defect.</para>
+    /// <c>phase</c> = <see cref="WritePhase"/> or <see cref="ConfirmPhase"/>.</para>
+    ///
+    /// <para>🚨 Only THIS deadline is answered: it is <c>Timeout</c>'s FALLBACK, never a
+    /// <c>Catch</c> of <see cref="TimeoutException"/>. A <see cref="TimeoutException"/> raised
+    /// upstream (a write's own initial-state bound, say) is a fault, not this route's deadline, and
+    /// still propagates to the exception handler like every other fault.</para>
+    ///
+    /// <para>🚨 A 504 does NOT say the verdict is absent: unsubscribing detaches this request from a
+    /// write already queued, it does not cancel it, so the verdict may still land after the answer.
+    /// The outcome is UNKNOWN; the caller re-reads <c>Admin/UpdatePolicy</c> or re-posts (the record
+    /// is an upsert by candidate tag, so a re-post is idempotent).</para>
     /// </summary>
     internal static IObservable<IResult> RecordAndConfirm(
         IObservable<System.Reactive.Unit> write,
         Func<IObservable<IResult>> confirmed,
         TimeSpan deadline,
         IScheduler scheduler,
-        Func<string, TimeoutException, IResult> timedOut) =>
+        Func<string, IResult> timedOut) =>
         Observable.Defer(() =>
         {
             // Per subscription: which wait the deadline found unfinished.
@@ -432,17 +441,20 @@ public static class ReleaseGateEndpoints
             return write
                 .Do(_ => Volatile.Write(ref phase, ConfirmPhase))
                 .SelectMany(_ => confirmed())
-                .Timeout(deadline, scheduler)
-                .Catch((TimeoutException ex) => Observable.Return(timedOut(Volatile.Read(ref phase), ex)));
+                .Timeout(deadline,
+                    Observable.Defer(() => Observable.Return(timedOut(Volatile.Read(ref phase)))),
+                    scheduler);
         });
 
     private static IResult VerificationTimedOut(
-        string phase, TimeoutException ex, ComboVerification verdict, AuthenticatedBuild build, ILogger? logger)
+        string phase, ComboVerification verdict, AuthenticatedBuild build, ILogger? logger)
     {
+        var seconds = VerificationDeadline.TotalSeconds;
         var what = phase == WritePhase
-            ? $"the write to {UpdatePolicyNodeType.NodePath} was not completed within {VerificationDeadline.TotalSeconds:0} s; the verdict is NOT recorded"
-            : $"the write completed, but {UpdatePolicyNodeType.NodePath} did not show this exact verdict within {VerificationDeadline.TotalSeconds:0} s; it may not be recorded";
-        logger?.LogWarning(ex,
+            ? $"the write to {UpdatePolicyNodeType.NodePath} had not completed within {seconds:0} s"
+            : $"the write completed, but {UpdatePolicyNodeType.NodePath} did not show this exact verdict within {seconds:0} s";
+        what += $"; whether the verdict is recorded is UNKNOWN (a queued write may still land) — re-read {UpdatePolicyNodeType.NodePath}, or re-post (an upsert by candidate tag, so idempotent)";
+        logger?.LogWarning(
             "Combo verdict {Verdict} for {Candidate} from {Repository} run {RunId}: {Phase} phase did not complete — answered 504: {What}",
             verdict.Verdict, verdict.CandidateTag, build.Repository, build.Claims.RunId, phase, what);
         return Results.Json(

@@ -734,22 +734,32 @@ expires, the route answers **504** with
 `{ "error": "Timed out: …", "phase": "write" | "confirm", "candidateTag": "…" }` and logs one
 Warning naming the verdict, the candidate, the build's repository and run, and the phase:
 
-- **`write`**: the write to `Admin/UpdatePolicy` had not completed. The verdict is **not** recorded.
-- **`confirm`**: the write completed, but `Admin/UpdatePolicy` never showed this exact verdict. It
-  may not be recorded; read the node before re-running.
+- **`write`**: the write to `Admin/UpdatePolicy` had not completed.
+- **`confirm`**: the write completed, but `Admin/UpdatePolicy` never showed this exact verdict.
 
-Any other fault still reaches the portal's exception handler as a 500. Only the deadline is an
-answer. A fault that is not a deadline is a defect, and mapping it here would hide it.
+🚨 In **both** phases, whether the verdict is recorded is **unknown**. Answering ends this request's
+subscription. It does not cancel a write that is already queued, so the verdict can still land
+after the 504. Re-read `Admin/UpdatePolicy`, or re-post: the record is an upsert by candidate tag,
+so a re-post is idempotent.
+
+Only this route's own deadline is answered. It is `Timeout`'s fallback, not a `Catch` of
+`TimeoutException`. Any other fault still reaches the portal's exception handler as a 500. That
+includes a `TimeoutException` raised upstream, for example by a write's own bound. A fault that is
+not this deadline is a defect, and mapping it here would hide it.
 
 Before this change the deadline escaped as a bare `TimeoutException`. Rx creates that exception
 without throwing it, so it carries no stack frames. The result was an unhandled 500 whose log line
 named neither the route nor the phase (#6790). In that incident the verifier's POST answered 500
-after 31 s. The node's version history shows no write of that verdict: the versions on either
-side of the POST differ only in the poller's `lastCheckedAt`, and the tag kept an earlier run's
-verdict. So the write was the phase that stalled, and nothing in the response could say so. The
-endpoint's composition (`ReleaseGateEndpoints.RecordAndConfirm`) is pinned on virtual time by
-`ComboVerificationDeadlineTest`, which includes both controls: a confirmed write is answered, and a
-fault that is not a deadline still propagates.
+after 31 s. The node's version history, read through the version written 9 minutes after the
+POST, shows no write of that verdict. The versions on either side of the POST differ only in the
+poller's `lastCheckedAt`, and the tag kept an earlier run's verdict. So the write was the phase
+that stalled, and nothing in the response could say so. The endpoint's composition
+(`ReleaseGateEndpoints.RecordAndConfirm`) is pinned on virtual time by
+`ComboVerificationDeadlineTest`, which has three controls:
+
+- a confirmed write is answered;
+- a fault that is not a deadline still propagates;
+- a `TimeoutException` raised upstream still propagates.
 
 `check-combo-verify.py` holds this shape: it requires the token request, the audience, the recording
 route, the confirmed landing and a mint before every call, refuses any return of the instance key,
