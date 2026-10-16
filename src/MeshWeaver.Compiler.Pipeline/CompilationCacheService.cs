@@ -1094,7 +1094,8 @@ internal class CompilationCacheService(
     IOptions<CompilationCacheOptions> options,
     ILogger<CompilationCacheService> logger,
     CollectibleContextUnloads? unloads = null,
-    ModuleContexts? modules = null)
+    ModuleContexts? modules = null,
+    IoPoolRegistry? ioPools = null)
     : ICompilationCacheService, IDisposable
 {
     /// <summary>Records <paramref name="context"/> as retired on the mesh's tracker (if any) so the
@@ -1113,11 +1114,25 @@ internal class CompilationCacheService(
     // whatever THIS process last compiled. Reading it NEVER consumes it: a context evicted between
     // the arming and the load (UnloadNodeContexts, a superseding publish, a PinForScan retry) is
     // re-created from it, and a speculative GetOrAdd factory that loses its race cannot take it from
-    // the winner. An entry lives as long as its BUILD FILE does — RegisterBuildProbingDirectories
-    // drops the entries whose file is gone (a superseded emit directory, a store copy the retention
-    // sweep deleted), so the map is bounded by the builds on disk, not by the builds ever loaded.
+    // the winner. An entry lives as long as its BUILD FILE does. The file is deleted mostly OUTSIDE
+    // this process (the assembly store's retention sweep runs on a shared volume, from any replica),
+    // so no in-process deletion hook can see it; instead an AMORTIZED sweep on the file-system pool
+    // drops the entries whose file is gone each time the map has doubled since the last sweep
+    // (SweepStaleBuildProbing) — O(1) File.Exists per new registration, none on a re-arm, never on
+    // the arming caller's thread.
     private readonly ConcurrentDictionary<string, System.Collections.Immutable.ImmutableArray<string>> _buildProbingDirs =
         new(StringComparer.Ordinal);
+    // The map size at which the next stale-entry sweep runs; int.MaxValue while one is in flight.
+    private const int BuildProbingSweepFloor = 16;
+    private int _buildProbingSweepAt = BuildProbingSweepFloor;
+    private readonly IIoPool _fileSystemPool = ioPools?.Get(IoPoolNames.FileSystem) ?? IoPool.Unbounded;
+    private readonly ReplaySubject<int> _buildProbingSweeps = new(1);
+
+    /// <summary>How many stale entries the last <see cref="SweepStaleBuildProbing"/> removed (test seam).</summary>
+    internal IObservable<int> BuildProbingSweeps => _buildProbingSweeps;
+
+    /// <summary>Entries currently registered in the per-build probing map (test seam).</summary>
+    internal int BuildProbingRegistrationCount => _buildProbingDirs.Count;
     // Sticky invalidation set: a node name in here forces IsCacheValid to return false
     // on the NEXT call (and then clears itself). Needed because InvalidateCache's
     // File.Delete can silently fail when the DLL is still mapped by a live ALC — in
@@ -1142,14 +1157,50 @@ internal class CompilationCacheService(
     public void RegisterBuildProbingDirectories(string dllPath, System.Collections.Generic.IReadOnlyList<string> directories)
     {
         if (string.IsNullOrEmpty(dllPath) || directories.Count == 0) return;
-        // Bound the map by the builds still on disk: a path whose file is gone can never load again.
-        foreach (var stale in _buildProbingDirs.Keys)
-            if (!string.Equals(stale, dllPath, StringComparison.Ordinal) && !File.Exists(stale))
-                _buildProbingDirs.TryRemove(stale, out _);
         _buildProbingDirs[dllPath] = directories.ToImmutableArray();
         // A live context for the path is given it now; every one created for it later reads it.
         if (_loadContexts.TryGetValue(dllPath, out var ctx) && !ctx.IsRetired)
             ApplyBuildProbing(ctx, dllPath);
+
+        // Amortized bound: sweep only once the map has doubled since the last sweep. A re-arm of a
+        // path already registered does not grow the map and so never sweeps.
+        var sweepAt = Volatile.Read(ref _buildProbingSweepAt);
+        if (_buildProbingDirs.Count >= sweepAt
+            && Interlocked.CompareExchange(ref _buildProbingSweepAt, int.MaxValue, sweepAt) == sweepAt)
+            SweepStaleBuildProbing();
+    }
+
+    /// <summary>
+    /// Drops every per-build probing entry whose build file is gone — it can never load again — on
+    /// the file-system pool, then sets the next sweep at twice the surviving size.
+    /// </summary>
+    private void SweepStaleBuildProbing()
+    {
+        _fileSystemPool.InvokeBlocking(ct =>
+            {
+                var removed = 0;
+                foreach (var path in _buildProbingDirs.Keys)
+                    if (!File.Exists(path) && _buildProbingDirs.TryRemove(path, out _))
+                        removed++;
+                return removed;
+            })
+            .Subscribe(
+                removed =>
+                {
+                    Volatile.Write(ref _buildProbingSweepAt,
+                        Math.Max(BuildProbingSweepFloor, 2 * _buildProbingDirs.Count));
+                    logger.LogDebug(
+                        "Build probing sweep removed {Removed} entr(ies) whose build file is gone; {Remaining} remain",
+                        removed, _buildProbingDirs.Count);
+                    _buildProbingSweeps.OnNext(removed);
+                },
+                ex =>
+                {
+                    Volatile.Write(ref _buildProbingSweepAt,
+                        Math.Max(BuildProbingSweepFloor, 2 * _buildProbingDirs.Count));
+                    logger.LogWarning(ex,
+                        "Build probing sweep failed — stale entries stay until the next sweep");
+                });
     }
 
     /// <summary>

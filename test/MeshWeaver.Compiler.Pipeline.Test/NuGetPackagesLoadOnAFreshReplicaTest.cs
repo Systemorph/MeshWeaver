@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
 using System.Threading.Tasks;
+using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -420,11 +421,13 @@ public class BuildProbingPrecedenceTest
 
     /// <summary>
     /// The registration is bounded by the builds ON DISK (the review of #6862: one entry per
-    /// historical build path for the mesh's lifetime). A registration drops every entry whose
-    /// build file is gone; an entry whose file is present survives.
+    /// historical build path for the mesh's lifetime). Build files are deleted mostly outside this
+    /// process (the store's retention sweep, from any replica), so once the map has grown to the
+    /// sweep size an amortized sweep on the file-system pool drops every entry whose file is gone
+    /// and keeps the ones still on disk. A re-arm of a registered path never triggers it.
     /// </summary>
     [Fact]
-    public void ARegistration_DropsEntriesWhoseBuildFileIsGone()
+    public async Task EntriesWhoseBuildFileIsDeleted_AreSweptOnceTheMapHasGrown()
     {
         var root = Path.Combine(Path.GetTempPath(), "mw-probe-bound-" + Guid.NewGuid().ToString("N"));
         var cache = new CompilationCacheService(
@@ -433,19 +436,34 @@ public class BuildProbingPrecedenceTest
         try
         {
             Directory.CreateDirectory(Path.Combine(root, "store"));
-            var kept = Path.Combine(root, "store", "v1-kept.dll");
-            var deleted = Path.Combine(root, "store", "v2-deleted.dll");
-            File.WriteAllBytes(kept, [0]);
-            File.WriteAllBytes(deleted, [0]);
-            cache.RegisterBuildProbingDirectories(kept, [Path.Combine(root, "kept")]);
-            cache.RegisterBuildProbingDirectories(deleted, [Path.Combine(root, "deleted")]);
+            string Build(int i)
+            {
+                var path = Path.Combine(root, "store", $"v{i}-build.dll");
+                File.WriteAllBytes(path, [0]);
+                return path;
+            }
 
-            File.Delete(deleted);  // the retention sweep / a superseded emit directory
-            cache.RegisterBuildProbingDirectories(Path.Combine(root, "store", "v3.dll"), [Path.Combine(root, "v3")]);
+            // Ten builds registered, then deleted (the retention sweep, a superseded emit dir).
+            var deleted = Enumerable.Range(0, 10).Select(Build).ToArray();
+            foreach (var path in deleted)
+                cache.RegisterBuildProbingDirectories(path, [Path.Combine(root, "dirs")]);
+            foreach (var path in deleted)
+                File.Delete(path);
+            // Re-arming a registered path does not grow the map, so it never sweeps.
+            cache.RegisterBuildProbingDirectories(deleted[0], [Path.Combine(root, "dirs")]);
+            cache.BuildProbingRegistrationCount.Should().Be(10);
 
-            cache.GetOrCreateLoadContextForPath("type_Probe", kept).HasBuildProbingDirectories.Should().BeTrue(
-                "a build still on disk keeps its registration");
-            cache.GetOrCreateLoadContextForPath("type_Probe", deleted).HasBuildProbingDirectories.Should().BeFalse(
+            // New builds grow the map to the sweep size: the sweep removes exactly the ten.
+            var kept = Enumerable.Range(10, 10).Select(Build).ToArray();
+            foreach (var path in kept)
+                cache.RegisterBuildProbingDirectories(path, [Path.Combine(root, "dirs")]);
+
+            var removed = await cache.BuildProbingSweeps.Should().Within(TestTimeouts.Convergence)
+                .Emit("the map reached the sweep size, so a sweep must run");
+            removed.Should().Be(10, "exactly the ten builds whose file is gone are dropped");
+            cache.BuildProbingRegistrationCount.Should().Be(10, "the ten builds still on disk keep their entries");
+            cache.GetOrCreateLoadContextForPath("type_Probe", kept[0]).HasBuildProbingDirectories.Should().BeTrue();
+            cache.GetOrCreateLoadContextForPath("type_Probe", deleted[1]).HasBuildProbingDirectories.Should().BeFalse(
                 "a build whose file is gone can never load, so its registration is dropped");
         }
         finally
