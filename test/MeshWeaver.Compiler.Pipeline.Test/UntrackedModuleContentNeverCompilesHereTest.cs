@@ -261,7 +261,7 @@ public class UntrackedModuleContentDecisionTest
     {
         var declined = PrebuiltAssemblySeeder.UntrackedPartitionParkReason("Feedback/Feedback/Source/FeedbackContent", offered: true);
         declined.Should().Contain("partition 'Feedback'").And.Contain("tracks no source")
-            .And.Contain("DECLINED", "an offered-and-refused bundle says the FILES are stale, not the bundle")
+            .And.Contain("DECLINED", "an offered-and-refused bundle: its fingerprint disagrees with the files here")
             .And.Contain("add a sync source").And.Contain("rebake").And.Contain("MeshWeaver#3583");
 
         var absent = PrebuiltAssemblySeeder.UntrackedPartitionParkReason("Feedback/Feedback/Source/FeedbackContent", offered: false);

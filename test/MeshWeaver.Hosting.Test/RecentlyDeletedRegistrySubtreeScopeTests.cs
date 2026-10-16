@@ -1,5 +1,6 @@
 using System;
 using System.Reactive.Linq;
+using System.Threading;
 using MeshWeaver.Mesh.Services;
 using Xunit;
 
@@ -118,5 +119,122 @@ public class RecentlyDeletedRegistrySubtreeScopeTests
 
         subscription.Dispose();
         registry.IsUnderActiveDeletion("n/m", out _).Should().BeFalse("unsubscribing releases the scope");
+    }
+
+    /// <summary>
+    /// #6719: a deletion waits for the writes ADMITTED under its root before it runs, and only for
+    /// those — a write elsewhere (including a prefix-sharing sibling) never holds it up.
+    /// </summary>
+    [Fact]
+    public void AdmittedWritesSettled_waits_for_admitted_writes_under_the_root_only()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        var under = registry.AdmitWrite(["w/x/y"]);
+        var sibling = registry.AdmitWrite(["w/xy"]);
+        using var scope = registry.BeginSubtreeDeletion("w/x");
+
+        var settled = false;
+        using var wait = registry.AdmittedWritesSettled("w/x").Subscribe(_ => settled = true);
+        settled.Should().BeFalse("a write admitted under the root is still in flight");
+        registry.AdmittedWritesUnder("w/x").Should().Equal("w/x/y");
+
+        sibling.Dispose();
+        settled.Should().BeFalse("the sibling is outside the subtree and was never waited on");
+
+        under.Dispose();
+        settled.Should().BeTrue("the last admitted write under the root settled");
+
+        // Control: nothing pending answers at once, and a second Dispose is harmless.
+        under.Dispose();
+        var immediate = false;
+        using var again = registry.AdmittedWritesSettled("w/x").Subscribe(_ => immediate = true);
+        immediate.Should().BeTrue("no admitted write is pending under the root");
+    }
+
+    /// <summary>
+    /// #6719 review: a ROW-only delete (<c>KeepDescendants</c>) guards and removes the row alone, so it
+    /// waits for writes to the row and never for writes to the descendants it keeps — those stay
+    /// admitted throughout, and waiting on them would time out a delete with nothing pending on its row.
+    /// </summary>
+    [Fact]
+    public void AdmittedWritesSettled_row_only_waits_for_the_row_and_not_for_retained_descendants()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        using var descendant = registry.AdmitWrite(["r/row/child"]);
+        using var rowScope = registry.BeginRowDeletion("r/row");
+
+        var rowOnlySettled = false;
+        using (registry.AdmittedWritesSettled("r/row", rowOnly: true).Subscribe(_ => rowOnlySettled = true))
+            rowOnlySettled.Should().BeTrue("a parked descendant write is not the row-only delete's concern");
+        registry.AdmittedWritesUnder("r/row", rowOnly: true).Should().BeEmpty();
+
+        // Control: the subtree form over the same state DOES wait for the descendant.
+        var subtreeSettled = false;
+        using (registry.AdmittedWritesSettled("r/row").Subscribe(_ => subtreeSettled = true))
+            subtreeSettled.Should().BeFalse("a subtree delete removes the descendant and must wait for its write");
+
+        // And a parked write to the ROW holds the row-only delete until it settles.
+        var row = registry.AdmitWrite(["r/row"]);
+        var settledAfterRow = false;
+        using var wait = registry.AdmittedWritesSettled("r/row", rowOnly: true).Subscribe(_ => settledAfterRow = true);
+        settledAfterRow.Should().BeFalse("a write admitted to the row itself is still in flight");
+        registry.AdmittedWritesUnder("r/row", rowOnly: true).Should().Equal("r/row");
+        row.Dispose();
+        settledAfterRow.Should().BeTrue("the row's admitted write settled");
+    }
+
+    /// <summary>
+    /// #6719: <see cref="RecentlyDeletedRegistry.WithinSubtreeDeletion{T}"/> (move, partition teardown)
+    /// runs its body only after the writes admitted under the root have settled.
+    /// </summary>
+    [Fact]
+    public void WithinSubtreeDeletion_runs_its_body_after_admitted_writes_settle()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        var admitted = registry.AdmitWrite(["v/w"]);
+        var bodyRan = false;
+
+        using var subscription = registry.WithinSubtreeDeletion("v", () =>
+        {
+            bodyRan = true;
+            return Observable.Return(1);
+        }).Subscribe(_ => { });
+
+        bodyRan.Should().BeFalse("a write admitted under the root is still in flight");
+        admitted.Dispose();
+        bodyRan.Should().BeTrue("the admitted write settled, so the scope's body runs");
+    }
+
+    /// <summary>
+    /// #6719 review: an admitted write that NEVER settles must not hold the scope — which refuses every
+    /// write under the root — for ever. The wait is bounded: the operation fails naming the pending
+    /// path, the body never runs, and the scope is released before the error is delivered.
+    /// </summary>
+    [Fact]
+    public void WithinSubtreeDeletion_fails_by_name_when_an_admitted_write_never_settles()
+    {
+        var registry = new RecentlyDeletedRegistry();
+        using var neverSettles = registry.AdmitWrite(["h/stuck"]);
+        var bodyRan = false;
+        Exception? error = null;
+        var heldWhenDelivered = true;
+        var terminated = 0;
+
+        using var subscription = registry.WithinSubtreeDeletion("h", TimeSpan.FromMilliseconds(50), () =>
+        {
+            bodyRan = true;
+            return Observable.Return(1);
+        }).Subscribe(_ => { }, ex =>
+        {
+            error = ex;
+            heldWhenDelivered = registry.IsUnderActiveDeletion("h/x", out _);
+            Volatile.Write(ref terminated, 1);
+        });
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref terminated) == 1, TimeSpan.FromSeconds(10))
+            .Should().BeTrue("the settlement wait is bounded");
+        error.Should().BeOfType<TimeoutException>().Which.Message.Should().Contain("h/stuck");
+        bodyRan.Should().BeFalse("nothing may be torn down or moved while an admitted write is pending");
+        heldWhenDelivered.Should().BeFalse("the scope is released before the failure is delivered");
     }
 }

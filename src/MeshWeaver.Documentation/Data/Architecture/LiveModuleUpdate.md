@@ -155,6 +155,33 @@ during an in-flight restart schedules no second one; and the negative control â€
 the guard names the stuck landed-not-loaded module. Mutation check: forcing the old restart path makes
 the live test fail (`Restarts` 1, expected 0).
 
+### What is pending is read off the volume's LISTINGS, never its directory timestamps (MeshWeaver#6829)
+
+Every decision above starts from `PendingModuleActivations`, and that reader memoises its walk of the
+module volume (the activation sidecar, `activation.d/`, the set index, one existence probe per
+landed DLL) so a probe does not pay it per call (#3664). The memo key used to be the last-write
+times of `modules/`, `modules/activation.d/` and `modules/sets/`, on the premise that a rename into a
+directory moves its timestamp everywhere. On the Azure Files (SMB) module share that premise does not
+hold, and the snapshot froze: a fresh closed-type-set instance took its reading mid-landing (one
+module landed, set 1 empty), the boot wave then landed about 33 modules and proposed set 2, and every
+later reading in that process still said *nothing pending, 1 module in NO proposed module set*. The
+self-updater answered `NothingToActivate` on its proposal check and its safety net alike, and the
+restart that adopts set 2 never came.
+
+The key is now what the three directories LIST: each file's name, length and own last-write time,
+and each subdirectory's name â€” and, under `activation.d/`, each module's own record directory file
+by file, because a record (a landing, an uninstall tombstone) lands by a rename into that directory
+and leaves `activation.d/`'s own listing unchanged
+(`ARecordOnlyChange_InsideAModulesRecordDirectory_IsSeen`). Module payload directories stay
+name-only: nothing the reading derives lives in them. That is what the reading is derived from, and no filesystem leaves it
+unchanged across a create, rename, replace or delete. A directory that cannot be listed yields no key
+at all, so the reading is retaken and reports the fault instead of serving the old snapshot. The old
+`DiskFingerprint` stays as an `[Obsolete]` type for binary compatibility and keys nothing.
+`PendingModuleActivationsCostTest.ALandingIsSeen_WhenTheVolumeDoesNotMoveDirectoryTimestamps`
+reproduces the share by restoring the three directories' timestamps after a second wave: it reads 1
+pending module where 3 are pending without the fix and 3 with it, while an unchanged volume is still
+read once.
+
 ### One landing, one recycle wave (MeshWeaver#6729)
 
 **A landing recycles each owner address ONCE.** `ModuleLiveActivation` hands every pending module of a

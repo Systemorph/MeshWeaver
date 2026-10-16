@@ -237,6 +237,8 @@ public class MeshQuery : IMeshQueryCore
     /// <returns>An observable of merged query result changes across all matching providers.</returns>
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
+        if (typeof(T) == typeof(object) && Projects(request))
+            return (IObservable<QueryResultChange<T>>)(object)ProjectAfterMerge(Query<MeshNode>(request), request);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
         // Run the subscribe on the DRAINABLE Query pool (not a bare TaskPoolScheduler): keeps the
         // calling hub's action block free while providers open their change feeds, AND makes the
@@ -436,6 +438,9 @@ public class MeshQuery : IMeshQueryCore
         MeshQueryRequest request,
         JsonSerializerOptions options)
     {
+        if (typeof(T) == typeof(object) && Projects(request))
+            return (IObservable<QueryResultChange<T>>)(object)ProjectAfterMerge(
+                ((IMeshQueryCore)this).Query<MeshNode>(request, options), request);
         var isSystem = string.IsNullOrEmpty(request.UserId)
             || string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal);
         var matched = SelectMatchingProviders(NamespacesForRequest(request));
@@ -1101,6 +1106,53 @@ public class MeshQuery : IMeshQueryCore
     /// </summary>
     private static string PathTiebreak<T>((T Item, double Score) hit)
         => hit.Item is MeshNode node ? node.Path ?? "" : "";
+
+    /// <summary>Whether any of the request's queries carries a <c>select:</c> projection.</summary>
+    private static bool Projects(MeshQueryRequest request)
+        => request.EffectiveQueries.Any(q => new QueryParser().Parse(q).Select is { Count: > 0 });
+
+    /// <summary>
+    /// 🚨 An UNTYPED read (<c>Query&lt;object&gt;</c>, the <c>select:</c> projection surface) runs
+    /// through the providers and the merge AS NODES, and is projected here — AFTER the merged sort,
+    /// skip and clip (#6830). Only a read that carries a <c>select:</c> takes this route: without
+    /// one the providers hand back nodes already, and an untyped read keeps whatever its providers
+    /// answer.
+    ///
+    /// <para>Each provider used to project its own rows to <c>select:</c> dictionaries before the
+    /// merge saw them. <see cref="ClipMergedInitial{T}"/> can only read a sort key, a path tiebreak
+    /// or a dedup key off a <see cref="MeshNode"/>, so over dictionaries it fell back to score and
+    /// then provider ARRIVAL order: <c>select:path,name sort:name-desc limit:3</c> over two
+    /// providers answered one provider's top three, not the mesh's — for every sort key, and for
+    /// the default newest-first ordering too. The sort key need not even be among the selected
+    /// fields, so the merge cannot be taught to read dictionaries; the projection has to wait.
+    /// The SQL providers still narrow their columns to the <c>select:</c> list (plus a content sort
+    /// key) when asked for nodes, so nothing extra is read.</para>
+    /// </summary>
+    private static IObservable<QueryResultChange<object>> ProjectAfterMerge(
+        IObservable<QueryResultChange<MeshNode>> nodes,
+        MeshQueryRequest request)
+        => nodes.Select(change =>
+        {
+            var parsed = change.Query
+                ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
+            var select = parsed.Select is { Count: > 0 } s ? s : null;
+            var items = change.Items
+                .Select(node => select is null ? (object)node : ParsedQuery.ProjectToSelect(node, select))
+                .ToList();
+            return new QueryResultChange<object>
+            {
+                ChangeType = change.ChangeType,
+                Items = items,
+                Scores = change.Scores,
+                Partitions = change.Partitions,
+                PartiallyReadPartitions = change.PartiallyReadPartitions,
+                SilentProviders = change.SilentProviders,
+                SnapshotIncomplete = change.SnapshotIncomplete,
+                Query = change.Query!,
+                Version = change.Version,
+                Timestamp = change.Timestamp,
+            };
+        });
 
     /// <summary>
     /// Sort + skip + clip the merged initial set. The authoritative ordering

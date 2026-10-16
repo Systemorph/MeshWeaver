@@ -3676,6 +3676,29 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// Waits, inside the delete's open subtree scope, for every write the storage guard ADMITTED at
+    /// or under <paramref name="path"/> before the scope opened (#6719). The scope refuses new writes;
+    /// this drains the ones already on their way, so none of them can commit after the storage delete
+    /// and recreate the node. Emits at once when nothing is pending — the common case. Bounded as its
+    /// own stage: a write that never terminates fails the delete BY NAME, listing what it waited on,
+    /// instead of being outrun by it.
+    /// <para>A row-only delete (<paramref name="rowOnly"/>, <c>KeepDescendants</c>) waits for writes to
+    /// the ROW alone — it guards and removes only that row, so writes to the descendants it keeps stay
+    /// admitted and must neither hold it up nor time it out.</para>
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> AdmittedWritesSettled(
+        RecentlyDeletedRegistry? registry, string path, bool rowOnly, TimeSpan budget)
+        => registry is null
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : registry.AdmittedWritesSettled(path, rowOnly)
+                .TimeoutAtStage(budget, () => DeleteStageTimeout(
+                    DeleteStage.SettleAdmittedWrites,
+                    $"write(s) admitted {(rowOnly ? "to" : "under")} '{path}' before the delete began did not "
+                    + $"settle within {budget.TotalSeconds:0}s: "
+                    + $"{string.Join(", ", registry.AdmittedWritesUnder(path, rowOnly).Take(10))}. "
+                    + "Nothing was deleted."));
+
+    /// <summary>
     /// The asker's reading of the owner's answer to a version-guarded <see cref="ValidateDeleteRequest"/>
     /// (#6673, #6750). Emits exactly one verdict; only an answer that CONFIRMS the expected version
     /// (<see cref="ValidateDeleteResponse.ConfirmedVersion"/>) is valid. Everything that is not a
@@ -3775,6 +3798,7 @@ public static class MeshExtensions
     private static class DeleteStage
     {
         public const string ReadRoot = "read-root";
+        public const string SettleAdmittedWrites = "settle-admitted-writes";
         public const string CheckPermission = "check-permission";
         public const string ValidateRoot = "validate-root";
         public const string CheckExpectedVersion = "check-expected-version";
@@ -4260,6 +4284,15 @@ public static class MeshExtensions
                                 //    the path sealed against own writes first (#6673) — see
                                 //    ExpectedVersionHoldsOnTheOwner. The seal rides the same
                                 //    scope, so it is lifted exactly when the subtree guard is.
+                                //    🚨 And the scope only stops NEW writes. A write the
+                                //    storage guard admitted a moment before the scope opened
+                                //    is still on its way to the store; committed after the
+                                //    storage delete, it would recreate the node this delete
+                                //    reports removed (#6719). So the delete first waits for
+                                //    every write admitted under `path` to settle, and only
+                                //    then checks the version, plans and removes — the writes
+                                //    are ordered BEFORE the delete, never after it (a row-only
+                                //    delete waits for writes to the row alone — see below).
                                 //    A row-only delete (KeepDescendants) removes nothing under
                                 //    `path`, so it guards the ROW alone (BeginRowDeletion): a
                                 //    subtree scope would refuse writers the operation never
@@ -4279,7 +4312,8 @@ public static class MeshExtensions
                                                 deletionScope,
                                                 recentlyDeleted.BeginVersionGuardedDeletion(path));
                                     },
-                                    subtreeScope => ExpectedVersionHoldsOnTheOwner(
+                                    subtreeScope => AdmittedWritesSettled(recentlyDeleted, path, capturedRequest.KeepDescendants, budget)
+                                    .SelectMany(_ => ExpectedVersionHoldsOnTheOwner(
                                         issuingHub, persistence, hub.JsonSerializerOptions, path,
                                         capturedRequest.ExpectedVersion, request.AccessContext, budget, logger,
                                         onChanged: actual =>
@@ -4306,7 +4340,7 @@ public static class MeshExtensions
                                                     .WithKey("activity.delete.versionUnestablished",
                                                         ("path", path), ("detail", detail))],
                                                 ImmutableList.Create(path));
-                                        })
+                                        }))
                                     .SelectMany(_ => CollectPathsForDelete(
                                         hub, path, capturedRequest.Recursive, capturedRequest.KeepDescendants, budget, logger))
                                     .SelectMany(collected =>

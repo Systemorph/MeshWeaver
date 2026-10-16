@@ -826,23 +826,43 @@ public partial class MeshOperations
     /// Parses the MCP-documented area-read route <c>{nodePath}/area/{Name[/Id]}</c>.
     /// The marker is the LAST exact <c>area</c> segment (ordinal, the documented casing) so
     /// a node path that itself contains an <c>area</c> segment still yields the deepest —
-    /// i.e. correct — node-path/area split. The legacy colon form <c>{path}/area:Name</c> is
-    /// deliberately NOT parsed here: it keeps flowing through <see cref="TryResolveUnifiedPath"/>
-    /// unchanged (it supports UCR-special forms like <c>area:content:file</c> that map to
-    /// <c>$Content</c> areas downstream).
+    /// i.e. correct — node-path/area split.
+    /// <para>Only an <c>area</c> segment that lies WHOLLY BEFORE the first <c>':'</c> marks the
+    /// route (#6815). The id after <c>{Name}/</c> is free text — a reference id like
+    /// <c>url=https://github.com/x</c> carries colons — so a colon anywhere after the marker is
+    /// part of the id, never a reason to drop the route. A colon at or before the marker is the
+    /// legacy colon form (<c>{path}/area:Name</c>, <c>{path}/data:…</c>, <c>area:content:file</c>
+    /// for the <c>$Content</c> areas): it is deliberately NOT parsed here and keeps flowing through
+    /// <see cref="TryResolveUnifiedPath"/> unchanged. So is a colon that cuts a legacy keyword
+    /// (<c>area</c>, <c>data</c>, <c>content</c>, …) even when an earlier, INTERIOR <c>area</c>
+    /// segment of the node path precedes it: <c>Root/area/Child/area:Echo</c> is area <c>Echo</c>
+    /// on <c>Root/area/Child</c>, never area <c>Child</c> on <c>Root</c>.</para>
     /// </summary>
-    private static bool TryParseAreaRoute(
+    internal static bool TryParseAreaRoute(
         string resolvedPath, out string nodePath, out string? area, out string? id)
     {
         nodePath = string.Empty;
         area = null;
         id = null;
 
-        if (resolvedPath.Contains(':'))
-            return false; // legacy colon form — handled by TryResolveUnifiedPath
+        // The segments eligible as the marker: every segment COMPLETED before the first colon.
+        // With a colon, the last segment of the colon-free prefix is the one the colon cuts
+        // (`area` in `{path}/area:Name`), so it is excluded — that is the legacy colon form.
+        var colon = resolvedPath.IndexOf(':');
+        var prefix = colon < 0 ? resolvedPath : resolvedPath[..colon];
+        var prefixSegments = prefix.Split('/');
+
+        // A colon that cuts a UCR keyword (`area:`, `data:`, `content:`, …) IS the legacy colon
+        // form, wherever an `area` segment sits before it: `Root/area/Child/area:Echo/x` addresses
+        // `Echo` on node `Root/area/Child`, so an INTERIOR `area` segment of the node path must not
+        // be taken for the marker. Any other colon (`url=https://…`) belongs to a free-text id.
+        if (colon >= 0 && IsLegacyColonKeyword(prefixSegments[^1]))
+            return false;
+
+        var lastEligible = colon < 0 ? prefixSegments.Length - 1 : prefixSegments.Length - 2;
 
         var segments = resolvedPath.Split('/');
-        for (var i = segments.Length - 1; i > 0; i--)
+        for (var i = lastEligible; i > 0; i--)
         {
             if (!string.Equals(segments[i], "area", StringComparison.Ordinal))
                 continue;
@@ -860,6 +880,15 @@ public partial class MeshOperations
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="segment"/> — the path segment a <c>':'</c> cuts — is a keyword of the
+    /// legacy colon form <c>{path}/{keyword}:{rest}</c>: <c>area</c> or a UCR prefix
+    /// (<see cref="MeshWeaver.Data.UcrPrefixResolver.PrefixToAreaMap"/>).
+    /// </summary>
+    private static bool IsLegacyColonKeyword(string segment)
+        => string.Equals(segment, "area", StringComparison.Ordinal)
+           || Data.UcrPrefixResolver.PrefixToAreaMap.ContainsKey(segment);
 
     /// <summary>
     /// Serves the MCP <c>get {path}/area/{Name}</c> route: renders through the settled
@@ -1450,14 +1479,67 @@ public partial class MeshOperations
         }
         else
         {
-            var cleanQuery = query.Replace("namespace:", "").Trim();
-            // "Base path to search FROM" is the whole subtree, not one level of it. A bare
-            // `namespace:X` is IMMEDIATE CHILDREN, so `basePath: @Admin` + `nodeType:LogIncident`
-            // answered 0 for nodes at `Admin/_LogIncident/…` — the parameter whose documented
-            // purpose is scoping did not reach what it scoped to (#4274, property 1). A query that
-            // states its own scope keeps it.
-            var scoped = StatesScope(cleanQuery) ? cleanQuery : $"{cleanQuery} scope:descendants".Trim();
-            fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
+            // 🚨 The query's OWN location is never rewritten (#6828). This used to strip every
+            // `namespace:` out of the text before prefixing the base, so `namespace:acme/Deals …`
+            // under `basePath: @beta` became the FREE-TEXT term `acme/Deals`, read against beta's
+            // partition: a semantic search flooded with whatever mentioned the words, with
+            // `coverage.partitions: ["beta"]` for a query that named acme — and `-namespace:X`, an
+            // exclusion, became a search FOR X. Now a query that states its own location keeps it
+            // when that location lies under the base (it is the narrower statement) and is
+            // refused, naming both, when it does not; only a query that names no location of its
+            // own is scoped by the base.
+            var own = new QueryParser().Parse(query);
+            var ownLocations = OwnLocations(own);
+            if (ownLocations is null)
+            {
+                // "Base path to search FROM" is the whole subtree, not one level of it. A bare
+                // `namespace:X` is IMMEDIATE CHILDREN, so `basePath: @Admin` + `nodeType:LogIncident`
+                // answered 0 for nodes at `Admin/_LogIncident/…` — the parameter whose documented
+                // purpose is scoping did not reach what it scoped to (#4274, property 1). A query that
+                // states its own scope keeps it.
+                // An EMPTY `namespace:`/`path:` names no location (callers write `namespace:` with a
+                // basePath to mean "the children of the base") — drop it, or it would re-anchor the
+                // composed query at the root.
+                // Quote-aware, and the rest of the text verbatim: a split-and-rejoin collapsed the
+                // spaces inside `name:"Jane  Q Example"` and dropped a `namespace:` written INSIDE a
+                // quoted value, so an exact-name search ran on a different value.
+                var trimmed = WithoutEmptyLocationQualifiers(query);
+                var scoped = StatesScope(trimmed) ? trimmed : $"{trimmed} scope:descendants".Trim();
+                fullQuery = $"namespace:{resolvedBase} {scoped}".Trim();
+            }
+            else
+            {
+                var outside = ownLocations.Where(l => !IsAtOrUnder(l, resolvedBase)).ToList();
+                if (outside.Count > 0)
+                {
+                    logger.LogInformation(
+                        "Search refused: query {Query} names locations {Outside} outside basePath {BasePath}",
+                        query, outside, basePath);
+                    return Observable.Return(
+                        $"Error: basePath '{resolvedBase}' and the query's own location "
+                        + $"({string.Join(", ", outside.Select(l => l.Length == 0 ? "the root" : $"'{l}'"))}) disagree — "
+                        + "the query names a place outside the base, so no answer could honour both. "
+                        + "Drop the basePath to search where the query says, or drop the query's "
+                        + "path:/namespace: to search under the base.");
+                }
+                // Every named location lies under the base — but a location named in ONE `OR`
+                // branch bounds only that branch: `namespace:Base/* OR nodeType:Markdown` would run
+                // its right branch everywhere. The query keeps its own location only when the WHOLE
+                // expression is bounded by it (an anchor, or a namespace filter on every branch —
+                // the sufficiency predicate with the `partitions:all` flag set aside).
+                if (!(own with { CrossPartition = false }).IsSufficientlySpecified())
+                {
+                    logger.LogInformation(
+                        "Search refused: query {Query} names a location in only some of its branches under basePath {BasePath}",
+                        query, basePath);
+                    return Observable.Return(
+                        $"Error: the query names a location in only some of its OR branches, so under basePath "
+                        + $"'{resolvedBase}' the other branches would search outside it. Give every branch a "
+                        + "path:/namespace: under the base, drop the query's own path:/namespace: to search the "
+                        + "whole base, or drop the basePath.");
+                }
+                fullQuery = query;
+            }
         }
 
         var parsed = new QueryParser().Parse(fullQuery);
@@ -1546,6 +1628,66 @@ public partial class MeshOperations
     private static bool StatesScope(string query)
         => query.Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Any(token => token.StartsWith("scope:", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// The locations a query names on its own — its <c>path:</c>/<c>namespace:</c> anchor(s) and
+    /// any positive namespace filter (membership or wildcard) — or <see langword="null"/> when it
+    /// names none and a <c>basePath</c> must scope it. An exclusion (<c>-namespace:X</c>) is a
+    /// filter, not a location, and is left for the base to scope (#6828).
+    /// </summary>
+    private static IReadOnlyList<string>? OwnLocations(ParsedQuery parsed)
+    {
+        var locations = new List<string>();
+        if (parsed.Paths is { Count: > 0 } paths)
+            locations.AddRange(paths);
+        else if (!string.IsNullOrEmpty(parsed.Path))
+            locations.Add(parsed.Path);
+        locations.AddRange(parsed.ExtractNamespacePatterns());
+        return locations.Count == 0 ? null : locations.Select(l => l.Trim('/')).ToList();
+    }
+
+    /// <summary>
+    /// <paramref name="query"/> without its EMPTY <c>namespace:</c>/<c>path:</c> tokens (callers'
+    /// "the base's children" idiom, which names no location), the rest of the text verbatim. Quote
+    /// aware: whitespace and a <c>namespace:</c> inside a quoted value belong to the value.
+    /// </summary>
+    private static string WithoutEmptyLocationQualifiers(string query)
+    {
+        var result = new System.Text.StringBuilder(query.Length);
+        var i = 0;
+        while (i < query.Length)
+        {
+            if (char.IsWhiteSpace(query[i]))
+            {
+                result.Append(query[i++]);
+                continue;
+            }
+            var start = i;
+            var quoted = false;
+            while (i < query.Length && (quoted || !char.IsWhiteSpace(query[i])))
+            {
+                if (quoted && query[i] == '\\' && i + 1 < query.Length)
+                    i++;
+                else if (query[i] == '"')
+                    quoted = !quoted;
+                i++;
+            }
+            var token = query[start..i];
+            if (!token.Equals("namespace:", StringComparison.OrdinalIgnoreCase)
+                && !token.Equals("path:", StringComparison.OrdinalIgnoreCase))
+                result.Append(token);
+        }
+        return result.ToString().Trim();
+    }
+
+    /// <summary>Whether <paramref name="location"/> is <paramref name="basePath"/> or lies below it.</summary>
+    private static bool IsAtOrUnder(string location, string basePath)
+    {
+        var root = basePath.Trim('/');
+        return root.Length == 0
+            || location.Equals(root, StringComparison.OrdinalIgnoreCase)
+            || location.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// The coverage a <see cref="Search"/> can state for <paramref name="parsed"/> from the query

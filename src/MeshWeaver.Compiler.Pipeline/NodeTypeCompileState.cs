@@ -203,6 +203,10 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.BuiltModuleVersionMvid"/> (#6831).</summary>
     public string? BuiltModuleVersionMvid { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.DeliveryHoldReason"/> (#6832). Mirrored because
+    /// the sync seams mask it.</summary>
+    public string? DeliveryHoldReason { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.CurrentSourceFingerprint"/>.</summary>
     public string? CurrentSourceFingerprint { get; init; }
 
@@ -260,6 +264,7 @@ public record NodeTypeCompileState
                 BuiltModuleVersion = definition.BuiltModuleVersion,
                 BuiltModuleVersionMvid = definition.BuiltModuleVersionMvid,
                 CurrentModuleVersion = definition.CurrentModuleVersion,
+                DeliveryHoldReason = definition.DeliveryHoldReason,
                 CurrentSourceFingerprint = definition.CurrentSourceFingerprint,
                 BuildProvenance = definition.BuildProvenance,
             };
@@ -290,6 +295,7 @@ public record NodeTypeCompileState
         && AdoptedModuleVersion is null
         && BuiltModuleVersion is null && BuiltModuleVersionMvid is null
         && CurrentModuleVersion is null
+        && DeliveryHoldReason is null
         && CurrentSourceFingerprint is null
         && BuildProvenance is Mesh.Services.BuildProvenance.Compiled;
 }

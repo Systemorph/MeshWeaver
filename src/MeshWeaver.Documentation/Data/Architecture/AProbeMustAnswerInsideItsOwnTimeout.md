@@ -155,7 +155,9 @@ then probed the shared module volume twice per declared entry, on every call —
 `LandedModuleDllExists`. It is the same defect [#3664](https://github.com/Systemorph/MeshWeaver/issues/3664)
 had already fixed on the sibling reader, on the same volume, for the same reason, and the fix is the
 same one: the probe now takes `PendingModuleActivations.ReadProbeInputs()`, which answers all three
-questions off one snapshot memoised behind a fingerprint of three directory timestamps
+questions off one snapshot memoised behind a fingerprint of three directories (originally their
+timestamps; since [#6829](https://github.com/Systemorph/MeshWeaver/issues/6829) their listings — see
+[Live Module Update](../LiveModuleUpdate))
 ([#4609](https://github.com/Systemorph/MeshWeaver/issues/4609) in core, the portal half in
 MeshWeaver.Plugins).
 

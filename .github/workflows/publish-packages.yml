@@ -6,8 +6,21 @@ name: Publish the surviving NuGet packages
 # package and the aspire integration". Everything else under the MeshWeaver prefix is retired and
 # unlisted (Doc/Architecture/NuGetPackageRetirement; scripts/orphaned-nuget-packages.py).
 #
-#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here
+#   MeshWeaver.Aspire.Hosting.Memex   memex/aspire/Memex.Aspire.Hosting  (THIS repo)  ← published here, on a release tag
 #   MeshWeaver.MemexTemplate          tools/MeshWeaver.MemexTemplate.Pack (MeshWeaver.Plugins)
+#
+# 🆕 A THIRD, RESTORED — the `memex` CLI, following `3-latest` (policy `cli-on-nuget-follows-3-latest`):
+#
+#   MeshWeaver.Cli                    src/MeshWeaver.Cli                  (THIS repo)  ← published here, on every ARMING
+#
+# policy `cli-on-nuget-follows-3-latest` (Doc/Architecture/PolicyNotProse): a customer's dedicated build server installs the CLI with
+# `dotnet tool install` and has no MeshWeaver checkout. main-cd's `arm` dispatches THIS lane with
+# packages=cli, version=<the armed 3.<minor>.<run>> and ref=<the armed core commit> whenever it arms
+# a set, so the highest stable MeshWeaver.Cli on nuget.org is always the CLI of the build `3-latest`
+# names. The SemVer-era notation is what makes that safe: `3.<minor>.<run>` sorts on nuget.org
+# exactly as the fleet ranks it (the `-ci.<n>` defect described below cannot recur — that label is
+# refused here). The CLI references no MeshWeaver framework assembly (System.CommandLine only), so
+# packing it at the armed commit is the same "entry point, not platform bytes" case as the adapter.
 #
 # 🚨 ONLY THE FIRST IS PUBLISHED BY THIS LANE, and that is deliberate — see "the template is
 # blocked" below. Both survive the retirement; only one can ship without a product decision.
@@ -77,6 +90,11 @@ name: Publish the surviving NuGet packages
 # nuget.org is reached by Trusted Publishing (GitHub OIDC via NuGet/login — no stored NuGet secret), exactly as unlist-orphaned-packages.yml does. The App token replaces
 # the stored GitHub PAT, which is the one this repository could actually stop storing.
 
+# The run-name is how main-cd's `publish-cli` finds the run it dispatched ("Publish cli <version>")
+# and how the CLI alert sees a publication in flight. A dry run says so in its title, so neither can
+# ever take a dry run — which pushes nothing — for a publication (#6843 review).
+run-name: "Publish ${{ inputs.packages || 'all' }} ${{ inputs.version || github.ref_name }}${{ inputs.dry-run && ' (dry run)' || '' }}"
+
 on:
   push:
     tags:
@@ -84,9 +102,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to publish (e.g. 3.0.0). Required on a dispatch; the tag supplies it otherwise."
+        description: "Version to publish (e.g. 3.1.0, or an armed build 3.1.10936). Required on a dispatch; the tag supplies it otherwise."
         type: string
         default: ""
+      ref:
+        description: "Commit to pack (main-cd's `arm` passes the ARMED core commit). Empty = the dispatched ref."
+        type: string
+        default: ""
+      packages:
+        description: "all = the Aspire integration + the CLI (a release); cli = the CLI alone (an arming)"
+        type: choice
+        options: [all, cli]
+        default: all
       dry-run:
         description: "Pack and verify, but do not push to nuget.org"
         type: boolean
@@ -95,8 +122,15 @@ on:
 permissions:
   contents: read
 
+# 🚨 ONE GROUP PER (packages, version, dry-run) — never one shared group (#6843 review). A shared
+# group keeps one running + ONE pending run, so every later dispatch — a newer arming, or merely a
+# dry run — silently CANCELLED the pending CLI publication, and main-cd's `publish-cli` could not tell
+# "superseded by a newer publication" from "replaced by a dry run that pushed nothing". Keyed this
+# way, nothing ever supersedes a CLI publication: every armed version publishes, and a cancelled
+# run is a failure. Two runs of the SAME version still serialise (`--skip-duplicate` makes the
+# second a no-op), and different versions push in parallel, which nuget.org accepts.
 concurrency:
-  group: publish-packages
+  group: publish-packages-${{ inputs.packages || 'all' }}-${{ inputs.version || github.ref_name }}${{ inputs.dry-run && '-dry' || '' }}
   cancel-in-progress: false
 
 jobs:
@@ -144,7 +178,7 @@ jobs:
           exit 1
 
   publish:
-    name: Pack + push the two survivors
+    name: Pack + push the surviving packages
     needs: preflight
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -152,10 +186,11 @@ jobs:
       id-token: write       # NuGet/login — the short-lived push key
       contents: read
     steps:
-      - name: Checkout MeshWeaver (the platform, and the Aspire adapter)
+      - name: Checkout MeshWeaver (the platform, the Aspire adapter and the CLI)
         uses: actions/checkout@v7
         with:
           path: meshweaver
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
@@ -180,12 +215,22 @@ jobs:
           [ "$(echo "$version" | tr -cd '.' | wc -c)" -eq 2 ] || { echo "::error::'$version' is not X.Y.Z"; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "publishing version $version"
+          # WHICH packages: a tag is a release (both); a dispatch says so. The list drives the pack,
+          # the count assertion and the LISTED verification, so the three can never disagree.
+          case "${{ inputs.packages || 'all' }}" in
+            all) ids="MeshWeaver.Aspire.Hosting.Memex MeshWeaver.Cli" ;;
+            cli) ids="MeshWeaver.Cli" ;;
+            *)   echo "::error::packages='${{ inputs.packages }}' — expected all or cli"; exit 1 ;;
+          esac
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          echo "packages: $ids (from $(git -C meshweaver rev-parse HEAD))"
 
       - name: Say what is being published
         run: |
           {
             echo "### Publishing MeshWeaver ${{ steps.version.outputs.version }}"
-            echo "- core: \`${GITHUB_SHA}\`"
+            echo "- core: \`$(git -C meshweaver rev-parse HEAD)\`"
+            echo "- packages: ${{ steps.version.outputs.ids }}"
             echo "- \`MeshWeaver.MemexTemplate\` is NOT published by this lane — the step is not built yet; see the header."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -193,6 +238,7 @@ jobs:
       # $(PlatformVersion)-ci.<run> (Directory.Build.props §2). PlatformVersion is passed too so a
       # tag can never publish a version the props does not agree with.
       - name: Pack the Aspire integration
+        if: contains(steps.version.outputs.ids, 'MeshWeaver.Aspire.Hosting.Memex')
         run: |
           set -euo pipefail
           dotnet pack meshweaver/memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj \
@@ -201,25 +247,57 @@ jobs:
             -p:PlatformVersion=${{ steps.version.outputs.version }} \
             --output "$RUNNER_TEMP/nupkgs"
 
+      # The CLI takes the version as the publishable string ONLY (-p:Version, #3022: it overrides
+      # $(Version) and no compiled attribute). PlatformVersion is NOT moved to 3.<minor>.<run>,
+      # because PlatformVersionSchemeGuard holds it to a clean line; the armed run number is the
+      # package version, which is all `dotnet tool install` reads.
+      # 🚨 The TOOL properties are passed too (#6843 review): `ref` may be an armed commit from
+      # BEFORE the CLI was packable again (policy `cli-on-nuget-follows-3-latest`), whose csproj inherits IsPackable=false and
+      # would pack nothing. Passing them makes any armed commit publishable; on a current commit
+      # they equal what MeshWeaver.Cli.csproj declares.
+      - name: Pack the CLI
+        if: contains(steps.version.outputs.ids, 'MeshWeaver.Cli')
+        run: |
+          set -euo pipefail
+          dotnet pack meshweaver/src/MeshWeaver.Cli/MeshWeaver.Cli.csproj \
+            -c Release \
+            -p:Version=${{ steps.version.outputs.version }} \
+            -p:IsPackable=true -p:PackAsTool=true -p:ToolCommandName=memex -p:PackageId=MeshWeaver.Cli \
+            --output "$RUNNER_TEMP/nupkgs"
+
       # 🚨 A POSITIVE, SPECIFIC signal: the id, at this exact version, and nothing else. `dotnet
       # pack` exiting 0 having produced no package (or one under a version nobody asked for) is
       # precisely the shape of false pass this repository has paid for. The count also catches a
       # project silently regaining packability, which Directory.Build.props defaults to false.
-      - name: The package exists, at this version, and it is the only one
+      - name: Each package exists, at this version, and nothing else was packed
         run: |
           set -euo pipefail
           V="${{ steps.version.outputs.version }}"
+          IDS="${{ steps.version.outputs.ids }}"
           ls -1 "$RUNNER_TEMP/nupkgs"
-          [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ] \
-            || { echo "::error::MeshWeaver.Aspire.Hosting.Memex.$V.nupkg was not produced"; exit 1; }
+          expected=0
+          for id in $IDS; do
+            [ -f "$RUNNER_TEMP/nupkgs/$id.$V.nupkg" ] || { echo "::error::$id.$V.nupkg was not produced"; exit 1; }
+            expected=$((expected + 1))
+          done
           count="$(find "$RUNNER_TEMP/nupkgs" -name '*.nupkg' | wc -l | tr -d ' ')"
-          [ "$count" -eq 1 ] || { echo "::error::expected exactly 1 package, found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          [ "$count" -eq "$expected" ] || { echo "::error::expected exactly $expected package(s) ($IDS), found $count — a project has regained packability; see Directory.Build.props"; exit 1; }
+          if [ -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" ]; then
+            # A tool package that is not a TOOL installs as a library and gives no `memex` command.
+            unzip -p "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" MeshWeaver.Cli.nuspec | grep -q '<packageType name="DotnetTool"' \
+              || { echo "::error::MeshWeaver.Cli.$V.nupkg is not a DotnetTool package — PackAsTool is missing from MeshWeaver.Cli.csproj"; exit 1; }
+            unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Cli.$V.nupkg" | grep -q 'tools/net10.0/any/memex.dll' \
+              || { echo "::error::MeshWeaver.Cli.$V.nupkg carries no tools/net10.0/any/memex.dll"; exit 1; }
+          fi
+          if [ ! -f "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" ]; then
+            echo "$expected package(s) at $V: $IDS"; exit 0
+          fi
           # The Deployment record assembly is BUNDLED into this package (Memex.Aspire.Hosting.csproj,
           # PackContractAssembly) — a customer AppHost builds its record from one reference. A nupkg
           # without it installs, compiles nothing, and cannot be recalled.
           unzip -l "$RUNNER_TEMP/nupkgs/MeshWeaver.Aspire.Hosting.Memex.$V.nupkg" | grep -q 'lib/net10.0/MeshWeaver.Deployment.Contract.dll' \
             || { echo "::error::MeshWeaver.Deployment.Contract.dll is not inside the nupkg — the PackContractAssembly target in Memex.Aspire.Hosting.csproj no longer bundles it"; exit 1; }
-          echo "1 package at $V, with the Deployment record assembly bundled"
+          echo "$expected package(s) at $V ($IDS), the adapter with the Deployment record assembly bundled"
 
       - name: Log in to nuget.org (Trusted Publishing — a short-lived key, nothing stored)
         if: ${{ !inputs.dry-run }}
@@ -245,17 +323,18 @@ jobs:
       # fifty-five "unlisted" lines were printed over versions that still read listed=true.
       # Registration blobs rebuild asynchronously, so a not-yet-listed reading is inconclusive and
       # is polled, never reported as either outcome.
-      - name: Verify both versions read as LISTED on nuget.org
+      - name: Verify every published version reads as LISTED on nuget.org
         if: ${{ !inputs.dry-run }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          IDS: ${{ steps.version.outputs.ids }}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import gzip, json, os, sys, time, urllib.request
 
           version = os.environ["VERSION"]
-          pending = ["MeshWeaver.Aspire.Hosting.Memex"]
+          pending = os.environ["IDS"].split()
 
           def listed(package_id: str) -> bool | None:
               url = ("https://api.nuget.org/v3/registration5-gz-semver2/"
@@ -290,8 +369,43 @@ jobs:
         run: |
           {
             echo "### Published to nuget.org"
-            echo "- \`MeshWeaver.Aspire.Hosting.Memex\` ${{ steps.version.outputs.version }}"
+            for id in ${{ steps.version.outputs.ids }}; do echo "- \`$id\` ${{ steps.version.outputs.version }}"; done
             echo ""
             echo "\`MeshWeaver.MemexTemplate\` was NOT published — this lane has no step for it yet (the GUI question is answered; see the header)"
             echo "decision recorded in Doc/Architecture/NuGetPackageRetirement."
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # ──────────────── THE CLI'S OWN ALERT, RECONCILED FROM THE TRUTH ────────────────
+  # Not CD's `ci-failure`: `verify-images` closes that after any image promotion, which proves
+  # nothing about nuget.org (#6843 review). The `cli-publish-failure` sentinel is DERIVED, not
+  # reported: .github/scripts/cli-publish-alert.sh reads the version `3-latest` names and whether
+  # nuget.org lists MeshWeaver.Cli at it, and opens or closes the issue from those two facts. So
+  # this job passes no outcome, and a reconcile that is dropped (the group keeps one pending),
+  # late or out of order loses nothing — the next one reads the same truth. One group across both
+  # workflows (main-cd's `cli-alert` too), so no two interleave a lookup with a create.
+  cli-alert:
+    name: "CLI publish alert (reconciled: 3-latest vs nuget.org)"
+    needs: [preflight, publish]
+    if: always() && !inputs.dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: cli-publish-alert
+      cancel-in-progress: false
+    permissions:
+      issues: write
+      actions: read     # is a publication of the target in flight
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            scripts/check-issue-taxonomy.py
+          sparse-checkout-cone-mode: false
+      - name: Reconcile the cli-publish-failure sentinel
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: bash .github/scripts/cli-publish-alert.sh "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

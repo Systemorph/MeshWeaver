@@ -106,6 +106,7 @@ public static class BuildDeliveryHold
                 CompiledSources = null,
                 BuildProvenance = BuildProvenance.AdoptionRefused,
                 RequestedReleaseForce = false,
+                DeliveryHoldReason = TooFarBehindNotice(pending, maxMinorVersionsBehind, reason),
             };
         // A refusal stands unless the versions are MEASURABLY same-MAJOR and within the bound: with
         // a usable build to serve, a refusal made ONLY on the bound recovers to StaleAdopted
@@ -129,6 +130,9 @@ public static class BuildDeliveryHold
                     : IncompatibleNotice(pending, reason),
                 CompiledSources = null,
                 RequestedReleaseForce = false,
+                DeliveryHoldReason = pastBound
+                    ? TooFarBehindNotice(pending, maxMinorVersionsBehind, reason)
+                    : IncompatibleNotice(pending, reason),
             };
         if (!hasUsableBuild)
             return null;
@@ -152,6 +156,11 @@ public static class BuildDeliveryHold
             CompiledSources = null,
             BuildProvenance = BuildProvenance.StaleAdopted,
             RequestedReleaseForce = false,
+            // 🚨 MeshWeaver#6832 — the gate's REASON survives the hold. The error text above is
+            // cleared because the record is Ok, and that used to be the only place the reason
+            // went: a release request (an install's, or the forced one a recycle stamps) answered by
+            // this hold then read as handled, with no build and nothing saying why.
+            DeliveryHoldReason = ServingNotice(pending, reason),
         };
     }
 
