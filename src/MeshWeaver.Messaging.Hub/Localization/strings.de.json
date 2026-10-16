@@ -1528,6 +1528,7 @@
   "activity.delete.keepDescendantsNotNodeType": "'{path}' kann nicht allein gelöscht werden (KeepDescendants): Nur eine NodeType-Definition darf ohne die darunterliegenden Nodes entfernt werden, dieser Node hat den Typ '{nodeType}'. Es wurde nichts gelöscht.",
   "activity.delete.hasChildren":"Der Node unter '{path}' hat untergeordnete Elemente. Verwenden Sie das rekursive Löschen, um ihn zu entfernen.",
   "activity.delete.versionConflict": "'{path}' wurde nicht gelöscht: Der Node wurde seit dem Lesen geändert (erwartete Version {expected}, gefunden {actual}). Es wurde nichts gelöscht; lesen Sie den Node erneut und entscheiden Sie neu.",
+  "activity.delete.versionConflictRootKept": "'{path}' wurde nicht gelöscht: Der Node wurde seit dem Lesen geändert (erwartete Version {expected}, gefunden {actual}). Der Node selbst wurde behalten; lesen Sie ihn erneut und entscheiden Sie neu.",
   "activity.delete.versionUnestablished": "'{path}' wurde nicht gelöscht: Die erwartete Version konnte nicht beim zuständigen Hub geprüft werden ({detail}). Es wurde nichts gelöscht; dies ist ein Verfügbarkeitsfehler, keine Aussage über den Node.",
   "activity.delete.blockedByDescendant": "'{path}' kann nicht gelöscht werden: {error}",
   "activity.delete.cancelled": "Das Löschen von '{path}' wurde abgebrochen, bevor ein Node entfernt wurde.",

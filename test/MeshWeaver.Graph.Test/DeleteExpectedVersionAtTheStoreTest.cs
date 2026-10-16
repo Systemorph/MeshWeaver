@@ -117,6 +117,8 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         survivor.Should().NotBeNull("a refused compare-and-delete removes nothing");
         survivor!.Name.Should().Be("written by another process");
         survivor.Version.Should().Be(read + 1);
+        response.Error.Should().Contain("Nothing was deleted",
+            "nothing was removed, so the no-deletion sentence is the true one");
 
         // The delete pass tombstoned the root before its commit. The foreign write was announced to
         // NOBODY here, so no notification can lift that tombstone: the refused delete itself must, or
@@ -197,6 +199,51 @@ public class DeleteExpectedVersionAtTheStoreTest(ITestOutputHelper output) : Mon
         response.Success.Should().BeTrue(
             response.Error ?? "no WRITABLE row survives; the shipped fallback is not this delete's to remove");
         (await Stored(node.Path)).Should().BeNull("no writable row exists");
+    }
+
+    /// <summary>
+    /// A RECURSIVE guarded delete removes the children first, and the store then refuses the root.
+    /// The answer is Conflict, and it must not claim "Nothing was deleted" — the children are gone,
+    /// and the partial-deletion note says so. Control: the non-recursive falsifier above, where
+    /// nothing was removed, keeps the no-deletion sentence.
+    /// </summary>
+    [Fact]
+    public async Task ARecursiveDeleteRefusedAtTheRoot_DoesNotClaimNothingWasDeleted()
+    {
+        var root = await Seed("store-guard-tree");
+        var child = await NodeFactory.CreateNode(new MeshNode("child", root.Path) { Name = "child", NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: Ct);
+        var read = (await Stored(root.Path))!.Version;
+
+        Storage.HoldDeletesOf(root.Path);
+        var delete = ObserveNodeOperation(new DeleteNodeRequest(root.Path)
+        {
+            ExpectedVersion = read,
+            Recursive = true,
+            ConfirmWarnings = true,
+        }).Replay(1);
+        using var connection = delete.Connect();
+        try
+        {
+            await Storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
+                .Emit("the cascade reached the root", cancellationToken: Ct);
+            var current = (await Stored(root.Path))!;
+            await OtherProcess
+                .Write(current with { Name = "written by another process", Version = read + 1 }, Mesh.JsonSerializerOptions)
+                .Should().Within(TestTimeouts.Convergence).Emit("the foreign write lands", cancellationToken: Ct);
+        }
+        finally
+        {
+            Storage.ReleaseDelete();
+        }
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", Ct)).Message;
+        Output.WriteLine($"[delete] success={response.Success} reason={response.RejectionReason} error={response.Error}");
+
+        response.RejectionReason.Should().Be(NodeDeletionRejectionReason.Conflict);
+        (await Stored(child.Path)).Should().BeNull("the premise: the cascade removed the child before the root");
+        (await Stored(root.Path)).Should().NotBeNull("the root was refused and kept");
+        response.Error.Should().NotContain("Nothing was deleted", "the child WAS deleted");
+        response.Error.Should().Contain("already removed", "the partial deletion is named");
     }
 
     /// <summary>The node's own hub, activated by reading the node and started.</summary>

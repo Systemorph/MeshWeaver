@@ -4787,13 +4787,21 @@ public static class MeshExtensions
                         // version is the fact itself: a durable row exists there. Descendant
                         // tombstones stay — those rows really were removed.
                         recentlyDeleted?.Supersede(path, conflict.StoredVersion);
-                        // The same sentence (and key) as the owner's refusal: the ROOT was not deleted.
-                        var conflictMsg = $"Did not delete '{path}': it changed since it was read "
-                            + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "
-                            + "Nothing was deleted; re-read the node and decide again.";
+                        // Nothing removed ⇒ the same sentence (and key) as the owner's refusal.
+                        // Descendants already removed ⇒ "nothing was deleted" would be false, so the
+                        // sentence says only the ROOT was kept and the partial note below names the rest.
+                        var conflictMsg = removedFirst.Count == 0
+                            ? $"Did not delete '{path}': it changed since it was read "
+                              + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "
+                              + "Nothing was deleted; re-read the node and decide again."
+                            : $"Did not delete '{path}': it changed since it was read "
+                              + $"(expected version {conflict.ExpectedVersion}, found {conflict.StoredVersion}). "
+                              + "The node itself was kept; re-read it and decide again.";
                         var conflictLog = collectedMessages.ToImmutable().Add(
                             new LogMessage(conflictMsg, LogLevel.Warning)
-                                .WithKey("activity.delete.versionConflict",
+                                .WithKey(removedFirst.Count == 0
+                                        ? "activity.delete.versionConflict"
+                                        : "activity.delete.versionConflictRootKept",
                                     ("path", path),
                                     ("expected", conflict.ExpectedVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                                     ("actual", conflict.StoredVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))));
