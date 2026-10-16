@@ -119,7 +119,11 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     private string InstallFolder(string id, string version) =>
         Path.Combine(PackagesFolder, id.ToLowerInvariant(), version.ToLowerInvariant());
 
-    [Fact(Timeout = 30_000)]
+    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant. The
+    // same bound as every case in this class. It only stops a wedge: the case makes no feed call
+    // and waits on nothing, and the inner 60 s waits elsewhere in the class stay below it so they
+    // fail first and by name.
+    [Fact(Timeout = 120_000)]
     public async Task WarmFolder_UnreachableFeed_ResolvesTheWholeClosureFromTheFolder()
     {
         Install("Acme.Offline.A", "1.0.0", "Acme.Offline.B", "1.0.0");
