@@ -1366,8 +1366,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// <summary>
     /// True when a delivery to this drain-bound singleton must be REFUSED rather than served: drain has
     /// begun AND the activation can actually leave — a hand-off is already under way, or another silo is
-    /// Active to take it (#6092 review). With nowhere to go (a single-pod instance, or every survivor
-    /// still joining) it keeps serving exactly as before drain existed, until SIGTERM's
+    /// Active and not draining to take it (#6092 review, #6865). With nowhere to go (a single-pod
+    /// instance, every peer draining too, or every survivor still joining) it keeps serving exactly as before drain existed, until SIGTERM's
     /// <c>IsLeaving()</c> takes over — a refusal there would only bounce the work for the whole grace
     /// period with no relocation to show for it.
     /// </summary>
@@ -1400,14 +1400,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// spent on them. <c>MigrateOnIdle</c> hands the placement director a hint naming another silo, and
     /// the directory is re-pointed as part of the move, so forwarded deliveries follow it.</para>
     ///
-    /// <para>No other active silo (the last one leaving, or a survivor still joining): nothing is
-    /// moved and nothing is latched, so a later refusal asks again once a survivor is Active.</para>
+    /// <para>No other active, non-draining silo (the last one leaving, every peer draining too, or a
+    /// survivor still joining): nothing is moved and nothing is latched, so a later refusal asks again
+    /// once a survivor is Active.</para>
     ///
-    /// <para>🚨 <b>Known limit:</b> membership cannot tell a lingering peer from a healthy one — a
-    /// leaving silo stays <c>Active</c> — so when two silos stop at once the target can be the other
-    /// leaving one. There the migrated activation refuses and hands off again, each hop a distinct
-    /// activation on the subscriber's bounded re-arm budget. That is bounded and loud (the give-up
-    /// logs a Warning), never a silent wait; a cluster-wide drain signal would remove it.</para>
+    /// <para>🚨 <b>Never to another DRAINING silo (#6865).</b> Membership cannot tell a draining peer
+    /// from a healthy one — a pod in its preStop drain stays <c>Active</c> — so when two pods drained
+    /// at once a singleton was handed back and forth between them every drain-watch tick for the whole
+    /// drain, each copy torn down before its first write landed. <see cref="AnotherActiveSilo"/> now
+    /// excludes every silo that has announced its drain (<see cref="ClusterDrainRoster"/>), and ranks
+    /// the rest with a fixed hash so independent pods agree. Still a limit: two silos that SIGTERM at
+    /// once without a preStop drain announce nothing, and there the hop is bounded and loud as
+    /// before.</para>
     /// </summary>
     private void HandOffTheAddress()
     {
@@ -1455,9 +1459,18 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     }
 
     /// <summary>
-    /// An ACTIVE silo other than this one, from Orleans' own membership view, or <c>null</c> when
-    /// there is none. Spread by the grain key so that the addresses of one leaving silo do not all
-    /// land on the same survivor.
+    /// An ACTIVE, NOT DRAINING silo other than this one, or <c>null</c> when there is none (#6865).
+    ///
+    /// <para>Draining is this silo's <see cref="ClusterDrainRoster"/> — the peers that announced their
+    /// drain — because Orleans membership still reports a draining pod <c>Active</c>. With every other
+    /// silo draining (or none Active) the answer is <c>null</c>: the address STAYS where it is and keeps
+    /// serving, exactly the documented no-survivor behaviour, instead of moving onto a pod that is
+    /// leaving too and being handed straight back.</para>
+    ///
+    /// <para>The pick is <see cref="DrainHandOffTarget"/> — rendezvous hashing with a FIXED hash over the
+    /// key and each candidate's identity, so every process ranks the candidates for one address the same
+    /// way. The previous spread used <c>string.GetHashCode</c>, which .NET randomises per process, so two
+    /// draining pods had no reason to agree.</para>
     /// </summary>
     /// <returns>The target silo, or <c>null</c>.</returns>
     private SiloAddress? AnotherActiveSilo()
@@ -1466,15 +1479,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         var local = ServiceProvider.GetService<ILocalSiloDetails>()?.SiloAddress;
         if (membership is null || local is null)
             return null;
-        var candidates = membership.CurrentSnapshot.Members.Values
-            .Where(m => m.Status == SiloStatus.Active && !m.SiloAddress.Equals(local))
-            .Select(m => m.SiloAddress)
-            .OrderBy(s => s.ToParsableString(), StringComparer.Ordinal)
-            .ToArray();
-        if (candidates.Length == 0)
-            return null;
-        var spread = (uint)StringComparer.Ordinal.GetHashCode(this.GetPrimaryKeyString());
-        return candidates[spread % (uint)candidates.Length];
+        var draining = ServiceProvider.GetService<ClusterDrainRoster>()?.Current;
+        return DrainHandOffTarget.Choose(
+            this.GetPrimaryKeyString(),
+            membership.CurrentSnapshot.Members.Values
+                .Where(m => m.Status == SiloStatus.Active
+                            && !m.SiloAddress.Equals(local)
+                            && draining?.Contains(m.SiloAddress) != true)
+                .Select(m => m.SiloAddress));
     }
 
     /// <summary>
