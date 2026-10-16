@@ -2272,20 +2272,23 @@ jobs:
       # `plugins/<source>:<identity>`, the immutable `<identity>-<run>` tag beside it, the tag move
       # LAST as the seal. `--skip-if-published` is the registry's sealed-skip, keyed on content ×
       # identity exactly as the share's. Same `if:` as the publish above: a run whose scope is
-      # `none` verified the shares already hold this content and publishes to neither.
+      # `none` (or that was superseded under the lock) pushes no bake of its own — and instead
+      # proves, or completes, the registry delivery of the LIVE share publication (the step after).
       #
       # The scripts come from the platform checkout at `platform-ref` beside publish-bake-bundles.sh
       # — the three move together (the publisher expects the layout the share script materialises).
       # ORAS is installed PINNED by the platform's install-oras.sh (the harness executes the
       # publisher with the same pin); the login is docker's, so ORAS reads the same credential.
+      # ORAS and the registry login now run on EVERY path the job reaches — the publishing one AND the
+      # two that publish nothing (scope `none`, or superseded under the lock), which must still prove
+      # (or complete) the registry delivery below (Copilot's review of #6878). From the GATE checkout
+      # (same scripts ref as mw-platform), because mw-platform is only fetched on a publishing path.
       - name: Install ORAS (pinned, from the platform checkout)
-        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
-        run: bash mw-platform/.github/scripts/install-oras.sh
+        run: bash mw-platform-gate/.github/scripts/install-oras.sh
       - name: Log in to the fleet registry (publisher)
-        if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
         env:
           REGISTRY_PASSWORD: ${{ secrets.bundle-registry-publisher-password }}
-        run: bash mw-platform/.github/scripts/registry-login.sh "${{ inputs.bundle-registry }}" "${{ inputs.bundle-registry-publisher }}"
+        run: bash mw-platform-gate/.github/scripts/registry-login.sh "${{ inputs.bundle-registry }}" "${{ inputs.bundle-registry-publisher }}"
       - name: "Push the sealed publication to the fleet registry (plugins/<source>:<identity>)"
         id: registry
         if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
@@ -2316,6 +2319,23 @@ jobs:
           source_lc=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
           echo "- fleet registry: \`$BUNDLE_REGISTRY/plugins/$source_lc:$IDENTITY\` = \`$index\` (immutable tag \`$IDENTITY-$GITHUB_RUN_ID\`)" >> "$GITHUB_STEP_SUMMARY"
 
+      # 🚨 A RUN THAT PUBLISHES NOTHING STILL OWES THE REGISTRY (Copilot's review of #6878). Skipping
+      # the registry because the SHARES hold this content left the tag stale whenever a sibling sealed
+      # the shares and then failed its own registry push — and every later run of that content, its
+      # re-run included, read `none` and skipped too. So under the prefix lock (held by the re-bind
+      # step when it ran, taken here otherwise) the tag is READ; when it does not name the live share
+      # publication (or a newer one), THAT publication — downloaded and verified against its own
+      # stamps, never this run's local bake — is pushed. The every-poll cost is one tag read.
+      - name: "Prove, or complete, the registry delivery (this run published nothing of its own)"
+        if: steps.scope.outputs.scope == 'none' || steps.rebind.outputs.publish == 'false'
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+          SOURCE: ${{ inputs.bake-source }}
+          BUNDLE_REGISTRY: ${{ inputs.bundle-registry }}
+          GH_TOKEN: ${{ steps.content-token.outputs.token || github.token }}
+          BAKE_CONTENT_REPOSITORY: ${{ inputs.content-repository || github.repository }}
+        run: mw-platform-gate/.github/scripts/bake-publication-lock.sh -- mw-platform-gate/.github/scripts/deliver-live-publication.sh
       # The lock the re-bind step took is held THROUGH the publish AND the registry push (the
       # registry's read–decide–tag must not interleave with another publisher's either) and
       # released here, on every

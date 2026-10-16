@@ -2097,6 +2097,7 @@ def run_cases(script: Path, work: Path, expect_defect: bool) -> None:
         run_rebind_cases(h, work)
         run_round5_cases(h, work)
         run_registry_lock_cases(h, work)
+        run_delivery_cases(h, work)
 
 
 LOCK_PATH = f"prebuilt-bundles/{IDENTITY}/_publishing.{SOURCE}"
@@ -2840,6 +2841,95 @@ def run_registry_lock_cases(h: "Harness", work: Path) -> None:
                              env=dict(env("8003"), BAKE_PUBLISH_LOCK_HOLDER="Systemorph-MeshWeaver-not-the-holder"))
     check("…and one told it holds a lease it does NOT hold runs nothing and fails",
           bad_run.returncode != 0 and "but it does not" in bad_run.stderr, f"rc={bad_run.returncode}")
+
+
+DELIVER = HERE / "deliver-live-publication.sh"
+
+# A recorder in place of push-bundle-publication.sh: `--published-commit` answers from a file (the
+# registry's tag), a push copies the directory it was handed (what would reach the registry) and
+# moves the "tag" to that directory's source commit.
+REGISTRY_RECORDER = """#!/usr/bin/env bash
+set -euo pipefail
+dir=""; ro=0
+while [ $# -gt 0 ]; do
+  case "$1" in --dir) dir="$2"; shift 2 ;; --published-commit) ro=1; shift ;; *) shift ;; esac
+done
+if [ "$ro" -eq 1 ]; then
+  [ -f "$MOCK_REGISTRY_TAG" ] && cat "$MOCK_REGISTRY_TAG"
+  exit 0
+fi
+rm -rf "$MOCK_REGISTRY_DELIVERED"; cp -R "$dir" "$MOCK_REGISTRY_DELIVERED"
+tr -d '[:space:]' < "$dir/source-commit.txt" > "$MOCK_REGISTRY_TAG"
+echo "bundle-publication: index=sha256:recorded"
+"""
+
+
+def run_delivery_cases(h: "Harness", work: Path) -> None:
+    # Copilot on #6878: a lane run that publishes NOTHING (scope=none, or superseded under the lock)
+    # used to skip the registry too, reasoning from the shares alone — so a sibling that sealed the
+    # shares and then failed its registry push left the tag stale for every later run of that
+    # content, its own re-run included. deliver-live-publication.sh verifies the tag and, when it is
+    # behind, delivers the LIVE SHARE publication itself (never the run's local bake).
+    recorder = work / "registry-recorder.sh"
+    recorder.write_text(REGISTRY_RECORDER)
+    recorder.chmod(0o755)
+    tag = work / "registry-tag"
+    delivered = work / "registry-delivered"
+    live_commit = "c" * 40
+    older = "b" * 40
+
+    def deliver(run_id: str) -> subprocess.CompletedProcess:
+        e = dict(os.environ)
+        e["PATH"] = f"{h.bin}{os.pathsep}{e['PATH']}"
+        e.update(h.base_env())
+        for k in ("BAKE_PUBLISH_LOCK_HOLDER", "MOCK_LEASE_IGNORE", "GH_TOKEN"):
+            e.pop(k, None)
+        e.update({"IDENTITY": IDENTITY, "SOURCE": SOURCE, "BUNDLE_REGISTRY": "registry.example",
+                  "PUSH_BUNDLE_PUBLICATION": str(recorder), "MOCK_REGISTRY_TAG": str(tag),
+                  "MOCK_REGISTRY_DELIVERED": str(delivered), "MOCK_AZ_ALLOW_SHOW": "1",
+                  "GITHUB_REPOSITORY": "Systemorph/MeshWeaver.Plugins", "GITHUB_RUN_ID": run_id})
+        return subprocess.run(["bash", str(LOCK_WRAPPER), "--", str(DELIVER)], capture_output=True,
+                              text=True, env=e)
+
+    def reset(registry_names: str | None) -> None:
+        h.reset()
+        plant_publication(h, live_commit, "Plugins-run-sibling")
+        if delivered.exists():
+            shutil.rmtree(delivered)
+        if registry_names is None:
+            if tag.exists():
+                tag.unlink()
+        else:
+            tag.write_text(registry_names + "\n")
+
+    print("\na run that publishes nothing still proves — or completes — the registry delivery:")
+    reset(live_commit)
+    r = deliver("9001")
+    check("the registry already names the live commit: verified, nothing downloaded or pushed",
+          r.returncode == 0 and "Verified" in r.stdout and not delivered.exists(),
+          f"rc={r.returncode}; {(r.stdout + r.stderr)[-200:]!r}")
+
+    for label, names in (("stale (an older commit)", older), ("absent", None)):
+        reset(names)
+        before = tag.read_text().strip() if tag.exists() else ""
+        r = deliver("9002")
+        share = h.shelf_root / ACCOUNT / SHARE / DEST
+        want = {p.name: p.read_bytes() for p in share.iterdir() if p.is_file()}
+        got = {p.name: p.read_bytes() for p in delivered.iterdir() if p.is_file()} if delivered.exists() else {}
+        check(f"NEGATIVE CONTROL: the registry tag is {label} before the delivery — the state a skip used to leave",
+              before != live_commit, f"tag before: {before or '<none>'}")
+        check(f"a registry tag that is {label} gets the LIVE SHARE publication, byte for byte, and the tag moves",
+              r.returncode == 0 and got == want and tag.read_text().strip() == live_commit,
+              f"rc={r.returncode}; delivered {sorted(got)} vs share {sorted(want)}; {(r.stdout + r.stderr)[-200:]!r}")
+    check("…under the lock, which it released", leases_held(h) == [], " ".join(leases_held(h)) or "none")
+
+    reset(older)
+    damaged = h.shelf_root / ACCOUNT / SHARE / DEST / "Beta.zip"
+    damaged.write_text("bytes no publisher stamped\n")
+    r = deliver("9003")
+    check("a share file that does not match its own digest stamp is NOT delivered: red, nothing pushed",
+          r.returncode != 0 and "Refusing to deliver" in (r.stdout + r.stderr) and not delivered.exists()
+          and tag.read_text().strip() == older, f"rc={r.returncode}")
 
 
 def main() -> int:

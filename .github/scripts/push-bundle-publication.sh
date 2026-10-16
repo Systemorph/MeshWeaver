@@ -3,6 +3,8 @@
 # push-bundle-publication.sh --registry <host> --source <name> --identity <id> --dir <publication dir>
 #                            [--tag-run <run id>] [--release <version>] [--skip-if-published]
 #                            [--registry-config <docker config.json>] [--plain-http] [--oras <binary>]
+# push-bundle-publication.sh --registry <host> --source <name> --identity <id> --published-commit
+#                            (read only: print the source commit <source>:<identity> names, or nothing)
 #
 # Publishes ONE sealed publication — the directory publish-bake-bundles.sh writes for one source
 # and one framework identity (`<package>.zip` per bundle, `modules/<package>.module.nupkg` beside
@@ -74,7 +76,7 @@ usage() {
   sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
-REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0; SKIP_IF_PUBLISHED=0
+REGISTRY=""; SOURCE=""; IDENTITY=""; DIR=""; TAG_RUN=""; RELEASE=""; REGISTRY_CONFIG=""; PLAIN_HTTP=0; SKIP_IF_PUBLISHED=0; PUBLISHED_COMMIT_ONLY=0
 ORAS="${ORAS:-oras}"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -85,6 +87,7 @@ while [ $# -gt 0 ]; do
     --tag-run) TAG_RUN="${2:-}"; shift 2 ;;
     --release) RELEASE="${2:-}"; shift 2 ;;
     --skip-if-published) SKIP_IF_PUBLISHED=1; shift ;;
+    --published-commit) PUBLISHED_COMMIT_ONLY=1; shift ;;
     --registry-config) REGISTRY_CONFIG="${2:-}"; shift 2 ;;
     --plain-http) PLAIN_HTTP=1; shift ;;
     --oras) ORAS="${2:-}"; shift 2 ;;
@@ -104,9 +107,39 @@ case "$PUBLICATION_LAYOUT" in ''|*[!0-9]*) fail "publication layout '$PUBLICATIO
 [ -n "$REGISTRY" ] || fail "--registry <host> is required"
 [ -n "$SOURCE" ] || fail "--source <name> is required"
 [ -n "$IDENTITY" ] || fail "--identity <id> is required"
+command -v "$ORAS" >/dev/null 2>&1 || fail "oras is not on PATH (or --oras/\$ORAS does not name a binary) — install a pinned release: https://github.com/oras-project/oras/releases"
+
+# ---- --published-commit: READ ONLY — which source commit does <source>:<identity> name? ----------
+# The question a lane asks when IT publishes nothing (its content is already sealed on the shares,
+# or a newer publication superseded it) but must still prove the REGISTRY carries what the shares
+# serve (deliver-live-publication.sh, Copilot's review of #6878). Prints the commit, or nothing
+# when the tag is absent; exit 0 either way. Any other failure to read is exit 1 — an unreadable
+# registry is never "absent". Reads exactly what the sealed-skip below reads, in the same shapes.
+if [ "$PUBLISHED_COMMIT_ONLY" -eq 1 ]; then
+  SOURCE_LC_RO=$(printf '%s' "$SOURCE" | tr '[:upper:]' '[:lower:]')
+  ROFLAGS=()
+  [ "$PLAIN_HTTP" -eq 1 ] && ROFLAGS+=(--plain-http)
+  [ -z "$REGISTRY_CONFIG" ] || ROFLAGS+=(--registry-config "$REGISTRY_CONFIG")
+  RO=$(mktemp -d); trap 'rm -rf "$RO"' EXIT
+  repo="$REGISTRY/plugins/$SOURCE_LC_RO"
+  if ! digest=$("$ORAS" resolve "${ROFLAGS[@]}" "$repo:$IDENTITY" 2>"$RO/resolve.err"); then
+    if grep -q ': not found$' "$RO/resolve.err"; then exit 0; fi
+    cat "$RO/resolve.err" >&2
+    fail "could not resolve $repo:$IDENTITY (see above) — whether the registry carries the publication cannot be established"
+  fi
+  "$ORAS" manifest fetch "${ROFLAGS[@]}" "$repo@$digest" > "$RO/index.json" \
+    || fail "could not fetch the index $repo@$digest"
+  sidecar=$(tr -d '\n' < "$RO/index.json" \
+    | sed -n 's/.*"digest":"\(sha256:[0-9a-f]\{64\}\)","size":[0-9]\{1,\},"artifactType":"application\/vnd\.meshweaver\.publication\.v1+json","annotations":{"io\.meshweaver\.role":"sidecars"}.*/\1/p')
+  [ -n "$sidecar" ] || fail "$repo:$IDENTITY names an index with no sidecar manifest — its source commit cannot be read"
+  "$ORAS" manifest fetch-config "${ROFLAGS[@]}" "$repo@$sidecar" > "$RO/config.json" \
+    || fail "could not fetch the sidecar config of $repo@$sidecar"
+  tr -d '\n' < "$RO/config.json" | sed -n 's/.*"sourceCommit":"\([^"]*\)".*/\1/p'
+  exit 0
+fi
+
 [ -n "$DIR" ] || fail "--dir <publication dir> is required"
 [ -d "$DIR" ] || fail "--dir '$DIR' is not a directory"
-command -v "$ORAS" >/dev/null 2>&1 || fail "oras is not on PATH (or --oras/\$ORAS does not name a binary) — install a pinned release: https://github.com/oras-project/oras/releases"
 
 # ---- names: the registry's grammar is lowercase, and it is enforced here so a refusal is a
 #      sentence rather than a MANIFEST_INVALID / NAME_INVALID from the registry --------------------
