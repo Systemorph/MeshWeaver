@@ -14,7 +14,10 @@ namespace MeshWeaver.Testing.Xunit.Test;
 /// </summary>
 public class NotEmitBeforeContractTest
 {
-    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
+    // Never reached: every subject and signal here is synchronous, so each case decides before the
+    // call returns. It only caps a regression that would otherwise hang the host — and it is not
+    // a write wait, so the framework's write bound (TestTimeouts) does not apply.
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
     [Fact]
     public async Task SilenceUntilTheSignal_Passes()
