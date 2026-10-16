@@ -73,6 +73,12 @@ public sealed class PathFilteringStorageAdapter(IStorageAdapter inner, Func<stri
             : Observable.Return(false);
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => matches(path)
+            ? inner.DeleteIfVersionAtMost(path, maxVersion, options)
+            : Observable.Return(false);
+
+    /// <inheritdoc />
     public IObservable<bool> Exists(string path)
         => matches(path)
             ? inner.Exists(path)

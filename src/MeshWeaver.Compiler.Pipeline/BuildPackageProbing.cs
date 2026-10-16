@@ -94,7 +94,11 @@ internal static class BuildPackageProbing
             .Do(resolved =>
             {
                 cacheService.RegisterBuildProbingDirectories(assemblyLocation, resolved.ProbingDirectories);
-                logger.LogDebug(
+                // Information, not Debug: it is the one positive evidence that a build's package
+                // closure reached the load context on THIS process (2026-10-16: an image without
+                // this lane and one with it were indistinguishable in the log). Written only for
+                // builds that record a #r "nuget:" package, once per load of such a build.
+                logger.LogInformation(
                     "Armed the package probe for {AssemblyLocation}: {Packages} → {Directories} probing directories",
                     assemblyLocation, packages, resolved.ProbingDirectories.Length);
             })

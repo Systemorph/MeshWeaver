@@ -185,8 +185,9 @@ now the detector, so `AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest` 
 the notification is still withheld. A subscription still in flight is never named (the heartbeat is not
 deferred behind an owner's initialisation; a `SubscribeRequest` is), and a tearing-down owner stays
 silent. The case was first written with the hand-off left to chance and passed alone while freezing in
-the suite: the hand-off target is a per-process ordinal string hash, which is why `HandOffTarget`
-exists. **Not modelled:** an in-process kill still writes `Dead` to the membership table, so a SIGSEGV
+the suite: the hand-off target was then a per-process ordinal string hash, which is why `HandOffTarget`
+exists. Since #6865 the target is a fixed rendezvous hash that skips draining silos, and `HandOffTarget`
+calls that production rule (`DrainHandOffTarget`) instead of restating it. **Not modelled:** an in-process kill still writes `Dead` to the membership table, so a SIGSEGV
 whose row stays `Active` until the survivors vote it out is not exercised.
 
 **Plugins#2530 / #6045 / #6046 — process-local negatives retracted only by a notification.** A point
