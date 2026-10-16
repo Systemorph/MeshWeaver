@@ -104,6 +104,30 @@ half-declared block lacks):
 | `bundles.root` | the directory it fills; defaults to `config.memex_portal.PreWarm__PrebuiltBundleRoot`, so the fetch lands exactly where the pre-warm looks |
 | `portal.imagePullSecret` | required when the registry is set: the `kubernetes.io/dockerconfigjson` Secret that pulls the platform image is mounted as ORAS's registry config, and there is no second credential |
 
+#### Declaring it on the Deployment record (#6825)
+
+A record-driven deploy declares the same block on the record itself — `bundles` on
+`DeploymentContent` (`BundlesSpec`), in the chart's own shape:
+
+```json
+"imagePullSecret": "fleet-registry-pull",
+"bundles": { "registry": "cr.meshweaver.cloud", "sources": ["plugins", "reinsurance"] }
+```
+
+| record field | renders |
+|---|---|
+| `bundles.registry` | `bundles.registry`; blank renders no section, so a record without the block renders byte-identically |
+| `bundles.sources` | `bundles.sources`, trimmed, blanks dropped, in the record's order |
+| `bundles.identity` | `bundles.identity` only when stated — the fallback for an image that predates the identity file |
+| `bundles.root` | `config.memex_portal.PreWarm__PrebuiltBundleRoot` (blank → `/data/prebuilt-bundles`), through core's shared derivation `DeploymentPortalConfig.BundleRoot`; the chart's `bundles.root` defaults to that key, so the shelf the init container fills is the directory the pre-warm reads |
+
+The Helm renderer (`HelmValues`, MeshWeaver.Plugins) refuses at plan time, naming the field, a
+registry with no source, a registry with no `imagePullSecret`, sources with no registry, and an
+`extraPortalConfig` `PreWarm__PrebuiltBundleRoot` that disagrees with the block — the typed value
+wins, so that extra would otherwise be dropped without a word. Before the field existed, an estate
+outside the fleet's own subscription could state its bundle source only in a hand-written values
+layer, and every record-driven Roll was refused by `hosting-deploy`'s drop guard for dropping it.
+
 For each source it resolves `plugins/<source>:<identity>` to its digest, pulls that digest's whole
 graph into a staging directory (every bundle's `.zip` and `.module.nupkg`, every sidecar under
 the name its layer is titled with — a sidecar a later publisher adds lands without a chart

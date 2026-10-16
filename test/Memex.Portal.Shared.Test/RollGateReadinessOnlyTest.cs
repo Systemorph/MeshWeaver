@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting;
+using MeshWeaver.Mesh;
 using Memex.Portal.ServiceDefaults;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
@@ -193,6 +194,60 @@ public class RollGateReadinessOnlyTest
             $"readiness answered {(int)readiness.StatusCode} for a Degraded required_modules. Only the "
             + "host's Unhealthy verdicts are meant to hold a roll; a module the store lane has yet to "
             + $"deliver never did. Body was:\n{readinessBody}");
+    }
+
+    /// <summary>
+    /// 🚨 <b>An unresolvable root forwarder is a ROLL GATE too</b> (MeshWeaver#6847). The
+    /// <c>module_forwarders</c> check is registered by <see cref="ServiceDefaults.AddDefaultHealthChecks"/>
+    /// itself, so this drives THAT registration — its own tags, plus whatever
+    /// <see cref="ServiceDefaults.TagRollGates"/> adds — and only swaps its verdict to the incident's
+    /// Unhealthy one (the real check answers Healthy in a host with no module registry). Startup and
+    /// liveness stay GREEN (an Unhealthy reading before startup completes must not have the kubelet
+    /// restart the container), readiness turns RED, and the reading still prints on <c>/health</c>.
+    /// </summary>
+    [Fact]
+    public async Task AnUnresolvableRootForwarder_HoldsReadiness_AndNeverFailsTheStartupProbe()
+    {
+        var probes = ChartProbePaths();
+
+        var (startup, startupBody) = await ProbeAsync(probes.Startup, ForwarderUnresolvable);
+        var (readiness, readinessBody) = await ProbeAsync(probes.Readiness, ForwarderUnresolvable);
+        var (liveness, _) = await ProbeAsync(probes.Liveness, ForwarderUnresolvable);
+
+        Assert.True(startup.StatusCode == HttpStatusCode.OK,
+            $"the chart's startupProbe path ('{probes.Startup}') answered {(int)startup.StatusCode} "
+            + $"because {ModuleForwarderHealthCheck.HealthCheckName} was Unhealthy. The forwarder check "
+            + "takes the replica out of rotation; on the startup probe it would have the kubelet restart "
+            + "the container. Body was:\n" + startupBody);
+        Assert.True(startupBody.Contains($"{ModuleForwarderHealthCheck.HealthCheckName}: Unhealthy", StringComparison.Ordinal)
+                    && startupBody.Contains(ForwarderGap, StringComparison.Ordinal),
+            $"the forwarder reading vanished from /health's body. Body was:\n{startupBody}");
+
+        Assert.True(readiness.StatusCode == HttpStatusCode.ServiceUnavailable,
+            $"the chart's readinessProbe path ('{probes.Readiness}') answered {(int)readiness.StatusCode} "
+            + $"with a root forwarder unresolvable, so the replica would keep taking traffic it fails. "
+            + $"Body was:\n{readinessBody}");
+        Assert.True(readinessBody.Contains(ModuleForwarderHealthCheck.HealthCheckName, StringComparison.Ordinal),
+            $"readiness refused without naming the check. Body was:\n{readinessBody}");
+
+        Assert.True(liveness.StatusCode == HttpStatusCode.OK,
+            $"the chart's livenessProbe path ('{probes.Liveness}') answered {(int)liveness.StatusCode} "
+            + "with a root forwarder unresolvable.");
+    }
+
+    private const string ForwarderGap =
+        "'mw-module-service:10 (Demo.IRecentChats)' has not been registered in this generation's container";
+
+    private static void ForwarderUnresolvable(IServiceCollection services) =>
+        // The registration AddDefaultHealthChecks made, tags untouched — only its verdict is replaced.
+        services.PostConfigure<HealthCheckServiceOptions>(options =>
+            options.Registrations.Single(r => r.Name == ModuleForwarderHealthCheck.HealthCheckName).Factory =
+                _ => new DelegateHealthCheck(HealthCheckResult.Unhealthy(ForwarderGap)));
+
+    private sealed class DelegateHealthCheck(HealthCheckResult result) : IHealthCheck
+    {
+        public Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, System.Threading.CancellationToken cancellationToken = default) =>
+            Task.FromResult(result);
     }
 
     /// <summary>

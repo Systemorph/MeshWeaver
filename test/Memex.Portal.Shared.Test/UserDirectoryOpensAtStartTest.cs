@@ -206,13 +206,18 @@ public class UserDirectoryOpensAtStartTest(ITestOutputHelper output) : MonolithM
         rejected.EverHydrated.Should().BeFalse("a floor must never count as the first snapshot");
         rejected.Hydrated.Should().BeFalse();
 
-        // A probe re-opens the terminated read; the replacement's snapshot is complete. The provider
-        // is already released, so the replacement may hydrate before this probe samples. Its verdict
-        // is therefore not asserted (it only triggers the re-open); the `rejected` assertions above
-        // already prove the incomplete snapshot did not hydrate.
-        await Probe(readiness, ct);
+        // A probe re-opens the terminated read; the replacement's snapshot is complete. Probe on every
+        // tick, as the kubelet does: the failed chain publishes its Failure BEFORE it releases its
+        // opening gate, so a probe landing in between is a no-op and only a LATER probe re-opens.
+        // A probe's own verdict is not asserted: the provider is already released, so the
+        // replacement may hydrate before it samples, and the `rejected` assertions above already
+        // prove the incomplete snapshot did not hydrate.
         await Observable.Interval(TestTimeouts.Quick / 100).StartWith(0L)
-            .Select(_ => cache.Reading)
+            .Select(tick =>
+            {
+                Probe(readiness, ct);   // synchronous: CheckHealthAsync returns a completed task
+                return cache.Reading;
+            })
             .Where(r => r.EverHydrated)
             .Should().Within(TestTimeouts.Convergence)
             .Emit("the probe must re-open the read and its complete snapshot must hydrate the directory", ct);

@@ -559,7 +559,21 @@ different questions, and only one of them may kill the container over a verdict 
   gates, today the NodeType bake gate (`nodetype_bake`, `PreWarm__GateReadiness`) and
   `required_modules`. A refusal keeps
   the pod alive and out of the Service; with `maxUnavailable: 0` the roll stalls and the previous
-  image keeps serving.
+  image keeps serving. Two more checks are readiness-tagged because their failure is a statement about
+  THIS replica that its siblings do not share: `token_validation` (the replica cannot authenticate an
+  API token) and `module_forwarders` (a root forwarder of a module cannot be resolved in that module's
+  current generation, so every activation that leases it fails — MeshWeaver#6847, below).
+  `module_forwarders` is also a roll gate, so its Unhealthy verdict never fails the startup probe.
+- **`module_forwarders` is deterministic, so it needs no failure count.** It reads, for every module's
+  current generation, whether each forwarder the root was laid out with at boot still resolves there
+  (`ModuleContexts.UnresolvableForwarders`). A built container never changes, so one Unhealthy reading
+  holds for as long as that generation serves — it clears on the next generation or on a restart, and
+  a transient lease failure is not this shape and never read. On 2026-10-16 a live swap left
+  memex.systemorph.com in exactly this state for about six and a half hours with every pod READY and
+  `/health` merely Degraded; now such a replica leaves the Service, names the module and the scope key
+  on `/health`, and the fleet watch raises `ModuleServiceLease` once it holds across two passes. The
+  remedy is a restart of the replica (a Restart action) — a fresh boot lays the forwarders out for the
+  generation it loads.
 - **livenessProbe → `/alive`**: *is it making progress?* A GC-bound process restarts.
 
 The bake gate rode the startup probe until MeshWeaver#5544. On 2026-09-25/26 that killed every control-instance
