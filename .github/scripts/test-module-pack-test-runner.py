@@ -138,6 +138,44 @@ class ModulePackTestRunnerTest(unittest.TestCase):
         for r in self.each('{"sdk": {"version": "10.0.400"}}', '{"test": {"runner": "VSTest"}}'):
             self.assertEqual("VSTest", r["RUNNER"])
 
+    def test_a_red_suite_is_named_on_github_at_both_call_sites(self):
+        # MeshWeaver.Plugins#3828: a red `Module tests` leg said only "the module's own suite
+        # failed". Each call site records the red suite's .trx — the SAME path test_flags writes —
+        # and hands it to name-failing-tests.py after the loop. That block is EXECUTED here over a
+        # real TeamTest trx; the named test and the step's annotation budget are asserted.
+        text = WORKFLOW.read_text()
+        record = 'red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")'
+        self.assertEqual(2, text.count(record), "both call sites record the red suite's ledger.trx")
+        self.assertEqual(2, text.count('mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")'),
+                         "the recorded path must be the directory test_flags writes into")
+        for selection, _ in self.sites:
+            self.assertIn("ledger.trx", selection, "test_flags names the trx ledger.trx")
+        lines = text.splitlines()
+        starts = [i for i, l in enumerate(lines) if l.strip() == 'if [ "${#red[@]}" -gt 0 ]; then']
+        self.assertEqual(2, len(starts), "both call sites name the red suites after the loop")
+        core = Path(__file__).resolve().parents[2]
+        for start in starts:
+            end = next(k for k in range(start, len(lines)) if lines[k].strip() == "fi")
+            block = dedent(lines[start:end + 1])
+            root = Path(tempfile.mkdtemp())
+            (root / "rt" / "trx" / "Mod").mkdir(parents=True)
+            (root / "rt" / "trx" / "Mod" / "ledger.trx").write_text(
+                '<?xml version="1.0"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">'
+                '<Results><UnitTestResult testName="Mod.Test.Renders" outcome="Failed"><Output>'
+                '<ErrorInfo><Message>Expected 3 rows, found 0.</Message></ErrorInfo></Output></UnitTestResult>'
+                '</Results></TestRun>')
+            (root / "build-logic").symlink_to(core)
+            script = "\n".join(["set -euo pipefail", 'MODULE=Mod', "red=()", record, block])
+            env = dict(os.environ, RUNNER_TEMP=str(root / "rt"),
+                       GITHUB_STEP_SUMMARY=str(root / "summary.md"))
+            out = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                 capture_output=True, text=True, check=True).stdout
+            self.assertIn("FAILED Mod › Mod.Test.Renders — Expected 3 rows, found 0.", out)
+            errors = [l for l in out.splitlines() if l.startswith("::error")]
+            self.assertEqual(1, len(errors), out)
+            self.assertIn("Mod.Test.Renders", errors[0])
+            self.assertIn("Mod.Test.Renders", (root / "summary.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()

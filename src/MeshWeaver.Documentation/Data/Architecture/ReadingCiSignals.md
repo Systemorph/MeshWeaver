@@ -342,6 +342,37 @@ names.**
 
 ---
 
+## 🚨 A step keeps TEN `::error` annotations — spend them on the failing tests' NAMES
+
+**GitHub keeps at most ten `::error` annotations per STEP and drops the rest without a trace** (the
+log keeps the line; the pull request's checks view does not). A step that runs several suites, or
+that runs a guard's self-test before the guard, therefore has to decide what those ten carry —
+otherwise the first ten things printed win, and they are rarely the answer.
+
+**A red test lane names every failing test on GitHub**: its fully-qualified name and the first line
+of its assertion message, on a `FAILED <suite> › <test> — <assertion>` log line, in the job summary,
+and as a few bounded MULTILINE annotations — one per red suite while the budget lasts, then one
+naming every remaining suite — read from the suite's own `.trx`. The module lane
+(`node-repo-module-pack.yml`, its `Module bundle` and `Module tests` legs) does this through
+`.github/scripts/name-failing-tests.py`; MeshWeaver.Plugins' suite loops through
+`classify-test-run.py --trx` with a shared `--annotation-budget` file per step. Before, a red leg
+said only that "the module's own suite failed", and the name had to be dug out of the raw log
+(MeshWeaver.Plugins#3828, `MeshWeaver.Blazor.Views.Test`). A suite that is red with nothing to name
+— no `.trx`, an unreadable one, or one recording no failure — is SAID, never left as an empty list.
+
+**A PASSING self-test prints no workflow command.** A guard's `--self-test` drives its refusal
+paths on purpose, inside a real CI step, and a refusal prints `::error` — that is the guard's
+contract. Let through, those EXPECTED refusals read as real failures on a green pull request and
+spend the step's ten: measured on MeshWeaver.Plugins, four self-tests printed 14 `::error` commands
+on every green run (`platform-mount.py` six of them — `no platform mount at …/nowhere`,
+`names no valid portal image digest ('not-a-digest')` — in the very step that then assembles the
+reference set, leaving four slots for a real refusal). The fix is in the self-test: capture the
+fixture's output, assert WHAT was refused, and replay it as plain log lines
+(MeshWeaver.Plugins `scripts/self_test_quiet.py`); `check-self-tests-quiet.py` executes every
+self-test the workflows run and refuses one that still prints a workflow command on a pass.
+
+---
+
 ## The same trap in the tools you write to watch CI
 
 Two bugs that make a monitor lie, both hit in one session:
