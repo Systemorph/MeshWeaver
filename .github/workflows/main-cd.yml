@@ -1603,19 +1603,28 @@ jobs:
             # retry only triples the cost and delays the red. (This reads the CAPTURED attempt
             # output, not the workflow log, so it cannot match its own comments — the script-echo
             # trap that has misled two CD triages already.)
-            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+            if grep -qE 'error CS[0-9]{4}' "$LOG"; then
               echo "::error::portal-ai publish failed with COMPILER diagnostics (see attempt $attempt above) — deterministic, not retried. Fix the build; the retry exists for the transport, not the compiler."
+              exit 1
+            fi
+            # An MSBuild error is a defect of the BUILD, not of the transport, so it is not retried
+            # either — but it is NOT a compiler diagnostic, and calling it one sent #6889's triage
+            # to the source: MSB4018 means a build TASK threw, and an IOException on an obj/ file
+            # there is two builds of one project racing (concurrent per-RID inner publishes).
+            if grep -qE 'error MSB[0-9]{4}' "$LOG"; then
+              codes=$(grep -oE 'error MSB[0-9]{4}' "$LOG" | sed 's/^error //' | sort -u | paste -sd, -)
+              echo "::error::portal-ai publish failed with MSBuild error(s) $codes (see attempt $attempt above) — not a compiler diagnostic and not the registry transport, so not retried. MSB4018 = a build task threw: read its exception (an IOException on an obj/ file is two builds of one project racing, #6889)."
               exit 1
             fi
             if [ "$attempt" -lt 3 ]; then
               # Re-login before retrying: an ACR token can expire during a long multi-arch push,
               # and a re-auth costs seconds against a leg that takes minutes.
-              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler or MSBuild diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
           done
-          echo "::error::portal-ai publish failed on all 3 attempts with no compiler diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
+          echo "::error::portal-ai publish failed on all 3 attempts with no compiler or MSBuild diagnostics — read the LAST attempt's output above. A registry blob-upload failure there (the CONTAINER-10xx family) means the connection died three times running, which is no longer a transient and wants investigating rather than another retry (#2810)."
           exit 1
       # 🚨 The mirror of this manifest to the fleet registry is `portal-image-mirror`, a job of its
       # own — it used to be two steps here, and see this job's `timeout-minutes` for what that cost.
@@ -2074,17 +2083,23 @@ jobs:
               exit 0
             fi
             echo "::endgroup::"
-            if grep -qE 'error (CS|MSB)[0-9]{4}' "$LOG"; then
+            if grep -qE 'error CS[0-9]{4}' "$LOG"; then
               echo "::error::control publish failed with COMPILER diagnostics (attempt $attempt) — deterministic, not retried."
               exit 1
             fi
+            # Not a compiler diagnostic and not the transport — see the portal-ai leg's note.
+            if grep -qE 'error MSB[0-9]{4}' "$LOG"; then
+              codes=$(grep -oE 'error MSB[0-9]{4}' "$LOG" | sed 's/^error //' | sort -u | paste -sd, -)
+              echo "::error::control publish failed with MSBuild error(s) $codes (attempt $attempt) — not a compiler diagnostic and not the registry transport, so not retried. MSB4018 = a build task threw: read its exception (an IOException on an obj/ file is two builds of one project racing, #6889)."
+              exit 1
+            fi
             if [ "$attempt" -lt 3 ]; then
-              echo "attempt $attempt failed without compiler diagnostics — re-authenticating and retrying in 30s"
+              echo "attempt $attempt failed without compiler or MSBuild diagnostics — re-authenticating and retrying in 30s"
               az acr login --name meshweaver || true
               sleep 30
             fi
           done
-          echo "::error::control publish failed on all 3 attempts with no compiler diagnostics — read the last attempt's output."
+          echo "::error::control publish failed on all 3 attempts with no compiler or MSBuild diagnostics — read the last attempt's output."
           exit 1
       - name: The published control image must identify itself as this run's version
         run: >
