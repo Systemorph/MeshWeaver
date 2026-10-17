@@ -275,7 +275,7 @@ def _query_target(entry: str) -> str | None:
         value = stripped
     for token in value.split():
         for key in ("namespace:", "path:"):
-            if token.startswith(key):
+            if token.lower().startswith(key):  # NodeSetQuery reads selectors case-insensitively
                 candidate = token[len(key):].strip("/")
                 return candidate if "/" in candidate else None
     return None
@@ -283,6 +283,52 @@ def _query_target(entry: str) -> str | None:
 
 def _first(path: str) -> str:
     return path.split("/", 1)[0]
+
+
+def _lenient_json(text: str):
+    """json.loads with the tolerances TreeNodeLoader / JsonFileParser apply to a node file: a leading
+    UTF-8 BOM, `//` and `/* */` comments, and trailing commas. Raises ValueError when it still does
+    not parse."""
+    text = text.lstrip("﻿")
+    out: list[str] = []
+    i, n, in_string = 0, len(text), False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            i = n if end < 0 else end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            if end < 0:
+                raise ValueError("unterminated /* comment")
+            i = end + 2
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] in "}]":
+                i += 1  # a trailing comma
+                continue
+        out.append(ch)
+        i += 1
+    return json.loads("".join(out))
 
 
 class SourceIncludes:
@@ -293,13 +339,17 @@ class SourceIncludes:
     What counts mirrors the compiler: every NodeType's `sources` AND `tests` (NodeSet.ResolveSources
     compiles their union), plus every `@@` include (NodeCompileShaping.ResolveCodeIncludes, hashed by
     NodeTypeSourceFingerprint.ComputeWithIncludes) — in the package's own files and, transitively, in
-    every file it reads from another package."""
+    every file it reads from another package. Paths match CASE-INSENSITIVELY (NodeSetQuery), so each
+    one is resolved to its on-disk casing at the commit it is read at, and compared with `:(icase)`."""
 
     def __init__(self, repo: Path):
         self.repo = repo
         self._edges: dict[tuple[str | None, str], dict[str, tuple[str, ...]] | None] = {}
         self._known: dict[str, bool] = {}
         self._same: dict[tuple, bool] = {}
+        self._listing: dict[tuple[str | None, str], list[tuple[str, bool]]] = {}
+        self._packages = {d.name.lower(): d.name for d in repo.iterdir()
+                          if d.is_dir() and (d / "index.json").is_file()} if repo.is_dir() else {}
 
     def _git(self, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
         return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True, input=stdin)
@@ -311,26 +361,71 @@ class SourceIncludes:
             self._known[commit] = self._git("cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
         return self._known[commit]
 
-    def _texts(self, commit: str | None, prefix: str, needle: str) -> list[str]:
-        """The text of every compiled-extension file under `prefix` (a folder, or `<prefix>.<ext>`)
-        at `commit` that contains `needle`."""
+    def _entries(self, commit: str | None, directory: str) -> list[tuple[str, bool]]:
+        """(name, is-directory) for every entry of `directory` ("" = the root) at `commit`."""
+        key = (commit, directory)
+        if key not in self._listing:
+            if commit is WORKTREE:
+                base = self.repo / directory if directory else self.repo
+                self._listing[key] = ([(e.name, e.is_dir()) for e in base.iterdir()] if base.is_dir() else [])
+            else:
+                done = self._git("ls-tree", commit, "--", f"{directory}/" if directory else ".")
+                if done.returncode != 0:
+                    raise SystemExit(f"✗ seal-packages: could not list {directory or 'the root'} at "
+                                     f"{_short(commit)} ({done.stderr.strip()})")
+                rows = [line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line]
+                self._listing[key] = [(path.rsplit("/", 1)[-1], meta.split()[1] == "tree") for meta, path in rows]
+        return self._listing[key]
+
+    def resolve(self, commit: str | None, target: str) -> str | None:
+        """`target` in its on-disk casing at `commit` — None when its first segment is no package of
+        this repository (another repository's path, or text that only looks like one). A path INTO a
+        package that does not resolve is a refusal: what the build read cannot be named."""
+        segments = [s for s in target.split("/") if s]
+        package = self._packages.get(segments[0].lower()) if segments else None
+        if package is None:
+            return None
+        real = [package]
+        for index, segment in enumerate(segments[1:], start=1):
+            entries = self._entries(commit, "/".join(real))
+            directory = next((name for name, is_dir in entries if is_dir and name.lower() == segment.lower()), None)
+            if directory is not None:
+                real.append(directory)
+                continue
+            last = index == len(segments) - 1
+            node = next((name.rsplit(".", 1)[0] for name, is_dir in entries
+                         if last and not is_dir and name.lower() in {f"{segment.lower()}{e}" for e in _COMPILED_EXTENSIONS}),
+                        None)
+            if node is None:
+                raise SystemExit(f"✗ seal-packages: '{target}' names no folder or node in {package} at "
+                                 f"{_short(commit) if commit else 'the checkout'} — what that build compiled from it "
+                                 "cannot be named, so whether it still matches cannot be decided")
+            real.append(node)
+        return "/".join(real)
+
+    def _texts(self, commit: str | None, prefix: str, needle: str) -> list[tuple[str, str]]:
+        """(path, text) of every compiled-extension file under `prefix` (a folder, or
+        `<prefix>.<ext>`; real casing) at `commit` that contains `needle`."""
         if commit is WORKTREE:
             base = self.repo / prefix
             files = list(base.rglob("*")) if base.is_dir() else []
             if base.parent.is_dir():
                 files += [base.parent / f"{base.name}{ext}" for ext in _COMPILED_EXTENSIONS]
-            texts = (_read(f) for f in sorted(files) if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
-            return [t for t in texts if t and needle in t]
-        listed = self._git("grep", "-l", "-F", needle, commit, "--", prefix, *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS))
+            texts = ((str(f.relative_to(self.repo)), _read(f)) for f in sorted(files)
+                     if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
+            return [(p, t) for p, t in texts if t and needle in t]
+        listed = self._git("grep", "-l", "-F", needle, commit, "--", prefix,
+                           *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS))
         if listed.returncode not in (0, 1):  # 1 = no match
             raise SystemExit(f"✗ seal-packages: could not read {prefix} at {_short(commit)} "
                              f"({listed.stderr.strip()}) — what a build compiled cannot be decided")
         paths = [line.split(":", 1)[1] for line in listed.stdout.splitlines() if ":" in line]
-        texts = (_git_show(self.repo, commit, p) for p in paths if p.endswith(_COMPILED_EXTENSIONS))
-        return [t for t in texts if t]
+        texts = ((p, _git_show(self.repo, commit, p)) for p in paths if p.endswith(_COMPILED_EXTENSIONS))
+        return [(p, t) for p, t in texts if t]
 
     def edges(self, commit: str | None, package: str) -> dict[str, tuple[str, ...]] | None:
-        """{other package: (path prefixes read)}; None when `commit` is not in the checkout."""
+        """{other package: (path prefixes read, on-disk casing)}; None when `commit` is not in the
+        checkout."""
         key = (commit, package)
         if key in self._edges:
             return self._edges[key]
@@ -342,24 +437,33 @@ class SourceIncludes:
 
         def add(target: str) -> None:
             target = target.strip().rstrip("./")
-            other = _first(target) if target else ""
-            if other and other != package and target not in found.setdefault(other, set()):
-                found[other].add(target)
-                pending.append(target)
+            real = self.resolve(commit, target) if target else None
+            other = _first(real) if real else ""
+            if other and other.lower() != package.lower() and real not in found.setdefault(other, set()):
+                found[other].add(real)
+                pending.append(real)
 
-        for text in self._texts(commit, package, "NodeTypeDefinition"):
-            content = (_json(text) or {}).get("content")
+        for path, text in self._texts(commit, package, "NodeTypeDefinition"):
+            if not path.endswith(".json"):
+                continue
+            try:
+                document = _lenient_json(text)
+            except ValueError as error:
+                raise SystemExit(f"✗ seal-packages: {path} at {_short(commit) if commit else 'the checkout'} names "
+                                 f"a NodeTypeDefinition and does not parse ({error}) — what it compiles cannot be "
+                                 "read, and skipping it would seal on a guess")
+            content = document.get("content") if isinstance(document, dict) else None
             if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
                 continue
             for entry in [*(content.get("sources") or []), *(content.get("tests") or [])]:
                 target = _query_target(entry) if isinstance(entry, str) else None
                 if target:
                     add(target)
-        for text in self._texts(commit, package, "@@"):
+        for _, text in self._texts(commit, package, "@@"):
             for match in _CODE_INCLUDE.finditer(text):
                 add(match.group(1))
         while pending:  # what another package's files @@-include is compiled in too
-            for text in self._texts(commit, pending.pop(), "@@"):
+            for _, text in self._texts(commit, pending.pop(), "@@"):
                 for match in _CODE_INCLUDE.finditer(text):
                     add(match.group(1))
         value = {p: tuple(sorted(v)) for p, v in sorted(found.items()) if v}
@@ -368,14 +472,15 @@ class SourceIncludes:
 
     def same(self, a: str | None, b: str | None, prefixes: tuple[str, ...]) -> bool:
         """Whether every file under `prefixes` (a folder, or a node file `<prefix>.<ext>`) is identical
-        at `a` and `b`. An unreadable answer is a refusal, never a guess."""
+        at `a` and `b`, matched case-insensitively as the compiler matches them. An unreadable answer
+        is a refusal, never a guess."""
         if a == b or not prefixes:
             return True
         key = (a, b, prefixes)
         if key in self._same:
             return self._same[key]
         revs = [c for c in (a, b) if c is not WORKTREE]
-        specs = [s for p in prefixes for s in (p, *(f"{p}{ext}" for ext in _COMPILED_EXTENSIONS))]
+        specs = [f":(icase){s}" for p in prefixes for s in (p, *(f"{p}{ext}" for ext in _COMPILED_EXTENSIONS))]
         done = self._git("diff", "--quiet", *revs, "--", *specs)
         if done.returncode in (0, 1):
             self._same[key] = done.returncode == 0
@@ -763,10 +868,11 @@ def source_include_violations(listing: dict, repo: Path, state: Path | None,
         built = sealed_from(entry)
         reads = includes.edges(built, name) if not (entry.get("carried") and not built) else None
         if reads is None:
-            if any(p in by_name or p in absent for p in includes.edges(WORKTREE, name) or {}):
-                problems.append(f"{name} is carried at {_short(built)}, which this checkout cannot read, and it "
-                                "compiles other packages' sources — whether its bytes match the sources this "
-                                "listing seals cannot be decided")
+            # Whatever the checkout shows now: HEAD may have dropped the includes, or the package,
+            # that the carried build was compiled from — only the build's own commit can say.
+            problems.append(f"{name} is carried at {_short(built)}, which this checkout cannot read — what its "
+                            "bytes were compiled from, and so whether they match the sources this listing seals, "
+                            "cannot be decided")
             continue
         for dependency, prefixes in reads.items():
             where = ", ".join(prefixes)
@@ -1086,6 +1192,13 @@ def self_test() -> int:
         put("Hosting", "1.68.0", ["AI@^1.24.0"])
         put("Essentials", "1.14.0", ["AI@^1.0.0", "Mail@^1.0.0"])
         put("Chess", "1.1.0")
+        # A carried build is read at the commit it came from, so that commit must exist (an
+        # unreadable one is refused — see source_include_violations).
+        for args in (("init", "-q", "-b", "main"), ("config", "user.email", "t@t"), ("config", "user.name", "t"),
+                     ("add", "-A"), ("commit", "-qm", "the commit the sealed publication came from")):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+        sealed_commit = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                                       capture_output=True, text=True).stdout.strip()
 
         def shape(sealed_modules: list[str]) -> None:
             for d in (bake, state):
@@ -1098,13 +1211,13 @@ def self_test() -> int:
             (state / STATE_PUBLICATION).write_text("sealed\n")
             (state / STATE_BUNDLES).write_text("Hosting.zip\nEssentials.zip\nChess.zip\n")
             (state / STATE_MODULES).write_text("".join(f"{m}\n" for m in sealed_modules))
-            (state / STATE_COMMIT).write_text("e" * 40 + "\n")
-            (state / STATE_PACKAGES).write_text(json.dumps({"schema": SCHEMA, "publicationCommit": "e" * 40, "packages": [
-                {"package": "Hosting", "bundle": "Hosting.zip", "sourceCommit": "e" * 40, "version": "1.67.18",
+            (state / STATE_COMMIT).write_text(sealed_commit + "\n")
+            (state / STATE_PACKAGES).write_text(json.dumps({"schema": SCHEMA, "publicationCommit": sealed_commit, "packages": [
+                {"package": "Hosting", "bundle": "Hosting.zip", "sourceCommit": sealed_commit, "version": "1.67.18",
                  "requires": ["AI@^1.24.0"], "carried": False},
-                {"package": "Essentials", "bundle": "Essentials.zip", "sourceCommit": "e" * 40, "version": "1.13.8",
+                {"package": "Essentials", "bundle": "Essentials.zip", "sourceCommit": sealed_commit, "version": "1.13.8",
                  "requires": ["AI@^1.0.0", "Mail@^1.0.0"], "carried": False},
-                {"package": "Chess", "bundle": "Chess.zip", "sourceCommit": "e" * 40, "version": "1.0.0",
+                {"package": "Chess", "bundle": "Chess.zip", "sourceCommit": sealed_commit, "version": "1.0.0",
                  "requires": [], "carried": False}]}))
 
         def carry(packages: list[str], modules: list[str] = ()) -> None:
@@ -1197,6 +1310,7 @@ def self_test() -> int:
                and not (bake / "Chess.zip").exists() and not (bake / "Games.zip").exists(), out.stdout)
 
     source_include_cases(expect)
+    source_include_reading_cases(expect)
 
     if failures:
         print(f"\nseal-packages self-test: {len(failures)} FAILED")
@@ -1424,6 +1538,8 @@ def source_include_cases(expect) -> None:
             "tests": ["@Store/Core/Test"]}}))
         put("Hosting/Probe/Source/Uses.cs", "// @@Store/Shared/Source/Util\nclass Uses {}\n")
         put("Store/Shared/Source/Util.cs", "// @@Chess/Board/Source/Board\nclass Util {}\n")
+        for folder in ("Bare/Source", "Spaced/Source", "Core/Test"):
+            put(f"Store/{folder}/File.cs", "class File {}\n")
         c4 = commit("Hosting reads Store through tests, bare paths and @@ includes")
         reads = SourceIncludes(repo).edges(c4, "Hosting") or {}
         store = set(reads.get("Store", ()))
@@ -1438,6 +1554,94 @@ def source_include_cases(expect) -> None:
         put("Store/Shared/Source/Util.cs", "// @@Chess/Board/Source/Board\nclass Util { int Changed; }\n")
         expect("…and a change to the @@-included file IS a difference",
                not SourceIncludes(repo).same(c4, WORKTREE, reads["Store"]))
+
+
+def source_include_reading_cases(expect) -> None:
+    """Reading a build's inputs as leniently as the compiler and the node loader do — and refusing,
+    never skipping, what still cannot be read."""
+    print("selectors and paths match case-insensitively, as NodeSetQuery matches them:")
+    expect("`Namespace:` is a namespace selector", _query_target("Namespace:Store/Core scope:subtree") == "Store/Core")
+    expect("`PATH:` is a path selector", _query_target("PATH:Store/Core/Source") == "Store/Core/Source")
+
+    def refused(action) -> str | None:
+        try:
+            action()
+        except SystemExit as stop:
+            return str(stop)
+        return None
+
+    with tempfile.TemporaryDirectory() as tmp:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                                  text=True).stdout.strip()
+
+        def put(rel: str, text: str) -> None:
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text, encoding="utf-8")
+
+        def commit(message: str) -> str:
+            git("add", "-A")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        for package in ("Store", "Hosting", "Chess"):
+            put(f"{package}/index.json", json.dumps({"id": package, "content": {"version": "1.0.0"}}))
+        put("Store/Core/Source/Licensing.cs", "class Licensing {}\n")
+        put("Store/Tools/Source/Clock.cs", "class Clock {}\n")
+        put("Hosting/Lower.json", json.dumps({"id": "Lower", "content": {
+            "$type": "NodeTypeDefinition", "sources": ["@store/core/source", "@@store/tools/source/clock"]}}))
+        put("Chess/Lenient.json", "﻿{\n  // a node file the loader accepts\n  \"id\": \"Lenient\",\n"
+            "  \"content\": { \"$type\": \"NodeTypeDefinition\", /* both */\n"
+            "    \"sources\": [\"@Store/Core/Source\",], },\n}\n")
+        c1 = commit("lower-cased and lenient NodeType definitions")
+        includes = SourceIncludes(repo)
+
+        reads = includes.edges(c1, "Hosting") or {}
+        expect("`@store/core/source` is Store's Store/Core/Source, recorded in its ON-DISK casing",
+               reads == {"Store": ("Store/Core/Source", "Store/Tools/Source/Clock")}, str(reads))
+        put("Store/Core/Source/Licensing.cs", "class Licensing { int Seats; }\n")
+        expect("…and a change under it IS a difference",
+               not includes.same(c1, WORKTREE, reads.get("Store", ())))
+        expect("…also when the authored casing is what is compared",
+               not includes.same(c1, WORKTREE, ("store/core/source",)))
+        git("checkout", "-q", "--", ".")
+        expect("NEGATIVE CONTROL: unchanged, it is the same",  # a fresh reader: answers are cached per run
+               SourceIncludes(repo).same(c1, WORKTREE, reads.get("Store", ())))
+
+        lenient = includes.edges(c1, "Chess") or {}
+        expect("a NodeType file with a BOM, comments and trailing commas is read, not skipped",
+               lenient == {"Store": ("Store/Core/Source",)}, str(lenient))
+
+        put("Chess/Broken.json", '{"id": "Broken", "content": {"$type": "NodeTypeDefinition", "sources": [')
+        c2 = commit("a NodeType file nothing can parse")
+        stop = refused(lambda: SourceIncludes(repo).edges(c2, "Chess"))
+        expect("a NodeType file that still does not parse REFUSES", stop is not None and "Broken.json" in stop, str(stop))
+        git("rm", "-q", "Chess/Broken.json")
+        put("Hosting/Nowhere.json", json.dumps({"id": "Nowhere", "content": {
+            "$type": "NodeTypeDefinition", "sources": ["@Store/Nowhere/Source"]}}))
+        c3 = commit("a query into Store that names nothing there")
+        stop = refused(lambda: SourceIncludes(repo).edges(c3, "Hosting"))
+        expect("a path INTO a package that does not resolve REFUSES", stop is not None and "Store/Nowhere" in stop,
+               str(stop))
+        expect("NEGATIVE CONTROL: a path whose first segment is no package here is not an edge",
+               SourceIncludes(repo).resolve(c1, "CodeNodePath/Whatever") is None)
+
+        print("a carried build whose commit cannot be read is refused, whatever the checkout shows:")
+        listing = {"schema": SCHEMA, "publicationCommit": c1, "packages": [
+            {"package": "Chess", "bundle": "Chess.zip", "sourceCommit": "0" * 40, "version": "1.0.0",
+             "requires": [], "carried": True},
+            {"package": "Store", "bundle": "Store.zip", "sourceCommit": c1, "version": "1.0.0",
+             "requires": [], "carried": False}]}
+        git("rm", "-q", "Chess/Lenient.json")  # HEAD no longer shows Chess compiling anything of Store
+        problems, _ = source_include_violations(listing, repo, None)
+        expect("REFUSED although the checkout shows no include of Chess's any more",
+               any("Chess is carried at 0000000000" in p for p in problems), str(problems))
 
 
 def main(argv: list[str]) -> int:
