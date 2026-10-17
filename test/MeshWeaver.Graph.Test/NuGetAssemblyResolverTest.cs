@@ -84,31 +84,10 @@ public class NuGetAssemblyResolverTest
         result.ProbingDirectories.Should().NotBeEmpty();
     }
 
-    [Fact(Timeout = 30_000)]
-    public async Task Resolve_UnknownPackage_Throws()
-    {
-        await SkipUnlessNuGetOrgReachable(TestContext.Current.CancellationToken);
-        var resolver = new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance);
-
-        var act = () => resolver.ResolveAsync(
-            [new NuGetPackageReference("This.Package.Does.Not.Exist.Really", "1.0.0")],
-            targetFramework: null);
-
-        await act.Should().ThrowAsync<Exception>();
-    }
-
-    [Fact(Timeout = 180_000)]
-    public async Task Resolve_TwiceWithSameInputs_HitsCache()
-    {
-        await SkipUnlessNuGetOrgReachable(TestContext.Current.CancellationToken);
-        var resolver = new NuGetAssemblyResolver(NullLogger<NuGetAssemblyResolver>.Instance);
-        var refs = new[] { new NuGetPackageReference("Humanizer", "2.14.1") };
-
-        var first = await resolver.ResolveAsync(refs, targetFramework: null, TestContext.Current.CancellationToken);
-        var second = await resolver.ResolveAsync(refs, targetFramework: null, TestContext.Current.CancellationToken);
-
-        second.Should().BeSameAs(first);
-    }
+    // Resolve_UnknownPackage_Throws and Resolve_TwiceWithSameInputs_HitsCache moved to
+    // NuGetOfflineFirstResolutionTest as hermetic cases (a local folder feed): neither asks anything
+    // only the live feed can answer, and the unknown-package case timed out whenever api.nuget.org
+    // was slow to answer one 404. Only cases that need REAL packages from the live feed stay here.
 
     /// <summary>
     /// The motivating case (client-a.meshweaver.cloud, linux-x64, 2026-10-11): a NodeType referencing

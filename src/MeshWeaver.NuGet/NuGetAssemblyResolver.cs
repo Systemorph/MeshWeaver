@@ -1,5 +1,8 @@
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using MeshWeaver.Mesh.Threading;
+using MeshWeaver.Messaging;
 using NuGet.Common;
 using MsLogging = Microsoft.Extensions.Logging;
 using NuGet.Configuration;
@@ -21,12 +24,39 @@ namespace MeshWeaver.NuGet;
 /// in the global-packages folder is resolved from its own <c>.nuspec</c>, and a feed is asked
 /// only for an identity the folder cannot answer. A floating or ranged root request still asks
 /// the feed which version to take; an exact version never does.
+///
+/// <para>The resolution is REACTIVE (<see cref="Resolve"/>). The NuGet SDK is Task-based, so its
+/// calls are one leaf run through the Http <see cref="IIoPool"/>; one resolution per inputs is
+/// shared through an instance <see cref="PromiseCache{TKey,TValue}"/>, which keeps a success and
+/// evicts a failure; and every resolution is bounded by <see cref="DefaultResolveBudget"/>, which
+/// cancels the leaf itself, not only a caller's wait.</para>
 /// </summary>
-public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
+public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
 {
     private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
 
-    private readonly ConcurrentDictionary<string, Task<ResolvedPackageSet>> _cache = new();
+    /// <summary>
+    /// The wall-clock budget of ONE resolution — every feed call, download and extraction it makes.
+    /// NuGet's own HTTP client bounds a single request at 100 s and retries it, so a feed that accepts
+    /// a connection and never answers held a resolution for many minutes; and the shared resolution
+    /// ignored every caller's token, so a caller's bound only stopped its own WAIT while the work, and
+    /// the cache entry every later caller joined, ran on. Past this budget the leaf is cancelled and
+    /// the resolution fails with a <see cref="TimeoutException"/> naming the packages and the feeds. It
+    /// sits below the compile pipeline's own bound on a compile (five minutes), so the resolver fails
+    /// first and by name.
+    /// </summary>
+    public static readonly TimeSpan DefaultResolveBudget = TimeSpan.FromMinutes(3);
+
+    private readonly PromiseCache<string, ResolvedPackageSet> _resolutions = new();
+    // Owns every shared resolution's connection, so disposing the resolver (the DI singleton dies with
+    // its mesh) releases them, and terminates any subscriber still attached, on the release lane.
+    private readonly CompositeDisposable _connections = new();
+    // Owns every in-flight persistent-cache save, so none outlives the resolver.
+    private readonly CompositeDisposable _saves = new();
+    private readonly IIoPool _cachePool;
+    private readonly ReleaseLane _releaseLane;
+    private readonly IIoPool _pool;
+    private readonly TimeSpan _resolveBudget;
     private readonly SourceCacheContext _sourceCache = new();
     private readonly MsLogging.ILogger<NuGetAssemblyResolver> logger;
     private readonly ISettings _settings;
@@ -35,28 +65,52 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     private readonly INuGetPackageCache _packageCache;
 
     /// <summary>
-    /// Creates a resolver reading the NuGet settings found from the application directory upward.
+    /// TEST-ONLY: a resolver reading the NuGet settings found from the application directory upward,
+    /// running its leaves on the unbounded fallback pool. Internal on purpose: production builds the
+    /// resolver through <see cref="NuGetServiceCollectionExtensions.AddNuGetResolver"/>, on the mesh's
+    /// Http pool, and must never be able to fall back to this one silently.
     /// </summary>
     /// <param name="logger">Logger for resolution and install outcomes.</param>
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
-    public NuGetAssemblyResolver(
+    internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         INuGetPackageCache? packageCache = null)
-        // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
-        // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
-        // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
-        // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
-        // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
-        // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
-        // the generator never loads and scope nodes compile but generate nothing (PensionFund
-        // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
-        // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
-        // → repo root nuget.config; in the published container the app dir, where the csproj
-        // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
-        // process and can't be relied on; the assembly location can.
-        : this(logger, Settings.LoadDefaultSettings(root: AppContext.BaseDirectory), null, packageCache)
+        : this(logger, DefaultSettings(), null, packageCache)
     {
     }
+
+    /// <summary>
+    /// Creates a resolver reading the NuGet settings found from the application directory upward,
+    /// running its NuGet SDK leaf on the mesh's <see cref="IoPoolNames.Http"/> pool.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="ioPools">The mesh's pools; the resolution runs on the Http lane.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    /// <param name="releaseLane">The mesh's release lane; <c>null</c> gives the resolver its own.</param>
+    public NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        IoPoolRegistry ioPools,
+        INuGetPackageCache? packageCache = null,
+        ReleaseLane? releaseLane = null)
+        : this(logger, DefaultSettings(), null, packageCache,
+            pool: ioPools.Get(IoPoolNames.Http), releaseLane: releaseLane,
+            cachePool: ioPools.Get(IoPoolNames.PackageCache))
+    {
+    }
+
+    // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
+    // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
+    // directory tree — so the repo/app nuget.config (which declares the `mesh-local`
+    // feed + the packageSourceMapping that pins MeshWeaver.*/Memex.* to it) is never
+    // seen. A version-LESS `#r "nuget:MeshWeaver.BusinessRules.Generator"` then resolves
+    // off nuget.org, where the stale 3.0.0-preview1 ships analyzers/ only (no lib/<tfm>) —
+    // the generator never loads and scope nodes compile but generate nothing (PensionFund
+    // renders empty; NuGetAssemblyResolverTest fails the lib/ assertion). Passing the
+    // assembly dir as root makes NuGet walk UP the tree to find it: in tests bin/.../net10.0
+    // → repo root nuget.config; in the published container the app dir, where the csproj
+    // ships nuget.config NEXT TO the baked dist/packages feed. CWD is whatever launched the
+    // process and can't be relied on; the assembly location can.
+    private static ISettings DefaultSettings() => Settings.LoadDefaultSettings(root: AppContext.BaseDirectory);
 
     /// <summary>
     /// Creates a resolver over explicit NuGet <paramref name="settings"/> (the feeds and the source
@@ -69,25 +123,59 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     /// <param name="settings">The NuGet settings naming the feeds.</param>
     /// <param name="globalPackagesFolder">The package folder to read and install into; <c>null</c> takes it from the settings.</param>
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    /// <param name="resolveBudget">The budget of one resolution; <c>null</c> takes <see cref="DefaultResolveBudget"/>.</param>
+    /// <param name="pool">The pool the NuGet SDK leaf runs on; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
+    /// <param name="releaseLane">The lane released connections terminate on; <c>null</c> gives the resolver its own.</param>
+    /// <param name="cachePool">The lane persistent-cache saves run on — never the resolution's pool; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
     internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         ISettings settings,
         string? globalPackagesFolder = null,
-        INuGetPackageCache? packageCache = null)
+        INuGetPackageCache? packageCache = null,
+        TimeSpan? resolveBudget = null,
+        IIoPool? pool = null,
+        ReleaseLane? releaseLane = null,
+        IIoPool? cachePool = null)
     {
+        _cachePool = cachePool ?? IoPool.Unbounded;
+        _releaseLane = releaseLane ?? new ReleaseLane();
         this.logger = logger;
         _settings = settings;
         _globalPackagesFolder = globalPackagesFolder;
+        _resolveBudget = resolveBudget ?? DefaultResolveBudget;
+        _pool = pool ?? IoPool.Unbounded;
         _nugetLogger = new NuGetLogger(logger);
         _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
     }
 
     /// <summary>
     /// Resolves the <paramref name="requested"/> packages (and their transitive dependencies) to
-    /// assembly paths. Results are memoized per (packages, framework) key; faulted or cancelled
-    /// resolutions are evicted so a transient feed failure does not poison the cache. The shared
-    /// resolution runs uncancellable so one caller's cancellation cannot abort it for others; the
-    /// per-caller <paramref name="ct"/> is projected onto the awaited result instead.
+    /// assembly paths. One resolution per (packages, framework) is shared by every subscriber and
+    /// kept once it succeeds; a failed one is evicted as it settles, so the next subscriber starts a
+    /// new attempt. A subscriber that unsubscribes stops only its own wait — the shared resolution
+    /// runs on for the others and ends at <see cref="DefaultResolveBudget"/> at the latest, which
+    /// cancels its leaf. A failure is logged once, whether or not anyone is still subscribed.
+    /// </summary>
+    /// <param name="requested">The package references to resolve.</param>
+    /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net10.0</c> when <c>null</c>.</param>
+    /// <returns>Emits one <c>ResolvedPackageSet</c> and completes, or fails naming the packages.</returns>
+    public IObservable<ResolvedPackageSet> Resolve(
+        IReadOnlyCollection<NuGetPackageReference> requested,
+        NuGetFramework? targetFramework = null)
+    {
+        if (requested.Count == 0) return Observable.Return(ResolvedPackageSet.Empty);
+        var framework = targetFramework ?? DefaultFramework;
+        var key = BuildCacheKey(requested, framework);
+        ImmutableArray<NuGetPackageReference> inputs = [.. requested];
+        // Deferred so EVERY subscription reads the cache anew: one that arrives after a failure was
+        // evicted builds a new attempt instead of replaying the old terminal.
+        return Observable.Defer(() => _resolutions.GetOrAdd(key, k => SharedResolution(k, inputs, framework)));
+    }
+
+    /// <summary>
+    /// The Task bridge for callers whose own signature is Task-based. It waits on
+    /// <see cref="Resolve"/> through the sanctioned bridge; <paramref name="ct"/> cancels this
+    /// caller's wait, never the shared resolution.
     /// </summary>
     /// <param name="requested">The package references to resolve.</param>
     /// <param name="targetFramework">The target framework to resolve assets for; defaults to <c>net10.0</c> when <c>null</c>.</param>
@@ -97,21 +185,76 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         IReadOnlyCollection<NuGetPackageReference> requested,
         NuGetFramework? targetFramework = null,
         CancellationToken ct = default)
-    {
-        if (requested.Count == 0) return Task.FromResult(ResolvedPackageSet.Empty);
+        => Resolve(requested, targetFramework).Await(ct);
 
-        var framework = targetFramework ?? DefaultFramework;
-        var key = BuildCacheKey(requested, framework);
-        // Use CancellationToken.None on the shared task so a single caller's
-        // cancellation can't poison the resolution for everyone else; the
-        // per-caller `ct` projects through WaitAsync below.
-        var task = _cache.GetOrAdd(key, _ => ResolveCoreAsync(requested, framework, CancellationToken.None));
-        // Evict faulted/cancelled tasks BEFORE returning so a transient feed
-        // failure doesn't poison the cache for the lifetime of the resolver.
-        // The next caller retries from scratch.
-        if (task.IsCompleted && (task.IsFaulted || task.IsCanceled))
-            _cache.TryRemove(new KeyValuePair<string, Task<ResolvedPackageSet>>(key, task));
-        return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
+    /// <summary>
+    /// The ONE attempt for <paramref name="key"/>: the NuGet SDK leaf on the pool, bounded by the
+    /// budget, its failure named, reported and evicted on the SHARED side — so it happens once per
+    /// attempt and also when no subscriber is left — and replayed to every subscriber.
+    /// </summary>
+    private IObservable<ResolvedPackageSet> SharedResolution(
+        string key, ImmutableArray<NuGetPackageReference> requested, NuGetFramework framework)
+        => _pool.Invoke(ct =>
+            {
+                OnResolutionStarting?.Invoke();
+                return ResolveCoreAsync(requested, framework, ct);
+            })
+            // On expiry Timeout disposes the leaf's subscription, which cancels the leaf's token, so
+            // NuGet stops; the fallback raises the named error in its place.
+            .Timeout(_resolveBudget, Observable.Defer(() =>
+                Observable.Throw<ResolvedPackageSet>(BudgetExceeded(requested))))
+            .Do(_ => { }, error =>
+            {
+                // Evict on the shared side, upstream of the replay: this runs before any subscriber
+                // sees the failure, so the entry under the key is still this attempt's — nothing
+                // else removes it, and no replacement can exist before it is removed.
+                _resolutions.Invalidate(key);
+                MsLogging.LoggerExtensions.LogWarning(logger, error,
+                    "NuGet resolution of {Packages} failed (feeds: {Feeds})",
+                    DescribePackages(requested), DescribeFeeds());
+            })
+            .Replay(1)
+            .AutoConnectOwnedBy(_connections, _releaseLane, nameof(NuGetAssemblyResolver));
+
+    /// <summary>
+    /// Cancels every persistent-cache save still running, and releases every shared resolution's
+    /// connection: an attempt still in flight is cancelled, and a subscriber still attached, or
+    /// arriving later, is terminated with an <see cref="ObjectDisposedException"/>.
+    /// </summary>
+    public void Dispose()
+    {
+        _saves.Dispose();
+        _connections.Dispose();
+    }
+
+    /// <summary>
+    /// Test seam: called on the pool thread as each resolution attempt starts. Null in production.
+    /// </summary>
+    internal Action? OnResolutionStarting { get; set; }
+
+    private TimeoutException BudgetExceeded(ImmutableArray<NuGetPackageReference> requested)
+        => new(
+            $"Resolving NuGet package(s) {DescribePackages(requested)} did not finish within its budget of "
+            + $"{_resolveBudget.TotalSeconds:0} s. The package folder could not answer, and the configured "
+            + $"feed(s) {DescribeFeeds()} did not answer in time — a feed that accepts the connection and "
+            + "never responds looks exactly like this.");
+
+    private static string DescribePackages(IEnumerable<NuGetPackageReference> requested)
+        => string.Join(", ", requested.Select(r => $"{r.Id} {r.VersionRange ?? "*"}"));
+
+    private string DescribeFeeds()
+        => string.Join(", ", LoadSources().Select(s => $"'{s.PackageSource.Source}'"));
+
+    private SourceRepository[] LoadSources()
+    {
+        var providers = Repository.Provider.GetCoreV3();
+        var sources = new PackageSourceProvider(_settings).LoadPackageSources()
+            .Where(s => s.IsEnabled)
+            .Select(s => new SourceRepository(s, providers))
+            .ToArray();
+        return sources.Length > 0
+            ? sources
+            : [new SourceRepository(new PackageSource("https://api.nuget.org/v3/index.json"), providers)];
     }
 
     private async Task<ResolvedPackageSet> ResolveCoreAsync(
@@ -120,17 +263,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         CancellationToken ct)
     {
         var packagesRoot = _globalPackagesFolder ?? SettingsUtility.GetGlobalPackagesFolder(_settings);
-        var providers = Repository.Provider.GetCoreV3();
-        var packageSourceProvider = new PackageSourceProvider(_settings);
-        var sources = packageSourceProvider.LoadPackageSources()
-            .Where(s => s.IsEnabled)
-            .Select(s => new SourceRepository(s, providers))
-            .ToArray();
-
-        if (sources.Length == 0)
-        {
-            sources = [new SourceRepository(new PackageSource("https://api.nuget.org/v3/index.json"), providers)];
-        }
+        var sources = LoadSources();
 
         // Honor nuget.config's packageSourceMapping. The repo config pins MeshWeaver.*/Memex.*
         // to the `mesh-local` feed (dist/packages) precisely so a version-LESS
@@ -299,7 +432,22 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             // folder contents change which versions resolve (NuGetRuntimeAssets.md, "Known limit").
             var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
                 ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
-            if (info is null) continue;
+            if (info is null)
+            {
+                // A REQUESTED package that neither the folder nor any feed holds is the answer
+                // "it does not exist" — say so by name here, rather than letting the package
+                // resolver below fail on a target it was never given.
+                if (PackageIdentityComparer.Default.Equals(current, root))
+                {
+                    var asked = string.Join(", ",
+                        FilterSourcesForPackage(current.Id, sources, mapping).Select(s => $"'{s.PackageSource.Source}'"));
+                    throw new InvalidOperationException(
+                        $"NuGet package {current.Id} {current.Version.ToNormalizedString()} was not found: it is not "
+                        + $"installed in the package folder '{packagesRoot}', and none of the configured feed(s) "
+                        + $"{asked} has it.");
+                }
+                continue;
+            }
 
             collected.Add(info);
             foreach (var dep in info.Dependencies)
@@ -558,21 +706,27 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
                 _nugetLogger),
             token: ct);
 
-        // Fire-and-forget cache save so we don't block the compile path on a slow upload.
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _packageCache.SaveAsync(info.Id, versionString, installedPath, CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                MsLogging.LoggerExtensions.LogWarning(logger, ex,
-                    "Failed to save NuGet package {Id} {Version} to persistent cache", info.Id, versionString);
-            }
-        }, CancellationToken.None);
+        SavePersistently(info.Id, versionString, installedPath);
 
         return installedPath;
+    }
+
+    /// <summary>
+    /// The persistent-cache save: optional, so not awaited, and run on its OWN lane
+    /// (<see cref="IoPoolNames.PackageCache"/>) — a stalled save sits outside every resolution's
+    /// budget, and on the resolution's pool it would hold the slot the next resolution needs, even
+    /// one the package folder answers. The resolver owns the subscription, so disposing it cancels
+    /// a save still running; a failure is logged, never lost.
+    /// </summary>
+    private void SavePersistently(string id, string version, string installedPath)
+    {
+        var save = new SingleAssignmentDisposable();
+        _saves.Add(save);
+        save.Disposable = _cachePool
+            .Invoke(saveCt => _packageCache.SaveAsync(id, version, installedPath, saveCt))
+            .Finally(() => _saves.Remove(save))
+            .Subscribe(_ => { }, ex => MsLogging.LoggerExtensions.LogWarning(logger, ex,
+                "Failed to save NuGet package {Id} {Version} to persistent cache", id, version));
     }
 
     /// <summary>

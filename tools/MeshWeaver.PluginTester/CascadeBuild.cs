@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Threading;
 ﻿using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Reactive.Linq;
@@ -331,9 +332,14 @@ public static class CascadeBuild
         var attribution = new Lazy<ReferenceGapAttribution>(
             () => ReferenceGapAttribution.Create(baseReferences, host.AppDirectory),
             LazyThreadSafetyMode.ExecutionAndPublication);
+        // No mesh in this process, so the build owns the pool registry a mesh would: the resolver gets
+        // the same bounded Http and PackageCache lanes it gets in a portal. Both end with the
+        // cascade (the Finally below), not with this method, which only builds the cold pipeline.
+        var ioPools = new IoPoolRegistry();
         var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
-            ?? NullLogger<NuGetAssemblyResolver>.Instance);
+            ?? NullLogger<NuGetAssemblyResolver>.Instance,
+            ioPools);
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-cascade-build-{Environment.ProcessId}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDirectory);
@@ -364,7 +370,12 @@ public static class CascadeBuild
                     return (build, build.IsGreen);
                 },
                 options.MaxParallel)
-            .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf, host.Surface));
+            .Select(results => Finish(options, wall, frameworkIdentity, snapshot, packages, results, entriesByPackage, workDirectory, DependenciesOf, host.Surface))
+            .Finally(() =>
+            {
+                nugetResolver.Dispose();
+                ioPools.Dispose();
+            });
     }
 
     private static Report Finish(

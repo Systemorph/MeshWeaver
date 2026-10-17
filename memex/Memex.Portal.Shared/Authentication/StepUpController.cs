@@ -54,6 +54,9 @@ public sealed partial class StepUpController(
     /// <summary>The Entra callback segment.</summary>
     public const string CallbackAction = "callback";
 
+    /// <summary>The segment the step-up pages' script is served from (<see cref="StepUpPages.ScriptPath"/>).</summary>
+    internal const string PageScriptAction = "page.js";
+
     /// <summary>The cookie carrying the handle and state of the pending step-up — never its content.</summary>
     internal const string PendingCookie = "mw_stepup";
 
@@ -408,6 +411,18 @@ public sealed partial class StepUpController(
     /// <summary>A refusal or failure — localized, with a way back (<see cref="StepUpPages.Message"/>).</summary>
     private static ContentResult Refusal(StepUpPageTexts t, string returnUrl, string message) =>
         Page(StepUpPages.Message(t, message, ReturnUrlPolicy.Sanitize(returnUrl)), StatusCodes.Status403Forbidden);
+
+    /// <summary>
+    /// The step-up pages' script (<see cref="StepUpPages.ScriptSource"/>) as a same-origin file, so the
+    /// pages run under a <c>script-src</c> without <c>'unsafe-inline'</c>. Anonymous: it is a constant
+    /// that carries no per-user value — every value it uses comes from the page's own data block, and
+    /// every endpoint it calls is authorized on its own.
+    /// </summary>
+    /// <returns>The script.</returns>
+    [AllowAnonymous]
+    [HttpGet(PageScriptAction)]
+    public ContentResult PageScript() =>
+        new() { Content = StepUpPages.ScriptSource, ContentType = "text/javascript; charset=utf-8", StatusCode = StatusCodes.Status200OK };
 
     /// <summary>One of the step-up pages as the response.</summary>
     private static ContentResult Page(string html, int status = StatusCodes.Status200OK) =>
