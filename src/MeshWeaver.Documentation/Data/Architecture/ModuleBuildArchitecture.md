@@ -597,7 +597,22 @@ keeps the supersede model in the next section.
    commit its bytes were baked from, its version, its `requires`, and whether it was carried. Before
    anything is written, `seal-packages.py listing` refuses a seal in which a package's `requires` on
    another package of the same listing is not met by the version the listing seals (the class of
-   MeshWeaver#6192). `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
+   MeshWeaver#6192). **A `requires` range is not the only tie: SOURCE INCLUDES travel with the bytes.**
+   A NodeType whose `sources` read another package's source nodes (`shared=@Store/Core/Source`)
+   compiles those files into its assembly, and its bundle's source fingerprint covers them; a
+   consumer installs the included package's nodes from THAT package's bundle. So a listing that seals
+   the dependent carried and the included package fresh — or the reverse — from commits whose
+   included files differ ships bytes every adopter declines (`DECLINED before writing (#2813)`): a
+   portal compiles them at boot, and a satellite gate that installs the publication fails
+   `bake consumption`. Measured on the `plugins` publication of 2026-10-17: `Hosting` carried, `Store`
+   fresh, and every Reinsurance, Manufacturing and Crm gate red on `Hosting/InstanceAction`,
+   `Hosting/ApprovalInbox` and `Hosting/InstanceRequest`. `withhold --content` therefore keeps such a
+   pair on one source set — a fresh package whose included files moved under a carried dependent waits
+   too (carried at the build that dependent was compiled against), and a fresh dependent over a
+   carried package it no longer matches waits too (carried, or, never sealed, out) — and `listing`
+   REFUSES a seal that would introduce such a pair. A pair already split in the sealed publication,
+   which no build it holds can repair, is a warning: refusing would keep exactly that publication
+   sealed. `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
    unchanged; `bake-scope.sh` narrows from the OLDEST commit the listing names, so a carried package
    is rebuilt the run it becomes publishable. Before this, a seal was one listing for one commit and
    a caller could seal only a commit at which nothing waited — which, under steady merging, almost
