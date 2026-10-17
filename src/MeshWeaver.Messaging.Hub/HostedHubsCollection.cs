@@ -26,8 +26,17 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// <see cref="RetireCorpse"/> has taken out of the registry but whose teardown has not finished
     /// (see <see cref="retiring"/>). Diagnostics, the stall detector and the disposal join all read
     /// this, so a retired hub stays visible to each of them until it is Dead.
+    ///
+    /// <para>🚨 It also carries every hub the disposal join is still WAITING on (<see cref="joining"/>).
+    /// A hub leaves the registry from INSIDE its own ShutDown phase — its removal is one of its
+    /// registrants — so for the rest of that phase the owner was joining a child nobody could see:
+    /// the owner's stall verdict printed "0 hosted hub(s) below it … the diagnostics below name it"
+    /// over a snapshot that named nothing, while the child it was waiting on sat blocked in its
+    /// registrant walk (#6883, measured on a partition root and its <c>sync/*</c> child).</para>
     /// </summary>
-    public IEnumerable<IMessageHub> Hubs => messageHubs.Values.Concat(retiring.Keys);
+    public IEnumerable<IMessageHub> Hubs =>
+        messageHubs.Values.Concat(retiring.Keys).Concat(joining.Keys)
+            .Distinct<IMessageHub>(ReferenceEqualityComparer.Instance);
     /// <summary>Address of the host (parent) hub that owns this collection.</summary>
     public Address Host { get; } = address;
     private readonly ILogger logger = serviceProvider.GetRequiredService<ILogger<HostedHubsCollection>>();
@@ -47,6 +56,14 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
     /// and an entry leaves only when its hub signals <c>DisposalCompleted</c>.</para>
     /// </summary>
     private readonly ConcurrentDictionary<IMessageHub, Unit> retiring = new(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Every hub the disposal join has disposed and whose <c>DisposalCompleted</c> has not yet
+    /// arrived — keyed by reference, like <see cref="retiring"/>. Empty outside this collection's own
+    /// teardown. Read through <see cref="Hubs"/> so the owner's diagnostics keep naming a child after
+    /// the child has taken itself out of the registry.
+    /// </summary>
+    private readonly ConcurrentDictionary<IMessageHub, Unit> joining = new(ReferenceEqualityComparer.Instance);
 
     /// <summary>
     /// 🚨 <b>Why the owner is going down, so its children can say so (#3510).</b> Set by the owning
@@ -774,6 +791,9 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
         IObservable<Unit> DisposeAndJoin(IMessageHub h)
         {
             var address = h.Address;
+            // Visible to the owner's diagnostics until it is Dead, whatever it does to the registry
+            // meanwhile — see `joining`.
+            joining.TryAdd(h, Unit.Default);
             try
             {
                 AttributeCascade(h, originatingCause);
@@ -793,6 +813,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                     "Error during disposal of hub {address} — its disposal can no longer complete, "
                     + "so the join settles this hub now instead of waiting on a signal it will never send",
                     address);
+                // The join no longer waits on it, so the diagnostics must stop naming it as awaited.
+                joining.TryRemove(h, out _);
                 return Observable.Return(Unit.Default);
             }
             return h.DisposalCompleted
@@ -801,7 +823,8 @@ public class HostedHubsCollection(IServiceProvider serviceProvider, Address addr
                 {
                     logger.LogError(ex, "Hub {address} disposal faulted", address);
                     return Observable.Return(Unit.Default);
-                });
+                })
+                .Finally(() => joining.TryRemove(h, out _));
         }
 
         var childCompletions = siblings.Select(DisposeAndJoin).ToArray();
