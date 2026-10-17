@@ -1546,6 +1546,7 @@
   "activity.node.upsert.innerCreateFaulted": "Inner CreateNode faulted: {error}",
   "activity.node.upsert.createCompletedEmpty": "The create for '{path}' completed without producing a response. It was NOT applied; retry against the fresh activation.",
   "activity.node.upsert.addressRecycling": "The owner of '{path}' is recycling, so the write was refused on arrival and NOTHING was written \u2014 the address reactivates, so this is worth retrying. Underlying report: {error}",
+  "activity.node.upsert.iconRefused": "The icon of '{path}' was refused: {detail}. An icon is a Fluent icon name, an emoji or short text, an http(s), relative or content: URL, a png/jpeg/gif/webp data: URI, or an SVG made of drawing elements only \u2014 no script, event handlers, foreign content or references outside the icon.",
   "activity.node.upsert.innerUpdateFaulted": "Inner UpdateNode faulted: {error}",
   "activity.node.upsert.updateCompletedEmpty": "The update of '{path}' completed without producing a result or a fault, so the write is NOT confirmed. The outcome is unknown: the owner may have committed it without acknowledging. Check the node's state before retrying.",
   "activity.node.upsert.staleSnapshot": "The write to '{path}' carries a snapshot taken at version {offeredVersion}, and the node is now at version {storedVersion}. Nothing was written: applying it would undo the changes made since. Read the node again and apply the change to what it holds now.",
@@ -2402,5 +2403,15 @@
   "install.installed": "Installed — you opened this from your home screen.",
   "install.desktop": "Open this page on your phone to add it to the home screen:",
   "install.accepted": "Added to your home screen.",
-  "install.dismissed": "Installation cancelled. Nothing was added."
+  "install.dismissed": "Installation cancelled. Nothing was added.",
+  "nodeType.hubConfigEdit.title": "Edit configuration",
+  "nodeType.hubConfigEdit.lambdaHint": "Lambda expression: config => config.AddData(...)",
+  "nodeType.field.displayName": "Display name",
+  "nodeType.field.displayOrder": "Display order",
+  "nodeType.field.childrenQuery": "Children query",
+  "nodeType.field.description": "Description",
+  "comments.reply": "Reply",
+  "comments.repliesCollapsed": "Replies ({0}), collapsed",
+  "comments.repliesExpanded": "Replies ({0}), expanded",
+  "agent.edit.addConfiguration": "Add agent configuration"
 }

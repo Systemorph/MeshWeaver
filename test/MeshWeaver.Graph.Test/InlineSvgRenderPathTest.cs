@@ -48,6 +48,8 @@ public class InlineSvgRenderPathTest
     /// </summary>
     private static void ShouldBePlated(string markup, string because)
     {
+        // The icon travels as an inert <img> from a data: URI; what it DRAWS is the decoded document.
+        markup = RenderedSvg.Decoded(markup);
         markup.Should().Contain("<rect width='24' height='24' rx='5'", because);
         markup.Should().NotContain("currentColor",
             "a glyph on a plate must be painted white, never inherit the surrounding text color");
@@ -62,8 +64,10 @@ public class InlineSvgRenderPathTest
         var sized = MeshNodeImageHelper.SizeInlineSvg(MonochromeOutline, 48);
 
         ShouldBePlated(sized, "SizeInlineSvg is what a raw-HTML surface calls, so it is a render seam");
-        sized.Should().StartWith("<svg style=\"width: 48px; height: 48px; display: block;\"",
-            "the size must still land on the outermost element — the plate");
+        sized.Should().StartWith("<img src=\"data:image/svg+xml,",
+            "the icon reaches the page as an inert image, never as injected markup");
+        sized.Should().Contain("width: 48px; height: 48px; display: block;",
+            "the size lands on the element the page lays out — the image");
     }
 
     [Fact]
@@ -143,6 +147,7 @@ public class InlineSvgRenderPathTest
             _ => Html(NodeIconPickerDialog.BuildPreviewTile(AuthoredPlate, AuthoredPlate)),
         };
 
+        markup = RenderedSvg.Decoded(markup);
         markup.Should().Contain("fill='#0e7490'", "the authored plate keeps its own hue");
         markup.Should().Contain("M6 12h12", "the authored glyph is untouched");
         Regex.Matches(markup, "<rect ").Count.Should().Be(1,

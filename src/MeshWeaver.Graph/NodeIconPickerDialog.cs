@@ -126,7 +126,7 @@ public static class NodeIconPickerDialog
         {
             var fit = resolved.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
             return Controls.Html(
-                $"<div style=\"{tile}\"><img src=\"{resolved}\" alt=\"\" style=\"width: 64px; height: 64px; border-radius: 8px; object-fit: {fit};\" /></div>");
+                $"<div style=\"{tile}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(resolved)}\" alt=\"\" style=\"width: 64px; height: 64px; border-radius: 8px; object-fit: {fit};\" /></div>");
         }
 
         // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it to

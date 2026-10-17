@@ -739,14 +739,13 @@ public static class MeshNodeLayoutAreas
             {
                 var fit = iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
                 tile = Controls.Html(
-                    $"<div style=\"{tileStyle}\"><img src=\"{iconValue}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {fit};\" /></div>");
+                    $"<div style=\"{tileStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(iconValue)}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {fit};\" /></div>");
             }
             else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             {
-                // Raw-HTML surface — no scoped CSS can size the injected svg, so a
-                // viewBox-only icon would render at the browser default (~300×150)
-                // and show a blank tile. Inject the size into the markup itself
-                // (mirrors the 48px img sizing above).
+                // Raw-HTML surface: SizeInlineSvg plates the icon, sizes it to 48px and
+                // emits it as an inert <img> from a data: URI — never the authored markup,
+                // which is user-settable content (mirrors the 48px img sizing above).
                 tile = Controls.Html(
                     $"<div style=\"{tileStyle}\">{MeshNodeImageHelper.SizeInlineSvg(iconValue, 48)}</div>");
             }

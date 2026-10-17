@@ -3351,6 +3351,19 @@ public static class PackageInstaller
             .Catch<bool, Exception>(_ => Upsert(hub, node).Select(_ => true));
     }
 
+    /// <summary>
+    /// The first node of <paramref name="nodes"/> whose icon <see cref="IconSafety"/> refuses, as the
+    /// exception that fails the install — or null when every icon is acceptable. The bulk lanes write
+    /// to persistence directly, past the creation validators, so they apply the rule themselves.
+    /// </summary>
+    internal static InvalidOperationException? RefusedIcon(IEnumerable<MeshNode> nodes)
+    {
+        foreach (var node in nodes)
+            if (IconSafety.Refusal(node.Icon) is { } refusal)
+                return new InvalidOperationException(IconSafety.RefusalMessage(node.Path, refusal));
+        return null;
+    }
+
     /// <summary>True for a non-root, non-satellite node whose NodeType is one the package declares
     /// and this host withholds, and which no static provider serves.</summary>
     internal static bool CreatesUnderAWithheldType(IMessageHub hub, MeshNode node, IReadOnlySet<string> withheldTypes) =>
@@ -3375,6 +3388,8 @@ public static class PackageInstaller
             CreatedDate = node.CreatedDate == default ? now : MeshNode.StorageStable(node.CreatedDate),
             LastModified = now,
         };
+        if (RefusedIcon([stamped]) is { } refusedIcon)
+            return Observable.Throw<bool>(refusedIcon);
         var changeFeed = hub.ServiceProvider.GetService<IMeshChangeFeed>();
         return hub.ServiceProvider.GetService<AccessService>()
             .RunAsSystem(() => persistence.WriteManyAndPublishCreated([stamped], options, changeFeed))
@@ -3864,6 +3879,11 @@ public static class PackageInstaller
             // one that created it, latching the subscriber as `system`.
             // ImpersonationScopeThreadAffinityTest ratchets this; the rest of this file already
             // uses RunAsSystem for exactly that reason.
+            // The icon rule (IconSafety) for this lane: it writes to persistence directly, so no
+            // creation validator sees the package's icons. A package carrying an icon the rule
+            // refuses fails its install naming the node, before anything is written.
+            if (RefusedIcon(stamped) is { } refusedIcon)
+                return Observable.Throw<IList<(string Path, bool Wrote)>>(refusedIcon);
             return accessService.RunAsSystem(
                     () => persistence.WriteManyAndPublishCreated(stamped, options, changeFeed))
                 .SelectMany(written =>

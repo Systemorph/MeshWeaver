@@ -41,12 +41,31 @@ internal sealed record StepUpPageTexts(string Locale)
 /// a full-page navigation (like the IdP round trip of the Entra rung). So they are deliberately
 /// minimal — a heading, a sentence, one button or field — every word from the localization catalog,
 /// and the only script is the WebAuthn call itself (<c>navigator.credentials.get/create</c>, no
-/// framework). Nothing is decided here: every endpoint the script calls re-checks on the server.
+/// framework), served as a same-origin file (<see cref="ScriptSource"/>) so the pages carry no
+/// inline script. Nothing is decided here: every endpoint the script calls re-checks on the server.
 /// </summary>
 internal static class StepUpPages
 {
-    /// <summary>The page shell.</summary>
-    internal static string Shell(StepUpPageTexts t, string body, string? script = null)
+    /// <summary>
+    /// The path the page script is served from — a same-origin FILE, never an inline block. The
+    /// portal's Content-Security-Policy is moving to a <c>script-src</c> without
+    /// <c>'unsafe-inline'</c> (Doc/Architecture/ContentSecurityPolicy), and under it an inline
+    /// script would not run: these pages carry their per-page values in a JSON data block (which
+    /// the browser never executes) and their behaviour in <see cref="ScriptSource"/>.
+    /// </summary>
+    internal const string ScriptPath = "/" + StepUpController.BasePath + "/" + StepUpController.PageScriptAction;
+
+    /// <summary>The id of the JSON data block the page script reads its values from.</summary>
+    internal const string DataElementId = "mw-step-up-data";
+
+    /// <summary>
+    /// The page shell. <paramref name="page"/> names the behaviour the shared page script runs
+    /// (<c>passkey</c> or <c>enroll</c>); <c>null</c> renders a page with no script at all.
+    /// <paramref name="values"/> are the per-page values (the receipt id), serialized into the data
+    /// block next to the localized status words.
+    /// </summary>
+    internal static string Shell(StepUpPageTexts t, string body, string? page = null,
+        IReadOnlyDictionary<string, string?>? values = null)
     {
         var html = new StringBuilder()
             .Append("<!doctype html><html lang=\"").Append(Enc(t.Locale)).Append("\"><head><meta charset=\"utf-8\">")
@@ -55,10 +74,30 @@ internal static class StepUpPages
             .Append("<body style=\"font-family:system-ui,sans-serif;max-width:40rem;margin:4rem auto;padding:0 1rem;line-height:1.5\">")
             .Append("<h1>").Append(Enc(t.L("stepUp.title"))).Append("</h1>")
             .Append(body);
-        if (script is not null)
-            html.Append("<script>").Append(script).Append("</script>");
+        if (page is not null)
+            html.Append("<script type=\"application/json\" id=\"").Append(DataElementId).Append("\">")
+                .Append(Data(t, page, values))
+                .Append("</script><script src=\"").Append(ScriptPath).Append("\"></script>");
         return html.Append("</body></html>").ToString();
     }
+
+    /// <summary>
+    /// The data block's JSON. <see cref="JsonSerializer"/>'s default encoder escapes <c>&lt;</c>,
+    /// <c>&gt;</c> and <c>&amp;</c>, so no value can close the <c>&lt;script&gt;</c> element it sits in.
+    /// </summary>
+    private static string Data(StepUpPageTexts t, string page, IReadOnlyDictionary<string, string?>? values) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["page"] = page,
+            ["values"] = values ?? new Dictionary<string, string?>(),
+            ["texts"] = new Dictionary<string, string>
+            {
+                ["working"] = t.L("stepUp.working"),
+                ["failed"] = t.L("stepUp.failed.generic"),
+                ["unsupported"] = t.L("stepUp.passkey.unsupported"),
+                ["done"] = t.L("stepUp.enroll.done"),
+            },
+        });
 
     /// <summary>A refusal or failure — one sentence and a way back.</summary>
     internal static string Message(StepUpPageTexts t, string message, string backUrl) =>
@@ -75,23 +114,7 @@ internal static class StepUpPages
             + "<p><button id=\"go\" type=\"button\">" + Enc(t.L("stepUp.passkey.button")) + "</button></p>"
             + "<p id=\"status\" role=\"status\"></p>"
             + "<p><a href=\"" + Enc(enrollUrl) + "\">" + Enc(t.L("stepUp.enroll.manage")) + "</a></p>",
-            Script(t, """
-                document.getElementById('go').addEventListener('click', async () => {
-                  const status = document.getElementById('status');
-                  if (!window.PublicKeyCredential) { status.textContent = T.unsupported; return; }
-                  status.textContent = T.working;
-                  try {
-                    const options = await post('passkey/options', {});
-                    if (options.error) { status.textContent = options.error; return; }
-                    options.challenge = dec(options.challenge);
-                    (options.allowCredentials || []).forEach(c => c.id = dec(c.id));
-                    const cred = await navigator.credentials.get({ publicKey: options });
-                    const answer = await post('passkey/verify', assertion(cred));
-                    if (answer.redirect) { location.href = answer.redirect; return; }
-                    status.textContent = answer.error || T.failed;
-                  } catch (e) { status.textContent = T.failed; }
-                });
-                """));
+            "passkey");
 
     /// <summary>The TOTP rung: a code (or a recovery code) and a nudge towards a passkey.</summary>
     internal static string Totp(StepUpPageTexts t, string formAction, string enrollUrl) =>
@@ -145,83 +168,102 @@ internal static class StepUpPages
                 .Append("<div id=\"recovery\" hidden>").Append(P(t.L("stepUp.enroll.recovery"))).Append("<pre id=\"codes\"></pre></div></div>");
         body.Append("<p id=\"status\" role=\"status\"></p>").Append(Back(t, returnUrl));
 
-        var receipt = JsonSerializer.Serialize(receiptId);
-        return Shell(t, body.ToString(), Script(t, "const RECEIPT = " + receipt + ";\n" + """
-            const status = document.getElementById('status');
-            const totp = document.getElementById('totp');
-            (async () => {
-              // TOTP is offered only where this device can do no passkey at all.
-              const webauthn = !!window.PublicKeyCredential;
-              const platform = webauthn && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false);
-              if (totp && !platform) totp.hidden = false;
-              if (!webauthn) document.getElementById('add').disabled = true;
-            })();
-            document.getElementById('add').addEventListener('click', async () => {
-              status.textContent = T.working;
-              try {
-                const options = await post('passkey/register/options', { receipt: RECEIPT });
-                if (options.error) { status.textContent = options.error; return; }
-                options.challenge = dec(options.challenge);
-                options.user.id = dec(options.user.id);
-                (options.excludeCredentials || []).forEach(c => c.id = dec(c.id));
-                const cred = await navigator.credentials.create({ publicKey: options });
-                const answer = await post('passkey/register', { receipt: RECEIPT, credential: JSON.stringify(attestation(cred)) });
-                if (answer.ok) { status.textContent = T.done; location.reload(); return; }
-                status.textContent = answer.error || T.failed;
-              } catch (e) { status.textContent = T.failed; }
-            });
-            const start = document.getElementById('totpStart');
-            if (start) start.addEventListener('click', async () => {
-              try {
-                const setup = await post('totp/enroll/start', { receipt: RECEIPT });
-                if (setup.error) { status.textContent = setup.error; return; }
-                document.getElementById('qr').innerHTML = setup.svg;
-                document.getElementById('secret').textContent = setup.secret;
-                document.getElementById('totpSetup').hidden = false;
-              } catch (e) { status.textContent = T.failed; }
-            });
-            const confirm = document.getElementById('totpConfirm');
-            if (confirm) confirm.addEventListener('click', async () => {
-              try {
-                const answer = await post('totp/enroll/confirm', { receipt: RECEIPT, code: document.getElementById('totpCode').value });
-                if (answer.error) { status.textContent = answer.error; return; }
-                document.getElementById('totpSetup').hidden = true;
-                document.getElementById('codes').textContent = answer.recoveryCodes.join('\n');
-                document.getElementById('recovery').hidden = false;
-              } catch (e) { status.textContent = T.failed; }
-            });
-            """));
+        return Shell(t, body.ToString(), "enroll",
+            new Dictionary<string, string?> { ["receipt"] = receiptId });
     }
 
     /// <summary>
-    /// The shared script prelude: the localized status words, base64url helpers, a JSON POST to a
-    /// sibling endpoint, and the two WebAuthn response serializers.
+    /// The page script, served as a same-origin file at <see cref="ScriptPath"/>: the base64url
+    /// helpers, a JSON POST to a sibling endpoint, the two WebAuthn response serializers, and the
+    /// behaviour of the two pages that need one — chosen by the data block's <c>page</c>. Every
+    /// endpoint it calls re-checks on the server; nothing here decides anything.
     /// </summary>
-    private static string Script(StepUpPageTexts t, string body) =>
-        "const T = " + JsonSerializer.Serialize(new Dictionary<string, string>
-        {
-            ["working"] = t.L("stepUp.working"),
-            ["failed"] = t.L("stepUp.failed.generic"),
-            ["unsupported"] = t.L("stepUp.passkey.unsupported"),
-            ["done"] = t.L("stepUp.enroll.done"),
-        }) + ";\n" + """
-            const enc = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-            const dec = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
-            const post = async (path, body) => {
-              const r = await fetch('/auth/step-up/' + path, { method: 'POST', credentials: 'same-origin',
-                headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-              return r.json();
-            };
-            const assertion = c => ({ id: c.id, rawId: enc(c.rawId), type: c.type,
-              response: { authenticatorData: enc(c.response.authenticatorData), clientDataJSON: enc(c.response.clientDataJSON),
-                signature: enc(c.response.signature), userHandle: c.response.userHandle ? enc(c.response.userHandle) : null },
-              clientExtensionResults: c.getClientExtensionResults() });
-            const attestation = c => ({ id: c.id, rawId: enc(c.rawId), type: c.type,
-              response: { attestationObject: enc(c.response.attestationObject), clientDataJSON: enc(c.response.clientDataJSON),
-                transports: c.response.getTransports ? c.response.getTransports() : [] },
-              clientExtensionResults: c.getClientExtensionResults() });
+    internal const string ScriptSource = """
+        (() => {
+        const D = JSON.parse(document.getElementById('mw-step-up-data').textContent);
+        const T = D.texts;
+        const RECEIPT = D.values.receipt ?? null;
+        const enc = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        const dec = s => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - s.length % 4) % 4)), c => c.charCodeAt(0));
+        const post = async (path, body) => {
+          const r = await fetch('/auth/step-up/' + path, { method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          return r.json();
+        };
+        const assertion = c => ({ id: c.id, rawId: enc(c.rawId), type: c.type,
+          response: { authenticatorData: enc(c.response.authenticatorData), clientDataJSON: enc(c.response.clientDataJSON),
+            signature: enc(c.response.signature), userHandle: c.response.userHandle ? enc(c.response.userHandle) : null },
+          clientExtensionResults: c.getClientExtensionResults() });
+        const attestation = c => ({ id: c.id, rawId: enc(c.rawId), type: c.type,
+          response: { attestationObject: enc(c.response.attestationObject), clientDataJSON: enc(c.response.clientDataJSON),
+            transports: c.response.getTransports ? c.response.getTransports() : [] },
+          clientExtensionResults: c.getClientExtensionResults() });
 
-            """ + body;
+        if (D.page === 'passkey') {
+          document.getElementById('go').addEventListener('click', async () => {
+            const status = document.getElementById('status');
+            if (!window.PublicKeyCredential) { status.textContent = T.unsupported; return; }
+            status.textContent = T.working;
+            try {
+              const options = await post('passkey/options', {});
+              if (options.error) { status.textContent = options.error; return; }
+              options.challenge = dec(options.challenge);
+              (options.allowCredentials || []).forEach(c => c.id = dec(c.id));
+              const cred = await navigator.credentials.get({ publicKey: options });
+              const answer = await post('passkey/verify', assertion(cred));
+              if (answer.redirect) { location.href = answer.redirect; return; }
+              status.textContent = answer.error || T.failed;
+            } catch (e) { status.textContent = T.failed; }
+          });
+        }
+
+        if (D.page === 'enroll') {
+          const status = document.getElementById('status');
+          const totp = document.getElementById('totp');
+          (async () => {
+            // TOTP is offered only where this device can do no passkey at all.
+            const webauthn = !!window.PublicKeyCredential;
+            const platform = webauthn && await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().catch(() => false);
+            if (totp && !platform) totp.hidden = false;
+            if (!webauthn) document.getElementById('add').disabled = true;
+          })();
+          document.getElementById('add').addEventListener('click', async () => {
+            status.textContent = T.working;
+            try {
+              const options = await post('passkey/register/options', { receipt: RECEIPT });
+              if (options.error) { status.textContent = options.error; return; }
+              options.challenge = dec(options.challenge);
+              options.user.id = dec(options.user.id);
+              (options.excludeCredentials || []).forEach(c => c.id = dec(c.id));
+              const cred = await navigator.credentials.create({ publicKey: options });
+              const answer = await post('passkey/register', { receipt: RECEIPT, credential: JSON.stringify(attestation(cred)) });
+              if (answer.ok) { status.textContent = T.done; location.reload(); return; }
+              status.textContent = answer.error || T.failed;
+            } catch (e) { status.textContent = T.failed; }
+          });
+          const start = document.getElementById('totpStart');
+          if (start) start.addEventListener('click', async () => {
+            try {
+              const setup = await post('totp/enroll/start', { receipt: RECEIPT });
+              if (setup.error) { status.textContent = setup.error; return; }
+              document.getElementById('qr').innerHTML = setup.svg;
+              document.getElementById('secret').textContent = setup.secret;
+              document.getElementById('totpSetup').hidden = false;
+            } catch (e) { status.textContent = T.failed; }
+          });
+          const confirm = document.getElementById('totpConfirm');
+          if (confirm) confirm.addEventListener('click', async () => {
+            try {
+              const answer = await post('totp/enroll/confirm', { receipt: RECEIPT, code: document.getElementById('totpCode').value });
+              if (answer.error) { status.textContent = answer.error; return; }
+              document.getElementById('totpSetup').hidden = true;
+              document.getElementById('codes').textContent = answer.recoveryCodes.join('\n');
+              document.getElementById('recovery').hidden = false;
+            } catch (e) { status.textContent = T.failed; }
+          });
+        }
+        })();
+        """;
 
     private static string Back(StepUpPageTexts t, string url) =>
         "<p><a href=\"" + Enc(url) + "\">" + Enc(t.L("stepUp.back")) + "</a></p>";

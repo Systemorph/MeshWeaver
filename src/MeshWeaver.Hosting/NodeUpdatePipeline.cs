@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Text.Json.Nodes;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -91,7 +92,16 @@ internal static class NodeUpdatePipeline
             // version client-side (the old `Math.Max(existing,…) + 1`) ships a frame
             // whose base is out of date by the time it lands, so the owner's
             // version-guarded merge mishandles it — the read-your-writes-after-update bug.
-            _ => hub.GetMeshNodeStream(node.Path)
+            _ =>
+            {
+                // The icon rule (IconSafety), re-judged INSIDE the write against `live`. The
+                // validator above judged the change against the `existing` it read, and another
+                // writer can move the node between that read and this lambda: a stored refused
+                // icon repaired meanwhile would otherwise pass as "unchanged" and be written back
+                // over the repair. Same CHANGE-not-state rule; a refusal leaves `live` untouched and
+                // surfaces as the validator's UnauthorizedAccessException. Last run wins.
+                string? iconRefusal = null;
+                var write = hub.GetMeshNodeStream(node.Path)
                 .Update(live =>
                 {
                     // 🚨 No-op gate BEFORE the LastModified re-stamp: an UpdateNode carrying a
@@ -122,6 +132,12 @@ internal static class NodeUpdatePipeline
                         CreatedDate = live.CreatedDate,
                         CreatedBy = live.CreatedBy,
                     };
+                    var refusedIcon = string.Equals(candidate.Icon, live.Icon, StringComparison.Ordinal)
+                        ? null
+                        : IconSafety.Refusal(candidate.Icon);
+                    Volatile.Write(ref iconRefusal, refusedIcon);
+                    if (refusedIcon is not null)
+                        return live;
                     if (MeshNode.SerializedEquals(live, candidate, hub.JsonSerializerOptions))
                         return live;
                     // 🚨 Re-stamp LastModified at APPLY time (real change only).
@@ -136,7 +152,14 @@ internal static class NodeUpdatePipeline
                     // not, so the owner-apply lambda here is the one place every
                     // storage config shares.
                     return candidate with { LastModified = DateTimeOffset.UtcNow };
-                }));
+                });
+                return write
+                    .Where(_ => Volatile.Read(ref iconRefusal) is null)
+                    .Concat(Observable.Defer(() => Volatile.Read(ref iconRefusal) is { } refusal
+                        ? Observable.Throw<MeshNode>(new UnauthorizedAccessException(
+                            IconSafety.RefusalMessage(node.Path, refusal)))
+                        : Observable.Empty<MeshNode>()));
+            });
 
     // 🚨 A VALIDATOR COMPARES THE EXISTING NODE WITH THE PROPOSED ONE, SO BOTH MUST BE TYPED
     // ALIKE — and the pipeline, not the validator, owes it that (#3056 fallout, found by the

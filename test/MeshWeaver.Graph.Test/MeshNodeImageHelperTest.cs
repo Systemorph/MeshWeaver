@@ -69,8 +69,10 @@ public class MeshNodeImageHelperTest
         // (Controls.Html tiles) no scoped CSS can reach them, so the size must
         // live in the markup — first style attribute wins in HTML parsing.
         const string svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M0 0h24v24\"/></svg>";
-        var sized = MeshNodeImageHelper.SizeInlineSvg(svg, 48);
-        sized.Should().StartWith("<svg style=\"width: 48px; height: 48px; display: block;\"");
+        var markup = MeshNodeImageHelper.SizeInlineSvg(svg, 48);
+        markup.Should().StartWith("<img src=\"data:image/svg+xml,");
+        markup.Should().Contain("style=\"width: 48px; height: 48px; display: block;");
+        var sized = RenderedSvg.Decoded(markup);
         sized.Should().Contain("viewBox=\"0 0 24 24\"");
         // 🚨 And it PLATES (#4350). This icon paints no ground of its own, so injected as authored
         // it would take the surrounding text color and disappear on one of the two themes — the

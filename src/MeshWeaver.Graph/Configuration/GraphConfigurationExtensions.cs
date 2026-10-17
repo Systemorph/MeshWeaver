@@ -426,6 +426,13 @@ public static class GraphConfigurationExtensions
                 // set and a false CS0103. Stateless integrity rule, no hub dependency.
                 services.AddScoped<INodeValidator, CodeNodeSegmentNameValidator>();
 
+                // Keeps an icon that could only be active content out of the store (the write-side
+                // second line behind the inert-image renderers): an inline SVG must parse and hold
+                // drawing content only, a URL must be http(s)/relative/content:, a data: URI raster
+                // or a clean SVG. Judges a CHANGE of icon, so a node whose stored icon predates the
+                // rule stays editable. Stateless, like the guard above. See IconSafety.
+                services.AddScoped<INodeValidator, Security.IconMarkupValidator>();
+
                 // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
                 // NodeType's whitelist was honoured by the Create FORM alone and the write boundary
                 // asked nothing about it — so a direct CreateNodeRequest, an agent tool call, or a
