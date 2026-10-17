@@ -97,7 +97,7 @@ public class PlatformNeverDependsOnPluginsGuard
         ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase,
         [
             new KeyValuePair<string, string>("dotnet-test.yml",
-                "`shared-rules` reads AGENTS.md from all seven repos (#2732 — a per-repo self-check "
+                "`shared-rules` reads AGENTS.md from every repo in .github/shared-rules.json (#2732 — a per-repo self-check "
                 + "cannot detect the missed-repo case), and `cross-repo-pair` resolves the "
                 + "`Pairs-with:` pull request a surface-removing change declares (#2689 — the "
                 + "deleting half must land LAST). Both mint a scoped App installation token and "

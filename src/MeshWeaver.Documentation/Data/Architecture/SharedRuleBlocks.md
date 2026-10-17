@@ -1,7 +1,7 @@
 ---
 Name: Shared Rule Blocks
 Category: Architecture
-Description: How the fleet's seven AGENTS.md files are held identical where they overlap — the marker syntax, the register, the two hubs, and why the drift gate sweeps every repo from one place instead of each repo checking itself.
+Description: How the fleet's AGENTS.md files are held identical where they overlap — the baseline every repo carries, the marker syntax, the register, the two hubs, and why the drift gate sweeps every repo from one place instead of each repo checking itself.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M21 16v5h-5"/><path d="M3 16v5h5"/><path d="M9 9h6v6H9z"/></svg>
 ---
 
@@ -99,6 +99,35 @@ not own — still says it must carry the block, and a listed repo with no marker
   rule should eventually live**. When the maintainer does decide, changing `hub` to that repo turns
   the same gate from enforcing sameness into enforcing the direction of inheritance.
 
+## The baseline every repo carries
+
+Maintainer, 2026-10-17: every Systemorph repository's `AGENTS.md` carries the fleet's best-practice
+rules **from one maintained source, machine-checked**. The source is the hub copy of each block in
+core's `AGENTS.md`; the check is this gate. Which blocks a repository must carry depends on what it
+contains, not on who owns it:
+
+| Class | Blocks required | Why |
+|---|---|---|
+| **Every repository** | `rest-not-graphql`, `conserve-work-products`, `file-it-and-move-on`, `merge-latest-before-push` | Process rules: how an agent works with GitHub, with its own findings and with its work products. They read the same in a repository with no code at all. |
+| **Code or content that runs on a MeshWeaver 3 mesh** — core, MeshWeaver.Plugins, the node repos, Memex | the four above, plus `dispose-to-serve-new-state`, `never-hand-roll-ui`, `declared-not-derived` | Platform rules: their text names 3.x hubs and activations, platform controls and declared catalogues. |
+| **No mesh code** — a tooling repository (DecisionModels), an archive (Product-Promotion), a standalone portal on an older major (CreditReRate, MeshWeaver 2.4) | the four process blocks only | The platform blocks would be *false* guidance there: the APIs and mechanisms they name do not exist in that code. |
+
+`worktree-per-change-set` is not part of the baseline: it stays `hub: peers` among the three node
+repos whose text agrees, because core and Plugins carry a longer, differently worded worktree rule
+and no canonical home has been decided.
+
+**Client-private repositories carry the baseline but are NOT in the register.** Core is a public
+repository: listing a client's repository would publish its name, and a drift's word diff would
+print in a public CI log. Such a repository carries the blocks byte-identical all the same, and is
+checked from a private checkout — `check-shared-rules.py --manifest <a private copy of the register
+naming it> --local <repo>=<path>`. Never add one to `.github/shared-rules.json`.
+
+**A new repository** copies its blocks from core's `AGENTS.md` (the hub text, slots filled with its
+own values the way an existing spoke of the same class fills them), verifies them with
+`check-shared-rules.py --local`, and — once that pull request has merged — is added to `repos`, to
+the `required-in` of each block its class requires, and to the fleet-reader mints' `repositories:`
+lists, in one core change. The `/new-repo` skill points here.
+
 ## Why the sweep runs in one place
 
 The obvious design is for each repo to check itself against the hub. **That design structurally
@@ -109,13 +138,13 @@ of seven repos, the seventh has no pull request, so its gate never runs — and 
 were updated"* produces evidence identical to *"all seven were updated"*. Only a sweep that reads
 every repo from one place can tell those apart.
 
-So the gate is one job that reads all seven, and it runs in core — which owns the shared CI and is
+So the gate is one job that reads every registered repo, and it runs in core — which owns the shared CI and is
 the platform hub. It runs in two places:
 
 | Where | When | Reads |
 |---|---|---|
-| `dotnet-test.yml` → job `shared-rules` | every core pull request and push | core from the checkout (so a PR is judged on its own diff), the other six from their default branches |
-| `shared-rules.yml` → job `sweep` | daily at 05:45 UTC, on dispatch, and on a main push touching the gate | all seven from their default branches |
+| `dotnet-test.yml` → job `shared-rules` | every core pull request and push | core from the checkout (so a PR is judged on its own diff), every other registered repo from its default branch |
+| `shared-rules.yml` → job `sweep` | daily at 05:45 UTC, on dispatch, and on a main push touching the gate | every registered repo from its default branch |
 
 The scheduled half exists because drift does not need a pull request to appear. In a week when the
 satellites are busy and core is quiet, the fleet could be inconsistent for days with every check
@@ -134,7 +163,7 @@ bypass, and adding one would make the gate decorative.
 
 ## No skip-trapdoor
 
-Six of the seven repos are private, so this gate genuinely needs a credential — precisely the
+Every registered repo except core is private, so this gate genuinely needs a credential — precisely the
 situation *"A gate NEVER tests its own inputs"* warns about, because GitHub paints a skipped job
 with the same tick as a passed one. So:
 
@@ -183,15 +212,15 @@ repos`. **Do step 3 as its own change set, after confirming all six, and read th
 default branches rather than from a local copy** — the gate does that by default, and `--local` for
 the repo the gate runs in is what makes a pull request judged on its own diff.
 
-**The register lists seven repositories, not eight, and that is a decision rather than an omission.**
-`Systemorph/MeshWeaver.Crm` carries an `AGENTS.md` and is deliberately absent from `repos`, so this
-gate never reads it and no block can require it. Admitting it has a hard prerequisite: the gate fails
-CLOSED on a repository whose `AGENTS.md` it cannot read, so the read-only fleet-reader App has to be
-installed on Crm first — an organisation-level act no change set here can perform. It has a second:
-because `required-in` is per block and a listed repository with no markers is red for **each** block
-naming it, Crm has to carry every block already registered before it is listed. So adding it is its
-own rollout, and a reader who "tidies up" the missing line reddens the gate on an unreadable
-repository. The rationale is recorded in `.github/shared-rules.json`'s own header, once.
+**Admitting a repository** has two prerequisites, because the gate fails CLOSED on a repository whose
+`AGENTS.md` it cannot read. First, the read-only fleet-reader App must reach it (measured 2026-10-17:
+installed org-wide) and the repository must be named in the `repositories:` list of every
+fleet-reader mint that reads the register — `dotnet-test.yml` (`shared-rules` and `cross-repo-pair`)
+and `shared-rules.yml`. Second, because `required-in` is per block and a listed repository with no
+markers is red for **each** block naming it, the repository must already carry every block it will
+be required to carry. So the spoke lands its copies first and core lists it afterwards — the same
+order as step 2 before step 3. `MeshWeaver.Crm` waited outside the register for exactly these two
+reasons; it joins once its baseline pull request has merged.
 
 **Changing the text of one:** the hub's copy is authoritative, so the hub's text lands first — but
 for a block with no slot around the changed words it cannot land GREEN in one step. The gate only
