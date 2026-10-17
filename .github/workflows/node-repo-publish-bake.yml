@@ -2161,6 +2161,11 @@ jobs:
       # (`--content` reads their `requires`); a waiting package that bakes no bundle at all is sealed
       # by no publication and blocks nothing (Plugins run 38527548962). An unreadable publication is
       # RED, nothing written. Runs whenever the bake ran; with nothing withheld it says so.
+      # `--content` also keeps every SOURCE-INCLUDE pair on one source set: a package whose sources a
+      # carried NodeType compiles (`shared=@Store/Core/Source`) waits with it when those files moved,
+      # and a fresh one compiling a carried package's moved sources waits too — otherwise every adopter
+      # declines the carried bytes (#2813) and every dependent gate that installs this publication is
+      # fatal. It reads carried commits from history: the narrowed checkout (fetch-depth 0) holds them.
       - name: "Per-package seal: replace every withheld package's fresh bytes by its sealed build"
         id: withhold
         if: steps.scope.outputs.scope != 'none' && steps.rebind.outputs.publish != 'false'
