@@ -3,19 +3,20 @@
 # was re-running ~25-minute CI cycles whose only failures were registry blips (`connection
 # refused` from ACR mid-login, the plugins registry answering 503 during #2915's window).
 #
-# 🚨 THIS IS NOT A FLAKE-RETRIER. The decision — the curated signature list, the EVERY-job rule,
-# and the refusal to act on an unreadable log — lives in `.github/scripts/retry-known-transients.py`
-# so that it can be PROVEN offline; read its module docstring before changing any of it.
+# 🚨 THIS IS NOT A FLAKE-RETRIER. The decision — the curated signature and annotation lists, the
+# EVERY-job rule, and the refusal to act on an input it cannot read — lives in
+# `.github/scripts/retry-known-transients.py` so that it can be PROVEN offline; read its module
+# docstring before changing any of it.
 #
-# 🚨 WHY THE DECISION MOVED OUT OF THIS FILE (#4534). As inline shell this step read its input with
-# `gh api …/actions/jobs/<id>/logs`, and between at least 2026-09-10 and 2026-09-17 that read failed
-# EVERY time, fleet-wide: the hosted runner's `gh` refuses to output a body containing terminal
-# escape sequences unless `--allow-escape-sequences` is passed, and every Actions log has them (each
-# `run:` line is echoed as `\e[36;1m…\e[0m`). The step then printed "log unreadable … cannot prove a
-# transient, no retry" and `exit 0` — a sentence that reads like a judgement, over a green tick, for
-# a week, with nobody noticing. The script reads the API DIRECTLY (no `gh`, so no dependency on a
-# CLI output policy that has already changed under us once) and treats "I cannot see my input" as a
-# RED, never a decline. An automation that cannot read its input must say so, not pass.
+# 🚨 CORE CALLS THE SAME LANE AS EVERY SATELLITE (node-repo-retry-transients.yml). The satellites'
+# hand-copied inline steward drifted from this one and went blind to runner deaths
+# (MeshWeaver.Manufacturing#84); one lane, called by all, is how a fix here reaches them. Calling it
+# from core too means core's own failed runs exercise the lane exactly as a satellite's do.
+#
+# 🚨 #4534 — why the decision is a script that reads the API directly, not inline shell around `gh`:
+# the hosted runner's `gh` refuses to output a body containing terminal escape sequences, every
+# Actions log has them, and for a week the steward printed "log unreadable … no retry" over a green
+# tick. The script treats "I cannot see my input" as a RED, never a decline.
 name: Retry known transients
 
 on:
@@ -24,33 +25,16 @@ on:
     types: [completed]
 
 permissions:
-  actions: write      # list the run's jobs, read their logs, POST rerun-failed-jobs
-  contents: read      # check this repo out for the decision script
+  actions: write      # list the run's jobs, read their logs, POST the one rerun
+  checks: read        # check-runs/<job>/annotations — the only record of a runner death
+  contents: read
 
 jobs:
+  # 🚨 A LOCAL `uses:` resolves at the triggering commit of the DEFAULT branch (workflow_run always
+  # runs the default branch's file), never at a fork's head — this job holds `actions: write`.
   retry:
-    if: >
-      github.event.workflow_run.conclusion == 'failure'
-      && github.event.workflow_run.run_attempt == 1
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      # 🚨 DEFAULT REF ON PURPOSE. On `workflow_run` this checks out the DEFAULT BRANCH, which is
-      # what must run: the triggering run may be a fork's pull request, and this job holds
-      # `actions: write`. Never add `ref: github.event.workflow_run.head_branch` — that would
-      # execute an untrusted contributor's script with the token that can rerun this repo's jobs.
-      - uses: actions/checkout@v7
-
-      # An unproven gate is no gate — and this one spent a week proving exactly that. The self-test
-      # is offline and takes seconds; it drives the read failures, the EVERY-job rule, and the
-      # signature list in both directions, so a steward that has gone blind again cannot reach the
-      # step below wearing a clean decision.
-      - name: "The steward reads a log, refuses a real red, and reds when blind (self-test)"
-        run: python3 .github/scripts/retry-known-transients.py --self-test
-
-      - name: Rerun iff EVERY failure matches a named transient
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_ID: ${{ github.event.workflow_run.id }}
-          REPO: ${{ github.repository }}
-        run: python3 .github/scripts/retry-known-transients.py --repo "$REPO" --run-id "$RUN_ID"
+    uses: ./.github/workflows/node-repo-retry-transients.yml
+    permissions:
+      actions: write
+      checks: read
+      contents: read

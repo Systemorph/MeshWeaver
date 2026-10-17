@@ -74,11 +74,11 @@ Each tab accepts any control as its view — including nested stacks, data grids
 
 ```csharp --render TabsComplex --show-code
 var overviewContent = Controls.Stack
-    .WithView(Controls.Html("<h3>Overview</h3>"))
+    .WithView(Controls.H3("Overview"))
     .WithView(Controls.Label("Dashboard content here"));
 
 var settingsContent = Controls.Stack
-    .WithView(Controls.Html("<h3>Settings</h3>"))
+    .WithView(Controls.H3("Settings"))
     .WithView(Controls.Label("Configuration options"));
 
 Controls.Tabs

@@ -186,7 +186,7 @@ The cell below runs in the kernel and renders a small stack of controls — the 
 ```csharp --render UIArchExample --show-code
 MeshWeaver.Layout.Controls.Stack
     .WithView(MeshWeaver.Layout.Controls.Markdown("### Controls Language — live demo\nEach `.WithView(...)` call adds a child to this stack."))
-    .WithView(MeshWeaver.Layout.Controls.Html("<p>A plain HTML paragraph rendered inside a stack control.</p>"))
+    .WithView(MeshWeaver.Layout.Controls.Body("A plain text paragraph rendered inside a stack control."))
     .WithView(MeshWeaver.Layout.Controls.Button("Click Me"))
 ```
 
