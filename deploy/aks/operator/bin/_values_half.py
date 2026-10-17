@@ -27,14 +27,6 @@ Anything else in the half — `parameters`, `pgbackrest`, `secrets.memex_postgre
 """
 import json, sys
 
-try:
-    import yaml
-except ImportError:  # the operator image installs PyYAML; a missing module is a named refusal
-    print("::error::_values_half.py needs PyYAML (python3 'yaml' module) — the operator image "
-          "installs it (Dockerfile: tdnf PyYAML). Refusing rather than guessing the half's keys.",
-          file=sys.stderr)
-    sys.exit(2)
-
 HALVES = ("memex_portal", "memex_migration")
 ALIAS = {"memex_postgres_password": "MEMEX_PASSWORD"}
 LEAF_FOR = {v: k for k, v in ALIAS.items()}
@@ -45,12 +37,30 @@ def env_name(leaf):
     return ALIAS.get(leaf, leaf)
 
 
-def load(path):
+def _yaml():
+    # Only a YAML half needs PyYAML (a captured half is block YAML). What hosting-kv-ensure COMPOSES is
+    # JSON and is read by the standard library, so a Provision never depends on PyYAML: the aks-silos
+    # runner lacked it and the pg3 Provision stopped at 'Create Key Vault secrets' (2026-10-17).
     try:
-        doc = yaml.safe_load(open(path))   # a JSON object is valid YAML
-    except Exception as e:  # noqa: BLE001 — named, fatal
-        print(f"::error::the values half cannot be parsed ({type(e).__name__}) — refusing.", file=sys.stderr)
+        import yaml
+    except ImportError:  # the operator image installs PyYAML; a missing module is a named refusal
+        print("::error::_values_half.py needs PyYAML (python3 'yaml' module) to read a YAML values half — "
+              "the operator image installs it (Dockerfile: tdnf PyYAML). Refusing rather than guessing "
+              "the half's keys.", file=sys.stderr)
         sys.exit(2)
+    return yaml
+
+
+def load(path):
+    text = open(path).read()
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        try:
+            doc = _yaml().safe_load(text)
+        except Exception as e:  # noqa: BLE001 — named, fatal
+            print(f"::error::the values half cannot be parsed ({type(e).__name__}) — refusing.", file=sys.stderr)
+            sys.exit(2)
     if not isinstance(doc, dict):
         print("::error::the values half is not a mapping — refusing.", file=sys.stderr)
         sys.exit(2)
