@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# hosting-registry-coupon --registry-url <https://registry> --vault <vault> --object <vault object>
+#                         --tier <plan> --description <text> --mint-secret <vault object>
+#                         [--expires-days <n>] [--max-usages <n>]
+#
+# MINT a registration COUPON into Key Vault without anyone seeing it (Doc/Architecture/PluginRegistry
+# → "Coupons"). A coupon is a registration bootstrap key (`mwr_…`) that carries a PLAN, EXPIRES and
+# registers at most --max-usages instances (default 1). The deployment record names the object
+# (`operator.environment.REGISTRY_BOOTSTRAP_SECRET`), and the Provision's register step presents it
+# (`hosting-registry-register --bootstrap-secret`), so the instance is registered on its plan from
+# the beginning — not on `free`, with a person raising the plan on the registry afterwards.
+#
+#   object PRESENT → KEPT, never re-minted (it is the coupon the record names; a second mint would
+#                    leave a live, unspent coupon nobody holds). Its plan tag is reported.
+#   object ABSENT  → POST <registry>/api/instances/coupons with the registry's coupon-mint credential
+#                    (the vault object --mint-secret names; the registry's
+#                    `PluginCatalog:Coupons:MintSecret` — a credential that can do NOTHING but mint
+#                    bounded coupons, never Bootstrap:Secret). The plan is checked against the
+#                    registry's own tier ladder THERE: an id it does not know is refused (400) before
+#                    anything is written. The raw coupon goes into the vault through a mode-600
+#                    --file, tagged mw-source=coupon, mw-plan, mw-expires, mw-max-usages, mw-coupon-id
+#                    (metadata a dry run and a status view read without reading the value).
+#
+# 🚨 NEVER PRINTS a coupon or the mint credential: each lives in one shell variable or a mode-600
+# file; the credential reaches curl in its `-K -` config on STDIN (never argv); the coupon's sha256
+# fingerprint is the only fact that crosses back.
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-registry-coupon"
+
+registry="" vault="" object="" tier="" description="" mint_secret="" expires_days="30" max_usages="1"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --registry-url) registry="${2:-}";     shift 2 ;;
+    --vault)        vault="${2:-}";        shift 2 ;;
+    --object)       object="${2:-}";       shift 2 ;;
+    --tier)         tier="${2:-}";         shift 2 ;;
+    --description)  description="${2:-}";  shift 2 ;;
+    --mint-secret)  mint_secret="${2:-}";  shift 2 ;;
+    --expires-days) expires_days="${2:-}"; shift 2 ;;
+    --max-usages)   max_usages="${2:-}";   shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag registry-url "$registry"
+hosting::need_flag vault "$vault"
+hosting::need_flag object "$object"
+hosting::need_flag tier "$tier"
+hosting::need_flag description "$description"
+hosting::need_flag mint-secret "$mint_secret"
+hosting::safe_url registry-url "$registry"
+hosting::safe_name vault "$vault"
+hosting::safe_name object "$object"
+hosting::safe_name mint-secret "$mint_secret"
+[[ "$tier" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]] \
+  || hosting::die "tier '${tier}' is not a plan id (lowercase letters, digits, hyphens) — the registry's tier ladder (Admin/Tiers/*) names plans that way"
+[[ "$expires_days" =~ ^[0-9]{1,3}$ ]] && [ "$expires_days" -ge 1 ] && [ "$expires_days" -le 90 ] \
+  || hosting::die "expires-days '${expires_days}' must be 1–90 — a coupon never lives for ever"
+[[ "$max_usages" =~ ^[0-9]{1,2}$ ]] && [ "$max_usages" -ge 1 ] && [ "$max_usages" -le 10 ] \
+  || hosting::die "max-usages '${max_usages}' must be 1–10 (1 = a single-use coupon)"
+# The description is free text for the registry admin's list; it travels in a jq-composed body, but
+# it is still kept to plain words so it can never carry a shell or JSON surprise.
+[[ "$description" =~ ^[A-Za-z0-9][A-Za-z0-9\ ._:/-]{0,119}$ ]] \
+  || hosting::die "description must be plain words (letters, digits, space . _ : / -; at most 120) — name the deployment the coupon is for"
+
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the mint answer is JSON"
+
+kv_exists() {
+  hosting::kv_exists "$vault" "$1"; local rc=$?
+  [ "$rc" -eq 2 ] && hosting::die "could not LIST vault ${vault} to see whether $1 exists — refusing to read a refused listing as 'absent' (that would mint a second coupon). The identity needs \`list\` on ${vault}."
+  return "$rc"
+}
+
+if kv_exists "$object"; then
+  held_plan="$(az keyvault secret list --vault-name "$vault" --query "[?name=='${object}'].tags.\"mw-plan\" | [0]" -o tsv 2>/dev/null || true)"
+  hosting::log "keep    ${object} (exists — a coupon is minted once; it carries plan ${held_plan:-<untagged>}). To replace it, revoke it on the registry and delete the object first."
+  hosting::say registry_coupon kept
+  hosting::say registry_coupon_plan "${held_plan:-unknown}"
+  exit 0
+fi
+
+if hosting::dry; then
+  hosting::log "(dry run) ${object} is absent from vault ${vault} — a real run mints a coupon for plan '${tier}' (${max_usages} use(s), expires in ${expires_days} day(s)) at ${registry}/api/instances/coupons with the credential in ${mint_secret}, and stores it under ${object} (never shown)"
+  hosting::say registry_coupon dry-run
+  hosting::say registry_coupon_plan "$tier"
+  exit 0
+fi
+
+hosting::step "Mint the coupon at the plugin registry"
+# shellcheck disable=SC2034  # read BY NAME below (printf into curl's -K - config), never an argument
+cred="$(az keyvault secret show --vault-name "$vault" --name "$mint_secret" --query value -o tsv 2>/dev/null)" \
+  || hosting::die "could not read the coupon-mint credential ${mint_secret} from vault ${vault} — nothing was minted. It is the registry's PluginCatalog:Coupons:MintSecret; grant the operator identity secret GET on it."
+[ -n "$cred" ] || hosting::die "vault ${vault} object ${mint_secret} is EMPTY — nothing was minted."
+body="$(C_TIER="$tier" C_DESC="$description" C_DAYS="$expires_days" C_USES="$max_usages" \
+  jq -cn '{tier: env.C_TIER, description: env.C_DESC, expiresDays: (env.C_DAYS | tonumber), maxUsages: (env.C_USES | tonumber)}')"
+out="$(mktemp)"
+status="$(printf 'header = "X-MeshWeaver-Coupon-Secret: %s"\n' "$cred" \
+  | curl -sS -K - -X POST -H 'Content-Type: application/json' --data "$body" \
+      -o "$out" -w '%{http_code}' --max-time 30 "${registry}/api/instances/coupons" 2>/dev/null)" || true
+unset cred
+status="${status:-000}"
+answer="$(cat "$out" 2>/dev/null || true)"; rm -f "$out"
+field() { printf '%s' "$answer" | jq -r --arg f "$1" 'if type == "object" then (.[$f] // empty | tostring) else empty end' 2>/dev/null; }
+case "$status" in
+  200) ;;
+  400) err="$(field error)"; unset answer; hosting::die "the registry refused the coupon (HTTP 400): ${err:-no reason given}. Nothing was minted." ;;
+  401|403) unset answer; hosting::die "the registry refused the coupon-mint credential in ${mint_secret} (HTTP ${status}) — it is not the registry's PluginCatalog:Coupons:MintSecret. Nothing was minted." ;;
+  404) unset answer; hosting::die "${registry} has no coupon mint (HTTP 404 on /api/instances/coupons): either it runs a build without it, or it configures no PluginCatalog:Coupons:MintSecret. Nothing was minted; a registry platform admin can mint the coupon by hand (Instance grants ▸ Registration keys, Uses = 1) and paste it on the control instance's record page as ${object}." ;;
+  503) err="$(field error)"; unset answer; hosting::die "the registry cannot mint coupons yet (HTTP 503): ${err:-not configured}. Nothing was minted." ;;
+  000) unset answer; hosting::die "the registry at ${registry} did not answer — nothing was minted. Retry once it answers." ;;
+  *)   unset answer; hosting::die "the registry at ${registry} answered HTTP ${status} to the coupon mint — not a verdict. Nothing was minted." ;;
+esac
+coupon_id="$(field id)"; coupon_tier="$(field tier)"; coupon_expires="$(field expiresAt)"
+umask 077
+coupon_file="$(mktemp)"
+trap 'hosting::on_exit; rm -f "$coupon_file"' EXIT
+printf '%s' "$answer" | jq -rj '.coupon // empty' > "$coupon_file" 2>/dev/null
+unset answer
+case "$(head -c 4 "$coupon_file")" in
+  mwr_) ;;
+  *) rm -f "$coupon_file"; hosting::die "the registry answered 200 but returned no mwr_ coupon — refusing to store it under ${object}. If one was minted, revoke it on the registry (Registration keys ▸ ${coupon_id:-?})." ;;
+esac
+[ "$coupon_tier" = "$tier" ] \
+  || { rm -f "$coupon_file"; hosting::die "the registry minted a coupon for plan '${coupon_tier:-?}', not '${tier}' — refusing to store it. Revoke it on the registry (Registration keys ▸ ${coupon_id:-?})."; }
+fp="$(hosting::fingerprint "$coupon_file")"
+
+hosting::step "Store the coupon in Key Vault"
+if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$coupon_file" \
+      --tags "mw-fp=${fp}" "mw-set-by=hosting-operator" "mw-set-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+             "mw-source=coupon" "mw-plan=${tier}" "mw-expires=${coupon_expires}" "mw-max-usages=${max_usages}" \
+             "mw-coupon-id=${coupon_id}" --output none; then
+  rm -f "$coupon_file"
+  hosting::die "the registry minted coupon ${coupon_id:-?} but it could not be stored under ${object} in vault ${vault} — and it is shown ONCE. Revoke it on the registry (Registration keys ▸ ${coupon_id:-?}) and re-request."
+fi
+rm -f "$coupon_file"
+kv_exists "$object" || hosting::die "${object} was written to vault ${vault} but is not listed — refusing to report a coupon the Provision will not find"
+hosting::log "minted  coupon ${coupon_id} for plan ${tier} (${max_usages} use(s), expires ${coupon_expires}) → ${object} in vault ${vault} (${fp})"
+hosting::say registry_coupon minted
+hosting::say registry_coupon_plan "$tier"
+hosting::say registry_coupon_id "$coupon_id"

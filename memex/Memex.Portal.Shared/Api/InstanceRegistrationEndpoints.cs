@@ -35,6 +35,9 @@ public static class InstanceRegistrationEndpoints
         // the registry that holds them (MeshWeaver#2802) — mapped from this one call so no host can
         // serve registration while the key lifecycle 404s.
         endpoints.MapInstanceKeyRotation();
+        // …and the coupon mint (a plan-bearing, single-use registration key minted into an
+        // operator's vault without anyone seeing it) — 404 until the registry configures it.
+        endpoints.MapRegistrationCoupons();
         return endpoints;
     }
 
@@ -81,8 +84,8 @@ public static class InstanceRegistrationEndpoints
                         MeshWeaverInstanceService.OpenRegistrationKeyConfigKey);
                 else
                     logger?.LogWarning(
-                        "Instance registration rejected for id '{InstanceId}' — invalid, revoked or "
-                        + "expired bootstrap key", body.InstanceId);
+                        "Instance registration rejected for id '{InstanceId}' — invalid, revoked, "
+                        + "expired or used-up (a spent coupon) bootstrap key", body.InstanceId);
                 return Observable.Return((IResult)Results.Json(
                     new { error = ex.Message }, statusCode: StatusCodes.Status401Unauthorized));
             })

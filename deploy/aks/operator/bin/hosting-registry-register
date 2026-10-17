@@ -17,7 +17,9 @@
 #                           naming the hand fix — never a silent re-registration.
 #   vault object ABSENT   → POST /api/instances/register with the bootstrap key (EMPTY = open
 #                           registration on the free plan; --bootstrap-secret names a vault object
-#                           holding a platform admin's `mwr_` key for a higher plan), the returned
+#                           holding a platform admin's `mwr_` key for a higher plan — normally a
+#                           COUPON minted for this deployment by hosting-registry-coupon, whose
+#                           `mw-plan` tag the dry run reports as the plan it registers on), the returned
 #                           `mwi_` key goes into the vault through a mode-600 --file, is read back
 #                           by id, and is then PROVEN to authenticate before the step reports.
 #
@@ -107,9 +109,23 @@ if kv_exists "$object"; then
 fi
 
 # ── absent: register, store, prove ────────────────────────────────────────────────────────────
+# The PLAN the registration will land on, read from the bootstrap object's `mw-plan` TAG — metadata
+# a COUPON carries from its mint (hosting-registry-coupon), never the value. A hand-pasted key has
+# no tag; then the registry's answer is the first word on the plan. No bootstrap key at all is open
+# registration: the free plan.
+coupon_plan=""
+if [ -n "$bootstrap_secret" ]; then
+  coupon_plan="$(az keyvault secret list --vault-name "$vault" --query "[?name=='${bootstrap_secret}'].tags.\"mw-plan\" | [0]" -o tsv 2>/dev/null || true)"
+  [ "$coupon_plan" = "None" ] && coupon_plan=""
+fi
 if hosting::dry; then
-  hosting::log "(dry run) ${object} is absent from vault ${vault} — a real run POSTs ${registry}/api/instances/register as '${instance}' (${display}, ${home}) with $([ -n "$bootstrap_secret" ] && echo "the bootstrap key in ${bootstrap_secret}" || echo "an EMPTY bootstrap key: open registration, free plan"), stores the returned key under ${object} and proves it authenticates"
+  if [ -n "$bootstrap_secret" ]; then
+    hosting::log "(dry run) ${object} is absent from vault ${vault} — a real run POSTs ${registry}/api/instances/register as '${instance}' (${display}, ${home}) presenting the coupon in ${bootstrap_secret}: the instance registers on plan ${coupon_plan:-<untagged: the plan the key was minted for>}; it stores the returned key under ${object} and proves it authenticates"
+  else
+    hosting::log "(dry run) ${object} is absent from vault ${vault} — a real run POSTs ${registry}/api/instances/register as '${instance}' (${display}, ${home}) with an EMPTY bootstrap key: open registration, plan free (the record names no coupon — operator.environment.REGISTRY_BOOTSTRAP_SECRET); it stores the returned key under ${object} and proves it authenticates"
+  fi
   hosting::say registry_registration dry-run
+  hosting::say registry_plan "${coupon_plan:-$([ -n "$bootstrap_secret" ] && echo unknown || echo free)}"
   exit 0
 fi
 
@@ -155,6 +171,12 @@ esac
 if [[ "$issued" =~ [\"\\[:space:]] ]]; then unset issued; hosting::die "the registry returned a key that is not a plain token — refusing to store it"; fi
 issued_hash="$(printf '%s' "$issued" | hosting::sha256)"
 hosting::log "registered '${instance}' at ${registry} on plan ${plan:-?} — key sha256 ${issued_hash:0:12}… (the key itself is not shown, here or anywhere)"
+if [ -n "$coupon_plan" ] && [ "$coupon_plan" != "${plan:-}" ]; then
+  # Not a refusal: the registration HAPPENED and the key is about to be stored — refusing here would
+  # strand an issued key. Said loudly, as a fact a reader of the run can grep for.
+  hosting::log "WARNING the coupon in ${bootstrap_secret} is tagged plan '${coupon_plan}', but the registry registered '${instance}' on '${plan:-?}' — the registry's answer is what licenses; set the plan on the registry (Instance grants ▸ '${instance}' ▸ Plan)"
+  hosting::say registry_plan_mismatch "${coupon_plan}->${plan:-unknown}"
+fi
 
 hosting::step "Store the instance key in Key Vault"
 umask 077

@@ -214,6 +214,7 @@ public static class InstanceGrantAdminSettingsTab
         {
             ["description"] = "",
             ["expiresDays"] = "",
+            ["maxUsages"] = "",
             ["keyId"] = "",
             ["tier"] = "",
         });
@@ -255,6 +256,14 @@ public static class InstanceGrantAdminSettingsTab
             .WithView(new TextFieldControl(new JsonPointerReference("expiresDays"))
             {
                 Label = host.Localize("registrationKeys.field.expiresDays"),
+                Placeholder = "∞",
+                DataContext = dataContext,
+            }.WithWidth("110px"))
+            // A usage limit makes the key a COUPON — "1" registers exactly one deployment on the
+            // key's plan and is then spent (RegistrationKey.MaxUsages). Empty = unlimited.
+            .WithView(new TextFieldControl(new JsonPointerReference("maxUsages"))
+            {
+                Label = host.Localize("registrationKeys.field.maxUsages"),
                 Placeholder = "∞",
                 DataContext = dataContext,
             }.WithWidth("110px"))
@@ -322,11 +331,23 @@ public static class InstanceGrantAdminSettingsTab
             expiresAt = DateTimeOffset.UtcNow.AddDays(days);
         }
 
+        int? maxUsages = null;
+        var usesText = data?.GetValueOrDefault("maxUsages")?.ToString()?.Trim();
+        if (!string.IsNullOrEmpty(usesText))
+        {
+            if (!int.TryParse(usesText, out var uses) || uses <= 0)
+            {
+                target.UpdateData(MintResultDataId, host.Localize("registrationKeys.error.maxUsages"));
+                return;
+            }
+            maxUsages = uses;
+        }
+
         var tier = data?.GetValueOrDefault("tier")?.ToString()?.Trim() ?? "";
         var service = host.Hub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
         service.Mint(
                 userId, context.Name ?? "", context.Email ?? "",
-                data?.GetValueOrDefault("description")?.ToString()?.Trim() ?? "", expiresAt, tier)
+                data?.GetValueOrDefault("description")?.ToString()?.Trim() ?? "", expiresAt, tier, maxUsages)
             .Subscribe(
                 result => target.UpdateData(MintResultDataId,
                     $"{host.Localize("registrationKeys.minted")}\n\n```\n{result.RawKey}\n```\n\n"
