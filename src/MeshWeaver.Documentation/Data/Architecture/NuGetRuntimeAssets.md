@@ -265,14 +265,24 @@ answer (#6863):
 - **A requested package that nothing holds** — not the folder, and every feed answered "no such
   package" — fails with an `InvalidOperationException` saying it was not found, naming the package,
   the folder and the feeds asked.
+- **The resolution is reactive, pooled, shared and bounded.** `INuGetAssemblyResolver.Resolve`
+  returns an observable, and platform code calls that; `ResolveAsync` remains only as the Task
+  bridge (`Resolve(…).Await(ct)`) for callers whose own signature is Task-based. The NuGet SDK is
+  Task-based, so its calls run as one leaf on the mesh's Http `IIoPool`. Callers must not wrap
+  `Resolve` in a slot of that same lane: a slot held while it waits on a leaf of its own lane can
+  starve the lane. One resolution per (packages, framework) is shared through an instance
+  `PromiseCache`. It keeps a success, and it evicts a failure on the shared side as the failure
+  settles, so the next caller starts a new attempt. An attempt that fails at once (an unparsable
+  version range) is evicted too, and every call makes exactly one attempt.
 - **Every resolution has a budget** (`NuGetAssemblyResolver.DefaultResolveBudget`, three minutes,
   below the compile pipeline's five-minute bound on a compile). NuGet's own HTTP client waits 100 s
   per request and retries, so a feed that accepts the connection and never answers used to hold a
-  resolution for many minutes. The resolution is shared by every caller with the same inputs and
-  ignores each caller's token, so a caller's bound only ended its own wait: the work, and the cache
-  entry later callers joined, ran on. Past the budget the resolution is cancelled and fails with a
-  `TimeoutException` naming the packages and the feeds. A failed resolution leaves the cache as it
-  settles, so the next caller starts afresh rather than receiving the old failure.
+  resolution for many minutes. The shared resolution ignored every caller's token, so a caller's
+  bound only ended its own wait while the work ran on. Past the budget the leaf's token is
+  cancelled, so NuGet itself stops, and the resolution fails with a `TimeoutException` naming the
+  packages and the feeds. A caller that unsubscribes still ends only its own wait.
+- **A failure is reported once**, as a warning naming the packages and the feeds, on the shared
+  side: once per attempt however many callers wait on it, and also when no caller is left.
 
 **Known limit: an installed diamond.** A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0. Online
 resolution meets the B 1.0 candidate, selects B 2.0, and installs only B 2.0. Offline, the walk still
@@ -305,7 +315,10 @@ The first configured feed refuses every connection, and some cases add a local f
   install lock.
 - An unknown package, with only an empty local feed configured, fails by name with no network
   call. A feed that accepts connections and never answers ends at a two-second test budget with
-  the `TimeoutException`, and the next call starts a new resolution. Same inputs on one resolver
+  the `TimeoutException`, the pool's in-flight count returns to zero (the leaf was cancelled, not
+  abandoned), and the next call starts a new resolution. An unparsable version range is one attempt
+  per call and never stays cached. A failure whose only caller stopped waiting is still logged,
+  once, naming the package and the feed. Same inputs on one resolver
   share one resolution. These three used to ask api.nuget.org, and the unknown-package case timed
   out whenever the live feed was slow to answer one 404. Tests that need real packages from the live
   feed stay in `NuGetAssemblyResolverTest` and skip when it is unreachable.

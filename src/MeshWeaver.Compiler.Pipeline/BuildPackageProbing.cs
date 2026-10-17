@@ -59,10 +59,13 @@ internal static class BuildPackageProbing
     /// directories for <paramref name="assemblyLocation"/>; emits one <see cref="Unit"/> and completes.
     /// Emits immediately when there is nothing to resolve.
     ///
-    /// <para>The resolution runs on <paramref name="resolvePool"/> — the HTTP lane, independent of the
-    /// Compile lane a kernel script holds while it waits for a NodeType to activate — through the
-    /// pool's COLD <see cref="IIoPool.Invoke{T}"/>, so the bound (or the caller's disposal) cancels the
-    /// wait and frees its slot; the resolver's own memoized resolution continues independently.</para>
+    /// <para>The resolution is the resolver's reactive <see cref="INuGetAssemblyResolver.Resolve"/>,
+    /// which runs its NuGet leaf on the Http lane itself — independent of the Compile lane a kernel
+    /// script holds while it waits for a NodeType to activate — and bounds it by its own budget. It
+    /// is deliberately NOT wrapped in <paramref name="resolvePool"/> any more: a slot of the Http lane
+    /// held while waiting on a leaf of the same lane can starve that lane. The bound (or the caller's
+    /// disposal) ends this wait; <paramref name="resolvePool"/> stays in the signature for its
+    /// callers.</para>
     ///
     /// <para>A resolution that fails or does not answer within <paramref name="bound"/> is logged as
     /// a WARNING naming the packages and the cause, and the load goes ahead: it then fails with the
@@ -89,7 +92,7 @@ internal static class BuildPackageProbing
             return Observable.Return(Unit.Default);
         }
 
-        return resolvePool.Invoke(ct => resolver.ResolveAsync(references, targetFramework: null, ct))
+        return resolver.Resolve(references)
             .Timeout(bound)
             .Do(resolved =>
             {

@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.NuGet;
@@ -395,6 +397,98 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
     {
         using var silent = new TcpListener(IPAddress.Loopback, 0);
         silent.Start(); // listens, never accepts or answers: the connection opens, the request hangs
+        var feed = WriteSilentFeedConfig(silent);
+        var budget = TimeSpan.FromSeconds(2);
+        using var pool = new MeshWeaver.Mesh.Threading.IoPool(4);
+        var resolver = new NuGetAssemblyResolver(
+            NullLogger<NuGetAssemblyResolver>.Instance,
+            Settings.LoadSpecificSettings(root, "nuget.config"),
+            PackagesFolder,
+            resolveBudget: budget,
+            pool: pool);
+        var request = new[] { new NuGetPackageReference("Acme.Does.Not.Exist", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = () => resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        var thrown = await first.Should().ThrowAsync<TimeoutException>();
+        thrown.Which.Message.Should().Contain("Acme.Does.Not.Exist 1.0.0")
+            .And.Contain($"'{feed}'")
+            .And.Contain("budget");
+
+        // The budget cancelled the LEAF, not only the wait: NuGet's own client would hold the request
+        // for 100 s, so the pool empties promptly only because the leaf's token was cancelled.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => pool.CurrentInFlight)
+            .Where(inFlight => inFlight == 0)
+            .FirstAsync()
+            .Should().Within(TimeSpan.FromSeconds(20))
+            .Emit("the expired resolution's leaf is cancelled and leaves the pool", ct);
+
+        // The failure is evicted: the next caller gets a NEW resolution, not the settled failure.
+        var retried = resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        retried.IsCompleted.Should().BeFalse("a settled failure must not be served from the cache");
+        await ((Func<Task>)(() => retried)).Should().ThrowAsync<TimeoutException>();
+    }
+
+    /// <summary>
+    /// A resolution that fails AT ONCE (an unparsable version range) must not stay cached, and each
+    /// call makes exactly ONE attempt: a failure that settled before the cache published its entry
+    /// used to escape eviction, and the caller who found it then started a second attempt.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ImmediateFailure_IsNotCached_AndEachCallMakesOneAttempt()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        var resolver = ColdResolver();
+        var attempts = 0;
+        resolver.OnResolutionStarting = () => Interlocked.Increment(ref attempts);
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "[1.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = () => resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        await first.Should().ThrowAsync<ArgumentException>();
+        Volatile.Read(ref attempts).Should().Be(1, "one call is one attempt");
+
+        var second = () => resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        await second.Should().ThrowAsync<ArgumentException>();
+        Volatile.Read(ref attempts).Should().Be(2, "the failure was evicted, so the next call tries afresh");
+    }
+
+    /// <summary>
+    /// The only caller stops waiting long before the shared resolution fails. Nobody observes that
+    /// failure, and it must still be reported: logged ONCE, naming the packages and the feeds.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task FailureNobodyWaitsFor_IsReportedOnce_NamingThePackagesAndTheFeeds()
+    {
+        using var silent = new TcpListener(IPAddress.Loopback, 0);
+        silent.Start();
+        var feed = WriteSilentFeedConfig(silent);
+        var log = new CapturingLogger();
+        var resolver = new NuGetAssemblyResolver(
+            log, Settings.LoadSpecificSettings(root, "nuget.config"), PackagesFolder,
+            resolveBudget: TimeSpan.FromSeconds(1));
+        var request = new[] { new NuGetPackageReference("Acme.Does.Not.Exist", "1.0.0") };
+
+        using (var leave = new CancellationTokenSource())
+        {
+            var waiting = resolver.ResolveAsync(request, targetFramework: null, ct: leave.Token);
+            leave.Cancel();
+            await ((Func<Task>)(() => waiting)).Should().ThrowAsync<OperationCanceledException>();
+        }
+
+        var report = await log.Warnings
+            .Where(m => m.Contains("Acme.Does.Not.Exist 1.0.0", StringComparison.Ordinal))
+            .FirstAsync()
+            .Should().Within(TimeSpan.FromSeconds(60))
+            .Emit("a failure nobody waits for is still reported", TestContext.Current.CancellationToken);
+        report.Should().Contain($"'{feed}'");
+        log.Snapshot.Count(m => m.Contains("Acme.Does.Not.Exist 1.0.0", StringComparison.Ordinal))
+            .Should().Be(1, "the shared failure is reported once, not once per caller");
+    }
+
+    private string WriteSilentFeedConfig(TcpListener silent)
+    {
         var feed = $"http://127.0.0.1:{((IPEndPoint)silent.LocalEndpoint).Port}/v3/index.json";
         File.WriteAllText(Path.Combine(root, "nuget.config"), $"""
             <?xml version="1.0" encoding="utf-8"?>
@@ -405,25 +499,29 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
               </packageSources>
             </configuration>
             """);
-        var budget = TimeSpan.FromSeconds(2);
-        var resolver = new NuGetAssemblyResolver(
-            NullLogger<NuGetAssemblyResolver>.Instance,
-            Settings.LoadSpecificSettings(root, "nuget.config"),
-            PackagesFolder,
-            resolveBudget: budget);
-        var request = new[] { new NuGetPackageReference("Acme.Does.Not.Exist", "1.0.0") };
-        var ct = TestContext.Current.CancellationToken;
+        return feed;
+    }
 
-        var first = () => resolver.ResolveAsync(request, targetFramework: null, ct: ct);
-        var thrown = await first.Should().ThrowAsync<TimeoutException>();
-        thrown.Which.Message.Should().Contain("Acme.Does.Not.Exist 1.0.0")
-            .And.Contain($"'{feed}'")
-            .And.Contain("budget");
+    /// <summary>Collects Warning-and-above messages, rendered, as a replayed stream.</summary>
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<NuGetAssemblyResolver>
+    {
+        private readonly System.Reactive.Subjects.ReplaySubject<string> warnings = new();
+        private ImmutableList<string> snapshot = ImmutableList<string>.Empty;
 
-        // The failure is evicted: the next caller gets a NEW resolution, not the settled failure.
-        var retried = resolver.ResolveAsync(request, targetFramework: null, ct: ct);
-        retried.IsCompleted.Should().BeFalse("a settled failure must not be served from the cache");
-        await ((Func<Task>)(() => retried)).Should().ThrowAsync<TimeoutException>();
+        public IObservable<string> Warnings => warnings;
+        public ImmutableList<string> Snapshot => Volatile.Read(ref snapshot);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel < Microsoft.Extensions.Logging.LogLevel.Warning) return;
+            var message = formatter(state, exception) + (exception is null ? string.Empty : " | " + exception.Message);
+            ImmutableInterlocked.Update(ref snapshot, s => s.Add(message));
+            warnings.OnNext(message);
+        }
     }
 
     /// <summary>The same inputs on one resolver share ONE resolution.</summary>

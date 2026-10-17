@@ -26,6 +26,9 @@
     <!-- NoReplaceMove: the package cache publishes its archives with a rename that cannot degrade into
          a copy (MeshWeaver#2190). Utils has no dependencies of its own. -->
     <ProjectReference Include="..\MeshWeaver.Utils\MeshWeaver.Utils.csproj" />
+    <!-- IIoPool + PromiseCache: the shared resolution runs its NuGet SDK leaf through the Http pool
+         and is shared through an instance promise-cache that evicts a failed attempt. -->
+    <ProjectReference Include="..\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
 
 </Project>
