@@ -124,6 +124,14 @@ On the Blazor client, `ItemTemplate.razor` iterates over the bound collection an
 
 The template's `JsonPointerReference("displayLabel")` resolves relative to each item's `DataContext`, producing paths like `/data/"assignments"/0/displayLabel`. Pointer resolution is entirely client-side — no round-trip per item.
 
+# Layout: a list is vertical unless it says otherwise
+
+An `ItemTemplateControl` with no `Orientation` renders its items **top to bottom**. Declare `.WithOrientation(Orientation.Horizontal)` for a row of chips or pills, and `.WithWrap(true)` when that row may run out of width.
+
+A common composition is a label/value list — each item a `LayoutGrid` with a `Controls.Subject` label (`xs: 12, sm: 4`) beside a `Controls.Body` value (`xs: 12, sm: 8`), so the pairs read as two columns and stack on a narrow screen. Leave the list's orientation undeclared, or declare it `Vertical`.
+
+> 🚨 **Renderers older than the vertical default lay an undeclared list out as ONE unwrapped row.** The Blazor view bound an absent orientation to `default(Orientation)`, which is `Horizontal`, so every item was squeezed side by side. In a label/value list each `LayoutGrid` (width 100%) then shrank until its label was drawn over its value. A view that must render correctly on such a portal declares `Vertical` explicitly.
+
 # Data Flow
 
 ```mermaid
@@ -171,5 +179,5 @@ MeshWeaver.Layout.Controls.Stack
 |----------|------|
 | `Template.BindMany` methods | `src/MeshWeaver.Layout/Template.cs` |
 | `ItemTemplateControl` record | `src/MeshWeaver.Layout/ItemTemplateControl.cs` |
-| Blazor renderer | `src/MeshWeaver.Blazor/Components/ItemTemplate.razor` |
+| Blazor renderer | MeshWeaver.Plugins `src/MeshWeaver.Blazor/Components/ItemTemplate.razor` (rendering test: `src/MeshWeaver.Blazor.Views.Test/ItemTemplateOrientationRenderTest.cs`) |
 | Layout test examples | `test/MeshWeaver.Layout.Test/LayoutTest.cs` — see `TestItemTemplate`, `TestDataBoundCheckboxes` |
