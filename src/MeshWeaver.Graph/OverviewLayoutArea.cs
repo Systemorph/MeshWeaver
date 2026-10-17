@@ -490,23 +490,18 @@ public static class OverviewLayoutArea
             : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
     }
 
-    /// <summary>Puts an inline <c>&lt;svg&gt;</c> icon through the backplate policy
-    /// (<see cref="IconBackplate.Ensure"/>) and then forces it to fill its container, by injecting a
-    /// <c>width/height:100%</c> style onto the root element — so an icon with a <c>viewBox</c> but no
-    /// explicit <c>width</c>/<c>height</c> (which a browser would render at the ~300×150 default and
-    /// overflow the tile) scales to its box instead.
+    /// <summary>An inline <c>&lt;svg&gt;</c> icon as an INERT <c>&lt;img&gt;</c> that fills its container —
+    /// plated through the backplate policy (<see cref="IconBackplate.Ensure"/>) and loaded from a
+    /// <c>data:</c> URI (<see cref="MeshNodeImageHelper.InlineSvgImageSource"/>), never injected as markup.
     ///
-    /// <para>🚨 The plate is not the caller's to remember, for the reason
-    /// <see cref="MeshNodeImageHelper.SizeInlineSvg"/> carries in full (#4350): this sizer is the
-    /// last thing that touches the markup before it is injected into a raw-HTML title row, so a
-    /// <c>currentColor</c> outline that skipped the policy inherited the heading's color and
-    /// vanished on one of the two themes. For an icon that already paints its own full-bleed plate
-    /// the policy is a no-op — its plate, hue and glyph are untouched — and the fill-to-box style
-    /// below remains the only markup this method adds.</para></summary>
+    /// <para>🚨 This used to splice a fill-the-box style onto the authored root tag and inject the
+    /// markup into the raw-HTML title row. A node icon is user-settable content and SVG can carry
+    /// active content; an image-loaded SVG cannot run any of it, which is why the icon is an image
+    /// here exactly as it is at <see cref="MeshNodeImageHelper.InlineSvgImage"/>. The plate stays part
+    /// of this sizer for the reason that method carries (#4350).</para></summary>
     internal static string SizeInlineSvg(string svg) =>
-        System.Text.RegularExpressions.Regex.Replace(IconBackplate.Ensure(svg).Trim(), "^<svg\\b",
-            "<svg style=\"width:100%;height:100%\" preserveAspectRatio=\"xMidYMid meet\"",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        $"<img src=\"{MeshNodeImageHelper.InlineSvgImageSource(svg.Trim())}\" alt=\"\" "
+        + "style=\"width:100%;height:100%;display:block;object-fit:contain;\" />";
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,

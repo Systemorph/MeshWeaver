@@ -49,6 +49,23 @@ Controls.Stack
     .WithView(Controls.Icon(FluentIcons.Star()))
 ```
 
+## Inline SVG icons render as images
+
+A node's `Icon` (and an `IconControl` value) may also hold inline `<svg>` markup. That value is
+user-settable content shown to other viewers, and SVG can carry script and event handlers, so it
+is **never injected into the page as markup**. Every renderer draws it as an `<img>` whose source
+is the icon as a `data:image/svg+xml` URI — an image-loaded SVG runs no script, fires no handler
+and loads nothing external:
+
+- server-side raw HTML: `MeshNodeImageHelper.InlineSvgImage(svg, pixels)` (and `SizeInlineSvg`,
+  which now returns the same inert image);
+- a renderer building its own element: `<img src="@MeshNodeImageHelper.InlineSvgImageSource(svg)">`.
+
+Both plate the icon first (`IconBackplate.Ensure`). One visual consequence: an image cannot inherit
+the page's text colour, so `currentColor` left inside an icon that paints its own plate resolves to
+black — pass `currentColor:` to `InlineSvgImage` / `InlineSvgImageSource` to give it a colour. An
+icon without its own plate is unaffected, because plating already recolours `currentColor` to white.
+
 ---
 
 # Progress
