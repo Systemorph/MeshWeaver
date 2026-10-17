@@ -246,26 +246,22 @@ On a clean run the log's `Status` ends at `Succeeded`; a `LogWarning` flips it t
 The cell below shows what a minimal executable Code node's C# looks like when it runs in the kernel. This is the same execution environment your scripts run in:
 
 ```csharp --render ExecuteScriptDemo --show-code
+record FlowStep(int Step, string Action, string Tool);
+
 var rows = new[]
 {
-    new { Step = 1, Action = "Search", Tool = "Search(\"nodeType:Code name:*import*\")" },
-    new { Step = 2, Action = "Verify", Tool = "Get(\"@.../ImportLargeClaims\")" },
-    new { Step = 3, Action = "Run",    Tool = "ExecuteScript(path=..., timeoutSeconds=120)" },
-    new { Step = 4, Action = "Check",  Tool = "Search(\"nodeType:LargeLoss ...\")" },
+    new FlowStep(1, "Search", "Search(\"nodeType:Code name:*import*\")"),
+    new FlowStep(2, "Verify", "Get(\"@.../ImportLargeClaims\")"),
+    new FlowStep(3, "Run",    "ExecuteScript(path=..., timeoutSeconds=120)"),
+    new FlowStep(4, "Check",  "Search(\"nodeType:LargeLoss ...\")"),
 };
 
 MeshWeaver.Layout.Controls.Stack
     .WithView(MeshWeaver.Layout.Controls.Markdown("### Typical agent flow for `ExecuteScript`"))
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<table style='width:100%;border-collapse:collapse'>" +
-        "<tr><th style='text-align:left;padding:6px 8px;border-bottom:2px solid #ccc'>Step</th>" +
-        "<th style='text-align:left;padding:6px 8px;border-bottom:2px solid #ccc'>Action</th>" +
-        "<th style='text-align:left;padding:6px 8px;border-bottom:2px solid #ccc'>MCP Tool Call</th></tr>" +
-        string.Concat(rows.Select(r =>
-            $"<tr><td style='padding:6px 8px;border-bottom:1px solid #eee'>{r.Step}</td>" +
-            $"<td style='padding:6px 8px;border-bottom:1px solid #eee'><b>{r.Action}</b></td>" +
-            $"<td style='padding:6px 8px;border-bottom:1px solid #eee;font-family:monospace'>{r.Tool}</td></tr>")) +
-        "</table>"))
+    .WithView(MeshWeaver.Layout.Controls.DataGrid(rows)
+        .WithColumn(new PropertyColumnControl<int> { Property = "step" }.WithTitle("Step"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "action" }.WithTitle("Action"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "tool" }.WithTitle("MCP Tool Call")))
 ```
 
 ## Related

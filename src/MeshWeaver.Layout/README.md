@@ -38,7 +38,7 @@ configuration.AddLayoutClient();
 
 ### Basic Controls
 ```csharp
-// Stack of HTML controls
+// Stack of controls
 Controls.Stack
     .WithView("Hello", "Hello")
     .WithView("World", "World")
@@ -61,7 +61,7 @@ return Controls.Stack
     )
     .WithView((area, _) =>
         area.GetDataStream<Toolbar>("toolbar")
-            .Select(tb => Controls.Html($"Report for year {tb.Year}")), 
+            .Select(tb => Controls.Label($"Report for year {tb.Year}")), 
         "Content"
     );
 ```
@@ -71,17 +71,17 @@ return Controls.Stack
 // Counter with click action
 Controls.Stack
     .WithView(
-        Controls.Html("Increase Counter")
+        Controls.Button("Increase Counter")
             .WithClickAction(context =>
                 context.Host.UpdateArea(
                     new("Counter/Counter"),
-                    Controls.Html((++counter))
+                    Controls.Label(++counter)
                 )
             ), 
         "Button"
     )
     .WithView(
-        Controls.Html(counter.ToString()), 
+        Controls.Label(counter), 
         "Counter"
     );
 ```
