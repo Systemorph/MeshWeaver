@@ -223,12 +223,11 @@ The cell below renders a small mock of the side panel's control strip so you can
 
 ```csharp --render SidePanelDemo --show-code
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Html("<b>Side Panel Header Controls</b>"))
+    .WithView(MeshWeaver.Layout.Controls.H4("Side Panel Header Controls"))
     .WithView(
         MeshWeaver.Layout.Controls.Stack
             .WithView(MeshWeaver.Layout.Controls.Button("+ New Thread"))
             .WithView(MeshWeaver.Layout.Controls.Button("↺ Resume"))
     )
-    .WithView(MeshWeaver.Layout.Controls.Html("<hr/>"))
-    .WithView(MeshWeaver.Layout.Controls.Html("<i>Main panel and side panel share space via a resizable splitter.</i>"))
+    .WithView(MeshWeaver.Layout.Controls.Markdown("*Main panel and side panel share space via a resizable splitter.*"))
 ```
