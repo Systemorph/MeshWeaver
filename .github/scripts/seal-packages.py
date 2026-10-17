@@ -457,20 +457,18 @@ class SourceIncludes:
             real.append(node)
         return "/".join(real)
 
-    def _texts(self, commit: str | None, prefix: str, needle: str,
-               node_only: bool = False) -> list[tuple[str, str]]:
+    def _texts(self, commit: str | None, prefix: str, needle: str) -> list[tuple[str, str]]:
         """(path, text) of every compiled-extension file under `prefix` (a folder, or
-        `<prefix>.<ext>`; real casing) at `commit` that contains `needle`. `node_only`: the node file
-        `<prefix>.<ext>` alone — what one `@@` include reads."""
+        `<prefix>.<ext>`; real casing) at `commit` that contains `needle`."""
         if commit is WORKTREE:
             base = self.repo / prefix
-            files = list(base.rglob("*")) if base.is_dir() and not node_only else []
+            files = list(base.rglob("*")) if base.is_dir() else []
             if base.parent.is_dir():
                 files += [base.parent / f"{base.name}{ext}" for ext in _COMPILED_EXTENSIONS]
             texts = ((str(f.relative_to(self.repo)), _read(f)) for f in sorted(files)
                      if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
             return [(p, t) for p, t in texts if t and needle in t]
-        specs = [*([] if node_only else [prefix]), *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS)]
+        specs = [prefix, *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS)]
         listed = self._git("grep", "-l", "-z", "-F", needle, commit, "--", *specs)
         if listed.returncode not in (0, 1):  # 1 = no match
             raise SystemExit(f"✗ seal-packages: could not read {prefix} at {_short(commit)} "
@@ -478,6 +476,30 @@ class SourceIncludes:
         paths = [row.split(":", 1)[1] for row in listed.stdout.split("\0") if ":" in row]
         texts = ((p, _git_show(self.repo, commit, p)) for p in paths if p.endswith(_COMPILED_EXTENSIONS))
         return [(p, t) for p, t in texts if t]
+
+    def node_files(self, commit: str | None, node: str) -> list[str]:
+        """Every file that stores the ONE node at `node` (real casing), as NodeFileMapper maps it:
+        `<node>.<ext>` (a leaf) or `<node>/index.<ext>` (a node with children), any extension,
+        `index` matched case-insensitively."""
+        parent, _, name = node.rpartition("/")
+        files = [f"{parent}/{entry}" if parent else entry for entry, is_dir in self._entries(commit, parent)
+                 if not is_dir and "." in entry and entry.rsplit(".", 1)[0] == name]
+        files += [f"{node}/{entry}" for entry, is_dir in self._entries(commit, node)
+                  if not is_dir and "." in entry and entry.rsplit(".", 1)[0].lower() == "index"]
+        return sorted(files)
+
+    def _node_texts(self, commit: str | None, node: str) -> list[tuple[str, str]]:
+        """(path, text) of the compiled-extension files storing the node one `@@` include names. A
+        target stored in none of NodeFileMapper's representations is a refusal: what the include
+        substituted cannot be read."""
+        files = self.node_files(commit, node)
+        if not files:
+            raise SystemExit(f"✗ seal-packages: the `@@` target '{node}' is stored as neither `{node}.<ext>` nor "
+                             f"`{node}/index.<ext>` at {_short(commit) if commit else 'the checkout'} — what that "
+                             "include compiled in cannot be read")
+        texts = ((p, _read(self.repo / p) if commit is WORKTREE else _git_show(self.repo, commit, p))
+                 for p in files if p.endswith(_COMPILED_EXTENSIONS))
+        return [(p, t) for p, t in texts if t and "@@" in t]
 
     def edges(self, commit: str | None, package: str) -> dict[str, tuple[str, ...]] | None:
         """{other package: (path prefixes read, on-disk casing)}; None when `commit` is not in the
@@ -536,7 +558,7 @@ class SourceIncludes:
                 add(match.group(1), included=True)
         while pending:  # what is compiled in from another package's files, and what an @@ pulls in
             prefix, included = pending.pop()
-            for path, text in self._texts(commit, prefix, "@@", node_only=included):
+            for path, text in (self._node_texts(commit, prefix) if included else self._texts(commit, prefix, "@@")):
                 for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit, included)):
                     add(match.group(1), included=True)
         value = {p: tuple(sorted(v)) for p, v in sorted(found.items()) if v}
@@ -1782,6 +1804,29 @@ def source_include_reading_cases(expect) -> None:
         expect("Store/Shared/Outer AND, through it, Chess/Shared/Inner are recorded",
                "Store/Shared/Outer" in chain.get("Store", ()) and chain.get("Chess") == ("Chess/Shared/Inner",),
                str(chain))
+
+        print("an @@ target stored as `<path>/index.<ext>` (a node with children) is read too:")
+        for ext, body in ((".cs", "// @@Chess/Shared/ViaCs\nclass Outer2 {}\n"),
+                          (".json", json.dumps({"id": "Outer3", "content": {
+                              "$type": "CodeConfiguration", "code": "// @@Chess/Shared/ViaJson"}}))):
+            name = "Outer2" if ext == ".cs" else "Outer3"
+            put(f"Store/Shared/{name}/index{ext}", body)
+            put(f"Store/Shared/{name}/Child.cs", "class Child {}\n")
+        put("Chess/Shared/ViaCs.cs", "class ViaCs {}\n")
+        put("Chess/Shared/ViaJson.cs", "class ViaJson {}\n")
+        put("Hosting/Chain/Source/Index.cs", "// @@Store/Shared/Outer2\n// @@Store/Shared/Outer3\nclass Index {}\n")
+        c9 = commit("Hosting → @@ two index-backed Store nodes → @@ Chess")
+        for where, at in (("at a commit", c9), ("in the checkout", WORKTREE)):
+            via = set((SourceIncludes(repo).edges(at, "Hosting") or {}).get("Chess", ()))
+            expect(f"`Outer2/index.cs` is followed into Chess ({where})", "Chess/Shared/ViaCs" in via, str(via))
+            expect(f"`Outer3/index.json` is followed into Chess ({where})", "Chess/Shared/ViaJson" in via, str(via))
+        put("Hosting/Chain/Source/Missing.cs", "// @@Store/Shared/NoSuchNode\nclass Missing {}\n")
+        (repo / "Store/Shared/NoSuchNode").mkdir(parents=True)
+        (repo / "Store/Shared/NoSuchNode/Notes.txt").write_text("a folder, but no node file\n")
+        c10 = commit("an @@ target that is a folder with no node file")
+        stop = refused(lambda: SourceIncludes(repo).edges(c10, "Hosting"))
+        expect("an @@ target stored in none of NodeFileMapper's representations REFUSES",
+               stop is not None and "Store/Shared/NoSuchNode" in stop, str(stop))
 
 
 def main(argv: list[str]) -> int:
