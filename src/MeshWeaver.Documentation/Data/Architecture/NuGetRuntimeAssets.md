@@ -287,6 +287,16 @@ answer (#6863):
   bound only ended its own wait while the work ran on. Past the budget the leaf's token is
   cancelled, so NuGet itself stops, and the resolution fails with a `TimeoutException` naming the
   packages and the feeds. A caller that unsubscribes still ends only its own wait.
+- **Persistent-cache saves have their own lane.** A save is optional, is not awaited and sits
+  outside every resolution's budget. It therefore runs on the `PackageCache` pool, never on the
+  resolution's Http pool, where a stalled save would hold the slot the next resolution needs, even
+  a resolution the package folder answers. The resolver owns each save's subscription, so
+  disposing the resolver cancels a save that is still running.
+- **Callers read files off the subscriber's thread.** A warm resolution replays on the subscriber's
+  thread. The compilation service therefore composes package references
+  (`AssemblyName.GetAssemblyName`) and digests generator assemblies as blocking leaves on the
+  file-system pool. It enters those leaves only after `Resolve` emits, so no slot is held while it
+  waits for the resolution.
 - **A failure is reported once**, as a warning naming the packages and the feeds, on the shared
   side: once per attempt however many callers wait on it, and also when no caller is left.
 

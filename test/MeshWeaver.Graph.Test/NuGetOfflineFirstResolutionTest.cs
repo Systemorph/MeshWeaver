@@ -487,6 +487,69 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
             .Should().Be(1, "the shared failure is reported once, not once per caller");
     }
 
+    /// <summary>
+    /// A persistent-cache save that never finishes must cost its own lane and nothing else: with ONE
+    /// resolution slot, a package the folder already holds still resolves while the save is stalled,
+    /// and disposing the resolver cancels the save it owns.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AStalledCacheSave_NeverDelaysAResolution_AndEndsWithTheResolver()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        Publish("Acme.Offline.A", "1.0.0"); // cold: installed from the feed, which triggers a save
+        Install("Acme.Offline.B", "1.0.0"); // warm: answered by the package folder
+        using var resolutionPool = new MeshWeaver.Mesh.Threading.IoPool(1);
+        using var cacheLane = new MeshWeaver.Mesh.Threading.IoPool(1);
+        var cache = new StallingPackageCache();
+        var resolver = new NuGetAssemblyResolver(
+            NullLogger<NuGetAssemblyResolver>.Instance,
+            Settings.LoadSpecificSettings(root, "nuget.config"),
+            PackagesFolder,
+            cache,
+            pool: resolutionPool,
+            cachePool: cacheLane);
+        var ct = TestContext.Current.CancellationToken;
+
+        await resolver.Resolve([new NuGetPackageReference("Acme.Offline.A", "1.0.0")])
+            .Should().Within(TimeSpan.FromSeconds(30))
+            .Emit("the cold package installs; its persistent-cache save is not awaited", ct);
+        await cache.SaveStarted.Should().Within(TimeSpan.FromSeconds(30))
+            .Emit("the save runs — and stalls", ct);
+
+        await resolver.Resolve([new NuGetPackageReference("Acme.Offline.B", "1.0.0")])
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Emit("an installed package resolves while a cache save is stalled", ct);
+
+        resolver.Dispose();
+        await cache.SaveCancelled.Should().Within(TimeSpan.FromSeconds(10))
+            .Emit("disposing the resolver cancels the save it owns", ct);
+    }
+
+    /// <summary>A persistent cache that holds nothing and whose save never finishes until cancelled.</summary>
+    private sealed class StallingPackageCache : INuGetPackageCache
+    {
+        private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> started = new();
+        private readonly System.Reactive.Subjects.AsyncSubject<System.Reactive.Unit> cancelled = new();
+
+        public IObservable<System.Reactive.Unit> SaveStarted => started;
+        public IObservable<System.Reactive.Unit> SaveCancelled => cancelled;
+
+        public Task<bool> TryHydrateAsync(string packageId, string version, string targetPackageFolder, CancellationToken ct) =>
+            Task.FromResult(false);
+
+        public Task SaveAsync(string packageId, string version, string sourcePackageFolder, CancellationToken ct)
+        {
+            ct.Register(() =>
+            {
+                cancelled.OnNext(System.Reactive.Unit.Default);
+                cancelled.OnCompleted();
+            });
+            started.OnNext(System.Reactive.Unit.Default);
+            started.OnCompleted();
+            return Observable.Never<System.Reactive.Unit>().Await(ct);
+        }
+    }
+
     private string WriteSilentFeedConfig(TcpListener silent)
     {
         var feed = $"http://127.0.0.1:{((IPEndPoint)silent.LocalEndpoint).Port}/v3/index.json";

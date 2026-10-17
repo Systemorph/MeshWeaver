@@ -51,6 +51,9 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     // Owns every shared resolution's connection, so disposing the resolver (the DI singleton dies with
     // its mesh) releases them, and terminates any subscriber still attached, on the release lane.
     private readonly CompositeDisposable _connections = new();
+    // Owns every in-flight persistent-cache save, so none outlives the resolver.
+    private readonly CompositeDisposable _saves = new();
+    private readonly IIoPool _cachePool;
     private readonly ReleaseLane _releaseLane;
     private readonly IIoPool _pool;
     private readonly TimeSpan _resolveBudget;
@@ -90,7 +93,24 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         INuGetPackageCache? packageCache = null,
         ReleaseLane? releaseLane = null)
         : this(logger, DefaultSettings(), null, packageCache,
-            pool: ioPools.Get(IoPoolNames.Http), releaseLane: releaseLane)
+            pool: ioPools.Get(IoPoolNames.Http), releaseLane: releaseLane,
+            cachePool: ioPools.Get(IoPoolNames.PackageCache))
+    {
+    }
+
+    /// <summary>
+    /// Creates a resolver outside a mesh — a command-line bake, a build tool — on the pool the
+    /// caller NAMES. There is no default: a process without a mesh chooses its pool explicitly
+    /// (<see cref="IoPool.Unbounded"/> included), so nothing ever lands on one by omission.
+    /// </summary>
+    /// <param name="logger">Logger for resolution and install outcomes.</param>
+    /// <param name="pool">The pool the NuGet SDK leaf runs on.</param>
+    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    public NuGetAssemblyResolver(
+        MsLogging.ILogger<NuGetAssemblyResolver> logger,
+        IIoPool pool,
+        INuGetPackageCache? packageCache = null)
+        : this(logger, DefaultSettings(), null, packageCache, pool: pool)
     {
     }
 
@@ -122,6 +142,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     /// <param name="resolveBudget">The budget of one resolution; <c>null</c> takes <see cref="DefaultResolveBudget"/>.</param>
     /// <param name="pool">The pool the NuGet SDK leaf runs on; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
     /// <param name="releaseLane">The lane released connections terminate on; <c>null</c> gives the resolver its own.</param>
+    /// <param name="cachePool">The lane persistent-cache saves run on — never the resolution's pool; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
     internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         ISettings settings,
@@ -129,8 +150,10 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
         INuGetPackageCache? packageCache = null,
         TimeSpan? resolveBudget = null,
         IIoPool? pool = null,
-        ReleaseLane? releaseLane = null)
+        ReleaseLane? releaseLane = null,
+        IIoPool? cachePool = null)
     {
+        _cachePool = cachePool ?? IoPool.Unbounded;
         _releaseLane = releaseLane ?? new ReleaseLane();
         this.logger = logger;
         _settings = settings;
@@ -210,11 +233,15 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
             .AutoConnectOwnedBy(_connections, _releaseLane, nameof(NuGetAssemblyResolver));
 
     /// <summary>
-    /// Releases every shared resolution's connection: an attempt still in flight is cancelled, and a
-    /// subscriber still attached, or arriving later, is terminated with an
-    /// <see cref="ObjectDisposedException"/>.
+    /// Cancels every persistent-cache save still running, and releases every shared resolution's
+    /// connection: an attempt still in flight is cancelled, and a subscriber still attached, or
+    /// arriving later, is terminated with an <see cref="ObjectDisposedException"/>.
     /// </summary>
-    public void Dispose() => _connections.Dispose();
+    public void Dispose()
+    {
+        _saves.Dispose();
+        _connections.Dispose();
+    }
 
     /// <summary>
     /// Test seam: called on the pool thread as each resolution attempt starts. Null in production.
@@ -695,13 +722,27 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
                 _nugetLogger),
             token: ct);
 
-        // The persistent-cache save is its own leaf on the pool, not awaited, so a slow upload never
-        // holds the compile path; its failure is logged, never lost.
-        _pool.Invoke(saveCt => _packageCache.SaveAsync(info.Id, versionString, installedPath, saveCt))
-            .Subscribe(_ => { }, ex => MsLogging.LoggerExtensions.LogWarning(logger, ex,
-                "Failed to save NuGet package {Id} {Version} to persistent cache", info.Id, versionString));
+        SavePersistently(info.Id, versionString, installedPath);
 
         return installedPath;
+    }
+
+    /// <summary>
+    /// The persistent-cache save: optional, so not awaited, and run on its OWN lane
+    /// (<see cref="IoPoolNames.PackageCache"/>) — a stalled save sits outside every resolution's
+    /// budget, and on the resolution's pool it would hold the slot the next resolution needs, even
+    /// one the package folder answers. The resolver owns the subscription, so disposing it cancels
+    /// a save still running; a failure is logged, never lost.
+    /// </summary>
+    private void SavePersistently(string id, string version, string installedPath)
+    {
+        var save = new SingleAssignmentDisposable();
+        _saves.Add(save);
+        save.Disposable = _cachePool
+            .Invoke(saveCt => _packageCache.SaveAsync(id, version, installedPath, saveCt))
+            .Finally(() => _saves.Remove(save))
+            .Subscribe(_ => { }, ex => MsLogging.LoggerExtensions.LogWarning(logger, ex,
+                "Failed to save NuGet package {Id} {Version} to persistent cache", id, version));
     }
 
     /// <summary>

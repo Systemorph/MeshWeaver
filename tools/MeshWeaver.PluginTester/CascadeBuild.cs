@@ -331,9 +331,12 @@ public static class CascadeBuild
         var attribution = new Lazy<ReferenceGapAttribution>(
             () => ReferenceGapAttribution.Create(baseReferences, host.AppDirectory),
             LazyThreadSafetyMode.ExecutionAndPublication);
+        // No mesh in this process, so no mesh pools: the resolver's pool is named here, explicitly —
+        // the unbounded fallback, as this tool used before the resolver took a pool.
         var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
-            ?? NullLogger<NuGetAssemblyResolver>.Instance);
+            ?? NullLogger<NuGetAssemblyResolver>.Instance,
+            MeshWeaver.Mesh.Threading.IoPool.Unbounded);
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-cascade-build-{Environment.ProcessId}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(workDirectory);

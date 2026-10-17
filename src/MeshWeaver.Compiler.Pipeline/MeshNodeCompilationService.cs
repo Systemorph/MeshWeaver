@@ -1682,10 +1682,14 @@ internal class MeshNodeCompilationService(
             allNugetRefs.Count > 0
                 ? nugetResolver.Resolve(allNugetRefs)
                     // One assembly per name (CompileReferences.WithPackageAssemblies) — the same
-                    // composition as the emit path, so diagnostics agree with the compile.
-                    .Select(resolved => CompileReferences
+                    // composition as the emit path, so diagnostics agree with the compile. It READS
+                    // the assembly files (AssemblyName.GetAssemblyName), and a warm resolution replays
+                    // on the subscriber's thread, so the composition is its own blocking leaf on the
+                    // file-system lane — taken only AFTER the resolution emits, so no slot is held
+                    // while waiting for it.
+                    .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => CompileReferences
                         .WithPackageAssemblies(References, resolved.AssemblyPaths)
-                        .ToImmutableArray())
+                        .ToImmutableArray()))
                 : Observable.Return(References.ToImmutableArray());
 
         return referencesObs.Select(references =>
@@ -2102,8 +2106,12 @@ internal class MeshNodeCompilationService(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, []))
                         : nugetResolver
                             .Resolve(prepared.NuGetReferences)
-                            .Select(resolved => GeneratedInputDigestOf(
-                                assemblyName, prepared.Source, resolved.AssemblyPaths)))
+                            // The digest reads the generator assemblies (their MVIDs); a warm
+                            // resolution replays on the subscriber's thread, so the read is a
+                            // blocking leaf on the file-system lane, entered only once the
+                            // resolution has emitted.
+                            .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => GeneratedInputDigestOf(
+                                assemblyName, prepared.Source, resolved.AssemblyPaths))))
                     .Take(1),
                 _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path)
             .Select(digest => (string?)digest)
