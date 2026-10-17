@@ -225,7 +225,10 @@ bound NodeType is T"* (optionally narrowed to some addresses, or to the activati
   from the embedded documentation it refused every live Doc NodeType as unknown, from the type's own
   recycle cascade, on every replica. A store read that FAULTS now surfaces as a fault — the cascade
   logs that nothing was recycled because the type could not be read — and is never reported as an
-  unknown type.
+  unknown type. 🚨 The store read alone did not end the refusals on a DB-synced `Doc` partition: there
+  the STORE itself lost the five types on every roll, because the migration's doc search backfill
+  wrote them back BARE, which is also what retyped the live definition hubs and started each cascade
+  — see [Static Repo Import](../StaticRepoImport) ("It is NOT harmless on a DB-synced Doc partition").
 - **Only System's requests are acted on.** Each process re-validates what it reads and refuses a
   request node not created by System — a platform admin, who holds `Admin`, cannot bypass the checks
   by writing `Admin/_Recycle` directly.
