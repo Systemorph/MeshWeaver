@@ -42,6 +42,13 @@ internal static class InboxDrainWatch
             var observer = Observer.Synchronize(downstream);
             var unfinished = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
             var queue = new Subject<MeshNode>();
+            // 🚨 Claiming, enqueueing and teardown are ONE critical section. Disposing the listing
+            // does not wait for a listing callback already running on another thread, so without it
+            // a callback could enqueue into a disposed queue (an ObjectDisposedException outside any
+            // error handler) or register claims AFTER teardown released them — stranded until the
+            // next boot. Nothing inside awaits: it is a plain synchronous section.
+            var gate = new object();
+            var tornDown = false;
             var drains = queue
                 .Select(node => Observable.Defer(() => drain(node))
                     // On COMPLETION only: a drain disposed mid-flight by the opening's end has not
@@ -52,16 +59,36 @@ internal static class InboxDrainWatch
             var listing = Observable.Defer(openListing).Subscribe(
                 nodes =>
                 {
-                    foreach (var node in claim(nodes ?? []))
+                    lock (gate)
                     {
-                        ImmutableInterlocked.Update(ref unfinished, set => set.Add(node.Path));
-                        queue.OnNext(node);
+                        if (tornDown)
+                            return;
+                        var claimed = claim(nodes ?? []).ToArray();
+                        if (tornDown)
+                        {
+                            // Torn down while claiming (re-entrantly, from inside the claim):
+                            // these claims were made after teardown collected the others.
+                            if (claimed.Length > 0)
+                                release(claimed.Select(n => n.Path).ToImmutableHashSet(StringComparer.Ordinal));
+                            return;
+                        }
+                        foreach (var node in claimed)
+                        {
+                            ImmutableInterlocked.Update(ref unfinished, set => set.Add(node.Path));
+                            queue.OnNext(node);
+                        }
                     }
                 },
                 observer.OnError,
                 observer.OnCompleted);
             return Disposable.Create(() =>
             {
+                lock (gate)
+                {
+                    if (tornDown)
+                        return;
+                    tornDown = true;
+                }
                 listing.Dispose();
                 drains.Dispose();
                 queue.Dispose();

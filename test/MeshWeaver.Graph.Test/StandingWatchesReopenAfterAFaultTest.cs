@@ -267,7 +267,8 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
         };
 
         await ingest.StartAsync(TestContext.Current.CancellationToken);
-        await Eventually(() => source.Opened.Count == 1, "the index is ensured and the inbox watch opens");
+        await Eventually(() => source.Opened.Count == 1 && source.Opened[0].HasObservers,
+            "the index is ensured and the inbox watch is subscribed");
         source.Opened[0].OnNext([NodeAt(a, "x"), NodeAt(b, "x")]);
         drained.Should().Equal([a], "B is queued behind A's unfinished drain");
 
@@ -275,10 +276,179 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
         source.Opened[0].OnError(new QueryProviderStalledException("test-provider", TimeSpan.FromSeconds(1), "q", "system"));
         clock.Scheduled.Should().Be(1, "the listing's fault ends the opening at once, even with A's drain still in flight");
         clock.FireNext().Should().BeTrue();
-        source.Opened.Should().HaveCount(2);
+        await Eventually(() => source.Opened.Count == 2 && source.Opened[1].HasObservers,
+            "the re-opened inbox watch is subscribed");
         source.Opened[1].OnNext([NodeAt(a, "x"), NodeAt(b, "x")]);
 
         drained.Should().Equal([a, a, b], "both claims of the dead opening were released and are drained now");
+    }
+
+    /// <summary>
+    /// An INCOMPLETE listing (a provider that did not answer) is a fault, never a recovery: it may be
+    /// missing the entry that DISABLES a configured key. Folding it used to end the fail-closed window
+    /// and drop that entry, so the configured fallback verified again.
+    /// </summary>
+    [Fact]
+    public void InstanceSecretCatalog_AnIncompleteRecoveryListing_NeverReEnablesADisabledConfiguredKey()
+    {
+        const string section = "Test:Inbox";
+        const string sender = "mounted";
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"{section}:{sender}"] = "the-mounted-key",
+        }).Build();
+        var clock = new ManualReopenClock();
+        var openings = new List<Subject<QueryResultChange<MeshNode>>>();
+        IObservable<QueryResultChange<MeshNode>> Open()
+        {
+            var live = new Subject<QueryResultChange<MeshNode>>();
+            openings.Add(live);
+            return live;
+        }
+        using var catalog = new InstanceSecretCatalog(Mesh, null, Open, clock.Schedule);
+        catalog.Start();
+        var disabled = NodeAt(InstanceSecrets.PathOf($"{section}:{sender}"),
+            new InstanceSecretContent { ConfigKey = $"{section}:{sender}", Disabled = true });
+        openings[0].OnNext(Initial(disabled));
+        InstanceSecrets.Candidates(catalog, configuration, section).Should()
+            .BeEmpty("the portal DISABLED the mounted key — precondition");
+
+        openings[0].OnError(new QueryProviderStalledException("test-provider", TimeSpan.FromSeconds(1), "q", "system"));
+        clock.FireNext().Should().BeTrue();
+        openings[1].OnNext(new QueryResultChange<MeshNode>
+        {
+            ChangeType = QueryChangeType.Initial,
+            Items = [],
+            SilentProviders = ["test-provider"],
+        });
+
+        catalog.Faulted.Should().BeTrue("an incomplete listing is not the recovery that ends the fail-closed window");
+        InstanceSecrets.Candidates(catalog, configuration, section).Should()
+            .BeEmpty("a listing that may be missing the disabling entry must never re-enable the configured key");
+        clock.Scheduled.Should().Be(2, "the incomplete listing is refused as a fault and the query re-opens");
+
+        clock.FireNext().Should().BeTrue();
+        openings[2].OnNext(Initial(disabled));
+        catalog.Faulted.Should().BeFalse("a COMPLETE listing ends the window");
+        InstanceSecrets.Candidates(catalog, configuration, section).Should().BeEmpty("and the key stays disabled");
+    }
+
+    /// <summary>
+    /// The inbox secret is read PER DELIVERY. A key rotated after the watch opened — the endpoint
+    /// already accepting deliveries signed with the new key — must verify those deliveries, not
+    /// refuse and DELETE them with the retired key the opening started with.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ImageClosureIngest_AKeyRotatedAfterTheWatchOpened_StillVerifiesTheDelivery()
+    {
+        var configuration = Mesh.ServiceProvider.GetRequiredService<IConfiguration>();
+        var original = configuration[SecretKey];
+        var source = new ReopenableSource<IEnumerable<MeshNode>>();
+        using var ingest = new ImageClosureIngest(Mesh,
+            Mesh.ServiceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ImageClosureIngest>>())
+        {
+            OpenInboxOverride = source.Open,
+            ScheduleReopen = new ManualReopenClock().Schedule,
+        };
+        try
+        {
+            await ingest.StartAsync(TestContext.Current.CancellationToken);
+            await Eventually(() => source.Opened.Count == 1 && source.Opened[0].HasObservers,
+                "the inbox watch is subscribed with the ORIGINAL key in force");
+
+            const string rotated = "the-rotated-key";
+            configuration[SecretKey] = rotated;
+            var digest = "sha256:" + new string('e', 64);
+            var body = ClosureRecord(digest);
+            var delivery = NodeAt($"{ImageClosureNodes.InboxTarget}/{WebhookInbox.InboxContainer}/rotated",
+                new WebhookEvent
+                {
+                    ReceivedAt = DateTimeOffset.UtcNow,
+                    ContentType = "application/json",
+                    Body = body,
+                    Headers = ImmutableDictionary<string, string>.Empty.Add(WebhookInbox.SignatureHeader, Sign(body, rotated)),
+                });
+            source.Opened[0].OnNext([delivery]);
+
+            var written = ImageClosureNodes.PathOf("memex-portal-ai", digest);
+            var parent = written[..written.LastIndexOf('/')];
+            var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+            var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => access.RunAsSystem(() => meshService
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{parent} scope:children")).Take(1)))
+                .Where(c => c.Items.Any(n => n.Path == written))
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit("the delivery verified with the key in force when it was drained, and its record was written",
+                    TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            configuration[SecretKey] = original;
+        }
+    }
+
+    private static string Sign(string body, string secret) =>
+        "sha256=" + Convert.ToHexString(System.Security.Cryptography.HMACSHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(secret), System.Text.Encoding.UTF8.GetBytes(body))).ToLowerInvariant();
+
+    private static string ClosureRecord(string digest) =>
+        System.Text.Json.JsonSerializer.Serialize(new
+        {
+            @event = ImageClosureRecord.EventName,
+            repository = "memex-portal-ai",
+            digest,
+            tags = new[] { "stg-9" },
+            platformCommit = "0123abc",
+            platformVersion = "3.1.10400",
+            frameworkIdentity = "c003e001",
+            runUrl = "https://github.com/Systemorph/MeshWeaver/actions/runs/1",
+            platforms = new[]
+            {
+                new
+                {
+                    rid = "linux-x64",
+                    fileCount = 1,
+                    manifestSha256 = new string('c', 64),
+                    files = new[] { new { path = "Lib0.dll", sha256 = new string('0', 64), bytes = 100L } },
+                },
+            },
+        });
+
+    /// <summary>
+    /// A listing callback racing the opening's teardown must neither throw (an enqueue into the
+    /// disposed queue escaped every error handler) nor leave claims behind (claims registered after
+    /// teardown released the rest were stranded until the next boot). Driven deterministically: the
+    /// claim itself tears the opening down, so the callback is guaranteed to be mid-flight.
+    /// </summary>
+    [Fact]
+    public void InboxDrainWatch_ACallbackRacingTeardown_NeitherThrowsNorStrandsItsClaims()
+    {
+        var listing = new Subject<IEnumerable<MeshNode>>();
+        var claimed = ImmutableHashSet<string>.Empty;
+        var drained = 0;
+        IDisposable? opening = null;
+        IEnumerable<MeshNode> Claim(IEnumerable<MeshNode> nodes)
+        {
+            opening!.Dispose();   // teardown lands while this callback is claiming
+            var fresh = nodes.ToArray();
+            foreach (var node in fresh)
+                claimed = claimed.Add(node.Path);
+            return fresh;
+        }
+
+        opening = InboxDrainWatch.Open(
+                () => listing,
+                Claim,
+                released => claimed = claimed.Except(released),
+                _ => { drained++; return Observable.Return(System.Reactive.Unit.Default); })
+            .Subscribe(_ => { }, _ => { });
+
+        var raced = () => listing.OnNext([NodeAt("Inbox/_Inbox/a", "x"), NodeAt("Inbox/_Inbox/b", "x")]);
+
+        raced.Should().NotThrow("an enqueue after teardown must never escape as ObjectDisposedException");
+        claimed.Should().BeEmpty("claims made by a callback that lost the race are released, never stranded");
+        drained.Should().Be(0, "nothing is drained by an opening that has been torn down");
     }
 
     /// <summary>

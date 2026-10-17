@@ -832,13 +832,36 @@ public sealed class InstanceSecretCatalog : IDisposable
             // stays fail-closed (Faulted), and the next full listing clears it.
             subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
-                () => Observable.Defer(open).Do(_ => { }, OnFault),
+                () => Observable.Defer(open).SelectMany(RejectIncompleteListing).Do(_ => { }, OnFault),
                 OnChange,
                 logger,
                 "[InstanceSecrets] catalog query",
                 scheduleReEstablish: scheduleReopen,
                 onPoisonedContent: OnFault);
         }
+    }
+
+    /// <summary>
+    /// 🚨 A full listing that is only a FLOOR is a fault, never a listing. An Initial/Reset whose fan-in
+    /// names <see cref="QueryResultChange{T}.SilentProviders"/> or carries
+    /// <see cref="QueryResultChange{T}.SnapshotIncomplete"/> may be MISSING entries — and a missing
+    /// DISABLED entry would let the configured fallback key verify again, while folding the frame
+    /// would also end the fail-closed window. So it is refused here: it reaches
+    /// <see cref="OnFault"/> (fail closed) and the watcher re-opens the query.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteListing(QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType is not (QueryChangeType.Initial or QueryChangeType.Reset))
+            return Observable.Return(change);
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"[InstanceSecrets] the catalog listing is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] "
+                + "did not answer, so a disabled entry may be missing from it"));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                "[InstanceSecrets] the catalog listing is INCOMPLETE: a provider dropped part of its read, so a "
+                + "disabled entry may be missing from it"));
+        return Observable.Return(change);
     }
 
     private void OnFault(Exception ex)

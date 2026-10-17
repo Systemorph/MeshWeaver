@@ -100,7 +100,10 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
         subscriptions.Add(ensureIndex.Subscribe(
             _ => subscriptions.Add(ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
-                () => Watch(openInbox, configuration?[key]),
+                // The secret is read PER DELIVERY, never per opening: a rotation between the
+                // endpoint accepting a delivery and this drain verifying it must not refuse —
+                // and delete — a delivery the endpoint verified with the new key.
+                () => Watch(openInbox, () => configuration?[key]),
                 _ => { },
                 logger,
                 "[ImageClosure] inbox watch",
@@ -128,7 +131,7 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
     /// One opening of the inbox watch (<see cref="InboxDrainWatch"/>): a listing fault ends it at once,
     /// and the claims of deliveries it did not finish draining are released for the re-opened watch.
     /// </summary>
-    private IObservable<Unit> Watch(Func<IObservable<IEnumerable<MeshNode>>> openInbox, string? secret) =>
+    private IObservable<Unit> Watch(Func<IObservable<IEnumerable<MeshNode>>> openInbox, Func<string?> secret) =>
         InboxDrainWatch.Open(
             openInbox,
             nodes => nodes
@@ -137,7 +140,7 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
                 .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
                 .ToArray(),
             released => ImmutableInterlocked.Update(ref claimed, set => set.Except(released)),
-            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? Drain(hub, node, secret, logger))
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? Drain(hub, node, secret(), logger))
                 .Select(_ => Unit.Default)
                 .Catch((Exception ex) =>
                 {
