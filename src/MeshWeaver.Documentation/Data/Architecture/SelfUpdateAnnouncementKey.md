@@ -1,7 +1,7 @@
 ---
 Name: Self-Update Announcement Key
 Category: Architecture
-Description: How a deployment announces its own self-update to the control instance with a key of its OWN instead of the fleet-wide inbox secret — the record names the vault object, the inbox accepts it as a per-sender key, the consumer lets it cause nothing but that record's self-update events, and a record that declares one is no longer announceable with the fleet secret. The key is generated on the deployment (/Admin/Settings/ControlLane), registered on the control instance, and tested on the deployment — no vault command, no mount, no restart.
+Description: How a deployment announces its own self-update to the control instance with a key of its OWN instead of the fleet-wide inbox secret — the record names the vault object, the inbox accepts it as a per-sender key, the consumer lets it cause nothing but that record's self-update events, and a record that declares one is no longer announceable with the fleet secret. By default the record is all it takes: the Provision generates the key into the vault, and both mounts (the instance's and the control instance's) are derived from the records — no administrator generates, pastes or maps anything. Generating on the deployment and registering on the control instance in the portal stays as the manual fallback.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/></svg>
 ---
 
@@ -25,10 +25,11 @@ triage events and self-update announcements for **any** deployment. So that inst
 | part | where | what it does |
 |---|---|---|
 | **The declaration** | `Hosting/Deployment` record → `announcementKeySecret` (`DeploymentContent.AnnouncementKeySecret`) | names the deployment's OWN vault object — a NAME, never a value. Declaring it is also the binding (below). |
-| **Generating** | the deployment: **/Admin/Settings/ControlLane** → **Generate key** | the deployment's own global administrator generates the key ON the deployment, on its server. It is stored in that instance's own encrypted store as `Hosting:ControlInbox:Secret` ([Instance Secrets](../InstanceSecrets)), and the self-updater signs with it from the next announcement on, with no restart. The key is shown ONCE, with its fingerprint. |
-| **Registering** | the control instance: **/Hosting/Integrations/Deployment/<id>** → **Announcement key** → paste → **Save** | a global administrator of the control instance pastes the key the deployment's administrator sent over a secure channel. It is stored in the control instance's own encrypted store as `Hosting:PlatformWebhookSecret:<deploymentId>`, where the inbox verifies with it at once. No vault copy is written. The fingerprint shown must equal the one the deployment's administrator sent separately. |
-| **The sender's mount** (optional) | the deployment's pod: `Hosting__ControlInbox__Secret` ← that vault object | the older way to deliver the same key. The self-updater signs with the key entered in the portal if there is one, else with this mount. |
-| **The receiver's mount** (optional) | the control instance: `Hosting__PlatformWebhookSecret__<deploymentId>` ← the same vault object | a CHILD of the inbox's shared key — the shape `Hosting:ModuleReportSecret:<deployment>` already has. The key registered in the portal takes precedence over it. |
+| **Generating** (default) | the Provision's vault step: `hosting-kv-ensure --generate <object>` | the operator job creates the vault object when it is absent — 256 random bits, never shown, never regenerated, tagged with its fingerprint. Every Roll/Reconcile whose render mounts the key runs the same step first (`--generate-only`), so the object exists before any mount needs it. |
+| **Generating** (manual fallback) | the deployment: **/Admin/Settings/ControlLane** → **Generate key** | the deployment's own global administrator generates the key ON the deployment, on its server. It is stored in that instance's own encrypted store as `Hosting:ControlInbox:Secret` ([Instance Secrets](../InstanceSecrets)), and the self-updater signs with it from the next announcement on, with no restart. The key is shown ONCE, with its fingerprint. |
+| **Registering** (manual fallback) | the control instance: **/Hosting/Integrations/Deployment/<id>** → **Announcement key** → paste → **Save** | a global administrator of the control instance pastes the key the deployment's administrator sent over a secure channel. It is stored in the control instance's own encrypted store as `Hosting:PlatformWebhookSecret:<deploymentId>`, where the inbox verifies with it at once. No vault copy is written. The fingerprint shown must equal the one the deployment's administrator sent separately. |
+| **The sender's mount** (derived) | the deployment's pod: `Hosting__ControlInbox__Secret` ← that vault object, plus `Hosting__ControlInbox__Url` ← `{Hosting:ReportTo}/api/hooks/Hosting/PlatformBuilds` | DERIVED from the record (MeshWeaver.Plugins `AnnouncementKeyMounts`) when it declares the key and reports to a control instance; an explicit mapping on the record wins. The self-updater signs with a key entered in the portal if there is one, else with this mount. |
+| **The receiver's mount** (derived) | the control instance: `Hosting__PlatformWebhookSecret__<deploymentId>` ← the same vault object | a CHILD of the inbox's shared key — the shape `Hosting:ModuleReportSecret:<deployment>` already has. DERIVED for every OTHER record that declares a key, is **Live** and whose `Hosting:ReportTo` names the control instance's host. A Planned record contributes nothing, because its object may not exist yet. A key registered in the portal takes precedence over it. |
 | **Ingestion** | core `WebhookInbox.Deliver` → `SenderKeyOf` | when the target's shared secret does not verify, the ONE child of the target's `SecretConfigKey` section whose value does is accepted as a **per-sender key** (two children verifying — two senders sharing a value — name nobody and are refused); the delivery is stored and `DeliveryResult.SenderKey` names the child. The inbox only decides whether the bytes are worth storing — it never widens what a delivery may do. |
 | **Authorization** | MeshWeaver.Plugins `PlatformBuildInboxWatcher` → `AnnouncementKeys` → `SelfUpdateRouting` | re-verifies the stored body and decides what the key may cause (the rules below). |
 
@@ -49,10 +50,30 @@ triage events and self-update announcements for **any** deployment. So that inst
    for that deployment. A record that declares nothing keeps the fleet-secret path — the migration
    bridge for the instances that hold it today (the public instance, the build instance).
 
-## Generating, registering and testing the key — in the portal
+## The default: the record is all it takes
 
-The key is generated WHERE IT IS USED TO SIGN — on the deployment, by its own administrator — and
-the control instance only registers it. Nobody mints, copies or mounts it by hand, and nobody needs
+A record that declares `announcementKeySecret` (and `Hosting__ReportTo`) is self-maintaining from its
+Provision on. Nobody generates, pastes or maps a key:
+
+1. **Provision** — the vault step creates the object when absent (`hosting-kv-ensure --generate`).
+2. **The instance's render** mounts it as `Hosting__ControlInbox__Secret` and states
+   `Hosting__ControlInbox__Url`, so its first boot already signs its announcements.
+3. **The record goes `Live`.** That changes the control instance's render, which now mounts the key
+   as `Hosting__PlatformWebhookSecret__<id>`. The record-change Reconcile (policy
+   `record-change-applies-itself`) applies it with nobody filing anything.
+4. **The next build the instance detects is announced and verified.** The instance's
+   `Admin/UpdatePolicy` reads `handed to the control lane`, and CD opens the Roll.
+
+The derivation lives in MeshWeaver.Plugins (`AnnouncementKeyMounts`; the design and its fail-closed
+fleet read are in `Hosting/SelfUpdateAnnouncementIdentity`). A mapped-but-absent object fails the whole
+CSI mount, so every Roll or Reconcile whose render mounts an announcement key creates any absent one
+first (`hosting-kv-ensure --generate-only`), and an existing one is never overwritten.
+
+## Manual fallback — generating, registering and testing the key in the portal
+
+For a record whose key cannot live in the control instance's vault, or a rotation done by hand, the
+key is generated WHERE IT IS USED TO SIGN — on the deployment, by its own administrator — and the
+control instance only registers it. Nobody mints, copies or mounts it by hand, and nobody needs
 vault access or cluster access.
 
 1. **The record declares the key.** `Deployments/<id>` carries `announcementKeySecret` (e.g. `fabrikam-Hosting-AnnouncementKey` — the claim; it names
@@ -112,10 +133,18 @@ Each step is safe on its own:
    then the **Announcement key** section of the Integrations app (`/Hosting/Integrations/Deployment/<id>`).
    It compiles against the sealed platform set,
    so it lands after the core half is sealed.
-3. **Systemorph/Memex** — `Deployments/<id>` declares `announcementKeySecret` (the claim, rule 3).
-   No vault object is mapped on either end, so no CSI mount can fail on an object that does not
-   exist yet.
-4. **Generate, register, test** — in the portal, as described above. No reconcile and no restart.
+3. **Core operator** — `hosting-kv-ensure --generate` / `--generate-only` (#6917): create the object
+   when absent, never regenerate it.
+4. **Systemorph/Memex** — the Actions-lane classifier admits the **Ensure announcement keys** step on
+   the unattended roll and record-change lanes (Memex#774).
+5. **MeshWeaver.Plugins** — the records derive both mounts (`AnnouncementKeyMounts`), the Provision
+   generates the key, and every Roll or Reconcile that mounts one ensures it first.
+6. **Systemorph/Memex** — `Deployments/<id>` declares `announcementKeySecret` (the claim, rule 3).
+   From step 5 on, nothing else is needed: the Provision creates the object, and the derived mounts
+   follow the record's status.
+
+The manual path (generate, register, test in the portal, as described above) needs no reconcile and
+no restart, and works at any point.
 
 The declaration switches the fleet secret off for that record (rule 4). For a FLEET instance that
 announces with the fleet secret today, have its administrator generate the key and register it BEFORE the
