@@ -175,6 +175,11 @@ public class InlineSvgEmissionBackplateGuard
         [
             "src/MeshWeaver.Domain/Icon.cs",              // defines the provider constant and parses to it
             "src/MeshWeaver.Graph/MeshNodeImageHelper.cs", // ResolveRenderable/IconLinkFor — both plate
+            // ImageSources.Resolve classifies but EMITS nothing: it hands the markup back as
+            // ImageSourceKind.Svg, whose contract is "draw only as SvgDataUri(…)" — and every
+            // renderer plates first (Blazor ImageView: IconBackplate.Ensure; web/RN: ensureBackplate).
+            // It cannot plate itself: MeshWeaver.Layout does not reference MeshWeaver.Graph.
+            "src/MeshWeaver.Layout/ImageControl.cs",
         ];
 
         var users = ScannedRoots
@@ -189,7 +194,7 @@ public class InlineSvgEmissionBackplateGuard
             .ToImmutableArray();
 
         Assert.True(users.Length == 0,
-            "a file outside the two that plate now classifies icons through the TYPED inline-svg "
+            "a file outside the sanctioned set now classifies icons through the TYPED inline-svg "
             + "provider, which this guard's source scan cannot follow. Either plate it through "
             + "MeshNodeImageHelper.ResolveRenderable / IconBackplate.Ensure and add it to mayUseIt "
             + "with the reason, or teach the detector that spelling: "
