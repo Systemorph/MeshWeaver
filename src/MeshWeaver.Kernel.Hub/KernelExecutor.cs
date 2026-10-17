@@ -112,12 +112,6 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.CompileCpu)
             ?? IoPool.Unbounded;
 
-    // NuGet restore (#r "nuget:...") is a genuine network + file-system I/O leaf —
-    // route it through the bounded Http pool, never a bare Observable.FromAsync.
-    private readonly IIoPool nugetPool =
-        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Http)
-            ?? IoPool.Unbounded;
-
     // Cancellation source for the script currently inside ExecuteAsync. Replaced
     // on each submission. CancelScriptRequest cancels it; the script's
     // CancellationToken trips at the next await point, RunAsync/ContinueWithAsync
@@ -380,7 +374,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         return Observable.Defer(() =>
                 compilePool.Invoke(t => EnsureInitializedAsync(t))
                     .SelectMany(_ => EnsureCellSurfaceReferences())
-                    .SelectMany(_ => nugetPool.Invoke(t => ResolveNuGetReferencesAsync(code, t)))
+                    .SelectMany(_ => ResolveNuGetReferences(code))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
             .Catch<object?, Exception>(ex =>
             {
@@ -786,39 +780,37 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         resolver.AddDirectories(dirs);
     }
 
-    private async Task<string> ResolveNuGetReferencesAsync(string source, CancellationToken ct)
+    // Reactive end to end: the resolver runs its NuGet leaf on the Http lane and bounds it itself, so
+    // this is NOT wrapped in a pool slot of that same lane — a slot held while waiting on a leaf of its
+    // own lane can starve it.
+    private IObservable<string> ResolveNuGetReferences(string source)
     {
         var (cleaned, refs) = NuGetDirectiveParser.Extract(source);
-        if (refs.Length == 0) return source;
+        if (refs.Length == 0) return Observable.Return(source);
 
         var resolver = publicHub.ServiceProvider.GetService<INuGetAssemblyResolver>();
         if (resolver is null)
         {
             Logger.LogWarning("INuGetAssemblyResolver not registered; #r \"nuget:...\" directives ignored.");
-            return cleaned;
+            return Observable.Return(cleaned);
         }
 
-        try
-        {
-            var resolved = await resolver.ResolveAsync(refs, targetFramework: null, ct);
-            // One assembly per name, the copy that runs (CompileReferences.WithPackageAssemblies):
-            // a closure assembly the session already references is not added a second time. The
-            // kernel's packages bind in the DEFAULT context, which cannot load a second version of a
-            // host assembly — so the host's reference is kept even when the package's is newer.
-            scriptOptions = scriptOptions.WithReferences(
-                MeshWeaver.Compiler.CompileReferences.WithPackageAssemblies(
-                    [.. scriptOptions.MetadataReferences], resolved.AssemblyPaths,
-                    KernelScriptReferences.GetOrCreateFromFile, packagesLoadInIsolation: false));
-            InstallRuntimeProbe(resolved.ProbingDirectories);
-            Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "NuGet restore failed for interactive cell.");
-            throw;
-        }
-
-        return cleaned;
+        return resolver.Resolve(refs)
+            .Select(resolved =>
+            {
+                // One assembly per name, the copy that runs (CompileReferences.WithPackageAssemblies):
+                // a closure assembly the session already references is not added a second time. The
+                // kernel's packages bind in the DEFAULT context, which cannot load a second version of a
+                // host assembly — so the host's reference is kept even when the package's is newer.
+                scriptOptions = scriptOptions.WithReferences(
+                    MeshWeaver.Compiler.CompileReferences.WithPackageAssemblies(
+                        [.. scriptOptions.MetadataReferences], resolved.AssemblyPaths,
+                        KernelScriptReferences.GetOrCreateFromFile, packagesLoadInIsolation: false));
+                InstallRuntimeProbe(resolved.ProbingDirectories);
+                Logger.LogInformation("Resolved {Count} NuGet package(s) for interactive cell.", refs.Length);
+                return cleaned;
+            })
+            .Do(_ => { }, ex => Logger.LogError(ex, "NuGet restore failed for interactive cell."));
     }
 
     /// <summary>

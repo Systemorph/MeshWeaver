@@ -80,7 +80,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         // EditorExtensions.GetEditorLabel). The previous marker ("Date/time picker") appears only in
         // the page PROSE, never inside .layout-area, so that row could not pass under any build.
         { "Doc/GUI/Editor", 1, EditorForm, "Full name" },
-        { "Doc/GUI/DataBinding", 1, Table, "NumberFieldControl" },
+        { "Doc/GUI/DataBinding", 1, DataGrid, "NumberFieldControl" },
         { "Doc/GUI/DataBinding/ItemTemplate", 1, Stack, "Alice" },
         { "Doc/GUI/Attributes", 1, Stack, "Attribute Quick Reference" },
         { "Doc/GUI/NodeMenu", 1, Table, "Permission" },
@@ -103,7 +103,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/DataMesh/DataCubes", 5, Table, "Funding Ratio" },
         { "Doc/DataMesh/NodeTypes", 1, Stack, "This cell rendered at" },
         { "Doc/DataMesh/NodeTypeConfiguration", 1, Table, "NodeType summary card" },
-        { "Doc/DataMesh/CreatingNodeTypes", 1, Table, "Primary key field" },
+        { "Doc/DataMesh/CreatingNodeTypes", 1, DataGrid, "Primary key field" },
         { "Doc/DataMesh/NodeOperations", 1, Stack, "Node Operations at a Glance" },
         { "Doc/DataMesh/CRUD", 1, Table, "Single entity by ID" },
         { "Doc/DataMesh/VirtualDataSources", 1, Table, "Mesh query mirror" },
