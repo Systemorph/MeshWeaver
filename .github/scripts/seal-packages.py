@@ -277,6 +277,10 @@ def _query_target(entry: str) -> str | None:
         for key in ("namespace:", "path:"):
             if token.lower().startswith(key):  # NodeSetQuery reads selectors case-insensitively
                 candidate = token[len(key):].strip("/")
+                # CodeQueryResolver rebases a single-segment NAMESPACE under the NodeType (package-
+                # local); a `path:` is absolute whatever its length (`path:Store` is Store's root).
+                if key == "path:":
+                    return candidate or None
                 return candidate if "/" in candidate else None
     return None
 
@@ -287,9 +291,24 @@ def _first(path: str) -> str:
 
 def _lenient_json(text: str):
     """json.loads with the tolerances TreeNodeLoader / JsonFileParser apply to a node file: a leading
-    UTF-8 BOM, `//` and `/* */` comments, and trailing commas. Raises ValueError when it still does
-    not parse."""
-    text = text.lstrip("﻿")
+    UTF-8 BOM, `//` and `/* */` comments, and trailing commas. Comments go FIRST, so a trailing comma
+    followed by a comment (`["@A/B", /* why */]`) is still seen as trailing. Raises ValueError when it
+    still does not parse."""
+    return json.loads(_strip_json(_strip_json(text.lstrip("﻿"), commas=False), comments=False))
+
+
+def _ci(mapping, key: str):
+    """A case-insensitive property read — the web-defaults behaviour TreeNodeLoader and the content
+    deserializer apply (`Content`, `Sources`, `IsExecutable`, …)."""
+    if not isinstance(mapping, dict):
+        return None
+    if key in mapping:
+        return mapping[key]
+    return next((v for k, v in mapping.items() if isinstance(k, str) and k.lower() == key.lower()), None)
+
+
+def _strip_json(text: str, comments: bool = True, commas: bool = True) -> str:
+    """One string-aware pass removing comments and/or trailing commas."""
     out: list[str] = []
     i, n, in_string = 0, len(text), False
     while i < n:
@@ -309,17 +328,17 @@ def _lenient_json(text: str):
             out.append(ch)
             i += 1
             continue
-        if text.startswith("//", i):
+        if comments and text.startswith("//", i):
             end = text.find("\n", i)
             i = n if end < 0 else end
             continue
-        if text.startswith("/*", i):
+        if comments and text.startswith("/*", i):
             end = text.find("*/", i + 2)
             if end < 0:
                 raise ValueError("unterminated /* comment")
             i = end + 2
             continue
-        if ch == ",":
+        if commas and ch == ",":
             j = i + 1
             while j < n and text[j].isspace():
                 j += 1
@@ -328,7 +347,27 @@ def _lenient_json(text: str):
                 continue
         out.append(ch)
         i += 1
-    return json.loads("".join(out))
+    return "".join(out)
+
+
+def _compiled_code(path: str, text: str, commit: str | None) -> str:
+    """The code this file contributes to an assembly — NodeCompileShaping.CollectCompileSources'
+    rule: a Code node (`CodeConfiguration`) with non-empty code that is NOT executable. A `.cs` node
+    is one by construction (its header carries no `isExecutable`); a `.json` file is one only when its
+    content says so — a Markdown node, an executable cell or a NodeType never enters the assembly, so
+    an `@@` in it is no input. A `.json` that does not parse cannot be classified and refuses."""
+    if path.endswith(".cs"):
+        return text
+    try:
+        document = _lenient_json(text)
+    except ValueError as error:
+        raise SystemExit(f"✗ seal-packages: {path} at {_short(commit) if commit else 'the checkout'} carries `@@` "
+                         f"and does not parse ({error}) — whether it is compiled cannot be decided")
+    content = _ci(document, "content")
+    if not isinstance(content, dict) or content.get("$type") != "CodeConfiguration" or _ci(content, "isExecutable"):
+        return ""
+    code = _ci(content, "code")
+    return code if isinstance(code, str) else ""
 
 
 class SourceIncludes:
@@ -452,19 +491,19 @@ class SourceIncludes:
                 raise SystemExit(f"✗ seal-packages: {path} at {_short(commit) if commit else 'the checkout'} names "
                                  f"a NodeTypeDefinition and does not parse ({error}) — what it compiles cannot be "
                                  "read, and skipping it would seal on a guess")
-            content = document.get("content") if isinstance(document, dict) else None
+            content = _ci(document, "content")
             if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
                 continue
-            for entry in [*(content.get("sources") or []), *(content.get("tests") or [])]:
+            for entry in [*(_ci(content, "sources") or []), *(_ci(content, "tests") or [])]:
                 target = _query_target(entry) if isinstance(entry, str) else None
                 if target:
                     add(target)
-        for _, text in self._texts(commit, package, "@@"):
-            for match in _CODE_INCLUDE.finditer(text):
+        for path, text in self._texts(commit, package, "@@"):
+            for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit)):
                 add(match.group(1))
         while pending:  # what another package's files @@-include is compiled in too
-            for _, text in self._texts(commit, pending.pop(), "@@"):
-                for match in _CODE_INCLUDE.finditer(text):
+            for path, text in self._texts(commit, pending.pop(), "@@"):
+                for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit)):
                     add(match.group(1))
         value = {p: tuple(sorted(v)) for p, v in sorted(found.items()) if v}
         self._edges[key] = value
@@ -1642,6 +1681,32 @@ def source_include_reading_cases(expect) -> None:
         problems, _ = source_include_violations(listing, repo, None)
         expect("REFUSED although the checkout shows no include of Chess's any more",
                any("Chess is carried at 0000000000" in p for p in problems), str(problems))
+
+        print("only what an assembly compiles counts, and node keys match as the loader matches them:")
+        expect("a single-segment `path:` is ABSOLUTE (`path:Store scope:descendants` reads Store)",
+               _query_target("path:Store scope:descendants") == "Store")
+        expect("…while a single-segment `namespace:` stays package-local",
+               _query_target("namespace:Store scope:descendants") is None)
+        expect("a trailing comma followed by a comment parses",
+               _lenient_json('{"sources": ["@Store/Core/Source", /* inputs */], // done\n}')
+               == {"sources": ["@Store/Core/Source"]})
+        put("Chess/Caps.json", json.dumps({"Id": "Caps", "Content": {
+            "$type": "NodeTypeDefinition", "Sources": ["@Store/Core/Source"]}}))
+        put("Chess/Doc.json", json.dumps({"id": "Doc", "content": {
+            "$type": "MarkdownContent", "content": "See @@Store/Nowhere/Page for the pattern."}}))
+        put("Chess/Cell.json", json.dumps({"id": "Cell", "content": {
+            "$type": "CodeConfiguration", "isExecutable": True, "code": "// @@Store/Nowhere/Cell"}}))
+        put("Chess/Shared.json", json.dumps({"id": "Shared", "content": {
+            "$type": "CodeConfiguration", "Code": "// @@Store/Tools/Source/Clock\nclass Shared {}"}}))
+        git("rm", "-q", "--cached", "--ignore-unmatch", "Hosting/Nowhere.json")
+        (repo / "Hosting/Nowhere.json").unlink()
+        c5 = commit("PascalCase keys, a Markdown node and an executable cell naming @@ paths")
+        stop = refused(lambda: SourceIncludes(repo).edges(c5, "Chess"))
+        expect("an @@ in a Markdown node or an executable cell does not abort", stop is None, str(stop))
+        chess = SourceIncludes(repo).edges(c5, "Chess") if stop is None else {}
+        expect("`Content` / `Sources` read case-insensitively, and the compiled Code node's @@ counts — "
+               "the Markdown and executable ones do not",
+               chess == {"Store": ("Store/Core/Source", "Store/Tools/Source/Clock")}, str(chess))
 
 
 def main(argv: list[str]) -> int:
