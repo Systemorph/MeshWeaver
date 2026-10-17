@@ -87,28 +87,68 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
 
         // The index node is the inbox's OWNER: the endpoint refuses a delivery whose target node does
         // not exist, so it is ensured before anything is watched.
-        subscriptions.Add(access.RunAsSystem(() => mesh.CreateOrUpdateNode(ImageClosureNodes.IndexNode()))
-            .Select(_ => Unit.Default)
-            .Concat(access.RunAsSystem(() => hub.GetQuery($"ImageClosure.Inbox:{hub.Address}", query))
-                .SelectMany(nodes => (nodes ?? [])
-                    .Where(n => !string.IsNullOrWhiteSpace(n.Path))
-                    .OrderBy(n => n.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
-                    .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
-                    .ToArray())
-                .Select(node => Observable.Defer(() => Drain(hub, node, configuration?[key], logger))
-                    .Select(_ => Unit.Default)
-                    .Catch((Exception ex) =>
-                    {
-                        logger.LogWarning(ex,
-                            "[ImageClosure] draining {Path} failed — it stays in the inbox and is retried at the next boot",
-                            node.Path);
-                        return Observable.Return(Unit.Default);
-                    }))
-                .Concat())
-            .Subscribe(_ => { }, ex => logger.LogError(ex,
-                "[ImageClosure] the inbox watch faulted — no further closure record is ingested in this process")));
+        //
+        // 🚨 A STANDING watch: one fault of the inbox query (a provider stall, a dropped connection)
+        // used to end it for the life of the process — no closure record was ingested again until a
+        // restart. The hub watcher re-opens it; the synced-query cache has already evicted the
+        // faulted chain, so the re-open reads fresh, and the claimed set keeps a delivery already
+        // picked up from being drained twice.
+        var openInbox = OpenInboxOverride
+            ?? (() => access.RunAsSystem(() => hub.GetQuery($"ImageClosure.Inbox:{hub.Address}", query)));
+        var ensureIndex = access.RunAsSystem(() => mesh.CreateOrUpdateNode(ImageClosureNodes.IndexNode()))
+            .Take(1);
+        subscriptions.Add(ensureIndex.Subscribe(
+            _ => subscriptions.Add(ActivityControlPlaneExtensions.SubscribeHubWatcher(
+                hub,
+                // The secret is read PER DELIVERY, never per opening: a rotation between the
+                // endpoint accepting a delivery and this drain verifying it must not refuse —
+                // and delete — a delivery the endpoint verified with the new key.
+                () => Watch(openInbox, () => configuration?[key]),
+                _ => { },
+                logger,
+                "[ImageClosure] inbox watch",
+                scheduleReEstablish: ScheduleReopen)),
+            ex => logger.LogError(ex,
+                "[ImageClosure] the inbox index node could not be ensured — the CD build's deliveries are "
+                + "refused at the endpoint and nothing is drained in this process")));
         return Task.CompletedTask;
     }
+
+    /// <summary>Test seam: opens the inbox query. Null in production.</summary>
+    internal Func<IObservable<IEnumerable<MeshNode>>>? OpenInboxOverride { get; set; }
+
+    /// <summary>Test seam: how a faulted inbox watch's re-open is scheduled. Null in production.</summary>
+    internal Func<Action, IDisposable>? ScheduleReopen { get; set; }
+
+    /// <summary>Whether this process has picked up the delivery at <paramref name="path"/> — the
+    /// observable trace that an emission of the inbox watch was processed.</summary>
+    internal bool HasClaimed(string path) => claimed.Contains(path);
+
+    /// <summary>Test seam: drains one delivery. Null in production (<see cref="Drain"/>).</summary>
+    internal Func<MeshNode, IObservable<string?>>? DrainOverride { get; set; }
+
+    /// <summary>
+    /// One opening of the inbox watch (<see cref="InboxDrainWatch"/>): a listing fault ends it at once,
+    /// and the claims of deliveries it did not finish draining are released for the re-opened watch.
+    /// </summary>
+    private IObservable<Unit> Watch(Func<IObservable<IEnumerable<MeshNode>>> openInbox, Func<string?> secret) =>
+        InboxDrainWatch.Open(
+            openInbox,
+            nodes => nodes
+                .Where(n => !string.IsNullOrWhiteSpace(n.Path))
+                .OrderBy(n => n.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
+                .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
+                .ToArray(),
+            released => ImmutableInterlocked.Update(ref claimed, set => set.Except(released)),
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? Drain(hub, node, secret(), logger))
+                .Select(_ => Unit.Default)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[ImageClosure] draining {Path} failed — it stays in the inbox and is retried at the next boot",
+                        node.Path);
+                    return Observable.Return(Unit.Default);
+                }));
 
     /// <summary>
     /// Drains ONE delivery: verify, validate, write, delete. Emits the written node's path, or null
