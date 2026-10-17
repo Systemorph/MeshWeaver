@@ -1203,6 +1203,20 @@ public static class MeshExtensions
                             Category = node.Category ?? existingNode.Category,
                             Content = node.Content ?? existingNode.Content
                         };
+                        // 🚨 The icon rule (IconSafety) BEFORE this write: the confirmation writes
+                        // straight to storage and never reaches the creation validators below, so
+                        // an icon supplied here would otherwise land unchecked. Same CHANGE-not-state
+                        // rule as every other icon boundary; a refusal leaves the transient as it was.
+                        if (!string.Equals(confirmedNode.Icon, existingNode.Icon, StringComparison.Ordinal)
+                            && IconSafety.Refusal(confirmedNode.Icon) is { } iconRefusal)
+                        {
+                            logger.LogWarning("[CreateNode] REFUSED confirmation of {Path}: {Refusal}",
+                                node.Path, iconRefusal);
+                            Respond(CreateNodeResponse.FailWith(
+                                IconSafety.LocalizedRefusal(node.Path, iconRefusal),
+                                NodeCreationRejectionReason.ValidationFailed));
+                            return Observable.Empty<(string mode, MeshNode node)>();
+                        }
                         // Commit-then-publish: Updated event fires inside the helper's
                         // .Do operator, which runs only after the storage write emits
                         // (post-commit). The no-persistence fallback below skips the
@@ -8513,6 +8527,14 @@ public static class MeshExtensions
                 // result the write reports.
                 long staleAgainstVersion = 0;
 
+                // The icon rule (IconSafety) for the one update verb that runs no validator chain.
+                // Judged INSIDE the write lambda, against `live` — the node the merge is applied to —
+                // never against the durable row read above, which can trail it: a stored icon the
+                // owner has since repaired would otherwise compare "unchanged" and be written back.
+                // Same CHANGE-not-state rule as IconMarkupValidator: a merge that leaves the live icon
+                // as it is passes whatever it holds. Last run wins, like staleAgainstVersion.
+                string? iconRefusal = null;
+
                 var write = hub.GetMeshNodeStream(node.Path)
                     // 1b', on the MERGED node. The create path repairs a stale self-default MainNode
                     // before it is ever stored; the update path has to repair it AFTERWARDS, because
@@ -8547,8 +8569,15 @@ public static class MeshExtensions
                             return live;
                         }
                         Volatile.Write(ref staleAgainstVersion, 0);
+                        var merged = UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions);
+                        var refusedIcon = string.Equals(merged.Icon, live.Icon, StringComparison.Ordinal)
+                            ? null
+                            : IconSafety.Refusal(merged.Icon);
+                        Volatile.Write(ref iconRefusal, refusedIcon);
+                        if (refusedIcon is not null)
+                            return live;
                         return RepairStaleSelfDefaultMainNode(
-                            FoldOntoLive(UpdateAccordingToSourceNode(live, node, hub.JsonSerializerOptions), live) with
+                            FoldOntoLive(merged, live) with
                             {
                                 Version = Math.Max(live.Version, existing.Version),
                                 // Identity fields the merge is meant to PRESERVE — recovered from the
@@ -8585,6 +8614,15 @@ public static class MeshExtensions
                         {
                             if (outcome.HasValue)
                             {
+                                if (Volatile.Read(ref iconRefusal) is { } refusedIconDetail)
+                                {
+                                    logger.LogWarning("[CreateOrUpdate] REFUSED {Path}: {Refusal}",
+                                        node.Path, refusedIconDetail);
+                                    PostFail(
+                                        IconSafety.LocalizedRefusal(node.Path, refusedIconDetail),
+                                        NodeUpsertRejectionReason.ValidationFailed);
+                                    return;
+                                }
                                 if (inboundRequest.SnapshotVersion is { } offered
                                     && Volatile.Read(ref staleAgainstVersion) is > 0 and var heldVersion)
                                 {
