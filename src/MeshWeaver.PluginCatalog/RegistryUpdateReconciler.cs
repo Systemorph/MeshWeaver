@@ -200,6 +200,39 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// keeps a slow delete from draining the same event twice. Instance state, immutable-swapped.</summary>
     private ImmutableHashSet<string> claimedDeliveries = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
+    /// <summary>Test seam: opens the module-published inbox query. Null in production.</summary>
+    internal Func<IObservable<IEnumerable<MeshNode>>>? OpenInboxOverride { get; set; }
+
+    /// <summary>Test seam: how a faulted inbox watch's re-open is scheduled. Null in production,
+    /// where the hub watcher's own cadence applies.</summary>
+    internal Func<Action, IDisposable>? ScheduleInboxReopen { get; set; }
+
+    /// <summary>Test seam: one safety-net pass. Null in production, where the pass is
+    /// <see cref="FullPass"/>.</summary>
+    internal Func<IObservable<Unit>>? SafetyNetPassOverride { get; set; }
+
+    /// <summary>Test seam: the scheduler the safety net's interval runs on. Null in production
+    /// (the default scheduler).</summary>
+    internal IScheduler? SafetyNetScheduler { get; set; }
+
+    /// <summary>Whether this process has picked up the inbox delivery at <paramref name="path"/> — the
+    /// observable trace that an emission of the inbox watch was processed.</summary>
+    internal bool HasClaimedDelivery(string path) => claimedDeliveries.Contains(path);
+
+    /// <summary>Test seam: drains one inbox delivery. Null in production.</summary>
+    internal Func<MeshNode, IObservable<Unit>>? DrainOverride { get; set; }
+
+    /// <summary>The standing inbox watch: <see cref="WatchInbox"/>, re-opened by the hub watcher
+    /// after any fault of its query.</summary>
+    internal IDisposable SubscribeInboxWatch(PluginCatalogOptions options) =>
+        ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
+            () => WatchInbox(options).SubscribeOn(TaskPoolScheduler.Default),
+            _ => { },
+            logger,
+            "[RegistryUpdate] module-published inbox watch",
+            scheduleReEstablish: ScheduleInboxReopen);
+
     /// <summary>Creates the service; the ledger write channel and the reconcile lane are live from
     /// construction so a state change is recorded, and a pass runs, whether it arrives from the
     /// boot, from a later feed read, from a broadcast or from the safety net.</summary>
@@ -321,24 +354,29 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
         // #3650 — the two other events, armed after the same precondition and independent of how
         // the boot pass went: a boot that deferred still has an inbox to drain and a floor to keep.
+        //
+        // 🚨 The inbox is a STANDING watch: one fault of its query (a provider stall, a dropped
+        // connection) used to end it for the life of the process, so broadcasts were drained only at
+        // the next boot. The hub watcher re-opens it; the synced-query cache has already evicted the
+        // faulted chain, and the claimed set keeps a delivery from being drained twice.
         subscriptions.Add(defaultsDone
             .ObserveOn(TaskPoolScheduler.Default)
-            .SelectMany(_ => WatchInbox(options))
-            .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
-                _ => { },
+                _ => subscriptions.Add(SubscribeInboxWatch(options)),
                 ex => logger.LogError(ex,
-                    "[RegistryUpdate] the module-published inbox watch faulted — broadcasts are not "
-                    + "drained in this process any more; each delivery stays in the inbox and is "
-                    + "consumed at the next boot, and the safety net still reconciles meanwhile.")));
+                    "[RegistryUpdate] the default install's completion signal faulted — the "
+                    + "module-published inbox is not watched in this process; each delivery stays in "
+                    + "the inbox and is consumed at the next boot.")));
         subscriptions.Add(defaultsDone
             .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ => SafetyNet(options))
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },
+                // A pass's fault is caught per tick inside SafetyNet; reaching here means the loop
+                // itself broke (its timer), which nothing re-arms.
                 ex => logger.LogError(ex,
-                    "[RegistryUpdate] the safety-net reconcile faulted — no further scheduled pass "
+                    "[RegistryUpdate] the safety-net loop faulted — no further scheduled pass "
                     + "runs in this process; broadcasts and the next boot still reconcile.")));
     }
 
@@ -468,10 +506,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// one package it names reconciled on the lane, the delivery deleted. Durable on both ends: a
     /// delivery that lands while this process is down replays into the first emission of the next
     /// boot's watch, so the inbox is at-least-once and the decision behind it idempotent. Never
-    /// completes on its own; a fault ends the watch loudly (the subscriber's error line), never
-    /// silently — a lost watch costs latency until the next boot, and the safety net still runs.
+    /// completes on its own; a fault ends THIS opening, and the caller's hub watcher re-opens it.
     /// </summary>
-    private IObservable<Unit> WatchInbox(PluginCatalogOptions options)
+    internal IObservable<Unit> WatchInbox(PluginCatalogOptions options)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -482,15 +519,21 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // query with no path reaches only the partitions a caller's RLS grants — a hosted service
         // has no caller. The same lesson as SelfUpdate's build watch (BuildCompletion.WatchQuery).
         var query = $"path:{inbox} scope:children nodeType:{WebhookInbox.NodeType}";
-        return access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))
-            .SelectMany(nodes => (nodes ?? [])
+        // 🚨 One opening (InboxDrainWatch): a listing fault ends it at once, and the claims of
+        // deliveries it did not finish draining are released, so the re-opened watch drains them
+        // instead of skipping them as "already picked up" until the next boot.
+        return InboxDrainWatch.Open(
+            OpenInboxOverride
+                ?? (() => access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))),
+            nodes => nodes
                 .Where(node => !string.IsNullOrWhiteSpace(node.Path))
                 // Oldest first within one emission: a burst of publishes from one CI wave drains
                 // in publish order, so a later version of the same package is examined last.
                 .OrderBy(node => node.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
                 .Where(node => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Add(node.Path)))
-                .ToArray())
-            .Select(node => Observable.Defer(() => DrainDelivery(node, options, meshService, access))
+                .ToArray(),
+            released => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Except(released)),
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? DrainDelivery(node, options, meshService, access))
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex,
@@ -498,8 +541,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         + "stays in the inbox and is retried at the next boot. Cause: {Cause}",
                         node.Path, ex.Message);
                     return Observable.Return(Unit.Default);
-                }))
-            .Concat();
+                }));
     }
 
     /// <summary>One delivery: parse, match its registry, reconcile that package on the lane, delete.</summary>
@@ -567,7 +609,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// again next tick; nothing here notifies admins or marks the ledger pending — that is the boot
     /// deferral's job, and the boot's retry budget is what such a registry has already exhausted.
     /// </summary>
-    private IObservable<Unit> SafetyNet(PluginCatalogOptions options)
+    internal IObservable<Unit> SafetyNet(PluginCatalogOptions options)
     {
         if (options.ReconcileSafetyNetInterval <= TimeSpan.Zero)
         {
@@ -577,19 +619,48 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.ReconcileSafetyNetInterval));
             return Observable.Never<Unit>();
         }
-        if (hub.ServiceProvider.GetService<RegistryTokenResolver>() is null)
-            return Observable.Never<Unit>();
+        var pass = SafetyNetPassOverride;
+        if (pass is null)
+        {
+            if (hub.ServiceProvider.GetService<RegistryTokenResolver>() is null)
+                return Observable.Never<Unit>();
+            pass = () => FullPass(options);
+        }
+        var scheduler = SafetyNetScheduler ?? DefaultScheduler.Instance;
 
-        return Observable.Defer(() => Observable.Timer(options.ReconcileSafetyNetInterval))
-            .SelectMany(_ => RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
-                .Select(SafetyNetReconcile)
-                .ToObservable()
-                .Concat()
+        // 🚨 The loop is STANDING — `.Repeat()` re-subscribes on COMPLETION only, never on an error —
+        // so a tick's fault must end the TICK, not the loop. Each registry's read already catches its
+        // own fault, but anything outside that per-registry Catch (the registry list, a synchronous
+        // throw while composing a pass, the ledger lane refusing) used to fault the whole chain, and
+        // the subscriber's error arm only logged: no further scheduled pass ran in this process until
+        // a restart. The pass is caught HERE, logged at Warning, and the next interval runs a fresh
+        // one; the cadence is the interval itself, so a fault that persists is re-tried no faster
+        // than the safety net ever ran.
+        return Observable.Defer(() => Observable.Timer(options.ReconcileSafetyNetInterval, scheduler))
+            .SelectMany(_ => Observable.Defer(pass)
                 .DefaultIfEmpty(Unit.Default)
-                .LastAsync())
-            .SelectMany(_ => RetryFaultedReloads(options))
+                .LastAsync()
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[RegistryUpdate] a safety-net reconcile pass faulted — installed packages keep "
+                        + "their current version; the next pass runs in {Interval}.",
+                        options.ReconcileSafetyNetInterval);
+                    return Observable.Return(Unit.Default);
+                }))
             .Repeat();
     }
+
+    /// <summary>One full pass against every configured registry, sequentially, on the lane, then
+    /// the faulted-reload re-arm. Shared by the safety net and <see cref="ReconcileNow"/>.</summary>
+    private IObservable<Unit> FullPass(PluginCatalogOptions options) =>
+        RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+            .Select(SafetyNetReconcile)
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync()
+            .SelectMany(_ => RetryFaultedReloads(options));
 
     /// <summary>
     /// ONE full pass against every configured registry, NOW, on the serialized lane — the same work
@@ -601,13 +672,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     public IObservable<Unit> ReconcileNow()
     {
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
-        return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
-            .Select(SafetyNetReconcile)
-            .ToObservable()
-            .Concat()
-            .DefaultIfEmpty(Unit.Default)
-            .LastAsync()
-            .SelectMany(_ => RetryFaultedReloads(options));
+        return FullPass(options);
     }
 
     /// <summary>

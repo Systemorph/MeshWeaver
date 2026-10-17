@@ -275,9 +275,16 @@ public static class ActivityControlPlaneExtensions
     ///     exact "resubscribe to recover from a state that shouldn't happen" pattern the
     ///     deleted 2026-06-08 watchdog was. STOP; the orphaned hub idle-disposes.</description></item>
     ///   <item><description><b>Everything else</b> — a genuinely transient fault (hub
-    ///     hiccup, cross-hub delivery blip) where the node is still alive and must not be
-    ///     left unobserved: re-establish after a short delay with a fresh
-    ///     subscription.</description></item>
+    ///     hiccup, cross-hub delivery blip, a stalled query provider) where the source must not
+    ///     be left unobserved: re-establish with a fresh subscription on a PACED cadence
+    ///     (<see cref="ReEstablishBackoff"/>: 1 s, 2 s, 5 s, 15 s, 30 s, then every 60 s),
+    ///     counted over consecutive faults with no emission in between — an emission proves the
+    ///     source is reading again and restarts the cadence at 1 s. Each re-open is a WARNING
+    ///     naming the watcher; a run that reaches the 60 s cap is reported ONCE at ERROR as a
+    ///     sustained outage (and its recovery once at Information), never once per re-open — so
+    ///     a real outage neither floods the Error channel (which files incidents) nor hammers the
+    ///     failing dependency once a second. The watcher never gives up: one that stopped would
+    ///     leave its hub half-alive (#891).</description></item>
     /// </list>
     /// </summary>
     /// <typeparam name="T">Element type produced by the observed source.</typeparam>
@@ -291,8 +298,9 @@ public static class ActivityControlPlaneExtensions
     /// <param name="onTransientFault">Optional callback run before a transient re-establish, e.g. to
     /// release a single-flight guard a faulted in-flight dispatch may have left set.</param>
     /// <param name="scheduleReEstablish">Test seam for how a transient re-establish is
-    /// scheduled. Production default is a 1 s <see cref="Observable.Timer(TimeSpan)"/>
-    /// off the action block. Returns the <see cref="IDisposable"/> that CANCELS the pending
+    /// scheduled. Production default is an <see cref="Observable.Timer(TimeSpan)"/> of
+    /// <see cref="ReEstablishBackoff"/> off the action block; a seam given here replaces the
+    /// timer (and therefore the delay) wholesale. Returns the <see cref="IDisposable"/> that CANCELS the pending
     /// schedule — the returned watcher disposes it, so tearing the watcher down also drops
     /// the timer off the process-wide <c>TimerQueue</c> (#991).</param>
     /// <param name="onPoisonedContent">Optional visible sink invoked (once, with the fault) when
@@ -317,7 +325,50 @@ public static class ActivityControlPlaneExtensions
         Action<Exception>? onPoisonedContent = null)
         => SubscribeWithReEstablishCore(
             source, onNext, address, logger, faultLogContext,
-            onTransientFault, scheduleReEstablish, onPoisonedContent, hub: null);
+            onTransientFault, Delayless(scheduleReEstablish), onPoisonedContent, hub: null, scheduler: null);
+
+    /// <summary>
+    /// The delay before re-establish number <paramref name="consecutive"/> (1-based) of a run of
+    /// transient faults with no emission in between: 1 s, 2 s, 5 s, 15 s, 30 s, then 60 s. The
+    /// first re-open is as quick as it always was (one hiccup costs one second); a fault that
+    /// persists backs off to once a minute instead of once a second.
+    /// </summary>
+    /// <param name="consecutive">How many re-establishes have been attempted in a row, including this one.</param>
+    internal static TimeSpan ReEstablishBackoff(int consecutive) => consecutive switch
+    {
+        <= 1 => TimeSpan.FromSeconds(1),
+        2 => TimeSpan.FromSeconds(2),
+        3 => TimeSpan.FromSeconds(5),
+        4 => TimeSpan.FromSeconds(15),
+        5 => TimeSpan.FromSeconds(30),
+        _ => ReEstablishBackoffCap,
+    };
+
+    /// <summary>The cadence a persisting fault settles at.</summary>
+    internal static readonly TimeSpan ReEstablishBackoffCap = TimeSpan.FromSeconds(60);
+
+    /// <summary>The re-establish number at which a run of faults reaches
+    /// <see cref="ReEstablishBackoffCap"/> and is reported once, at Error, as a sustained outage.</summary>
+    internal const int SustainedOutageReEstablish = 6;
+
+    /// <summary>
+    /// Test seam: <see cref="SubscribeWithReEstablish{T}"/> with the production paced cadence driven
+    /// by <paramref name="scheduler"/> instead of the default scheduler, so a test can step virtual
+    /// time through a run of faults.
+    /// </summary>
+    internal static IDisposable SubscribeWithReEstablishOn<T>(
+        Func<IObservable<T>> source,
+        Action<T> onNext,
+        Address address,
+        ILogger? logger,
+        string faultLogContext,
+        System.Reactive.Concurrency.IScheduler scheduler)
+        => SubscribeWithReEstablishCore(
+            source, onNext, address, logger, faultLogContext,
+            onTransientFault: null, schedule: null, onPoisonedContent: null, hub: null, scheduler);
+
+    private static Func<TimeSpan, Action, IDisposable>? Delayless(Func<Action, IDisposable>? scheduleReEstablish) =>
+        scheduleReEstablish is null ? null : (_, reEstablish) => scheduleReEstablish(reEstablish);
 
     /// <summary>
     /// <see cref="SubscribeWithReEstablish{T}"/> for a watcher OWNED BY <paramref name="hub"/> —
@@ -373,7 +424,7 @@ public static class ActivityControlPlaneExtensions
         ArgumentNullException.ThrowIfNull(hub);
         return SubscribeWithReEstablishCore(
             source, onNext, hub.Address, logger, faultLogContext,
-            onTransientFault, scheduleReEstablish, onPoisonedContent, hub);
+            onTransientFault, Delayless(scheduleReEstablish), onPoisonedContent, hub, scheduler: null);
     }
 
     private static IDisposable SubscribeWithReEstablishCore<T>(
@@ -383,9 +434,10 @@ public static class ActivityControlPlaneExtensions
         ILogger? logger,
         string faultLogContext,
         Action? onTransientFault,
-        Func<Action, IDisposable>? scheduleReEstablish,
+        Func<TimeSpan, Action, IDisposable>? schedule,
         Action<Exception>? onPoisonedContent,
-        IMessageHub? hub)
+        IMessageHub? hub,
+        System.Reactive.Concurrency.IScheduler? scheduler)
     {
         var serial = new System.Reactive.Disposables.SerialDisposable();
         // 🚨 #991 — the PENDING re-establish must be cancellable, and cancelled by teardown.
@@ -404,8 +456,18 @@ public static class ActivityControlPlaneExtensions
         // disposal is disposed on assignment.
         var pendingReEstablish = new System.Reactive.Disposables.SerialDisposable();
         var disposed = false;
-        var schedule = scheduleReEstablish
-            ?? (reEstablish => Observable.Timer(TimeSpan.FromSeconds(1)).Subscribe(_ => reEstablish()));
+        var timerScheduler = scheduler ?? System.Reactive.Concurrency.DefaultScheduler.Instance;
+        var scheduleAfter = schedule
+            ?? ((delay, reEstablish) => Observable.Timer(delay, timerScheduler).Subscribe(_ => reEstablish()));
+        // 🚨 The PACING state of the re-establish loop. `consecutive` counts re-establishes since the
+        // last emission; an emission resets it (the source is reading again), so one hiccup costs one
+        // second and a persisting fault settles at once a minute. `escalated` makes the sustained-
+        // outage ERROR fire once per outage, not once per re-open: the old shape logged EVERY re-open
+        // at Error and re-opened every second forever — during a real outage that flooded the Error
+        // channel (which the incident bot files issues from) and hammered the failing dependency.
+        // Only the subscription's own callbacks touch these, and Rx serialises those per opening.
+        var consecutive = 0;
+        var escalated = false;
 
         // 🚨 #3026 — the callback is GATED on the hub's teardown state. `Stop()` below disposes the
         // subscription at the first instant of teardown, but an emission that was already
@@ -441,12 +503,24 @@ public static class ActivityControlPlaneExtensions
             // 🚨 Observable.Defer, never a bare `source()`. A factory that throws SYNCHRONOUSLY —
             // `GetMeshNodeStream()` on a hub whose scope is gone, evaluated inside the factory —
             // would otherwise throw out of Establish(): on the first call that is the installer's
-            // problem, but on a RE-establish the caller is the 1 s Observable.Timer tick, i.e. a
+            // problem, but on a RE-establish the caller is the paced Observable.Timer tick, i.e. a
             // raw scheduler thread with nothing above it, and an unhandled throw there kills the
             // host (#2468's shape, #3026's crash). Defer forwards a factory throw to OnError, where
             // the classifier below owns it like any other fault.
             serial.Disposable = Observable.Defer(source).Subscribe(
-                deliver,
+                x =>
+                {
+                    if (consecutive > 0)
+                    {
+                        if (escalated)
+                            logger?.LogInformation(
+                                "{Context} on {Address} recovered after {Count} re-establishes",
+                                faultLogContext, address, consecutive);
+                        consecutive = 0;
+                        escalated = false;
+                    }
+                    deliver(x);
+                },
                 ex =>
                 {
                     if (IsOwnHubDisposing(ex, address))
@@ -492,11 +566,26 @@ public static class ActivityControlPlaneExtensions
                             faultLogContext, address);
                         return;
                     }
-                    logger?.LogError(ex, "{Context} faulted on {Address} — re-establishing",
-                        faultLogContext, address);
+                    consecutive++;
+                    var delay = ReEstablishBackoff(consecutive);
+                    if (consecutive >= SustainedOutageReEstablish && !escalated)
+                    {
+                        escalated = true;
+                        logger?.LogError(ex,
+                            "{Context} on {Address} has faulted {Count} times in a row with no emission — "
+                            + "a sustained outage of its source. Re-establishing every {Delay}; this is "
+                            + "reported once per outage, each further re-open at Warning.",
+                            faultLogContext, address, consecutive, delay);
+                    }
+                    else
+                    {
+                        logger?.LogWarning(ex,
+                            "{Context} faulted on {Address} — re-establish {Count} in {Delay}",
+                            faultLogContext, address, consecutive, delay);
+                    }
                     onTransientFault?.Invoke();
                     if (!disposed)
-                        pendingReEstablish.Disposable = schedule(Establish);
+                        pendingReEstablish.Disposable = scheduleAfter(delay, Establish);
                 });
         }
 

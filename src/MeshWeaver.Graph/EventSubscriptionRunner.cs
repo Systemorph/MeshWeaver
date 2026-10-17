@@ -85,6 +85,27 @@ public sealed class EventSubscriptionRunner(
     // One-shot cold-start reconcile seeded from an authoritative storage read (see StartAsync) — disposed on stop.
     private IDisposable? startupSub;
 
+    /// <summary>Test seam: opens the runner's live workspace queries (id, query). Null in production,
+    /// where each opens the workspace's synced query as system.</summary>
+    internal Func<string, string, IObservable<IEnumerable<MeshNode>>>? OpenQueryOverride { get; set; }
+
+    /// <summary>Test seam: how a faulted standing query's re-open is scheduled. Null in production,
+    /// where the hub watcher's own cadence applies.</summary>
+    internal Func<Action, IDisposable>? ScheduleReopen { get; set; }
+
+    /// <summary>The outstanding subscriptions as the live query last listed them.</summary>
+    internal IReadOnlyList<EventSubscription> PendingSnapshot
+    {
+        get { lock (gate) return pending; }
+    }
+
+    // 🚨 The runner's two live queries are STANDING watches: one fault (a provider stall, a dropped
+    // connection) used to end each for the life of the process — no pending subscription fired again
+    // until a restart. The hub watcher re-opens a faulted query; the synced-query cache has already
+    // evicted the faulted chain, so the re-open reads fresh.
+    private IObservable<IEnumerable<MeshNode>> OpenQuery(string id, string query)
+        => OpenQueryOverride?.Invoke(id, query) ?? AsSystem(() => hub.GetWorkspace().GetQuery(id, query));
+
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
@@ -94,9 +115,11 @@ public sealed class EventSubscriptionRunner(
 
         // Live snapshot of outstanding subscriptions; re-emits on add / fire / cancel. Reading the Admin
         // partition needs an identity → system. (Constant query id: one registry entry, no leak.)
-        pendingSub = AsSystem(() => hub.GetWorkspace().GetQuery("event-subscriptions",
-                $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"))
-            .Subscribe(nodes =>
+        pendingSub = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
+            () => OpenQuery("event-subscriptions",
+                $"path:{EventSubscriptionNodeType.Namespace} scope:children nodeType:{EventSubscriptionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"),
+            nodes =>
             {
                 // 🚨 ReadSubscription, NEVER `n.Content as EventSubscription` (issue #1392). This
                 // list IS the candidate set for every firing path — change feed, trigger-node
@@ -151,7 +174,10 @@ public sealed class EventSubscriptionRunner(
                 // That keeps `executing` bounded by the pending set instead of the runner's uptime.
                 foreach (var id in executing.Keys.Where(id => !pendingIds.Contains(id)).ToList())
                     executing.TryRemove(id, out _);
-            }, ex => logger?.LogWarning(ex, "Event-subscriptions query failed"));
+            },
+            logger,
+            "Event-subscriptions query",
+            scheduleReEstablish: ScheduleReopen);
 
         // 🚨 Cold-start authoritative reconcile — the fix for the memex 2026-07-20 stranded-invite incident.
         // The live pendingSub above reads the WORKSPACE cache (GetQuery): on a cold start it is EMPTY until
@@ -610,9 +636,11 @@ public sealed class EventSubscriptionRunner(
     /// </summary>
     private void MigrateLegacyScheduledActions()
     {
-        legacySub = AsSystem(() => hub.GetWorkspace().GetQuery("event-subscriptions-legacy",
-                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"))
-            .Subscribe(nodes =>
+        legacySub = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
+            () => OpenQuery("event-subscriptions-legacy",
+                $"path:{ScheduledActionNodeType.Namespace} scope:children nodeType:{ScheduledActionNodeType.NodeType} select:path,id,namespace,name,nodeType,content"),
+            nodes =>
             {
                 foreach (var node in nodes ?? [])
                 {
@@ -637,7 +665,10 @@ public sealed class EventSubscriptionRunner(
                                 lock (gate) migratedLegacyIds.Remove(legacy.Id);
                             });
                 }
-            }, ex => logger?.LogWarning(ex, "Legacy ScheduledAction migration query failed"));
+            },
+            logger,
+            "Legacy ScheduledAction migration query",
+            scheduleReEstablish: ScheduleReopen);
     }
 
     /// <summary>Maps a legacy <see cref="ScheduledAction"/> to the equivalent <see cref="EventSubscription"/>
