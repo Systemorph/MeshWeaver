@@ -89,7 +89,7 @@ Place a toolbar on the right side of a page title by combining it with a horizon
 Controls.Stack
     .WithOrientation(Orientation.Horizontal)
     .WithHorizontalAlignment("space-between")
-    .WithView(Controls.Html("<h2>Users</h2>"))
+    .WithView(Controls.H2("Users"))
     .WithView(
         Controls.Toolbar
             .WithView(Controls.Button("Add User"))

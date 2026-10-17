@@ -32,7 +32,7 @@ For responsive multi-column grid layouts, see [Layout Grid](../LayoutGrid).
 
 ```csharp --render BasicWithView --show-code
 Controls.Stack                                              // Create a container
-    .WithView(Controls.Html("<h2>Dashboard</h2>"))          // Add a heading
+    .WithView(Controls.H2("Dashboard"))                     // Add a heading
     .WithView(Controls.Label("Welcome to the app"))         // Add a label
     .WithView(Controls.Button("Get Started"))               // Add a button
 ```
@@ -66,7 +66,7 @@ Containers nest freely. A `Stack` inside a `Tabs` panel is a common pattern for 
 Controls.Tabs                                                               // Tabbed dashboard
     .WithView(                                                              // Overview tab
         Controls.Stack                                                      // Stack inside tab
-            .WithView(Controls.Html("<h3>Overview</h3>"))                   // Tab heading
+            .WithView(Controls.H3("Overview"))                              // Tab heading
             .WithView(Controls.Label("Welcome to the dashboard")),          // Tab content
         s => s.WithLabel("Overview"))                                       // Tab label
     .WithView(Controls.Label("Detailed analytics here"), s => s            // Analytics tab
