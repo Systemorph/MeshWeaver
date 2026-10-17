@@ -123,14 +123,14 @@ The cell below builds a small layout stack that mirrors what an embedded area lo
 
 ```csharp --render AreaPrefixDemo --show-code
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<div style='padding:12px;border:1px solid #ddd;border-radius:6px;background:#f9f9f9'>" +
-        "<strong>Thumbnail area</strong> &mdash; compact card view" +
-        "</div>"))
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<div style='padding:12px;border:1px solid #ddd;border-radius:6px;background:#f9f9f9;margin-top:8px'>" +
-        "<strong>Catalog area</strong> &mdash; searchable child-node grid" +
-        "</div>"))
+    .WithView(MeshWeaver.Layout.Controls.Stack
+        .WithView(MeshWeaver.Layout.Controls.H4("Thumbnail area"))
+        .WithView(MeshWeaver.Layout.Controls.Body("Compact card view"))
+        .AddSkin(Skins.Card))
+    .WithView(MeshWeaver.Layout.Controls.Stack
+        .WithView(MeshWeaver.Layout.Controls.H4("Catalog area"))
+        .WithView(MeshWeaver.Layout.Controls.Body("Searchable child-node grid"))
+        .AddSkin(Skins.Card))
     .WithView(MeshWeaver.Layout.Controls.Markdown(
         "_Use_ `@@Node/AreaName` _in any markdown document to embed either of these live._"))
 ```
