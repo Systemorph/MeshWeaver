@@ -207,6 +207,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// where the hub watcher's own cadence applies.</summary>
     internal Func<Action, IDisposable>? ScheduleInboxReopen { get; set; }
 
+    /// <summary>Test seam: one safety-net pass. Null in production, where the pass is
+    /// <see cref="FullPass"/>.</summary>
+    internal Func<IObservable<Unit>>? SafetyNetPassOverride { get; set; }
+
+    /// <summary>Test seam: the scheduler the safety net's interval runs on. Null in production
+    /// (the default scheduler).</summary>
+    internal IScheduler? SafetyNetScheduler { get; set; }
+
     /// <summary>Whether this process has picked up the inbox delivery at <paramref name="path"/> — the
     /// observable trace that an emission of the inbox watch was processed.</summary>
     internal bool HasClaimedDelivery(string path) => claimedDeliveries.Contains(path);
@@ -362,8 +370,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
                 _ => { },
+                // A pass's fault is caught per tick inside SafetyNet; reaching here means the loop
+                // itself broke (its timer), which nothing re-arms.
                 ex => logger.LogError(ex,
-                    "[RegistryUpdate] the safety-net reconcile faulted — no further scheduled pass "
+                    "[RegistryUpdate] the safety-net loop faulted — no further scheduled pass "
                     + "runs in this process; broadcasts and the next boot still reconcile.")));
     }
 
@@ -592,7 +602,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// again next tick; nothing here notifies admins or marks the ledger pending — that is the boot
     /// deferral's job, and the boot's retry budget is what such a registry has already exhausted.
     /// </summary>
-    private IObservable<Unit> SafetyNet(PluginCatalogOptions options)
+    internal IObservable<Unit> SafetyNet(PluginCatalogOptions options)
     {
         if (options.ReconcileSafetyNetInterval <= TimeSpan.Zero)
         {
@@ -602,19 +612,48 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 PluginCatalogOptions.SectionName, nameof(PluginCatalogOptions.ReconcileSafetyNetInterval));
             return Observable.Never<Unit>();
         }
-        if (hub.ServiceProvider.GetService<RegistryTokenResolver>() is null)
-            return Observable.Never<Unit>();
+        var pass = SafetyNetPassOverride;
+        if (pass is null)
+        {
+            if (hub.ServiceProvider.GetService<RegistryTokenResolver>() is null)
+                return Observable.Never<Unit>();
+            pass = () => FullPass(options);
+        }
+        var scheduler = SafetyNetScheduler ?? DefaultScheduler.Instance;
 
-        return Observable.Defer(() => Observable.Timer(options.ReconcileSafetyNetInterval))
-            .SelectMany(_ => RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
-                .Select(SafetyNetReconcile)
-                .ToObservable()
-                .Concat()
+        // 🚨 The loop is STANDING — `.Repeat()` re-subscribes on COMPLETION only, never on an error —
+        // so a tick's fault must end the TICK, not the loop. Each registry's read already catches its
+        // own fault, but anything outside that per-registry Catch (the registry list, a synchronous
+        // throw while composing a pass, the ledger lane refusing) used to fault the whole chain, and
+        // the subscriber's error arm only logged: no further scheduled pass ran in this process until
+        // a restart. The pass is caught HERE, logged at Warning, and the next interval runs a fresh
+        // one; the cadence is the interval itself, so a fault that persists is re-tried no faster
+        // than the safety net ever ran.
+        return Observable.Defer(() => Observable.Timer(options.ReconcileSafetyNetInterval, scheduler))
+            .SelectMany(_ => Observable.Defer(pass)
                 .DefaultIfEmpty(Unit.Default)
-                .LastAsync())
-            .SelectMany(_ => RetryFaultedReloads(options))
+                .LastAsync()
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[RegistryUpdate] a safety-net reconcile pass faulted — installed packages keep "
+                        + "their current version; the next pass runs in {Interval}.",
+                        options.ReconcileSafetyNetInterval);
+                    return Observable.Return(Unit.Default);
+                }))
             .Repeat();
     }
+
+    /// <summary>One full pass against every configured registry, sequentially, on the lane, then
+    /// the faulted-reload re-arm. Shared by the safety net and <see cref="ReconcileNow"/>.</summary>
+    private IObservable<Unit> FullPass(PluginCatalogOptions options) =>
+        RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+            .Select(SafetyNetReconcile)
+            .ToObservable()
+            .Concat()
+            .DefaultIfEmpty(Unit.Default)
+            .LastAsync()
+            .SelectMany(_ => RetryFaultedReloads(options));
 
     /// <summary>
     /// ONE full pass against every configured registry, NOW, on the serialized lane — the same work
@@ -626,13 +665,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     public IObservable<Unit> ReconcileNow()
     {
         var options = hub.ServiceProvider.GetService<PluginCatalogOptions>() ?? new PluginCatalogOptions();
-        return RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
-            .Select(SafetyNetReconcile)
-            .ToObservable()
-            .Concat()
-            .DefaultIfEmpty(Unit.Default)
-            .LastAsync()
-            .SelectMany(_ => RetryFaultedReloads(options));
+        return FullPass(options);
     }
 
     /// <summary>

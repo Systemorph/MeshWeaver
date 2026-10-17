@@ -94,10 +94,33 @@ once, with an error arm that only logs. Each now re-opens.
 | `PartitionRegistry` (Graph) | the fault became a `null` that the shared `Replay(1)` entry served to every later caller | the faulted entry is evicted. Its current callers get `null`, and the next lookup opens a fresh query. It also folds the change feed now: a delta for another partition used to read as "no definition". |
 | `RegistryUpdateReconciler` module-published inbox (PluginCatalog) | broadcasts drained only at the next boot | `SubscribeHubWatcher` |
 | `InstanceAutoRegistrationService` consent wait (PluginCatalog) | the fault answered `false`, the waiter filtered it out, and registration never ran until a restart | `StandingWatchRecovery.ReopenOnTransientFault` with no budget, so the wait stays open as long as its waiter does. It re-reads the record on every emission, so a record written incomplete and completed later also registers. |
+| `OutboundEmailSender` outbound-mail watch (portal) | no outbound mail sent until a restart | `SubscribeHubWatcher` (`SubscribeOutboundWatch`). A re-open re-offers every still-New mail; the send queue's re-read of the authoritative node still decides each send. |
+| `InvitationEmailSender` invitation watch (portal) | no invitation e-mailed until a restart | `SubscribeHubWatcher` (`SubscribeInvitationWatch`). The in-process claim and the durable `EmailSentAt` stamp still decide each send. |
+| `RegistryUpdateReconciler` safety net (PluginCatalog) | a pass that faulted outside the per-registry catch ended every later scheduled pass (`.Repeat()` re-subscribes on completion only) | each tick's pass is caught, logged at Warning, and the next interval runs a fresh one |
 
 `SubscribeHubWatcher` re-opens after any fault that does not end the watch for good (its own hub
 disposing, poisoned own content, its own node gone). It ends with the hub that owns it. Tests drive
 the re-open through its `scheduleReEstablish` seam on a manual clock, never on wall time.
+
+### The hub watcher's cadence is paced
+
+`SubscribeHubWatcher` used to re-open after a fixed 1 s and log every re-open at Error, forever.
+During a real outage of its source that was about 3600 Error lines an hour per watcher — and the
+Error channel files incidents — plus 3600 fresh opens an hour against the dependency that was
+failing. It now has the same shape as `StandingWatchRecovery`, except that it never gives up (a
+stopped control-plane watcher leaves its hub half-alive):
+
+- **Backoff.** 1 s, 2 s, 5 s, 15 s, 30 s, then every 60 s, counted over consecutive faults with no
+  emission between them. An emission proves the source reads again and restarts the cadence at 1 s,
+  so one hiccup still costs one second.
+- **Levels.** Each re-open is a Warning naming the watcher, the attempt and the delay. The re-open
+  that reaches the 60 s cap is reported once at Error as a sustained outage. The first emission after
+  that is reported once at Information. A one-hour outage is about 65 opens and one Error line.
+- **Signature.** Unchanged. A caller's `scheduleReEstablish` seam still replaces the timer wholesale,
+  so the existing manual-clock tests are unaffected.
+
+`HubWatcherPacesItsReEstablishTest` (`MeshWeaver.Hosting.Test`) pins this on virtual time. Putting
+back the fixed 1 s / Error-per-re-open body fails both of its tests.
 
 ### The guard
 
@@ -114,13 +137,14 @@ whose chain opens a live query (`.Query<`, `GetQuery(`, `ObserveQuery`) without 
 It is a ratchet, and the count may only fall. It reads text, not symbols, so it MISSES some watches:
 a query subscribed in another statement or by a method's caller, a `GetMeshNodeStream` or
 change-feed watch, and a standing chain with a per-item `Take`. A green run means no new watch of
-the measured shape, not that every watch is guarded. The two sites it counts at seeding are the
-portal's e-mail senders (`OutboundEmailSender`, `InvitationEmailSender`).
+the measured shape, not that every watch is guarded. The baseline is zero: the two sites it counted
+at seeding, the portal's e-mail senders, are converted.
 
 ## Tests
 
-- `StandingWatchesReopenAfterAFaultTest` (`MeshWeaver.Graph.Test`) and
-  `PluginCatalogStandingWatchesReopenTest` (`Memex.Portal.Shared.Test`) cover the sites above with
+- `StandingWatchesReopenAfterAFaultTest` (`MeshWeaver.Graph.Test`),
+  `PluginCatalogStandingWatchesReopenTest` and `EmailWatchesReopenAfterAFaultTest`
+  (`Memex.Portal.Shared.Test`) cover the sites above with
   one script: the first open throws `QueryProviderStalledException`, the watch survives, the
   re-open runs on the test's clock, and a later emission is processed. Each was proven by putting
   back the unguarded shape, which fails it.

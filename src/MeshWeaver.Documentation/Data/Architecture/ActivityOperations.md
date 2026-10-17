@@ -142,7 +142,7 @@ Two things the signature makes non-optional:
 
 The handler runs on whatever scheduler the upstream stream emits on — in practice the hub's own action block. Treat it as hub-reachable code: no `await`, compose follow-up work as `IObservable` chains.
 
-The subscription is **self-healing but not infinitely retrying**. It is established through `SubscribeWithReEstablish`, which re-establishes after ~1 s on a transient fault but stops permanently on two classes: own-node content that cannot be deserialized (re-subscribing would replay the same poisoned emission at 1 Hz), and a routing `NotFound` on its own node (the node is gone — re-subscribing is the resubscribe storm that took prod down on 2026-06-10). Both terminal cases are logged loudly rather than retried.
+The subscription is **self-healing but not infinitely retrying**. It is established through `SubscribeWithReEstablish`, which re-establishes on a transient fault — after 1 s, backing off to once a minute while the fault persists — but stops permanently on two classes: own-node content that cannot be deserialized (re-subscribing would replay the same poisoned emission at 1 Hz), and a routing `NotFound` on its own node (the node is gone — re-subscribing is the resubscribe storm that took prod down on 2026-06-10). Both terminal cases are logged loudly rather than retried.
 
 The running script receives the cancellation, throws `OperationCanceledException`, and the executor's normal terminal path writes `Status = Cancelled` back to the activity's MeshNode. The same stream the cancel button is bound to ticks one final time with the terminal state, and the UI re-renders — the cancel button disappears without any additional coordination.
 

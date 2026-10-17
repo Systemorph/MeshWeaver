@@ -52,11 +52,12 @@ public class StandingQueryWatchRatchetGuard
     private static readonly string[] ScannedRoots = ["src", "memex"];
 
     /// <summary>
-    /// The two sites the scan finds at seeding are the portal's e-mail senders
-    /// (<c>OutboundEmailSender</c>, <c>InvitationEmailSender</c>): a live query whose error arm only
-    /// logs. MAY ONLY DECREASE — lower it in the change that converts one.
+    /// Zero: the two sites the scan found at seeding — the portal's e-mail senders
+    /// (<c>OutboundEmailSender</c>, <c>InvitationEmailSender</c>), a live query whose error arm only
+    /// logged — now hand their query to the hub watcher. MAY ONLY DECREASE, and there is nothing
+    /// left to decrease: a new site is converted, never baselined.
     /// </summary>
-    private const int Baseline = 2;
+    private const int Baseline = 0;
 
     private static readonly Regex SubscribeCall = new(@"\.Subscribe\s*\(", RegexOptions.Compiled);
     private static readonly Regex LiveQuery = new(@"(\.Query\s*<|\bGetQuery\s*\(|\bObserveQuery\b)", RegexOptions.Compiled);
