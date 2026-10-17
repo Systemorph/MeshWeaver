@@ -21,9 +21,10 @@ namespace MeshWeaver.Graph.Configuration;
 /// per-VIEWER gating (permission + admin) happens in the aggregator against the viewer's own
 /// streams, never here.</para>
 ///
-/// <para>Fault-tolerant: a query error logs and degrades to the LAST known set (or empty), then
-/// the subscription retries on the next subscriber epoch — the menu keeps rendering its compiled
-/// items no matter what this catalog does.</para>
+/// <para>Fault-tolerant: a query error logs and degrades to the LAST known set (or empty), and the
+/// query RE-OPENS on the hub watcher's cadence, so the next full listing replaces the frozen set —
+/// one fault never freezes the menus for the rest of the process's life. The menu keeps rendering
+/// its compiled items no matter what this catalog does.</para>
 ///
 /// <para>🚨 <see cref="Contributions"/> emits the query's ANSWER, never a placeholder: until the
 /// first Initial (or a fault) arrives it emits nothing. It used to open with an empty set, and a
@@ -40,12 +41,27 @@ public sealed class UiContributionCatalog : IDisposable
         new(null);
     private readonly object gate = new();
     private IDisposable? subscription;
+    // Test seams: the catalog query and how a re-open is scheduled. Null in production.
+    private readonly Func<IObservable<QueryResultChange<MeshNode>>>? openCatalog;
+    private readonly Func<Action, IDisposable>? scheduleReopen;
 
     /// <summary>Creates the catalog; the query subscription starts lazily on first read.</summary>
     public UiContributionCatalog(IMessageHub hub, ILogger<UiContributionCatalog>? logger = null)
+        : this(hub, logger, openCatalog: null, scheduleReopen: null)
+    {
+    }
+
+    /// <summary>The seam a test drives: the query the catalog opens, and the clock its re-open runs on.</summary>
+    internal UiContributionCatalog(
+        IMessageHub hub,
+        ILogger<UiContributionCatalog>? logger,
+        Func<IObservable<QueryResultChange<MeshNode>>>? openCatalog,
+        Func<Action, IDisposable>? scheduleReopen)
     {
         this.hub = hub;
         this.logger = logger;
+        this.openCatalog = openCatalog;
+        this.scheduleReopen = scheduleReopen;
     }
 
     /// <summary>
@@ -96,27 +112,34 @@ public sealed class UiContributionCatalog : IDisposable
                 return;
             }
 
-            IDisposable Subscribe()
-            {
-                using (accessService?.ImpersonateAsSystem())
-                {
-                    return meshService
-                        // Contributions are authored wherever the contributing plugin lives, so the
-                        // catalog is mesh-wide by nature (#3202 — fan-out is opt-in).
-                        .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(UiContributionNodeType.NodeType)))
-                        .Subscribe(OnChange, ex =>
-                        {
-                            // Degrade to the last known set; the compiled menu is unaffected. A fault
-                            // before the first answer answers EMPTY, so nothing waits on it forever.
-                            logger?.LogWarning(ex, "UiContribution catalog query faulted; menu contributions frozen at the last known set");
-                            if (state.Value is null)
-                                state.OnNext(ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty);
-                        });
-                }
-            }
+            // RunAsSystem (Using + Defer): the query is both built and subscribed under the system
+            // identity on every (re-)open — the re-open runs on a timer thread with no ambient context.
+            IObservable<QueryResultChange<MeshNode>> Open() => accessService.RunAsSystem(() => meshService
+                // Contributions are authored wherever the contributing plugin lives, so the
+                // catalog is mesh-wide by nature (#3202 — fan-out is opt-in).
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(MeshWideQuery.OfType(UiContributionNodeType.NodeType))));
 
-            subscription = Subscribe();
+            var open = openCatalog ?? Open;
+            // 🚨 A STANDING watch: the hub watcher re-opens the query after a fault, so a stall or a
+            // dropped connection freezes the set only until the re-opened query lists it again.
+            subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+                hub,
+                () => Observable.Defer(open).Do(_ => { }, OnFault),
+                OnChange,
+                logger,
+                "UiContribution catalog query",
+                scheduleReEstablish: scheduleReopen,
+                onPoisonedContent: OnFault);
         }
+    }
+
+    private void OnFault(Exception ex)
+    {
+        // Degrade to the last known set; the compiled menu is unaffected. A fault before the first
+        // answer answers EMPTY, so nothing waits on it forever; the re-opened query replaces it.
+        logger?.LogWarning(ex, "UiContribution catalog query faulted; menu contributions frozen at the last known set until the query re-opens");
+        if (state.Value is null)
+            state.OnNext(ImmutableDictionary<string, (MeshNode, UiContribution)>.Empty);
     }
 
     private void OnChange(QueryResultChange<MeshNode> change)

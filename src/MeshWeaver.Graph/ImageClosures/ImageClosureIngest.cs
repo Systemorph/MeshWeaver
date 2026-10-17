@@ -87,15 +87,48 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
 
         // The index node is the inbox's OWNER: the endpoint refuses a delivery whose target node does
         // not exist, so it is ensured before anything is watched.
-        subscriptions.Add(access.RunAsSystem(() => mesh.CreateOrUpdateNode(ImageClosureNodes.IndexNode()))
-            .Select(_ => Unit.Default)
-            .Concat(access.RunAsSystem(() => hub.GetQuery($"ImageClosure.Inbox:{hub.Address}", query))
+        //
+        // 🚨 A STANDING watch: one fault of the inbox query (a provider stall, a dropped connection)
+        // used to end it for the life of the process — no closure record was ingested again until a
+        // restart. The hub watcher re-opens it; the synced-query cache has already evicted the
+        // faulted chain, so the re-open reads fresh, and the claimed set keeps a delivery already
+        // picked up from being drained twice.
+        var openInbox = OpenInboxOverride
+            ?? (() => access.RunAsSystem(() => hub.GetQuery($"ImageClosure.Inbox:{hub.Address}", query)));
+        var ensureIndex = access.RunAsSystem(() => mesh.CreateOrUpdateNode(ImageClosureNodes.IndexNode()))
+            .Take(1);
+        subscriptions.Add(ensureIndex.Subscribe(
+            _ => subscriptions.Add(ActivityControlPlaneExtensions.SubscribeHubWatcher(
+                hub,
+                () => Watch(openInbox, configuration?[key]),
+                _ => { },
+                logger,
+                "[ImageClosure] inbox watch",
+                scheduleReEstablish: ScheduleReopen)),
+            ex => logger.LogError(ex,
+                "[ImageClosure] the inbox index node could not be ensured — the CD build's deliveries are "
+                + "refused at the endpoint and nothing is drained in this process")));
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Test seam: opens the inbox query. Null in production.</summary>
+    internal Func<IObservable<IEnumerable<MeshNode>>>? OpenInboxOverride { get; set; }
+
+    /// <summary>Test seam: how a faulted inbox watch's re-open is scheduled. Null in production.</summary>
+    internal Func<Action, IDisposable>? ScheduleReopen { get; set; }
+
+    /// <summary>Whether this process has picked up the delivery at <paramref name="path"/> — the
+    /// observable trace that an emission of the inbox watch was processed.</summary>
+    internal bool HasClaimed(string path) => claimed.Contains(path);
+
+    private IObservable<Unit> Watch(Func<IObservable<IEnumerable<MeshNode>>> openInbox, string? secret) =>
+        Observable.Defer(openInbox)
                 .SelectMany(nodes => (nodes ?? [])
                     .Where(n => !string.IsNullOrWhiteSpace(n.Path))
                     .OrderBy(n => n.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
                     .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
                     .ToArray())
-                .Select(node => Observable.Defer(() => Drain(hub, node, configuration?[key], logger))
+                .Select(node => Observable.Defer(() => Drain(hub, node, secret, logger))
                     .Select(_ => Unit.Default)
                     .Catch((Exception ex) =>
                     {
@@ -104,11 +137,7 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
                             node.Path);
                         return Observable.Return(Unit.Default);
                     }))
-                .Concat())
-            .Subscribe(_ => { }, ex => logger.LogError(ex,
-                "[ImageClosure] the inbox watch faulted — no further closure record is ingested in this process")));
-        return Task.CompletedTask;
-    }
+                .Concat();
 
     /// <summary>
     /// Drains ONE delivery: verify, validate, write, delete. Emits the written node's path, or null

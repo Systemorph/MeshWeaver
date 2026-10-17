@@ -710,12 +710,28 @@ public sealed class InstanceSecretCatalog : IDisposable
     private readonly System.Reactive.Subjects.BehaviorSubject<bool> loaded = new(false);
     private readonly object gate = new();
     private IDisposable? subscription;
+    // Test seams: the catalog query and how a re-open is scheduled. Null in production: the query is
+    // the mesh's, and SubscribeHubWatcher's own cadence schedules the re-open.
+    private readonly Func<IObservable<QueryResultChange<MeshNode>>>? openCatalog;
+    private readonly Func<Action, IDisposable>? scheduleReopen;
 
     /// <summary>Created by DI, once per mesh.</summary>
     public InstanceSecretCatalog(IMessageHub hub, ILogger<InstanceSecretCatalog>? logger = null)
+        : this(hub, logger, openCatalog: null, scheduleReopen: null)
+    {
+    }
+
+    /// <summary>The seam a test drives: the query the catalog opens, and the clock its re-open runs on.</summary>
+    internal InstanceSecretCatalog(
+        IMessageHub hub,
+        ILogger<InstanceSecretCatalog>? logger,
+        Func<IObservable<QueryResultChange<MeshNode>>>? openCatalog,
+        Func<Action, IDisposable>? scheduleReopen)
     {
         this.hub = hub;
         this.logger = logger;
+        this.openCatalog = openCatalog;
+        this.scheduleReopen = scheduleReopen;
     }
 
     /// <summary>Emits whenever the set changes (and once on subscribe). Carries no values.</summary>
@@ -753,9 +769,11 @@ public sealed class InstanceSecretCatalog : IDisposable
     }
 
     /// <summary>
-    /// True once the catalog's live query has FAULTED. The snapshot can then no longer see a
-    /// revocation, so a verifier must fail CLOSED (<see cref="InstanceSecrets.Candidates"/> offers no
-    /// per-sender key at all) until the process restarts and the subscription is re-established.
+    /// True while the catalog's live query is DOWN: from the fault that ended it until the re-opened
+    /// query delivers a full listing again. The snapshot cannot see a revocation in that window, so a
+    /// verifier fails CLOSED (<see cref="InstanceSecrets.Candidates"/> offers no per-sender key at
+    /// all). The query re-opens by itself (the hub watcher's re-establish), so a fault costs that
+    /// window, never the rest of the process's life.
     /// </summary>
     public bool Faulted { get; private set; }
 
@@ -798,19 +816,32 @@ public sealed class InstanceSecretCatalog : IDisposable
             }
             // RunAsSystem, not a `using` scope around Subscribe: the subscription outlives this
             // method, and the seal stamps the system identity on the query operation itself.
-            subscription = accessService
-                .RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(InstanceSecrets.CatalogQuery)))
-                .Subscribe(OnChange, ex =>
-                {
-                    // 🚨 Fail CLOSED: a dead feed can no longer deliver a revocation, so every
-                    // per-sender key stops verifying (Candidates) until a restart re-subscribes.
-                    Faulted = true;
-                    logger?.LogError(ex,
-                        "[InstanceSecrets] catalog query FAULTED; per-sender keys are refused until this process restarts");
-                    loaded.OnNext(true);
-                    state.OnNext(state.Value);
-                });
+            var open = openCatalog
+                ?? (() => accessService.RunAsSystem(() => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(InstanceSecrets.CatalogQuery))));
+            // 🚨 A STANDING watch. One fault (a provider stall, a dropped connection) used to end it
+            // for the life of the process, and every per-sender key was refused until a restart. The
+            // hub watcher re-opens the query; between the fault and the re-opened listing the catalog
+            // stays fail-closed (Faulted), and the next full listing clears it.
+            subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+                hub,
+                () => Observable.Defer(open).Do(_ => { }, OnFault),
+                OnChange,
+                logger,
+                "[InstanceSecrets] catalog query",
+                scheduleReEstablish: scheduleReopen,
+                onPoisonedContent: OnFault);
         }
+    }
+
+    private void OnFault(Exception ex)
+    {
+        // 🚨 Fail CLOSED: a dead feed can no longer deliver a revocation, so every per-sender key
+        // stops verifying (Candidates) until the re-opened query has listed the set again.
+        Faulted = true;
+        logger?.LogWarning(ex,
+            "[InstanceSecrets] catalog query FAULTED; per-sender keys are refused until the re-opened query lists the set again");
+        loaded.OnNext(true);
+        state.OnNext(state.Value);
     }
 
     private void OnChange(QueryResultChange<MeshNode> change)
@@ -836,6 +867,9 @@ public sealed class InstanceSecretCatalog : IDisposable
                             .Select(kv => kv.Key).ToList());
                 break;
         }
+        // A full listing is the re-opened feed reading again: the fail-closed window ends here.
+        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            Faulted = false;
         state.OnNext(current);
         if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
             loaded.OnNext(true);

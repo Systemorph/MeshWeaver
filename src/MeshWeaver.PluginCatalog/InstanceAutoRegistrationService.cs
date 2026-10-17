@@ -647,31 +647,58 @@ public sealed class InstanceAutoRegistrationService(
     /// <paramref name="wait"/> the query is LEFT OPEN until a record appears, which is how the
     /// registration that was waiting for consent wakes up without a restart.
     /// </summary>
-    private IObservable<bool> ConsentGiven(bool wait)
+    internal IObservable<bool> ConsentGiven(bool wait)
     {
         var workspace = hub.GetWorkspace();
         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
         var path = MeshWeaverInstanceNodeType.ConsentPath;
-        var rows = accessService.RunAsSystem(() => workspace.GetQuery(
-            $"consent|{path}", $"path:{path} nodeType:{MeshWeaverInstanceNodeType.ConsentNodeType}"));
-        var present = wait
-            ? rows.Where(r => r.Any()).Take(1)
-            : rows.Take(1).Timeout(TimeSpan.FromSeconds(10));
-        return present
-            .SelectMany(r => r.Any()
-                ? accessService.RunAsSystem(() => workspace.GetMeshNodeStream(path)
-                        .Where(node => node is not null)
-                        .Take(1)
-                        .Timeout(TimeSpan.FromSeconds(10)))
-                    .Select(node => node!.ContentAs<InstanceConsent>(hub.JsonSerializerOptions)?.IsComplete ?? false)
-                : Observable.Return(false))
-            .Catch((Exception ex) =>
-            {
-                // A read that reached no verdict is not consent. Say so, and stay unregistered.
-                logger.LogWarning(ex, "Could not read the instance consent record at {Path} — treating as not given", path);
-                return Observable.Return(false);
-            });
+        IObservable<IEnumerable<MeshNode>> Rows() => ConsentRowsOverride?.Invoke()
+            ?? accessService.RunAsSystem(() => workspace.GetQuery(
+                $"consent|{path}", $"path:{path} nodeType:{MeshWeaverInstanceNodeType.ConsentNodeType}"));
+        IObservable<bool> Verdict(IEnumerable<MeshNode> r) => r.Any()
+            ? (ConsentContentOverride?.Invoke()
+                    ?? accessService.RunAsSystem(() => workspace.GetMeshNodeStream(path)))
+                .Where(node => node is not null)
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(10))
+                .Select(node => node!.ContentAs<InstanceConsent>(hub.JsonSerializerOptions)?.IsComplete ?? false)
+            : Observable.Return(false);
+
+        if (!wait)
+            return Observable.Defer(Rows).Take(1).Timeout(TimeSpan.FromSeconds(10))
+                .SelectMany(Verdict)
+                .Catch((Exception ex) =>
+                {
+                    // A read that reached no verdict is not consent. Say so, and stay unregistered.
+                    logger.LogWarning(ex, "Could not read the instance consent record at {Path} — treating as not given", path);
+                    return Observable.Return(false);
+                });
+
+        // 🚨 The WAIT is a standing watch, and it used to die on its first fault: the Catch above
+        // answered `false`, the waiter's `Where(given)` filtered it out, the chain completed, and the
+        // registration never ran until a restart — however soon after the admin consented. It now
+        // stays live (a record written incomplete and completed later is re-read on each emission)
+        // and RE-OPENS after any fault on the standing-watch backoff, at Warning, for as long as
+        // the waiter is subscribed.
+        return StandingWatchRecovery.ReopenOnTransientFault(
+            () => Observable.Defer(Rows).Select(Verdict).Switch(),
+            maxConsecutive: int.MaxValue,
+            backoff: StandingWatchRecovery.DefaultBackoff,
+            scheduler: ConsentReopenScheduler ?? Scheduler.Default,
+            onReopen: (ex, attempt, delay) => logger.LogWarning(ex,
+                "Waiting for the instance consent record at {Path}: the read faulted (attempt {Attempt}) — "
+                + "re-opening in {Delay}", path, attempt, delay),
+            isTransient: _ => true);
     }
+
+    /// <summary>Test seam: the consent existence query. Null in production.</summary>
+    internal Func<IObservable<IEnumerable<MeshNode>>>? ConsentRowsOverride { get; set; }
+
+    /// <summary>Test seam: the consent record's live node. Null in production.</summary>
+    internal Func<IObservable<MeshNode?>>? ConsentContentOverride { get; set; }
+
+    /// <summary>Test seam: the clock the consent wait's re-open runs on. Null in production.</summary>
+    internal IScheduler? ConsentReopenScheduler { get; set; }
 
     /// <summary>The registration proper — present the key (or none, openly), store the issued
     /// credential. Split out of <see cref="EnsureRegistered"/> so the consent-deferred path and the

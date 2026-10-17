@@ -73,8 +73,50 @@ shapes. The handshake and the view retry (`AreaErrorClassifier`) both use it. It
 transport's own two timeout phrases, never a NACK that carries a verdict. Re-asking is safe: the
 claim registration is idempotent per holder, even if the timed-out request did land.
 
+## The same defect in eight more places
+
+A sweep for watches with no guard of their own found the same shape again: a live query subscribed
+once, with an error arm that only logs. Each now re-opens.
+
+| site | what one fault used to cost | how it re-opens now |
+|---|---|---|
+| `InstanceSecretCatalog` (Graph) | every per-sender key refused until a restart (it fails closed) | `SubscribeHubWatcher`. It stays fail-closed (`Faulted`) from the fault until the re-opened query lists the set again. |
+| `UiContributionCatalog` (Graph) | menus frozen at the last known set | `SubscribeHubWatcher`. The next full listing replaces the frozen set. |
+| `EventSubscriptionRunner`, both live queries (Graph) | no pending subscription fired, no legacy action migrated | `SubscribeHubWatcher` on each |
+| `ImageClosureIngest` inbox (Graph) | no closure record ingested | `SubscribeHubWatcher`. The claimed set keeps a delivery from being drained twice. |
+| `PartitionRegistry` (Graph) | the fault became a `null` that the shared `Replay(1)` entry served to every later caller | the faulted entry is evicted. Its current callers get `null`, and the next lookup opens a fresh query. It also folds the change feed now: a delta for another partition used to read as "no definition". |
+| `RegistryUpdateReconciler` module-published inbox (PluginCatalog) | broadcasts drained only at the next boot | `SubscribeHubWatcher` |
+| `InstanceAutoRegistrationService` consent wait (PluginCatalog) | the fault answered `false`, the waiter filtered it out, and registration never ran until a restart | `StandingWatchRecovery.ReopenOnTransientFault` with no budget, so the wait stays open as long as its waiter does. It re-reads the record on every emission, so a record written incomplete and completed later also registers. |
+
+`SubscribeHubWatcher` re-opens after any fault that does not end the watch for good (its own hub
+disposing, poisoned own content, its own node gone). It ends with the hub that owns it. Tests drive
+the re-open through its `scheduleReEstablish` seam on a manual clock, never on wall time.
+
+### The guard
+
+`StandingQueryWatchRatchetGuard` (`MeshWeaver.Documentation.Test`) counts `.Subscribe(` statements
+whose chain opens a live query (`.Query<`, `GetQuery(`, `ObserveQuery`) without one of these:
+
+- a one-shot read: `Take`, `FirstAsync` and similar;
+- a write;
+- a re-opening helper;
+- a top-level `Catch`;
+- a forwarding observer;
+- an error arm that releases the chain for the next caller.
+
+It is a ratchet, and the count may only fall. It reads text, not symbols, so it MISSES some watches:
+a query subscribed in another statement or by a method's caller, a `GetMeshNodeStream` or
+change-feed watch, and a standing chain with a per-item `Take`. A green run means no new watch of
+the measured shape, not that every watch is guarded. The two sites it counts at seeding are the
+portal's e-mail senders (`OutboundEmailSender`, `InvitationEmailSender`).
+
 ## Tests
 
+- `StandingWatchesReopenAfterAFaultTest` (`MeshWeaver.Graph.Test`) and
+  `PluginCatalogStandingWatchesReopenTest` (`Memex.Portal.Shared.Test`) cover the sites above with
+  one script: the first open throws `QueryProviderStalledException`, the watch survives, the
+  re-open runs on the test's clock, and a later emission is processed. Each was proven by putting
+  back the unguarded shape, which fails it.
 - `LiveRecordCensusReopensAfterTransientFaultTest` runs on a real monolith mesh. A test query provider
   answers the catalog query and then dies mid-stream with the incident's exception chain. The fixed
   census re-opens, reads again, and opens a fresh upstream. The negative control runs the raw census
