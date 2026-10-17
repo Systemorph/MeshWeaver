@@ -96,12 +96,12 @@ Responsive design lets you write **one layout** that adapts to all of them.
 ```csharp --render ColumnDemo --show-code
 Controls.LayoutGrid
     .WithSkin(skin => skin.WithSpacing(2))
-    .WithView(Controls.Html("<div style='background:#1565c0;color:white;padding:12px;text-align:center;border-radius:4px'>12 cols (100%)</div>"), s => s.WithXs(12))
-    .WithView(Controls.Html("<div style='background:#1976d2;color:white;padding:12px;text-align:center;border-radius:4px'>6 cols</div>"), s => s.WithXs(6))
-    .WithView(Controls.Html("<div style='background:#1976d2;color:white;padding:12px;text-align:center;border-radius:4px'>6 cols</div>"), s => s.WithXs(6))
-    .WithView(Controls.Html("<div style='background:#2196f3;color:white;padding:12px;text-align:center;border-radius:4px'>4</div>"), s => s.WithXs(4))
-    .WithView(Controls.Html("<div style='background:#2196f3;color:white;padding:12px;text-align:center;border-radius:4px'>4</div>"), s => s.WithXs(4))
-    .WithView(Controls.Html("<div style='background:#2196f3;color:white;padding:12px;text-align:center;border-radius:4px'>4</div>"), s => s.WithXs(4))
+    .WithView(Controls.Markdown("12 cols (100%)").AddSkin(Skins.Card), s => s.WithXs(12))
+    .WithView(Controls.Markdown("6 cols").AddSkin(Skins.Card), s => s.WithXs(6))
+    .WithView(Controls.Markdown("6 cols").AddSkin(Skins.Card), s => s.WithXs(6))
+    .WithView(Controls.Markdown("4").AddSkin(Skins.Card), s => s.WithXs(4))
+    .WithView(Controls.Markdown("4").AddSkin(Skins.Card), s => s.WithXs(4))
+    .WithView(Controls.Markdown("4").AddSkin(Skins.Card), s => s.WithXs(4))
 ```
 
 ---
@@ -134,10 +134,10 @@ Key guidelines:
 ```csharp --render MobileFirst --show-code
 Controls.LayoutGrid
     .WithSkin(skin => skin.WithSpacing(2))
-    .WithView(Controls.Html("<div style='background:#2e7d32;color:white;padding:16px;border-radius:4px'><b>Primary Content</b><br/>Full width on mobile</div>"), s => s
+    .WithView(Controls.Markdown("**Primary Content**\n\nFull width on mobile").AddSkin(Skins.Card), s => s
         .WithXs(12)    // Full width on phones
         .WithMd(8))    // 2/3 width on tablets+
-    .WithView(Controls.Html("<div style='background:#388e3c;color:white;padding:16px;border-radius:4px'><b>Sidebar</b><br/>Below on mobile, side on tablet</div>"), s => s
+    .WithView(Controls.Markdown("**Sidebar**\n\nBelow on mobile, side on tablet").AddSkin(Skins.Card), s => s
         .WithXs(12)    // Full width on phones (stacks below)
         .WithMd(4))    // 1/3 width on tablets+ (appears beside)
 ```
@@ -156,10 +156,10 @@ Key guidelines:
 ```csharp --render TabletLayout --show-code
 Controls.LayoutGrid
     .WithSkin(skin => skin.WithSpacing(3))
-    .WithView(Controls.Html("<div style='background:#1565c0;color:white;padding:20px;border-radius:4px;min-height:80px'><b>Navigation</b></div>"), s => s
+    .WithView(Controls.Markdown("**Navigation**").AddSkin(Skins.Card), s => s
         .WithXs(12)    // Full width on phone
         .WithMd(3))    // Narrow sidebar on tablet
-    .WithView(Controls.Html("<div style='background:#1976d2;color:white;padding:20px;border-radius:4px;min-height:80px'><b>Main Content Area</b><br/>Most of the screen on tablet</div>"), s => s
+    .WithView(Controls.Markdown("**Main Content Area**\n\nMost of the screen on tablet").AddSkin(Skins.Card), s => s
         .WithXs(12)    // Full width on phone
         .WithMd(9))    // Wide main area on tablet
 ```
@@ -178,13 +178,13 @@ Key guidelines:
 ```csharp --render DesktopLayout --show-code
 Controls.LayoutGrid
     .WithSkin(skin => skin.WithSpacing(2))
-    .WithView(Controls.Html("<div style='background:#7b1fa2;color:white;padding:16px;border-radius:4px'>Card 1</div>"), s => s
+    .WithView(Controls.Markdown("Card 1").AddSkin(Skins.Card), s => s
         .WithXs(12).WithSm(6).WithLg(3))  // 1 col -> 2 cols -> 4 cols
-    .WithView(Controls.Html("<div style='background:#7b1fa2;color:white;padding:16px;border-radius:4px'>Card 2</div>"), s => s
+    .WithView(Controls.Markdown("Card 2").AddSkin(Skins.Card), s => s
         .WithXs(12).WithSm(6).WithLg(3))
-    .WithView(Controls.Html("<div style='background:#7b1fa2;color:white;padding:16px;border-radius:4px'>Card 3</div>"), s => s
+    .WithView(Controls.Markdown("Card 3").AddSkin(Skins.Card), s => s
         .WithXs(12).WithSm(6).WithLg(3))
-    .WithView(Controls.Html("<div style='background:#7b1fa2;color:white;padding:16px;border-radius:4px'>Card 4</div>"), s => s
+    .WithView(Controls.Markdown("Card 4").AddSkin(Skins.Card), s => s
         .WithXs(12).WithSm(6).WithLg(3))
 ```
 

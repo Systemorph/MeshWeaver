@@ -68,7 +68,7 @@ using MeshWeaver.Layout;
 
 Controls.Stack
     .WithView(Controls.Markdown("**A layout area, authored inline.**"))
-    .WithView(Controls.Html("It renders as a real control — not a screenshot."))
+    .WithView(Controls.Body("It renders as a real control — not a screenshot."))
 ```
 
 - `--render <AreaName>` executes the block and streams its **last expression** into the named area below.
@@ -111,7 +111,7 @@ Drop `--show-code` and the block still runs, but only the **result** shows — a
 using MeshWeaver.Layout;
 
 Controls.Stack
-    .WithView(Controls.Html("<strong>A live area, no code shown</strong>"))
+    .WithView(Controls.H4("A live area, no code shown"))
     .WithView(Controls.Markdown("Interactive and data-bound, just without the editor above it."))
 ```
 

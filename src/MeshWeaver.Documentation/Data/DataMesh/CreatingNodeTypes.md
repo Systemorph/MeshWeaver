@@ -437,7 +437,7 @@ public static class ProjectLayoutAreas
                 {
                     // Build view from live data
                     return Controls.Stack
-                        .WithView(Controls.Html("<h2>Dashboard</h2>"));
+                        .WithView(Controls.H2("Dashboard"));
                 });
     }
 }
@@ -483,42 +483,28 @@ Child types are defined in subfolders and follow the same pattern. The key diffe
 The table below summarises which attribute to reach for at each stage of model definition. It is rendered live from a small in-kernel data table:
 
 ```csharp --render NodeTypeAttributeRef --show-code
+record AttributeRow(string Attribute, string Category, string Effect);
+
 var rows = new[]
 {
-    ("[Key]",                                       "Record identity", "Primary key field for dimension types"),
-    ("[Required]",                                  "Validation",      "Field must be non-null / non-empty"),
-    ("[MeshNodeProperty(nameof(MeshNode.Name))]",   "Node mapping",    "Binds the field to the MeshNode Name shown in navigation"),
-    ("[MeshNodeProperty(nameof(MeshNode.Icon))]",   "Node mapping",    "Binds the field to the MeshNode Icon"),
-    ("[Dimension&lt;T&gt;]",                        "Relationships",   "Declares a lookup relationship to dimension type T"),
-    ("[Dimension(typeof(T))]",                      "Relationships",   "Alternative syntax for non-generic dimension reference"),
-    ("[Markdown(...)]",                             "Editor control",  "Renders a rich Markdown editor for the field"),
-    ("[UiControl(Style = &quot;...&quot;)]",        "Layout",          "Applies inline CSS to the form control"),
-    ("[Browsable(false)]",                          "Visibility",      "Excludes the field from all generated UI"),
-    ("[DisplayName(&quot;...&quot;)]",              "Labels",          "Custom label in generated forms"),
+    new AttributeRow("[Key]",                                     "Record identity", "Primary key field for dimension types"),
+    new AttributeRow("[Required]",                                "Validation",      "Field must be non-null / non-empty"),
+    new AttributeRow("[MeshNodeProperty(nameof(MeshNode.Name))]", "Node mapping",    "Binds the field to the MeshNode Name shown in navigation"),
+    new AttributeRow("[MeshNodeProperty(nameof(MeshNode.Icon))]", "Node mapping",    "Binds the field to the MeshNode Icon"),
+    new AttributeRow("[Dimension<T>]",                            "Relationships",   "Declares a lookup relationship to dimension type T"),
+    new AttributeRow("[Dimension(typeof(T))]",                    "Relationships",   "Alternative syntax for non-generic dimension reference"),
+    new AttributeRow("[Markdown(...)]",                           "Editor control",  "Renders a rich Markdown editor for the field"),
+    new AttributeRow("[UiControl(Style = \"...\")]",              "Layout",          "Applies inline CSS to the form control"),
+    new AttributeRow("[Browsable(false)]",                        "Visibility",      "Excludes the field from all generated UI"),
+    new AttributeRow("[DisplayName(\"...\")]",                    "Labels",          "Custom label in generated forms"),
 };
 
-var bodyRows = string.Join("", rows.Select((r, i) =>
-{
-    var bg = i % 2 == 0 ? "#f9f9f9" : "white";
-    return $"<tr style='background:{bg}'>" +
-           $"<td style='padding:5px 10px;font-family:monospace;font-size:0.85em'>{r.Item1}</td>" +
-           $"<td style='padding:5px 10px'>{r.Item2}</td>" +
-           $"<td style='padding:5px 10px'>{r.Item3}</td>" +
-           "</tr>";
-}));
-
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Markdown("### Content Type Attribute Reference"))
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<table style='width:100%;border-collapse:collapse'>" +
-        "<thead><tr>" +
-        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Attribute</th>" +
-        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Category</th>" +
-        "<th style='text-align:left;padding:6px 10px;border-bottom:2px solid #ccc'>Effect</th>" +
-        "</tr></thead><tbody>" +
-        bodyRows +
-        "</tbody></table>"
-    ))
+    .WithView(MeshWeaver.Layout.Controls.H3("Content Type Attribute Reference"))
+    .WithView(MeshWeaver.Layout.Controls.DataGrid(rows)
+        .WithColumn(new PropertyColumnControl<string> { Property = "attribute" }.WithTitle("Attribute"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "category" }.WithTitle("Category"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "effect" }.WithTitle("Effect")))
 ```
 
 ---

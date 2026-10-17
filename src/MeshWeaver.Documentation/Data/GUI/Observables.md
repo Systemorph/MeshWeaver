@@ -56,7 +56,7 @@ A static view is computed exactly once — when the layout area first loads. No 
 
 ```csharp --render StaticExample --show-code
 Controls.Stack
-    .WithView(Controls.Html("<h2>Dashboard</h2>"))
+    .WithView(Controls.H2("Dashboard"))
     .WithView(Controls.Label("This text never changes"))
 ```
 
@@ -99,7 +99,7 @@ In practice, most layout areas are a mix: structural scaffolding is static, and 
 
 ```csharp
 Controls.Stack
-    .WithView(Controls.Html("<h1>Dashboard</h1>"))         // static header
+    .WithView(Controls.H1("Dashboard"))                    // static header
     .WithView(metricsStream.Select(m => BuildMetrics(m))) // dynamic content
     .WithView(Controls.Button("Refresh"))                  // static button
 ```
