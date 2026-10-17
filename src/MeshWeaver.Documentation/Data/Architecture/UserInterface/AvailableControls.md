@@ -72,6 +72,8 @@ Two shapes cover the whole factory surface: parameterless controls are **propert
 
 > **One naming gotcha.** `Controls.Text(...)` is a text **input** (`TextFieldControl`), not display text. Read-only text goes through `Controls.Label` / the typography helpers, `Controls.Markdown`, or — for genuinely pre-rendered markup only — `Controls.Html`.
 
+> **`Controls.Html` is for markup that already exists** — rendered markdown, an authored `.html`/`.svg` file, a fragment a renderer produced. **Never build markup for it**: a heading is `Controls.H1`…`H6` (or `Controls.Title`), a line of text is `Controls.Label`/`Controls.Body`, formatted prose is `Controls.Markdown`, rows are `Controls.DataGrid` + `PropertyColumnControl<T>`, and layout is `Controls.Stack`/`Controls.LayoutGrid` with `Skins.Card` for a framed box. A hand-built HTML string renders as an opaque blob on the non-Blazor renderers and drifts from the theme — see [Cross-Renderer Authoring](/Doc/GUI/CrossRendererAuthoring) and [Data Binding](/Doc/GUI/DataBinding).
+
 ## Display — Label, Badge, Icon, Markdown
 
 Display controls present read-only content: `Label` with typography helpers for text, `Badge` for status pills, `Icon` for the `FluentIcons` catalog, and `Markdown` for formatted prose. They are the leaves of most control trees.

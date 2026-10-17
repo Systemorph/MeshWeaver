@@ -103,7 +103,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/DataMesh/DataCubes", 5, Table, "Funding Ratio" },
         { "Doc/DataMesh/NodeTypes", 1, Stack, "This cell rendered at" },
         { "Doc/DataMesh/NodeTypeConfiguration", 1, Table, "NodeType summary card" },
-        { "Doc/DataMesh/CreatingNodeTypes", 1, Table, "Primary key field" },
+        { "Doc/DataMesh/CreatingNodeTypes", 1, DataGrid, "Primary key field" },
         { "Doc/DataMesh/NodeOperations", 1, Stack, "Node Operations at a Glance" },
         { "Doc/DataMesh/CRUD", 1, Table, "Single entity by ID" },
         { "Doc/DataMesh/VirtualDataSources", 1, Table, "Mesh query mirror" },
