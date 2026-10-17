@@ -1580,6 +1580,13 @@ before assuming any given steward keeps them:
   belongs in the job **summary**, and a job judged without a log should raise a `::warning::` — which
   is visible on the run without pretending the steward itself failed.
 
+> **Superseded by one steward.** Core and every satellite now call the same reusable lane,
+> `node-repo-retry-transients.yml`, whose script distinguishes 404/410 from a blind read, reads the
+> check-run annotations for a runner death, and writes the job summary and a `::warning::` per job
+> judged without a log. (It still matches the raw decoded log, BOM and escapes included — the table's
+> third row is unchanged.) The table below records the drift that motivated it
+> (MeshWeaver.Manufacturing#84); see [CI Content Bake](../CiContentBake) → the retry steward.
+
 🚨 **WHICH STEWARD KEEPS WHICH — do not read the three rules as a description of the fleet.** They are
 what the four stewards fixed on 2026-09-17 do (MeshWeaver.Plugins and the three satellites). **Core's
 `#4554` fix implements the READ and none of the three**, verified against
