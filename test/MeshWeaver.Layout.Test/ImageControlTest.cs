@@ -141,6 +141,56 @@ public class ImageControlTest(ITestOutputHelper output) : HubTestBase(output)
         named.Icon!.Provider.Should().Be(Icon.FluentProvider);
     }
 
+    /// <summary>Fluent names with digits are names, not text (review thread on #6901): they resolve
+    /// as Named when the renderer has them, and fall through to the fallback when it does not.</summary>
+    [Theory]
+    [InlineData("Calendar3Day")]
+    [InlineData("Battery10")]
+    [InlineData("Cellular5g")]
+    [InlineData("ArrowRepeat1")]
+    [InlineData("CellularData2")]
+    public void Resolve_AFluentNameWithDigits_IsNamed_AndFallsBackWhenUnknown(string name)
+    {
+        var named = ImageSources.Resolve(Icon.Parse(name));
+        named.Kind.Should().Be(ImageSourceKind.Named);
+        named.Value.Should().Be(name);
+        named.Icon!.Provider.Should().Be(Icon.FluentProvider);
+
+        ImageSources.Resolve(Icon.Parse(name), Icon.Parse("🚀"), canRenderNamed: _ => false)
+            .Should().Be(new ResolvedImage(ImageSourceKind.Glyph, "🚀"));
+    }
+
+    /// <summary>Every digit-carrying name the platform's Fluent catalogue declares parses as a
+    /// Fluent name — the measured denominator, so the rule cannot silently miss a family.</summary>
+    [Fact]
+    public void EveryCatalogueNameWithDigits_ParsesAsFluent()
+    {
+        var names = typeof(MeshWeaver.Application.Styles.FluentIcons)
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(m => m.ReturnType == typeof(Icon) && m.Name.Any(char.IsDigit))
+            .Select(m => m.Name)
+            .Distinct()
+            .ToArray();
+        names.Should().NotBeEmpty();
+        names.Where(n => Icon.Parse(n)!.Provider != Icon.FluentProvider).Should().BeEmpty();
+    }
+
+    /// <summary>The digit rule must not swallow short text: monograms, codes and emoji stay glyphs.</summary>
+    [Theory]
+    [InlineData("A1")]
+    [InlineData("B2B")]
+    [InlineData("Q3")]
+    [InlineData("🚀")]
+    [InlineData("1️⃣")]
+    [InlineData("Q3 report")]
+    [InlineData("v2")]
+    [InlineData("R&D")]
+    public void Resolve_ShortTextAndEmoji_StayGlyphs(string text)
+    {
+        Icon.Parse(text)!.Provider.Should().Be(Icon.TextProvider);
+        ImageSources.Resolve(Icon.Parse(text)).Should().Be(new ResolvedImage(ImageSourceKind.Glyph, text));
+    }
+
     [Fact]
     public void Resolve_AnUnknownName_FallsThrough()
     {
