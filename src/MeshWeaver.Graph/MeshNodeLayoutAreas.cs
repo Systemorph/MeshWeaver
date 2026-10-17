@@ -391,10 +391,10 @@ public static class MeshNodeLayoutAreas
             .WithView(Controls.Icon(FluentIcons.ShieldKeyhole())
                 .WithStyle("font-size: 64px; color: var(--neutral-foreground-hint); margin-bottom: 16px;"))
             .WithView(Controls.H2(LocalizationCatalog.Get("error.accessDenied", locale)).WithStyle("margin: 0;"))
-            .WithView(Controls.Html(
-                $"<p style=\"color: var(--neutral-foreground-hint); max-width: 480px;\">" +
-                $"You do not have permission to view <strong>{System.Web.HttpUtility.HtmlEncode(nodeName)}</strong>. " +
-                $"Contact the owner to request access.</p>"))
+            // A Label, not markup: the node name is the viewer's text, never page structure.
+            .WithView(Controls.Body(LocalizationCatalog.Get(AccessDeniedDetailKey, locale, nodeName))
+                .WithColor(HintColor)
+                .WithStyle("max-width: 480px;"))
             .WithView(Controls.Button(LocalizationCatalog.Get("ui.requestAccess", locale))
                 .WithAppearance(Appearance.Accent)
                 .WithIconStart(FluentIcons.PersonAdd())
@@ -402,10 +402,8 @@ public static class MeshNodeLayoutAreas
                 {
                     // Show a confirmation that the request was noted
                     var dialog = Controls.Dialog(
-                        Controls.Markdown(
-                            $"Access request for **{nodeName}** has been noted.\n\n" +
-                            "The node owner will be notified."),
-                        "Access Requested"
+                        Controls.Body(LocalizationCatalog.Get(AccessRequestedBodyKey, locale, nodeName)),
+                        LocalizationCatalog.Get(AccessRequestedTitleKey, locale)
                     ).WithSize("S").WithClosable(true);
                     ctx.Host.UpdateArea(DialogControl.DialogArea, dialog);
                     return Task.CompletedTask;
@@ -621,9 +619,7 @@ public static class MeshNodeLayoutAreas
         }
         else
         {
-            titleColumn = titleColumn.WithView(Controls.Html(
-                $"<h1 style=\"margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(title)}</h1>"));
+            titleColumn = titleColumn.WithView(Controls.H1(title).WithStyle(TitleStyle));
         }
 
         identityRow = identityRow.WithView(titleColumn);
@@ -646,9 +642,6 @@ public static class MeshNodeLayoutAreas
 
     private const string HeaderStyle =
         "padding-bottom: 20px; margin-bottom: 24px; border-bottom: 1px solid var(--neutral-stroke-rest); gap: 8px;";
-
-    private const string MetaRowStyle =
-        "align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);";
 
     private const string TitleStyle =
         "margin: 0; font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.15;";
@@ -683,7 +676,11 @@ public static class MeshNodeLayoutAreas
         var actions = BuildHeaderActionRow(host, IsNodeTypeDefinitionHub(host), hubPath, canEdit);
 
         return NodePageProjections.Header(host, HeaderStyle, NodePageProjections.Viewer.Of(host))
-            .Bind(p => HeaderTemplate(p.Style, p.Title, p.Icon, p.IconWidth, p.TileStyle, p.MetaHtml,
+            .Bind(p => HeaderTemplate(p.Style, p.Title, p.Icon, p.IconSize, p.IconFit, p.TileStyle,
+                new MetaSlots(
+                    p.Meta.TypeStyle, p.Meta.TypeLabel, p.Meta.TypeText, p.Meta.TypeHref,
+                    p.Meta.CreatedStyle, p.Meta.CreatedLabel, p.Meta.CreatedText,
+                    p.Meta.ChangedStyle, p.Meta.ChangedLabel, p.Meta.ChangedText),
                 tileFrame, editableTitle, actions), HeaderDataId);
     }
 
@@ -692,12 +689,11 @@ public static class MeshNodeLayoutAreas
     /// them). Every other part is the static structure the caller built.
     /// </summary>
     internal static StackControl HeaderTemplate(
-        object style, object title, object icon, object iconWidth, object tileStyle, object metaHtml,
+        object style, object title, object icon, object iconSize, object iconFit, object tileStyle, MetaSlots meta,
         UiControl tileFrame, UiControl? editableTitle, UiControl actions)
     {
         var tile = (tileFrame as StackControl ?? Controls.Stack)
-            .WithView((Controls.Stack with { Style = tileStyle })
-                .WithView(new IconControl(icon) { Width = iconWidth }));
+            .WithView(IconTileControl(icon, iconSize, iconFit, tileStyle));
 
         var titleColumn = Controls.Stack.WithStyle("flex: 1; min-width: 0;")
             .WithView(editableTitle ?? Controls.H1(title).WithStyle(TitleStyle));
@@ -713,15 +709,21 @@ public static class MeshNodeLayoutAreas
         return (Controls.Stack.WithWidth("100%") with { Style = style })
             .WithView(identityRow)
             // Named, not auto-named: see NodeMetaArea.
-            .WithView(MetaRowTemplate(metaHtml), NodeMetaArea);
+            .WithView(MetaRow(meta), NodeMetaArea);
     }
 
-    /// <summary>The provenance line bound to a pointer — <see cref="MetaRowHtml"/> computed on the hub.</summary>
-    private static StackControl MetaRowTemplate(object metaHtml)
-        => Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle(MetaRowStyle)
-            .WithView(new HtmlControl(metaHtml));
+    /// <summary>
+    /// The node icon tile: a <c>Stack</c> carrying the tile style and ONE <see cref="ImageControl"/>
+    /// — decorative (empty alt), because the node's name stands right beside it. Every value is a
+    /// literal or a pointer. The image control is what draws an inline svg as an inert image and
+    /// refuses an unsafe URL, so the tile no longer carries markup of its own.
+    /// </summary>
+    internal static StackControl IconTileControl(object icon, object size, object fit, object tileStyle)
+        => (Controls.Stack with { Style = tileStyle })
+            .WithView(Controls.Image(icon, "")
+                .WithSize(size)
+                .WithFit(fit)
+                .WithShape(ImageShape.Rounded));
 
     /// <summary>
     /// Renders the node icon as a clickable tile that opens the icon-picker dialog when the
@@ -730,42 +732,8 @@ public static class MeshNodeLayoutAreas
     internal static UiControl BuildClickableIcon(
         LayoutAreaHost host, MeshNode? node, string? iconValue, string? rawIcon, bool canEdit)
     {
-        const string tileStyle = "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
-
-        UiControl tile;
-        if (!string.IsNullOrEmpty(iconValue))
-        {
-            if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
-            {
-                var fit = iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
-                tile = Controls.Html(
-                    $"<div style=\"{tileStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(iconValue)}\" alt=\"\" style=\"width: 48px; height: 48px; border-radius: 8px; object-fit: {fit};\" /></div>");
-            }
-            else if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            {
-                // Raw-HTML surface: SizeInlineSvg plates the icon, sizes it to 48px and
-                // emits it as an inert <img> from a data: URI — never the authored markup,
-                // which is user-settable content (mirrors the 48px img sizing above).
-                tile = Controls.Html(
-                    $"<div style=\"{tileStyle}\">{MeshNodeImageHelper.SizeInlineSvg(iconValue, 48)}</div>");
-            }
-            else if (rawIcon != null && MeshNodeImageHelper.IsFluentIconName(rawIcon))
-            {
-                tile = Controls.Stack.WithStyle(tileStyle)
-                    .WithView(Controls.Icon(new Icon(FluentIcons.Provider, rawIcon))
-                        .WithStyle("font-size: 36px; color: var(--accent-fill-rest);"));
-            }
-            else
-            {
-                tile = Controls.Html(
-                    $"<div style=\"{tileStyle} font-size: 30px;\">{System.Web.HttpUtility.HtmlEncode(iconValue)}</div>");
-            }
-        }
-        else
-        {
-            tile = Controls.Html(
-                $"<div style=\"{tileStyle} border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint); font-size: 20px;\">+</div>");
-        }
+        var decided = IconTile.Of(iconValue, rawIcon);
+        UiControl tile = IconTileControl(decided.Icon, decided.Size, decided.Fit, decided.Style);
 
         if (!canEdit || node == null)
             return tile;
@@ -994,6 +962,30 @@ public static class MeshNodeLayoutAreas
     /// <summary>The one timestamp format the provenance line uses.</summary>
     private const string MetaStampFormat = "yyyy-MM-dd HH:mm";
 
+    // ── Text keys of the node page's own chrome (strings.{en,de}.json) ─────────────────────────────
+    internal const string AccessDeniedDetailKey = "node.accessDenied.detail";
+    internal const string AccessRequestedTitleKey = "node.accessRequested.title";
+    internal const string AccessRequestedBodyKey = "node.accessRequested.body";
+    internal const string MetadataTitleKey = "settings.metadata";
+    internal const string MetadataNameKey = "node.metadata.name";
+    internal const string MetadataPathKey = "node.metadata.path";
+    internal const string MetadataParentKey = "node.metadata.parent";
+    internal const string NodeNotFoundKey = "node.notFound";
+    internal const string NodeNotFoundAtKey = "node.notFoundAt";
+    internal const string SelectCollectionKey = "node.files.selectCollection";
+    internal const string DownloadPdfKey = "content.downloadPdf";
+    internal const string InsertedFromKey = "content.insertedFrom";
+    internal const string NavigateToKey = "content.navigateTo";
+
+    /// <summary>The secondary text colour of the node page's chrome — the provenance values, hints.</summary>
+    internal const string HintColor = "var(--neutral-foreground-hint)";
+
+    /// <summary>The primary text colour — the provenance labels.</summary>
+    internal const string RestColor = "var(--neutral-foreground-rest)";
+
+    /// <summary>The provenance line's text size, on every label of the row.</summary>
+    private const string MetaTextStyle = "font-size: 0.85rem;";
+
     /// <summary>
     /// The provenance line's segments — <c>Type</c>, <c>Created</c>, and either <c>Updated</c> or,
     /// when <paramref name="lastActivity"/> is supplied, <c>Last activity</c>.
@@ -1074,61 +1066,58 @@ public static class MeshNodeLayoutAreas
     {
         var access = host.Hub.ServiceProvider.GetService<AccessService>();
         var zoneId = access?.Context?.TimeZoneId ?? access?.CircuitContext?.TimeZoneId;
-
-        var row = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("align-items: center; gap: 24px; flex-wrap: wrap; font-size: 0.85rem; color: var(--neutral-foreground-hint);");
-
-        foreach (var entry in BuildMetaEntries(node, zoneId, lastActivity))
-        {
-            var label = System.Web.HttpUtility.HtmlEncode(host.Localize(entry.LabelKey));
-            var text = System.Web.HttpUtility.HtmlEncode(entry.Text);
-            // "by" is the viewer's word; "what" is the author's sentence, rendered as authored.
-            if (entry.By is { } by)
-                text += " " + System.Web.HttpUtility.HtmlEncode(host.Localize(MetaByKey, by));
-            if (entry.What is { } what)
-                text += " — " + System.Web.HttpUtility.HtmlEncode(what);
-            row = row.WithView(entry.Href is { } href
-                ? Controls.Html(
-                    "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">" +
-                    $"<span>{label}</span>" +
-                    $"<a href=\"{href}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{text}</a>" +
-                    "</span>")
-                : Controls.Html(
-                    $"<span><span style=\"color: var(--neutral-foreground-rest);\">{label}</span> {text}</span>"));
-        }
-
-        return row;
+        // The SAME composition the bound template draws, fed literal values instead of pointers.
+        return MetaRow(MetaSlots.Of(MetaLine.Of(BuildMetaEntries(node, zoneId, lastActivity), host.ViewerLocale())));
     }
 
     /// <summary>
-    /// The provenance line as ONE fragment of markup — the same segments, labels and links
-    /// <see cref="BuildMetaRow"/> draws, for the template header and strip that BIND it
-    /// (<see cref="NodePageProjections"/>). Pure: the viewer's language is passed in, because the
-    /// projection that calls this runs off the render turn, where no viewer is ambient.
+    /// The provenance line's slots as the controls receive them: each a literal value
+    /// (<see cref="MetaSlots.Of"/>) or a <see cref="JsonPointerReference"/> into a bound
+    /// <see cref="MetaLine"/> — the template header and the composed strip build it from the
+    /// projection's pointers inside their <c>Bind</c> expression.
     /// </summary>
-    /// <param name="entries">The segments (<see cref="BuildMetaEntries"/>).</param>
-    /// <param name="locale">The viewer's language tag.</param>
-    internal static string MetaRowHtml(ImmutableArray<NodeMetaEntry> entries, string? locale)
+    internal sealed record MetaSlots(
+        object TypeStyle, object TypeLabel, object TypeText, object TypeHref,
+        object CreatedStyle, object CreatedLabel, object CreatedText,
+        object ChangedStyle, object ChangedLabel, object ChangedText)
     {
-        var spans = entries.Select(entry =>
-        {
-            var label = System.Web.HttpUtility.HtmlEncode(LocalizationCatalog.Get(entry.LabelKey, locale));
-            var text = System.Web.HttpUtility.HtmlEncode(entry.Text);
-            if (entry.By is { } by)
-                text += " " + System.Web.HttpUtility.HtmlEncode(LocalizationCatalog.Get(MetaByKey, locale, by));
-            if (entry.What is { } what)
-                text += " — " + System.Web.HttpUtility.HtmlEncode(what);
-            return entry.Href is { } href
-                ? "<span style=\"display: inline-flex; align-items: center; gap: 6px;\">"
-                  + $"<span>{label}</span>"
-                  + $"<a href=\"{href}\" style=\"color: var(--accent-fill-rest); font-weight: 500;\">{text}</a>"
-                  + "</span>"
-                : $"<span><span style=\"color: var(--neutral-foreground-rest);\">{label}</span> {text}</span>";
-        });
-        return "<div style=\"display: flex; align-items: center; gap: 24px; flex-wrap: wrap;\">"
-               + string.Concat(spans) + "</div>";
+        /// <summary>The literal slots of <paramref name="line"/>.</summary>
+        public static MetaSlots Of(MetaLine line) => new(
+            line.TypeStyle, line.TypeLabel, line.TypeText, line.TypeHref,
+            line.CreatedStyle, line.CreatedLabel, line.CreatedText,
+            line.ChangedStyle, line.ChangedLabel, line.ChangedText);
     }
+
+    /// <summary>
+    /// The provenance line composed from platform controls — a wrapping horizontal <c>Stack</c> of
+    /// three segments, each a <c>Label</c> and its value: the node type as a <c>Link</c> to its
+    /// Configuration area, the two stamps as <c>Label</c>s. No markup: every value is text the
+    /// renderer encodes, and the link's href is held to <see cref="LinkHrefs"/> by the renderer.
+    /// </summary>
+    /// <param name="slots">The values — literals, or pointers into a bound <see cref="MetaLine"/>.</param>
+    internal static StackControl MetaRow(MetaSlots slots)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(24)
+            .WithWrap(true)
+            .WithStyle("align-items: center;")
+            .WithView(MetaSegment(slots.TypeStyle,
+                MetaLabel(slots.TypeLabel, HintColor),
+                Controls.Link(slots.TypeText, slots.TypeHref).WithStyle(MetaTextStyle + " font-weight: 500;")))
+            .WithView(MetaSegment(slots.CreatedStyle,
+                MetaLabel(slots.CreatedLabel, RestColor),
+                MetaLabel(slots.CreatedText, HintColor)))
+            .WithView(MetaSegment(slots.ChangedStyle,
+                MetaLabel(slots.ChangedLabel, RestColor),
+                MetaLabel(slots.ChangedText, HintColor)));
+
+    private static StackControl MetaSegment(object style, UiControl label, UiControl value)
+        => (Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(6) with { Style = style })
+            .WithView(label)
+            .WithView(value);
+
+    private static LabelControl MetaLabel(object text, string color)
+        => Controls.Label(text).WithColor(color).WithStyle(MetaTextStyle);
 
     /// <summary>
     /// Registers the page a node LANDS ON, and says what it does about provenance. Use this — not
@@ -1235,7 +1224,10 @@ public static class MeshNodeLayoutAreas
                 .WithWidth("100%")
                 .WithView(
                     NodePageProjections.Meta(host, stripStyle, viewer)
-                        .Bind(p => ProvenanceStrip(p.Style, p.MetaHtml), ProvenanceDataId),
+                        .Bind(p => ProvenanceStrip(p.Style, new MetaSlots(
+                            p.Meta.TypeStyle, p.Meta.TypeLabel, p.Meta.TypeText, p.Meta.TypeHref,
+                            p.Meta.CreatedStyle, p.Meta.CreatedLabel, p.Meta.CreatedText,
+                            p.Meta.ChangedStyle, p.Meta.ChangedLabel, p.Meta.ChangedText)), ProvenanceDataId),
                     NodeMetaArea)
                 .WithView(view));
     }
@@ -1244,9 +1236,9 @@ public static class MeshNodeLayoutAreas
     internal const string ProvenanceDataId = "nodeProvenance";
 
     /// <summary>The composed provenance strip with its bound values as POINTERS.</summary>
-    internal static StackControl ProvenanceStrip(object style, object metaHtml)
+    internal static StackControl ProvenanceStrip(object style, MetaSlots meta)
         => (Controls.Stack.WithWidth("100%") with { Style = style })
-            .WithView(MetaRowTemplate(metaHtml));
+            .WithView(MetaRow(meta));
 
     /// <summary>
     /// Builds a content URL for navigating to a specific layout area of a node.
@@ -1361,66 +1353,100 @@ public static class MeshNodeLayoutAreas
         => Observable.Return<UiControl?>(MeshNodeThumbnailControl.ForPath(host.Hub.Address.ToString()));
 
     /// <summary>
-    /// Renders the Metadata area showing node properties (name, type, path).
-    /// Uses GetStream for reactive data binding instead of direct persistence access.
+    /// Renders the Metadata area showing node properties (name, path, type, parent) as a TEMPLATE:
+    /// a heading and a key/value list of <c>Label</c>s and <c>Link</c>s, emitted at once and bound
+    /// to <see cref="MetadataView"/> — a projection of the hub's own node — so nothing waits on the
+    /// node and a rename or move updates the values in place.
     /// </summary>
     [Browsable(false)]
     public static IObservable<UiControl?> Metadata(LayoutAreaHost host, RenderingContext _1)
     {
         var hubPath = host.Hub.Address.ToString();
-
-        // Use GetStream<MeshNode> to get node data reactively from MeshDataSource
-        return host.StreamView<MeshNode>(
-            (nodes, h) =>
-            {
-                var node = nodes.FirstOrDefault(n => n.Path == hubPath);
-                return BuildMetadataContent(h, node);
-            },
-            "Metadata");
+        // The viewer's language is read HERE, on the render turn; the projection runs later, off it.
+        var locale = host.ViewerLocale();
+        var title = LocalizationCatalog.Get(MetadataTitleKey, locale);
+        var nameLabel = LocalizationCatalog.Get(MetadataNameKey, locale);
+        var pathLabel = LocalizationCatalog.Get(MetadataPathKey, locale);
+        var typeLabel = LocalizationCatalog.Get(MetaTypeKey, locale);
+        var parentLabel = LocalizationCatalog.Get(MetadataParentKey, locale);
+        return Observable.Return<UiControl?>(host.Workspace.GetMeshNodeStream()
+            .Select(node => ProjectMetadata(node, hubPath, locale))
+            .DistinctUntilChanged()
+            .Bind(p => MetadataTemplate(
+                    title, p.BackText, p.BackHref, p.NotFoundStyle, p.NotFound, p.FieldsStyle,
+                    nameLabel, p.Name, pathLabel, p.Path,
+                    p.TypeStyle, typeLabel, p.Type,
+                    p.ParentStyle, parentLabel, p.ParentPath, p.ParentHref),
+                MetadataDataId));
     }
 
-    private static UiControl BuildMetadataContent(LayoutAreaHost host, MeshNode? node)
+    /// <summary>The <c>/data</c> id the Metadata page's projection is published under.</summary>
+    internal const string MetadataDataId = "nodeMetadata";
+
+    /// <summary>What the Metadata page shows — every field a string, absent rows carry the hidden style.</summary>
+    /// <param name="BackText">The node's name — the link back to its Overview.</param>
+    /// <param name="BackHref">The node's Overview.</param>
+    /// <param name="NotFoundStyle">Visible only when the node cannot be read.</param>
+    /// <param name="NotFound">"Node not found.", localized.</param>
+    /// <param name="FieldsStyle">Hidden when the node cannot be read.</param>
+    /// <param name="Name">The node's name.</param>
+    /// <param name="Path">The node's path.</param>
+    /// <param name="TypeStyle">Hidden for a node without a type.</param>
+    /// <param name="Type">The node's type.</param>
+    /// <param name="ParentStyle">Hidden for a root node.</param>
+    /// <param name="ParentPath">The parent's path.</param>
+    /// <param name="ParentHref">The parent's Overview.</param>
+    internal sealed record MetadataView(
+        string BackText, string BackHref, string NotFoundStyle, string NotFound, string FieldsStyle,
+        string Name, string Path, string TypeStyle, string Type,
+        string ParentStyle, string ParentPath, string ParentHref);
+
+    /// <summary>Projects the node into <see cref="MetadataView"/>. Pure; the viewer's language is passed in.</summary>
+    internal static MetadataView ProjectMetadata(MeshNode? node, string hubPath, string? locale)
     {
-        var stack = Controls.Stack.WithWidth("100%");
-
-        // Header with back link
-        var nodePath = node?.Namespace ?? host.Hub.Address.ToString();
-        var backHref = $"/{nodePath}/{OverviewArea}";
-        var nodeName = node?.Name ?? nodePath.Split('/').LastOrDefault() ?? "Overview";
-        stack = stack.WithView(Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithView(Controls.Html("<h2>Metadata</h2>"))
-            .WithView(Controls.Button(nodeName)
-                .WithNavigateToHref(backHref)));
-
-        if (node == null)
-        {
-            stack = stack.WithView(Controls.Html("<p><em>Node not found.</em></p>"));
-            return stack;
-        }
-
-        // Display metadata fields
-        stack = stack.WithView(Controls.Html($"<p><strong>Name:</strong> {node.Name}</p>"));
-        stack = stack.WithView(Controls.Html($"<p><strong>Path:</strong> {node.Namespace}</p>"));
-
-        if (!string.IsNullOrEmpty(node.NodeType))
-        {
-            stack = stack.WithView(Controls.Html($"<p><strong>Type:</strong> {node.NodeType}</p>"));
-        }
-
-        var parentPath = node.GetParentPath();
-        if (!string.IsNullOrEmpty(parentPath))
-        {
-            var parentHref = $"/{parentPath}/{OverviewArea}";
-            stack = stack.WithView(Controls.Stack
-                .WithOrientation(Orientation.Horizontal)
-                .WithView(Controls.Html("<p><strong>Parent:</strong> </p>"))
-                .WithView(Controls.Button(parentPath)
-                    .WithNavigateToHref(parentHref)));
-        }
-
-        return stack;
+        var path = node?.Path ?? hubPath;
+        var backText = node?.Name ?? path.Split('/').LastOrDefault() ?? path;
+        if (node is null)
+            return new MetadataView(backText, $"/{path}/{OverviewArea}", MetaLine.Visible,
+                LocalizationCatalog.Get(NodeNotFoundKey, locale), NodePageProjections.Hidden,
+                "", "", NodePageProjections.Hidden, "", NodePageProjections.Hidden, "", "");
+        var parentPath = node.GetParentPath() ?? "";
+        return new MetadataView(
+            backText, $"/{path}/{OverviewArea}", NodePageProjections.Hidden, "", MetaLine.Visible,
+            node.Name ?? node.Id, path,
+            string.IsNullOrEmpty(node.NodeType) ? NodePageProjections.Hidden : MetaLine.Visible, node.NodeType ?? "",
+            string.IsNullOrEmpty(parentPath) ? NodePageProjections.Hidden : MetaLine.Visible,
+            parentPath, string.IsNullOrEmpty(parentPath) ? "" : $"/{parentPath}/{OverviewArea}");
     }
+
+    /// <summary>
+    /// The Metadata page's controls: an <c>H2</c> with a link back to the node, then one
+    /// label/value row per field. Values are literals or pointers into <see cref="MetadataView"/>.
+    /// </summary>
+    internal static StackControl MetadataTemplate(
+        object title, object backText, object backHref, object notFoundStyle, object notFound, object fieldsStyle,
+        object nameLabel, object name, object pathLabel, object path,
+        object typeStyle, object typeLabel, object type,
+        object parentStyle, object parentLabel, object parentPath, object parentHref)
+        => Controls.Stack.WithWidth("100%").WithVerticalGap(8)
+            .WithView(Controls.Stack
+                .WithOrientation(Orientation.Horizontal)
+                .WithHorizontalGap(16)
+                .WithStyle("align-items: baseline;")
+                .WithView(Controls.H2(title))
+                .WithView(Controls.Link(backText, backHref)))
+            .WithView(Controls.Label(notFound).WithColor(HintColor) with { Style = notFoundStyle })
+            .WithView((Controls.Stack.WithVerticalGap(6) with { Style = fieldsStyle })
+                .WithView(KeyValueRow(MetaLine.Visible, nameLabel, Controls.Label(name)))
+                .WithView(KeyValueRow(MetaLine.Visible, pathLabel, Controls.Label(path)))
+                .WithView(KeyValueRow(typeStyle, typeLabel, Controls.Label(type)))
+                .WithView(KeyValueRow(parentStyle, parentLabel, Controls.Link(parentPath, parentHref))));
+
+    /// <summary>One label/value row: the label in bold, then the value.</summary>
+    private static StackControl KeyValueRow(object style, object label, UiControl value)
+        => (Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8) with { Style = style })
+            .WithView(Controls.Label(label).WithWeight(FontWeight.Bold))
+            .WithView(value);
 
 
     private static string GetNodeContent(MeshNode? node)
@@ -1843,17 +1869,17 @@ public static class MeshNodeLayoutAreas
         for (var i = 0; i < segments.Length; i++)
         {
             cumulative = i == 0 ? segments[i] : $"{cumulative}/{segments[i]}";
+            // The platform has no Breadcrumb control yet: a horizontal Stack of links separated by
+            // a glyph Label is the composition until it does. The "/" glyph needs no translation.
             if (i > 0)
-                row = row.WithView(Controls.Html(
-                    "<span style=\"color: var(--neutral-foreground-hint); user-select: none;\">/</span>"));
+                row = row.WithView(Controls.Label("/").WithColor(HintColor));
 
             if (i < segments.Length - 1)
                 // Ancestor → default page /{cumulative} (empty area).
                 row = row.WithView(Controls.NavLink(segments[i], $"/{cumulative}"));
             else
                 // Current node — plain bold text, not a link.
-                row = row.WithView(Controls.Html(
-                    $"<span style=\"font-weight: 600;\">{System.Web.HttpUtility.HtmlEncode(segments[i])}</span>"));
+                row = row.WithView(Controls.Label(segments[i]).WithWeight(FontWeight.Bold));
         }
 
         return row;
@@ -2068,6 +2094,7 @@ public static class MeshNodeLayoutAreas
 
         // Multiple collections: show combobox for selection
         var initialCollection = host.GetQueryStringParamValue("collection") ?? collections[0].Name;
+        var selectCollectionHint = host.Localize(SelectCollectionKey);
 
         var options = collections
             .Select(c => (Option)new Option<string>(c.Name, c.DisplayName ?? c.Name))
@@ -2094,7 +2121,7 @@ public static class MeshNodeLayoutAreas
                 {
                     var selected = data?.GetValueOrDefault("collection")?.ToString();
                     if (string.IsNullOrEmpty(selected))
-                        return (UiControl?)Controls.Html("<p style=\"color: var(--neutral-foreground-hint);\">Select a collection.</p>");
+                        return (UiControl?)Controls.Body(selectCollectionHint).WithColor(HintColor);
                     return (UiControl?)new FileBrowserControl(selected).WithReadOnly(readOnly);
                 }));
 
@@ -2135,56 +2162,50 @@ public static class MeshNodeLayoutAreas
         };
     }
 
+    /// <summary>The icon a self-reference shows for a node that has none.</summary>
+    internal const string DefaultSelfReferenceIcon = "/static/NodeTypeIcons/document.svg";
+
+    /// <summary>The <c>/data</c> id the self-reference's projection is published under.</summary>
+    internal const string SelfReferenceDataId = "nodeIcon";
+
+    /// <summary>What a node referencing itself in its content shows: its icon and its name.</summary>
+    /// <param name="Icon">The node's own icon (any <see cref="ImageControl"/> source form), or empty.</param>
+    /// <param name="Text">The node's name, or a localized not-found line.</param>
+    internal sealed record SelfReferenceView(string Icon, string Text);
+
     /// <summary>
-    /// Self-reference: the node's icon and name as a TEMPLATE — an <see cref="HtmlControl"/> bound
-    /// to a projection of the node, returned at once instead of after the node's read
-    /// (Doc/GUI/DataBinding → "Templates first, data later"). The fragment is computed on the hub
-    /// because an icon is a URL, an inline svg or a glyph, each drawn differently.
+    /// Self-reference: the node's icon and name as a TEMPLATE — an <see cref="ImageControl"/> and a
+    /// <c>Label</c> bound to a projection of the node, returned at once instead of after the node's
+    /// read (Doc/GUI/DataBinding → "Templates first, data later"). The image control draws whichever
+    /// form the icon takes — a URL, a node's <c>content:</c> file, inline svg as an inert image, a
+    /// glyph — and the document glyph when the node has none.
     /// </summary>
     private static IObservable<UiControl?> NodeIconView(LayoutAreaHost host, string hubPath)
-        => Observable.Return<UiControl?>(NodeIconHtml(host.Workspace, hubPath).BoundHtml("nodeIcon"));
-
-    /// <summary>The live icon fragment of the hub's own node, or a not-found line.</summary>
-    private static IObservable<string> NodeIconHtml(IWorkspace workspace, string hubPath)
-        => workspace.GetMeshNodeStream().Select(node => node == null
-            ? NodeNotFoundHtml(hubPath)
-            : RenderNodeIconHtml(node));
-
-    private static string NodeNotFoundHtml(string hubPath)
-        => $"<em>Node not found: {System.Web.HttpUtility.HtmlEncode(hubPath)}</em>";
-
-    /// <summary>
-    /// Renders the node's icon/logo for content self-reference.
-    /// Priority: content.avatar > content.logo > node.Icon
-    /// </summary>
-    internal static string RenderNodeIconHtml(MeshNode node)
     {
-        var imageUrl = GetNodeImageUrl(node);
-        var iconUrl = !string.IsNullOrEmpty(imageUrl) ? imageUrl : "/static/NodeTypeIcons/document.svg";
-        var name = node.Name ?? node.Id;
-
-        // Inline svg goes through MeshNodeImageHelper.SizeInlineSvg, which plates it (#4350) AND
-        // gives it the 24px box: injected raw, an icon authored with a viewBox and no width/height
-        // rendered at the browser's ~300×150 default inside a 24px div, and a currentColor outline
-        // took the text color and disappeared on one of the two themes.
-        var iconHtml = iconUrl.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
-            ? $"<div style=\"width: 24px; height: 24px; flex-shrink: 0; display: flex; align-items: center; justify-content: center;\">{MeshNodeImageHelper.SizeInlineSvg(iconUrl, 24)}</div>"
-            : $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(iconUrl)}\" alt=\"\" style=\"width: 24px; height: 24px; flex-shrink: 0; object-fit: contain;\" />";
-
-        return $@"
-            <div style=""display: flex; align-items: center; gap: 8px;"">
-                {iconHtml}
-                <span>{System.Web.HttpUtility.HtmlEncode(name)}</span>
-            </div>";
+        var notFound = host.Localize(NodeNotFoundAtKey, hubPath);
+        return Observable.Return<UiControl?>(host.Workspace.GetMeshNodeStream()
+            .Select(node => ProjectSelfReference(node, notFound))
+            .DistinctUntilChanged()
+            .Bind(p => SelfReferenceTemplate(p.Icon, p.Text, hubPath), SelfReferenceDataId));
     }
 
-    /// <summary>
-    /// Gets the image URL for a node.
-    /// </summary>
-    private static string? GetNodeImageUrl(MeshNode node)
-    {
-        return node.Icon;
-    }
+    /// <summary>Projects the node into <see cref="SelfReferenceView"/>. Pure.</summary>
+    internal static SelfReferenceView ProjectSelfReference(MeshNode? node, string notFound)
+        => node is null
+            ? new SelfReferenceView("", notFound)
+            : new SelfReferenceView(node.Icon ?? "", node.Name ?? node.Id);
+
+    /// <summary>The self-reference's controls; values are literals or pointers.</summary>
+    internal static StackControl SelfReferenceTemplate(object icon, object text, string nodePath)
+        => Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(8)
+            .WithStyle("align-items: center;")
+            .WithView(Controls.Image(icon, "")
+                .WithSize(24)
+                .WithNodePath(nodePath)
+                .WithFallback(DefaultSelfReferenceIcon))
+            .WithView(Controls.Label(text));
 
     private static IObservable<UiControl?> RenderImageAsync(LayoutAreaHost host, string contentPath, string _)
     {
@@ -2195,8 +2216,13 @@ public static class MeshNodeLayoutAreas
         var staticUrl = ContentCollectionsExtensions.GetContentFileUrl(
             address, ContentCollectionsExtensions.DefaultCollectionName, contentPath);
 
+        // The file name is the alt text: it is what the author called the picture. The image
+        // control has no natural-height mode, so the picture is contained in a page-wide box.
         return Observable.Return<UiControl?>(
-            Controls.Html($"<img src='{staticUrl}' alt='{Path.GetFileName(contentPath)}' style='max-width: 100%;' />"));
+            Controls.Image(staticUrl, Path.GetFileName(contentPath))
+                .WithWidth("100%")
+                .WithHeight("60vh")
+                .WithFit(ImageFit.Contain));
     }
 
     private static UiControl RenderMarkdownContent(LayoutAreaHost host, string contentPath)
@@ -2205,23 +2231,29 @@ public static class MeshNodeLayoutAreas
         var address = host.Hub.Address.ToString();
         var fileName = Path.GetFileName(contentPath);
 
-        // Create a message with link to navigate to the content
-        var markdown = $"*This is text inserted from @{address}/{ContentCollectionsExtensions.DefaultCollectionName}:{contentPath}*\n\n" +
-                       $"[Navigate to {fileName}](/{address}/$Content/{contentPath})";
-
-        return Controls.Markdown(markdown);
+        return Controls.Stack
+            .WithVerticalGap(8)
+            .WithView(Controls.Label(host.Localize(InsertedFromKey,
+                    $"@{address}/{ContentCollectionsExtensions.DefaultCollectionName}:{contentPath}"))
+                .WithColor(HintColor))
+            .WithView(Controls.Link(host.Localize(NavigateToKey, fileName), $"/{address}/$Content/{contentPath}"));
     }
 
     private static UiControl RenderPdf(LayoutAreaHost host, string contentPath)
     {
         var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
-        return Controls.Html($@"
-            <div style=""width: 100%; min-height: 500px;"">
-                <iframe src=""{contentUrl}"" style=""width: 100%; height: 600px; border: 1px solid #ccc; border-radius: 4px;"" title=""{Path.GetFileName(contentPath)}""></iframe>
-                <div style=""margin-top: 8px;"">
-                    <a href=""{contentUrl}"" download=""{Path.GetFileName(contentPath)}"" style=""color: #0078d4;"">Download PDF</a>
-                </div>
-            </div>");
+        var fileName = Path.GetFileName(contentPath);
+        // The viewer itself is the browser's own PDF reader in an <iframe> — an embed, like a video
+        // player, for which the platform has no control yet (a PdfViewer is a candidate). Only the
+        // frame is markup: the download is a platform Link, with no hard-coded colours.
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithVerticalGap(8)
+            .WithView(Controls.Html(
+                $"<iframe src=\"{System.Web.HttpUtility.HtmlAttributeEncode(contentUrl)}\" " +
+                $"title=\"{System.Web.HttpUtility.HtmlAttributeEncode(fileName)}\" " +
+                "style=\"width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;\"></iframe>"))
+            .WithView(Controls.Link(host.Localize(DownloadPdfKey), contentUrl).WithDownload(fileName));
     }
 
     private static UiControl RenderJsonContent(LayoutAreaHost host, string contentPath)
@@ -2234,14 +2266,17 @@ public static class MeshNodeLayoutAreas
     {
         var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
         var fileName = Path.GetFileName(contentPath);
-        return Controls.Html($@"
-            <div style=""padding: 16px; background: #f5f5f5; border-radius: 8px; display: inline-flex; align-items: center; gap: 12px;"">
-                <span style=""font-size: 24px;"">📄</span>
-                <div>
-                    <div style=""font-weight: 500;"">{fileName}</div>
-                    <a href=""{contentUrl}"" download=""{fileName}"" style=""color: #0078d4; font-size: 14px;"">Download</a>
-                </div>
-            </div>");
+        // A file card: the document glyph, the file's name and a download link, on the platform's
+        // card skin (theme-aware — the old #f5f5f5 box was a light-theme colour on both themes).
+        return Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: center;")
+            .WithView(Controls.Image("📄", "").WithSize(30))
+            .WithView(Controls.Stack
+                .WithView(Controls.Label(fileName).WithWeight(FontWeight.Bold))
+                .WithView(Controls.Link(host.Localize("common.download"), contentUrl).WithDownload(fileName)))
+            .AddSkin(Skins.Card);
     }
 
     /// <summary>

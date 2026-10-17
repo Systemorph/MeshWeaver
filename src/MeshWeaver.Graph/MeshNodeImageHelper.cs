@@ -615,22 +615,7 @@ public static partial class MeshNodeImageHelper
     /// <c>xlink</c> prefix when the markup uses it. Everything else is returned byte-identical.
     /// </summary>
     /// <param name="svg">Inline svg markup.</param>
-    public static string AsSvgDocument(string svg)
-    {
-        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
-            return svg;
-        // Attribute VALUES are blanked before looking for a declaration, so text inside one
-        // (aria-label="xmlns=…") is never mistaken for an attribute of its own.
-        var attrs = QuotedValue().Replace(svg[(root.Start + "<svg".Length)..root.End], "\"\"");
-        var added = "";
-        if (!XmlnsAttr().IsMatch(attrs))
-            added += " xmlns=\"http://www.w3.org/2000/svg\"";
-        if (svg.Contains("xlink:", StringComparison.Ordinal) && !XmlnsXlinkAttr().IsMatch(attrs))
-            added += " xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
-        if (added.Length == 0)
-            return svg;
-        return svg.Insert(root.Start + "<svg".Length, added);
-    }
+    public static string AsSvgDocument(string svg) => MeshWeaver.Layout.ImageSources.AsSvgDocument(svg);
 
     /// <summary>
     /// The span of the root <c>&lt;svg …&gt;</c> start tag — from its <c>&lt;</c> to its closing
@@ -672,12 +657,6 @@ public static partial class MeshNodeImageHelper
 
     [GeneratedRegex(@"""[^""]*""|'[^']*'", RegexOptions.CultureInvariant)]
     private static partial Regex QuotedValue();
-
-    [GeneratedRegex(@"(?<![-:\w])xmlns\s*=", RegexOptions.CultureInvariant)]
-    private static partial Regex XmlnsAttr();
-
-    [GeneratedRegex(@"(?<![-:\w])xmlns:xlink\s*=", RegexOptions.CultureInvariant)]
-    private static partial Regex XmlnsXlinkAttr();
 
     /// <summary>
     /// A text glyph (an emoji) wrapped in an SVG that draws it, because no <c>href</c> can carry a
