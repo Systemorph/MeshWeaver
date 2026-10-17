@@ -143,14 +143,18 @@ Once an `assets` collection is registered, reference it just like the built-in `
 The cell below shows the collection-name resolution table as it appears at runtime:
 
 ```csharp --render ContentPrefixDemo --show-code
+record PrefixRow(string ReferenceForm, string Effect);
+
+var rows = new[]
+{
+    new PrefixRow("@@addr/content/logo.svg", "Embeds the file inline"),
+    new PrefixRow("@addr/docs/readme.md", "Renders a hyperlink"),
+    new PrefixRow("@@addr/assets/banner.png", "Embeds from the assets collection"),
+};
+
 MeshWeaver.Layout.Controls.Stack
     .WithView(MeshWeaver.Layout.Controls.Markdown("## Collection Prefix — runtime reference\n\nThe prefix immediately after the address selects the collection."))
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<table style='border-collapse:collapse;width:100%'>" +
-        "<thead><tr><th style='border:1px solid #ccc;padding:6px'>Reference form</th><th style='border:1px solid #ccc;padding:6px'>Effect</th></tr></thead>" +
-        "<tbody>" +
-        "<tr><td style='border:1px solid #ccc;padding:6px'><code>@@addr/content/logo.svg</code></td><td style='border:1px solid #ccc;padding:6px'>Embeds the file inline</td></tr>" +
-        "<tr><td style='border:1px solid #ccc;padding:6px'><code>@addr/docs/readme.md</code></td><td style='border:1px solid #ccc;padding:6px'>Renders a hyperlink</td></tr>" +
-        "<tr><td style='border:1px solid #ccc;padding:6px'><code>@@addr/assets/banner.png</code></td><td style='border:1px solid #ccc;padding:6px'>Embeds from the <em>assets</em> collection</td></tr>" +
-        "</tbody></table>"))
+    .WithView(MeshWeaver.Layout.Controls.DataGrid(rows)
+        .WithColumn(new PropertyColumnControl<string> { Property = "referenceForm" }.WithTitle("Reference form"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "effect" }.WithTitle("Effect")))
 ```

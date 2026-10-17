@@ -94,7 +94,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         { "Doc/Architecture/VectorSearch", 1, Table, "TextSearch" },
         { "Doc/Architecture/BusinessRules", 1, Table, "C001" },
         // ---- AI ----
-        { "Doc/AI/ExecuteScript", 1, Table, "Typical agent flow" },
+        { "Doc/AI/ExecuteScript", 1, DataGrid, "Typical agent flow" },
         // ---- DataMesh ----
         { "Doc/DataMesh/InteractiveMarkdown", 3, null, "Hello World" },
         { "Doc/DataMesh/QuerySyntax", 1, Table, "nodeType:Organization" },
