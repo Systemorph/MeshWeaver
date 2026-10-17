@@ -334,7 +334,7 @@ public class ShutDownPhaseStallVerdictTest : HubTestBase
             .Where(e => e is not null)
             .Select(e => e!.Message)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(30))
+            .Timeout(TestTimeouts.Convergence)
             .Await(TestContext.Current.CancellationToken);
     }
 
