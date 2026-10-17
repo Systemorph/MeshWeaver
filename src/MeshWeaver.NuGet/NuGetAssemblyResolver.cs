@@ -26,7 +26,20 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
 {
     private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
 
+    /// <summary>
+    /// The wall-clock budget of ONE resolution — every feed call, download and extraction it makes.
+    /// NuGet's own HTTP client bounds a single request at 100 s and retries it, so a feed that accepts
+    /// a connection and never answers held a resolution for many minutes; and the shared resolution
+    /// ignored every caller's token, so a caller's bound only stopped its own WAIT while the work, and
+    /// the cache entry every later caller joined, ran on. Past this budget the resolution is cancelled
+    /// and fails with a <see cref="TimeoutException"/> naming the packages and the feeds. It sits below
+    /// the compile pipeline's own bound on a compile (five minutes), so the resolver fails first and by
+    /// name.
+    /// </summary>
+    public static readonly TimeSpan DefaultResolveBudget = TimeSpan.FromMinutes(3);
+
     private readonly ConcurrentDictionary<string, Task<ResolvedPackageSet>> _cache = new();
+    private readonly TimeSpan _resolveBudget;
     private readonly SourceCacheContext _sourceCache = new();
     private readonly MsLogging.ILogger<NuGetAssemblyResolver> logger;
     private readonly ISettings _settings;
@@ -69,15 +82,18 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     /// <param name="settings">The NuGet settings naming the feeds.</param>
     /// <param name="globalPackagesFolder">The package folder to read and install into; <c>null</c> takes it from the settings.</param>
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    /// <param name="resolveBudget">The budget of one resolution; <c>null</c> takes <see cref="DefaultResolveBudget"/>.</param>
     internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         ISettings settings,
         string? globalPackagesFolder = null,
-        INuGetPackageCache? packageCache = null)
+        INuGetPackageCache? packageCache = null,
+        TimeSpan? resolveBudget = null)
     {
         this.logger = logger;
         _settings = settings;
         _globalPackagesFolder = globalPackagesFolder;
+        _resolveBudget = resolveBudget ?? DefaultResolveBudget;
         _nugetLogger = new NuGetLogger(logger);
         _packageCache = packageCache ?? NullNuGetPackageCache.Instance;
     }
@@ -102,16 +118,64 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
 
         var framework = targetFramework ?? DefaultFramework;
         var key = BuildCacheKey(requested, framework);
-        // Use CancellationToken.None on the shared task so a single caller's
-        // cancellation can't poison the resolution for everyone else; the
-        // per-caller `ct` projects through WaitAsync below.
-        var task = _cache.GetOrAdd(key, _ => ResolveCoreAsync(requested, framework, CancellationToken.None));
-        // Evict faulted/cancelled tasks BEFORE returning so a transient feed
-        // failure doesn't poison the cache for the lifetime of the resolver.
-        // The next caller retries from scratch.
-        if (task.IsCompleted && (task.IsFaulted || task.IsCanceled))
+        // The shared task is NOT cancelled by any caller's token, so a single caller's
+        // cancellation can't poison the resolution for everyone else; the per-caller `ct`
+        // projects through WaitAsync below. The shared task is bounded by its OWN budget instead
+        // (DefaultResolveBudget), so it always ends.
+        var task = _cache.GetOrAdd(key, _ => StartResolution(key, requested, framework));
+        // A failure already settled when this caller arrived is never handed out again: evict it
+        // and start afresh, so a transient feed failure doesn't poison the cache for the lifetime
+        // of the resolver. (A failure that settles later evicts itself — StartResolution.)
+        if (task.IsFaulted || task.IsCanceled)
+        {
             _cache.TryRemove(new KeyValuePair<string, Task<ResolvedPackageSet>>(key, task));
+            task = _cache.GetOrAdd(key, _ => StartResolution(key, requested, framework));
+        }
         return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
+    }
+
+    private Task<ResolvedPackageSet> StartResolution(
+        string key, IReadOnlyCollection<NuGetPackageReference> requested, NuGetFramework framework)
+    {
+        var task = ResolveWithinBudgetAsync(requested, framework);
+        task.ContinueWith(
+            failed => _cache.TryRemove(new KeyValuePair<string, Task<ResolvedPackageSet>>(key, failed)),
+            CancellationToken.None,
+            TaskContinuationOptions.NotOnRanToCompletion | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+        return task;
+    }
+
+    private async Task<ResolvedPackageSet> ResolveWithinBudgetAsync(
+        IReadOnlyCollection<NuGetPackageReference> requested, NuGetFramework framework)
+    {
+        using var budget = new CancellationTokenSource(_resolveBudget);
+        try
+        {
+            return await ResolveCoreAsync(requested, framework, budget.Token);
+        }
+        catch (OperationCanceledException ex) when (budget.IsCancellationRequested)
+        {
+            var packages = string.Join(", ", requested.Select(r => $"{r.Id} {r.VersionRange ?? "*"}"));
+            var feeds = string.Join(", ", LoadSources().Select(s => $"'{s.PackageSource.Source}'"));
+            throw new TimeoutException(
+                $"Resolving NuGet package(s) {packages} did not finish within its budget of "
+                + $"{_resolveBudget.TotalSeconds:0} s. The package folder could not answer, and the configured "
+                + $"feed(s) {feeds} did not answer in time — a feed that accepts the connection and never "
+                + "responds looks exactly like this.", ex);
+        }
+    }
+
+    private SourceRepository[] LoadSources()
+    {
+        var providers = Repository.Provider.GetCoreV3();
+        var sources = new PackageSourceProvider(_settings).LoadPackageSources()
+            .Where(s => s.IsEnabled)
+            .Select(s => new SourceRepository(s, providers))
+            .ToArray();
+        return sources.Length > 0
+            ? sources
+            : [new SourceRepository(new PackageSource("https://api.nuget.org/v3/index.json"), providers)];
     }
 
     private async Task<ResolvedPackageSet> ResolveCoreAsync(
@@ -120,17 +184,7 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
         CancellationToken ct)
     {
         var packagesRoot = _globalPackagesFolder ?? SettingsUtility.GetGlobalPackagesFolder(_settings);
-        var providers = Repository.Provider.GetCoreV3();
-        var packageSourceProvider = new PackageSourceProvider(_settings);
-        var sources = packageSourceProvider.LoadPackageSources()
-            .Where(s => s.IsEnabled)
-            .Select(s => new SourceRepository(s, providers))
-            .ToArray();
-
-        if (sources.Length == 0)
-        {
-            sources = [new SourceRepository(new PackageSource("https://api.nuget.org/v3/index.json"), providers)];
-        }
+        var sources = LoadSources();
 
         // Honor nuget.config's packageSourceMapping. The repo config pins MeshWeaver.*/Memex.*
         // to the `mesh-local` feed (dist/packages) precisely so a version-LESS
@@ -299,7 +353,22 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
             // folder contents change which versions resolve (NuGetRuntimeAssets.md, "Known limit").
             var info = ReadInstalledDependencyInfo(current, packagesRoot, framework)
                 ?? await ResolveFromFeedAsync(current, packagesRoot, sources, mapping, framework, ct);
-            if (info is null) continue;
+            if (info is null)
+            {
+                // A REQUESTED package that neither the folder nor any feed holds is the answer
+                // "it does not exist" — say so by name here, rather than letting the package
+                // resolver below fail on a target it was never given.
+                if (PackageIdentityComparer.Default.Equals(current, root))
+                {
+                    var asked = string.Join(", ",
+                        FilterSourcesForPackage(current.Id, sources, mapping).Select(s => $"'{s.PackageSource.Source}'"));
+                    throw new InvalidOperationException(
+                        $"NuGet package {current.Id} {current.Version.ToNormalizedString()} was not found: it is not "
+                        + $"installed in the package folder '{packagesRoot}', and none of the configured feed(s) "
+                        + $"{asked} has it.");
+                }
+                continue;
+            }
 
             collected.Add(info);
             foreach (var dep in info.Dependencies)

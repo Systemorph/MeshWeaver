@@ -1,6 +1,8 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.NuGet;
@@ -354,6 +356,91 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         thrown.Which.Message.Should().Contain("Acme.Offline.B 1.0.0")
             .And.Contain("is not installed")
             .And.Contain($"'{UnreachableFeed}'");
+    }
+
+    /// <summary>
+    /// An UNKNOWN package is decided locally: the folder does not hold it and the one (local, empty)
+    /// feed does not either, so resolution fails by name, with no network and no clock in the test.
+    /// This replaced a case that asked api.nuget.org the same question and timed out whenever the
+    /// live feed was slow (Graph shard, 2026-10-17: 30 s for one 404).
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task UnknownPackage_NoFeedHoldsIt_FailsNamingThePackageAndTheFeed()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        var ct = TestContext.Current.CancellationToken;
+
+        var exact = () => ColdResolver().ResolveAsync(
+            [new NuGetPackageReference("Acme.Does.Not.Exist", "1.0.0")], targetFramework: null, ct: ct);
+        var thrown = await exact.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Message.Should().Contain("Acme.Does.Not.Exist 1.0.0")
+            .And.Contain("was not found")
+            .And.Contain($"'{LocalFeed}'");
+
+        var floating = () => ColdResolver().ResolveAsync(
+            [new NuGetPackageReference("Acme.Does.Not.Exist", null)], targetFramework: null, ct: ct);
+        (await floating.Should().ThrowAsync<InvalidOperationException>())
+            .Which.Message.Should().Contain("Acme.Does.Not.Exist");
+    }
+
+    /// <summary>
+    /// A feed that ACCEPTS the connection and never answers — what a stalled or overloaded feed
+    /// looks like. NuGet's own client waits 100 s per request and retries, and the shared resolution
+    /// ignored every caller's token, so this used to hold a resolution (and the cache entry every
+    /// later caller joined) for minutes. It must now end at the resolver's budget, by name, and the
+    /// failure must not stay cached.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task SilentFeed_FailsWithinTheResolveBudget_NamingThePackageAndTheFeed()
+    {
+        using var silent = new TcpListener(IPAddress.Loopback, 0);
+        silent.Start(); // listens, never accepts or answers: the connection opens, the request hangs
+        var feed = $"http://127.0.0.1:{((IPEndPoint)silent.LocalEndpoint).Port}/v3/index.json";
+        File.WriteAllText(Path.Combine(root, "nuget.config"), $"""
+            <?xml version="1.0" encoding="utf-8"?>
+            <configuration>
+              <packageSources>
+                <clear />
+                <add key="silent" value="{feed}" />
+              </packageSources>
+            </configuration>
+            """);
+        var budget = TimeSpan.FromSeconds(2);
+        var resolver = new NuGetAssemblyResolver(
+            NullLogger<NuGetAssemblyResolver>.Instance,
+            Settings.LoadSpecificSettings(root, "nuget.config"),
+            PackagesFolder,
+            resolveBudget: budget);
+        var request = new[] { new NuGetPackageReference("Acme.Does.Not.Exist", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = () => resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        var thrown = await first.Should().ThrowAsync<TimeoutException>();
+        thrown.Which.Message.Should().Contain("Acme.Does.Not.Exist 1.0.0")
+            .And.Contain($"'{feed}'")
+            .And.Contain("budget");
+
+        // The failure is evicted: the next caller gets a NEW resolution, not the settled failure.
+        var retried = resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        retried.IsCompleted.Should().BeFalse("a settled failure must not be served from the cache");
+        await ((Func<Task>)(() => retried)).Should().ThrowAsync<TimeoutException>();
+    }
+
+    /// <summary>The same inputs on one resolver share ONE resolution.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TwiceWithSameInputs_HitsTheCache()
+    {
+        WriteConfig(withLocalFeed: true, withUnreachableFeed: false);
+        Publish("Acme.Offline.A", "1.0.0");
+        var resolver = ColdResolver();
+        var request = new[] { new NuGetPackageReference("Acme.Offline.A", "1.0.0") };
+        var ct = TestContext.Current.CancellationToken;
+
+        var first = await resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+        var second = await resolver.ResolveAsync(request, targetFramework: null, ct: ct);
+
+        first.AssemblyPaths.Should().Contain(p => p.EndsWith("Acme.Offline.A.dll", StringComparison.Ordinal));
+        second.Should().BeSameAs(first);
     }
 
     private int readerRefused;

@@ -262,6 +262,17 @@ answer (#6863):
   failed, resolution fails with an `InvalidOperationException`. The error names the package and
   version, the package folder, and each failing feed with what it reported. A feed failure never
   surfaces when the folder could answer, because no feed is asked.
+- **A requested package that nothing holds** — not the folder, and every feed answered "no such
+  package" — fails with an `InvalidOperationException` saying it was not found, naming the package,
+  the folder and the feeds asked.
+- **Every resolution has a budget** (`NuGetAssemblyResolver.DefaultResolveBudget`, three minutes,
+  below the compile pipeline's five-minute bound on a compile). NuGet's own HTTP client waits 100 s
+  per request and retries, so a feed that accepts the connection and never answers used to hold a
+  resolution for many minutes. The resolution is shared by every caller with the same inputs and
+  ignores each caller's token, so a caller's bound only ended its own wait: the work, and the cache
+  entry later callers joined, ran on. Past the budget the resolution is cancelled and fails with a
+  `TimeoutException` naming the packages and the feeds. A failed resolution leaves the cache as it
+  settles, so the next caller starts afresh rather than receiving the old failure.
 
 **Known limit: an installed diamond.** A needs B ≥ 1.0 and C ≥ 1.0, and C raises B to ≥ 2.0. Online
 resolution meets the B 1.0 candidate, selects B 2.0, and installs only B 2.0. Offline, the walk still
@@ -292,6 +303,12 @@ The first configured feed refuses every connection, and some cases add a local f
 - A folder that passes the existence checks and is deleted by a concurrent repair before its
   manifest is read counts as a local miss, never a failure: resolution goes on to the feed and the
   install lock.
+- An unknown package, with only an empty local feed configured, fails by name with no network
+  call. A feed that accepts connections and never answers ends at a two-second test budget with
+  the `TimeoutException`, and the next call starts a new resolution. Same inputs on one resolver
+  share one resolution. These three used to ask api.nuget.org, and the unknown-package case timed
+  out whenever the live feed was slow to answer one 404. Tests that need real packages from the live
+  feed stay in `NuGetAssemblyResolverTest` and skip when it is unreachable.
 - Every interleaving wait in these tests is asserted. A missed window fails the test instead of
   passing without having exercised it.
 
