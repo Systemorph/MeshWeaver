@@ -26,17 +26,23 @@ In MeshWeaver, `IObservable<T>` is the universal currency. The host's `GetDataSt
 The example below implements a simulation dialog. A user picks a statistical distribution and a sample count, clicks **Run Simulation**, and sees summary statistics computed entirely on the server.
 
 ```csharp --render DistributionDialogPreview --show-code
+record DialogPart(string Control, string BoundTo, string ReactiveTrigger);
+
+var parts = new[]
+{
+    new DialogPart("Sample count", "BasicInput.Samples", "—"),
+    new DialogPart("Distribution selector", "BasicInput.DistributionType", "Swaps the parameter editor"),
+    new DialogPart("Parameter editor", "Distribution", "Re-rendered on type change"),
+    new DialogPart("Run button", "Click action", "Emits to Subject<(double[], TimeSpan)>"),
+    new DialogPart("Results area", "Subject subscription", "Updated on each emission"),
+};
+
 MeshWeaver.Layout.Controls.Stack
     .WithView(MeshWeaver.Layout.Controls.Markdown("## Distribution Statistics\n\nThis page documents how to build reactive dialogs. See the code blocks below for the full implementation pattern."))
-    .WithView(MeshWeaver.Layout.Controls.Html(
-        "<table><thead><tr><th>Control</th><th>Bound to</th><th>Reactive trigger</th></tr></thead>" +
-        "<tbody>" +
-        "<tr><td>Sample count</td><td><code>BasicInput.Samples</code></td><td>—</td></tr>" +
-        "<tr><td>Distribution selector</td><td><code>BasicInput.DistributionType</code></td><td>Swaps the parameter editor</td></tr>" +
-        "<tr><td>Parameter editor</td><td><code>Distribution</code></td><td>Re-rendered on type change</td></tr>" +
-        "<tr><td>Run button</td><td>Click action</td><td>Emits to <code>Subject&lt;(double[], TimeSpan)&gt;</code></td></tr>" +
-        "<tr><td>Results area</td><td>Subject subscription</td><td>Updated on each emission</td></tr>" +
-        "</tbody></table>"))
+    .WithView(MeshWeaver.Layout.Controls.DataGrid(parts)
+        .WithColumn(new PropertyColumnControl<string> { Property = "control" }.WithTitle("Control"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "boundTo" }.WithTitle("Bound to"))
+        .WithColumn(new PropertyColumnControl<string> { Property = "reactiveTrigger" }.WithTitle("Reactive trigger")))
 ```
 
 ## Domain Model
