@@ -144,7 +144,13 @@ public static class RegistrationCouponEndpoints
         var keys = rootHub.ServiceProvider.GetRequiredService<RegistrationKeyService>();
         var access = rootHub.ServiceProvider.GetRequiredService<AccessService>();
 
-        return (ladder?.Read().Take(1) ?? Observable.Return(PlanTierRanks.Empty))
+        // 🚨 The ladder is read AS SYSTEM, after the credential was checked: the HTTP caller is
+        // anonymous, and on a registry with Access:DenyAnonymous a query under that identity answers
+        // an EMPTY Initial — every plan would read "not on the ladder" and the empty result would be
+        // cached for a minute.
+        return (ladder is null
+                ? Observable.Return(PlanTierRanks.Empty)
+                : access.RunAsSystem(() => ladder.Read().Take(1)))
             .SelectMany(ranks =>
             {
                 // 🚨 The ladder decides, never the caller: a plan the registry does not know licenses
@@ -157,9 +163,11 @@ public static class RegistrationCouponEndpoints
                                 + (ranks.Ids.Count == 0 ? "none seeded" : string.Join(", ", ranks.Ids))
                                 + "). Nothing was minted.",
                     }, statusCode: StatusCodes.Status400BadRequest));
-                return Observable.Using(
-                        () => access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }),
-                        _ => keys.Mint(owner, owner, "", request.Description!.Trim(), expiresAt, tier, uses))
+                // RunAs, never Observable.Using over SwitchAccessContext: the scope is AsyncLocal and
+                // the mint terminates on another hub's thread, so a Using would restore the caller
+                // there and leave the subscribing flow latched as the coupon owner.
+                return access.RunAs(new AccessContext { ObjectId = owner, Name = owner },
+                        () => keys.Mint(owner, owner, "", request.Description!.Trim(), expiresAt, tier, uses))
                     .Select(result =>
                     {
                         logger?.LogInformation(

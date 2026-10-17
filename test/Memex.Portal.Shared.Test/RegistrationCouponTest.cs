@@ -224,3 +224,75 @@ public class RegistrationCouponTest(ITestOutputHelper output) : MonolithMeshTest
         again.StatusCode.Should().Be(HttpStatusCode.Unauthorized, "single use");
     }
 }
+
+/// <summary>
+/// 🚨 The mint reads the registry's tier ladder AS SYSTEM. Its HTTP caller is anonymous (the mint
+/// credential is a header, not an identity), and on a registry with <c>Access:DenyAnonymous</c> a
+/// ladder query under that identity answers an EMPTY Initial — with a cold cache every plan then read
+/// "not on the ladder" (400) and that empty ladder was cached for a minute. This fixture states the
+/// switch, so the mint below reaches a COLD ladder as the anonymous HTTP caller.
+/// </summary>
+public class RegistrationCouponOnAClosedRegistryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string TierNodeType = "Store/Tier";
+    private const string MintSecret = "test-coupon-mint-credential-closed-registry";
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddPluginCatalog()
+            .AddMeshNodes(new MeshNode(TierNodeType)
+            {
+                Name = "Tier",
+                IsSatelliteType = false,
+                HubConfiguration = config => config
+                    .AddMeshDataSource(source => source.WithContentType<RegistrationCouponTest.TierNode>()),
+            })
+            .ConfigureHub(config => config.WithType<RegistrationCouponTest.TierNode>(nameof(RegistrationCouponTest.TierNode)))
+            .ConfigureServices(services => services.AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [AnonymousAccess.DenyAnonymousConfigKey] = "true",
+                }).Build()));
+
+    [Fact(Timeout = 300_000)]
+    public async Task TheMint_ReadsTheLadderAsSystem_SoAnAnonymousCallerOnAClosedRegistryStillMints()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+                .CreateOrUpdateNode(new MeshNode("dedicated", PlanTierLadder.Namespace)
+                {
+                    Name = "dedicated",
+                    NodeType = TierNodeType,
+                    State = MeshNodeState.Active,
+                    Content = new RegistrationCouponTest.TierNode { Rank = 25, AllAccess = true },
+                }))
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(60)).Await(ct);
+
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [RegistrationCouponPayloads.SecretConfigKey] = MintSecret,
+            [RegistrationCouponPayloads.OwnerConfigKey] = "coupon-owner",
+        });
+        builder.Services.AddSingleton<IMessageHub>(Mesh);
+        var app = builder.Build();
+        app.MapInstanceRegistration();
+        await app.StartAsync(ct);
+        await using var _ = app;
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, RegistrationCouponPayloads.Route)
+        {
+            Content = JsonContent.Create(new { tier = "dedicated", description = "fabrikam ramp-up", expiresDays = 14 }),
+        };
+        request.Headers.TryAddWithoutValidation(RegistrationCouponPayloads.SecretHeader, MintSecret);
+        // The fixture logs a DevLogin HOST identity in for every flow without one; the real registry
+        // has none — its mint caller is anonymous. Clear it so the request runs exactly as anonymous.
+        access.ClearHostIdentity();
+        using var response = await app.GetTestClient().SendAsync(request, ct);
+        var text = await response.Content.ReadAsStringAsync(ct);
+        response.StatusCode.Should().Be(HttpStatusCode.OK,
+            "a plan the ladder knows is minted even though the HTTP caller is anonymous on a closed registry: " + text);
+    }
+}

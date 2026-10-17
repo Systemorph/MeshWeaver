@@ -30,18 +30,23 @@ source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 HOSTING_CMD="hosting-registry-coupon"
 
 registry="" vault="" object="" tier="" description="" mint_secret="" expires_days="30" max_usages="1"
+# A flag given LAST with no value must not spin: `shift 2` on one remaining argument shifts nothing,
+# so the loop would never end. Shift what is there; the empty value is then refused by need_flag.
+shift_value() { if [ $# -ge 2 ]; then shift_n=2; else shift_n=1; fi; }
 while [ $# -gt 0 ]; do
+  shift_n=1
   case "$1" in
-    --registry-url) registry="${2:-}";     shift 2 ;;
-    --vault)        vault="${2:-}";        shift 2 ;;
-    --object)       object="${2:-}";       shift 2 ;;
-    --tier)         tier="${2:-}";         shift 2 ;;
-    --description)  description="${2:-}";  shift 2 ;;
-    --mint-secret)  mint_secret="${2:-}";  shift 2 ;;
-    --expires-days) expires_days="${2:-}"; shift 2 ;;
-    --max-usages)   max_usages="${2:-}";   shift 2 ;;
+    --registry-url) registry="${2:-}";     shift_value "$@" ;;
+    --vault)        vault="${2:-}";        shift_value "$@" ;;
+    --object)       object="${2:-}";       shift_value "$@" ;;
+    --tier)         tier="${2:-}";         shift_value "$@" ;;
+    --description)  description="${2:-}";  shift_value "$@" ;;
+    --mint-secret)  mint_secret="${2:-}";  shift_value "$@" ;;
+    --expires-days) expires_days="${2:-}"; shift_value "$@" ;;
+    --max-usages)   max_usages="${2:-}";   shift_value "$@" ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
+  shift "$shift_n"
 done
 hosting::need_flag registry-url "$registry"
 hosting::need_flag vault "$vault"

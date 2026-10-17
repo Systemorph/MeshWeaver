@@ -814,6 +814,7 @@ refuses_hard "coupon refuses an expiry beyond 90 days" "must be 1–90" hosting-
 refuses_hard "coupon refuses more than 10 uses" "must be 1–10" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d --mint-secret m --max-usages 11
 refuses_hard "coupon refuses a description with a metacharacter" "must be plain words" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description 'x$(id)' --mint-secret m
 refuses_hard "coupon needs --mint-secret" "missing required flag --mint-secret" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d
+refuses_hard "coupon: a flag given LAST with no value refuses, never spins" "missing required flag --mint-secret" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d --mint-secret
 unset _rc_out _rc_rc _rc_reglog _rc_azlog _rc_reg _rc_kv
 
 echo "── hosting-kv-copy: a fleet-shared object materialised under the prefix, never shown ──"
