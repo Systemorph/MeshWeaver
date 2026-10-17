@@ -97,7 +97,11 @@ The fence syntax:
 
 **A plain fence is the explicit marker for a non-runnable fragment** — pseudo-code, wire shapes, framework source excerpts (handlers, layout-area methods, service registrations), bash. If a fence shows real, self-contained runnable code, make it executable.
 
-**Every executable block is enforced by CI**: `DocExecutableBlocksTest` (in `test/MeshWeaver.Persistence.Test`) extracts every `--render`/`--execute` block from every embedded doc page and executes it through a real kernel session — a block that stops compiling fails the build naming the page and the block. The same test carries a coverage ratchet, so silently converting an executable block back to a prose-only fence is visible.
+**Every executable C# block is type-checked on every core pull request**: `DocExecutableCellsCompileTest` (in `test/MeshWeaver.Documentation.Test`) extracts every `--render`/`--execute` block from every embedded doc page the way the portal does (`MarkdownContent.Parse`), and COMPILES each page's blocks as one script chain, in document order, with the kernel's own options (`MeshScriptEnvironment.CreateScriptOptions` over `MeshScriptEnvironment.ReferencesAsync` — the same reference set, default imports and globals type `KernelExecutor` uses). A block that stops compiling fails that page's case, naming the page, the cell's position and id, and the Roslyn diagnostics. It compiles and never executes — execution needs a mesh.
+
+Two kinds of block are skipped there, and each skip is printed with its reason: a non-C# fence (routed to a foreign-language worker, not the Roslyn kernel), and a block that declares `#r "nuget:…"` — together with every later block on the same page, whose session holds the restored package — because the guard compiles offline.
+
+Running the blocks is the other half and lives in MeshWeaver.Plugins, which holds the mesh test bases: `DocExecutableBlocksTest` (`src/MeshWeaver.Persistence.Test` there) executes every block through a real kernel session per page and carries the coverage ratchet. It runs with that repository's host suites, so it catches a block that compiles and then throws — but on that repository's schedule, not on the core pull request that changed the page.
 
 Use executable blocks for every UI claim a page makes — if the doc says a control renders, the doc should *render it*. Pages that define sample models back them with real code in `src/MeshWeaver.Documentation/` and tests in `test/MeshWeaver.Documentation.Test` (see [Business Rules](/Doc/Architecture/BusinessRules) for the canonical example).
 
