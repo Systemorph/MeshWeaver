@@ -504,7 +504,8 @@ public static partial class MeshNodeImageHelper
     [GeneratedRegex(@"(?:^|;)\s*color\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex StyleColor();
 
-    [GeneratedRegex(@"^[#\w\s(),.%+-]+$", RegexOptions.CultureInvariant)]
+    // "/" admits the slash alpha form, rgb(255 0 0 / 50%); quotes and markup characters stay out.
+    [GeneratedRegex(@"^[#\w\s(),./%+-]+$", RegexOptions.CultureInvariant)]
     private static partial Regex PlainColorValue();
 
     /// <summary>The one media type that tells a browser "this icon scales losslessly".</summary>

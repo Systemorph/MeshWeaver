@@ -201,4 +201,20 @@ public class InlineSvgIconsAreInertTest
         ResolvedColor(decoded).Should().Be(resolved);
         decoded.Should().NotContain("stroke='#ff0000'", "paint values are never rewritten");
     }
+
+    /// <summary>An alpha colour in the slash form (<c>rgb(255 0 0 / 50%)</c>) is a plain colour and is
+    /// applied; a value with a quote is still refused.</summary>
+    [Theory]
+    [InlineData("rgb(255 0 0 / 50%)", "rgb(255 0 0 / 50%)")]
+    [InlineData("hsl(0 100% 50% / .5)", "hsl(0 100% 50% / .5)")]
+    [InlineData("red'/><x a='", null)]
+    public void AnAlphaColour_IsApplied_AQuotedOneIsNot(string color, string? resolved)
+    {
+        const string ownPlate = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
+                                + "<rect width='24' height='24' fill='#0e7490'/><path d='M6 12h12' stroke='currentColor'/></svg>";
+
+        var src = MeshNodeImageHelper.InlineSvgImageSource(ownPlate, color);
+
+        ResolvedColor(Uri.UnescapeDataString(src["data:image/svg+xml,".Length..])).Should().Be(resolved);
+    }
 }
