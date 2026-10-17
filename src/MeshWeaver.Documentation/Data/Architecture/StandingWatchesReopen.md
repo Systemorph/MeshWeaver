@@ -44,6 +44,15 @@ again, and the cache has already evicted the faulted chain. So the re-open gets 
 not a replay of the latched fault. A factory that hands back the same cached observable would defeat
 the rule.
 
+**A re-open never nests.** The helper is one flat pipeline, and `RetryWhen` re-subscribes it in
+place. An earlier version re-opened from inside its own `Catch`. Each fault then wrapped one more
+operator layer around the next opening. That chain, and the stack every later emission climbed,
+grew with each fault the watch survived, and it was never released. `StandingWatchRecoveryDoesNotNestTest`
+pins this structurally: the number of Rx operator objects the live subscription holds is the same
+after 1000 faults as after one, and the old shape grows by at least one per fault. It counts objects,
+not stack frames. A frame count depends on what the JIT inlined: on a Release CI host the old shape
+measured flat.
+
 The gap is never silent. Before each re-open, the hosted service records the interruption on the
 census (`NodeTypeBakeReportRegistry.RecordLiveRecordsFault`), so `/health` degrades and says why. The
 next reading clears it (`RecordLiveRecords`). A terminal fault is never followed by a reading, so it
@@ -73,8 +82,62 @@ shapes. The handshake and the view retry (`AreaErrorClassifier`) both use it. It
 transport's own two timeout phrases, never a NACK that carries a verdict. Re-asking is safe: the
 claim registration is idempotent per holder, even if the timed-out request did land.
 
+## The same defect in eight more places
+
+A sweep for watches with no guard of their own found the same shape again: a live query subscribed
+once, with an error arm that only logs. Each now re-opens.
+
+| site | what one fault used to cost | how it re-opens now |
+|---|---|---|
+| `InstanceSecretCatalog` (Graph) | every per-sender key refused until a restart (it fails closed) | `SubscribeHubWatcher`. It stays fail-closed (`Faulted`) from the fault until the re-opened query lists the set again. |
+| `UiContributionCatalog` (Graph) | menus frozen at the last known set | `SubscribeHubWatcher`. The next full listing replaces the frozen set. |
+| `EventSubscriptionRunner`, both live queries (Graph) | no pending subscription fired, no legacy action migrated | `SubscribeHubWatcher` on each |
+| `ImageClosureIngest` inbox (Graph) | no closure record ingested | `SubscribeHubWatcher` over one `InboxDrainWatch` opening (see below) |
+| `PartitionRegistry` (Graph) | the fault became a `null` that the shared `Replay(1)` entry served to every later caller | the faulted entry is evicted. Its current callers get `null`, and the next lookup opens a fresh query. It also folds the change feed now: a delta for another partition used to read as "no definition". |
+| `RegistryUpdateReconciler` module-published inbox (PluginCatalog) | broadcasts drained only at the next boot | `SubscribeHubWatcher` over one `InboxDrainWatch` opening (see below) |
+| `InstanceAutoRegistrationService` consent wait (PluginCatalog) | the fault answered `false`, the waiter filtered it out, and registration never ran until a restart | `StandingWatchRecovery.ReopenOnTransientFault` with no budget, so the wait stays open as long as its waiter does. While waiting, the record's node stream stays LIVE: only its first value is bounded. The query and the node stream are independent feeds, so a record that completes on the node stream after the last query emission still registers. |
+
+**The two inbox drains share one opening, `InboxDrainWatch` (Graph).** The listing and the drain
+queue are independent. A `listing.Select(drain).Concat()` pipeline held a listing fault back until
+the drain in flight finished, so a hung drain kept a faulted query from being re-opened at all.
+Now a listing fault ends the opening at once. A claim belongs to the opening that made it until
+its drain has run. When the opening ends, every delivery it claimed and did not finish is released,
+so the re-opened watch drains it instead of skipping it as already picked up.
+
+**The secret catalog publishes its entries and its fail-closed flag as ONE snapshot.** They used
+to be two fields written one after the other. A verifier reading between the two writes could see
+the feed as recovered while the entries were still the pre-outage set.
+
+`SubscribeHubWatcher` re-opens after any fault that does not end the watch for good (its own hub
+disposing, poisoned own content, its own node gone). It ends with the hub that owns it. Tests drive
+the re-open through its `scheduleReEstablish` seam on a manual clock, never on wall time.
+
+### The guard
+
+`StandingQueryWatchRatchetGuard` (`MeshWeaver.Documentation.Test`) counts `.Subscribe(` statements
+whose chain opens a live query (`.Query<`, `GetQuery(`, `ObserveQuery`) without one of these:
+
+- a one-shot read: `Take`, `FirstAsync` and similar (a `Timeout` alone is not one: it leaves the
+  watch standing);
+- a write;
+- a re-opening helper;
+- a top-level `Catch`;
+- a forwarding observer;
+- an error arm that releases the chain for the next caller.
+
+It is a ratchet, and the count may only fall. It reads text, not symbols, so it MISSES some watches:
+a query subscribed in another statement or by a method's caller, a `GetMeshNodeStream` or
+change-feed watch, and a standing chain with a per-item `Take`. A green run means no new watch of
+the measured shape, not that every watch is guarded. The two sites it counts at seeding are the
+portal's e-mail senders (`OutboundEmailSender`, `InvitationEmailSender`).
+
 ## Tests
 
+- `StandingWatchesReopenAfterAFaultTest` (`MeshWeaver.Graph.Test`) and
+  `PluginCatalogStandingWatchesReopenTest` (`Memex.Portal.Shared.Test`) cover the sites above with
+  one script: the first open throws `QueryProviderStalledException`, the watch survives, the
+  re-open runs on the test's clock, and a later emission is processed. Each was proven by putting
+  back the unguarded shape, which fails it.
 - `LiveRecordCensusReopensAfterTransientFaultTest` runs on a real monolith mesh. A test query provider
   answers the catalog query and then dies mid-stream with the incident's exception chain. The fixed
   census re-opens, reads again, and opens a fresh upstream. The negative control runs the raw census

@@ -200,6 +200,31 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// keeps a slow delete from draining the same event twice. Instance state, immutable-swapped.</summary>
     private ImmutableHashSet<string> claimedDeliveries = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 
+    /// <summary>Test seam: opens the module-published inbox query. Null in production.</summary>
+    internal Func<IObservable<IEnumerable<MeshNode>>>? OpenInboxOverride { get; set; }
+
+    /// <summary>Test seam: how a faulted inbox watch's re-open is scheduled. Null in production,
+    /// where the hub watcher's own cadence applies.</summary>
+    internal Func<Action, IDisposable>? ScheduleInboxReopen { get; set; }
+
+    /// <summary>Whether this process has picked up the inbox delivery at <paramref name="path"/> — the
+    /// observable trace that an emission of the inbox watch was processed.</summary>
+    internal bool HasClaimedDelivery(string path) => claimedDeliveries.Contains(path);
+
+    /// <summary>Test seam: drains one inbox delivery. Null in production.</summary>
+    internal Func<MeshNode, IObservable<Unit>>? DrainOverride { get; set; }
+
+    /// <summary>The standing inbox watch: <see cref="WatchInbox"/>, re-opened by the hub watcher
+    /// after any fault of its query.</summary>
+    internal IDisposable SubscribeInboxWatch(PluginCatalogOptions options) =>
+        ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
+            () => WatchInbox(options).SubscribeOn(TaskPoolScheduler.Default),
+            _ => { },
+            logger,
+            "[RegistryUpdate] module-published inbox watch",
+            scheduleReEstablish: ScheduleInboxReopen);
+
     /// <summary>Creates the service; the ledger write channel and the reconcile lane are live from
     /// construction so a state change is recorded, and a pass runs, whether it arrives from the
     /// boot, from a later feed read, from a broadcast or from the safety net.</summary>
@@ -321,16 +346,19 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
 
         // #3650 — the two other events, armed after the same precondition and independent of how
         // the boot pass went: a boot that deferred still has an inbox to drain and a floor to keep.
+        //
+        // 🚨 The inbox is a STANDING watch: one fault of its query (a provider stall, a dropped
+        // connection) used to end it for the life of the process, so broadcasts were drained only at
+        // the next boot. The hub watcher re-opens it; the synced-query cache has already evicted the
+        // faulted chain, and the claimed set keeps a delivery from being drained twice.
         subscriptions.Add(defaultsDone
             .ObserveOn(TaskPoolScheduler.Default)
-            .SelectMany(_ => WatchInbox(options))
-            .SubscribeOn(TaskPoolScheduler.Default)
             .Subscribe(
-                _ => { },
+                _ => subscriptions.Add(SubscribeInboxWatch(options)),
                 ex => logger.LogError(ex,
-                    "[RegistryUpdate] the module-published inbox watch faulted — broadcasts are not "
-                    + "drained in this process any more; each delivery stays in the inbox and is "
-                    + "consumed at the next boot, and the safety net still reconciles meanwhile.")));
+                    "[RegistryUpdate] the default install's completion signal faulted — the "
+                    + "module-published inbox is not watched in this process; each delivery stays in "
+                    + "the inbox and is consumed at the next boot.")));
         subscriptions.Add(defaultsDone
             .ObserveOn(TaskPoolScheduler.Default)
             .SelectMany(_ => SafetyNet(options))
@@ -468,10 +496,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// one package it names reconciled on the lane, the delivery deleted. Durable on both ends: a
     /// delivery that lands while this process is down replays into the first emission of the next
     /// boot's watch, so the inbox is at-least-once and the decision behind it idempotent. Never
-    /// completes on its own; a fault ends the watch loudly (the subscriber's error line), never
-    /// silently — a lost watch costs latency until the next boot, and the safety net still runs.
+    /// completes on its own; a fault ends THIS opening, and the caller's hub watcher re-opens it.
     /// </summary>
-    private IObservable<Unit> WatchInbox(PluginCatalogOptions options)
+    internal IObservable<Unit> WatchInbox(PluginCatalogOptions options)
     {
         var meshService = hub.ServiceProvider.GetService<IMeshService>();
         if (meshService is null)
@@ -482,15 +509,21 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // query with no path reaches only the partitions a caller's RLS grants — a hosted service
         // has no caller. The same lesson as SelfUpdate's build watch (BuildCompletion.WatchQuery).
         var query = $"path:{inbox} scope:children nodeType:{WebhookInbox.NodeType}";
-        return access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))
-            .SelectMany(nodes => (nodes ?? [])
+        // 🚨 One opening (InboxDrainWatch): a listing fault ends it at once, and the claims of
+        // deliveries it did not finish draining are released, so the re-opened watch drains them
+        // instead of skipping them as "already picked up" until the next boot.
+        return InboxDrainWatch.Open(
+            OpenInboxOverride
+                ?? (() => access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))),
+            nodes => nodes
                 .Where(node => !string.IsNullOrWhiteSpace(node.Path))
                 // Oldest first within one emission: a burst of publishes from one CI wave drains
                 // in publish order, so a later version of the same package is examined last.
                 .OrderBy(node => node.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
                 .Where(node => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Add(node.Path)))
-                .ToArray())
-            .Select(node => Observable.Defer(() => DrainDelivery(node, options, meshService, access))
+                .ToArray(),
+            released => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Except(released)),
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? DrainDelivery(node, options, meshService, access))
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex,
@@ -498,8 +531,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         + "stays in the inbox and is retried at the next boot. Cause: {Cause}",
                         node.Path, ex.Message);
                     return Observable.Return(Unit.Default);
-                }))
-            .Concat();
+                }));
     }
 
     /// <summary>One delivery: parse, match its registry, reconcile that package on the lane, delete.</summary>

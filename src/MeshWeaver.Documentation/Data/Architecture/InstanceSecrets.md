@@ -74,7 +74,12 @@ memory and hands values only to the code that signs or verifies with them:
   VERIFIER accepts under a section, current value first, then the rotation's previous value.
 
 A value saved in the portal therefore reaches the next signature or verification on every
-replica, as soon as the change feed delivers it. `WhenLoaded` lets a verifier wait for the first
+replica, as soon as the change feed delivers it.
+
+If the catalog's query faults, the catalog **fails closed**. `Candidates` offers no per-sender key,
+because a dead feed cannot see a revocation. The query then re-opens by itself, and the next full
+listing ends the window. A fault costs that window, not the rest of the process's life
+([Standing watches re-open](../StandingWatchesReopen)). `WhenLoaded` lets a verifier wait for the first
 listing after a start, so the first delivery is not checked against configuration alone.
 
 **Precedence.** A portal entry wins over a configured value for the same key. A DISABLED entry is a
