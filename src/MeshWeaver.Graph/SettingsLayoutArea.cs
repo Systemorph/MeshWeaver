@@ -610,23 +610,22 @@ public static class SettingsLayoutArea
         var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
 
         var section = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        section = section.WithView(Controls.Html(
-            "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
+        section = section.WithView(Controls.Label(host.Localize("ui.icon"))
+            .WithWeight(FontWeight.Bold)
+            .WithStyle("font-size: 0.85rem;"));
 
-        // Live preview + Regenerate button. The preview is a TEMPLATE bound to the projected
-        // markup of the node's Icon (the same field the Icon Path box below binds to), so it is
-        // drawn at once and tracks edits live — it no longer waits for the node before it renders.
-        var previewId = $"iconPreview_{nodePath.Replace("/", "_")}";
+        // Live preview + Regenerate button. The preview's image is bound DIRECTLY to the node's
+        // Icon — the same field the Icon Path box below binds to — so it is drawn at once, tracks
+        // edits live, and needs no projection on the hub at all.
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithStyle("align-items: center;")
-            .WithView((Controls.Html(new JsonPointerReference(IconPreviewMarkupPointer)) with
-                {
-                    DataContext = LayoutAreaReference.GetDataPointer(previewId)
-                })
-                .PublishingTo(previewId, IconPreviewProjection(host, nodePath)))
+            .WithView(CreateLayoutArea.IconPreviewTile(new JsonPointerReference(nameof(MeshNode.Icon)), nodePath) with
+            {
+                DataContext = nodeContext
+            })
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
@@ -705,22 +704,6 @@ public static class SettingsLayoutArea
 
         return section;
     }
-
-    /// <summary>The icon preview's markup as data, at the pointer the preview control binds to.</summary>
-    /// <param name="Markup">The 48px preview markup (<see cref="CreateLayoutArea.IconPreviewMarkup"/>).</param>
-    internal sealed record IconPreview(string Markup);
-
-    /// <summary>The pointer of <see cref="IconPreview.Markup"/> inside its data slot (camelCase on the wire).</summary>
-    private static readonly string IconPreviewMarkupPointer =
-        nameof(IconPreview.Markup).ToCamelCase() ?? nameof(IconPreview.Markup);
-
-    /// <summary>
-    /// The node's Icon, projected into preview markup — the one read behind the icon picker's
-    /// preview. A projection, not a control: the preview template binds to it and never waits for it.
-    /// </summary>
-    private static IObservable<IconPreview> IconPreviewProjection(LayoutAreaHost host, string nodePath)
-        => host.Workspace.GetMeshNodeStream(nodePath)
-            .Select(node => new IconPreview(CreateLayoutArea.IconPreviewMarkup(node?.Icon)));
 
     /// <summary>
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user

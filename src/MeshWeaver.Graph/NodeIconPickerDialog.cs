@@ -52,12 +52,13 @@ public static class NodeIconPickerDialog
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px; padding: 8px;");
 
         // Live preview of whatever is currently in the Icon field.
+        var noIcon = host.Localize(NoIconKey);
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<Dictionary<string, object?>>(formDataId)
             .Select(data =>
             {
                 var raw = data?.GetValueOrDefault("icon")?.ToString() ?? "";
                 var resolved = MeshNodeImageHelper.ResolveContentPath(raw, nodePath) ?? "";
-                return (UiControl)BuildPreviewTile(resolved, raw);
+                return (UiControl)BuildPreviewTile(resolved, raw, noIcon);
             }));
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference("icon"))
@@ -115,28 +116,37 @@ public static class NodeIconPickerDialog
             .WithClosable(true);
     }
 
-    internal static UiControl BuildPreviewTile(string resolved, string raw)
+    /// <summary>The 72px tile the picker previews an icon in.</summary>
+    internal const string PreviewTileStyle =
+        "width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2);";
+
+    /// <summary>Text key of the empty tile's "No icon".</summary>
+    internal const string NoIconKey = "node.icon.none";
+
+    /// <summary>
+    /// The picker's preview of the icon being chosen: one <see cref="ImageControl"/> in a 72px tile —
+    /// the control that draws the icon everywhere else, so the picker shows exactly what the portal
+    /// will draw (an inline svg plated, as an inert image; a raster picture cropped to fill; a glyph).
+    /// A dashed tile with "No icon" while the field is empty.
+    /// </summary>
+    /// <param name="resolved">The icon with a <c>content:</c> reference already resolved to its URL.</param>
+    /// <param name="raw">The value as typed.</param>
+    /// <param name="noIcon">The localized "No icon" line.</param>
+    internal static UiControl BuildPreviewTile(string resolved, string raw, string noIcon = "")
     {
-        const string tile = "width: 72px; height: 72px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2);";
         if (string.IsNullOrEmpty(raw))
-            return Controls.Html(
-                $"<div style=\"{tile} border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint);\">No icon</div>");
+            return Controls.Stack
+                .WithStyle(PreviewTileStyle + " border: 2px dashed var(--neutral-stroke-rest); background: transparent;")
+                .WithView(Controls.Label(noIcon).WithColor("var(--neutral-foreground-hint)"));
 
-        if (resolved.StartsWith("data:") || resolved.StartsWith("http") || resolved.StartsWith("/"))
-        {
-            var fit = resolved.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? "contain" : "cover";
-            return Controls.Html(
-                $"<div style=\"{tile}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(resolved)}\" alt=\"\" style=\"width: 64px; height: 64px; border-radius: 8px; object-fit: {fit};\" /></div>");
-        }
-
-        // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it to
-        // the 64px the <img> branch above uses. The picker's whole job is to show the user what
-        // they are choosing, so it has to show the icon the way the portal renders it — and drawn
-        // raw, a currentColor outline is invisible on one of the two themes.
-        if (raw.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return Controls.Html($"<div style=\"{tile}\">{MeshNodeImageHelper.SizeInlineSvg(raw, 64)}</div>");
-
-        return Controls.Html($"<div style=\"{tile} font-size: 36px;\">{System.Web.HttpUtility.HtmlEncode(raw)}</div>");
+        var source = string.IsNullOrEmpty(resolved) ? raw : resolved;
+        var isRaster = (source.StartsWith("data:") || source.StartsWith("http") || source.StartsWith("/"))
+                       && !source.EndsWith(".svg", StringComparison.OrdinalIgnoreCase);
+        return Controls.Stack.WithStyle(PreviewTileStyle)
+            .WithView(Controls.Image(source, "")
+                .WithSize(64)
+                .WithShape(ImageShape.Rounded)
+                .WithFit(isRaster ? ImageFit.Cover : ImageFit.Contain));
     }
 
     private static IObservable<System.Reactive.Unit> ApplyFileAsIcon(UiActionContext ctx, string formDataId)

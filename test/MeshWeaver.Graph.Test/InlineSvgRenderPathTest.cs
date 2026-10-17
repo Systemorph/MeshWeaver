@@ -37,9 +37,9 @@ public class InlineSvgRenderPathTest
         + "<rect width='24' height='24' rx='5' fill='#0e7490'/>"
         + "<path d='M6 12h12' stroke='#fff'/></svg>";
 
-    /// <summary>The markup an <c>HtmlControl</c> hands to the page.</summary>
-    private static string Html(UiControl control) =>
-        Assert.IsType<HtmlControl>(control).Data?.ToString() ?? "";
+    /// <summary>What the page receives for a surface that hands the icon to an
+    /// <see cref="ImageControl"/> — see <see cref="RenderedImage"/>.</summary>
+    private static string Drawn(UiControl surface) => RenderedImage.SvgMarkup(surface, "an icon surface");
 
     /// <summary>
     /// What "plated" means on the page, checked on the RENDERED markup rather than on a helper's
@@ -71,12 +71,6 @@ public class InlineSvgRenderPathTest
     }
 
     [Fact]
-    public void TheFillItsBoxSizer_Plates()
-        => ShouldBePlated(
-            OverviewLayoutArea.SizeInlineSvg(MonochromeOutline),
-            "the overview title icon reaches for its own 100%-sizing variant");
-
-    [Fact]
     public void TheClassifyingSeam_Plates()
     {
         var renderable = MeshNodeImageHelper.ResolveRenderable(MonochromeOutline);
@@ -90,37 +84,37 @@ public class InlineSvgRenderPathTest
     [Fact]
     public void TheOverviewTitleIcon_Plates()
         => ShouldBePlated(
-            OverviewLayoutArea.RenderNodeIconHtml(MonochromeOutline),
+            Drawn(OverviewLayoutArea.TitleIcon(OverviewLayoutArea.TitleIconSource(MonochromeOutline)!, "Space/Page")),
             "the title row draws the node's icon beside its name");
 
     [Fact]
     public void TheNodePageIconTile_Plates()
         => ShouldBePlated(
-            Html(MeshNodeLayoutAreas.BuildClickableIcon(
+            Drawn(MeshNodeLayoutAreas.BuildClickableIcon(
                 host: null!, node: null, iconValue: MonochromeOutline, rawIcon: MonochromeOutline, canEdit: false)),
             "the 56px tile at the head of every node page");
 
     [Fact]
     public void TheContentSelfReferenceIcon_Plates()
     {
-        var markup = MeshNodeLayoutAreas.RenderNodeIconHtml(
-            new MeshNode("Page", "Space") { Icon = MonochromeOutline });
+        var view = MeshNodeLayoutAreas.ProjectSelfReference(new MeshNode("Page", "Space") { Icon = MonochromeOutline }, "");
+        var surface = MeshNodeLayoutAreas.SelfReferenceTemplate(view.Icon, view.Text, "Space/Page");
 
-        ShouldBePlated(markup, "a node that references itself in its own content draws its icon");
-        markup.Should().Contain("width: 24px; height: 24px; display: block;",
-            "injected bare, a viewBox-only svg renders at the browser's ~300x150 default in a 24px box");
+        ShouldBePlated(Drawn(surface), "a node that references itself in its own content draws its icon");
+        RenderedImage.TheImage(surface, "a self-reference").Size.Should().Be(24,
+            "the image box sizes the icon — a viewBox-only svg never renders at the browser's ~300x150 default");
     }
 
     [Fact]
     public void TheCreateFormIconPreview_Plates()
         => ShouldBePlated(
-            Html(CreateLayoutArea.BuildIconPreview(MonochromeOutline)),
+            Drawn(CreateLayoutArea.BuildIconPreview(MonochromeOutline)),
             "the preview has to show what the portal will actually draw");
 
     [Fact]
     public void TheIconPickerPreviewTile_Plates()
         => ShouldBePlated(
-            Html(NodeIconPickerDialog.BuildPreviewTile(MonochromeOutline, MonochromeOutline)),
+            Drawn(NodeIconPickerDialog.BuildPreviewTile(MonochromeOutline, MonochromeOutline)),
             "choosing an icon means seeing the icon you are choosing");
 
     // ── The other half of the policy: what already works must not change ──────────────────────
@@ -142,9 +136,9 @@ public class InlineSvgRenderPathTest
         var markup = path switch
         {
             "sizer" => MeshNodeImageHelper.SizeInlineSvg(AuthoredPlate, 48),
-            "tile" => Html(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, AuthoredPlate, AuthoredPlate, false)),
-            "preview" => Html(CreateLayoutArea.BuildIconPreview(AuthoredPlate)),
-            _ => Html(NodeIconPickerDialog.BuildPreviewTile(AuthoredPlate, AuthoredPlate)),
+            "tile" => Drawn(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, AuthoredPlate, AuthoredPlate, false)),
+            "preview" => Drawn(CreateLayoutArea.BuildIconPreview(AuthoredPlate)),
+            _ => Drawn(NodeIconPickerDialog.BuildPreviewTile(AuthoredPlate, AuthoredPlate)),
         };
 
         markup = RenderedSvg.Decoded(markup);

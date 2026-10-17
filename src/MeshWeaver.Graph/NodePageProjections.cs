@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
@@ -34,17 +35,18 @@ internal static class NodePageProjections
     /// <summary>What the node page's header shows.</summary>
     /// <param name="Style">The header's style — hidden for a node excluded from the header context.</param>
     /// <param name="Title">The node's name, else its id, else the hub path.</param>
-    /// <param name="Icon">The icon to draw: a Fluent name, an image URL, inline svg or a glyph.</param>
-    /// <param name="IconWidth">The icon's drawn size.</param>
+    /// <param name="Icon">The icon to draw (an <see cref="ImageControl"/> source): a Fluent name, an image URL, inline svg or a glyph.</param>
+    /// <param name="IconSize">The icon's box side, a CSS length.</param>
+    /// <param name="IconFit">How a picture fills that box — one of <see cref="ImageFit"/>.</param>
     /// <param name="TileStyle">The icon tile's style — dashed while the node has no icon.</param>
-    /// <param name="MetaHtml">The provenance line.</param>
+    /// <param name="Meta">The provenance line.</param>
     internal sealed record HeaderView(
-        string Style, string Title, string Icon, string IconWidth, string TileStyle, string MetaHtml);
+        string Style, string Title, string Icon, string IconSize, string IconFit, string TileStyle, MetaLine Meta);
 
     /// <summary>The provenance strip a framework-composed landing page carries.</summary>
     /// <param name="Style">The strip's style — hidden for a node excluded from the header context.</param>
-    /// <param name="MetaHtml">The provenance line.</param>
-    internal sealed record MetaView(string Style, string MetaHtml);
+    /// <param name="Meta">The provenance line.</param>
+    internal sealed record MetaView(string Style, MetaLine Meta);
 
     /// <summary>The node's markdown body.</summary>
     /// <param name="Markdown">The raw markdown (empty when the node carries none).</param>
@@ -61,6 +63,9 @@ internal static class NodePageProjections
 
     internal const string TileStyle =
         "width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: var(--neutral-layer-2); flex-shrink: 0;";
+
+    /// <summary>The tile of a Fluent icon: the icon takes the accent colour, as it always has.</summary>
+    internal const string FluentTileStyle = TileStyle + " color: var(--accent-fill-rest);";
 
     internal const string EmptyTileStyle = TileStyle
         + " border: 2px dashed var(--neutral-stroke-rest); background: transparent; color: var(--neutral-foreground-hint);";
@@ -96,8 +101,7 @@ internal static class NodePageProjections
         => host.Workspace.GetMeshNodeStream()
             .Select(node => new MetaView(
                 IsHeaderless(node) ? Hidden : visibleStyle,
-                MeshNodeLayoutAreas.MetaRowHtml(
-                    MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale)))
+                MetaLine.Of(MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale)))
             .DistinctUntilChanged();
 
     /// <summary>The markdown body of the hub's own node.</summary>
@@ -160,30 +164,108 @@ internal static class NodePageProjections
     private static HeaderView ProjectHeader(
         MeshNode? node, MeshNode? partitionRoot, string hubPath, string visibleStyle, Viewer viewer)
     {
-        var (icon, width, tile) = IconOf(node, partitionRoot);
+        var tile = IconTile.Of(MeshNodeImageHelper.ResolveNodeIcon(node, partitionRoot), node?.Icon);
         return new HeaderView(
             IsHeaderless(node) ? Hidden : visibleStyle,
             node?.Name ?? node?.Id ?? hubPath,
-            icon, width, tile,
-            MeshNodeLayoutAreas.MetaRowHtml(MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale));
+            tile.Icon, tile.Size, tile.Fit, tile.Style,
+            MetaLine.Of(MeshNodeLayoutAreas.BuildMetaEntries(node, viewer.ZoneId), viewer.Locale));
     }
 
-    /// <summary>
-    /// The icon tile's content, in the shapes <see cref="MeshNodeLayoutAreas.BuildClickableIcon"/>
-    /// draws: an image or inline svg at 48px, a Fluent icon (the node's OWN name for it) at 36px, a
-    /// glyph at 34px (the <c>IconControl</c> width that draws it as large as that method's inline
-    /// 30px text glyph), and a dashed "+" placeholder while the node has none.
-    /// </summary>
-    private static (string Icon, string Width, string Tile) IconOf(MeshNode? node, MeshNode? partitionRoot)
+}
+
+/// <summary>
+/// The node icon tile as DATA: the <see cref="ImageControl"/> source, its box, its fit and the
+/// tile's style. ONE decision, shared by the hub-built header
+/// (<see cref="MeshNodeLayoutAreas.BuildClickableIcon"/>) and the bound header template, so the two
+/// cannot drift: an image or inline svg at 48px (a raster picture cropped to fill, a vector
+/// contained), a Fluent icon (the node's OWN name for it) at 36px in the accent colour, a glyph in a
+/// 38px box (an <see cref="ImageControl"/> draws a glyph at 0.8 of its box — the 30px text glyph the
+/// tile always showed), and a dashed "+" placeholder while the node has none.
+/// </summary>
+/// <param name="Icon">The image source — the resolved icon, the node's own Fluent name, or "+" for none.</param>
+/// <param name="Size">The image box side, a CSS length.</param>
+/// <param name="Fit">One of <see cref="ImageFit"/>.</param>
+/// <param name="Style">The tile's style.</param>
+internal sealed record IconTile(string Icon, string Size, string Fit, string Style)
+{
+    /// <summary>Decides the tile for a resolved icon value and the node's raw one.</summary>
+    /// <param name="iconValue">The resolved icon (<see cref="MeshNodeImageHelper.ResolveNodeIcon(MeshNode?, MeshNode?)"/>).</param>
+    /// <param name="rawIcon">The node's own <c>Icon</c> field.</param>
+    public static IconTile Of(string? iconValue, string? rawIcon)
     {
-        var iconValue = MeshNodeImageHelper.ResolveNodeIcon(node, partitionRoot);
         if (string.IsNullOrEmpty(iconValue))
-            return ("+", "20px", EmptyTileStyle);
-        if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/")
-            || iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return (iconValue, "48px", TileStyle);
-        if (node?.Icon is { } raw && MeshNodeImageHelper.IsFluentIconName(raw))
-            return (raw, "36px", TileStyle);
-        return (iconValue, "34px", TileStyle);
+            return new("+", "24px", ImageFit.Contain, NodePageProjections.EmptyTileStyle);
+        if (iconValue.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
+            return new(iconValue, "48px", ImageFit.Contain, NodePageProjections.TileStyle);
+        if (iconValue.StartsWith("data:") || iconValue.StartsWith("http") || iconValue.StartsWith("/"))
+            return new(iconValue, "48px",
+                iconValue.EndsWith(".svg", StringComparison.OrdinalIgnoreCase) ? ImageFit.Contain : ImageFit.Cover,
+                NodePageProjections.TileStyle);
+        if (rawIcon is { } raw && MeshNodeImageHelper.IsFluentIconName(raw))
+            return new(raw, "36px", ImageFit.Contain, NodePageProjections.FluentTileStyle);
+        return new(iconValue, "38px", ImageFit.Contain, NodePageProjections.TileStyle);
+    }
+}
+
+/// <summary>
+/// The provenance line as DATA, in three fixed slots — the node type (a link to its Configuration
+/// area), the creation stamp, and the last change (the node's own, or the newest activity beneath a
+/// container). Every label is already in the viewer's language. An absent segment carries the
+/// hidden style and empty text, so the bound row keeps one shape and never says something false.
+/// </summary>
+/// <param name="TypeStyle">The type segment's style — hidden when the node has no type.</param>
+/// <param name="TypeLabel">"Type:", localized.</param>
+/// <param name="TypeText">The type's short name.</param>
+/// <param name="TypeHref">The type's Configuration page.</param>
+/// <param name="CreatedStyle">The creation segment's style.</param>
+/// <param name="CreatedLabel">"Created:", localized.</param>
+/// <param name="CreatedText">The stamp, with "by {who}" in the viewer's language.</param>
+/// <param name="ChangedStyle">The change segment's style.</param>
+/// <param name="ChangedLabel">"Updated:" or "Last activity:", localized.</param>
+/// <param name="ChangedText">The stamp, "by {who}", and what happened, as authored.</param>
+internal sealed record MetaLine(
+    string TypeStyle, string TypeLabel, string TypeText, string TypeHref,
+    string CreatedStyle, string CreatedLabel, string CreatedText,
+    string ChangedStyle, string ChangedLabel, string ChangedText)
+{
+    /// <summary>The style of a visible segment.</summary>
+    internal const string Visible = "align-items: center;";
+
+    /// <summary>
+    /// Projects the segments (<see cref="MeshNodeLayoutAreas.BuildMetaEntries"/>) into the three
+    /// slots. Pure: the viewer's language is passed in, because the projection runs off the render
+    /// turn, where no viewer is ambient.
+    /// </summary>
+    /// <param name="entries">The segments.</param>
+    /// <param name="locale">The viewer's language tag.</param>
+    public static MetaLine Of(ImmutableArray<NodeMetaEntry> entries, string? locale)
+    {
+        var type = entries.FirstOrDefault(e => e.LabelKey == MeshNodeLayoutAreas.MetaTypeKey);
+        var created = entries.FirstOrDefault(e => e.LabelKey == MeshNodeLayoutAreas.MetaCreatedKey);
+        var changed = entries.FirstOrDefault(e =>
+            e.LabelKey is MeshNodeLayoutAreas.MetaUpdatedKey or MeshNodeLayoutAreas.MetaLastActivityKey);
+        return new MetaLine(
+            StyleOf(type), LabelOf(type, locale), type?.Text ?? "", type?.Href ?? "",
+            StyleOf(created), LabelOf(created, locale), TextOf(created, locale),
+            StyleOf(changed), LabelOf(changed, locale), TextOf(changed, locale));
+    }
+
+    private static string StyleOf(NodeMetaEntry? entry) => entry is null ? NodePageProjections.Hidden : Visible;
+
+    private static string LabelOf(NodeMetaEntry? entry, string? locale)
+        => entry is null ? "" : LocalizationCatalog.Get(entry.LabelKey, locale);
+
+    /// <summary>The stamp, then "by" in the viewer's language, then the author's own sentence as authored.</summary>
+    private static string TextOf(NodeMetaEntry? entry, string? locale)
+    {
+        if (entry is null)
+            return "";
+        var text = entry.Text;
+        if (entry.By is { } by)
+            text += " " + LocalizationCatalog.Get(MeshNodeLayoutAreas.MetaByKey, locale, by);
+        if (entry.What is { } what)
+            text += " — " + what;
+        return text;
     }
 }
