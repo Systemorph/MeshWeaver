@@ -637,16 +637,19 @@ public static class SettingsLayoutArea
         var section = Controls.Stack.WithWidth("100%").WithVerticalGap(8);
         section = section.WithView(Controls.Subject(host.Localize("settings.meta.icon")));
 
-        // Live preview + Regenerate button. The preview is the platform's IconControl bound
+        // Live preview + Regenerate button. The preview is the platform's ImageControl bound
         // DIRECTLY to the node's Icon (the same field the Icon Path box below binds to), so it is
-        // drawn at once and tracks edits live; IconControl renders every shape a node icon holds
-        // (Fluent name, image URL / data URI, inline svg through the backplate policy, text glyph).
+        // drawn at once and tracks edits live; ImageControl renders every shape a node icon holds
+        // (image URL / data URI / content: reference, inline svg as an image, glyph, Fluent name).
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithVerticalAlignment(VerticalAlignment.Center)
-            .WithView(Controls.Icon(new JsonPointerReference(nameof(MeshNode.Icon))).WithWidth("32px")
+            // Decorative alt: the "Icon" label above already says what it is. NodePath lets the
+            // renderer resolve a `content:` reference (what "Use as Icon" writes) to its URL.
+            .WithView(Controls.Image(new JsonPointerReference(nameof(MeshNode.Icon)), "")
+                .WithNodePath(nodePath)
                 with { DataContext = nodeContext })
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)

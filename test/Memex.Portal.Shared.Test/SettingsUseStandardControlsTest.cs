@@ -13,6 +13,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Client;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -85,13 +86,15 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
         => base.ConfigureClient(configuration).AddLayoutClient();
 
     private IObservable<JsonElement> Frames(string address, string? tab)
+        => Open(address, tab).Select(change => change.Value);
+
+    private ISynchronizationStream<JsonElement> Open(string address, string? tab)
     {
         TestUsers.DevLogin(Mesh, new AccessContext
             { ObjectId = Person, Name = "Standard Controls Person", Email = $"{Person}@meshweaver.io" });
         return GetClient().GetWorkspace()
             .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(address),
-                new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = tab })
-            .Select(change => change.Value);
+                new LayoutAreaReference(MeshNodeLayoutAreas.SettingsArea) { Id = tab });
     }
 
     /// <summary>Every area of a frame: its id and its control.</summary>
@@ -182,6 +185,59 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
     [InlineData("Metadata")]
     [InlineData("EffectiveAccess")]
     public Task ASpacesNodeSettings_AreComposedOfStandardControls(string tab) => AssertStandard(Space, tab, TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// Check access AFTER a check: the verdict card (H4 heading + DataGrid bound to the rows the click
+    /// wrote) is standard controls too, and so is the blank-user warning. The initial page alone
+    /// never renders either.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task CheckAccess_VerdictAndWarning_AreComposedOfStandardControls()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string tab = "EffectiveAccess";
+        var stream = Open(Space, tab);
+        var initial = await stream.Select(c => c.Value).Should().Within(Budget)
+            .Match(f => Settled(f, $"/Settings/{tab}") && CheckButton(f) is not null,
+                "Check access renders its form", ct);
+        var button = CheckButton(initial)!;
+
+        // Blank user → the warning bar.
+        stream.SubmitUserAction(new ClickedEvent(button, stream.StreamId), actingUser: null, onRefused: null, onAccepted: null);
+        var warned = await stream.Select(c => c.Value).Should().Within(Budget)
+            .Match(f => Areas(f).Any(a => TypeOf(a.Control) == nameof(MessageBarControl)
+                    && a.Control.TryGetProperty("intent", out var i) && i.GetString() == MessageBarIntent.Warning),
+                "a check without a user id shows the warning bar", ct);
+        NonStandard(warned).Should().BeEmpty("the blank-user warning is a standard message bar");
+
+        // A user → the verdict card with its rows.
+        stream.UpdatePointer(System.Text.Json.Nodes.JsonValue.Create(Person),
+            LayoutAreaReference.GetDataPointer($"effectiveAccess_{Space}"), new JsonPointerReference("userId"));
+        stream.SubmitUserAction(new ClickedEvent(button, stream.StreamId), actingUser: null, onRefused: null, onAccepted: null);
+        var verdict = await stream.Select(c => c.Value).Should().Within(Budget)
+            .Match(f => Areas(f).Any(a => TypeOf(a.Control) == nameof(DataGridControl))
+                    && Rows(f, $"effectiveAccessRows_{Space}") == SettingsLayoutArea.CheckedPermissions.Count,
+                "the check renders the verdict grid over one row per permission", ct);
+
+        NonStandard(verdict).Should().BeEmpty("the verdict card and grid are standard controls");
+        Failures(verdict).Should().BeEmpty();
+        Areas(verdict).Should().Contain(a => TypeOf(a.Control) == nameof(LabelControl)
+                && a.Control.TryGetProperty("data", out var d) && (d.GetString() ?? "").Contains(Person, StringComparison.Ordinal),
+            "the card is headed with the user the check ran for");
+    }
+
+    /// <summary>The area of the Check button in a Check access frame, or <c>null</c>.</summary>
+    private static string? CheckButton(JsonElement frame)
+        => Areas(frame).FirstOrDefault(a => TypeOf(a.Control) == nameof(ButtonControl)
+            && a.Control.TryGetProperty("data", out var t) && t.ValueKind == JsonValueKind.String && t.GetString() == "Check").Id;
+
+    /// <summary>How many rows the data slot <paramref name="dataId"/> holds in the frame.</summary>
+    private static int Rows(JsonElement frame, string dataId)
+        => frame.TryGetProperty("data", out var data)
+           && data.TryGetProperty(JsonSerializer.Serialize(dataId), out var rows)
+           && rows.ValueKind == JsonValueKind.Array
+            ? rows.GetArrayLength()
+            : -1;
 
     /// <summary>
     /// The negative control for <see cref="Failures"/>: a tab whose builder throws settles with an
