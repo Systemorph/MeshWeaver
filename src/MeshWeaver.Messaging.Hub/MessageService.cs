@@ -3411,6 +3411,38 @@ public class MessageService : IMessageService
                 requestFates?.Find(delivery.Id)?.Add("NACK_DECLINED reason=reply-to-disposing-hub", Address);
                 return;
             }
+            // 🚨 …AND A RELEASE OF STATE THIS HUB HOLDS IS FULFILLED BY THIS VERY TEARDOWN (#6890).
+            // An IReleasesRemoteState message (UnsubscribeRequest) asks its RECEIVER to let go of
+            // state the receiver holds — the owner-side per-subscriber stream and its sync/{id}
+            // sub-hub. The receiver here is the hub being disposed, and its disposal releases
+            // everything it holds: DisposeHostedHubs tears every sync/{id} sub-hub down. So the
+            // work the message carried is done by the teardown that discarded it.
+            //
+            // And nobody waits on the answer. A release is posted fire-and-forget (the release
+            // disposable JsonSynchronizationStream.CreateExternalClient registers is a plain Post
+            // with no callback); IReleasesRemoteState says it in its own words, "there is no
+            // requester to NACK". A ShuttingDown NACK would land at the subscriber as an UN-awaited
+            // DeliveryFailure answering no question — the same reason the reply branch above posts
+            // none. Both halves of the Error below were therefore false for it.
+            //
+            // MEASURED (#6890): every fingerprint still folding into that log site on 2026-10-16 was an
+            // UnsubscribeRequest from a cache/{id} sender, parked behind [DataContextInit,MeshNodeInit]
+            // on a hub Orleans deactivated (DirectoryFailure: the directory owner's silo stopping).
+            //
+            // Still REPORTED, at Debug, with the same facts.
+            if (delivery.Message is IReleasesRemoteState)
+            {
+                logger.LogDebug(DisposalDiscardedDeferredDelivery,
+                    "[DISPOSE-DISCARD] Hub {Address} is disposing with {MessageType} (id={MessageId}, from {Sender}) "
+                    + "still deferred; initialization gates closed at deferral: [{Gates}]. RunLevel={RunLevel}; "
+                    + "teardown {Disposal}. It is a RELEASE of state this hub holds, and this teardown releases "
+                    + "all of it; a release is fire-and-forget, so no answer is posted to its sender. "
+                    + "Teardown-normal; nobody is stranded.",
+                    Address, delivery.Message.GetType().Name, delivery.Id, delivery.Sender,
+                    gatesAtDeferral, hub.RunLevel, disposal);
+                requestFates?.Find(delivery.Id)?.Add("NACK_DECLINED reason=release-to-disposing-hub", Address);
+                return;
+            }
             if (delivery.Sender is null || delivery.Sender.Equals(Address))
                 logger.LogDebug(DisposalDiscardedDeferredDelivery,
                     "[DISPOSE-DISCARD] Hub {Address} is disposing with its OWN {MessageType} "
