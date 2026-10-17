@@ -615,7 +615,7 @@ public static partial class MeshNodeImageHelper
     /// <c>xlink</c> prefix when the markup uses it. Everything else is returned byte-identical.
     /// </summary>
     /// <param name="svg">Inline svg markup.</param>
-    public static string AsSvgDocument(string svg) => ImageSources.AsSvgDocument(svg);
+    public static string AsSvgDocument(string svg) => MeshWeaver.Layout.ImageSources.AsSvgDocument(svg);
 
     /// <summary>
     /// The span of the root <c>&lt;svg …&gt;</c> start tag — from its <c>&lt;</c> to its closing
