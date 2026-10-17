@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MeshWeaver.Mesh.Services.LanguageServer;
+using MeshWeaver.Messaging;
 using MeshWeaver.NuGet;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -83,7 +84,7 @@ internal sealed class SpeculativeCompilation(INuGetAssemblyResolver nugetResolve
         var effectiveReferences = composeOnto;
         if (toResolve.Count > 0)
         {
-            var resolved = await nugetResolver.ResolveAsync(toResolve, targetFramework: null, ct);
+            var resolved = await nugetResolver.Resolve(toResolve).Await(ct);
             effectiveReferences = [.. CompileReferences.WithPackageAssemblies(composeOnto, resolved.AssemblyPaths)];
         }
 
