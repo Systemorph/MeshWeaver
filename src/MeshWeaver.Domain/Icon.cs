@@ -33,8 +33,8 @@ public record Icon(string Provider, string Id)
 
     /// <summary>
     /// TOTAL conversion of the raw string forms an icon field (e.g. <c>MeshNode.Icon</c>) legitimately
-    /// holds: inline <c>&lt;svg&gt;</c> markup (<see cref="InlineSvgProvider"/>), an image URL or data
-    /// URI (<see cref="UrlProvider"/>), or a Fluent UI icon name such as "Document" or "Calendar3Day"
+    /// holds: inline <c>&lt;svg&gt;</c> markup (<see cref="InlineSvgProvider"/>), an image URL, data
+    /// URI or bare image filename such as <c>logo.png</c> (<see cref="UrlProvider"/>, see <see cref="IsImageFileName"/>), or a Fluent UI icon name such as "Document" or "Calendar3Day"
     /// (<see cref="FluentProvider"/>, spelled as <see cref="IsFluentName"/> says). Any other non-empty value — an emoji or arbitrary text — degrades
     /// to <see cref="TextProvider"/> so binding NEVER throws; null/whitespace parses to null.
     /// </summary>
@@ -46,11 +46,36 @@ public record Icon(string Provider, string Id)
             return null;
         if (value.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
             return new Icon(InlineSvgProvider, value) { Size = IconSize.Custom };
-        if (value.Contains('/') || value.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        if (value.Contains('/') || value.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
+            || IsImageFileName(value))
             return new Icon(UrlProvider, value);
         if (IsFluentName(value))
             return new Icon(FluentProvider, value);
         return new Icon(TextProvider, value);
+    }
+
+    /// <summary>The extensions <see cref="IsImageFileName"/> recognizes, lower-case. Immutable.</summary>
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> ImageExtensions =
+        System.Collections.Immutable.ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase, "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "ico");
+
+    /// <summary>
+    /// Whether <paramref name="value"/> is a bare relative image FILENAME — <c>logo.png</c>,
+    /// <c>avatar.webp?v=2</c>, <c>mark.svg#icon</c>: one token with no whitespace or control
+    /// character, a non-empty name, and one of png jpg jpeg gif webp svg avif ico as its extension,
+    /// optionally followed by a <c>?query</c> or <c>#fragment</c>. Without this a filename with no
+    /// <c>/</c> parsed as TEXT and rendered as its own name. Text that merely contains a dot
+    /// (<c>v1.2</c>, <c>e.g.</c>, <c>report.pdf</c>) is not a filename by this rule.
+    /// </summary>
+    /// <param name="value">The candidate value.</param>
+    public static bool IsImageFileName(string? value)
+    {
+        if (string.IsNullOrEmpty(value) || value.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            return false;
+        var end = value.IndexOfAny(['?', '#']);
+        var path = end < 0 ? value : value[..end];
+        var dot = path.LastIndexOf('.');
+        return dot > 0 && ImageExtensions.Contains(path[(dot + 1)..]);
     }
 
     /// <summary>

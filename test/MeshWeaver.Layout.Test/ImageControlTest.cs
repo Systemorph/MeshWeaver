@@ -191,6 +191,40 @@ public class ImageControlTest(ITestOutputHelper output) : HubTestBase(output)
         ImageSources.Resolve(Icon.Parse(text)).Should().Be(new ResolvedImage(ImageSourceKind.Glyph, text));
     }
 
+    /// <summary>A bare relative image filename is a URL, not text (review thread on #6901) — as the
+    /// source and as the fallback, because icon-typed bindings parse through the same rule.</summary>
+    [Theory]
+    [InlineData("logo.png")]
+    [InlineData("avatar.webp?v=2")]
+    [InlineData("photo.JPG")]
+    [InlineData("mark.svg#icon")]
+    [InlineData("favicon.ico")]
+    [InlineData("banner.avif")]
+    [InlineData("anim.gif")]
+    [InlineData("pic.jpeg")]
+    public void Resolve_ABareImageFilename_IsAUrl_AsSourceAndAsFallback(string file)
+    {
+        Icon.Parse(file)!.Provider.Should().Be(Icon.UrlProvider);
+        ImageSources.Resolve(Icon.Parse(file)).Should().Be(new ResolvedImage(ImageSourceKind.Url, file));
+        ImageSources.Resolve(Icon.Parse("javascript:alert(1)"), Icon.Parse(file))
+            .Should().Be(new ResolvedImage(ImageSourceKind.Url, file));
+    }
+
+    /// <summary>The filename rule must not swallow glyphs, names or text that merely contain a dot.</summary>
+    [Theory]
+    [InlineData("🚀", Icon.TextProvider)]
+    [InlineData("v2", Icon.TextProvider)]
+    [InlineData("Q3", Icon.TextProvider)]
+    [InlineData("Document", Icon.FluentProvider)]
+    [InlineData("Calendar3Day", Icon.FluentProvider)]
+    [InlineData("my logo.png", Icon.TextProvider)]
+    [InlineData(".png", Icon.TextProvider)]
+    [InlineData("v1.2", Icon.TextProvider)]
+    [InlineData("e.g.", Icon.TextProvider)]
+    [InlineData("report.pdf", Icon.TextProvider)]
+    public void Parse_TheFilenameRule_LeavesOtherFormsAlone(string value, string provider) =>
+        Icon.Parse(value)!.Provider.Should().Be(provider);
+
     [Fact]
     public void Resolve_AnUnknownName_FallsThrough()
     {
