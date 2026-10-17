@@ -1684,6 +1684,21 @@ What it grants is what any signed-in user already had — creating a partition, 
 
 **And never below the root (#4449).** `OwnsPartitionProvisioningValidator` refuses a NESTED instance of an owning type — registered in `src/` or declared in mesh content — with `InvalidPath`. For an in-mesh type it reads the definition's durable row rather than the stream, so the refusal never activates the type's hub and never varies with which hubs are warm; a store that cannot answer refuses as unavailable. The design, and why a hub-fed projection could not carry it, is [Partition Ownership Resolution](/Doc/Architecture/PartitionOwnershipResolution). (A bulk `CreateNodesRequest` compensates a failed owner grant — [Bulk Create Compensation](/Doc/Architecture/BulkCreateCompensation).) `RlsNodeValidator` is registered by `AddRowLevelSecurity()` alongside `PartitionWriteGuardValidator`, `OwnsPartitionProvisioningValidator` and `PartitionRootDeletionGuard` — validators **AND**-compose, so a rejection by any one of them wins even when RLS would grant.
 
+### An icon is drawing content, never markup that runs
+
+`MeshNode.Icon` is a free string one user sets and every other user is shown. The renderers draw an inline-SVG icon as an inert image ([Display Controls](/Doc/GUI/DisplayControls)); the write boundary is the second line, and keeps a value that could only ever be active content out of the store. The rule is `IconSafety` (`src/MeshWeaver.Mesh.Contract/IconSafety.cs`), applied by `IconMarkupValidator` (Create and Update) and inline in the update branch of `CreateOrUpdateNodeRequest`, the one update verb that runs no validator chain. An icon may be:
+
+- nothing, a Fluent icon name, or an emoji / short text with no markup characters and no scheme;
+- an `http(s)` URL, a relative or root-relative path, or a `content:` reference;
+- a `data:` URI carrying base64 png, jpeg, gif or webp;
+- an SVG, inline or as a `data:image/svg+xml` URI, that **parses as XML** (DTD prohibited, no resolver) and holds only allow-listed drawing elements and presentation attributes: no script, no `foreignObject`, no animation, no event-handler attribute, no processing instruction, and every `href` / `url(…)` a `#fragment` inside the icon.
+
+The SVG is judged as the element tree a parser builds, never by pattern-matching the string, and the refusal names the element, attribute, scheme or character it refused (`ValidationFailed`, so an importer treats it as a content verdict and does not retry it).
+
+**It judges a CHANGE, never a state.** An update that leaves the stored icon as it is passes whatever it holds, and nothing runs on a read, so a node whose icon predates the rule still loads and stays editable; replacing such an icon with an acceptable one is the repair. Every icon in the documentation and sample trees passes (`IconCorpusTest`), as did every icon in the plugin and satellite node trees when the rule was written, and the icons the node-initializer agent and the thread identicon generator produce.
+
+**Not closed here.** A raw cross-hub `PatchDataRequest` runs RLS on the owner but none of the app-integrity validators ([Participant Ingress](../ParticipantIngress) → "Not closed here"), so this rule is a second line behind the inert renderers — never the only one. Pinned by `IconSafetyTest`, `IconMarkupValidatorJudgeTest` and `IconWriteBoundaryTest` (MeshWeaver.Graph.Test).
+
 Node *reads* are validated through `MeshCatalog.ValidateReadAsync`, which runs the same validators; query *listing* is filtered separately, in SQL, by `user_effective_permissions` (see "PostgreSQL integration").
 
 ---

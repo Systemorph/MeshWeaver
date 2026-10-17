@@ -1,0 +1,350 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Text.Json;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Security;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence.Parsers;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// The icon rule (<see cref="IconSafety"/>) as pure logic: every shape the platform's own content
+/// uses is accepted, and every value that could only be active content is refused BY NAME.
+///
+/// <para>The refused fixtures are inert stand-ins (<c>void 0</c>): what is under test is that the
+/// rule recognises the SHAPE, which it does from the parsed element tree, not from what a script
+/// would do.</para>
+/// </summary>
+public class IconSafetyTest
+{
+    private const string Ns = "xmlns=\"http://www.w3.org/2000/svg\"";
+
+    /// <summary>The shapes the core, plugin and satellite node trees use — each must pass.</summary>
+    public static TheoryData<string> Accepted() =>
+    [
+        "",
+        "Document",
+        "MusicNote2",            // a Fluent name with a digit reads as text — still fine
+        "code",
+        "🤖",
+        "👩‍💼",                  // ZWJ sequence
+        "/static/NodeTypeIcons/box.svg",
+        "/api/content/MeshWeaver/logo.svg",
+        "./assets/icon.png",
+        "https://example.com/logo.png?size=64&theme=dark",
+        "content:icon.svg",
+        "content/icon.png",
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+        $"<svg {Ns} viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M4 4h16\"/></svg>",
+        $"<svg {Ns} width=\"24\" height=\"24\"><defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#fff\"/></linearGradient></defs><rect width=\"24\" height=\"24\" rx=\"6\" fill=\"url(#g)\" data-mw-mark=\"1\"/><text x=\"4\" y=\"16\" font-size=\"10\">A</text></svg>",
+        $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs><path id=\"p\" d=\"M0 0h1\"/></defs><use xlink:href=\"#p\"/><use href=\"#p\"/></svg>",
+        "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M4%204h16'/%3E%3C/svg%3E",
+    ];
+
+    [Theory]
+    [MemberData(nameof(Accepted))]
+    public void AcceptedShapes_Pass(string icon)
+        => IconSafety.Refusal(icon).Should().BeNull($"'{icon}' is a shape the platform's own content uses");
+
+    [Fact]
+    public void NoIcon_Passes() => IconSafety.Refusal(null).Should().BeNull();
+
+    /// <summary>Each refused value, and the word the refusal must NAME.</summary>
+    public static TheoryData<string, string> Refused() => new()
+    {
+        { $"<svg {Ns}><script>void 0</script></svg>", "<script>" },
+        { $"<svg {Ns}><foreignObject width=\"1\" height=\"1\"/></svg>", "<foreignObject>" },
+        { $"<svg {Ns} onload=\"void 0\"><path d=\"M0 0\"/></svg>", "onload" },
+        { $"<svg {Ns}><path ONCLICK=\"void 0\" d=\"M0 0\"/></svg>", "ONCLICK" },
+        { $"<svg {Ns}><set attributeName=\"fill\" to=\"red\"/></svg>", "<set>" },
+        { $"<svg {Ns}><animate attributeName=\"x\"/></svg>", "<animate>" },
+        { $"<svg {Ns}><image href=\"x.png\"/></svg>", "<image>" },
+        { $"<svg {Ns}><a href=\"#x\"><path d=\"M0 0\"/></a></svg>", "<a>" },
+        { $"<svg {Ns}><use href=\"https://example.com/sprite.svg#a\"/></svg>", "href" },
+        { $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><use xlink:href=\"java&#9;script:void 0\"/></svg>", "xlink:href" },
+        { $"<svg {Ns}><rect style=\"fill:url(https://example.com/a.svg#g)\"/></svg>", "url(" },
+        { $"<svg {Ns}><rect fill=\"url( 'https://example.com/a' )\"/></svg>", "url(" },
+        { $"<svg {Ns}><rect class=\"x\" style=\"background:java script:void 0\"/></svg>", "style" },
+        { $"<svg {Ns}><x:div xmlns:x=\"http://www.w3.org/1999/xhtml\"/></svg>", "namespace" },
+        { $"<?xml-stylesheet href=\"a.css\"?><svg {Ns}/>", "processing instruction" },
+        { $"<!DOCTYPE svg [<!ENTITY e \"x\">]><svg {Ns}>&e;</svg>", "not well-formed" },
+        { $"<svg {Ns}><path d=\"M0 0\"></svg>", "not well-formed" },
+        { "<img src=\"x\">", "<svg>" },
+        { "<b>bold</b>", "<svg>" },
+        { "javascript:void 0", "javascript" },
+        { "JaVaScRiPt:void 0", "JaVaScRiPt" },
+        { "vbscript:x", "vbscript" },
+        { "data:text/html;base64,PGI+", "text/html" },
+        { "data:image/png,notbase64", "base64" },
+        { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20onload='void%200'/%3E", "onload" },
+        { "data:image/svg+xml,<svg/>", "encoded" },
+        { "https://example.com/a.png\" x=\"", "'\"'" },
+        { "/static/a b.png", "whitespace" },
+        { "a<b", "'<'" },
+        { "Tom & Jerry", "'&'" },
+        { new string('x', IconSafety.MaxTextLength + 1), "at most" },
+    };
+
+    [Theory]
+    [MemberData(nameof(Refused))]
+    public void RefusedShapes_AreRefused_ByName(string icon, string named)
+    {
+        var refusal = IconSafety.Refusal(icon);
+        refusal.Should().NotBeNull($"'{icon}' could only ever be active content, or escapes its context");
+        refusal!.Should().Contain(named, "the refusal must name what it refused, so the writer can fix it");
+    }
+
+    /// <summary>
+    /// 🚨 The external-reference rule is not a blanket ban on <c>url(</c>: a fragment reference is
+    /// how every gradient icon in the content trees fills its shape.
+    /// </summary>
+    [Fact]
+    public void FragmentReferences_AreNotExternalReferences()
+        => IconSafety.Refusal($"<svg {Ns}><rect fill=\"url('#g')\" clip-path=\"url(#c)\"/></svg>").Should().BeNull();
+}
+
+/// <summary>
+/// <see cref="IconMarkupValidator"/>'s CHANGE-not-state rule, as pure logic: a stored icon that
+/// predates the rule must not make its node un-editable.
+/// </summary>
+public class IconMarkupValidatorJudgeTest
+{
+    private const string Active = "<svg xmlns=\"http://www.w3.org/2000/svg\" onload=\"void 0\"/>";
+
+    private static MeshNode Node(string? icon) => new("n", "TestData") { Name = "n", Icon = icon };
+
+    [Fact]
+    public void Create_WithARefusedIcon_IsRefused_ValidationFailed()
+    {
+        var result = IconMarkupValidator.Judge(new NodeValidationContext
+        {
+            Operation = NodeOperation.Create,
+            Node = Node(Active)
+        });
+        result.IsValid.Should().BeFalse();
+        result.Reason.Should().Be(NodeRejectionReason.ValidationFailed);
+        result.ErrorMessage.Should().Contain("TestData/n").And.Contain("onload");
+    }
+
+    [Fact]
+    public void Update_ThatLeavesAStoredIconAsItIs_Passes_WhateverItHolds()
+        => IconMarkupValidator.Judge(new NodeValidationContext
+        {
+            Operation = NodeOperation.Update,
+            Node = Node(Active) with { Name = "renamed" },
+            ExistingNode = Node(Active)
+        }).IsValid.Should().BeTrue(
+            "a node whose icon predates the rule must stay editable — the rule judges a CHANGE");
+
+    [Fact]
+    public void Update_ThatChangesTheIconToARefusedValue_IsRefused()
+        => IconMarkupValidator.Judge(new NodeValidationContext
+        {
+            Operation = NodeOperation.Update,
+            Node = Node(Active),
+            ExistingNode = Node("Document")
+        }).IsValid.Should().BeFalse();
+
+    [Fact]
+    public void Update_ThatReplacesAStoredRefusedIcon_WithAnAcceptedOne_Passes()
+        => IconMarkupValidator.Judge(new NodeValidationContext
+        {
+            Operation = NodeOperation.Update,
+            Node = Node("Document"),
+            ExistingNode = Node(Active)
+        }).IsValid.Should().BeTrue("replacing a bad icon is the repair and must stay open");
+}
+
+/// <summary>
+/// The import paths must keep working: every icon in the node trees this repository ships (the
+/// embedded documentation and the samples) passes the rule. Markdown is read through the importer's
+/// own <see cref="MarkdownFileParser"/>, so the icon judged is the one the import would write.
+/// </summary>
+public class IconCorpusTest(ITestOutputHelper output)
+{
+    [Fact]
+    public void EveryShippedIcon_PassesTheRule()
+    {
+        var root = FindRepoRoot();
+        var trees = new[]
+        {
+            Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
+            Path.Combine(root, "samples"),
+        };
+        var parser = new MarkdownFileParser();
+        var icons = new List<(string File, string Icon)>();
+        foreach (var tree in trees.Where(Directory.Exists))
+        {
+            foreach (var file in Directory.EnumerateFiles(tree, "*.md", SearchOption.AllDirectories))
+            {
+                var node = parser.Parse(file, File.ReadAllText(file), Path.GetRelativePath(tree, file));
+                if (!string.IsNullOrEmpty(node?.Icon))
+                    icons.Add((file, node.Icon));
+            }
+            foreach (var file in Directory.EnumerateFiles(tree, "*.json", SearchOption.AllDirectories))
+            {
+                if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                    || file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+                    continue;
+                if (TopLevelIcon(file) is { Length: > 0 } icon)
+                    icons.Add((file, icon));
+            }
+        }
+
+        output.WriteLine($"judged {icons.Count} icons across {string.Join(", ", trees.Select(t => Path.GetRelativePath(root, t)))}");
+        icons.Count.Should().BeGreaterThan(100,
+            "a corpus walk that found (almost) nothing proves nothing — the trees carry thousands of icons");
+
+        var refused = icons
+            .Select(i => (i.File, Refusal: IconSafety.Refusal(i.Icon)))
+            .Where(i => i.Refusal is not null)
+            .Select(i => $"{Path.GetRelativePath(root, i.File)}: {i.Refusal}")
+            .ToList();
+        refused.Should().BeEmpty("every icon this repository ships must pass, or its import would be refused");
+    }
+
+    private static string? TopLevelIcon(string file)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(file));
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                return null;
+            foreach (var property in doc.RootElement.EnumerateObject())
+                if (property.NameEquals("icon") || property.NameEquals("Icon"))
+                    return property.Value.ValueKind == JsonValueKind.String ? property.Value.GetString() : null;
+            return null;
+        }
+        catch (JsonException)
+        {
+            return null; // not a node file
+        }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        return dir?.FullName
+               ?? throw new InvalidOperationException(
+                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
+    }
+}
+
+/// <summary>
+/// The rule at the write boundaries a caller actually reaches: the creation chain, the
+/// <c>UpdateNode</c> pipeline (behind the MCP <c>update</c>/<c>patch</c> tools) and the upsert's update
+/// branch, which runs no validator chain and so carries the rule inline.
+/// </summary>
+public class IconWriteBoundaryTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Active = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>void 0</script></svg>";
+    private const string Clean = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M4 4h16\"/></svg>";
+
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+    private static string NewId() => "ic" + Guid.NewGuid().ToString("N")[..8];
+
+    private static MeshNode Node(string id, string? icon) => new(id, TestPartition)
+    {
+        Name = "Icon " + id,
+        NodeType = "Markdown",
+        State = MeshNodeState.Active,
+        Icon = icon,
+    };
+
+    [Fact]
+    public void AddGraph_RegistersTheValidator()
+        => Mesh.ServiceProvider.GetServices<INodeValidator>().OfType<IconMarkupValidator>()
+            .Should().ContainSingle("a validator that is correct but unwired protects nothing");
+
+    [Fact(Timeout = 180_000)]
+    public async Task Create_WithARefusedIcon_IsRefused_AndWritesNothing()
+    {
+        var id = NewId();
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(Node(id, Active))
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+
+        failure.Should().NotBeNull("an icon that could only be active content must not reach the store");
+        failure!.Message.Should().Contain("<script>", "the refusal names what it refused");
+
+        var listed = await MeshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{TestPartition} nodeType:Markdown"))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        listed.Items.Should().NotContain(n => n.Id == id, "a refused create must leave no node behind");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task Create_WithACleanSvgIcon_Lands()
+    {
+        var id = NewId();
+        var created = await MeshService.CreateNode(Node(id, Clean))
+            .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+        created.Icon.Should().Be(Clean, "the control: a drawing-only SVG is exactly what icons are");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task Update_ThatChangesTheIconToARefusedValue_IsRefused_AndLeavesTheNodeAsItWas()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Node(id, Clean))
+            .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.UpdateNode(Node(id, Active))
+                .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken));
+        failure.Should().NotBeNull("UpdateNode is what the MCP update and patch tools call");
+        failure!.Message.Should().Contain("<script>");
+
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds())
+            .Await(TestContext.Current.CancellationToken);
+        after.Icon.Should().Be(Clean, "a refused update must leave the node as it was");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task Upsert_ThatChangesTheIconToARefusedValue_IsRefused_ValidationFailed()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Node(id, Clean))
+            .Take(1).Timeout(60.Seconds()).Await(TestContext.Current.CancellationToken);
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var response = await access
+            .RunAsSystem(() => ObserveNodeOperation(new CreateOrUpdateNodeRequest(Node(id, Active))))
+            .FirstAsync()
+            .Select(d => d.Message)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(TestContext.Current.CancellationToken);
+        Output.WriteLine($"upsert {path}: success={response.Success} reason={response.RejectionReason} error={response.Error}");
+
+        response.Success.Should().BeFalse(
+            "the upsert's update branch runs no validator chain — every importer and installer "
+            + "arrives here, so it must carry the rule itself");
+        response.RejectionReason.Should().Be(NodeUpsertRejectionReason.ValidationFailed,
+            "a rule these bytes break is a content verdict, so an importer does not retry it forever");
+        response.Error.Should().Contain("<script>");
+
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds())
+            .Await(TestContext.Current.CancellationToken);
+        after.Icon.Should().Be(Clean);
+    }
+}

@@ -8362,6 +8362,21 @@ public static class MeshExtensions
         // UnresolvableNodeTypeBypassGuard. It is never silent: taking it logs a warning here.
         void ApplyUpdateViaStream(MeshNode existing, string? existingNodeType)
         {
+            // The icon rule (IconSafety) for the one update verb that runs no validator chain: the
+            // same CHANGE-not-state judgement as IconMarkupValidator, so an upsert re-asserting an
+            // icon already stored passes and a node predating the rule stays importable. The
+            // lost-create-race branch passes the INCOMING node as `existing` (it never read the
+            // winner), so there the icon is judged outright rather than compared with itself.
+            if ((ReferenceEquals(existing, node)
+                 || !string.Equals(node.Icon, existing.Icon, StringComparison.Ordinal))
+                && IconSafety.Refusal(node.Icon) is { } iconRefusal)
+            {
+                logger.LogWarning("[CreateOrUpdate] REFUSED {Path}: {Refusal}", node.Path, iconRefusal);
+                PostFail(LocalizableText.Verbatim(IconSafety.RefusalMessage(node.Path, iconRefusal)),
+                    NodeUpsertRejectionReason.ValidationFailed);
+                return;
+            }
+
             if (!NodeTypeResolution.ChangesNodeType(node.NodeType, existingNodeType))
             {
                 WriteThroughStream(existing);
