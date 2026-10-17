@@ -181,6 +181,8 @@ public class MessageBarAndLinkControlTest(ITestOutputHelper output) : HubTestBas
     [InlineData("/Doc/GUI", "_blank", LinkHrefs.ExternalRel)]
     [InlineData("/Doc/GUI", "_self", null)]
     [InlineData("/Doc/GUI", null, null)]
+    [InlineData("/Doc/GUI", "", null)]
+    [InlineData("/Doc/GUI", " ", LinkHrefs.ExternalRel)]
     [InlineData("mailto:someone@example.com", null, null)]
     public void LinkHrefs_RelFor_MarksExternalAndNewTabLinks(string href, string? target, string? rel) =>
         LinkHrefs.RelFor(href, target).Should().Be(rel);

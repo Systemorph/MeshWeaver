@@ -105,14 +105,15 @@ public static class LinkHrefs
     /// The <c>rel</c> a renderer gives a link: <see cref="ExternalRel"/> when the address is external
     /// (<see cref="IsExternal"/>) or it opens in another browsing context (a <paramref name="target"/>
     /// other than <c>_self</c>), so the opened page gets no handle on the portal's window and no
-    /// referrer; <c>null</c> otherwise.
+    /// referrer; <c>null</c> otherwise. Only a <c>null</c> or empty target is unset: a whitespace-only
+    /// one is a name, and a browser opens a named browsing context for it.
     /// </summary>
     /// <param name="href">The address.</param>
     /// <param name="target">The link's target, or <c>null</c>.</param>
     /// <returns>The <c>rel</c> value, or <c>null</c>.</returns>
     public static string? RelFor(string? href, string? target) =>
         IsExternal(href)
-        || (!string.IsNullOrWhiteSpace(target) && !string.Equals(target, "_self", StringComparison.OrdinalIgnoreCase))
+        || (!string.IsNullOrEmpty(target) && !string.Equals(target, "_self", StringComparison.OrdinalIgnoreCase))
             ? ExternalRel
             : null;
 }
