@@ -135,24 +135,30 @@ public static class StandingWatchRecovery
         var budget = Math.Max(0, maxConsecutive);
         var classify = isTransient ?? IsTransient;
 
-        IObservable<T> Subscription(int consecutiveSoFar) => Observable.Defer(() =>
+        // 🚨 ONE flat pipeline, re-subscribed in place by RetryWhen. The previous shape re-opened from
+        // inside its own Catch (`Timer.SelectMany(_ => Subscription(n))`), so every re-open nested
+        // one more Catch/SelectMany layer around the next opening: over a long-lived watch the
+        // operator chain — and the stack every later emission climbed — grew with the number of
+        // faults it had ever survived, and was never released after the source recovered.
+        return Observable.Defer(() =>
         {
-            // Per subscription, never shared: whether THIS opening has emitted decides whether the
-            // fault that ends it continues a run of failures or starts a new one.
+            // Per outer subscription, never shared between subscribers. `emitted` says whether the
+            // CURRENT opening has emitted, which decides whether the fault that ends it continues a
+            // run of failures or starts a new one.
+            var consecutive = 0;
             var emitted = false;
             return Observable.Defer(open)
                 .Do(_ => emitted = true)
-                .Catch((Exception fault) =>
+                .RetryWhen(faults => faults.SelectMany(fault =>
                 {
-                    var consecutive = (emitted ? 0 : consecutiveSoFar) + 1;
+                    consecutive = (emitted ? 0 : consecutive) + 1;
+                    emitted = false;
                     if (!classify(fault) || consecutive > budget)
-                        return Observable.Throw<T>(fault);
+                        return Observable.Throw<long>(fault);
                     var wait = backoff(consecutive);
                     onReopen?.Invoke(fault, consecutive, wait);
-                    return Observable.Timer(wait, scheduler).SelectMany(_ => Subscription(consecutive));
-                });
+                    return Observable.Timer(wait, scheduler);
+                }));
         });
-
-        return Subscription(0);
     }
 }

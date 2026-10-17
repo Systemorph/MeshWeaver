@@ -44,6 +44,13 @@ again, and the cache has already evicted the faulted chain. So the re-open gets 
 not a replay of the latched fault. A factory that hands back the same cached observable would defeat
 the rule.
 
+**A re-open never nests.** The helper is one flat pipeline, and `RetryWhen` re-subscribes it in
+place. An earlier version re-opened from inside its own `Catch`. Each fault then wrapped one more
+operator layer around the next opening. That chain, and the stack every later emission climbed,
+grew with each fault the watch survived, and it was never released. `StandingWatchRecoveryDoesNotNestTest`
+pins this: the stack depth at which an emission reaches the subscriber is the same after 1000
+faults as after one, and the old shape grows.
+
 The gap is never silent. Before each re-open, the hosted service records the interruption on the
 census (`NodeTypeBakeReportRegistry.RecordLiveRecordsFault`), so `/health` degrades and says why. The
 next reading clears it (`RecordLiveRecords`). A terminal fault is never followed by a reading, so it
