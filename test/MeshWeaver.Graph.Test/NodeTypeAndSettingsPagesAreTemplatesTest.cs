@@ -200,6 +200,39 @@ public class NodeTypeAndSettingsPagesAreTemplatesTest(ITestOutputHelper output) 
             "a per-field write never clobbers a definition field the editor does not show");
     }
 
+    /// <summary>
+    /// A NodeType created WITHOUT content: the editor's first Configuration edit has no typed content
+    /// to name its key against, so it used to be written verbatim (<c>Configuration</c>) into an empty
+    /// object, which <c>ContentAs&lt;NodeTypeDefinition&gt;</c> reads as no configuration — the edit was
+    /// lost (the removed Save path built a definition for this case). The write now names the key
+    /// against the content type the NodeType declares.
+    /// </summary>
+    [Fact]
+    public async Task AConfigurationEdit_OnANodeTypeWithNoContent_LandsOnTheDefinition()
+    {
+        var id = "bare-type-" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{TestPartition}/{id}";
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = id,
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+
+        var editor = Descendants(NodeTypeLayoutAreas.BuildHubConfigEditTemplate(path, "en"))
+            .OfType<CodeEditorControl>().Single();
+        var ctx = Assert.NotNull(LayoutAreaReference.TryParseMeshNodeDataContext(editor.DataContext));
+        var faults = ImmutableList<Exception>.Empty;
+        MeshNodeBindingExtensions.Write(Mesh, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+            ctx.NodePath, ctx.BindContent, ctx.SubPath, (JsonPointerReference)editor.Value!, "config => config.AddData(d => d)",
+            onError: ex => faults = faults.Add(ex));
+
+        await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence).Match(
+            n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.Configuration == "config => config.AddData(d => d)",
+            "the first edit of a content-less NodeType lands where ContentAs<NodeTypeDefinition> reads it");
+        faults.Should().BeEmpty("no write was refused");
+    }
+
     [Fact]
     public void TheListsAreRunByTheGui()
     {

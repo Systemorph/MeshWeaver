@@ -393,7 +393,7 @@ public static class MeshNodeBindingExtensions
                 if (bindContent)
                 {
                     var content = ToJsonObject(node.Content, options) ?? new JsonObject();
-                    SetField(content, pointer, valueNode, options.PropertyNamingPolicy, TypedContentType(node.Content));
+                    SetField(content, pointer, valueNode, options.PropertyNamingPolicy, ContentRootType(hub, node));
                     return node with { Content = JsonSerializer.Deserialize<object>(content.ToJsonString(), options) };
                 }
 
@@ -417,10 +417,26 @@ public static class MeshNodeBindingExtensions
                 });
     }
 
-    /// <summary>The CLR type of typed content, or <c>null</c> for absent or untyped (raw JSON) content,
-    /// whose missing keys are then written verbatim.</summary>
-    private static Type? TypedContentType(object? content)
-        => content is null or JsonElement or JsonNode ? null : content.GetType();
+    /// <summary>
+    /// The CLR type the content-mode write names missing keys against: the type of typed content; for
+    /// ABSENT content, the content type the node's NodeType declares — resolved the way the reader
+    /// materialises it (<see cref="IMeshContentTypeRegistry.TryResolveByNodeType"/>), so the first edit of
+    /// a node created without content (a NodeType's <c>Configuration</c>) lands under the key
+    /// <c>ContentAs&lt;T&gt;</c> reads; <c>null</c> for untyped (raw JSON) content, whose keys stay
+    /// verbatim.
+    /// </summary>
+    private static Type? ContentRootType(IMessageHub hub, MeshNode node)
+    {
+        if (node.Content is JsonElement or JsonNode)
+            return null;
+        if (node.Content is not null)
+            return node.Content.GetType();
+        return !string.IsNullOrEmpty(node.NodeType)
+               && hub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } registry
+               && registry.TryResolveByNodeType(node.NodeType, out var declared)
+            ? declared
+            : null;
+    }
 
     /// <summary>Joins an optional content sub-path (e.g. <c>"composer"</c>) with a field pointer
     /// (e.g. <c>"harness"</c>) into a single JSON-pointer-style path (<c>"composer/harness"</c>).</summary>
