@@ -40,7 +40,11 @@ public class VirtualUserMiddleware(RequestDelegate next, ILogger<VirtualUserMidd
     // the VUser flow. An exclusion list that is broader than it reads is how routes end up skipping
     // machinery nobody meant to skip. (The prefix list above is genuinely prefix-shaped — subtrees
     // like /_content/… and /static/… — so it keeps StartsWith.)
-    private static readonly string[] ExcludedExactPaths = ["/api/version"];
+    //
+    // /api/csp-report is the same shape: browsers POST Content-Security-Policy violation reports
+    // there on their own, possibly without the visitor's cookie, at the rate pages violate the
+    // report-only policy (Doc/Architecture/ContentSecurityPolicy). A report needs no identity.
+    private static readonly string[] ExcludedExactPaths = ["/api/version", "/api/csp-report"];
 
     public async Task InvokeAsync(HttpContext context)
     {
