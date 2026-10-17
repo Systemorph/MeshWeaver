@@ -251,14 +251,22 @@ def _is_bare_path(value: str) -> bool:
             and '"' not in value and "'" not in value and not value.startswith("-"))
 
 
+class UnanchoredQuery(ValueError):
+    """A `sources` / `tests` query with no `path:` / `namespace:` anchor: NodeSetQuery matches it
+    against Code nodes under EVERY path, so which packages' sources it compiles cannot be named."""
+
+
 def _query_target(entry: str) -> str | None:
     """The node-path prefix a `sources` / `tests` entry reads, None when package-local or
     unreadable. A port of CodeQueryResolver.ParseName + Expand: the `name=` prefix only when the
     name is an identifier (`NamePattern`) and the rest is non-empty, both sides trimmed; `$self`
     is the NodeType's own path (package-local); `@`, `@@` and a BARE PATH are path references; a
     reference that still carries a `:` and every other entry is a query whose `namespace:` /
-    `path:` token names the location — a single-segment `namespace:` is rebased under the type."""
+    `path:` token names the location — a single-segment `namespace:` is rebased under the type.
+    Raises UnanchoredQuery for a query with neither anchor (`nodeType:Code`, free text)."""
     value = entry.strip()
+    if not value:
+        return None
     eq = value.find("=")
     if eq > 0:
         name, rest = value[:eq].rstrip(), value[eq + 1:].strip()
@@ -282,7 +290,7 @@ def _query_target(entry: str) -> str | None:
                 if key == "path:":
                     return candidate or None
                 return candidate if "/" in candidate else None
-    return None
+    raise UnanchoredQuery(entry)
 
 
 def _first(path: str) -> str:
@@ -350,12 +358,16 @@ def _strip_json(text: str, comments: bool = True, commas: bool = True) -> str:
     return "".join(out)
 
 
-def _compiled_code(path: str, text: str, commit: str | None) -> str:
+def _compiled_code(path: str, text: str, commit: str | None, included: bool = False) -> str:
     """The code this file contributes to an assembly — NodeCompileShaping.CollectCompileSources'
     rule: a Code node (`CodeConfiguration`) with non-empty code that is NOT executable. A `.cs` node
     is one by construction (its header carries no `isExecutable`); a `.json` file is one only when its
     content says so — a Markdown node, an executable cell or a NodeType never enters the assembly, so
-    an `@@` in it is no input. A `.json` that does not parse cannot be classified and refuses."""
+    an `@@` in it is no input. A `.json` that does not parse cannot be classified and refuses.
+
+    `included`: the node is an explicit `@@` TARGET. NodeCompileShaping.ResolveCodeIncludes
+    substitutes any Code node it names, executable or not — the executable filter governs only the
+    roots a query selects."""
     if path.endswith(".cs"):
         return text
     try:
@@ -364,7 +376,9 @@ def _compiled_code(path: str, text: str, commit: str | None) -> str:
         raise SystemExit(f"✗ seal-packages: {path} at {_short(commit) if commit else 'the checkout'} carries `@@` "
                          f"and does not parse ({error}) — whether it is compiled cannot be decided")
     content = _ci(document, "content")
-    if not isinstance(content, dict) or content.get("$type") != "CodeConfiguration" or _ci(content, "isExecutable"):
+    if not isinstance(content, dict) or content.get("$type") != "CodeConfiguration":
+        return ""
+    if _ci(content, "isExecutable") and not included:
         return ""
     code = _ci(content, "code")
     return code if isinstance(code, str) else ""
@@ -443,19 +457,21 @@ class SourceIncludes:
             real.append(node)
         return "/".join(real)
 
-    def _texts(self, commit: str | None, prefix: str, needle: str) -> list[tuple[str, str]]:
+    def _texts(self, commit: str | None, prefix: str, needle: str,
+               node_only: bool = False) -> list[tuple[str, str]]:
         """(path, text) of every compiled-extension file under `prefix` (a folder, or
-        `<prefix>.<ext>`; real casing) at `commit` that contains `needle`."""
+        `<prefix>.<ext>`; real casing) at `commit` that contains `needle`. `node_only`: the node file
+        `<prefix>.<ext>` alone — what one `@@` include reads."""
         if commit is WORKTREE:
             base = self.repo / prefix
-            files = list(base.rglob("*")) if base.is_dir() else []
+            files = list(base.rglob("*")) if base.is_dir() and not node_only else []
             if base.parent.is_dir():
                 files += [base.parent / f"{base.name}{ext}" for ext in _COMPILED_EXTENSIONS]
             texts = ((str(f.relative_to(self.repo)), _read(f)) for f in sorted(files)
                      if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
             return [(p, t) for p, t in texts if t and needle in t]
-        listed = self._git("grep", "-l", "-z", "-F", needle, commit, "--", prefix,
-                           *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS))
+        specs = [*([] if node_only else [prefix]), *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS)]
+        listed = self._git("grep", "-l", "-z", "-F", needle, commit, "--", *specs)
         if listed.returncode not in (0, 1):  # 1 = no match
             raise SystemExit(f"✗ seal-packages: could not read {prefix} at {_short(commit)} "
                              f"({listed.stderr.strip()}) — what a build compiled cannot be decided")
@@ -473,15 +489,24 @@ class SourceIncludes:
             self._edges[key] = None
             return None
         found: dict[str, set[str]] = {}
-        pending: list[str] = []
+        pending: list[tuple[str, bool]] = []
+        walked: set[tuple[str, bool]] = set()
 
-        def add(target: str) -> None:
+        def add(target: str, included: bool) -> None:
+            """`included`: an explicit `@@` target (one node, walked whatever IsExecutable says);
+            otherwise a query prefix (every compiled node under it, executable ones excluded)."""
             target = target.strip().rstrip("./")
             real = self.resolve(commit, target) if target else None
-            other = _first(real) if real else ""
-            if other and other.lower() != package.lower() and real not in found.setdefault(other, set()):
-                found[other].add(real)
-                pending.append(real)
+            if not real:
+                return
+            other = _first(real)
+            if other.lower() != package.lower():
+                found.setdefault(other, set()).add(real)
+            elif not included:
+                return  # an own-package query: the package's own scan below already reads it
+            if (real, included) not in walked:
+                walked.add((real, included))
+                pending.append((real, included))
 
         for path, text in self._texts(commit, package, "NodeTypeDefinition"):
             if not path.endswith(".json"):
@@ -496,16 +521,24 @@ class SourceIncludes:
             if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
                 continue
             for entry in [*(_ci(content, "sources") or []), *(_ci(content, "tests") or [])]:
-                target = _query_target(entry) if isinstance(entry, str) else None
+                try:
+                    target = _query_target(entry) if isinstance(entry, str) else None
+                except UnanchoredQuery:
+                    raise SystemExit(
+                        f"✗ seal-packages: {path} at {_short(commit) if commit else 'the checkout'} declares the "
+                        f"query '{entry}' with no `path:` or `namespace:` anchor — NodeSetQuery matches it against "
+                        "Code nodes under every path, so which packages' sources this NodeType compiles cannot be "
+                        "established. Anchor the query to the location it means.")
                 if target:
-                    add(target)
+                    add(target, included=False)
         for path, text in self._texts(commit, package, "@@"):
             for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit)):
-                add(match.group(1))
-        while pending:  # what another package's files @@-include is compiled in too
-            for path, text in self._texts(commit, pending.pop(), "@@"):
-                for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit)):
-                    add(match.group(1))
+                add(match.group(1), included=True)
+        while pending:  # what is compiled in from another package's files, and what an @@ pulls in
+            prefix, included = pending.pop()
+            for path, text in self._texts(commit, prefix, "@@", node_only=included):
+                for match in _CODE_INCLUDE.finditer(_compiled_code(path, text, commit, included)):
+                    add(match.group(1), included=True)
         value = {p: tuple(sorted(v)) for p, v in sorted(found.items()) if v}
         self._edges[key] = value
         return value
@@ -1569,8 +1602,16 @@ def source_include_cases(expect) -> None:
         expect("whitespace around `=` and after `@` is trimmed (shared= @Store/Core/Source)",
                _query_target("shared= @Store/Core/Source") == "Store/Core/Source"
                and _query_target("shared = @ Store/Core/Source") == "Store/Core/Source")
-        expect("NEGATIVE CONTROL: a quoted term and a multi-term entry are queries, not paths",
-               _query_target('"Store/Core/Source"') is None and _query_target("Store/Core Source") is None)
+        def unanchored(entry: str) -> bool:
+            try:
+                _query_target(entry)
+            except UnanchoredQuery:
+                return True
+            return False
+
+        expect("NEGATIVE CONTROL: a quoted term and a multi-term entry are queries, not paths — and, "
+               "anchored nowhere, they are refused rather than read as package-local",
+               unanchored('"Store/Core/Source"') and unanchored("Store/Core Source"))
         expect("NEGATIVE CONTROL: $self is the NodeType's own path", _query_target("$self/Source") is None)
         put("Hosting/Probe.json", json.dumps({"id": "Probe", "content": {
             "$type": "NodeTypeDefinition",
@@ -1721,6 +1762,26 @@ def source_include_reading_cases(expect) -> None:
         put("Store/Côté/Source/Grüße.cs", "class Gruesse { int Changed; }\n")
         expect("…and a change to the non-ASCII file IS a difference",
                not SourceIncludes(repo).same(c6, WORKTREE, accents))
+
+        print("a query anchored nowhere names no packages — so it refuses:")
+        put("Chess/Unanchored.json", json.dumps({"id": "Unanchored", "content": {
+            "$type": "NodeTypeDefinition", "sources": ["nodeType:Code"]}}))
+        c7 = commit("a NodeType compiling every Code node of the mesh")
+        stop = refused(lambda: SourceIncludes(repo).edges(c7, "Chess"))
+        expect("`nodeType:Code` REFUSES, naming the NodeType file and the query",
+               stop is not None and "Chess/Unanchored.json" in stop and "'nodeType:Code'" in stop, str(stop))
+        git("rm", "-q", "Chess/Unanchored.json")
+
+        print("an explicit @@ target is walked even when it is an EXECUTABLE cell:")
+        put("Hosting/Chain/Source/Root.cs", "// @@Store/Shared/Outer\nclass Root {}\n")
+        put("Store/Shared/Outer.json", json.dumps({"id": "Outer", "content": {
+            "$type": "CodeConfiguration", "isExecutable": True, "code": "// @@Chess/Shared/Inner"}}))
+        put("Chess/Shared/Inner.cs", "class Inner {}\n")
+        c8 = commit("Hosting → @@Store/Shared/Outer (executable) → @@Chess/Shared/Inner")
+        chain = SourceIncludes(repo).edges(c8, "Hosting") or {}
+        expect("Store/Shared/Outer AND, through it, Chess/Shared/Inner are recorded",
+               "Store/Shared/Outer" in chain.get("Store", ()) and chain.get("Chess") == ("Chess/Shared/Inner",),
+               str(chain))
 
 
 def main(argv: list[str]) -> int:
