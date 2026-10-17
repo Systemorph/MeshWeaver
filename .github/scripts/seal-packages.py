@@ -408,11 +408,12 @@ class SourceIncludes:
                 base = self.repo / directory if directory else self.repo
                 self._listing[key] = ([(e.name, e.is_dir()) for e in base.iterdir()] if base.is_dir() else [])
             else:
-                done = self._git("ls-tree", commit, "--", f"{directory}/" if directory else ".")
+                # -z: a non-ASCII name arrives verbatim, never C-quoted ("\303\264…" names no file).
+                done = self._git("ls-tree", "-z", commit, "--", f"{directory}/" if directory else ".")
                 if done.returncode != 0:
                     raise SystemExit(f"✗ seal-packages: could not list {directory or 'the root'} at "
                                      f"{_short(commit)} ({done.stderr.strip()})")
-                rows = [line.split("\t", 1) for line in done.stdout.splitlines() if "\t" in line]
+                rows = [row.split("\t", 1) for row in done.stdout.split("\0") if "\t" in row]
                 self._listing[key] = [(path.rsplit("/", 1)[-1], meta.split()[1] == "tree") for meta, path in rows]
         return self._listing[key]
 
@@ -453,12 +454,12 @@ class SourceIncludes:
             texts = ((str(f.relative_to(self.repo)), _read(f)) for f in sorted(files)
                      if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
             return [(p, t) for p, t in texts if t and needle in t]
-        listed = self._git("grep", "-l", "-F", needle, commit, "--", prefix,
+        listed = self._git("grep", "-l", "-z", "-F", needle, commit, "--", prefix,
                            *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS))
         if listed.returncode not in (0, 1):  # 1 = no match
             raise SystemExit(f"✗ seal-packages: could not read {prefix} at {_short(commit)} "
                              f"({listed.stderr.strip()}) — what a build compiled cannot be decided")
-        paths = [line.split(":", 1)[1] for line in listed.stdout.splitlines() if ":" in line]
+        paths = [row.split(":", 1)[1] for row in listed.stdout.split("\0") if ":" in row]
         texts = ((p, _git_show(self.repo, commit, p)) for p in paths if p.endswith(_COMPILED_EXTENSIONS))
         return [(p, t) for p, t in texts if t]
 
@@ -1707,6 +1708,19 @@ def source_include_reading_cases(expect) -> None:
         expect("`Content` / `Sources` read case-insensitively, and the compiled Code node's @@ counts — "
                "the Markdown and executable ones do not",
                chess == {"Store": ("Store/Core/Source", "Store/Tools/Source/Clock")}, str(chess))
+
+        print("a NON-ASCII path segment is listed with -z, resolved and compared — never C-quoted away:")
+        put("Store/Côté/Source/Grüße.cs", "class Gruesse {}\n")
+        put("Chess/Accents.json", json.dumps({"id": "Accents", "content": {
+            "$type": "NodeTypeDefinition", "sources": ["@store/côté/source", "@@Store/Côté/Source/grüße"]}}))
+        c6 = commit("a source folder and a node with non-ASCII names")
+        accents = (SourceIncludes(repo).edges(c6, "Chess") or {}).get("Store", ())
+        expect("`@store/côté/source` resolves to Store/Côté/Source and the node to Store/Côté/Source/Grüße",
+               "Store/Côté/Source" in accents and "Store/Côté/Source/Grüße" in accents, str(accents))
+        expect("NEGATIVE CONTROL: unchanged, it is the same", SourceIncludes(repo).same(c6, WORKTREE, accents))
+        put("Store/Côté/Source/Grüße.cs", "class Gruesse { int Changed; }\n")
+        expect("…and a change to the non-ASCII file IS a difference",
+               not SourceIncludes(repo).same(c6, WORKTREE, accents))
 
 
 def main(argv: list[str]) -> int:
