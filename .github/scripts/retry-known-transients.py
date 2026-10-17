@@ -343,15 +343,34 @@ VERDICT_EVIDENCE_IN_LANE: dict[str, str] = {
 }
 
 
+# The runner ECHOES a step's whole `run:` script before executing it, each source line wrapped in
+# the cyan SGR `\x1b[36;1m…\x1b[0m`. That preamble carries every `echo "::error …"` the step COULD
+# emit, whichever branch runs — so it is source, never evidence (review on #6898).
+ECHOED_SOURCE = "\x1b[36;1m"
+
+
+def emitted_lines(log: str) -> list[str]:
+    """The log WITHOUT the echoed `run:` source: only what the step actually printed."""
+    return [line for line in log.splitlines() if ECHOED_SOURCE not in line]
+
+
 def verdict_excused(own: list[str], log: str) -> str | None:
-    """Why a verdict-only job is a CONSEQUENCE of upstream failures, or None when it is not proven."""
+    """Why a verdict-only job is a CONSEQUENCE of upstream failures, or None when it is not proven.
+
+    Both halves read EMITTED records only. The upstream line is the step's own output (its echo
+    prints the resolved results; the echoed source shows `$PACK_RESULT` unexpanded), and a finding
+    counts only as an error record the step RAISED — a `##[error]` line, which is what `::error`
+    becomes once executed. The same sentence in the echoed preamble is a branch that may never run.
+    """
     if not own or not set(own) <= VERDICT_STEPS.keys():
         return None
+    output = emitted_lines(log)
+    errors = [line for line in output if "##[error]" in line]
     for step in own:
         _, upstream, independent = VERDICT_STEPS[step]
-        if not re.search(upstream, log):
+        if not any(re.search(upstream, line) for line in output):
             return None
-        if any(sentence in log for sentence in independent):
+        if any(sentence in line for line in errors for sentence in independent):
             return None
     return (f"verdict step {own[0]!r} failed, and its log names an upstream job that did not succeed "
             "and none of the step's own findings — a consequence of other failed jobs, never a cause")
@@ -724,6 +743,21 @@ VERDICT_ONLY = _steps(("Set up job", "completed", "success"),
 
 
 def self_test() -> int:
+    """Every case below drives `run()`, which appends to `$GITHUB_STEP_SUMMARY` — and the lane runs
+    this inside the REAL job, so its synthetic retries and declines would land in the live summary
+    (review on #6898). The variable is unset for the duration and restored afterwards."""
+    import os
+    saved = os.environ.pop("GITHUB_STEP_SUMMARY", None)
+    try:
+        return _self_test_cases(saved)
+    finally:
+        if saved is not None:
+            os.environ["GITHUB_STEP_SUMMARY"] = saved
+
+
+def _self_test_cases(live_summary: str | None) -> int:
+    import os
+    import tempfile
     failures: list[str] = []
 
     def check(name: str, condition: bool) -> None:
@@ -732,6 +766,21 @@ def self_test() -> int:
             failures.append(name)
 
     print("retry-known-transients self-test")
+    check("the self-test runs with NO job summary to write into",
+          os.environ.get("GITHUB_STEP_SUMMARY") is None)
+    # Positive control: `summarize` really writes when a summary is set, so the guard above is what
+    # keeps the cases below out of the live one — not a summarize that never writes.
+    with tempfile.TemporaryDirectory() as scratch:
+        probe = os.path.join(scratch, "summary.md")
+        os.environ["GITHUB_STEP_SUMMARY"] = probe
+        try:
+            summarize(["probe line"])
+        finally:
+            del os.environ["GITHUB_STEP_SUMMARY"]
+        written = open(probe, encoding="utf-8").read() if os.path.exists(probe) else ""
+        check("...and summarize() writes when one IS set (positive control)", "probe line" in written)
+    if live_summary is not None:
+        before = os.path.getsize(live_summary) if os.path.exists(live_summary) else -1
 
     # ── The #4534 regression: a REAL log, escape sequences and all, must be read and classified. ──
     escaped = REAL_LOG_HEAD + (
@@ -983,10 +1032,23 @@ def self_test() -> int:
           decide("o/r", "9", paged_annotations).retry)
 
     # ── Verdict jobs: excused only beside a proven transient, never a cause alone. ──
-    verdict_upstream = REAL_LOG_HEAD + (
+    # The runner's echo of the step's `run:` source — every finding the step COULD raise, as source.
+    verdict_preamble = "".join(
+        f"2026-09-22T09:49:19.{i}Z \x1b[36;1m{src}\x1b[0m\n" for i, src in enumerate((
+            'echo "scope=$SCOPE, selection named $COUNT module bundle(s); pack job: $PACK_RESULT, '
+            'tests lane: $TESTS_RESULT"',
+            'echo "::error title=Module bundles incomplete::the scope is FULL, so every one of the \\',
+            "$declared declared module(s) must be packed — but the selection named $COUNT. The \\",
+            'selection and the caller\'s matrix disagree."',
+            "echo \"::error title=Module bundles incomplete::the selection job reported \\",
+            "echo \"::error title=Module bundles incomplete::the selection produced no lane key, so \\",
+        )))
+    verdict_upstream = REAL_LOG_HEAD + verdict_preamble + (
         "2026-09-22T09:49:20.0Z scope=affected, selection named 3 module bundle(s); pack job: failure, "
         "tests lane: skipped\n"
         "2026-09-22T09:49:21.0Z ##[error]Process completed with exit code 1.\n")
+    check("the verdict fixture really carries the echoed findings (so the next case can fail)",
+          all(s in verdict_preamble for s in VERDICT_STEPS["Exactly the selected bundles were built"][2]))
     check("a lone VERDICT job never retries (its own red, with nothing behind it)",
           not decide("o/r", "9", _fake({1: verdict_upstream}, steps={1: VERDICT_ONLY})).retry)
     fetch = _fake({1: _http(404), 2: verdict_upstream}, steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
@@ -1009,6 +1071,17 @@ def self_test() -> int:
                                        steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
                                        annotations={1: LOST_COMMUNICATION})).retry)
     upstream_green = verdict_upstream.replace("pack job: failure", "pack job: success")
+    check("a genuine consequential verdict is excused DESPITE the findings echoed in its source "
+          "(review on #6898)",
+          decide("o/r", "9", _fake({1: _http(404), 2: verdict_upstream},
+                                   steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+                                   annotations={1: LOST_COMMUNICATION})).retry)
+    echoed_only_upstream = REAL_LOG_HEAD + verdict_preamble.replace(
+        "pack job: $PACK_RESULT", "pack job: failure") + "2026-09-22T09:49:21.0Z ##[error]x\n"
+    check("an upstream 'failure' that appears only in ECHOED source is not evidence",
+          not decide("o/r", "9", _fake({1: _http(404), 2: echoed_only_upstream},
+                                       steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+                                       annotations={1: LOST_COMMUNICATION})).retry)
     check("a verdict step whose upstream jobs SUCCEEDED beside a runner death does NOT retry",
           not decide("o/r", "9", _fake({1: _http(404), 2: upstream_green},
                                        steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
@@ -1093,6 +1166,9 @@ def self_test() -> int:
     # to prevent. So the adapter is driven against a loopback server (offline, no network) over
     # the shape that broke: a 302 to signed storage, answering an escape-bearing log.
     failures.extend(_self_test_adapter(check))
+    if live_summary is not None:
+        after = os.path.getsize(live_summary) if os.path.exists(live_summary) else -1
+        check("the LIVE job summary was not written by the self-test", after == before)
 
     print(f"{'FAILED: ' + ', '.join(failures) if failures else 'all cases passed'}")
     return 1 if failures else 0
