@@ -161,7 +161,10 @@ public static class IconSafety
             return CharacterRefusal(value, "URL");
         }
 
-        if (value.Contains('/'))
+        // A relative URL: a path, or a bare image FILENAME (`logo.png?size=64&theme=dark`,
+        // a content hash plus `.svg`) — classified by the platform's own rule, so it gets the URL
+        // rules (query and fragment allowed) rather than the text rules.
+        if (value.Contains('/') || MeshWeaver.Domain.Icon.IsImageFileName(value))
             return CharacterRefusal(value, "URL");
 
         if (value.Length > MaxTextLength)
@@ -227,6 +230,8 @@ public static class IconSafety
         {
             if (char.IsControl(c) || (char.IsWhiteSpace(c) && what == "URL"))
                 return $"a {what} may not contain whitespace or control characters";
+            if (what == "URL" && c > '~')
+                return $"a URL may not contain the non-ASCII character U+{(int)c:X4}";
             if (MarkupCharacters.Contains(c))
                 return $"a {what} may not contain the character '{c}'";
         }

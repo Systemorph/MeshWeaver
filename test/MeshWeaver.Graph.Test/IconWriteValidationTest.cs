@@ -45,6 +45,11 @@ public class IconSafetyTest
         "./assets/icon.png",
         "https://example.com/logo.png?size=64&theme=dark",
         "content:icon.svg",
+        // Review on #6910: bare relative image FILENAMES are URLs (MeshWeaver.Domain.Icon.IsImageFileName),
+        // so a query with '&' and a stem longer than the text cap are fine.
+        "logo.png?size=64&theme=dark",
+        "3f2a9c41e8b07d65c1a4f0e92b7d38c56a1e04f9b2c8d7e63a5f10b4c9d2e871.svg",
+        "mark.svg#icon",
         "content/icon.png",
         "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
         $"<svg {Ns} viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\"><circle cx=\"12\" cy=\"12\" r=\"4\"/><path d=\"M4 4h16\"/></svg>",
@@ -157,6 +162,9 @@ public class IconSafetyTest
         { $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs><path id=\"p\" d=\"M0 0\"/></defs><use xlink:href=\"&#160;#p\"/></svg>", "fragment" },
         { $"<svg {Ns}><rect fill=\"url(&#160;#p)\"/></svg>", "outside the icon" },
         { $"<svg {Ns}><rect fill=\"red&#160;\"/></svg>", "non-ASCII" },
+        // …and a bare image filename still meets the URL rules.
+        { "logo.png?x=\"onerror=", "'\"'" },
+        { "logo.png?x=\u00e9", "non-ASCII" },
         // (c) a whitespace-only value past the length bound.
         { new string(' ', IconSafety.MaxIconLength + 1), "at most" },
         { $"<svg {Ns}><rect fill=\"u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },
