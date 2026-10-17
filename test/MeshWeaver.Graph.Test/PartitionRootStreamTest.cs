@@ -138,22 +138,19 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
 
     private const string DocumentGlyph = "/static/NodeTypeIcons/document.svg";
 
-    /// <summary>The mark's path data — the fragment to WAIT for, because it reads identically in the
-    /// rendered HTML and in the JSON the area store travels as (it carries no character JSON
-    /// escapes).</summary>
+    /// <summary>The mark's path data — the fragment to WAIT for.</summary>
     private const string MarkPathData = "M8 6h8v3H8z";
 
-    /// <summary>The mark's INNER markup, which is what an assertion can pin. The whole
-    /// <see cref="PackageMark"/> string cannot be: a raw-HTML surface has no scoped CSS to size a
-    /// viewBox-only svg with, so <c>MeshNodeImageHelper.SizeInlineSvg</c> injects an explicit
-    /// <c>style</c> into the OPENING tag on the way out. Everything after it is untouched.</summary>
+    /// <summary>The mark's inner markup — what an assertion pins. The tile's <see cref="ImageControl"/>
+    /// carries the resolved icon as its SOURCE value, so the authored mark arrives intact.</summary>
     private const string MarkSignature =
         "<rect width=\"24\" height=\"24\" rx=\"5\" fill=\"#1f6feb\"/>"
         + "<path d=\"M8 6h8v3H8z\" fill=\"#fff\"/></svg>";
 
-    /// <summary>The 56 px square the node-page header draws its icon in — the one HTML control whose
-    /// content IS the resolved icon.</summary>
-    private const string IconTileMarker = "width: 56px; height: 56px";
+    /// <summary>The image box the node-page header's 56 px tile draws a picture or svg icon in
+    /// (<c>IconTile.Of</c>) — what tells the tile's <see cref="ImageControl"/> from any other image
+    /// on the page.</summary>
+    private const string IconTileImageSize = "48px";
 
     /// <summary>
     /// The node's rendered Overview header icon tile, awaited until it carries
@@ -174,10 +171,12 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
         var stream = workspace.GetRemoteStream<JsonElement, LayoutAreaReference>(
             new Address(nodePath), reference);
 
+        // The tile is an ImageControl (no longer markup): its Source is the resolved icon — a literal
+        // on this hub-built header — and its box is the tile's image size.
         var tiles = await stream.TreeSnapshots(reference.Area!)
-            .Select(tree => tree.OfType<HtmlControl>()
-                .Select(html => RenderedSvg.Decoded(html.Data?.ToString() ?? ""))
-                .Where(data => data.Contains(IconTileMarker))
+            .Select(tree => tree.OfType<ImageControl>()
+                .Where(image => image.Size?.ToString() == IconTileImageSize)
+                .Select(image => image.Source?.ToString() ?? "")
                 .ToList())
             .Should().Within(RenderBudget).Match(
                 found => found.Any(tile => tile.Contains(awaitedFragment)),
