@@ -268,7 +268,11 @@ answer (#6863):
 - **The resolution is reactive, pooled, shared and bounded.** `INuGetAssemblyResolver.Resolve`
   returns an observable, and platform code calls that; `ResolveAsync` remains only as the Task
   bridge (`Resolve(…).Await(ct)`) for callers whose own signature is Task-based. The NuGet SDK is
-  Task-based, so its calls run as one leaf on the mesh's Http `IIoPool`. Callers must not wrap
+  Task-based, so its calls run as one leaf on the mesh's Http `IIoPool`. `AddNuGetResolver` builds the
+  resolver with an explicit factory on that pool (`GetRequiredService<IoPoolRegistry>()`), so a
+  container without the pools fails loudly instead of running unbounded. The unbounded-pool
+  constructor is internal and test-only. `NuGetResolverRegistrationTest` resolves the mesh's
+  resolver and observes the Http pool's in-flight count rise while an attempt runs. Callers must not wrap
   `Resolve` in a slot of that same lane: a slot held while it waits on a leaf of its own lane can
   starve the lane. One resolution per (packages, framework) is shared through an instance
   `PromiseCache`. It keeps a success, and it evicts a failure on the shared side as the failure

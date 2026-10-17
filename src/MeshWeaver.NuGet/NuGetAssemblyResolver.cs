@@ -62,13 +62,14 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     private readonly INuGetPackageCache _packageCache;
 
     /// <summary>
-    /// Creates a resolver reading the NuGet settings found from the application directory upward,
-    /// running its leaves on the unbounded fallback pool. A mesh resolves the
-    /// <see cref="IoPoolRegistry"/> overload instead.
+    /// TEST-ONLY: a resolver reading the NuGet settings found from the application directory upward,
+    /// running its leaves on the unbounded fallback pool. Internal on purpose: production builds the
+    /// resolver through <see cref="NuGetServiceCollectionExtensions.AddNuGetResolver"/>, on the mesh's
+    /// Http pool, and must never be able to fall back to this one silently.
     /// </summary>
     /// <param name="logger">Logger for resolution and install outcomes.</param>
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
-    public NuGetAssemblyResolver(
+    internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         INuGetPackageCache? packageCache = null)
         : this(logger, DefaultSettings(), null, packageCache)
