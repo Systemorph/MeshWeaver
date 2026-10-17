@@ -135,12 +135,30 @@ public class DocumentationNodeProvider : IStaticNodeProvider
     /// <c>index→folder</c> collapse). Used by the out-of-process database-migration backfill to
     /// mirror docs into Postgres for full-text + vector search, so search-result links resolve to
     /// the same path the embedded partition reads. Returns content pages only (no governance nodes).
+    ///
+    /// <para>🚨 <b>Without <paramref name="jsonOptions"/> the node FILE FORMAT still has to be read,
+    /// not guessed</b> (#6826). The fallback used to be <c>new JsonSerializerOptions()</c> —
+    /// case-sensitive and without string enums — under which every authored <c>.json</c> node
+    /// (camelCase keys) deserialized with NO NodeType, NO name and NO content, silently: 19 of
+    /// them, among them all five Doc NodeTypes. The out-of-process migration backfill calls this
+    /// without a hub and upserted those bare rows into <c>doc.mesh_nodes</c> on every roll, which on
+    /// a portal whose <c>Doc</c> partition is DB-synced is the very row the type's activation loads:
+    /// its <c>node_type</c> went NULL, the change feed told every live definition hub it had been
+    /// retyped to "(none)", each recycled itself, and its recycle cascade was then refused as
+    /// "unknown NodeType(s)" because the store now said the same. The fallback is
+    /// <see cref="NodeFileFormatOptions"/>; a <c>.json</c> node that still reads without a NodeType
+    /// is a THROW naming the file, never a bare node.</para>
     /// </summary>
+    /// <param name="jsonOptions">The hub's options (typed, polymorphic content) when a hub is at
+    /// hand; null reads the node file format without a type registry
+    /// (<see cref="NodeFileFormatOptions"/> — every top-level field typed, content left as JSON).</param>
+    /// <exception cref="InvalidOperationException">An authored <c>.json</c> node read without a
+    /// NodeType — the bare-node shape, which is never written anywhere.</exception>
     public static IReadOnlyList<MeshNode> LoadIndexableNodes(JsonSerializerOptions? jsonOptions = null)
     {
         var assembly = typeof(DocumentationNodeProvider).Assembly;
         var prefix = $"{assembly.GetName().Name}.Data.";
-        var parserRegistry = new FileFormatParserRegistry(jsonOptions ?? new JsonSerializerOptions());
+        var parserRegistry = new FileFormatParserRegistry(jsonOptions ?? NodeFileFormatOptions());
 
         var nodes = new List<MeshNode>();
         foreach (var resourceName in assembly.GetManifestResourceNames()
@@ -161,6 +179,11 @@ public class DocumentationNodeProvider : IStaticNodeProvider
 
             var node = parserRegistry.TryParse(extension, relativePath, content, fullPath);
             if (node == null) continue;
+            if (string.IsNullOrEmpty(node.NodeType))
+                throw new InvalidOperationException(
+                    $"Documentation node file '{relativePath}' read without a NodeType — a bare node. "
+                    + "Writing it would erase the row's type wherever the Doc partition is stored "
+                    + "(#6826); the file or the options it was read with are wrong.");
 
             // Align Namespace/Id with the served path (mirrors EmbeddedResourceStorageAdapter's
             // path normalization, including the partition prefix and NO index→parent collapse).
@@ -175,6 +198,22 @@ public class DocumentationNodeProvider : IStaticNodeProvider
         }
         return nodes;
     }
+
+    /// <summary>
+    /// The options that read the authored node FILE FORMAT when no hub (and so no type registry) is
+    /// at hand: camelCase keys matched case-insensitively, enums as strings, comments and trailing
+    /// commas tolerated. Every top-level <see cref="MeshNode"/> field is typed; polymorphic content
+    /// (<c>$type</c>) stays an untyped <see cref="JsonElement"/>, which is all a caller without a
+    /// type registry can use. A new instance per call: the set is mutable until first use.
+    /// </summary>
+    public static JsonSerializerOptions NodeFileFormatOptions() => new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        ReadCommentHandling = JsonCommentHandling.Skip,
+        AllowTrailingCommas = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
 
     /// <summary>
     /// Converts embedded resource name back to file path relative to Data/.

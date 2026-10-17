@@ -243,13 +243,16 @@ public static class ActivationRecycle
     ///
     /// <para>🚨 <b>Never from a QUERY</b> (#6826). This check used to ask
     /// <c>mesh.Query("path:{type}")</c>, i.e. the query READ MODEL, whether a specific path exists
-    /// — the use the CQRS rule forbids, because a query's negative is not the store's. On a portal
-    /// whose <c>Doc</c> partition is served from the embedded documentation, while the database
-    /// holds only a derived search index of it, every Doc NodeType was refused as unknown on every
-    /// replica although each was live, compiled and served: the cascade fired from the type's own
-    /// live activation, and the read model answered "nothing there". A store read can only answer
-    /// what an activation would load, and a store FAULT propagates rather than reading as
-    /// "unknown".</para>
+    /// — the use the CQRS rule forbids, because a query's negative is not the store's. A store read
+    /// can only answer what an activation would load, and a store FAULT propagates rather than
+    /// reading as "unknown".</para>
+    ///
+    /// <para>🚨 The production refusals of every Doc NodeType were NOT a read-model divergence: on a
+    /// DB-synced <c>Doc</c> partition the STORE itself held the five rows without a type for a
+    /// window on every roll — the migration's doc search backfill wrote them back bare, which also
+    /// retyped the live definition hubs and started each cascade. The store read answered that
+    /// truthfully; the fix is the writer (<c>DocumentationNodeProvider.LoadIndexableNodes</c>,
+    /// <c>Doc/Architecture/StaticRepoImport</c>).</para>
     /// </summary>
     /// <param name="hub">Any surviving hub of the mesh.</param>
     /// <param name="types">The NodeType paths a request names.</param>
