@@ -23,6 +23,16 @@ namespace MeshWeaver.Layout
         /// <summary>Controls wrapping behaviour when items overflow the primary axis (data-bound or bool value).</summary>
         public object? Wrap { get; init; }
 
+        /// <summary>
+        /// The minimum width of a tile, as a CSS length (e.g. <c>"280px"</c>) — set, the list renders
+        /// as a TILE FLOW: every rendered item is itself a tile of at least this width, as many as fit
+        /// share a row in equal columns and the rest wrap (the same mode as
+        /// <see cref="LayoutGridSkin.MinTileWidth"/>). The items ARE the tiles: never wrap a bound
+        /// list in a grid container instead, where the whole list would be ONE grid cell.
+        /// <see cref="Orientation"/> and <see cref="Wrap"/> do not apply in this mode. The gap is 12px.
+        /// </summary>
+        public object? MinTileWidth { get; init; }
+
         /// <summary>Returns a copy with <paramref name="orientation"/> as its Orientation.</summary>
         /// <param name="orientation">The layout orientation for the item list.</param>
         /// <returns>A new instance with the updated Orientation.</returns>
@@ -32,6 +42,11 @@ namespace MeshWeaver.Layout
         /// <param name="wrap">A boolean or data-bound value controlling item wrapping.</param>
         /// <returns>A new instance with the updated Wrap.</returns>
         public ItemTemplateControl WithWrap(object? wrap) => this with { Wrap = wrap };
+
+        /// <summary>Returns a copy that renders its items as a tile flow of at least <paramref name="minTileWidth"/>; see <see cref="MinTileWidth"/>.</summary>
+        /// <param name="minTileWidth">A CSS length, e.g. <c>"280px"</c>.</param>
+        /// <returns>A new instance in tile-flow mode.</returns>
+        public ItemTemplateControl WithMinTileWidth(object? minTileWidth) => this with { MinTileWidth = minTileWidth };
         /// <summary>
         /// Renders the view template into the entity store, then renders the item view into a child area.
         /// </summary>
@@ -47,7 +62,7 @@ namespace MeshWeaver.Layout
         }
 
         /// <summary>
-        /// Returns true when <paramref name="other"/> has equal View, Wrap, Orientation, and Data (using structural data equality).
+        /// Returns true when <paramref name="other"/> has equal View, Wrap, Orientation, MinTileWidth, and Data (using structural data equality).
         /// </summary>
         /// <param name="other">The instance to compare with.</param>
         /// <returns>True if all relevant properties are equal; otherwise false.</returns>
@@ -62,16 +77,18 @@ namespace MeshWeaver.Layout
             return Equals(View, other.View)
                    && Equals(Wrap, other.Wrap)
                    && Equals(Orientation, other.Orientation)
+                   && Equals(MinTileWidth, other.MinTileWidth)
                    && LayoutHelperExtensions.DataEquality(Data, other.Data);
         }
 
-        /// <summary>Returns a hash code combining the base hash with View, Wrap, Orientation, and Data.</summary>
+        /// <summary>Returns a hash code combining the base hash with View, Wrap, Orientation, MinTileWidth, and Data.</summary>
         /// <returns>A composite hash code.</returns>
         public override int GetHashCode() =>
             HashCode.Combine(base.GetHashCode(),
                 Wrap,
                 View,
                 Orientation,
+                MinTileWidth,
                 LayoutHelperExtensions.DataHashCode(Data)
             );
     }

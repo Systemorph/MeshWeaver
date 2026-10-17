@@ -230,6 +230,56 @@ Controls.LayoutGrid
 
 ---
 
+# Tile Flow
+
+A card catalog does not want breakpoints at all: it wants **tiles of a minimum width that fill the
+row and wrap**, however many there are and however wide the screen is. That is the grid's
+**tile-flow mode** — declare the minimum tile width and nothing else:
+
+```csharp --render TileFlow --show-code
+Controls.LayoutGrid
+    .WithMinTileWidth("180px")
+    .WithView(Controls.Markdown("**Tile 1**").AddSkin(Skins.Card))
+    .WithView(Controls.Markdown("**Tile 2**").AddSkin(Skins.Card))
+    .WithView(Controls.Markdown("**Tile 3**").AddSkin(Skins.Card))
+    .WithView(Controls.Markdown("**Tile 4**").AddSkin(Skins.Card))
+    .WithView(Controls.Markdown("**Tile 5**").AddSkin(Skins.Card))
+```
+
+Every child is a tile at least that wide. As many tiles as fit share a row in equal columns, and the
+rest wrap onto the next row. A tile never grows wider than the container, so on a phone the grid is
+one column. The per-item spans (`WithXs` … `WithXxl`) do not apply in this mode. The gap is
+`WithSpacing(n)` × 4px, or 12px when no spacing is set.
+
+Every renderer draws the same result. The web renderers (Blazor, React) use a CSS grid with
+`repeat(auto-fill, minmax(min(100%, w), 1fr))`. React Native has no CSS grid, so it measures the
+container and computes the column count. A view never writes that CSS itself: hand-rolled
+`display: grid` styles render as an opaque style string on native, and they cannot see the list
+problem below.
+
+## Tiles from a bound list
+
+When the tiles come from data, put the mode on the **bound list itself**. The list's rendered items
+are then the tiles:
+
+```csharp
+// ✅ every course row is its own tile
+new ItemTemplateControl(card, new JsonPointerReference("")) { DataContext = coursesPointer }
+    .WithMinTileWidth("300px")
+```
+
+🚨 **Never wrap a bound list in a grid container instead.** A grid lays out its *children*, and a
+bound list is ONE child, so the whole list becomes one grid cell and every tile stacks in a single
+column. That is the exact failure a hand-rolled `display: grid` stack around an `ItemTemplateControl`
+produces once lists render vertically by default.
+
+| Method | On | Effect |
+|--------|----|--------|
+| `.WithMinTileWidth(w)` | `LayoutGrid` (shorthand for `.WithSkin(s => s.WithMinTileWidth(w))`) | Static children become tiles of at least `w` |
+| `.WithMinTileWidth(w)` | `ItemTemplateControl` | Each bound row becomes a tile of at least `w`; `Orientation`/`Wrap` do not apply |
+
+---
+
 # Grid Configuration
 
 Control the container itself via `.WithSkin()`:
@@ -238,6 +288,7 @@ Control the container itself via `.WithSkin()`:
 |--------|---------|--------|
 | `.WithSpacing(n)` | Gap between items | `1`, `2`, `3` (multiples of the base spacing unit) |
 | `.WithJustify(j)` | Horizontal alignment of the row | `"start"`, `"center"`, `"end"` |
+| `.WithMinTileWidth(w)` | Switches to tile flow (above) | a CSS length, e.g. `"280px"` |
 
 ---
 
