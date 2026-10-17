@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Mesh.Threading;
 using MeshWeaver.Messaging;
@@ -30,7 +31,7 @@ namespace MeshWeaver.NuGet;
 /// evicts a failure; and every resolution is bounded by <see cref="DefaultResolveBudget"/>, which
 /// cancels the leaf itself, not only a caller's wait.</para>
 /// </summary>
-public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
+public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
 {
     private static readonly NuGetFramework DefaultFramework = NuGetFramework.Parse("net10.0");
 
@@ -47,6 +48,10 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     public static readonly TimeSpan DefaultResolveBudget = TimeSpan.FromMinutes(3);
 
     private readonly PromiseCache<string, ResolvedPackageSet> _resolutions = new();
+    // Owns every shared resolution's connection, so disposing the resolver (the DI singleton dies with
+    // its mesh) releases them, and terminates any subscriber still attached, on the release lane.
+    private readonly CompositeDisposable _connections = new();
+    private readonly ReleaseLane _releaseLane;
     private readonly IIoPool _pool;
     private readonly TimeSpan _resolveBudget;
     private readonly SourceCacheContext _sourceCache = new();
@@ -77,11 +82,14 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     /// <param name="logger">Logger for resolution and install outcomes.</param>
     /// <param name="ioPools">The mesh's pools; the resolution runs on the Http lane.</param>
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
+    /// <param name="releaseLane">The mesh's release lane; <c>null</c> gives the resolver its own.</param>
     public NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         IoPoolRegistry ioPools,
-        INuGetPackageCache? packageCache = null)
-        : this(logger, DefaultSettings(), null, packageCache, pool: ioPools.Get(IoPoolNames.Http))
+        INuGetPackageCache? packageCache = null,
+        ReleaseLane? releaseLane = null)
+        : this(logger, DefaultSettings(), null, packageCache,
+            pool: ioPools.Get(IoPoolNames.Http), releaseLane: releaseLane)
     {
     }
 
@@ -112,14 +120,17 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
     /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
     /// <param name="resolveBudget">The budget of one resolution; <c>null</c> takes <see cref="DefaultResolveBudget"/>.</param>
     /// <param name="pool">The pool the NuGet SDK leaf runs on; <c>null</c> takes <see cref="IoPool.Unbounded"/>.</param>
+    /// <param name="releaseLane">The lane released connections terminate on; <c>null</c> gives the resolver its own.</param>
     internal NuGetAssemblyResolver(
         MsLogging.ILogger<NuGetAssemblyResolver> logger,
         ISettings settings,
         string? globalPackagesFolder = null,
         INuGetPackageCache? packageCache = null,
         TimeSpan? resolveBudget = null,
-        IIoPool? pool = null)
+        IIoPool? pool = null,
+        ReleaseLane? releaseLane = null)
     {
+        _releaseLane = releaseLane ?? new ReleaseLane();
         this.logger = logger;
         _settings = settings;
         _globalPackagesFolder = globalPackagesFolder;
@@ -195,7 +206,14 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver
                     DescribePackages(requested), DescribeFeeds());
             })
             .Replay(1)
-            .AutoConnect(1);
+            .AutoConnectOwnedBy(_connections, _releaseLane, nameof(NuGetAssemblyResolver));
+
+    /// <summary>
+    /// Releases every shared resolution's connection: an attempt still in flight is cancelled, and a
+    /// subscriber still attached, or arriving later, is terminated with an
+    /// <see cref="ObjectDisposedException"/>.
+    /// </summary>
+    public void Dispose() => _connections.Dispose();
 
     /// <summary>
     /// Test seam: called on the pool thread as each resolution attempt starts. Null in production.

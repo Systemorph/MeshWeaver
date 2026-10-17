@@ -274,6 +274,8 @@ answer (#6863):
   `PromiseCache`. It keeps a success, and it evicts a failure on the shared side as the failure
   settles, so the next caller starts a new attempt. An attempt that fails at once (an unparsable
   version range) is evicted too, and every call makes exactly one attempt.
+  Each shared attempt's connection is owned by the resolver (`AutoConnectOwnedBy`), so disposing it
+  with its mesh releases an attempt still in flight and terminates whoever is still attached.
 - **Every resolution has a budget** (`NuGetAssemblyResolver.DefaultResolveBudget`, three minutes,
   below the compile pipeline's five-minute bound on a compile). NuGet's own HTTP client waits 100 s
   per request and retries, so a feed that accepts the connection and never answers used to hold a
