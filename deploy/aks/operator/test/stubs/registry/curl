@@ -88,7 +88,10 @@ if [ "$method $path" = "POST /api/instances/register" ]; then
   while read -r h i s; do [ "$i" = "$reg_id" ] && answer 409 '{"error":"instance id is taken"}'; done < "$keys"
   minted="mwi_fake-registered-key-NEVER-PRINTED-${reg_id}"
   printf '%s %s current\n' "$(printf '%s' "$minted" | sha256sum | cut -c1-64)" "$reg_id" >> "$keys"
-  answer 200 "$(printf '{"instanceId":"%s","instanceKey":"%s","plan":"free"}' "$reg_id" "$minted")"
+  # A keyed registration lands on the plan the key carries ($state/bootstrap_plan — a coupon's tier);
+  # open registration on free.
+  reg_plan=free; [ -n "$reg_boot" ] && [ -f "$state/bootstrap_plan" ] && reg_plan="$(cat "$state/bootstrap_plan")"
+  answer 200 "$(printf '{"instanceId":"%s","instanceKey":"%s","plan":"%s"}' "$reg_id" "$minted" "$reg_plan")"
 fi
 [ -n "$slot" ] || answer 401 '{"error":"This registry does not accept the presented instance key"}'
 
