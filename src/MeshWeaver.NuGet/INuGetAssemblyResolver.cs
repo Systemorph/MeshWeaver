@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Threading;
 using NuGet.Frameworks;
 
 namespace MeshWeaver.NuGet;
@@ -22,4 +23,18 @@ public interface INuGetAssemblyResolver
         IReadOnlyCollection<NuGetPackageReference> requested,
         NuGetFramework? targetFramework = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// The reactive form, and the one platform code calls: emits one <c>ResolvedPackageSet</c> and
+    /// completes, or fails. <see cref="NuGetAssemblyResolver"/> shares, bounds and pools the work
+    /// itself. The default runs <see cref="ResolveAsync"/> as one leaf on the unbounded fallback pool,
+    /// so an implementation that only provides the Task form keeps working; unsubscribing cancels it.
+    /// </summary>
+    /// <param name="requested">The package references to resolve.</param>
+    /// <param name="targetFramework">The target framework to resolve assets for; defaults to the resolver's default framework when <c>null</c>.</param>
+    /// <returns>Emits one <c>ResolvedPackageSet</c> and completes.</returns>
+    IObservable<ResolvedPackageSet> Resolve(
+        IReadOnlyCollection<NuGetPackageReference> requested,
+        NuGetFramework? targetFramework = null)
+        => IoPool.Unbounded.Invoke(ct => ResolveAsync(requested, targetFramework, ct));
 }

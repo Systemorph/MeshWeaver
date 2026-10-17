@@ -121,6 +121,14 @@ public static class IoPoolNames
     public const string Process = "Process";
 
     /// <summary>
+    /// Writes of the NuGet resolver's OPTIONAL persistent package cache (blob or file). Its own lane,
+    /// never <see cref="Http"/> or <see cref="FileSystem"/>: a save is fire-and-forget and outside any
+    /// resolution's budget, so on a shared lane a stalled save would hold a slot a resolution — or
+    /// any other file or HTTP leaf — needs. Capped at <see cref="IoPoolOptions.PackageCache"/>.
+    /// </summary>
+    public const string PackageCache = "PackageCache";
+
+    /// <summary>
     /// The cases of a NodeType's <c>Tests</c> area (<c>MeshWeaver.Testing.InMesh.MeshTestRunner</c>).
     /// A case runs as ONE leaf on this pool so that the runner's bound cancels it through the pool's
     /// linked token rather than abandoning it. The pool does NOT order the cases (the runner does);
@@ -264,6 +272,12 @@ public sealed record IoPoolOptions
     public int Http { get; init; } = 16;
 
     /// <summary>
+    /// Concurrent persistent-package-cache writes (the <see cref="IoPoolNames.PackageCache"/> pool).
+    /// Small: the writes are optional, and a stalled one should cost this lane, nothing else.
+    /// </summary>
+    public int PackageCache { get; init; } = 2;
+
+    /// <summary>
     /// Concurrent range reads against the log store per process (the <see cref="IoPoolNames.LogStore"/>
     /// pool). ONE: a range read already fans out inside the store (its frontend splits the window and
     /// runs the pieces in parallel), so the reads of one process are run one after another and the
@@ -383,6 +397,7 @@ public sealed record IoPoolOptions
             IoPoolNames.FileSystem => FileSystem,
             IoPoolNames.Blob => Blob,
             IoPoolNames.Http => Http,
+            IoPoolNames.PackageCache => PackageCache,
             IoPoolNames.LogStore => LogStore,
             IoPoolNames.Ai => Ai,
             IoPoolNames.Query => Query,
