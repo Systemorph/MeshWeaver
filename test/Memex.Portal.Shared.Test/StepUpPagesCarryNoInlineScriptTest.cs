@@ -110,6 +110,23 @@ public class StepUpPagesCarryNoInlineScriptTest
         Assert.Empty(InlineScriptViolations("<script type=\"application/json\" id=\"d\">{}</script><script src=\"/a.js\"></script>"));
     }
 
+    /// <summary>
+    /// Negative control for the attribute parse: a name that merely CONTAINS <c>src</c> or
+    /// <c>type</c> is not that attribute. An inline script carrying <c>data-src</c> has no
+    /// <c>src</c>, and one carrying <c>data-type="application/json"</c> is still executable — both
+    /// must be reported. Likewise <c>data-onclick</c> is not a handler and <c>data-href</c> is not a URL.
+    /// </summary>
+    [Fact]
+    public void LookalikeAttributeNamesAreNotTheAttributes()
+    {
+        Assert.Single(InlineScriptViolations("<script data-src=\"/a.js\">run()</script>"));
+        Assert.Single(InlineScriptViolations("<script data-type=\"application/json\">run()</script>"));
+        Assert.Single(InlineScriptViolations("<script data-src=\"/a.js\" data-type=\"application/json\">run()</script>"));
+        Assert.Empty(InlineScriptViolations("<div data-onclick=\"x\" data-href=\"javascript:x\">x</div>"));
+        // …and the exact names still count, in any case and quoting.
+        Assert.Empty(InlineScriptViolations("<script SRC='/a.js'></script><script type=application/json>{}</script>"));
+    }
+
     private static JsonElement Data(string html)
     {
         var match = Regex.Match(html,
@@ -121,32 +138,52 @@ public class StepUpPagesCarryNoInlineScriptTest
 
     /// <summary>
     /// Every construct a <c>script-src</c> without <c>'unsafe-inline'</c> refuses: a <c>&lt;script&gt;</c>
-    /// with a body and no <c>src</c> whose type the browser executes, an <c>on*</c> attribute, and a
-    /// <c>javascript:</c> URL.
+    /// with no <c>src</c> whose type the browser executes, an <c>on*</c> attribute, and a
+    /// <c>javascript:</c> URL. Attributes are parsed per tag and compared by EXACT name, so
+    /// <c>data-src</c> is not <c>src</c>, <c>data-type</c> is not <c>type</c> and
+    /// <c>data-onclick</c> is not a handler.
     /// </summary>
     internal static IReadOnlyList<string> InlineScriptViolations(string html)
     {
         var found = new List<string>();
-        foreach (Match script in Regex.Matches(html, @"<script\b([^>]*)>(.*?)</script\s*>",
-                     RegexOptions.IgnoreCase | RegexOptions.Singleline))
+        foreach (Match tag in Regex.Matches(html, @"<([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[^\s=/>]+(?:\s*=\s*(?:""[^""]*""|'[^']*'|[^\s>]+))?)*)\s*/?>"))
         {
-            var attributes = script.Groups[1].Value;
-            if (Regex.IsMatch(attributes, @"\bsrc\s*=", RegexOptions.IgnoreCase))
-                continue;
-            var type = Regex.Match(attributes, "\\btype\\s*=\\s*[\"']?([^\"'\\s>]+)", RegexOptions.IgnoreCase);
-            if (type.Success && !IsExecutableType(type.Groups[1].Value))
-                continue;
-            found.Add("inline <script" + attributes + ">");
+            var name = tag.Groups[1].Value;
+            var attributes = Attributes(tag.Groups[2].Value);
+            if (name.Equals("script", StringComparison.OrdinalIgnoreCase)
+                && !attributes.ContainsKey("src")
+                && IsExecutableType(attributes.TryGetValue("type", out var type) ? type : ""))
+                found.Add("inline <script" + tag.Groups[2].Value + ">");
+            foreach (var (attribute, value) in attributes)
+            {
+                if (attribute.Length > 2 && attribute.StartsWith("on", StringComparison.Ordinal))
+                    found.Add("inline handler " + attribute);
+                if (attribute is "href" or "src" or "action" or "formaction"
+                    && System.Net.WebUtility.HtmlDecode(value).TrimStart().StartsWith("javascript:", StringComparison.OrdinalIgnoreCase))
+                    found.Add("javascript: URL in " + attribute);
+            }
         }
-        foreach (Match handler in Regex.Matches(html, @"<[a-z][^>]*\s(on[a-z]+)\s*=", RegexOptions.IgnoreCase))
-            found.Add("inline handler " + handler.Groups[1].Value);
-        foreach (Match url in Regex.Matches(html, "(?:href|src|action|formaction)\\s*=\\s*[\"']?\\s*javascript:", RegexOptions.IgnoreCase))
-            found.Add("javascript: URL " + url.Value);
         return found;
     }
 
+    /// <summary>One tag's attributes, by lower-cased exact name (the first occurrence wins, as in HTML).</summary>
+    private static Dictionary<string, string> Attributes(string text)
+    {
+        var attributes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (Match a in Regex.Matches(text, @"([^\s=/>]+)(?:\s*=\s*(?:""([^""]*)""|'([^']*)'|([^\s>]+)))?"))
+        {
+            var key = a.Groups[1].Value.ToLowerInvariant();
+            var value = a.Groups[2].Success ? a.Groups[2].Value
+                : a.Groups[3].Success ? a.Groups[3].Value
+                : a.Groups[4].Value;
+            attributes.TryAdd(key, value);
+        }
+        return attributes;
+    }
+
     private static bool IsExecutableType(string type) =>
-        type.Equals("module", StringComparison.OrdinalIgnoreCase)
+        type.Length == 0
+        || type.Equals("module", StringComparison.OrdinalIgnoreCase)
         || type.Equals("importmap", StringComparison.OrdinalIgnoreCase)
         || type.Contains("javascript", StringComparison.OrdinalIgnoreCase)
         || type.Contains("ecmascript", StringComparison.OrdinalIgnoreCase);

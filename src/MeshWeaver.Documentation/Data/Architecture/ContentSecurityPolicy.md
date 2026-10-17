@@ -11,8 +11,20 @@ Icon: /static/NodeTypeIcons/key.svg
 `'self' 'nonce-<per response>' blob:`.** `'unsafe-inline'` is what let injected markup run at all:
 an inline `<script>` or an `on*=` handler smuggled into rendered content executed with the viewer's
 session. Fixing each injection point (at render time and at write time) removes that injection;
-dropping `'unsafe-inline'` removes the class — markup the server did not vouch for does not run,
-whoever put it there.
+dropping `'unsafe-inline'` removes that class of execution.
+
+**What the strict policy stops, precisely:** an inline `<script>` (or inline import map) that does
+not carry this response's nonce, every inline event handler (`on*=`), every `javascript:` URL, and
+— with `'unsafe-eval'` gone — `eval`, `new Function` and string timers.
+
+**What it does NOT stop:** a `<script src>` pointing at a file the policy allows WITHOUT a nonce —
+any same-origin URL (`'self'`) and any `blob:` URL. So an injection that can make the portal SERVE
+attacker-controlled JavaScript from its own origin (an uploaded file returned as script, a content
+path that echoes input as JavaScript), or that already runs script able to mint a `blob:`, still
+executes. Same-origin hosting of user content as executable script is therefore a separate defect
+class the policy does not cover — `X-Content-Type-Options: nosniff` and the content-type a file is
+served with are what stand between an uploaded file and a script tag. Nor does it stop markup
+injection that runs no script (an injected form, link or style).
 
 The policy is set in MeshWeaver.Plugins, `src/Memex.Portal.Gui/Security/ContentSecurityPolicy.cs`,
 and composed by `MemexPortalComposition`. No other host in either repository sets one: the print and
@@ -40,8 +52,12 @@ out of scope here.
 One per request: 128 random bits, base64, minted by the CSP middleware **before** the response
 renders and kept on `HttpContext.Items` (`HttpContext.CspNonce()`). `App.razor` stamps it on every
 inline `<script>` it emits and on Blazor's `<ImportMap>` (an inline import map is subject to
-`script-src` too). The header names the same value. Content cannot learn it: it is new on every
-response, and browsers hide the `nonce` attribute from the DOM.
+`script-src` too). The header names the same value. It is new on every response, so it cannot be
+guessed or replayed from an earlier page. Browsers hide the `nonce` ATTRIBUTE (`getAttribute` and
+CSS attribute selectors read an empty value), which keeps it from markup-only exfiltration — but
+the `nonce` PROPERTY (`script.nonce`) still returns it to any JavaScript already running in the
+page. The nonce therefore stops injected markup from *starting* script; it is no barrier once
+script is running, which is what the rest of this policy exists to prevent.
 
 Pages rendered **outside** the Blazor shell carry no nonce and need none: the step-up pages
 (`memex/Memex.Portal.Shared/Authentication/StepUpPages.cs`, core) put their per-page values in a
