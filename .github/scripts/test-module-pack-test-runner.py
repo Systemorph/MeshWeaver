@@ -17,6 +17,7 @@ Stdlib only.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tempfile
@@ -137,6 +138,73 @@ class ModulePackTestRunnerTest(unittest.TestCase):
     def test_another_runner_named_is_not_mtp(self):
         for r in self.each('{"sdk": {"version": "10.0.400"}}', '{"test": {"runner": "VSTest"}}'):
             self.assertEqual("VSTest", r["RUNNER"])
+
+    def test_a_red_suite_is_named_on_github_at_both_call_sites(self):
+        # MeshWeaver.Plugins#3828: a red `Module tests` leg said only "the module's own suite
+        # failed". Each call site records the red suite's .trx — the SAME path test_flags writes —
+        # and hands it to name-failing-tests.py after the loop. That block is EXECUTED here over a
+        # real TeamTest trx; the named test and the step's annotation budget are asserted.
+        text = WORKFLOW.read_text()
+        record = 'red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")'
+        self.assertEqual(2, text.count(record), "both call sites record the red suite's ledger.trx")
+        self.assertEqual(2, text.count('mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")'),
+                         "the recorded path must be the directory test_flags writes into")
+        for selection, _ in self.sites:
+            self.assertIn("ledger.trx", selection, "test_flags names the trx ledger.trx")
+        lines = text.splitlines()
+        starts = [i for i, l in enumerate(lines) if l.strip() == 'if [ "${#red[@]}" -gt 0 ]; then']
+        self.assertEqual(2, len(starts), "both call sites name the red suites after the loop")
+        fails = [l.strip() for l in lines if "bk fail" in l and "the module's own suite failed" in l]
+        self.assertEqual(2, len(fails), "both call sites record a red suite's failure")
+        core = Path(__file__).resolve().parents[2]
+        # 🚨 A MULTI-SUITE batch, failure bookkeeping AND the report, as the step runs them: the
+        # REAL `bk fail` line of each call site against the real batch state, then the naming
+        # block. Six red suites used to print twelve `::error`s (one generic per `bk fail`, then
+        # the names) and GitHub dropped the last names; eleven left no slot for any name.
+        modules = [f"Mod{i:02d}" for i in range(11)]
+        for fail, start in zip(fails, starts):
+            end = next(k for k in range(start, len(lines)) if lines[k].strip() == "fi")
+            block = dedent(lines[start:end + 1])
+            root = Path(tempfile.mkdtemp())
+            for m in modules:
+                (root / "rt" / "trx" / m).mkdir(parents=True)
+                (root / "rt" / "trx" / m / "ledger.trx").write_text(
+                    '<?xml version="1.0"?><TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">'
+                    f'<Results><UnitTestResult testName="{m}.Test.Renders" outcome="Failed"><Output>'
+                    '<ErrorInfo><Message>Expected 3 rows, found 0.</Message></ErrorInfo></Output></UnitTestResult>'
+                    '</Results></TestRun>')
+            (root / "build-logic").symlink_to(core)
+            batch = json.dumps([{"module": m, "package": m, "project": f"src/{m}/{m}.csproj"} for m in modules])
+            script = "\n".join([
+                "set -euo pipefail",
+                'bk() { python3 "$MODULE_PACK_BATCH" --state "$BATCH_STATE" "$@"; }',
+                'bk init --batch "$BATCH" > /dev/null',
+                "red=()",
+                f"for MODULE in {' '.join(modules)}; do",
+                "  rc=1",
+                f"  {fail}",
+                f"  {record}",
+                "done",
+                block,
+                'echo "FAILED_IN_STATE=$(bk list --failed | tr "\\n" " ")"',
+            ])
+            env = dict(os.environ, RUNNER_TEMP=str(root / "rt"), GITHUB_STEP_SUMMARY=str(root / "summary.md"),
+                       MODULE_PACK_BATCH=str(core / ".github" / "scripts" / "module-pack-batch.py"),
+                       BATCH_STATE=str(root / "state.json"), BATCH=batch)
+            out = subprocess.run(["bash", "-c", script], cwd=root, env=env,
+                                 capture_output=True, text=True, check=True).stdout
+            errors = [l for l in out.splitlines() if l.startswith("::error")]
+            self.assertLessEqual(len(errors), 10, f"{len(errors)} `::error`s — GitHub keeps ten per step")
+            self.assertTrue(all("failing tests" in e or "more red suite" in e for e in errors),
+                            "every annotation of the step is a failing-test one:\n" + "\n".join(errors))
+            joined = "\n".join(errors)
+            for m in modules:
+                self.assertIn(m, joined, f"{m} is represented in the step's annotations")
+                self.assertIn(f"FAILED {m} › {m}.Test.Renders — Expected 3 rows, found 0.", out)
+            self.assertIn(f"{modules[0]}.Test.Renders", errors[0], "the first suite's TEST is named")
+            self.assertEqual(" ".join(modules), out.split("FAILED_IN_STATE=")[1].split("\n")[0].strip(),
+                             "the verdicts are still recorded for every red suite")
+            self.assertIn("Mod00.Test.Renders", (root / "summary.md").read_text())
 
 
 if __name__ == "__main__":
