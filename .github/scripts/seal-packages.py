@@ -210,6 +210,156 @@ def _lines(path: Path) -> list[str]:
     return [line.strip() for line in (text or "").splitlines() if line.strip()]
 
 
+# ─── cross-package SOURCE includes: what a bundle's bytes were compiled from ────────────────────
+# 🚨 A `requires` range is not the only thing that ties two packages of one listing together. A
+# NodeType's `sources` may read ANOTHER package's source nodes (`shared=@Store/Core/Source`): those
+# files are COMPILED INTO the dependent's assembly, and the bundle records a fingerprint over every
+# source it read (`sourcePaths` / `sourceIncludes`). A consumer installs the dependent's own nodes
+# from its bundle and the included package's nodes from THAT package's bundle — so when the listing
+# seals the two from commits whose included files differ, the dependent's fingerprint matches no
+# source set any consumer can ever hold, and every adopter DECLINES it (PrebuiltAssemblySeeder,
+# `DECLINED before writing (#2813)`): a portal compiles it at boot, and a satellite gate that installs
+# the publication is FATAL ("the gate did not judge the bytes the bake shipped").
+#
+# Measured: the `plugins` publication for c003e001 sealed `Hosting` CARRIED (its lock waited) beside
+# `Store` FRESH, while `Hosting/InstanceAction`, `Hosting/ApprovalInbox` and `Hosting/InstanceRequest`
+# compile `shared=@Store/Core/Source` & co. Every Reinsurance, Manufacturing and Crm gate that
+# installed it from 2026-10-17 ~10:47Z on went red on exactly those three types.
+#
+# So both halves hold a pair (D compiles sources of P) to ONE rule: the files D read from P are the
+# same at the commit the listing seals D from and the commit it seals P from.
+#   withhold  restores it where it can: a FRESH P under a CARRIED D waits too (carried at its sealed
+#             build) when that build matches what D was compiled against; a FRESH D over a CARRIED P
+#             waits too (carried, or — never sealed — out). Neither move ever ships bytes the sealed
+#             publication did not already hold together.
+#   listing   refuses a seal that would INTRODUCE such a pair (it was consistent in the sealed
+#             publication and is not in this listing). A pair already inconsistent in the sealed
+#             publication that nothing here can restore is a warning, never a refusal: refusing would
+#             keep exactly that publication sealed.
+WORKTREE = None  # the content checkout itself: what a package sealed FRESH is baked from
+
+
+def _query_target(entry: str) -> str | None:
+    """The node-path prefix a `sources` entry reads in ANOTHER package, None when package-local or
+    unreadable. The grammar of MeshWeaver.Plugins' scripts/affected-modules.py (`first_segment_of` /
+    `query_path`): an optional `name=` prefix, `@`/`@@` shorthand, else the first `namespace:` /
+    `path:` token — whose single-segment form is package-local."""
+    value = entry
+    eq = value.find("=")
+    if eq > 0 and " " not in value[:eq] and ":" not in value[:eq]:
+        value = value[eq + 1:]
+    if value.startswith("@@"):
+        target = value[2:]
+    elif value.startswith("@"):
+        target = value[1:]
+    else:
+        target = None
+        for token in value.split(" "):
+            for key in ("namespace:", "path:"):
+                if token.startswith(key):
+                    candidate = token[len(key):].strip("/")
+                    target = candidate if "/" in candidate else None
+                    break
+            else:
+                continue
+            break
+    if not target:
+        return None
+    return target.split(" ", 1)[0].strip("/") or None
+
+
+def _cross_package_sources(documents: list[str], package: str) -> dict[str, tuple[str, ...]]:
+    """{other package: (path prefixes it reads)} over the NodeType definitions in `documents`."""
+    found: dict[str, set[str]] = {}
+    for text in documents:
+        if "NodeTypeDefinition" not in text:
+            continue  # the cheap filter: most JSON in a package is instances, not NodeTypes
+        doc = _json(text)
+        content = (doc or {}).get("content")
+        if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
+            continue
+        for entry in content.get("sources") or []:
+            target = _query_target(entry) if isinstance(entry, str) else None
+            other = target.split("/", 1)[0] if target else None
+            if other and other != package:
+                found.setdefault(other, set()).add(target)
+    return {p: tuple(sorted(v)) for p, v in sorted(found.items())}
+
+
+class SourceIncludes:
+    """Reads, per (commit, package), which other packages' sources the package's NodeTypes compile,
+    and whether those files are identical between two commits. `WORKTREE` stands for the checkout."""
+
+    def __init__(self, repo: Path):
+        self.repo = repo
+        self._edges: dict[tuple[str | None, str], dict[str, tuple[str, ...]] | None] = {}
+        self._known: dict[str, bool] = {}
+        self._same: dict[tuple, bool] = {}
+
+    def _git(self, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "-C", str(self.repo), *args], capture_output=True, text=True, input=stdin)
+
+    def resolvable(self, commit: str | None) -> bool:
+        if commit is WORKTREE:
+            return True
+        if commit not in self._known:
+            self._known[commit] = self._git("cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
+        return self._known[commit]
+
+    def edges(self, commit: str | None, package: str) -> dict[str, tuple[str, ...]] | None:
+        """None when `commit` is not in the checkout (shallow, or a fixture commit)."""
+        key = (commit, package)
+        if key in self._edges:
+            return self._edges[key]
+        if commit is WORKTREE:
+            root = self.repo / package
+            docs = [t for t in (_read(p) for p in sorted(root.rglob("*.json"))) if t] if root.is_dir() else []
+            value = _cross_package_sources(docs, package)
+        elif not self.resolvable(commit):
+            value = None
+        else:
+            listed = self._git("grep", "-l", "-F", "NodeTypeDefinition", commit, "--", f"{package}/")
+            if listed.returncode not in (0, 1):  # 1 = no match
+                raise SystemExit(f"✗ seal-packages: could not read {package}'s NodeType definitions at "
+                                 f"{_short(commit)} ({listed.stderr.strip()})")
+            paths = [line.split(":", 1)[1] for line in listed.stdout.splitlines()
+                     if ":" in line and line.endswith(".json")]
+            docs = [t for t in (_git_show(self.repo, commit, p) for p in paths) if t]
+            value = _cross_package_sources(docs, package)
+        self._edges[key] = value
+        return value
+
+    def same(self, a: str | None, b: str | None, prefixes: tuple[str, ...]) -> bool:
+        """Whether every file under `prefixes` (a folder, or a node file `<prefix>.<ext>`) is identical
+        at `a` and `b`. An unreadable answer is a refusal, never a guess."""
+        if a == b or not prefixes:
+            return True
+        key = (a, b, prefixes)
+        if key in self._same:
+            return self._same[key]
+        revs = [c for c in (a, b) if c is not WORKTREE]
+        specs = [s for p in prefixes for s in (p, f":(glob){p}.*")]
+        done = self._git("diff", "--quiet", *revs, "--", *specs)
+        if done.returncode in (0, 1):
+            self._same[key] = done.returncode == 0
+            return self._same[key]
+        raise SystemExit(f"✗ seal-packages: could not compare {', '.join(prefixes)} between "
+                         f"{_short(a) if a else 'the checkout'} and {_short(b) if b else 'the checkout'} "
+                         f"({done.stderr.strip()}) — whether a carried build still matches the sources it was "
+                         "compiled from cannot be decided, and sealing on a guess is the #2813 class.")
+
+
+def _sealed_commits(state: Path, listed: set[str]) -> dict[str, str | None]:
+    """{package: the commit the SEALED publication's build of it came from} for every sealed bundle —
+    the per-package listing where there is one, else `source-commit.txt` (a legacy seal)."""
+    prior = _json(_read(state / STATE_PACKAGES)) if (state / STATE_PACKAGES).exists() else None
+    by_listing = {str(e["package"]): e.get("sourceCommit")
+                  for e in (prior or {}).get("packages") or [] if isinstance(e, dict) and e.get("package")}
+    legacy = (_read(state / STATE_COMMIT) or "").strip() or None
+    legacy = None if legacy == "unknown" else legacy
+    return {b[:-len(".zip")]: by_listing.get(b[:-len(".zip")], legacy) for b in listed if b.endswith(".zip")}
+
+
 # ─── withhold ────────────────────────────────────────────────────────────────────────────────────
 def _requires_in(repo: Path, package: str) -> list[str]:
     return _requires(_json(_read(repo / package / "index.json")))
@@ -260,9 +410,14 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
     waiting = list(dict.fromkeys(withheld))
     for package in waiting:
         hold(package)
+    sourced: dict[str, str] = {}  # package → why a source include made it wait
+    source_notes: dict[tuple[str, str], str] = {}
     if repo is not None:
         by_lower = {d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()} if repo.is_dir() else {}
-        while True:
+        includes = SourceIncludes(repo)
+        sealed_at = _sealed_commits(state, listed)
+
+        def requires_step() -> bool:
             never, held = set(absent), set(waiting)
             # Every package this run would still seal FRESH: a bundle left in the bake, or a module
             # package (named lower-case — mapped back to its package folder).
@@ -276,17 +431,94 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
                                 if d in never and d != package), None)
                 if blocker:
                     more[package] = blocker
-            if not more:
-                break
             for package, blocker in more.items():
                 pulled[package] = blocker
                 waiting.append(package)
                 hold(package)
+            return bool(more)
+
+        def source_step() -> bool:
+            """ONE move that restores a source-include pair, or none. One at a time: every hold
+            changes which commit the next pair is read at."""
+            held = set(waiting)
+            shipped = {b.stem for b in bake.glob("*.zip")} | {p for p in held if f"{p}.zip" in listed}
+
+            def at(package: str):
+                # False: held, but no commit is recorded for its sealed build (nothing to compare).
+                return (sealed_at.get(package) or False) if package in held else WORKTREE
+
+            def carries_cleanly(package: str) -> bool:
+                # Held, it is carried — not dropped as never sealed by its module package either.
+                module = f"{package.lower()}.module.nupkg"
+                return (f"{package}.zip" in listed
+                        and (module in listed_modules or not (bake / MODULES_DIR / module).exists()))
+
+            for dependent in sorted(shipped):
+                built = at(dependent)
+                if built is False:
+                    continue
+                reads = includes.edges(built, dependent)
+                if reads is None:
+                    if includes.edges(WORKTREE, dependent):
+                        raise SystemExit(
+                            f"✗ seal-packages: {dependent} is carried at {_short(built)}, which this checkout "
+                            "does not hold, and its NodeTypes compile other packages' sources — whether the "
+                            "carried bytes still match them cannot be decided. The publish-bake lane checks the "
+                            "content out with full history when it narrows (`narrow-by-affected`); nothing is "
+                            "written, and the existing publication stays sealed and intact.")
+                    continue
+                for dependency, prefixes in reads.items():
+                    if dependency not in shipped:
+                        continue
+                    against = at(dependency)
+                    if against is False or includes.same(built, against, prefixes):
+                        continue
+                    where = ", ".join(prefixes)
+                    if (dependency not in held and carries_cleanly(dependency)
+                            and sealed_at.get(dependency)
+                            and includes.same(built, sealed_at[dependency], prefixes)):
+                        sourced[dependency] = (f"{dependent} waits at {_short(built)} and its NodeTypes compile "
+                                               f"{where} — which moved since; {dependency} is held at "
+                                               f"{_short(sealed_at[dependency])}, the build {dependent} was compiled against")
+                        waiting.append(dependency)
+                        hold(dependency)
+                        return True
+                    if dependent not in held:
+                        own = sealed_at.get(dependent)
+                        own_reads = includes.edges(own, dependent) if own else None
+                        if f"{dependent}.zip" not in listed:
+                            sourced[dependent] = (f"its NodeTypes compile {where}, and {dependency} waits at "
+                                                  f"{_short(against)} — it has never been sealed, so it stays out "
+                                                  "until both can be sealed together")
+                        elif (carries_cleanly(dependent) and own_reads is not None
+                              and includes.same(own, against, own_reads.get(dependency, ()))):
+                            sourced[dependent] = (f"its NodeTypes compile {where}, and {dependency} waits at "
+                                                  f"{_short(against)}; its own sealed build at {_short(own)} "
+                                                  "was compiled against that")
+                        else:
+                            source_notes[(dependent, dependency)] = (
+                                f"{dependent} (fresh) compiles {where}, {dependency} waits at {_short(against)}, and "
+                                f"{dependent}'s sealed build was not compiled against it either — no build of the "
+                                f"pair matches; {dependent} adopts once {dependency} is sealed")
+                            continue
+                        waiting.append(dependent)
+                        hold(dependent)
+                        return True
+                    source_notes[(dependent, dependency)] = (
+                        f"{dependent} (carried at {_short(built)}) compiles {where}, and no build of {dependency} "
+                        f"the sealed publication holds matches it (this listing seals {dependency} at "
+                        f"{_short(against) if against else 'this commit'}) — already so in the sealed publication; "
+                        f"{dependent} adopts once it is sealed again")
+            return False
+
+        while requires_step() or source_step():
+            pass
     (state / STATE_CARRY_MODULES).write_text("".join(f"{m}\n" for m in modules_carried), encoding="utf-8")
     (state / STATE_WITHHELD).write_text("".join(f"{p}\n" for p in waiting), encoding="utf-8")
     (state / STATE_NEVER_SEALED).write_text("".join(f"{p}\n" for p in absent), encoding="utf-8")
     return {"carried": carried, "absent": absent, "bundleless": bundleless, "modulesCarried": modules_carried,
-            "status": status, "waiting": waiting, "pulled": pulled}
+            "status": status, "waiting": waiting, "pulled": pulled, "sourced": sourced,
+            "sourceNotes": [source_notes[k] for k in sorted(source_notes)]}
 
 
 def cmd_withhold(a: argparse.Namespace) -> int:
@@ -312,12 +544,17 @@ def cmd_withhold(a: argparse.Namespace) -> int:
               "so it neither travels nor blocks a dependent here")
     for p, dep in result["pulled"].items():
         print(f"  · {p}: waits too — it requires {dep}, which waits and has never been sealed for this identity")
+    for p, why in result["sourced"].items():
+        print(f"  · {p}: waits too — {why}")
     for m in result["modulesCarried"]:
         print(f"  · module {m}: carried forward from the sealed module set")
+    for note in result["sourceNotes"]:
+        print(f"::warning title=A carried build that no sealed source set matches::{note}")
     print(f"::notice title=Sealed per package::{len(result['carried'])} waiting package(s) carried forward at their "
           f"previously sealed build, {len(result['absent'])} never sealed and left out, {len(result['bundleless'])} "
-          f"bake no bundle, {len(result['pulled'])} wait because a dependency was never sealed; every other package "
-          "this run baked is sealed at this commit")
+          f"bake no bundle, {len(result['pulled'])} wait because a dependency was never sealed, "
+          f"{len(result['sourced'])} wait so that the sources a carried build compiled travel with it; every other "
+          "package this run baked is sealed at this commit")
     if a.github_output:
         with open(a.github_output, "a", encoding="utf-8") as out:
             out.write(f"carry={'true' if result['carried'] else 'false'}\n")
@@ -448,6 +685,53 @@ def floor_violations(listing: dict, repo: Path, withheld: list[str],
     return problems, notes
 
 
+def source_include_violations(listing: dict, repo: Path, state: Path | None) -> tuple[list[str], list[str]]:
+    """(refusals, notes) for the source-include rule (see SourceIncludes): a pair whose included files
+    differ between the commits this listing seals them from is REFUSED when the sealed publication held
+    the same two packages consistently — this listing would introduce an unadoptable build — and only
+    noted when it was already so there."""
+    includes = SourceIncludes(repo)
+    listed = set(_lines(state / STATE_BUNDLES)) if state is not None else set()
+    before = _sealed_commits(state, listed) if state is not None else {}
+    by_name = {e["package"]: e for e in listing["packages"]}
+
+    def sealed_from(entry: dict):
+        return entry.get("sourceCommit") if entry.get("carried") else WORKTREE
+
+    problems: list[str] = []
+    notes: list[str] = []
+    for name, entry in sorted(by_name.items()):
+        built = sealed_from(entry)
+        if entry.get("carried") and not built:
+            continue  # a legacy carried build with no recorded commit: nothing to compare against
+        reads = includes.edges(built, name)
+        if reads is None:
+            if includes.edges(WORKTREE, name):
+                problems.append(f"{name} is carried at {_short(built)}, which this checkout does not hold, and its "
+                                "NodeTypes compile other packages' sources — whether its bytes match the sources "
+                                "this listing seals cannot be decided")
+            continue
+        for dependency, prefixes in reads.items():
+            other = by_name.get(dependency)
+            if other is None:
+                continue
+            against = sealed_from(other)
+            if other.get("carried") and not against:
+                continue
+            if includes.same(built, against, prefixes):
+                continue
+            text = (f"{name} ({'carried at ' + _short(built) if built else 'fresh'}) compiles "
+                    f"{', '.join(prefixes)}, but this listing seals {dependency} "
+                    f"{'carried at ' + _short(against) if against else 'fresh'} — those files differ, so every "
+                    f"adopter declines {name}'s bytes (#2813)")
+            was_d, was_p = before.get(name), before.get(dependency)
+            was_reads = includes.edges(was_d, name) if was_d else None
+            introduced = (was_d and was_p and was_reads is not None and includes.resolvable(was_p)
+                          and includes.same(was_d, was_p, was_reads.get(dependency, ())))
+            (problems if introduced else notes).append(text)
+    return problems, notes
+
+
 def _short(sha) -> str:
     return (sha or "an unknown commit")[:10]
 
@@ -466,6 +750,19 @@ def cmd_listing(a: argparse.Namespace) -> int:
         print(f"  · {e['package']} {e.get('version') or '?'} carried at {_short(e.get('sourceCommit'))}")
     for n in notes:
         print(f"::warning title=Carried dependent of a never-sealed package::{n}")
+    source_problems, source_notes = source_include_violations(listing, repo, state)
+    for n in source_notes:
+        print(f"::warning title=A carried build that no sealed source set matches::{n} — already so in the sealed "
+              "publication; this listing does not make it worse")
+    if source_problems:
+        print(f"::error title=Seal refused — a carried build would not match the sources sealed beside it::"
+              f"{len(source_problems)} package(s) compile sources this listing seals from a different commit. "
+              "Every adopter would decline their bytes (a portal compiles them at boot; a dependent's gate that "
+              "installs this publication is fatal). `withhold --content` holds the moving side back; nothing is "
+              "written, and the existing publication stays sealed and intact.")
+        for p in source_problems:
+            print(f"::error::{p}")
+        return 1
     if problems:
         print(f"::error title=Seal refused — a dependency floor would be unmet::{len(problems)} requirement(s) of a "
               "sealed package are not met by what the SAME listing seals. Sealing them would hand every portal a "
@@ -836,11 +1133,185 @@ def self_test() -> int:
                and "Games: waits too — it requires Chess" in out.stdout
                and not (bake / "Chess.zip").exists() and not (bake / "Games.zip").exists(), out.stdout)
 
+    source_include_cases(expect)
+
     if failures:
         print(f"\nseal-packages self-test: {len(failures)} FAILED")
         return 1
     print("\nseal-packages self-test: all green")
     return 0
+
+
+def source_include_cases(expect) -> None:
+    """The `plugins` publication of 2026-10-17: Hosting carried, Store fresh, Hosting's NodeTypes
+    compiling Store's sources — and its mirror image and its near misses."""
+    print("the query grammar of a cross-package `sources` entry:")
+    expect("shared=@P/A/Source reads P/A/Source", _query_target("shared=@Store/Core/Source") == "Store/Core/Source")
+    expect("@@P/X reads P/X", _query_target("@@Store/Tools/Source/Clock") == "Store/Tools/Source/Clock")
+    expect("namespace:P/A scope:subtree reads P/A", _query_target("namespace:Store/Core scope:subtree") == "Store/Core")
+    expect("NEGATIVE CONTROL: a single-segment namespace is package-local",
+           _query_target("namespace:Source scope:subtree") is None)
+
+    me = str(Path(__file__).resolve())
+
+    def cli(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, me, *args], capture_output=True, text=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        repo, bake, state = root / "repo", root / "bake", root / "state"
+        for d in (repo, bake, state):
+            d.mkdir()
+
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                                  text=True).stdout.strip()
+
+        def put(rel: str, text: str) -> None:
+            (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / rel).write_text(text)
+
+        def commit(message: str) -> str:
+            git("add", "-A")
+            git("commit", "-qm", message)
+            return git("rev-parse", "HEAD")
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.email", "t@t")
+        git("config", "user.name", "t")
+        for package in ("Store", "Hosting", "Chess"):
+            put(f"{package}/index.json", json.dumps({"id": package, "content": {"version": "1.0.0"}}))
+            put(f"{package}/manifest.lock", json.dumps({"version": "1.0.0"}))
+        put("Store/Core/Source/Licensing.cs", "class Licensing {}\n")
+        put("Store/Tools/Source/Clock.cs", "class Clock {}\n")
+        put("Store/Guide/Source/Notes.cs", "class Notes {}\n")
+        put("Hosting/InstanceAction.json", json.dumps({"id": "InstanceAction", "content": {
+            "$type": "NodeTypeDefinition",
+            "sources": ["namespace:Source scope:subtree", "shared=@Store/Core/Source", "@@Store/Tools/Source/Clock"]}}))
+        put("Hosting/InstanceAction/Source/Action.cs", "class Action {}\n")
+        put("Chess/Board/Source/Board.cs", "class Board {}\n")
+        c1 = commit("the commit both builds in the sealed publication came from")
+
+        includes = SourceIncludes(repo)
+        expect("Hosting's NodeTypes read Store/Core/Source and the single node Store/Tools/Source/Clock",
+               includes.edges(c1, "Hosting") == {"Store": ("Store/Core/Source", "Store/Tools/Source/Clock")},
+               str(includes.edges(c1, "Hosting")))
+        expect("…the same read from the checkout itself", includes.edges(WORKTREE, "Hosting") == includes.edges(c1, "Hosting"))
+        expect("NEGATIVE CONTROL: Chess compiles nobody's sources", includes.edges(c1, "Chess") == {})
+
+        def shape(previous: dict[str, str], fresh: list[str]) -> None:
+            for d in (bake, state):
+                shutil.rmtree(d)
+                d.mkdir()
+            for p in fresh:
+                (bake / f"{p}.zip").write_text(f"fresh {p}")
+            (state / STATE_PUBLICATION).write_text("sealed\n")
+            (state / STATE_BUNDLES).write_text("".join(f"{p}.zip\n" for p in sorted(previous)))
+            (state / STATE_MODULES).write_text("")
+            (state / STATE_COMMIT).write_text(max(previous.values()) + "\n")
+            (state / STATE_PACKAGES).write_text(json.dumps({"schema": SCHEMA, "publicationCommit": c1, "packages": [
+                {"package": p, "bundle": f"{p}.zip", "sourceCommit": c, "version": "1.0.0", "requires": [],
+                 "carried": False} for p, c in sorted(previous.items())]}))
+
+        def carry(packages: list[str]) -> None:
+            for p in packages:
+                if not (bake / f"{p}.zip").exists():
+                    (bake / f"{p}.zip").write_text(f"sealed {p}")
+
+        def withhold_cli(waiting: str, content: bool = True) -> subprocess.CompletedProcess:
+            args = ["withhold", "--bake", str(bake), "--withhold", waiting, "--state", str(state)]
+            return cli(*args, *(["--content", str(repo)] if content else []))
+
+        def listing_cli(waiting: str) -> subprocess.CompletedProcess:
+            return cli("listing", "--bake", str(bake), "--content", str(repo), "--commit", git("rev-parse", "HEAD"),
+                       "--withhold", waiting, "--state", str(state))
+
+        def sealed() -> dict[str, dict]:
+            return {e["package"]: e for e in (_json(_read(bake / LISTING)) or {}).get("packages", [])}
+
+        put("Store/Core/Source/Licensing.cs", "class Licensing { int Seats; }\n")
+        c2 = commit("Store's included source moves while Hosting's lock waits")
+
+        print("THE INCIDENT — Hosting waits, Store's included source moved, both sealed at one commit before:")
+        everyone = {"Store": c1, "Hosting": c1, "Chess": c1}
+        shape(everyone, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Hosting")
+        expect("withhold holds Store back too, naming Hosting and the moved sources",
+               out.returncode == 0 and "Store" in _lines(state / STATE_WITHHELD)
+               and "Store: waits too — Hosting waits at" in out.stdout and "Store/Core/Source" in out.stdout
+               and not (bake / "Store.zip").exists(), out.stdout + out.stderr)
+        expect("…and NEGATIVE CONTROL: the unrelated Chess is still sealed fresh",
+               (bake / "Chess.zip").exists() and "Chess" not in _lines(state / STATE_WITHHELD))
+        carry(["Hosting", "Store"])
+        out = listing_cli("Hosting")
+        by = sealed()
+        expect("the seal is GREEN with Hosting AND Store carried at the commit Hosting was compiled against",
+               out.returncode == 0 and by.get("Hosting", {}).get("sourceCommit") == c1
+               and by.get("Store", {}).get("sourceCommit") == c1 and by.get("Store", {}).get("carried") is True
+               and by.get("Chess", {}).get("carried") is False, out.stdout + out.stderr)
+
+        print("NEGATIVE CONTROL — the same run without the source rule in withhold is REFUSED by the listing:")
+        shape(everyone, ["Store", "Hosting", "Chess"])
+        withhold_cli("Hosting", content=False)
+        carry(["Hosting"])
+        out = listing_cli("Hosting")
+        expect("refused, naming Hosting, the included path and Store sealed fresh — nothing written",
+               out.returncode == 1 and "Hosting (carried at" in out.stdout and "Store/Core/Source" in out.stdout
+               and "this listing seals Store fresh" in out.stdout and not (bake / LISTING).exists(),
+               out.stdout + out.stderr)
+
+        print("a Store change OUTSIDE what Hosting compiles holds nothing back:")
+        put("Store/Guide/Source/Notes.cs", "class Notes { string Text; }\n")
+        c3 = commit("Store moves a source nobody else compiles")
+        shape({"Store": c2, "Hosting": c2, "Chess": c2}, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Hosting")
+        expect("Hosting waits at c2, Store moved only Store/Guide/Source since: Store is sealed fresh",
+               out.returncode == 0 and _lines(state / STATE_WITHHELD) == ["Hosting"] and (bake / "Store.zip").exists()
+               and "A carried build" not in out.stdout, out.stdout + out.stderr)
+        carry(["Hosting"])
+        out = listing_cli("Hosting")
+        expect("…and the listing is GREEN with no source warning",
+               out.returncode == 0 and "source set matches" not in out.stdout, out.stdout + out.stderr)
+        expect("Store/Guide/Source moved and Hosting's inputs did not, between c2 and c3",
+               includes.same(c2, c3, ("Store/Core/Source", "Store/Tools/Source/Clock"))
+               and not includes.same(c2, c3, ("Store/Guide/Source",)))
+        expect("a single included NODE (Store/Tools/Source/Clock → Clock.cs) is compared, not only folders",
+               not includes.same(c1, WORKTREE, ("Store/Core/Source",))
+               and includes.same(c1, WORKTREE, ("Store/Tools/Source/Clock",)))
+        put("Store/Tools/Source/Clock.cs", "class Clock { long Ticks; }\n")
+        expect("…and an edit to that one node file IS a difference",
+               not includes.same(c3, WORKTREE, ("Store/Tools/Source/Clock",)))
+        git("checkout", "-q", "--", "Store/Tools/Source/Clock.cs")
+
+        print("ALREADY BROKEN in the sealed publication (Hosting at c1, Store at c2) — warned, never refused:")
+        shape({"Store": c2, "Hosting": c1, "Chess": c1}, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Hosting")
+        expect("Store is NOT held (its sealed build does not match Hosting either) and the pair is named",
+               out.returncode == 0 and "Store" not in _lines(state / STATE_WITHHELD)
+               and "A carried build that no sealed source set matches" in out.stdout, out.stdout + out.stderr)
+        carry(["Hosting"])
+        out = listing_cli("Hosting")
+        expect("the listing is GREEN with a warning — refusing would only keep that same publication sealed",
+               out.returncode == 0 and "already so in the sealed publication" in out.stdout, out.stdout + out.stderr)
+
+        print("the MIRROR — Store waits, Hosting fresh compiles Store's moved sources:")
+        shape(everyone, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Store")
+        expect("Hosting waits too, carried at the build compiled against the Store that is carried",
+               out.returncode == 0 and "Hosting" in _lines(state / STATE_WITHHELD)
+               and "Hosting: waits too — its NodeTypes compile Store/Core/Source" in out.stdout,
+               out.stdout + out.stderr)
+        carry(["Store", "Hosting"])
+        out = listing_cli("Store")
+        expect("GREEN, both carried at c1",
+               out.returncode == 0 and sealed().get("Hosting", {}).get("sourceCommit") == c1, out.stdout + out.stderr)
+
+        print("a fresh Hosting that was NEVER sealed, over a carried Store it no longer matches, stays out:")
+        shape({"Store": c1, "Chess": c1}, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Store")
+        expect("Hosting is held and, never sealed, left out of the listing",
+               out.returncode == 0 and "Hosting" in _lines(state / STATE_NEVER_SEALED)
+               and not (bake / "Hosting.zip").exists(), out.stdout + out.stderr)
 
 
 def main(argv: list[str]) -> int:
