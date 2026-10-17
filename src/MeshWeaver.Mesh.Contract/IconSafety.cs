@@ -51,8 +51,17 @@ public static class IconSafety
     /// <summary>Longest text / emoji icon accepted. The longest in the measured corpus is 15.</summary>
     public const int MaxTextLength = 64;
 
+    /// <summary>
+    /// Upper bound on a whole icon value, in characters — checked FIRST, so every later rule runs
+    /// over a bounded input. The largest icon in the measured content trees is under 10,000.
+    /// </summary>
+    public const int MaxIconLength = 256 * 1024;
+
     /// <summary>Upper bound on an SVG document the parser will read, in characters.</summary>
-    public const int MaxSvgCharacters = 1_000_000;
+    public const int MaxSvgCharacters = MaxIconLength;
+
+    /// <summary>Upper bound on one SVG attribute value, in characters.</summary>
+    public const int MaxAttributeLength = 64 * 1024;
 
     // Constant lookups, written once and never at runtime (AGENTS.md → "No static collections").
     private static readonly ImmutableHashSet<string> AllowedElements = ImmutableHashSet.Create(
@@ -111,6 +120,9 @@ public static class IconSafety
     {
         if (string.IsNullOrWhiteSpace(icon))
             return null;
+
+        if (icon.Length > MaxIconLength)
+            return $"an icon is at most {MaxIconLength} characters (this one has {icon.Length})";
 
         var value = icon.Trim();
 
@@ -218,15 +230,28 @@ public static class IconSafety
             return refusal is null ? null : $"the SVG inside the data: URI is refused: {refusal}";
         }
 
-        if (!RasterMediaTypes.Contains(mediaType))
-            return $"a data: icon may only carry {string.Join(", ", RasterMediaTypes)} or image/svg+xml, "
-                   + $"not '{mediaType}'";
-        if (!isBase64)
-            return $"a {mediaType} data: icon must be base64-encoded";
-        foreach (var c in payload)
-            if (!(char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '=' or '-' or '_'))
-                return $"a {mediaType} data: icon's payload is not base64";
-        return null;
+        // A raster URI is judged as a WHOLE against one exact grammar —
+        // `data:image/(png|jpeg|gif|webp);base64,` followed by base64 characters only — so its
+        // header can carry nothing (no extra parameters, quotes or whitespace) that a renderer
+        // placing it inside an attribute would have to escape.
+        foreach (var rasterType in RasterMediaTypes)
+        {
+            var prefix = $"data:{rasterType};base64,";
+            if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (value.Length == prefix.Length)
+                return $"a {rasterType} data: icon has no payload";
+            for (var i = prefix.Length; i < value.Length; i++)
+            {
+                var c = value[i];
+                if (!(char.IsAsciiLetterOrDigit(c) || c is '+' or '/' or '='))
+                    return $"a {rasterType} data: icon must be exactly 'data:{rasterType};base64,' followed by base64 characters";
+            }
+            return null;
+        }
+        return RasterMediaTypes.Contains(mediaType)
+            ? $"a {mediaType} data: icon must be exactly 'data:{mediaType};base64,' followed by base64 characters"
+            : $"a data: icon may only carry {string.Join(", ", RasterMediaTypes)} or image/svg+xml, not '{mediaType}'";
     }
 
     /// <summary>
@@ -324,6 +349,15 @@ public static class IconSafety
 
     private static string? ValueRefusal(string attribute, string value)
     {
+        if (value.Length > MaxAttributeLength)
+            return $"the attribute '{attribute}' is longer than {MaxAttributeLength} characters";
+
+        // CSS escapes ("u\72l(") would let a function name or a scheme hide from every check
+        // below, and no drawing attribute needs a backslash — so one is refused outright rather
+        // than decoded. (XML character references are already decoded by the parser.)
+        if (value.Contains('\\'))
+            return $"the attribute '{attribute}' contains a backslash, which an SVG icon does not need";
+
         // Normalise the way a URL or CSS parser would read it: case, and the whitespace / control
         // characters that browsers skip inside a scheme ("java\tscript:").
         var normalised = new StringBuilder(value.Length);
@@ -336,14 +370,17 @@ public static class IconSafety
             if (flat.Contains(forbidden, StringComparison.Ordinal))
                 return $"the attribute '{attribute}' carries '{forbidden}', which is not allowed in an SVG icon";
 
-        // Every url(…) must point INSIDE the document.
+        // Every url(…) must point INSIDE the document. Scanned by index — no per-occurrence copy,
+        // so the cost is linear in the attribute length however many url( it repeats.
         var at = 0;
         while ((at = flat.IndexOf("url(", at, StringComparison.Ordinal)) >= 0)
         {
-            var target = flat[(at + 4)..].TrimStart('"', '\'');
-            if (!target.StartsWith('#'))
+            var target = at + 4;
+            while (target < flat.Length && flat[target] is '"' or '\'')
+                target++;
+            if (target >= flat.Length || flat[target] != '#')
                 return $"the attribute '{attribute}' references something outside the icon (url(…) must be a '#fragment')";
-            at += 4;
+            at = target;
         }
         return null;
     }

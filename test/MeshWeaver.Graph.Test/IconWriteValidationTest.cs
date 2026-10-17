@@ -95,7 +95,42 @@ public class IconSafetyTest
         { "a<b", "'<'" },
         { "Tom & Jerry", "'&'" },
         { new string('x', IconSafety.MaxTextLength + 1), "at most" },
+        // Review on #6910: the raster header was unchecked, so it could carry quotes and spaces
+        // that end the attribute a renderer places the URI in.
+        { "data:image/png;x=\" onerror=\"void 0\" x=\";base64,AAAA", "exactly" },
+        { "data:image/png;charset=utf-8;base64,AAAA", "exactly" },
+        { "data:image/png;base64,AA AA", "exactly" },
+        // …and CSS escapes would hide a function name from the url( check.
+        { $"<svg {Ns}><rect style=\"fill:u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },
+        { $"<svg {Ns}><rect fill=\"u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },
     };
+
+    /// <summary>
+    /// The whole value is bounded before any rule reads it, so a write cannot buy unbounded work:
+    /// an attribute repeating <c>url(#g)</c> past the bound is refused outright.
+    /// </summary>
+    [Fact]
+    public void AnIconPastTheLengthBound_IsRefused_BeforeAnyParse()
+    {
+        var huge = $"<svg {Ns}><rect fill=\"{string.Concat(Enumerable.Repeat("url(#g)", 100_000))}\"/></svg>";
+        IconSafety.Refusal(huge).Should().Contain("at most");
+    }
+
+    /// <summary>An attribute longer than its own bound is refused, naming it.</summary>
+    [Fact]
+    public void AnAttributePastItsBound_IsRefused()
+    {
+        var longValue = string.Concat(Enumerable.Repeat("url(#g) ", IconSafety.MaxAttributeLength / 8 + 1));
+        IconSafety.Refusal($"<svg {Ns}><rect fill=\"{longValue}\"/></svg>").Should().Contain("'fill'");
+    }
+
+    /// <summary>Many fragment references within the bounds are fine — and judged in one pass.</summary>
+    [Fact]
+    public void ManyFragmentReferencesWithinTheBounds_Pass()
+    {
+        var value = string.Concat(Enumerable.Repeat("url(#g) ", 7_000));
+        IconSafety.Refusal($"<svg {Ns}><rect fill=\"{value}\"/></svg>").Should().BeNull();
+    }
 
     [Theory]
     [MemberData(nameof(Refused))]
@@ -346,5 +381,67 @@ public class IconWriteBoundaryTest(ITestOutputHelper output) : MonolithMeshTestB
             .Where(n => n is not null).FirstAsync().Timeout(60.Seconds())
             .Await(TestContext.Current.CancellationToken);
         after.Icon.Should().Be(Clean);
+    }
+
+    /// <summary>
+    /// Review on #6910: the upsert's unchanged-icon exemption compares against the LIVE node the
+    /// merge is applied to, not the durable row the handler read — that row can trail the live node
+    /// during the persistence debounce, and a stored refused icon the owner has since repaired would
+    /// then read as "unchanged" and be written back over the repair.
+    ///
+    /// <para>🚨 A behaviour pin, NOT a reproduction of the trail: in this test host the handler's
+    /// row read already reflects the repair (measured — the earlier snapshot comparison passes this
+    /// test too), so the window cannot be opened deterministically here. What it pins is the
+    /// outcome the fix guarantees by construction: repair, then an upsert re-asserting the legacy
+    /// icon, is refused and the repair stands.</para>
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task Upsert_CarryingARefusedIcon_IsJudgedAgainstTheLiveNode_NotATrailingDurableRow()
+    {
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        var ct = TestContext.Current.CancellationToken;
+        await MeshService.CreateNode(Node(id, Clean))
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+
+        var store = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        var durable = await Observable.Interval(50.Milliseconds()).StartWith(0L)
+            .SelectMany(_ => store.Read(path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Icon == Clean)
+            .FirstAsync().Timeout(60.Seconds()).Await(ct);
+
+        // A legacy stored icon: written to the row directly, as content that predates the rule.
+        // The owner adopts it from the change feed.
+        await store.Write(durable! with { Icon = Active }, Mesh.JsonSerializerOptions)
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n?.Icon == Active).FirstAsync().Timeout(60.Seconds()).Await(ct);
+
+        // The owner REPAIRS it. The durable row trails the live node until the persistence
+        // debounce flushes, and the upsert below reads that row in the window.
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Update(n => n with { Icon = Clean })
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+        var trailing = await store.Read(path, Mesh.JsonSerializerOptions).Take(1).Timeout(60.Seconds()).Await(ct);
+        Output.WriteLine($"durable row still holds the refused icon: {trailing?.Icon == Active}");
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var response = await access
+            .RunAsSystem(() => ObserveNodeOperation(
+                new CreateOrUpdateNodeRequest(Node(id, Active) with { Name = "renamed" })))
+            .FirstAsync()
+            .Select(d => d.Message)
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        Output.WriteLine($"upsert {path}: success={response.Success} reason={response.RejectionReason} error={response.Error}");
+
+        response.Success.Should().BeFalse(
+            "the live node holds the clean icon, so writing the refused one is a CHANGE and must be judged");
+        response.RejectionReason.Should().Be(NodeUpsertRejectionReason.ValidationFailed);
+
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds())
+            .Await(ct);
+        after.Icon.Should().Be(Clean, "the repaired icon must not be overwritten");
     }
 }
