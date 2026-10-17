@@ -949,10 +949,10 @@ self-tested on every call (and in core's `workflow-shell` job). What it proves, 
 | with NO failed step of its own | a failure-level **annotation** naming GitHub's own sentence | runner lost communication; runner shutdown signal; Actions budget refused the job |
 | whose failed step's log is readable | a named **log** signature (the log alone decides — an annotation never overrides it) | ACR `connection refused`, `api.nuget.org` restore resets, App-token mint 5xx |
 | whose failed step left NO log (404) | the **runner-gone** annotation only; never for an EXPIRED (410) log | runner died mid-step (Plugins#2773) |
-| whose only failed step is a core lane's verdict step, or that echoes a skipped matrix | nothing by itself — excused only beside a proven transient, and then the WHOLE run is re-run (a skipped job does not come back from `rerun-failed-jobs`) | `Exactly the selected bundles were built` |
+| whose only failed step is a core lane's verdict step, or that echoes a skipped matrix | nothing by itself — excused only beside a proven transient AND only when its log shows an upstream job did not succeed and none of the step's own findings (the step name is not the proof: the same step also fails on a FULL-scope selection mismatch); then the WHOLE run is re-run (a skipped job does not come back from `rerun-failed-jobs`) | `Exactly the selected bundles were built` with `pack job: failure` |
 
 Only the event's `run_attempt` 1 is judged (and the job listing is pinned to that attempt), so the
-retry happens once and never loops. An input the steward cannot read — the job list, a log that is
+retry happens once and never loops — and the run is read AGAIN immediately before the POST: if somebody re-ran it in the meantime (a newer attempt, still running, or already decided), the steward does not retry over them. An input the steward cannot read — the job list, a log that is
 not 404/410, the annotations (the caller must grant `checks: read`), the rerun POST — is a RED naming
 the read, never a quiet decline. Measured on the run that motivated it: the lane's script, dry-run
 against MeshWeaver.Manufacturing run 39014906977, names the one failed job's runner-death annotation

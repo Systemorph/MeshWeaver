@@ -278,8 +278,9 @@ def read_annotations(repo: str, job_id: int, fetch) -> list[dict]:
         except urllib.error.URLError as error:
             raise LogUnreadable(
                 f"reading the annotations of job {job_id} failed in transport: {error.reason}") from error
-        if payload == {}:
-            payload = []  # an empty body decodes to {} in the adapter; an empty list is legitimate
+        # 🚨 No `{}` → `[]` shortcut. GitHub answers "no annotations" with the two bytes `[]`; an
+        # EMPTY body (which the adapter decodes to `{}`) is a response this steward cannot read, and
+        # treating it as "no annotations" would turn a blind read into a confident decline.
         if not isinstance(payload, list):
             raise LogUnreadable(
                 f"the annotations of job {job_id} came back as {type(payload).__name__}, not a list")
@@ -317,9 +318,43 @@ ANNOTATION_SIGNATURES: tuple[tuple[str, str], ...] = (
 # asserts the step really is there (a renamed step must red here, not silently decline every death
 # behind its aggregator). Measured on MeshWeaver.Plugins PR #2014, run 35222879197: a runner died in a
 # module-test leg, and the aggregator's `Exactly the selected bundles were built` vetoed the retry.
-VERDICT_STEPS: dict[str, str] = {
-    "Exactly the selected bundles were built": "node-repo-module-pack.yml",
+#
+# 🚨 THE STEP NAME IS NOT THE PROOF. The same step also fails on its OWN findings — a FULL-scope
+# selection that disagrees with the caller's matrix, a failed selector, an empty lane key — none of
+# which a retry can fix. So an entry carries (the defining lane, the log line that says an UPSTREAM
+# job did not succeed, the sentences of the step's independent findings). The verdict job is excused
+# only when its log shows the upstream line AND none of the independent findings; anything else is
+# UNPROVEN and vetoes the retry. The self-test asserts every string still occurs in the lane.
+VERDICT_STEPS: dict[str, tuple[str, str, tuple[str, ...]]] = {
+    "Exactly the selected bundles were built": (
+        "node-repo-module-pack.yml",
+        # The step's first line: `echo "scope=$SCOPE, …; pack job: $PACK_RESULT, tests lane: $TESTS_RESULT"`.
+        r"; pack job: (?:failure|cancelled), tests lane: |; pack job: [a-z]+, tests lane: (?:failure|cancelled)\b",
+        # Fragments that sit on ONE source line: the step wraps its messages with `\`+newline,
+        # which leaves the next line's indentation inside the printed sentence.
+        ("selection and the caller's matrix disagree",
+         "the selection job reported",
+         "the selection produced no lane key"),
+    ),
 }
+# The literal fragments of each evidence line, asserted present in the defining lane.
+VERDICT_EVIDENCE_IN_LANE: dict[str, str] = {
+    "Exactly the selected bundles were built": "pack job: $PACK_RESULT, tests lane: $TESTS_RESULT",
+}
+
+
+def verdict_excused(own: list[str], log: str) -> str | None:
+    """Why a verdict-only job is a CONSEQUENCE of upstream failures, or None when it is not proven."""
+    if not own or not set(own) <= VERDICT_STEPS.keys():
+        return None
+    for step in own:
+        _, upstream, independent = VERDICT_STEPS[step]
+        if not re.search(upstream, log):
+            return None
+        if any(sentence in log for sentence in independent):
+            return None
+    return (f"verdict step {own[0]!r} failed, and its log names an upstream job that did not succeed "
+            "and none of the step's own findings — a consequence of other failed jobs, never a cause")
 
 
 def failed_steps(job: dict) -> list[str]:
@@ -377,12 +412,14 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
         annotations = read_annotations(repo, job_id, fetch)
         matched = match_annotations(annotations)
         where = "no step ran" if not job.get("steps") else "no step of its own failed"
+        # Judged WITHOUT a log by construction (the log was never read), so both outcomes are
+        # listed for the `Judged without a log` warning and the summary carries their evidence.
         if matched:
-            return TRANSIENT, f"{matched} ({where})", False
+            return TRANSIENT, f"{matched} ({where})", True
         seen = [str(a.get("message", ""))[:120] for a in annotations
                 if a.get("annotation_level") == "failure"] or ["no failure-level annotation"]
         return UNPROVEN, (f"failed with {where}, and no annotation matches a named signature: {seen} — "
-                          "cannot prove a transient, no retry"), False
+                          "cannot prove a transient, no retry"), True
     log = read_job_log(repo, job_id, fetch)  # raises LogUnreadable → red, never a decline
     if isinstance(log, str):
         matched = classify(log)
@@ -390,9 +427,13 @@ def judge(repo: str, job: dict, fetch) -> tuple[str, str, bool]:
             return CONSEQUENTIAL_KIND, matched, False
         if matched is not None:
             return TRANSIENT, f"{matched} (failed step {own[0]!r})", False
+        excused = verdict_excused(own, log)
+        if excused:
+            return CONSEQUENTIAL_KIND, excused, False
         if set(own) <= VERDICT_STEPS.keys():
-            return CONSEQUENTIAL_KIND, (f"verdict step {own[0]!r} failed — a consequence of other "
-                                        "failed jobs, never a cause"), False
+            return UNPROVEN, (f"verdict step {own[0]!r} failed WITHOUT evidence that an upstream job "
+                              "caused it (or with one of the step's own findings) — this may be a "
+                              "real red, so no retry. Investigate it."), False
         return UNPROVEN, (f"NO named signature matched (failed step {own[0]!r}) — this is (or may "
                           "be) a real red, so no retry. Investigate it."), False
     if log.status == 404:
@@ -531,6 +572,36 @@ def run(repo: str, run_id: str, fetch, dry_run: bool, attempt: int | None = None
     if not decision.retry:
         return 0
     endpoint = "rerun" if decision.scope == RERUN_ALL else "rerun-failed-jobs"
+    # 🚨 THE DECISION IS ABOUT ONE ATTEMPT; THE POST IS ABOUT THE RUN AS IT IS NOW. A hand re-run can
+    # start (and even fail for a real defect) while this steward is queued, and the event this job
+    # carries stays stale forever — re-running the steward replays it. So the run is read again
+    # immediately before the POST, and the retry happens only while the run is still the completed
+    # failure of the attempt that was judged. An unreadable answer is a RED, never a guess.
+    judged = attempt if attempt is not None else 1
+    try:
+        current = fetch(f"/repos/{repo}/actions/runs/{run_id}")
+    except (urllib.error.HTTPError, urllib.error.URLError) as error:
+        reason = (f"HTTP {error.code} {error.reason}" if isinstance(error, urllib.error.HTTPError)
+                  else error.reason)
+        print(f"::error title=Retry steward is blind::run {run_id} in {repo} is proven transient, but "
+              f"re-reading the run before the POST failed: {reason}. Not retrying on a stale view.")
+        return 1
+    except LogUnreadable as error:
+        print(f"::error title=Retry steward is blind::run {run_id} in {repo}: re-reading the run "
+              f"before the POST failed: {error}. Not retrying on a stale view.")
+        return 1
+    if not isinstance(current, dict) or not isinstance(current.get("run_attempt"), int):
+        print(f"::error title=Retry steward is blind::run {run_id} in {repo}: the run metadata read "
+              "before the POST carries no run_attempt. Not retrying on a stale view.")
+        return 1
+    if (current["run_attempt"] != judged or current.get("status") != "completed"
+            or current.get("conclusion") != "failure"):
+        line = (f"run {run_id} moved on after attempt {judged} was judged (now attempt "
+                f"{current['run_attempt']}, {current.get('status')}/{current.get('conclusion')}) — "
+                "somebody re-ran it, so this steward does NOT retry over them.")
+        print(line)
+        summarize([line])
+        return 0
     if dry_run:
         print(f"--dry-run: NOT posting {endpoint}.")
         return 0
@@ -556,6 +627,7 @@ REAL_LOG_HEAD = (
 )
 
 
+RUN_STILL_RED = {"run_attempt": 1, "status": "completed", "conclusion": "failure"}
 ONE_FAILED_STEP = [{"name": "Run", "status": "completed", "conclusion": "failure"}]
 
 
@@ -566,13 +638,16 @@ def _steps(*triples: tuple[str, str, str | None]) -> list[dict]:
 def _fake(logs: dict[int, object], total: int | None = None,
           pages: list[list[int]] | None = None,
           steps: dict[int, list[dict]] | None = None,
-          annotations: dict[int, object] | None = None):
+          annotations: dict[int, object] | None = None,
+          run_state: object = None):
     """A fetch double. `logs` maps job id → log text, or an Exception to raise.
 
     `pages` (a list of job-id lists) serves a DIFFERENT set of job records per page, so a test can
     prove that page two's records are USED and not merely requested. `steps` overrides a job's
     `steps[]` (default: one failed step — the job's OWN failure). `annotations` maps job id → the
     check-run annotation list, or an Exception to raise; an absent entry is an EMPTY list.
+    `run_state` is what GET runs/<id> answers right before the POST (default: attempt 1, still a
+    completed failure), or an Exception to raise.
     """
     calls: list[str] = []
     steps = steps or {}
@@ -586,6 +661,11 @@ def _fake(logs: dict[int, object], total: int | None = None,
         calls.append(f"{method} {path}")
         if method == "POST":
             return {}
+        if re.search(r"/actions/runs/[0-9]+$", path):
+            state = run_state if run_state is not None else dict(RUN_STILL_RED)
+            if isinstance(state, Exception):
+                raise state
+            return state
         if "/jobs?" in path:
             if pages is not None:
                 index = int(path.split("&page=")[1]) - 1
@@ -786,6 +866,8 @@ def self_test() -> int:
             raise urllib.error.HTTPError(path, 403, "Forbidden", {}, None)  # type: ignore[arg-type]
         if "/jobs?" in path:
             return {"total_count": 1, "jobs": [{"id": 1, "conclusion": "failure", "steps": ONE_FAILED_STEP}]}
+        if path.endswith("/actions/runs/9"):
+            return dict(RUN_STILL_RED)
         return escaped
 
     check("a refused rerun POST exits 1, not a quiet non-retry",
@@ -901,9 +983,13 @@ def self_test() -> int:
           decide("o/r", "9", paged_annotations).retry)
 
     # ── Verdict jobs: excused only beside a proven transient, never a cause alone. ──
+    verdict_upstream = REAL_LOG_HEAD + (
+        "2026-09-22T09:49:20.0Z scope=affected, selection named 3 module bundle(s); pack job: failure, "
+        "tests lane: skipped\n"
+        "2026-09-22T09:49:21.0Z ##[error]Process completed with exit code 1.\n")
     check("a lone VERDICT job never retries (its own red, with nothing behind it)",
-          not decide("o/r", "9", _fake({1: real_red}, steps={1: VERDICT_ONLY})).retry)
-    fetch = _fake({1: _http(404), 2: real_red}, steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+          not decide("o/r", "9", _fake({1: verdict_upstream}, steps={1: VERDICT_ONLY})).retry)
+    fetch = _fake({1: _http(404), 2: verdict_upstream}, steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
                   annotations={1: LOST_COMMUNICATION})
     code = run("o/r", "9", fetch, dry_run=False)
     check("a death + the aggregator that failed BECAUSE of it retry together",
@@ -911,16 +997,74 @@ def self_test() -> int:
     check("...as a WHOLE-run rerun: the skipped dependents do not come back from rerun-failed-jobs",
           _posted(fetch) == ["POST /repos/o/r/actions/runs/9/rerun"])
     check("a verdict job beside a REAL red never retries",
-          not decide("o/r", "9", _fake({1: real_red, 2: real_red},
+          not decide("o/r", "9", _fake({1: real_red, 2: verdict_upstream},
                                        steps={2: VERDICT_ONLY})).retry)
+    # 🚨 The step NAME is not the proof (review on #6898): the same step fails on its OWN findings.
+    full_scope_mismatch = verdict_upstream.replace(
+        "##[error]Process completed", "##[error]the scope is FULL, so every one of the 4 declared "
+        "module(s) must be packed — but the selection named 3. The selection and the caller's matrix "
+        "disagree.\n2026-09-22T09:49:21.1Z ##[error]Process completed")
+    check("a verdict step's OWN finding (FULL-scope mismatch) beside a runner death does NOT retry",
+          not decide("o/r", "9", _fake({1: _http(404), 2: full_scope_mismatch},
+                                       steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+                                       annotations={1: LOST_COMMUNICATION})).retry)
+    upstream_green = verdict_upstream.replace("pack job: failure", "pack job: success")
+    check("a verdict step whose upstream jobs SUCCEEDED beside a runner death does NOT retry",
+          not decide("o/r", "9", _fake({1: _http(404), 2: upstream_green},
+                                       steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+                                       annotations={1: LOST_COMMUNICATION})).retry)
+    tests_failed = verdict_upstream.replace("pack job: failure, tests lane: skipped",
+                                            "pack job: success, tests lane: failure")
+    check("...while a failed TESTS lane behind the verdict is upstream evidence too",
+          decide("o/r", "9", _fake({1: _http(404), 2: tests_failed},
+                                   steps={1: FROZEN_LEG, 2: VERDICT_ONLY},
+                                   annotations={1: LOST_COMMUNICATION})).retry)
     # The verdict list is only as good as its names. Each must still be a step of the core lane that
     # defines it — a renamed step would silently veto every death behind that aggregator.
     workflows = Path(__file__).resolve().parent.parent / "workflows"
-    for step, lane in VERDICT_STEPS.items():
+    for step, (lane, _, independent) in VERDICT_STEPS.items():
         defined = workflows / lane
         text = defined.read_text(encoding="utf-8") if defined.is_file() else ""
         check(f"verdict step {step!r} is still declared in {lane} (read: {defined.is_file()})",
               f"name: {step}" in text)
+        check(f"...and its upstream-evidence line is still printed there",
+              VERDICT_EVIDENCE_IN_LANE[step] in text)
+        for sentence in independent:
+            check(f"...and its own finding {sentence!r} is still raised there", sentence in text)
+
+    # ── Review on #6898: an EMPTY annotations body is a blind read, not "no annotations". ──
+    fetch = _fake({1: _http(404)}, steps={1: FROZEN_LEG}, annotations={1: {}})
+    check("an EMPTY annotations response exits 1 (never read as an empty list)",
+          run("o/r", "9", fetch, dry_run=False) == 1 and not _posted(fetch))
+    check("...while a real `[]` is a legitimate 'no annotations' (a named decline)",
+          run("o/r", "9", _fake({1: _http(404)}, steps={1: FROZEN_LEG},
+                                annotations={1: []}), dry_run=False) == 0)
+
+    # ── Review on #6898: annotation-only outcomes were judged without a log, and say so. ──
+    decision = decide("o/r", "9", _fake({1: _http(404)}, steps={1: FROZEN_LEG},
+                                        annotations={1: LOST_COMMUNICATION}))
+    check("a runner death proven by annotation is listed as judged WITHOUT a log",
+          decision.retry and len(decision.logless) == 1 and "lost communication" in decision.logless[0])
+    decision = decide("o/r", "9", _fake({1: _http(404)}, steps={1: FROZEN_LEG}, annotations={1: unnamed}))
+    check("...and so is an annotation-only decline", not decision.retry and len(decision.logless) == 1)
+
+    # ── Review on #6898: the POST acts on the run as it is NOW, not on the stale event. ──
+    for name, state in (("a hand re-run started attempt 2", {"run_attempt": 2, "status": "in_progress", "conclusion": None}),
+                        ("attempt 2 already failed for real", {"run_attempt": 2, "status": "completed", "conclusion": "failure"}),
+                        ("the run is now green", {"run_attempt": 1, "status": "completed", "conclusion": "success"})):
+        fetch = _fake({1: escaped}, run_state=state)
+        check(f"{name}: no POST, exit 0, named",
+              run("o/r", "9", fetch, dry_run=False, attempt=1) == 0 and not _posted(fetch))
+    for name, state in (("HTTP 500", _http(500)), ("no run_attempt", {"status": "completed"}),
+                        ("a non-object", ["nope"])):
+        fetch = _fake({1: escaped}, run_state=state)
+        check(f"an unreadable run re-read ({name}) exits 1 and posts nothing",
+              run("o/r", "9", fetch, dry_run=False, attempt=1) == 1 and not _posted(fetch))
+    fetch = _fake({1: escaped})
+    run("o/r", "9", fetch, dry_run=False, attempt=1)
+    reads = [c for c in fetch.calls if c == "GET /repos/o/r/actions/runs/9"]  # type: ignore[attr-defined]
+    check("the run is re-read immediately BEFORE the POST",
+          bool(reads) and fetch.calls.index(reads[-1]) == len(fetch.calls) - 2)  # type: ignore[attr-defined]
 
     # ── ONE retry, ever, and the attempt is the EVENT's. ──
     fetch = _fake({1: escaped})
