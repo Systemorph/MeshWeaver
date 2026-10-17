@@ -567,27 +567,67 @@ public static partial class MeshNodeImageHelper
     /// <param name="svg">Inline svg markup.</param>
     public static string AsSvgDocument(string svg)
     {
-        if (string.IsNullOrEmpty(svg))
+        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
             return svg;
-        var open = SvgRootTag().Match(svg);
-        if (!open.Success)
-            return svg;
-        var attrs = open.Groups["attrs"].Value;
+        // Attribute VALUES are blanked before looking for a declaration, so text inside one
+        // (aria-label="xmlns=…") is never mistaken for an attribute of its own.
+        var attrs = QuotedValue().Replace(svg[(root.Start + "<svg".Length)..root.End], "\"\"");
         var added = "";
         if (!XmlnsAttr().IsMatch(attrs))
             added += " xmlns=\"http://www.w3.org/2000/svg\"";
-        if (svg.Contains("xlink:", StringComparison.Ordinal) && !attrs.Contains("xmlns:xlink", StringComparison.Ordinal))
+        if (svg.Contains("xlink:", StringComparison.Ordinal) && !XmlnsXlinkAttr().IsMatch(attrs))
             added += " xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
         if (added.Length == 0)
             return svg;
-        return svg.Insert(open.Index + "<svg".Length, added);
+        return svg.Insert(root.Start + "<svg".Length, added);
     }
 
-    [GeneratedRegex(@"<svg\b(?<attrs>[^>]*)>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
-    private static partial Regex SvgRootTag();
+    /// <summary>
+    /// The span of the root <c>&lt;svg …&gt;</c> start tag — from its <c>&lt;</c> to its closing
+    /// <c>&gt;</c> — scanned QUOTE-AWARE: a <c>&gt;</c> inside a quoted attribute value
+    /// (<c>aria-label="A &gt; B"</c>) is part of the value, not the end of the tag. Null when there is
+    /// no well-formed root tag.
+    /// </summary>
+    private static (int Start, int End)? RootSvgTag(string svg)
+    {
+        var start = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        while (start >= 0)
+        {
+            var next = start + "<svg".Length;
+            if (next >= svg.Length)
+                return null;
+            var c = svg[next];
+            if (char.IsWhiteSpace(c) || c is '>' or '/')
+                break;
+            start = svg.IndexOf("<svg", next, StringComparison.OrdinalIgnoreCase);
+        }
+        if (start < 0)
+            return null;
+        var quote = '\0';
+        for (var i = start + "<svg".Length; i < svg.Length; i++)
+        {
+            var ch = svg[i];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+            }
+            else if (ch is '"' or '\'')
+                quote = ch;
+            else if (ch == '>')
+                return (start, i);
+        }
+        return null;
+    }
+
+    [GeneratedRegex(@"""[^""]*""|'[^']*'", RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedValue();
 
     [GeneratedRegex(@"(?<![-:\w])xmlns\s*=", RegexOptions.CultureInvariant)]
     private static partial Regex XmlnsAttr();
+
+    [GeneratedRegex(@"(?<![-:\w])xmlns:xlink\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex XmlnsXlinkAttr();
 
     /// <summary>
     /// A text glyph (an emoji) wrapped in an SVG that draws it, because no <c>href</c> can carry a

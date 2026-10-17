@@ -128,6 +128,26 @@ public class InlineSvgIconsAreInertTest
         MeshNodeImageHelper.AsSvgDocument(document).Should().Be(document, "declarations already present are left alone");
     }
 
+    /// <summary>
+    /// The root tag is read quote-aware: a <c>&gt;</c> inside an attribute value is not the end of the
+    /// tag. Read naively, the declaration that IS present looked absent and a second <c>xmlns</c> was
+    /// inserted — a document no XML parser (and so no image) accepts. Each case parses the decoded
+    /// document as XML, which is exactly what a browser does to an image-loaded SVG.
+    /// </summary>
+    [Theory]
+    [InlineData("<svg aria-label=\"A > B\" xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><rect width=\"24\" height=\"24\" fill=\"#123456\"/></svg>")]
+    [InlineData("<svg aria-label='xmlns=x' viewBox='0 0 24 24'><rect width='24' height='24' fill='#123456'/></svg>")]
+    [InlineData("<svg viewBox='0 0 24 24'><rect width='24' height='24' fill='#123456'/><defs><path id='m' d='M0 0h4v4z'/></defs><use xlink:href='#m'/></svg>")]
+    [InlineData("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' fill='#123456'/><use xlink:href='#m'/></svg>")]
+    public void TheDataUriDocument_IsWellFormedXml(string svg)
+    {
+        var document = Uri.UnescapeDataString(MeshNodeImageHelper.SvgDataUri(svg)["data:image/svg+xml,".Length..]);
+
+        var parsed = System.Xml.Linq.XDocument.Parse(document);
+
+        parsed.Root!.Name.Should().Be(System.Xml.Linq.XName.Get("svg", "http://www.w3.org/2000/svg"));
+    }
+
     /// <summary>An explicit colour replaces <c>currentColor</c>, which an image-loaded svg cannot
     /// inherit from the page.</summary>
     [Fact]
