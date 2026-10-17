@@ -2479,6 +2479,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
 
+    # The namer the module lane's `Module bundle` / `Module tests` legs call on a red suite: every
+    # failing test's name + first assertion line, in the log, the summary and at most the step's
+    # ten `::error` annotations, every red suite represented (MeshWeaver.Plugins#3828). Offline
+    # cases: a red suite, no .trx, an unreadable one, a dead host's row, a budget already spent.
+    - name: "A red module suite names its failing tests within the step's ten annotations (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/name-failing-tests.py --self-test
+
     # The writer of an image's closure as mesh data (#4066, policy `image-closure-as-mesh-data`):
     # main-cd runs it over the publish directories the reference-set assertion just accepted. Both
     # directions offline — the record's denominator and per-file hashes, and every refusal (a
