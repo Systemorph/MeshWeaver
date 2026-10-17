@@ -219,8 +219,8 @@ fleet-reader mint that reads the register — `dotnet-test.yml` (`shared-rules` 
 and `shared-rules.yml`. Second, because `required-in` is per block and a listed repository with no
 markers is red for **each** block naming it, the repository must already carry every block it will
 be required to carry. So the spoke lands its copies first and core lists it afterwards — the same
-order as step 2 before step 3. `MeshWeaver.Crm` waited outside the register until 2026-10-17 for
-exactly these two reasons.
+order as step 2 before step 3. `MeshWeaver.Crm` waited outside the register for exactly these two
+reasons; it joins once its baseline pull request has merged.
 
 **Changing the text of one:** the hub's copy is authoritative, so the hub's text lands first — but
 for a block with no slot around the changed words it cannot land GREEN in one step. The gate only

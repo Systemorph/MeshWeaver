@@ -29,6 +29,12 @@
     "worktree-per-change-set stays `hub: peers`, scoped to the three repos that agree on its text.",
     "Doc/Architecture/SharedRuleBlocks → 'The baseline every repo carries' has the per-repo reasoning.",
     "",
+    "🚧 BASELINE ROLLOUT IN FLIGHT (2026-10-17). Still to widen once their spoke PRs merge: file-it-and-move-on",
+    "and merge-latest-before-push to Reinsurance (#265), SocialMedia (#249), Manufacturing (#134); and to",
+    "register MeshWeaver.Crm (#174, every baseline block) and Product-Promotion (#139, the process blocks;",
+    "blocked while Actions is disabled there). Those four node-repo PRs are AGENTS.md-only and wait on the",
+    "fleet-wide node-repo gate failure ('bake consumption … DECLINED'), not on their diff.",
+    "",
     "ADMITTING A REPO: the gate FAILS CLOSED on a repo it cannot read, so (a) the read-only",
     "fleet-reader App (`meshweaver-reader`) must reach it — measured 2026-10-17: installed org-wide,",
     "repository_selection: all — and the repo must be added to the `repositories:` list of every",
@@ -72,10 +78,8 @@
     "Systemorph/MeshWeaver.SocialMedia",
     "Systemorph/MeshWeaver.Manufacturing",
     "Systemorph/Memex",
-    "Systemorph/MeshWeaver.Crm",
     "Systemorph/CreditReRate",
-    "Systemorph/DecisionModels",
-    "Systemorph/Product-Promotion"
+    "Systemorph/DecisionModels"
   ],
   "hubs-note": [
     "There are TWO hubs, and which one is authoritative depends on the KIND of rule. This is not",
@@ -114,10 +118,8 @@
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm",
         "Systemorph/CreditReRate",
-        "Systemorph/DecisionModels",
-        "Systemorph/Product-Promotion"
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -157,10 +159,8 @@
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm",
         "Systemorph/CreditReRate",
-        "Systemorph/DecisionModels",
-        "Systemorph/Product-Promotion"
+        "Systemorph/DecisionModels"
       ],
       "slots": [
         "doc-home",
@@ -216,8 +216,7 @@
         "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm"
+        "Systemorph/Memex"
       ],
       "slots": [
         "reference"
@@ -248,9 +247,8 @@
         "SocialMedia#205, Manufacturing#101, Memex#409; step 3 this entry's widening. Crm#127",
         "carries the same text, unregistered — see the paragraph above.",
         "",
-        "Systemorph/MeshWeaver.Crm was absent from this register until 2026-10-17 (the fleet-reader App",
-        "had to reach it first). It is registered with the baseline rollout, its copy refreshed to the",
-        "current hub text in Crm#174.",
+        "Systemorph/MeshWeaver.Crm is still absent: it joins the register when Crm#174 (every",
+        "baseline block, this one refreshed to the current hub text) has merged.",
         "",
         "TEXT CHANGE LANDED (2026-10-03/04, the update contract: after a DisposeRequest the next",
         "activation binds the NEWEST build, the old one keeps serving until then). Step 1 is this",
@@ -275,8 +273,7 @@
         "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm"
+        "Systemorph/Memex"
       ],
       "slots": [
         "reference"
@@ -311,14 +308,9 @@
         "Systemorph/MeshWeaver",
         "Systemorph/MeshWeaver.Plugins",
         "Systemorph/MeshWeaver.Education",
-        "Systemorph/MeshWeaver.Reinsurance",
-        "Systemorph/MeshWeaver.SocialMedia",
-        "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm",
         "Systemorph/CreditReRate",
-        "Systemorph/DecisionModels",
-        "Systemorph/Product-Promotion"
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -355,8 +347,8 @@
         "between (1) and (3) is the one moment this block is compared nowhere; close it the same day.",
         "",
         "Step 2 of that text change was still owed on 2026-10-17 — all six spokes carried the old",
-        "text — and landed with the baseline rollout (Plugins#3831, Education#398, Reinsurance#265,",
-        "SocialMedia#249, Manufacturing#134, Memex#769); required-in then widened to the baseline."
+        "text — and lands with the baseline rollout (Plugins#3831, Education#398, Memex#769 merged;",
+        "Reinsurance#265, SocialMedia#249, Manufacturing#134 open); required-in names the merged ones."
       ]
     },
     {
@@ -366,14 +358,9 @@
         "Systemorph/MeshWeaver",
         "Systemorph/MeshWeaver.Plugins",
         "Systemorph/MeshWeaver.Education",
-        "Systemorph/MeshWeaver.Reinsurance",
-        "Systemorph/MeshWeaver.SocialMedia",
-        "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm",
         "Systemorph/CreditReRate",
-        "Systemorph/DecisionModels",
-        "Systemorph/Product-Promotion"
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -417,8 +404,7 @@
         "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex",
-        "Systemorph/MeshWeaver.Crm"
+        "Systemorph/Memex"
       ],
       "slots": [],
       "why": [
