@@ -59,7 +59,7 @@ public static class ServiceIdentitiesSettingsTab
         });
 
         stack = stack
-            .WithView(Controls.Title(host.Localize("serviceIdentities.title"), 2))
+            .WithView(Controls.H2(host.Localize("serviceIdentities.title")))
             .WithView(Controls.Markdown(host.Localize("serviceIdentities.intro")));
 
         stack = stack.WithView(Section(host, "serviceIdentities.createHeading", Row()
@@ -137,7 +137,7 @@ public static class ServiceIdentitiesSettingsTab
         // the click says which token it is.
         var failed = (Func<string, string>)(message => $"{host.Localize("serviceIdentities.error")} {message}");
         stack = stack
-            .WithView(Controls.Title(host.Localize("serviceIdentities.listHeading"), 3))
+            .WithView(Controls.H3(host.Localize("serviceIdentities.listHeading")))
             .WithView(IdentityRowsFeed(host)
                 .BindGrid(ListDataId, host.Localize("serviceIdentities.none"), failed)
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.ObjectId).ToCamelCase() }
@@ -148,7 +148,7 @@ public static class ServiceIdentitiesSettingsTab
                     .WithTitle(host.Localize("serviceIdentities.column.status")))
                 .WithColumn(new PropertyColumnControl<string> { Property = nameof(IdentityRow.IssuedBy).ToCamelCase() }
                     .WithTitle(host.Localize("serviceIdentities.column.issuedBy"))))
-            .WithView(Controls.Title(host.Localize("serviceIdentities.tokensHeading"), 3))
+            .WithView(Controls.H3(host.Localize("serviceIdentities.tokensHeading")))
             .WithView(TokenGrid(host, TokenRowsFeed(host, tokens),
                 rotate: (ctx, token) => Rotate(ctx, host, tokens, token),
                 revoke: (ctx, token) => Revoke(ctx, host, tokens, token)));
@@ -344,7 +344,7 @@ public static class ServiceIdentitiesSettingsTab
     private static UiControl Section(LayoutAreaHost host, string headingKey, UiControl body)
         => Controls.Stack.WithWidth("100%")
             .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; gap: 12px; margin-bottom: 24px;")
-            .WithView(Controls.Title(host.Localize(headingKey), 3))
+            .WithView(Controls.H3(host.Localize(headingKey)))
             .WithView(body);
 
     private static UiControl Text(LayoutAreaHost host, string dataId, string field, string labelKey, string width)

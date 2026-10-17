@@ -7,6 +7,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -147,9 +148,7 @@ public static class SettingsLayoutArea
             // (flex-shrink:0 for the same fill-area shrink-clipping reason as on the splitter).
             return Controls.Stack.WithWidth("100%")
                 .WithStyle("display: flex; flex-direction: column; flex: 1 0 auto;")
-                .WithView(Controls.Html(
-                    "<div style=\"padding: 8px 16px; background: var(--neutral-layer-3); border-bottom: 1px solid var(--neutral-stroke-rest); " +
-                    "color: var(--neutral-foreground-hint); font-size: 0.85rem; text-align: center;\">Read-only — you do not have edit permissions</div>"))
+                .WithView(Controls.MessageBar(host.Localize("settings.readOnlyNotice")).WithIntent(MessageBarIntent.Info))
                 .WithView(settingsPage);
         }
 
@@ -181,14 +180,16 @@ public static class SettingsLayoutArea
         items = [.. items.Select(i => i.Localized(access))];
         var title = Title(host, node);
 
-        var searchBox = (new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Search settings…")
-                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(searchDataId) })
-            .WithClass("settings-menu-search");
+        // The platform's text field, bound to the search slot — no class, no stylesheet rule of
+        // its own: the pane's vertical gap is the only spacing it gets.
+        var searchBox = new TextFieldControl(new JsonPointerReference(""))
+                .WithPlaceholder(host.Localize(MenuSearchPlaceholderKey))
+                .WithImmediate(true) with { DataContext = LayoutAreaReference.GetDataPointer(searchDataId) };
 
         return Controls.Stack
             .WithClass("settings-menu-pane")
             .WithWidth("100%")
+            .WithVerticalGap(8)
             .WithView(searchBox)
             .WithView(
                 (h, c) => h.GetDataStream<string>(searchDataId)
@@ -320,7 +321,7 @@ public static class SettingsLayoutArea
             ?? items.FirstOrDefault();
 
         if (matchedItem == null)
-            return stack.WithView(Controls.Html("<p><em>No settings tabs available.</em></p>"));
+            return stack.WithView(Controls.MessageBar(host.Localize("settings.noTabs")));
 
         try
         {
@@ -328,8 +329,10 @@ public static class SettingsLayoutArea
         }
         catch (Exception ex)
         {
-            return stack.WithView(Controls.Html(
-                $"<p style=\"color: var(--warning-color);\">Failed to load tab: {System.Web.HttpUtility.HtmlEncode(ex.Message)}</p>"));
+            // Plain text in a message bar: the exception message is data, never markup.
+            return stack.WithView(Controls.MessageBar(ex.Message)
+                .WithIntent(MessageBarIntent.Error)
+                .WithTitle(host.Localize("settings.tabFailed")));
         }
     }
 
@@ -339,7 +342,7 @@ public static class SettingsLayoutArea
     {
         if (node == null)
         {
-            stack = stack.WithView(Controls.Html("<p><em>Node not found.</em></p>"));
+            stack = stack.WithView(Controls.MessageBar(host.Localize("settings.nodeNotFound")));
             return stack;
         }
 
@@ -352,9 +355,9 @@ public static class SettingsLayoutArea
         // (Identity + Timestamps are read-only and rendered from the snapshot `meta`.)
         var nodeContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
 
-        stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
-        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, node.Path, nodeContext)));
-        stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta, host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.identity"), BuildIdentitySection(host, meta)));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.display"), BuildDisplaySection(host, node.Path, nodeContext)));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.timestamps"), BuildTimestampsSection(host, meta, host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())));
 
         return stack;
     }
@@ -409,8 +412,8 @@ public static class SettingsLayoutArea
         var hubPath = host.Hub.Address.ToString();
         if (host.Hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
         {
-            return stack.WithView(Controls.Html(
-                "<p style=\"color: var(--warning-color);\">Row-Level Security is not enabled.</p>"));
+            return stack.WithView(Controls.MessageBar(host.Localize("effectiveAccess.rlsDisabled"))
+                .WithIntent(MessageBarIntent.Warning));
         }
 
         stack = stack.WithView(Controls.H2(host.Localize("settings.effectiveAccess")).WithStyle("margin: 0 0 16px 0;"));
@@ -419,8 +422,19 @@ public static class SettingsLayoutArea
 
         var formId = $"effectiveAccess_{hubPath.Replace("/", "_")}";
         var resultId = $"effectiveAccessResult_{hubPath.Replace("/", "_")}";
+        var rowsId = $"effectiveAccessRows_{hubPath.Replace("/", "_")}";
+        var noticeId = $"effectiveAccessNotice_{hubPath.Replace("/", "_")}";
         host.UpdateData(formId, new Dictionary<string, object?> { ["userId"] = "" });
         host.UpdateData(resultId, "");
+        host.UpdateData(noticeId, "");
+        // The texts the click writes, resolved HERE on the render turn — the click's continuation
+        // runs off the viewer's delivery, where the viewer's language is no longer ambient.
+        var needUser = host.Localize("effectiveAccess.needUser");
+        var allowed = host.Localize("effectiveAccess.allowed");
+        var denied = host.Localize("effectiveAccess.denied");
+        var locale = host.ViewerLocale();
+        var permissionTitle = host.Localize("effectiveAccess.colPermission");
+        var statusTitle = host.Localize("effectiveAccess.colStatus");
 
         var userField = new TextFieldControl(new JsonPointerReference("userId"))
         {
@@ -433,14 +447,14 @@ public static class SettingsLayoutArea
 
         stack = stack.WithView(Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("margin-top: 12px; gap: 8px;")
+            .WithHorizontalGap(8)
             .WithView(Controls.Button(host.Localize("ui.check"))
                 .WithAppearance(Appearance.Accent)
                 .WithReactiveClickAction(ctx =>
                 {
                     // Pure reactive — read the form value, then SelectMany into the permission
-                    // stream and write the rendered HTML back to the result data slot. RETURNED
-                    // to the click, so a fault in either read is the click's visible refusal.
+                    // stream and write the verdict rows + their heading back to the data slots.
+                    // RETURNED to the click, so a fault in either read is the click's visible refusal.
                     return ctx.Host.Stream.GetDataStream<Dictionary<string, object?>>(formId)
                         .Take(1)
                         .SelectMany(data =>
@@ -448,24 +462,42 @@ public static class SettingsLayoutArea
                             var userId = data?.GetValueOrDefault("userId")?.ToString()?.Trim() ?? "";
                             if (string.IsNullOrEmpty(userId))
                             {
-                                ctx.Host.UpdateData(resultId, "<p style=\"color: var(--warning-color);\">Please enter a user ID.</p>");
+                                ctx.Host.UpdateData(resultId, "");
+                                ctx.Host.UpdateData(noticeId, needUser);
                                 return Observable.Empty<(string UserId, Permission Perms)>();
                             }
                             return host.Hub.GetEffectivePermissions(hubPath, userId)
                                 .Take(1)
                                 .Select(perms => (UserId: userId, Perms: perms));
                         })
-                        .Do(t => ctx.Host.UpdateData(resultId,
-                            BuildPermissionResultHtml(t.UserId, t.Perms)))
+                        .Do(t =>
+                        {
+                            ctx.Host.UpdateData(noticeId, "");
+                            ctx.Host.UpdateData(rowsId, PermissionRows(t.Perms, allowed, denied));
+                            ctx.Host.UpdateData(resultId, t.UserId);
+                        })
                         .Select(_ => System.Reactive.Unit.Default);
                 })));
 
+        // The validation message, when the check ran without a user id.
+        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(noticeId)
+            .Select(notice => string.IsNullOrEmpty(notice)
+                ? (UiControl)Controls.Stack
+                : Controls.MessageBar(notice).WithIntent(MessageBarIntent.Warning)));
+
+        // The verdict: a heading + a DataGrid bound to the rows slot (a template — the grid reads
+        // the rows the click wrote), keyed on the user the check ran for.
         stack = stack.WithView((h, _) =>
         {
             return h.Stream.GetDataStream<string>(resultId)
-                .Select(html => string.IsNullOrEmpty(html)
+                .Select(userId => string.IsNullOrEmpty(userId)
                     ? (UiControl)Controls.Stack
-                    : (UiControl)Controls.Html(html));
+                    : Section(LocalizationCatalog.Get("effectiveAccess.heading", locale, userId),
+                            Controls.DataGrid(new JsonPointerReference(LayoutAreaReference.GetDataPointer(rowsId)))
+                                .WithColumn(new PropertyColumnControl<string>
+                                    { Property = nameof(PermissionRow.Permission).ToCamelCase() }.WithTitle(permissionTitle))
+                                .WithColumn(new PropertyColumnControl<string>
+                                    { Property = nameof(PermissionRow.Status).ToCamelCase() }.WithTitle(statusTitle))));
         });
 
         return stack;
@@ -483,77 +515,70 @@ public static class SettingsLayoutArea
 
     #region Helpers
 
-    // Modern-business section card. The card / header / body styling lives in
-    // standard-page-layout.css (.settings-section[-header|-body]) so it's consistent across tabs
-    // and tweakable in one place — only the title text is dynamic here.
-    private static UiControl BuildSection(string title, UiControl content)
-    {
-        return Controls.Stack
-            .WithClass("settings-section")
+    /// <summary>
+    /// One settings section: a card (<see cref="Skins.Card"/>) with the section title as an H4
+    /// heading above its content — the platform's card, not a stylesheet class of this page's own.
+    /// For any settings tab that groups its fields into sections.
+    /// </summary>
+    /// <param name="title">The section title, already localized.</param>
+    /// <param name="content">The section body.</param>
+    /// <returns>The section control.</returns>
+    public static UiControl Section(string title, UiControl content)
+        => Controls.Stack
             .WithWidth("100%")
-            .WithView(Controls.Html(
-                $"<div class=\"settings-section-header\">{System.Web.HttpUtility.HtmlEncode(title)}</div>"))
-            .WithView(Controls.Stack.WithClass("settings-section-body").WithWidth("100%").WithView(content));
-    }
+            .WithView(Controls.Stack
+                .WithWidth("100%")
+                .WithVerticalGap(12)
+                .WithView(Controls.H4(title))
+                .WithView(content))
+            .AddSkin(Skins.Card.WithWidth("100%"));
 
-    // Responsive metadata grid: label/value cells flow into as many columns as the width
-    // allows — one column on narrow screens, several on a wide one — instead of a fixed
-    // two-column (label | value) layout that wasted horizontal space.
-    private const string MetaGridStyle =
-        "display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); " +
-        "gap: 14px 28px; font-size: 0.9rem; align-items: start;";
+    private static UiControl BuildSection(string title, UiControl content) => Section(title, content);
 
-    private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
-    {
-        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
-        // Node Type first, as a direct link to the type's Configuration area.
-        grid = AddNodeTypeField(grid, meta.NodeType);
-        grid = AddReadOnlyField(grid, "Id", meta.Id);
-        grid = AddReadOnlyField(grid, "Namespace", meta.Namespace);
-        grid = AddReadOnlyField(grid, "State", meta.State.ToString());
-        grid = AddReadOnlyField(grid, "Version", meta.Version.ToString());
-        return grid;
-    }
+    /// <summary>
+    /// A responsive grid of read-only facts: each cell spans the full width on a phone, half on a
+    /// tablet and a third on a wide screen (<see cref="LayoutGridControl"/>).
+    /// </summary>
+    private static LayoutGridControl FactGrid(IEnumerable<UiControl> facts)
+        => facts.Aggregate(Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3)),
+            (grid, fact) => grid.WithView(fact, cell => cell.WithXs(12).WithSm(6).WithMd(4)));
+
+    private static UiControl BuildIdentitySection(LayoutAreaHost host, MeshNodeMetadata meta)
+        => FactGrid([
+            // Node Type first, as a direct link to the type's Configuration area.
+            NodeTypeFact(host.Localize("settings.meta.nodeType"), meta.NodeType),
+            Fact(host.Localize("settings.meta.id"), meta.Id),
+            Fact(host.Localize("settings.meta.namespace"), meta.Namespace),
+            Fact(host.Localize("settings.meta.state"), meta.State.ToString()),
+            Fact(host.Localize("settings.meta.version"), meta.Version.ToString()),
+        ]);
 
     /// <summary>
     /// Node Type cell: NodeTypes are themselves MeshNodes, so the type name links straight
     /// to the type definition's Configuration area (same pattern as the header meta row).
     /// </summary>
-    private static StackControl AddNodeTypeField(StackControl grid, string? nodeType)
+    private static UiControl NodeTypeFact(string label, string? nodeType)
     {
-        string valueHtml;
         if (string.IsNullOrEmpty(nodeType) || nodeType == MeshNode.NodeTypePath)
-        {
-            valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(nodeType ?? "—")}</span>";
-        }
-        else
-        {
-            var href = MeshNodeLayoutAreas.BuildUrl(nodeType, NodeTypeLayoutAreas.ConfigurationArea);
-            var label = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
-            valueHtml =
-                $"<a href=\"{System.Web.HttpUtility.HtmlEncode(href)}\" " +
-                "style=\"color: var(--accent-fill-rest); font-weight: 500; text-decoration: none; word-break: break-word;\">" +
-                $"{System.Web.HttpUtility.HtmlEncode(label)}</a>";
-        }
-        return grid.WithView(Controls.Html(BuildMetaCell("Node Type", valueHtml)));
+            return Fact(label, nodeType);
+        var href = MeshNodeLayoutAreas.BuildUrl(nodeType, NodeTypeLayoutAreas.ConfigurationArea);
+        var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
+        return Controls.Stack
+            .WithVerticalGap(2)
+            .WithView(Controls.Subject(label))
+            .WithView(Controls.Link(typeName, href));
     }
 
-    private static StackControl AddReadOnlyField(StackControl grid, string label, string? value)
-    {
-        var valueHtml = $"<span style=\"word-break: break-word;\">{System.Web.HttpUtility.HtmlEncode(value ?? "—")}</span>";
-        return grid.WithView(Controls.Html(BuildMetaCell(label, valueHtml)));
-    }
-
-    private static string BuildMetaCell(string label, string valueHtml) =>
-        "<div style=\"display: flex; flex-direction: column; gap: 2px; min-width: 0;\">" +
-        "<span style=\"color: var(--neutral-foreground-hint); font-weight: 600; font-size: 0.72rem; " +
-        $"text-transform: uppercase; letter-spacing: 0.04em;\">{System.Web.HttpUtility.HtmlEncode(label)}</span>" +
-        valueHtml +
-        "</div>";
+    /// <summary>A label/value fact: the label in the subject typography, the value as body text.</summary>
+    private static UiControl Fact(string label, string? value)
+        => Controls.Stack
+            .WithVerticalGap(2)
+            .WithView(Controls.Subject(label))
+            .WithView(Controls.Body(string.IsNullOrEmpty(value) ? "—" : value));
 
     private static UiControl BuildDisplaySection(LayoutAreaHost host, string nodePath, string nodeContext)
     {
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("gap: 16px;");
+        var stack = Controls.Stack.WithWidth("100%").WithVerticalGap(16);
 
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
         {
@@ -565,8 +590,8 @@ public static class SettingsLayoutArea
         // Description + Generate button on its own row, matching the icon layout below.
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
-            .WithStyle("gap: 8px;")
-            .WithView(Controls.Html("<label style=\"font-weight: 500; font-size: 0.85rem;\">Description</label>"))
+            .WithVerticalGap(8)
+            .WithView(Controls.Subject(host.Localize("settings.meta.description")))
             .WithView(new MarkdownEditorControl
             {
                 Value = new JsonPointerReference(nameof(MeshNode.Description)),
@@ -609,24 +634,23 @@ public static class SettingsLayoutArea
         var collections = contentService?.GetAllCollectionConfigs()?.ToList() ?? [];
         var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
 
-        var section = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
-        section = section.WithView(Controls.Html(
-            "<label style=\"font-weight: 500; font-size: 0.85rem;\">Icon</label>"));
+        var section = Controls.Stack.WithWidth("100%").WithVerticalGap(8);
+        section = section.WithView(Controls.Subject(host.Localize("settings.meta.icon")));
 
-        // Live preview + Regenerate button. The preview is a TEMPLATE bound to the projected
-        // markup of the node's Icon (the same field the Icon Path box below binds to), so it is
-        // drawn at once and tracks edits live — it no longer waits for the node before it renders.
-        var previewId = $"iconPreview_{nodePath.Replace("/", "_")}";
+        // Live preview + Regenerate button. The preview is the platform's ImageControl bound
+        // DIRECTLY to the node's Icon (the same field the Icon Path box below binds to), so it is
+        // drawn at once and tracks edits live; ImageControl renders every shape a node icon holds
+        // (image URL / data URI / content: reference, inline svg as an image, glyph, Fluent name).
         section = section.WithView(Controls.Stack
             .WithWidth("100%")
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
-            .WithStyle("align-items: center;")
-            .WithView((Controls.Html(new JsonPointerReference(IconPreviewMarkupPointer)) with
-                {
-                    DataContext = LayoutAreaReference.GetDataPointer(previewId)
-                })
-                .PublishingTo(previewId, IconPreviewProjection(host, nodePath)))
+            .WithVerticalAlignment(VerticalAlignment.Center)
+            // Decorative alt: the "Icon" label above already says what it is. NodePath lets the
+            // renderer resolve a `content:` reference (what "Use as Icon" writes) to its URL.
+            .WithView(Controls.Image(new JsonPointerReference(nameof(MeshNode.Icon)), "")
+                .WithNodePath(nodePath)
+                with { DataContext = nodeContext })
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
@@ -705,22 +729,6 @@ public static class SettingsLayoutArea
 
         return section;
     }
-
-    /// <summary>The icon preview's markup as data, at the pointer the preview control binds to.</summary>
-    /// <param name="Markup">The 48px preview markup (<see cref="CreateLayoutArea.IconPreviewMarkup"/>).</param>
-    internal sealed record IconPreview(string Markup);
-
-    /// <summary>The pointer of <see cref="IconPreview.Markup"/> inside its data slot (camelCase on the wire).</summary>
-    private static readonly string IconPreviewMarkupPointer =
-        nameof(IconPreview.Markup).ToCamelCase() ?? nameof(IconPreview.Markup);
-
-    /// <summary>
-    /// The node's Icon, projected into preview markup — the one read behind the icon picker's
-    /// preview. A projection, not a control: the preview template binds to it and never waits for it.
-    /// </summary>
-    private static IObservable<IconPreview> IconPreviewProjection(LayoutAreaHost host, string nodePath)
-        => host.Workspace.GetMeshNodeStream(nodePath)
-            .Select(node => new IconPreview(CreateLayoutArea.IconPreviewMarkup(node?.Icon)));
 
     /// <summary>
     /// Click handler for the quick-pick "Use as Icon" button: reads the filename the user
@@ -836,44 +844,34 @@ public static class SettingsLayoutArea
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 
-    private static UiControl BuildTimestampsSection(MeshNodeMetadata meta, string? zoneId)
-    {
+    private static UiControl BuildTimestampsSection(LayoutAreaHost host, MeshNodeMetadata meta, string? zoneId)
         // Stored UTC → the viewer's zone. The "zzz" offset stays, so the rendered value
         // still says which offset it is rather than being an unlabelled wall clock.
-        var grid = Controls.Stack.WithWidth("100%").WithStyle(MetaGridStyle);
-        grid = AddReadOnlyField(grid, "Created",
-            meta.CreatedDate == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.CreatedDate, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz"));
-        grid = AddReadOnlyField(grid, "Last Modified",
-            meta.LastModified == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.LastModified, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz"));
-        return grid;
-    }
+        => FactGrid([
+            Fact(host.Localize("settings.meta.created"),
+                meta.CreatedDate == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.CreatedDate, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz")),
+            Fact(host.Localize("settings.meta.lastModified"),
+                meta.LastModified == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.LastModified, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz")),
+        ]);
 
-    private static string BuildPermissionResultHtml(string userId, Permission perms)
-    {
-        var allPerms = new[] { Permission.Read, Permission.Create, Permission.Update, Permission.Delete, Permission.Comment };
-        var rows = string.Join("", allPerms.Select(p =>
-        {
-            var has = perms.HasFlag(p);
-            var icon = has ? "<span style=\"color: #4ade80;\">&#x2713;</span>" : "<span style=\"color: #f87171;\">&#x2717;</span>";
-            return $"<tr><td style=\"padding: 6px 12px;\">{p}</td><td style=\"padding: 6px 12px;\">{icon} {(has ? "Allowed" : "Denied")}</td></tr>";
-        }));
+    /// <summary>The permissions the Effective Access check reports, in display order.</summary>
+    internal static readonly IReadOnlyList<Permission> CheckedPermissions =
+        [Permission.Read, Permission.Create, Permission.Update, Permission.Delete, Permission.Comment];
 
-        return $@"
-            <div style=""margin-top: 16px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; overflow: hidden;"">
-                <div style=""padding: 10px 12px; background: var(--neutral-layer-2); font-weight: 600; font-size: 0.85rem;"">
-                    Permissions for <em>{System.Web.HttpUtility.HtmlEncode(userId)}</em> on this node
-                </div>
-                <table style=""width: 100%; border-collapse: collapse; font-size: 0.85rem;"">
-                    <thead>
-                        <tr style=""border-bottom: 1px solid var(--neutral-stroke-rest); background: var(--neutral-layer-3);"">
-                            <th style=""padding: 6px 12px; text-align: left;"">Permission</th>
-                            <th style=""padding: 6px 12px; text-align: left;"">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>{rows}</tbody>
-                </table>
-            </div>";
-    }
+    /// <summary>One row of the Effective Access verdict grid.</summary>
+    /// <param name="Permission">The permission's name (a wire identifier, not translated).</param>
+    /// <param name="Status">The localized "Allowed" or "Denied".</param>
+    internal sealed record PermissionRow(string Permission, string Status);
+
+    /// <summary>The verdict rows for <paramref name="perms"/> — pure, so a test reads them without rendering.</summary>
+    /// <param name="perms">The user's effective permissions on the node.</param>
+    /// <param name="allowed">The viewer's word for a granted permission.</param>
+    /// <param name="denied">The viewer's word for a withheld permission.</param>
+    internal static IReadOnlyList<PermissionRow> PermissionRows(Permission perms, string allowed, string denied)
+        => [.. CheckedPermissions.Select(p => new PermissionRow(p.ToString(), perms.HasFlag(p) ? allowed : denied))];
+
+    /// <summary>The catalog key of the menu search box's placeholder.</summary>
+    internal const string MenuSearchPlaceholderKey = "settings.searchPlaceholder";
 
     #endregion
 }

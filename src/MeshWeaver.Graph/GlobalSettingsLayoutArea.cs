@@ -145,7 +145,7 @@ public static class GlobalSettingsLayoutArea
             ?? items.FirstOrDefault();
 
         if (matchedItem == null)
-            return stack.WithView(Controls.Html("<p><em>No global settings tabs available.</em></p>"));
+            return stack.WithView(Controls.MessageBar(host.Localize("settings.noTabs")));
 
         try
         {
@@ -153,8 +153,10 @@ public static class GlobalSettingsLayoutArea
         }
         catch (Exception ex)
         {
-            return stack.WithView(Controls.Html(
-                $"<p style=\"color: var(--warning-color);\">Failed to load tab: {System.Web.HttpUtility.HtmlEncode(ex.Message)}</p>"));
+            // Plain text in a message bar: the exception message is data, never markup.
+            return stack.WithView(Controls.MessageBar(ex.Message)
+                .WithIntent(MessageBarIntent.Error)
+                .WithTitle(host.Localize("settings.tabFailed")));
         }
     }
 
