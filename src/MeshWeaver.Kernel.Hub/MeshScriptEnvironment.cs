@@ -6,6 +6,7 @@ using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Scripting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -58,6 +59,25 @@ public static class MeshScriptEnvironment
     /// ~200 MiB-per-session leak documented on <see cref="KernelScriptReferences"/>).
     /// </summary>
     public static MetadataReferenceResolver MetadataResolver => SharedScriptMetadataResolver.Instance;
+
+    /// <summary>
+    /// The <see cref="ScriptOptions"/> a kernel session compiles every submission with, over
+    /// <paramref name="references"/> (normally <see cref="ReferencesAsync"/>): the shared metadata
+    /// resolver, the default <see cref="Imports"/> and debug information. <c>KernelExecutor</c> builds
+    /// its session from this, and <c>DocExecutableCellsCompileTest</c> compiles every executable doc
+    /// cell with it — one definition, so the guard checks exactly what the portal runs.
+    /// </summary>
+    /// <param name="references">The session's metadata references.</param>
+    /// <returns>The script options for one kernel session.</returns>
+    public static ScriptOptions CreateScriptOptions(IEnumerable<MetadataReference> references)
+        => ScriptOptions.Default
+            .WithReferences(references)
+            // 🚨 Required for the reference sharing to be complete: the compilation resolves the
+            // globals type's transitive closure via ResolveMissingAssembly — with the default
+            // resolver that re-materializes every assembly's native metadata PER SESSION.
+            .WithMetadataResolver(MetadataResolver)
+            .WithImports(Imports)
+            .WithEmitDebugInformation(true);
 
     /// <summary>
     /// The curated assembly anchors plus the DI-contributed assemblies for one script session:
