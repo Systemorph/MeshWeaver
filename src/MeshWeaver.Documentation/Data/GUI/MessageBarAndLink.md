@@ -75,7 +75,7 @@ Controls.Stack
     .WithWrap(true)
     .WithView(Controls.Link("Data binding", "/Doc/GUI/DataBinding"))
     .WithView(Controls.Link("Fluent UI", "https://www.fluentui-blazor.net/").WithOpenInNewTab())
-    .WithView(Controls.Link("Download the sample", "/static/sample.csv").WithDownload("sample.csv"))
+    .WithView(Controls.Link("Download the report", "/api/content/ACME/Reports/sample.csv").WithDownload("sample.csv"))
     .WithView(Controls.Link("Write to support", "mailto:support@example.com").WithTooltip("Opens your mail app"))
 ```
 
@@ -87,6 +87,10 @@ Controls.Stack
 
 Write a mesh path as an absolute path (`/Doc/GUI`). Never write `@/…` in an `href`: that form is for
 markdown links only.
+
+A file that belongs to a node is downloaded through `/api/content/{node}/{file}`, which checks that the
+reader may read the owning node. Never point a link at `/static/…` for mesh content: `/static` serves
+only the build's own assets and checks no permission at all.
 
 ## Href safety
 
