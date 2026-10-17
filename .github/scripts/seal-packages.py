@@ -239,56 +239,61 @@ def _lines(path: Path) -> list[str]:
 WORKTREE = None  # the content checkout itself: what a package sealed FRESH is baked from
 
 
+_QUERY_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")        # CodeQueryResolver.NamePattern
+_CODE_INCLUDE = re.compile(r"@@(\w[\w\-./]*)")                      # NodeCompileShaping.CodeIncludePattern
+_COMPILED_EXTENSIONS = (".cs", ".json")                             # where a Code node's text lives
+
+
+def _is_bare_path(value: str) -> bool:
+    """CodeQueryResolver.IsBarePath, conservatively: one unquoted term holding a `/` and no field
+    qualifier is a path reference, exactly like its `@` spelling (MeshWeaver#5508)."""
+    return ("/" in value and not any(ch.isspace() for ch in value) and ":" not in value
+            and '"' not in value and "'" not in value and not value.startswith("-"))
+
+
 def _query_target(entry: str) -> str | None:
-    """The node-path prefix a `sources` entry reads in ANOTHER package, None when package-local or
-    unreadable. The grammar of MeshWeaver.Plugins' scripts/affected-modules.py (`first_segment_of` /
-    `query_path`): an optional `name=` prefix, `@`/`@@` shorthand, else the first `namespace:` /
-    `path:` token — whose single-segment form is package-local."""
-    value = entry
+    """The node-path prefix a `sources` / `tests` entry reads, None when package-local or
+    unreadable. A port of CodeQueryResolver.ParseName + Expand: the `name=` prefix only when the
+    name is an identifier (`NamePattern`) and the rest is non-empty, both sides trimmed; `$self`
+    is the NodeType's own path (package-local); `@`, `@@` and a BARE PATH are path references; a
+    reference that still carries a `:` and every other entry is a query whose `namespace:` /
+    `path:` token names the location — a single-segment `namespace:` is rebased under the type."""
+    value = entry.strip()
     eq = value.find("=")
-    if eq > 0 and " " not in value[:eq] and ":" not in value[:eq]:
-        value = value[eq + 1:]
-    if value.startswith("@@"):
-        target = value[2:]
-    elif value.startswith("@"):
-        target = value[1:]
-    else:
-        target = None
-        for token in value.split(" "):
-            for key in ("namespace:", "path:"):
-                if token.startswith(key):
-                    candidate = token[len(key):].strip("/")
-                    target = candidate if "/" in candidate else None
-                    break
-            else:
-                continue
-            break
-    if not target:
+    if eq > 0:
+        name, rest = value[:eq].rstrip(), value[eq + 1:].strip()
+        if rest and _QUERY_NAME.match(name):
+            value = rest
+    if "$self" in value:
         return None
-    return target.split(" ", 1)[0].strip("/") or None
+    if value.startswith("@") or _is_bare_path(value):
+        stripped = value.lstrip("@").lstrip()
+        if not stripped:
+            return None
+        if ":" not in stripped:
+            return stripped.strip("/") or None
+        value = stripped
+    for token in value.split():
+        for key in ("namespace:", "path:"):
+            if token.startswith(key):
+                candidate = token[len(key):].strip("/")
+                return candidate if "/" in candidate else None
+    return None
 
 
-def _cross_package_sources(documents: list[str], package: str) -> dict[str, tuple[str, ...]]:
-    """{other package: (path prefixes it reads)} over the NodeType definitions in `documents`."""
-    found: dict[str, set[str]] = {}
-    for text in documents:
-        if "NodeTypeDefinition" not in text:
-            continue  # the cheap filter: most JSON in a package is instances, not NodeTypes
-        doc = _json(text)
-        content = (doc or {}).get("content")
-        if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
-            continue
-        for entry in content.get("sources") or []:
-            target = _query_target(entry) if isinstance(entry, str) else None
-            other = target.split("/", 1)[0] if target else None
-            if other and other != package:
-                found.setdefault(other, set()).add(target)
-    return {p: tuple(sorted(v)) for p, v in sorted(found.items())}
+def _first(path: str) -> str:
+    return path.split("/", 1)[0]
 
 
 class SourceIncludes:
-    """Reads, per (commit, package), which other packages' sources the package's NodeTypes compile,
-    and whether those files are identical between two commits. `WORKTREE` stands for the checkout."""
+    """Reads, per (commit, package), which other packages' files the package's compiled bytes were
+    built from, and whether those files are identical between two commits. `WORKTREE` stands for
+    the checkout.
+
+    What counts mirrors the compiler: every NodeType's `sources` AND `tests` (NodeSet.ResolveSources
+    compiles their union), plus every `@@` include (NodeCompileShaping.ResolveCodeIncludes, hashed by
+    NodeTypeSourceFingerprint.ComputeWithIncludes) — in the package's own files and, transitively, in
+    every file it reads from another package."""
 
     def __init__(self, repo: Path):
         self.repo = repo
@@ -306,26 +311,58 @@ class SourceIncludes:
             self._known[commit] = self._git("cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
         return self._known[commit]
 
+    def _texts(self, commit: str | None, prefix: str, needle: str) -> list[str]:
+        """The text of every compiled-extension file under `prefix` (a folder, or `<prefix>.<ext>`)
+        at `commit` that contains `needle`."""
+        if commit is WORKTREE:
+            base = self.repo / prefix
+            files = list(base.rglob("*")) if base.is_dir() else []
+            if base.parent.is_dir():
+                files += [base.parent / f"{base.name}{ext}" for ext in _COMPILED_EXTENSIONS]
+            texts = (_read(f) for f in sorted(files) if f.is_file() and f.suffix in _COMPILED_EXTENSIONS)
+            return [t for t in texts if t and needle in t]
+        listed = self._git("grep", "-l", "-F", needle, commit, "--", prefix, *(f"{prefix}{ext}" for ext in _COMPILED_EXTENSIONS))
+        if listed.returncode not in (0, 1):  # 1 = no match
+            raise SystemExit(f"✗ seal-packages: could not read {prefix} at {_short(commit)} "
+                             f"({listed.stderr.strip()}) — what a build compiled cannot be decided")
+        paths = [line.split(":", 1)[1] for line in listed.stdout.splitlines() if ":" in line]
+        texts = (_git_show(self.repo, commit, p) for p in paths if p.endswith(_COMPILED_EXTENSIONS))
+        return [t for t in texts if t]
+
     def edges(self, commit: str | None, package: str) -> dict[str, tuple[str, ...]] | None:
-        """None when `commit` is not in the checkout (shallow, or a fixture commit)."""
+        """{other package: (path prefixes read)}; None when `commit` is not in the checkout."""
         key = (commit, package)
         if key in self._edges:
             return self._edges[key]
-        if commit is WORKTREE:
-            root = self.repo / package
-            docs = [t for t in (_read(p) for p in sorted(root.rglob("*.json"))) if t] if root.is_dir() else []
-            value = _cross_package_sources(docs, package)
-        elif not self.resolvable(commit):
-            value = None
-        else:
-            listed = self._git("grep", "-l", "-F", "NodeTypeDefinition", commit, "--", f"{package}/")
-            if listed.returncode not in (0, 1):  # 1 = no match
-                raise SystemExit(f"✗ seal-packages: could not read {package}'s NodeType definitions at "
-                                 f"{_short(commit)} ({listed.stderr.strip()})")
-            paths = [line.split(":", 1)[1] for line in listed.stdout.splitlines()
-                     if ":" in line and line.endswith(".json")]
-            docs = [t for t in (_git_show(self.repo, commit, p) for p in paths) if t]
-            value = _cross_package_sources(docs, package)
+        if not self.resolvable(commit):
+            self._edges[key] = None
+            return None
+        found: dict[str, set[str]] = {}
+        pending: list[str] = []
+
+        def add(target: str) -> None:
+            target = target.strip().rstrip("./")
+            other = _first(target) if target else ""
+            if other and other != package and target not in found.setdefault(other, set()):
+                found[other].add(target)
+                pending.append(target)
+
+        for text in self._texts(commit, package, "NodeTypeDefinition"):
+            content = (_json(text) or {}).get("content")
+            if not isinstance(content, dict) or content.get("$type") != "NodeTypeDefinition":
+                continue
+            for entry in [*(content.get("sources") or []), *(content.get("tests") or [])]:
+                target = _query_target(entry) if isinstance(entry, str) else None
+                if target:
+                    add(target)
+        for text in self._texts(commit, package, "@@"):
+            for match in _CODE_INCLUDE.finditer(text):
+                add(match.group(1))
+        while pending:  # what another package's files @@-include is compiled in too
+            for text in self._texts(commit, pending.pop(), "@@"):
+                for match in _CODE_INCLUDE.finditer(text):
+                    add(match.group(1))
+        value = {p: tuple(sorted(v)) for p, v in sorted(found.items()) if v}
         self._edges[key] = value
         return value
 
@@ -338,7 +375,7 @@ class SourceIncludes:
         if key in self._same:
             return self._same[key]
         revs = [c for c in (a, b) if c is not WORKTREE]
-        specs = [s for p in prefixes for s in (p, f":(glob){p}.*")]
+        specs = [s for p in prefixes for s in (p, *(f"{p}{ext}" for ext in _COMPILED_EXTENSIONS))]
         done = self._git("diff", "--quiet", *revs, "--", *specs)
         if done.returncode in (0, 1):
             self._same[key] = done.returncode == 0
@@ -468,12 +505,30 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
                             "written, and the existing publication stays sealed and intact.")
                     continue
                 for dependency, prefixes in reads.items():
+                    where = ", ".join(prefixes)
                     if dependency not in shipped:
+                        # A provider held OUT (never sealed) is no exemption: a fresh dependent would
+                        # be sealed over sources no consumer of this publication receives. A
+                        # content-only or another repository's package is not in `absent`.
+                        if dependency in absent and dependent not in held:
+                            sourced[dependent] = (f"its NodeTypes compile {where}, and {dependency} waits and has "
+                                                  "never been sealed — so it waits with it (carried, or out)")
+                            waiting.append(dependent)
+                            hold(dependent)
+                            return True
                         continue
                     against = at(dependency)
                     if against is False or includes.same(built, against, prefixes):
                         continue
-                    where = ", ".join(prefixes)
+                    if (dependency not in held and dependent in held and f"{dependency}.zip" not in listed):
+                        # A NEW provider under a carried dependent: the sealed publication never held
+                        # it, so holding it out keeps exactly what that publication was.
+                        sourced[dependency] = (f"{dependent} waits at {_short(built)} and its NodeTypes compile "
+                                               f"{where}; {dependency} has never been sealed, so it stays out "
+                                               f"until {dependent} can be sealed with it")
+                        waiting.append(dependency)
+                        hold(dependency)
+                        return True
                     if (dependency not in held and carries_cleanly(dependency)
                             and sealed_at.get(dependency)
                             and includes.same(built, sealed_at[dependency], prefixes)):
@@ -685,15 +740,19 @@ def floor_violations(listing: dict, repo: Path, withheld: list[str],
     return problems, notes
 
 
-def source_include_violations(listing: dict, repo: Path, state: Path | None) -> tuple[list[str], list[str]]:
-    """(refusals, notes) for the source-include rule (see SourceIncludes): a pair whose included files
-    differ between the commits this listing seals them from is REFUSED when the sealed publication held
-    the same two packages consistently — this listing would introduce an unadoptable build — and only
-    noted when it was already so there."""
+def source_include_violations(listing: dict, repo: Path, state: Path | None,
+                              never_sealed: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """(refusals, notes) for the source-include rule (see SourceIncludes). A pair whose included files
+    differ between the commits this listing seals them from is REFUSED unless the sealed publication is
+    POSITIVELY shown to have held the same two packages split already (then it is noted: refusing would
+    keep exactly that publication). Anything that cannot be checked refuses — a carried build with no
+    readable commit, a provider whose commit is unknown — and so does a fresh dependent of a provider
+    that waits and was never sealed (its sources reach no consumer)."""
     includes = SourceIncludes(repo)
     listed = set(_lines(state / STATE_BUNDLES)) if state is not None else set()
     before = _sealed_commits(state, listed) if state is not None else {}
     by_name = {e["package"]: e for e in listing["packages"]}
+    absent = never_sealed or set()
 
     def sealed_from(entry: dict):
         return entry.get("sourceCommit") if entry.get("carried") else WORKTREE
@@ -702,33 +761,37 @@ def source_include_violations(listing: dict, repo: Path, state: Path | None) -> 
     notes: list[str] = []
     for name, entry in sorted(by_name.items()):
         built = sealed_from(entry)
-        if entry.get("carried") and not built:
-            continue  # a legacy carried build with no recorded commit: nothing to compare against
-        reads = includes.edges(built, name)
+        reads = includes.edges(built, name) if not (entry.get("carried") and not built) else None
         if reads is None:
-            if includes.edges(WORKTREE, name):
-                problems.append(f"{name} is carried at {_short(built)}, which this checkout does not hold, and its "
-                                "NodeTypes compile other packages' sources — whether its bytes match the sources "
-                                "this listing seals cannot be decided")
+            if any(p in by_name or p in absent for p in includes.edges(WORKTREE, name) or {}):
+                problems.append(f"{name} is carried at {_short(built)}, which this checkout cannot read, and it "
+                                "compiles other packages' sources — whether its bytes match the sources this "
+                                "listing seals cannot be decided")
             continue
         for dependency, prefixes in reads.items():
+            where = ", ".join(prefixes)
             other = by_name.get(dependency)
             if other is None:
+                if dependency in absent and not entry.get("carried"):
+                    problems.append(f"{name} (fresh) compiles {where}, but {dependency} waits and has never been "
+                                    "sealed — no consumer of this publication receives those sources")
                 continue
             against = sealed_from(other)
             if other.get("carried") and not against:
+                problems.append(f"{name} compiles {where}, and {dependency} is carried with no recorded commit — "
+                                "whether the two match cannot be decided")
                 continue
             if includes.same(built, against, prefixes):
                 continue
             text = (f"{name} ({'carried at ' + _short(built) if built else 'fresh'}) compiles "
-                    f"{', '.join(prefixes)}, but this listing seals {dependency} "
+                    f"{where}, but this listing seals {dependency} "
                     f"{'carried at ' + _short(against) if against else 'fresh'} — those files differ, so every "
                     f"adopter declines {name}'s bytes (#2813)")
             was_d, was_p = before.get(name), before.get(dependency)
             was_reads = includes.edges(was_d, name) if was_d else None
-            introduced = (was_d and was_p and was_reads is not None and includes.resolvable(was_p)
-                          and includes.same(was_d, was_p, was_reads.get(dependency, ())))
-            (problems if introduced else notes).append(text)
+            already_split = bool(was_d and was_p and was_reads is not None and includes.resolvable(was_p)
+                                 and not includes.same(was_d, was_p, was_reads.get(dependency, ())))
+            (notes if already_split else problems).append(text)
     return problems, notes
 
 
@@ -750,7 +813,7 @@ def cmd_listing(a: argparse.Namespace) -> int:
         print(f"  · {e['package']} {e.get('version') or '?'} carried at {_short(e.get('sourceCommit'))}")
     for n in notes:
         print(f"::warning title=Carried dependent of a never-sealed package::{n}")
-    source_problems, source_notes = source_include_violations(listing, repo, state)
+    source_problems, source_notes = source_include_violations(listing, repo, state, never_sealed)
     for n in source_notes:
         print(f"::warning title=A carried build that no sealed source set matches::{n} — already so in the sealed "
               "publication; this listing does not make it worse")
@@ -1312,6 +1375,69 @@ def source_include_cases(expect) -> None:
         expect("Hosting is held and, never sealed, left out of the listing",
                out.returncode == 0 and "Hosting" in _lines(state / STATE_NEVER_SEALED)
                and not (bake / "Hosting.zip").exists(), out.stdout + out.stderr)
+
+        print("a provider held OUT (never sealed) holds a fresh dependent of its sources too:")
+        shape({"Hosting": c3, "Chess": c3}, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Store")
+        expect("Store waits and was never sealed, so the fresh Hosting compiling it waits too (carried)",
+               out.returncode == 0 and "Store" in _lines(state / STATE_NEVER_SEALED)
+               and "Hosting" in _lines(state / STATE_WITHHELD) and not (bake / "Hosting.zip").exists()
+               and "Hosting: waits too — its NodeTypes compile" in out.stdout, out.stdout + out.stderr)
+        shape({"Hosting": c3, "Chess": c3}, ["Store", "Hosting", "Chess"])
+        withhold_cli("Store", content=False)
+        out = listing_cli("Store")
+        expect("…and the listing REFUSES a fresh Hosting over a never-sealed Store (no withhold rule)",
+               out.returncode == 1 and "waits and has never been sealed" in out.stdout
+               and not (bake / LISTING).exists(), out.stdout + out.stderr)
+
+        print("a NEW provider under a carried dependent stays out with it:")
+        shape({"Hosting": c1, "Chess": c1}, ["Store", "Hosting", "Chess"])
+        out = withhold_cli("Hosting")
+        expect("Store (never sealed, its sources moved since Hosting's build) is held out",
+               out.returncode == 0 and "Store" in _lines(state / STATE_NEVER_SEALED)
+               and "Store: waits too — Hosting waits at" in out.stdout, out.stdout + out.stderr)
+        carry(["Hosting"])
+        out = listing_cli("Hosting")
+        expect("…and the listing is GREEN", out.returncode == 0, out.stdout + out.stderr)
+
+        print("a mismatch whose PREVIOUS state cannot be read is refused, never waved through:")
+        shape({"Store": c1, "Hosting": "0" * 40, "Chess": c1}, ["Store", "Hosting", "Chess"])
+        withhold_cli("Store", content=False)
+        carry(["Store"])
+        out = listing_cli("Store")
+        expect("fresh Hosting vs Store carried at c1, Hosting's previous commit unreadable: REFUSED",
+               out.returncode == 1 and "Hosting (fresh) compiles" in out.stdout and not (bake / LISTING).exists(),
+               out.stdout + out.stderr)
+
+        print("what a build compiles, read as the compiler reads it:")
+        expect("a BARE path behind a name is a path reference (shared=Store/Core/Source)",
+               _query_target("shared=Store/Core/Source") == "Store/Core/Source")
+        expect("whitespace around `=` and after `@` is trimmed (shared= @Store/Core/Source)",
+               _query_target("shared= @Store/Core/Source") == "Store/Core/Source"
+               and _query_target("shared = @ Store/Core/Source") == "Store/Core/Source")
+        expect("NEGATIVE CONTROL: a quoted term and a multi-term entry are queries, not paths",
+               _query_target('"Store/Core/Source"') is None and _query_target("Store/Core Source") is None)
+        expect("NEGATIVE CONTROL: $self is the NodeType's own path", _query_target("$self/Source") is None)
+        put("Hosting/Probe.json", json.dumps({"id": "Probe", "content": {
+            "$type": "NodeTypeDefinition",
+            "sources": ["shared=Store/Bare/Source", "shared= @Store/Spaced/Source"],
+            "tests": ["@Store/Core/Test"]}}))
+        put("Hosting/Probe/Source/Uses.cs", "// @@Store/Shared/Source/Util\nclass Uses {}\n")
+        put("Store/Shared/Source/Util.cs", "// @@Chess/Board/Source/Board\nclass Util {}\n")
+        c4 = commit("Hosting reads Store through tests, bare paths and @@ includes")
+        reads = SourceIncludes(repo).edges(c4, "Hosting") or {}
+        store = set(reads.get("Store", ()))
+        expect("bare and spaced `sources` entries are read",
+               {"Store/Bare/Source", "Store/Spaced/Source"} <= store, str(reads))
+        expect("`tests` entries are read (NodeSet.ResolveSources compiles the union)",
+               "Store/Core/Test" in store, str(reads))
+        expect("an @@ include in the package's own Code node is read", "Store/Shared/Source/Util" in store, str(reads))
+        expect("…and TRANSITIVELY: what that included file @@-includes from Chess",
+               reads.get("Chess") == ("Chess/Board/Source/Board",), str(reads))
+        expect("the checkout reads the same", SourceIncludes(repo).edges(WORKTREE, "Hosting") == reads)
+        put("Store/Shared/Source/Util.cs", "// @@Chess/Board/Source/Board\nclass Util { int Changed; }\n")
+        expect("…and a change to the @@-included file IS a difference",
+               not SourceIncludes(repo).same(c4, WORKTREE, reads["Store"]))
 
 
 def main(argv: list[str]) -> int:
