@@ -41,7 +41,7 @@ public static class StepUpSettingsTab
     {
         var enabled = StepUpOptions.From(host.Hub.ServiceProvider.GetService<IConfiguration>()).Enabled;
         stack = stack
-            .WithView(Controls.Title(host.Localize("settings.security"), 2))
+            .WithView(Controls.H2(host.Localize("settings.security")))
             .WithView(Controls.Markdown(host.Localize("stepUp.settings.intro")))
             .WithView(Controls.Markdown(host.Localize("stepUp.settings.entra")));
         if (!enabled)

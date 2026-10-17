@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -55,7 +56,7 @@ public static class ApiTokensSettingsTab
         var userEmail = userContext?.Email ?? "";
 
         stack = stack
-            .WithView(Controls.Title(host.Localize("settings.apiTokens"), 2))
+            .WithView(Controls.H2(host.Localize("settings.apiTokens")))
             .WithView(Controls.Markdown(host.Localize("apiTokens.intro")));
 
         const string createDataId = "apiTokenCreate";
@@ -79,7 +80,9 @@ public static class ApiTokensSettingsTab
 
         var formRow = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
+            .WithHorizontalGap(12)
+            .WithVerticalAlignment(VerticalAlignment.Bottom)
+            .WithWrap(true);
 
         formRow = formRow.WithView(new TextFieldControl(new JsonPointerReference("label"))
         {
@@ -154,11 +157,8 @@ public static class ApiTokensSettingsTab
                 return Task.CompletedTask;
             }));
 
-        var createSection = Controls.Stack.WithWidth("100%")
-            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; gap: 12px; margin-bottom: 24px;")
-            .WithView(Controls.Title(host.Localize("apiTokens.createHeading"), 3))
-            .WithView(formRow);
-        stack = stack.WithView(createSection);
+        // The create form as a settings section: the platform's card, not an inline-styled box.
+        stack = stack.WithView(SettingsLayoutArea.Section(host.Localize("apiTokens.createHeading"), formRow));
 
         // Result area (newly created token display) — full width so the token text has room.
         stack = stack.WithView((h, _) =>
@@ -168,7 +168,7 @@ public static class ApiTokensSettingsTab
                     : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Markdown(markdown)))
                 .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
-        stack = stack.WithView(Controls.Title(host.Localize("apiTokens.yourTokens"), 3));
+        stack = stack.WithView(Controls.H3(host.Localize("apiTokens.yourTokens")));
 
         // Live token list — bound directly to the synced query. The view
         // re-renders whenever the underlying mesh-query collection changes
@@ -192,7 +192,7 @@ public static class ApiTokensSettingsTab
         ApiTokenService tokenService,
         string resultDataId)
     {
-        var container = Controls.Stack.WithWidth("100%").WithStyle("gap: 8px;");
+        var container = Controls.Stack.WithWidth("100%").WithVerticalGap(8);
 
         // 🚨 Render instants in the VIEWER's zone, resolved explicitly off AccessContext — never
         // the process's ambient culture, which on Blazor Server is the container's and identical
@@ -209,9 +209,13 @@ public static class ApiTokensSettingsTab
                 : "apiTokens.status.active";
             var never = host.Localize("apiTokens.never");
 
+            // One token = one row on the platform's card (no hand-drawn border); its children are
+            // the token facts, the status and the row's actions.
             var row = Controls.Stack
+                .WithWidth("100%")
                 .WithOrientation(Orientation.Horizontal)
-                .WithStyle("padding: 12px; border: 1px solid var(--neutral-stroke-rest); border-radius: 6px; align-items: center; gap: 16px;");
+                .WithVerticalAlignment(VerticalAlignment.Center)
+                .WithHorizontalGap(16);
 
             // Markdown, not an HTML string: the label and hash are user/system data and Markdown
             // renders them as text rather than as markup we had to hand-escape.
@@ -276,7 +280,8 @@ public static class ApiTokensSettingsTab
                     }));
             }
 
-            container = container.WithView(row);
+            container = container.WithView(Controls.Stack.WithWidth("100%").WithView(row)
+                .AddSkin(Skins.Card.WithWidth("100%")));
         }
 
         return container;
