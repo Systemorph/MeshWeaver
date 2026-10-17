@@ -34,7 +34,7 @@ Instead of describing how to update the DOM, you describe *what* each named area
 
 ```csharp
 Controls.Stack
-    .WithView(Controls.Html("<h1>Dashboard</h1>"))      // Static — rendered once
+    .WithView(Controls.H1("Dashboard"))                 // Static — rendered once
     .WithView(liveDataStream.Select(d => ShowData(d)))  // Dynamic — updates on each emission
     .WithView(Controls.Button("Refresh"))               // Static — rendered once
 ```
@@ -60,7 +60,7 @@ No callbacks to wire up. No teardown code to write — the counter below is tick
 
 ```csharp --render GuiOverviewDemo --show-code
 Controls.Stack
-    .WithView(Controls.Html("<b>MeshWeaver UI — live from the kernel</b>"))
+    .WithView(Controls.H4("MeshWeaver UI — live from the kernel"))
     .WithView(Controls.Markdown($"Rendered at **{DateTime.Now:HH:mm:ss}** — controls are plain C# records."))
     .WithView(Controls.Button("A static button (no action wired here)"))
 ```

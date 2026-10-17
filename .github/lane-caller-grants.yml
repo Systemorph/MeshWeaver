@@ -243,6 +243,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The inline copy read only job LOGS, so a
+      # self-hosted runner death (no log, the reason only in the check-run annotation) was declined every time. The
+      # lane needs `checks: read` for those annotations and `actions: write` for the one rerun POST.
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
 
   # ── MeshWeaver.SocialMedia ────────────────────────────────────────────────────────────────────
   # Its `module` caller ALREADY grants `id-token: write`, which is why #3933 did not break this repo
@@ -308,6 +316,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The inline copy read only job LOGS, so a
+      # self-hosted runner death (no log, the reason only in the check-run annotation) was declined every time. The
+      # lane needs `checks: read` for those annotations and `actions: write` for the one rerun POST.
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
 
   # ── MeshWeaver.Manufacturing ──────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Manufacturing:
@@ -362,6 +378,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The inline copy read only job LOGS, so a
+      # self-hosted runner death (no log, the reason only in the check-run annotation) was declined every time. The
+      # lane needs `checks: read` for those annotations and `actions: write` for the one rerun POST.
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
 
   # ── MeshWeaver.Crm ────────────────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Crm:
@@ -420,6 +444,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Retry known transients (MeshWeaver.Manufacturing#84) — ARRIVING. The inline copy read only job LOGS, so a
+      # self-hosted runner death (no log, the reason only in the check-run annotation) was declined every time. The
+      # lane needs `checks: read` for those annotations and `actions: write` for the one rerun POST.
+      - workflow: retry-known-transients.yml
+        job: retry
+        lane: node-repo-retry-transients.yml
+        grants: {actions: write, checks: read, contents: read}
+        pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
 
   # ── MeshWeaver.FundReporting (private content repo; stood up 2026-09-20 from Crm's caller) ─────
   Systemorph/MeshWeaver.FundReporting:

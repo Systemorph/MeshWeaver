@@ -291,6 +291,12 @@ them, keeping only repo-specific policy (digest pin, gating, `repository_dispatc
 own `scripts/`). Adopting one renames that repo's required-status-check contexts to
 `<caller job> / <name>` — do it in the same change.
 
+The retry steward is one of them: `node-repo-retry-transients.yml` (core calls it too). Its
+hand-copied predecessors drifted and three went blind to self-hosted runner deaths, whose only
+evidence is the check-run ANNOTATION (MeshWeaver.Manufacturing#84) — a copy keeps none of the fixes
+made after it. Full reference:
+[CiContentBake.md](../../../src/MeshWeaver.Documentation/Data/Architecture/CiContentBake.md) → the retry steward.
+
 > 📅 **2026-09-12 — two of those "repo-specific" items no longer exist, by decision.** There is no
 > digest pin (the platform is resolved at run time to the newest SEALED set, #3842), and there is no
 > `meshweaver-framework-released` receiver: the per-build release wave is off by default
