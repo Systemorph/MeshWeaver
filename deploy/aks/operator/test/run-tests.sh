@@ -1761,6 +1761,14 @@ ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hostin
 case "$_ks_out" in *"waiting   1 declared key(s)"*"build-portal-keyvault:Hosting__ControlInbox__Secret"*"::hosting:: kv_synced_waited=1"*) ok "…naming the key it waited for" ;;
   *) bad "the waited key is named" "said: ${_ks_out}" ;; esac
 
+# 2026-10-17 (pg3, control): the rotation added the key but managedFields still named the Secret's FIRST
+# write, older than every pod — the step waited, saw the key, called every pod current and restarted
+# nothing. A waited key is dated by when the step SAW it, so the pods that predate that restart.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hosting__ControlInbox__Secret" HOSTING_KS_LATE_AFTER=3 \
+   HOSTING_KS_WRITTEN=2026-09-20T08:00:00Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a waited key restarts the pods that predate it, though managedFields still name an older write" \
+  || bad "a waited key restarts despite a stale managedFields time" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
+
 # A key that never arrives is a FAILED step — and the pods are NOT restarted onto the same gap.
 ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" \
    HOSTING_KV_SYNC_SECONDS=2 -- "${KS_ARGS[@]}"

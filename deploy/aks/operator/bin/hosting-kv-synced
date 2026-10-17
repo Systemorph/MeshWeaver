@@ -20,7 +20,9 @@
 #   1. waits (bounded) until the Secret carries every declared key — a key that never arrives is a
 #      FAILED step naming it (an absent vault object fails the whole CSI mount long before this);
 #   2. compares WHEN the Secret's data was last written (the newest `managedFields` entry that owns
-#      `f:data` — the CSI driver's own write) with when each running portal pod STARTED. A pod that
+#      `f:data` — the CSI driver's own write — or, when step 1 had to wait, the moment it SAW the
+#      last key, whichever is later: a rotation pass can add a key without moving managedFields)
+#      with when each running portal pod STARTED. A pod that
 #      started before that write resolved envFrom from an older Secret and may lack the key — and
 #      "the key is there NOW" proves nothing about it: a waited rollout gives the rotation pass all
 #      the time it needs to land AFTER the pods booted, which is exactly the build measurement;
@@ -110,6 +112,12 @@ if [ -n "$first" ]; then
     sleep "$interval"
     left="$(missing_keys)"
   done
+  # The moment this step SAW every key is an upper bound on when the driver wrote the last one.
+  # The Secret's own write time cannot be trusted for it: on 2026-10-17 a rotation pass added a key
+  # to pg3's and control's synced Secrets while managedFields still named their first writes
+  # (08:20:35Z, 2026-09-26) — so every pod looked current, nothing restarted, and the key reached no
+  # process. A pod that started before the keys were seen resolved envFrom without one of them.
+  observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 hosting::log "present   all ${#pairs[@]} declared key(s) are in their synced Secret(s) (names read, no value)"
 hosting::say kv_synced_keys "${#pairs[@]}"
@@ -128,6 +136,7 @@ for secret in $(printf '%s\n' "${secrets[@]}" | sort -u); do
       + [ .metadata.creationTimestamp ] | map(select(. != null)) | max // ""')"
   { [ -z "$last_write" ] || [[ "$t" > "$last_write" ]]; } && last_write="$t"
 done
+{ [ -n "${observed_at:-}" ] && { [ -z "$last_write" ] || [[ "$observed_at" > "$last_write" ]]; }; } && last_write="$observed_at"
 [ -n "$last_write" ] || hosting::die "the synced Secret(s) carry no write time (managedFields, creationTimestamp) — whether the running pods read the current keys cannot be decided"
 
 hosting::probe any kubectl -n "$namespace" get deployment "$deployment" -o json; rc=$?
