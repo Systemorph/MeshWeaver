@@ -526,6 +526,17 @@ refuses_hard "--generate-only refuses the provisioning flags" "cannot be combine
   hosting-kv-ensure --vault V --namespace n --generate-only --prefix acme- --generate k
 refuses_hard "--generate refuses an object name with a metacharacter" "is not a plain name" \
   hosting-kv-ensure --vault V --namespace n --generate-only --generate 'k;id'
+kve HOSTING_KVE_VERSIONS=2 -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && case "$_kve_out" in *"kv_generated_raced=acme-Hosting-AnnouncementKey"*) true ;; *) false ;; esac \
+  && ok "a concurrent create (two versions right after the write) is SAID, never hidden" || bad "a raced create is reported" "rc=${_kve_rc}: ${_kve_out}"
+rm -rf "$_kve_state"
+kve -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+case "$_kve_out" in *"raced"*) bad "a lone create reports no race" "said: ${_kve_out}" ;; *) ok "a lone create reports no race" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "--generate-only refuses the database flags too" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate k --db-host pg.test
+refuses_hard "a trailing --generate with no object refuses (never a parser hang)" "needs an object name" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate
 unset _kve_out _kve_rc _kve_log _kve_state _kve_key
 
 # 🚨 Memex#648 — the helm VALUES HALF. A record declaring vaultValuesKeys deploys only with

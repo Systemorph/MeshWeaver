@@ -62,7 +62,8 @@ while [ $# -gt 0 ]; do
     --registry-key-object) registry_key_object="${2:-}"; shift 2 ;;
     --values-half)         values_half="${2:-}";         shift 2 ;;
     --vault-keys)          vault_keys="${2:-}";          shift 2 ;;
-    --generate)            generate+=("${2:-}");         shift 2 ;;
+    --generate)            [ $# -ge 2 ] || hosting::die "--generate needs an object name"
+                           generate+=("$2");             shift 2 ;;
     --generate-only)       generate_only=true;           shift ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
@@ -102,7 +103,7 @@ for object in ${generate[@]+"${generate[@]}"}; do
 done
 if [ "$generate_only" = true ]; then
   [ ${#generate[@]} -gt 0 ] || hosting::die "--generate-only names nothing to generate — pass at least one --generate <object>"
-  [ -z "$prefix$db_connection$values_half$vault_keys$registry_key_vault$registry_key_object" ] && [ "$skip_registry_key" != true ] \
+  [ -z "$prefix$db_connection$db_host$db_port$db_user$db_name$db_password_secret$values_half$vault_keys$registry_key_vault$registry_key_object" ] && [ "$skip_registry_key" != true ] \
     || hosting::die "--generate-only generates the --generate objects and nothing else; it cannot be combined with --prefix, the database, registry or values-half flags"
 fi
 if [ -n "$db_port" ] && ! [[ "$db_port" =~ ^[0-9]{1,5}$ ]]; then
@@ -161,6 +162,16 @@ ensure_generated() {
     rm -rf "$gen_dir"
     kv_exists "$object" \
       || hosting::die "${object} was written to vault ${vault} but is not listed — refusing to report a key the CSI driver will not find"
+    # 🚨 Key Vault has no create-if-absent: two jobs that both read "absent" (the sender's and the
+    # control instance's first deploy of the same key, in the same seconds) both write, and the LATER
+    # version wins. Detected here from metadata — more than one version means another writer raced
+    # this one — and said, never hidden: both ends then read the latest version once the CSI driver
+    # rotates or the pods restart, and until then an announcement may be refused (it is re-sent hourly).
+    versions="$(az keyvault secret list-versions --vault-name "$vault" --name "$object" --query "length(@)" -o tsv 2>/dev/null || echo "?")"
+    if [ "$versions" != "1" ]; then
+      hosting::log "WARNING ${object} holds ${versions} version(s) right after creation — another job created it concurrently; the latest version wins and both ends converge on it at the next CSI rotation or pod restart"
+      hosting::say kv_generated_raced "$object"
+    fi
     hosting::log "created ${object} in vault ${vault} (${fp})"
     created=$((created + 1))
     hosting::say kv_generated "${object}:created"
