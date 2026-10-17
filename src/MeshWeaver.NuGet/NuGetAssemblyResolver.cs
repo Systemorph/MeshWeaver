@@ -98,22 +98,6 @@ public sealed class NuGetAssemblyResolver : INuGetAssemblyResolver, IDisposable
     {
     }
 
-    /// <summary>
-    /// Creates a resolver outside a mesh — a command-line bake, a build tool — on the pool the
-    /// caller NAMES. There is no default: a process without a mesh chooses its pool explicitly
-    /// (<see cref="IoPool.Unbounded"/> included), so nothing ever lands on one by omission.
-    /// </summary>
-    /// <param name="logger">Logger for resolution and install outcomes.</param>
-    /// <param name="pool">The pool the NuGet SDK leaf runs on.</param>
-    /// <param name="packageCache">Optional persistent cache hydrated before a feed download.</param>
-    public NuGetAssemblyResolver(
-        MsLogging.ILogger<NuGetAssemblyResolver> logger,
-        IIoPool pool,
-        INuGetPackageCache? packageCache = null)
-        : this(logger, DefaultSettings(), null, packageCache, pool: pool)
-    {
-    }
-
     // Anchor settings discovery to the ASSEMBLY directory, NOT the ambient CWD. With
     // root: null, NuGet loads ONLY the user/machine-wide configs and does NOT walk a
     // directory tree — so the repo/app nuget.config (which declares the `mesh-local`

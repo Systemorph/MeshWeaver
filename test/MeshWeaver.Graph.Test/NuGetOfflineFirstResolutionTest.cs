@@ -511,17 +511,17 @@ public sealed class NuGetOfflineFirstResolutionTest : IDisposable
         var ct = TestContext.Current.CancellationToken;
 
         await resolver.Resolve([new NuGetPackageReference("Acme.Offline.A", "1.0.0")])
-            .Should().Within(TimeSpan.FromSeconds(30))
+            .Should().Within(MeshWeaver.Fixture.TestTimeouts.Convergence)
             .Emit("the cold package installs; its persistent-cache save is not awaited", ct);
-        await cache.SaveStarted.Should().Within(TimeSpan.FromSeconds(30))
+        await cache.SaveStarted.Should().Within(MeshWeaver.Fixture.TestTimeouts.Convergence)
             .Emit("the save runs — and stalls", ct);
 
         await resolver.Resolve([new NuGetPackageReference("Acme.Offline.B", "1.0.0")])
-            .Should().Within(TimeSpan.FromSeconds(10))
+            .Should().Within(MeshWeaver.Fixture.TestTimeouts.Convergence)
             .Emit("an installed package resolves while a cache save is stalled", ct);
 
         resolver.Dispose();
-        await cache.SaveCancelled.Should().Within(TimeSpan.FromSeconds(10))
+        await cache.SaveCancelled.Should().Within(MeshWeaver.Fixture.TestTimeouts.Convergence)
             .Emit("disposing the resolver cancels the save it owns", ct);
     }
 
