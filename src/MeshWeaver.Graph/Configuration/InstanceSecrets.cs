@@ -705,6 +705,14 @@ public sealed class InstanceSecretCatalog : IDisposable
     private readonly ILogger<InstanceSecretCatalog>? logger;
     private readonly System.Reactive.Subjects.BehaviorSubject<ImmutableDictionary<string, CatalogEntry>> state =
         new(ImmutableDictionary<string, CatalogEntry>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase));
+    // 🚨 The entries AND the fail-closed flag, swapped as ONE reference. They used to be two fields
+    // written one after the other, so a verifier reading between the writes could see the feed as
+    // recovered (Faulted false) while the entries were still the pre-outage set — a key disabled
+    // during the outage would verify. Readers take the whole snapshot; observers are notified only
+    // after it is published.
+    private sealed record Snapshot(ImmutableDictionary<string, CatalogEntry> Entries, bool Faulted);
+    private Snapshot snapshot = new(
+        ImmutableDictionary<string, CatalogEntry>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), Faulted: false);
     // Whether the query's first listing has arrived. Kept beside the state, not folded into it, so
     // "nothing is set" and "not read yet" stay two different facts.
     private readonly System.Reactive.Subjects.BehaviorSubject<bool> loaded = new(false);
@@ -765,7 +773,7 @@ public sealed class InstanceSecretCatalog : IDisposable
     public CatalogEntry? Entry(string configKey)
     {
         EnsureSubscribed();
-        return state.Value.TryGetValue(configKey.Trim(), out var entry) ? Refresh(entry) : null;
+        return Volatile.Read(ref snapshot).Entries.TryGetValue(configKey.Trim(), out var entry) ? Refresh(entry) : null;
     }
 
     /// <summary>
@@ -775,14 +783,14 @@ public sealed class InstanceSecretCatalog : IDisposable
     /// all). The query re-opens by itself (the hub watcher's re-establish), so a fault costs that
     /// window, never the rest of the process's life.
     /// </summary>
-    public bool Faulted { get; private set; }
+    public bool Faulted => Volatile.Read(ref snapshot).Faulted;
 
     /// <summary>Every entry whose key is a direct child of <paramref name="section"/>, keyed by the child name.</summary>
     public IEnumerable<(string Child, CatalogEntry Entry)> ChildrenOf(string section)
     {
         EnsureSubscribed();
         var prefix = section.Trim() + ":";
-        foreach (var (key, entry) in state.Value)
+        foreach (var (key, entry) in Volatile.Read(ref snapshot).Entries)
         {
             if (!key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 continue;
@@ -837,16 +845,18 @@ public sealed class InstanceSecretCatalog : IDisposable
     {
         // 🚨 Fail CLOSED: a dead feed can no longer deliver a revocation, so every per-sender key
         // stops verifying (Candidates) until the re-opened query has listed the set again.
-        Faulted = true;
+        var faulted = Volatile.Read(ref snapshot) with { Faulted = true };
+        Volatile.Write(ref snapshot, faulted);
         logger?.LogWarning(ex,
             "[InstanceSecrets] catalog query FAULTED; per-sender keys are refused until the re-opened query lists the set again");
         loaded.OnNext(true);
-        state.OnNext(state.Value);
+        state.OnNext(faulted.Entries);
     }
 
     private void OnChange(QueryResultChange<MeshNode> change)
     {
-        var current = state.Value;
+        var prior = Volatile.Read(ref snapshot);
+        var current = prior.Entries;
         switch (change.ChangeType)
         {
             case QueryChangeType.Initial:
@@ -867,9 +877,10 @@ public sealed class InstanceSecretCatalog : IDisposable
                             .Select(kv => kv.Key).ToList());
                 break;
         }
-        // A full listing is the re-opened feed reading again: the fail-closed window ends here.
-        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-            Faulted = false;
+        // A full listing is the re-opened feed reading again: the fail-closed window ends here — in
+        // the SAME publish as the entries it read, so no reader sees one without the other.
+        var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
+        Volatile.Write(ref snapshot, new Snapshot(current, full ? false : prior.Faulted));
         state.OnNext(current);
         if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
             loaded.OnNext(true);

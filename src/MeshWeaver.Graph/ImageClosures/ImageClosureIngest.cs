@@ -121,23 +121,31 @@ public sealed class ImageClosureIngest(IMessageHub hub, ILogger<ImageClosureInge
     /// observable trace that an emission of the inbox watch was processed.</summary>
     internal bool HasClaimed(string path) => claimed.Contains(path);
 
+    /// <summary>Test seam: drains one delivery. Null in production (<see cref="Drain"/>).</summary>
+    internal Func<MeshNode, IObservable<string?>>? DrainOverride { get; set; }
+
+    /// <summary>
+    /// One opening of the inbox watch (<see cref="InboxDrainWatch"/>): a listing fault ends it at once,
+    /// and the claims of deliveries it did not finish draining are released for the re-opened watch.
+    /// </summary>
     private IObservable<Unit> Watch(Func<IObservable<IEnumerable<MeshNode>>> openInbox, string? secret) =>
-        Observable.Defer(openInbox)
-                .SelectMany(nodes => (nodes ?? [])
-                    .Where(n => !string.IsNullOrWhiteSpace(n.Path))
-                    .OrderBy(n => n.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
-                    .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
-                    .ToArray())
-                .Select(node => Observable.Defer(() => Drain(hub, node, secret, logger))
-                    .Select(_ => Unit.Default)
-                    .Catch((Exception ex) =>
-                    {
-                        logger.LogWarning(ex,
-                            "[ImageClosure] draining {Path} failed — it stays in the inbox and is retried at the next boot",
-                            node.Path);
-                        return Observable.Return(Unit.Default);
-                    }))
-                .Concat();
+        InboxDrainWatch.Open(
+            openInbox,
+            nodes => nodes
+                .Where(n => !string.IsNullOrWhiteSpace(n.Path))
+                .OrderBy(n => n.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
+                .Where(n => ImmutableInterlocked.Update(ref claimed, set => set.Add(n.Path)))
+                .ToArray(),
+            released => ImmutableInterlocked.Update(ref claimed, set => set.Except(released)),
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? Drain(hub, node, secret, logger))
+                .Select(_ => Unit.Default)
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[ImageClosure] draining {Path} failed — it stays in the inbox and is retried at the next boot",
+                        node.Path);
+                    return Observable.Return(Unit.Default);
+                }));
 
     /// <summary>
     /// Drains ONE delivery: verify, validate, write, delete. Emits the written node's path, or null

@@ -171,7 +171,7 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
         var pendingSource = new FlakySource<IEnumerable<MeshNode>>();
         var legacySource = new FlakySource<IEnumerable<MeshNode>>();
         using var runner = new EventSubscriptionRunner(
-            Mesh, new SilentChangeFeed(),
+            Mesh, Mesh.ServiceProvider.GetRequiredService<IMeshChangeFeed>(),
             Mesh.ServiceProvider.GetRequiredService<IMeshService>(),
             Mesh.ServiceProvider.GetRequiredService<AccessService>())
         {
@@ -224,6 +224,63 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
         ingest.HasClaimed(delivery).Should().BeTrue("a delivery after the fault is picked up");
     }
 
+    /// <summary>A live query that hands out a FRESH stream per open, so the test can fault one opening.</summary>
+    private sealed class ReopenableSource<T>
+    {
+        private ImmutableList<Subject<T>> opened = [];
+
+        public IReadOnlyList<Subject<T>> Opened => opened;
+
+        public IObservable<T> Open()
+        {
+            var live = new Subject<T>();
+            ImmutableInterlocked.Update(ref opened, list => list.Add(live));
+            return live;
+        }
+    }
+
+    /// <summary>
+    /// A fault in the MIDDLE of a drain must not strand the deliveries that listing already claimed:
+    /// the opening's queue dies with it, so A (in flight) and B (queued behind A) are released and the
+    /// re-opened watch drains both. Before the fix both stayed claimed and B was never drained.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ImageClosureIngest_AFaultMidDrain_ReleasesTheClaimsItsListingHadNotDrained()
+    {
+        var clock = new ManualReopenClock();
+        var source = new ReopenableSource<IEnumerable<MeshNode>>();
+        var drained = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var inbox = $"{ImageClosureNodes.InboxTarget}/{WebhookInbox.InboxContainer}";
+        string a = $"{inbox}/a", b = $"{inbox}/b";
+        var firstOpening = true;
+        using var ingest = new ImageClosureIngest(Mesh,
+            Mesh.ServiceProvider.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ImageClosureIngest>>())
+        {
+            OpenInboxOverride = source.Open,
+            ScheduleReopen = clock.Schedule,
+            DrainOverride = node =>
+            {
+                drained.Enqueue(node.Path);
+                // In the first opening A's drain never finishes, so B waits behind it.
+                return firstOpening && node.Path == a ? Observable.Never<string?>() : Observable.Return<string?>(node.Path);
+            },
+        };
+
+        await ingest.StartAsync(TestContext.Current.CancellationToken);
+        await Eventually(() => source.Opened.Count == 1, "the index is ensured and the inbox watch opens");
+        source.Opened[0].OnNext([NodeAt(a, "x"), NodeAt(b, "x")]);
+        drained.Should().Equal([a], "B is queued behind A's unfinished drain");
+
+        firstOpening = false;
+        source.Opened[0].OnError(new QueryProviderStalledException("test-provider", TimeSpan.FromSeconds(1), "q", "system"));
+        clock.Scheduled.Should().Be(1, "the listing's fault ends the opening at once, even with A's drain still in flight");
+        clock.FireNext().Should().BeTrue();
+        source.Opened.Should().HaveCount(2);
+        source.Opened[1].OnNext([NodeAt(a, "x"), NodeAt(b, "x")]);
+
+        drained.Should().Equal([a, a, b], "both claims of the dead opening were released and are drained now");
+    }
+
     /// <summary>
     /// The negative control: the pre-fix shape — subscribe once, log the error — driven by the same
     /// flaky source and clock. It opens once and nothing ever opens it again, so a later emission is
@@ -245,12 +302,5 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
         source.Opens.Should().Be(1);
         source.Live.OnNext(Initial());
         seen.Should().Be(0, "the watch is dead: the later listing is never processed");
-    }
-
-    private sealed class SilentChangeFeed : IMeshChangeFeed
-    {
-        public void Publish(MeshChangeEvent change) { }
-        public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
-            => Disposable.Empty;
     }
 }

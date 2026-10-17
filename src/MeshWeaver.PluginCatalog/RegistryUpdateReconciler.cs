@@ -211,6 +211,9 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     /// observable trace that an emission of the inbox watch was processed.</summary>
     internal bool HasClaimedDelivery(string path) => claimedDeliveries.Contains(path);
 
+    /// <summary>Test seam: drains one inbox delivery. Null in production.</summary>
+    internal Func<MeshNode, IObservable<Unit>>? DrainOverride { get; set; }
+
     /// <summary>The standing inbox watch: <see cref="WatchInbox"/>, re-opened by the hub watcher
     /// after any fault of its query.</summary>
     internal IDisposable SubscribeInboxWatch(PluginCatalogOptions options) =>
@@ -506,16 +509,21 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
         // query with no path reaches only the partitions a caller's RLS grants — a hosted service
         // has no caller. The same lesson as SelfUpdate's build watch (BuildCompletion.WatchQuery).
         var query = $"path:{inbox} scope:children nodeType:{WebhookInbox.NodeType}";
-        return Observable.Defer(OpenInboxOverride
-                ?? (() => access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))))
-            .SelectMany(nodes => (nodes ?? [])
+        // 🚨 One opening (InboxDrainWatch): a listing fault ends it at once, and the claims of
+        // deliveries it did not finish draining are released, so the re-opened watch drains them
+        // instead of skipping them as "already picked up" until the next boot.
+        return InboxDrainWatch.Open(
+            OpenInboxOverride
+                ?? (() => access.RunAsSystem(() => hub.GetQuery($"RegistryUpdate.Inbox:{hub.Address}", query))),
+            nodes => nodes
                 .Where(node => !string.IsNullOrWhiteSpace(node.Path))
                 // Oldest first within one emission: a burst of publishes from one CI wave drains
                 // in publish order, so a later version of the same package is examined last.
                 .OrderBy(node => node.ContentAs<WebhookEvent>(hub.JsonSerializerOptions)?.ReceivedAt ?? DateTimeOffset.MinValue)
                 .Where(node => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Add(node.Path)))
-                .ToArray())
-            .Select(node => Observable.Defer(() => DrainDelivery(node, options, meshService, access))
+                .ToArray(),
+            released => ImmutableInterlocked.Update(ref claimedDeliveries, set => set.Except(released)),
+            node => Observable.Defer(() => DrainOverride?.Invoke(node) ?? DrainDelivery(node, options, meshService, access))
                 .Catch((Exception ex) =>
                 {
                     logger.LogWarning(ex,
@@ -523,8 +531,7 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                         + "stays in the inbox and is retried at the next boot. Cause: {Cause}",
                         node.Path, ex.Message);
                     return Observable.Return(Unit.Default);
-                }))
-            .Concat();
+                }));
     }
 
     /// <summary>One delivery: parse, match its registry, reconcile that package on the lane, delete.</summary>

@@ -1,5 +1,4 @@
 using System;
-using System.Diagnostics;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting;
@@ -15,33 +14,81 @@ namespace MeshWeaver.Hosting.Test;
 /// The chain — and the stack every later emission climbs to reach the subscriber — grew with the
 /// number of faults over the hub's life and was never released after the source recovered.
 ///
-/// <para>Measured as the stack depth at which an emission reaches the subscriber after N transient
+/// <para>Measured as the number of Rx operator objects the live subscription holds after N transient
 /// faults, on a <see cref="TestScheduler"/>: it must be the SAME after 1000 faults as after one.
 /// <see cref="TheNestingShape_GrowsWithEveryFault"/> is the negative control — the previous
 /// implementation, driven by the same source and clock, grows.</para>
 /// </summary>
 public class StandingWatchRecoveryDoesNotNestTest
 {
-    private static int DepthAfterFaults(
+    /// <summary>
+    /// The LIVE subscription's size after <paramref name="faults"/> transient faults and one healthy
+    /// opening that stays open: the number of Rx operator objects reachable from the subscription.
+    /// 🚨 Structural, never a stack depth: a stack trace's frame count depends on what the JIT inlined
+    /// (guarded devirtualization under tiered PGO folds the per-layer OnNext forwarders away, so a
+    /// Release CI host measured the nesting shape FLAT), while the object graph a subscription holds
+    /// is the nesting itself.
+    /// </summary>
+    private static int LayersAfterFaults(
         int faults,
         Func<Func<IObservable<int>>, IScheduler, IObservable<int>> reopen)
     {
         var scheduler = new TestScheduler();
         var opens = 0;
-        var depth = -1;
+        var seen = 0;
         Exception? terminal = null;
         IObservable<int> Open() => ++opens <= faults
             ? Observable.Throw<int>(new TimeoutException("transient"))
-            : Observable.Return(42);
+            : Observable.Never<int>().StartWith(42);
 
-        using var _ = reopen(Open, scheduler)
-            .Subscribe(_ => depth = new StackTrace().FrameCount, ex => terminal = ex);
+        using var subscription = reopen(Open, scheduler).Subscribe(_ => seen++, ex => terminal = ex);
         scheduler.AdvanceBy(TimeSpan.FromSeconds(faults + 1).Ticks);
 
         terminal.Should().BeNull("every fault is transient and the budget is unbounded");
         opens.Should().Be(faults + 1, "each fault re-opens exactly once");
-        depth.Should().BePositive("the opening after the last fault emits");
-        return depth;
+        seen.Should().Be(1, "the opening after the last fault emits and stays open");
+        return ReachableRxObjects(subscription);
+    }
+
+    /// <summary>Counts the System.Reactive objects reachable from <paramref name="root"/> through
+    /// instance fields — the operator chain a live subscription holds.</summary>
+    private static int ReachableRxObjects(object root)
+    {
+        var visited = new System.Collections.Generic.HashSet<object>(System.Collections.Generic.ReferenceEqualityComparer.Instance);
+        var pending = new System.Collections.Generic.Stack<object>();
+        pending.Push(root);
+        var count = 0;
+        while (pending.Count > 0 && visited.Count < 1_000_000)
+        {
+            var current = pending.Pop();
+            if (!visited.Add(current))
+                continue;
+            var type = current.GetType();
+            if (type.Namespace?.StartsWith("System.Reactive", StringComparison.Ordinal) == true)
+                count++;
+            if (current is Array array)
+            {
+                if (!type.GetElementType()!.IsValueType)
+                    foreach (var item in array)
+                        if (item is not null)
+                            pending.Push(item);
+                continue;
+            }
+            for (var t = type; t is not null; t = t.BaseType)
+                foreach (var field in t.GetFields(System.Reflection.BindingFlags.Instance
+                             | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic
+                             | System.Reflection.BindingFlags.DeclaredOnly))
+                {
+                    // Struct fields are walked too (boxed): Rx keeps its subscriptions in struct
+                    // disposables (SingleAssignmentDisposableValue and kin).
+                    if (field.FieldType.IsPrimitive || field.FieldType.IsEnum || field.FieldType == typeof(string)
+                        || field.FieldType.IsPointer || field.FieldType == typeof(decimal))
+                        continue;
+                    if (field.GetValue(current) is { } next && next is not Type && next is not System.Reflection.MemberInfo)
+                        pending.Push(next);
+                }
+        }
+        return count;
     }
 
     private static IObservable<int> Current(Func<IObservable<int>> open, IScheduler scheduler) =>
@@ -51,8 +98,8 @@ public class StandingWatchRecoveryDoesNotNestTest
     [Fact]
     public void AThousandConsecutiveFaults_LeaveTheSubscriptionDepthUnchanged()
     {
-        var afterOne = DepthAfterFaults(1, Current);
-        var afterThousand = DepthAfterFaults(1000, Current);
+        var afterOne = LayersAfterFaults(1, Current);
+        var afterThousand = LayersAfterFaults(1000, Current);
 
         afterThousand.Should().Be(afterOne,
             "a re-open replaces the failed opening in place; it never wraps another layer around it");
@@ -112,8 +159,8 @@ public class StandingWatchRecoveryDoesNotNestTest
     [Fact]
     public void TheNestingShape_GrowsWithEveryFault()
     {
-        var afterOne = DepthAfterFaults(1, Nesting);
-        var afterTwoHundred = DepthAfterFaults(200, Nesting);
+        var afterOne = LayersAfterFaults(1, Nesting);
+        var afterTwoHundred = LayersAfterFaults(200, Nesting);
 
         afterTwoHundred.Should().BeGreaterThan(afterOne + 199,
             "each re-open of the old shape wraps the next opening in one more layer");
