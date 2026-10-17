@@ -85,7 +85,7 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
     /// </summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
-            .AddDocumentation(new HashSet<string>(StringComparer.Ordinal) { DocumentationNodeProvider.RootNamespace });
+            .AddDocumentation(ImmutableHashSet.Create(StringComparer.Ordinal, DocumentationNodeProvider.RootNamespace));
 
     /// <summary>
     /// 🚨 THE GUARD, exercised. Options that cannot read the node file format — the case-sensitive
@@ -119,7 +119,7 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
             .Where(n => n.Path.StartsWith(DocumentationNodeProvider.RootNamespace + "/", StringComparison.Ordinal))
             .Select(n => n.Path[(DocumentationNodeProvider.RootNamespace.Length + 1)..] + ".json")
             .Where(file => thrown.Message.Contains($"'{file}'", StringComparison.Ordinal))
-            .ToList();
+            .ToImmutableList();
         named.Should().ContainSingle("the message names exactly one real documentation .json file");
     }
 
@@ -132,9 +132,9 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var withoutHub = DocumentationNodeProvider.LoadIndexableNodes()
-            .ToDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
+            .ToImmutableDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
         var asImported = DocumentationNodeProvider.LoadIndexableNodes(Mesh.JsonSerializerOptions)
-            .ToDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
+            .ToImmutableDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
 
         withoutHub.Keys.Except(asImported.Keys, StringComparer.OrdinalIgnoreCase).Should().BeEmpty(
             "the migration indexes no page the import does not serve");
@@ -154,7 +154,7 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
             })
             .Select(n => $"{n.Path}: '{withoutHub[n.Path].NodeType ?? "(none)"}'/'{withoutHub[n.Path].Name ?? "(none)"}' "
                          + $"vs '{n.NodeType}'/'{n.Name}'")
-            .ToList();
+            .ToImmutableList();
         disagreements.Should().BeEmpty(
             "every column the migration upserts must read the same as the import wrote it — a "
             + "difference IS a rewrite of the served row on every roll");
@@ -175,7 +175,7 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
 
         var parsed = DocumentationNodeProvider.LoadIndexableNodes()
             .Where(n => DocNodeTypes.Contains(n.Path, StringComparer.OrdinalIgnoreCase))
-            .ToDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
+            .ToImmutableDictionary(n => n.Path, StringComparer.OrdinalIgnoreCase);
         var announced = await WriteAsTheMigration(type => parsed[type]);
 
         foreach (var type in DocNodeTypes)
@@ -217,7 +217,7 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
             // and resets the row to version 1 from ANY version. Seeding at 1 lets the switch land
             // here exactly as it lands in production; the version reset itself is not modelled.
             .Select(n => n with { State = MeshNodeState.Active, Version = 1 })
-            .ToList();
+            .ToImmutableList();
         definitions.Should().HaveCount(DocNodeTypes.Length, "the documentation ships all five");
         definitions.Should().OnlyContain(n => n.NodeType == MeshNode.NodeTypePath);
         foreach (var definition in definitions)
