@@ -88,6 +88,42 @@ public class TheDocSearchBackfillKeepsDocNodeTypesTypedTest(ITestOutputHelper ou
             .AddDocumentation(new HashSet<string>(StringComparer.Ordinal) { DocumentationNodeProvider.RootNamespace });
 
     /// <summary>
+    /// 🚨 THE GUARD, exercised. Options that cannot read the node file format — the case-sensitive
+    /// defaults the no-hub parse used before this fix — must make the load THROW, naming the
+    /// <c>.json</c> file that read without a NodeType, rather than return the bare node the
+    /// migration would write over a live definition row.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public void OptionsThatReadANodeFileBare_Throw_NamingTheFile()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        InvalidOperationException? thrown = null;
+        IReadOnlyList<MeshNode>? loaded = null;
+        try
+        {
+            loaded = DocumentationNodeProvider.LoadIndexableNodes(new System.Text.Json.JsonSerializerOptions());
+        }
+        catch (InvalidOperationException ex)
+        {
+            thrown = ex;
+        }
+
+        loaded.Should().BeNull("a load that read a node file bare must not return at all");
+        thrown.Should().NotBeNull(
+            "case-sensitive options read every camelCase .json node without a NodeType — the bare node "
+            + "the guard exists to refuse");
+        thrown!.Message.Should().Contain(".json").And.Contain("without a NodeType",
+            "the refusal names the offending file, so whoever reads it knows which file or which "
+            + "options are wrong");
+        var named = DocumentationNodeProvider.LoadIndexableNodes()
+            .Where(n => n.Path.StartsWith(DocumentationNodeProvider.RootNamespace + "/", StringComparison.Ordinal))
+            .Select(n => n.Path[(DocumentationNodeProvider.RootNamespace.Length + 1)..] + ".json")
+            .Where(file => thrown.Message.Contains($"'{file}'", StringComparison.Ordinal))
+            .ToList();
+        named.Should().ContainSingle("the message names exactly one real documentation .json file");
+    }
+
+    /// <summary>
     /// Pure: the migration's parse (no hub) and the boot import's parse (the hub's options) agree on
     /// every documentation node's identity — above all, on which ones are NodeTypes.
     /// </summary>
