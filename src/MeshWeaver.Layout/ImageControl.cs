@@ -309,6 +309,14 @@ public static partial class ImageSources
         return info.LengthInTextElements <= max ? value : info.SubstringByTextElements(0, max);
     }
 
+    /// <summary>
+    /// Whether a TEXT value was meant as a URL: it starts with a URI scheme once whitespace and
+    /// control characters are dropped — the way a browser reads a scheme, so <c>java&#9;script:</c>
+    /// counts as one.
+    /// </summary>
+    private static bool LooksLikeAUrl(string text) =>
+        SchemePrefix().IsMatch(new string(text.Where(c => !char.IsWhiteSpace(c) && !char.IsControl(c)).ToArray()));
+
     private static ResolvedImage? Classify(Icon? icon, Func<Icon, bool>? canRenderNamed)
     {
         if (icon is null || string.IsNullOrWhiteSpace(icon.Id))
@@ -317,7 +325,7 @@ public static partial class ImageSources
         {
             Icon.InlineSvgProvider => new ResolvedImage(ImageSourceKind.Svg, icon.Id),
             Icon.UrlProvider => SafeUrl(icon.Id) is { } url ? new ResolvedImage(ImageSourceKind.Url, url) : null,
-            Icon.TextProvider => SchemePrefix().IsMatch(icon.Id.Trim()) ? null : new ResolvedImage(ImageSourceKind.Glyph, icon.Id.Trim()),
+            Icon.TextProvider => LooksLikeAUrl(icon.Id) ? null : new ResolvedImage(ImageSourceKind.Glyph, icon.Id.Trim()),
             _ => canRenderNamed is null || canRenderNamed(icon) ? new ResolvedImage(ImageSourceKind.Named, icon.Id, icon) : null,
         };
     }

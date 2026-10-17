@@ -106,10 +106,13 @@ public class ImageControlTest(ITestOutputHelper output) : HubTestBase(output)
 
     /// <summary><c>javascript:alert(1)</c> has no slash, so <see cref="Icon.Parse"/> calls it TEXT — it
     /// must still not render as a glyph, because it was meant as a URL.</summary>
-    [Fact]
-    public void Resolve_ASchemeShapedGlyph_IsRefused_AndInitialsWin()
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("java\tscript:alert(1)")]
+    [InlineData(" java script:alert(1)")]
+    public void Resolve_ASchemeShapedGlyph_IsRefused_AndInitialsWin(string value)
     {
-        var resolved = ImageSources.Resolve(Icon.Parse("javascript:alert(1)"), null, "AL");
+        var resolved = ImageSources.Resolve(Icon.Parse(value), null, "AL");
         resolved.Should().Be(new ResolvedImage(ImageSourceKind.Initials, "AL"));
     }
 
