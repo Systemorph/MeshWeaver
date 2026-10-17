@@ -8605,7 +8605,7 @@ public static class MeshExtensions
                                     logger.LogWarning("[CreateOrUpdate] REFUSED {Path}: {Refusal}",
                                         node.Path, refusedIconDetail);
                                     PostFail(
-                                        LocalizableText.Verbatim(IconSafety.RefusalMessage(node.Path, refusedIconDetail)),
+                                        IconSafety.LocalizedRefusal(node.Path, refusedIconDetail),
                                         NodeUpsertRejectionReason.ValidationFailed);
                                     return;
                                 }

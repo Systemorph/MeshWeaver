@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Xml;
+using MeshWeaver.Data;
 
 namespace MeshWeaver.Mesh;
 
@@ -182,6 +183,23 @@ public static class IconSafety
         + "text, an http(s), relative or content: URL, a png/jpeg/gif/webp data: URI, or an SVG made "
         + "of drawing elements only — no script, event handlers, foreign content or references outside "
         + "the icon.";
+
+    /// <summary>The catalog key of <see cref="RefusalMessage"/>.</summary>
+    public const string RefusalMessageKey = "activity.node.upsert.iconRefused";
+
+    /// <summary>
+    /// <see cref="RefusalMessage"/> paired with <see cref="RefusalMessageKey"/>, for a write boundary
+    /// that records the refusal where a viewer reads it. The English is byte-identical to
+    /// <see cref="RefusalMessage"/>. The node path and the rule's finding travel as ARGUMENTS: the
+    /// sentence around them is ours and translates; the finding names an element, attribute,
+    /// scheme or character and is carried as the rule wrote it.
+    /// </summary>
+    /// <param name="path">The node being written.</param>
+    /// <param name="refusal">The detail from <see cref="Refusal"/>.</param>
+    /// <returns>The localizable refusal.</returns>
+    public static LocalizableText LocalizedRefusal(string? path, string refusal) =>
+        LocalizableText.Keyed(RefusalMessage(path, refusal), RefusalMessageKey,
+            ("path", path), ("detail", refusal));
 
     /// <summary>Whether <paramref name="icon"/> is acceptable — <see cref="Refusal"/> is null.</summary>
     /// <param name="icon">The candidate icon.</param>

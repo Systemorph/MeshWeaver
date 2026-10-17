@@ -64,6 +64,30 @@ public class IconSafetyTest
     [Fact]
     public void NoIcon_Passes() => IconSafety.Refusal(null).Should().BeNull();
 
+    /// <summary>
+    /// The refusal a write boundary records is KEYED, and the catalog's English renders exactly the
+    /// sentence the validator returns — so the two surfaces can never drift.
+    /// </summary>
+    [Fact]
+    public void TheLocalizedRefusal_IsKeyed_AndTheCatalogRendersTheSameEnglish()
+    {
+        const string path = "TestData/n";
+        const string detail = "the element <title> is not allowed in an SVG icon";
+        var localized = IconSafety.LocalizedRefusal(path, detail);
+        localized.Key.Should().Be(IconSafety.RefusalMessageKey);
+        localized.English.Should().Be(IconSafety.RefusalMessage(path, detail));
+
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull();
+        using var catalog = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            dir!.FullName, "src", "MeshWeaver.Messaging.Hub", "Localization", "strings.en.json")));
+        var template = catalog.RootElement.GetProperty(IconSafety.RefusalMessageKey).GetString()!;
+        template.Replace("{path}", path).Replace("{detail}", detail)
+            .Should().Be(IconSafety.RefusalMessage(path, detail));
+    }
+
     /// <summary>Each refused value, and the word the refusal must NAME.</summary>
     public static TheoryData<string, string> Refused() => new()
     {
