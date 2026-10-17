@@ -231,6 +231,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Secure Development Framework](SecureDevelopmentFramework) — how production and development are separated when the platform is delivered into a client's own environment: a ringfenced client estate, a narrow interface, a consultant environment that never touches production data, and who approves what
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
+- [Content-Security-Policy — No Inline Script](ContentSecurityPolicy) — the portal's `script-src` moves from `'unsafe-inline'` to a per-request nonce: the strict policy, the nonce on the shell's own scripts, the `/api/csp-report` endpoint, the declared ReportOnly/Enforce switch, and what remains before enforcement
 
 ### Threads, activities & AI
 

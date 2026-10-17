@@ -19,6 +19,8 @@ public class VirtualUserMiddlewareExclusionTest
     // The anonymous build-identity endpoint: polled by machines that keep no cookie, so the VUser
     // flow could only churn — and it must stay answerable when the mesh is unhealthy.
     [InlineData("/api/version")]
+    // Browser-sent Content-Security-Policy violation reports: no identity, possibly no cookie.
+    [InlineData("/api/csp-report")]
     public async Task ExcludedPrefixes_SkipVirtualUserAssignment(string path)
     {
         var nextCalled = false;
