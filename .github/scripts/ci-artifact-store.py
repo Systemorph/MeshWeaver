@@ -122,6 +122,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 # A container/account name grammar strict enough that a malformed --store is refused before the
@@ -136,6 +137,19 @@ KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-/]{0,1022}$")
 
 class Red(Exception):
     """A refusal that must reach the log as ::error and exit 1."""
+
+
+def scratch_token() -> str:
+    """A name component no OTHER writer of a shared store can mint.
+
+    🚨 `os.getpid()` is NOT one. Every runner pod has its own PID namespace, and pods running the
+    same job template walk the same process tree, so two of them reach the same step with the
+    SAME pid — measured: `aks-silos-tv7h9-runner-bb4gd` and `-cf9hl` ran the store probe 27 ms
+    apart on one Azure Files share, and the first pod's unlink removed the second pod's probe, which
+    then reported `[Errno 2] No such file or directory: '/ci-artifacts/.mw-store-write-probe.951'`
+    — a healthy, writable share read as "unavailable". The random part is what makes it unique;
+    the host and pid are kept only so a stray file names the pod that left it."""
+    return f"{os.uname().nodename}.{os.getpid()}.{uuid.uuid4().hex}"
 
 
 def sha256_file(path: Path) -> str:
@@ -444,13 +458,21 @@ class FileStore(Store):
     def reachable(self) -> str:
         if not self.root.is_dir():
             return f"{self.root} is not a directory on this runner (the share is not mounted here)"
-        probe = self.root / f".mw-store-write-probe.{os.getpid()}"
+        # 🚨 The probe name must be unique ACROSS PODS, not per process: see scratch_token(). It is
+        # created exclusively ('x'), so a name collision could never again pass as a write.
+        probe = self.root / f".mw-store-write-probe.{scratch_token()}"
         try:
-            probe.write_text("x")
+            with open(probe, "x") as f:
+                f.write("x")
+            self._probe_written(probe)
             probe.unlink()
         except OSError as e:
             return f"{self.root} is not writable by this job: {e}"
         return ""
+
+    def _probe_written(self, probe: Path) -> None:
+        """Between the probe's write and its unlink — the window a concurrent pod's probe lands in.
+        Overridable only so the self-test can put a second writer exactly there."""
 
     def _path(self, key: str) -> Path:
         if not KEY_RE.match(key) or ".." in key.split("/"):
@@ -471,7 +493,7 @@ class FileStore(Store):
             os.fsync(f.fileno())
         os.replace(tmp, dst)
 
-    def _verify_written(self, dst: Path, key: str, size: int, digest: str) -> None:
+    def _verify_written(self, dst: Path, key: str, size: int, digest: str, tmp: Path) -> None:
         """🚨 READ THE DESTINATION BACK — the whole of #4761 in one method.
 
         Before this existed, `put` printed `store: wrote <n> bytes … sha256 <hex>` with BOTH
@@ -502,9 +524,10 @@ class FileStore(Store):
             raise Red(f"the write is INVISIBLE: {where} stats and hashes correctly and does not "
                       f"appear in its own directory listing, so a consumer enumerating the prefix "
                       f"will not find it.")
-        leftover = sorted(q.name for q in dst.parent.glob(dst.name + ".tmp.*"))
-        if leftover:
-            raise Red(f"the publish left its staging file behind next to {where}: {leftover} — the "
+        # Only OUR staging file is evidence: another pod putting the same key concurrently holds its
+        # own `<name>.tmp.<token>` next to dst, legitimately, until its own rename.
+        if tmp.exists():
+            raise Red(f"the publish left its staging file behind next to {where}: {tmp.name} — the "
                       f"rename did not consume it, which means it was not a rename.")
 
     def put(self, key: str, file: Path, expect_store_id: str | None = None) -> str:
@@ -524,14 +547,16 @@ class FileStore(Store):
         # `os.replace` is a real rename(2) — unlike .NET's File.Move it has no link(2)/copy fallback,
         # so it either renames or raises. What it CANNOT tell us is whether the name it published is
         # readable afterwards, which is why _verify_written follows and is not optional.
-        tmp = dst.with_name(dst.name + f".tmp.{os.getpid()}")
+        # 🚨 The staging name is unique ACROSS PODS (scratch_token): with a pid alone, two pods
+        # putting one key copy into ONE staging file and the first rename takes the other's bytes.
+        tmp = dst.with_name(dst.name + f".tmp.{scratch_token()}")
         shutil.copyfile(file, tmp)
         try:
             self._publish(tmp, dst)
         except OSError as e:
             tmp.unlink(missing_ok=True)
             raise Red(f"could not publish {file.name} as {dst} on {self.store_id()}: {e}")
-        self._verify_written(dst, key, size, digest)
+        self._verify_written(dst, key, size, digest, tmp)
         print(f"store: wrote {file.name} ({size} bytes) to {dst}, sha256 {digest} — "
               f"read back from the destination and verified ({self.store_id()})")
         return f"{self.spec}/{key}#sha256={digest}"
@@ -936,6 +961,46 @@ def self_test() -> int:
         check("file: an unmounted directory is reported unreachable, not crashed",
               "not a directory" in make_store("file:" + str(tmp / "no-such-mount")).reachable())
         check("file: a mounted, writable directory is reachable", fs.reachable() == "")
+
+        # 🚨 TWO PODS, ONE PID, ONE SHARE (Plugins run 39019459631). Runner pods have their own
+        # PID namespaces and walk the same process tree, so two of them probe the shared share with
+        # the SAME pid. Put the second pod's whole probe inside the first's write→unlink window,
+        # with getpid pinned to the measured 951 for both, exactly as it happened.
+        real_getpid = os.getpid
+        os.getpid = lambda: 951
+        try:
+            class OverlappedProbe(FileStore):
+                def _probe_written(self, probe: Path) -> None:
+                    self.inner = FileStore(str(self.root)).reachable()
+
+            outer = OverlappedProbe(str(share))
+            outer_said = outer.reachable()
+            check("file: two pods probing one share with the same pid are BOTH reachable",
+                  outer_said == "" and outer.inner == "", f"outer={outer_said!r} inner={outer.inner!r}")
+            check("file: the overlapped probes leave nothing behind",
+                  not list(share.glob(".mw-store-write-probe.*")))
+
+            # …and the same two pods putting ONE key: the second pod's whole put lands inside the
+            # first's copy→rename window. With a pid-named staging file the second copy overwrote
+            # the first's and renamed it away, so the first rename raised ENOENT.
+            race_key = "modules/Plugins/MeshWeaver.AI/race/bundle.nupkg"
+
+            class OverlappedPut(FileStore):
+                def _publish(self, tmp_: Path, dst_: Path) -> None:
+                    self.inner = FileStore(str(self.root)).put(race_key, payload)
+                    super()._publish(tmp_, dst_)
+
+            racer = OverlappedPut(str(share))
+            try:
+                rloc = racer.put(race_key, payload)
+                check("file: two pods putting one key with the same pid both publish",
+                      rloc == racer.inner and sha256_file(share / race_key) == digest, rloc)
+            except Red as e:
+                check("file: two pods putting one key with the same pid both publish", False, str(e))
+            check("file: the overlapped puts leave no staging file behind",
+                  not list(share.rglob("*.tmp.*")))
+        finally:
+            os.getpid = real_getpid
         check("file: resolve --require is green for a usable share",
               resolve_cmd(argparse.Namespace(declared=f"file:{share}", require=True, az=az)) == 0)
         try:
