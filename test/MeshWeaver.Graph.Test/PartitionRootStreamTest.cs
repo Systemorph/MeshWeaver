@@ -176,7 +176,7 @@ public class PartitionRootStreamTest(ITestOutputHelper output) : MonolithMeshTes
 
         var tiles = await stream.TreeSnapshots(reference.Area!)
             .Select(tree => tree.OfType<HtmlControl>()
-                .Select(html => html.Data?.ToString() ?? "")
+                .Select(html => RenderedSvg.Decoded(html.Data?.ToString() ?? ""))
                 .Where(data => data.Contains(IconTileMarker))
                 .ToList())
             .Should().Within(RenderBudget).Match(

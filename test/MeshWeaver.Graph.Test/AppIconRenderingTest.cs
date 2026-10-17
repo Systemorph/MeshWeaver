@@ -71,15 +71,15 @@ public class AppIconRenderingTest
     [Fact]
     public void Sizing_an_authored_icon_overrides_its_own_dimensions()
     {
-        // The defence in depth: whatever an icon author wrote, the surface's size wins. Duplicate
-        // attributes resolve first-wins in HTML parsing, so the injected style must come FIRST.
+        // The defence in depth: whatever an icon author wrote, the surface's size wins. The icon is
+        // an image now, so its authored width/height are only its intrinsic size inside the image
+        // document — the <img> element's own box is what the page lays out.
         const string authored = "<svg width='24' height='24' viewBox='0 0 24 24'><rect/></svg>";
 
         var sized = MeshNodeImageHelper.SizeInlineSvg(authored, 36);
 
-        sized.IndexOf("style=", StringComparison.Ordinal)
-            .Should().BeLessThan(sized.IndexOf("width='24'", StringComparison.Ordinal),
-                "the injected size has to precede the authored one to win");
-        sized.Should().Contain("36px");
+        sized.Should().StartWith("<img ", "the surface lays out an image box, not the authored svg");
+        sized.Should().Contain("width=\"36\"").And.Contain("width: 36px; height: 36px;");
+        sized.Should().NotContain("width='24'", "the authored size is inside the encoded image, never on the page");
     }
 }
