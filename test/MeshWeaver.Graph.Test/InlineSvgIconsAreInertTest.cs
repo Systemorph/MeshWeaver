@@ -167,16 +167,38 @@ public class InlineSvgIconsAreInertTest
         document.Should().Contain("M4 4h16v16H4z", "the authored glyph survives plating");
     }
 
-    /// <summary>An explicit colour replaces <c>currentColor</c>, which an image-loaded svg cannot
-    /// inherit from the page.</summary>
-    [Fact]
-    public void AnExplicitColor_ReplacesCurrentColor()
+    /// <summary>The colour <c>currentColor</c> resolves against, walked up from the first path the way a
+    /// renderer inherits it: the nearest <c>color</c> attribute wins.</summary>
+    private static string? ResolvedColor(string document)
     {
-        const string ownPlate = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'>"
-                                + "<rect width='24' height='24' fill='#0e7490'/><path d='M6 12h12' stroke='currentColor'/></svg>";
+        var parsed = System.Xml.Linq.XDocument.Parse(document);
+        var element = parsed.Descendants().First(e => e.Name.LocalName == "path");
+        for (var at = element; at is not null; at = at.Parent)
+            if (at.Attribute("color") is { } color)
+                return color.Value;
+        return null;
+    }
 
-        var decoded = RenderedSvg.Decoded(MeshNodeImageHelper.InlineSvgImage(ownPlate, 20, "#ff0000"));
+    /// <summary>
+    /// An explicit colour is supplied as the document's INHERITED DEFAULT — a root <c>color</c> — and
+    /// never by rewriting paint: an image-loaded svg cannot inherit from the page, but a colour the icon
+    /// declares itself must keep winning, exactly as it did inline.
+    /// </summary>
+    [Theory]
+    // an icon that paints its own plate, no colour of its own: the requested colour applies
+    [InlineData("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' fill='#0e7490'/><path d='M6 12h12' stroke='currentColor'/></svg>", "#ff0000")]
+    // a colour on a child element wins over the requested one
+    [InlineData("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' fill='#0e7490'/><g color='blue'><path d='M6 12h12' stroke='currentColor'/></g></svg>", "blue")]
+    // a colour on the root wins over the requested one
+    [InlineData("<svg color='blue' xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' fill='#0e7490'/><path d='M6 12h12' stroke='currentColor'/></svg>", "blue")]
+    // a plateless icon is plated first: the plate root takes the colour, the glyph is the plate's white
+    [InlineData("<svg viewBox='0 0 24 24' fill='none'><path d='M6 12h12' stroke='currentColor'/></svg>", "#ff0000")]
+    public void AnExplicitColor_IsTheInheritedDefault_NeverAPaintRewrite(string svg, string resolved)
+    {
+        var src = MeshNodeImageHelper.InlineSvgImageSource(svg, "#ff0000");
+        var decoded = Uri.UnescapeDataString(src["data:image/svg+xml,".Length..]);
 
-        decoded.Should().Contain("stroke='#ff0000'").And.NotContain("currentColor");
+        ResolvedColor(decoded).Should().Be(resolved);
+        decoded.Should().NotContain("stroke='#ff0000'", "paint values are never rewritten");
     }
 }

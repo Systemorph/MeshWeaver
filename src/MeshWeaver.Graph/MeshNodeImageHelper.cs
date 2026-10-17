@@ -432,12 +432,13 @@ public static partial class MeshNodeImageHelper
     /// <c>currentColor</c> inside it resolves to the image document's own default (black). The plate
     /// already recolours <c>currentColor</c> to white for every icon it wraps, so only an icon that
     /// paints its OWN plate and still uses <c>currentColor</c> for detail is affected — pass
-    /// <paramref name="currentColor"/> to give that detail an explicit colour.</para>
+    /// <paramref name="currentColor"/> to supply the colour the page would have given it, as the
+    /// document's inherited default (<see cref="WithRootColor"/>).</para>
     /// </summary>
     /// <param name="svg">The inline svg markup.</param>
     /// <param name="pixels">The square size, in CSS pixels, the icon should occupy.</param>
-    /// <param name="currentColor">An explicit CSS colour to substitute for any <c>currentColor</c> left
-    /// in the icon after plating, or null to leave it.</param>
+    /// <param name="currentColor">A plain CSS colour supplied as the document's inherited default
+    /// (colours the icon declares itself still win), or null.</param>
     public static string InlineSvgImage(string svg, int pixels, string? currentColor = null)
         => $"<img src=\"{InlineSvgImageSource(svg, currentColor)}\" alt=\"\" width=\"{pixels}\" height=\"{pixels}\" "
            + $"style=\"width: {pixels}px; height: {pixels}px; display: block; object-fit: contain;\" />";
@@ -448,15 +449,63 @@ public static partial class MeshNodeImageHelper
     /// through <see cref="IconBackplate.Ensure"/> and encoded as a <c>data:</c> URI.
     /// </summary>
     /// <param name="svg">The inline svg markup.</param>
-    /// <param name="currentColor">An explicit CSS colour for any <c>currentColor</c> left after
-    /// plating, or null to leave it.</param>
+    /// <param name="currentColor">A plain CSS colour supplied as the document's inherited default
+    /// (<see cref="WithRootColor"/>), or null.</param>
     public static string InlineSvgImageSource(string svg, string? currentColor = null)
     {
         var plated = IconBackplate.Ensure(svg);
-        if (!string.IsNullOrWhiteSpace(currentColor))
-            plated = plated.Replace("currentColor", currentColor, StringComparison.OrdinalIgnoreCase);
+        if (PlainColor(currentColor) is { } color)
+            plated = WithRootColor(plated, color);
         return SvgDataUri(plated);
     }
+
+    /// <summary>
+    /// <paramref name="svg"/> with <paramref name="color"/> as the INHERITED DEFAULT colour of the
+    /// image document: a <c>color="…"</c> attribute on the root <c>&lt;svg&gt;</c>, set only when the root
+    /// declares no colour of its own (attribute or <c>style</c>). Paint values are never rewritten, so
+    /// every colour the icon declares itself — on the root or on a descendant
+    /// (<c>&lt;g color="blue"&gt;</c>) — still wins through ordinary inheritance, and <c>currentColor</c>
+    /// resolves against whichever is nearest: what the page's CSS colour did for the icon inline.
+    /// </summary>
+    /// <param name="svg">Inline svg markup.</param>
+    /// <param name="color">A plain CSS colour.</param>
+    public static string WithRootColor(string svg, string color)
+    {
+        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
+            return svg;
+        var raw = svg[(root.Start + "<svg".Length)..root.End];
+        if (ColorAttr().IsMatch(QuotedValue().Replace(raw, "\"\"")))
+            return svg;
+        var style = StyleAttr().Match(raw);
+        if (style.Success && StyleColor().IsMatch(style.Groups["v"].Value))
+            return svg;
+        return svg.Insert(root.Start + "<svg".Length, $" color=\"{color}\"");
+    }
+
+    /// <summary>
+    /// <paramref name="color"/> when it can be written into an image document: a plain CSS colour
+    /// (a name, <c>#hex</c>, <c>rgb()</c>/<c>hsl()</c>…). A <c>var(…)</c> cannot resolve inside an image,
+    /// and a quote or markup character would break the XML — both yield null.
+    /// </summary>
+    private static string? PlainColor(string? color)
+    {
+        var c = color?.Trim();
+        if (string.IsNullOrEmpty(c) || c.Contains("var(", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return PlainColorValue().IsMatch(c) ? c : null;
+    }
+
+    [GeneratedRegex(@"(?<![-:\w])color\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex ColorAttr();
+
+    [GeneratedRegex(@"(?<![-:\w])style\s*=\s*(?:""(?<v>[^""]*)""|'(?<v>[^']*)')", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StyleAttr();
+
+    [GeneratedRegex(@"(?:^|;)\s*color\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StyleColor();
+
+    [GeneratedRegex(@"^[#\w\s(),.%+-]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainColorValue();
 
     /// <summary>The one media type that tells a browser "this icon scales losslessly".</summary>
     public const string SvgMediaType = "image/svg+xml";

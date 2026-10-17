@@ -63,8 +63,11 @@ and loads nothing external:
 
 Both plate the icon first (`IconBackplate.Ensure`). One visual consequence: an image cannot inherit
 the page's text colour, so `currentColor` left inside an icon that paints its own plate resolves to
-black — pass `currentColor:` to `InlineSvgImage` / `InlineSvgImageSource` to give it a colour. An
-icon without its own plate is unaffected, because plating already recolours `currentColor` to white.
+black — pass `currentColor:` to `InlineSvgImage` / `InlineSvgImageSource` to give it a colour. That
+colour becomes the document's inherited default (a `color` attribute on the root `<svg>`, set only
+when the root declares none); paint is never rewritten, so colours the icon declares itself still
+win. An icon without its own plate is unaffected, because plating already recolours `currentColor`
+to white.
 
 ---
 
