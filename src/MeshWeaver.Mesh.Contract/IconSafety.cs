@@ -66,7 +66,9 @@ public static class IconSafety
     // Constant lookups, written once and never at runtime (AGENTS.md → "No static collections").
     private static readonly ImmutableHashSet<string> AllowedElements = ImmutableHashSet.Create(
         StringComparer.Ordinal,
-        "svg", "g", "defs", "symbol", "use", "title", "desc",
+        // No title / desc: HTML treats them as integration points, so their content can be
+        // re-parsed as HTML. An icon's accessible name is the alt text of the image it renders as.
+        "svg", "g", "defs", "symbol", "use",
         "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
         "text", "tspan", "textPath",
         "linearGradient", "radialGradient", "stop", "pattern",
@@ -74,7 +76,10 @@ public static class IconSafety
 
     private static readonly ImmutableHashSet<string> AllowedAttributes = ImmutableHashSet.Create(
         StringComparer.Ordinal,
-        "id", "class", "style", "version", "role", "focusable", "lang",
+        // No `style`: CSS has URL-bearing functions besides url( (image-set, …), so a declaration
+        // block is refused outright rather than parsed. Presentation attributes carry the same
+        // properties under the strict value grammar below.
+        "id", "class", "version", "role", "focusable", "lang",
         "viewBox", "preserveAspectRatio", "width", "height",
         "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r", "rx", "ry", "fx", "fy", "fr",
         "d", "points", "pathLength", "transform",
@@ -101,10 +106,11 @@ public static class IconSafety
 
     private static readonly ImmutableArray<string> AllowedSchemes = ["http", "https", "content"];
 
-    // Matched against an attribute value with case folded and whitespace / control characters
-    // removed, the way a URL or CSS parser reads it.
-    private static readonly ImmutableArray<string> ForbiddenValueFragments =
-        ["javascript:", "vbscript:", "data:", "expression(", "-moz-binding", "behavior:", "@import"];
+    // The only functions an attribute value may call: colours, transforms, and url(#fragment).
+    private static readonly ImmutableHashSet<string> AllowedFunctions = ImmutableHashSet.Create(
+        StringComparer.OrdinalIgnoreCase,
+        "url", "rgb", "rgba", "hsl", "hsla",
+        "matrix", "translate", "scale", "rotate", "skewX", "skewY");
 
     // Markup and quoting characters: none of these belongs in a glyph name, an emoji or a URL, and
     // each is what lets a value escape the element or attribute a renderer put it in.
@@ -118,11 +124,14 @@ public static class IconSafety
     /// <returns><c>null</c> for an acceptable icon; the refusal otherwise.</returns>
     public static string? Refusal(string? icon)
     {
-        if (string.IsNullOrWhiteSpace(icon))
+        // The bound applies to EVERY non-null value — checked before anything scans the string,
+        // blank values included.
+        if (icon is null)
             return null;
-
         if (icon.Length > MaxIconLength)
             return $"an icon is at most {MaxIconLength} characters (this one has {icon.Length})";
+        if (string.IsNullOrWhiteSpace(icon))
+            return null;
 
         var value = icon.Trim();
 
@@ -266,7 +275,7 @@ public static class IconSafety
         {
             DtdProcessing = DtdProcessing.Prohibit,
             XmlResolver = null,
-            IgnoreComments = true,
+            IgnoreComments = false,
             MaxCharactersInDocument = MaxSvgCharacters,
         };
 
@@ -280,6 +289,22 @@ public static class IconSafety
                 {
                     case XmlNodeType.ProcessingInstruction:
                         return $"an SVG icon may not carry a processing instruction ('<?{reader.Name}')";
+
+                    // Neither is drawing content, and both change meaning when an HTML parser
+                    // reads the markup instead of an XML one — so refused, never ignored.
+                    case XmlNodeType.CDATA:
+                        return "an SVG icon may not carry a CDATA section";
+                    case XmlNodeType.Comment:
+                        return "an SVG icon may not carry a comment";
+                    case XmlNodeType.DocumentType:
+                        return "an SVG icon may not carry a DOCTYPE";
+
+                    case XmlNodeType.Text:
+                    case XmlNodeType.Whitespace:
+                    case XmlNodeType.SignificantWhitespace:
+                        if (reader.Value.IndexOfAny(['<', '>']) >= 0)
+                            return "an SVG icon's text may not contain '<' or '>'";
+                        break;
 
                     case XmlNodeType.Element:
                     {
@@ -358,29 +383,37 @@ public static class IconSafety
         if (value.Contains('\\'))
             return $"the attribute '{attribute}' contains a backslash, which an SVG icon does not need";
 
-        // Normalise the way a URL or CSS parser would read it: case, and the whitespace / control
-        // characters that browsers skip inside a scheme ("java\tscript:").
-        var normalised = new StringBuilder(value.Length);
-        foreach (var c in value)
-            if (!char.IsWhiteSpace(c) && !char.IsControl(c))
-                normalised.Append(char.ToLowerInvariant(c));
-        var flat = normalised.ToString();
-
-        foreach (var forbidden in ForbiddenValueFragments)
-            if (flat.Contains(forbidden, StringComparison.Ordinal))
-                return $"the attribute '{attribute}' carries '{forbidden}', which is not allowed in an SVG icon";
-
-        // Every url(…) must point INSIDE the document. Scanned by index — no per-occurrence copy,
-        // so the cost is linear in the attribute length however many url( it repeats.
-        var at = 0;
-        while ((at = flat.IndexOf("url(", at, StringComparison.Ordinal)) >= 0)
+        // A STRICT value grammar for every attribute: letters, digits, whitespace and
+        // `# . , % + - _ ( )` — which is what colours, lengths, numbers, path data, transforms and
+        // url(#fragment) are written in. Quotes are allowed in font-family alone. No ':' (so no
+        // scheme), no '/', no ';', no '@'. Every function call must be on the allow-list, and
+        // url( must hold a bare '#fragment'. One linear pass, no copies.
+        var quotesAllowed = attribute == "font-family";
+        for (var i = 0; i < value.Length; i++)
         {
-            var target = at + 4;
-            while (target < flat.Length && flat[target] is '"' or '\'')
-                target++;
-            if (target >= flat.Length || flat[target] != '#')
-                return $"the attribute '{attribute}' references something outside the icon (url(…) must be a '#fragment')";
-            at = target;
+            var c = value[i];
+            if (char.IsAsciiLetterOrDigit(c) || char.IsWhiteSpace(c)
+                || c is '#' or '.' or ',' or '%' or '+' or '-' or '_' or ')'
+                || (quotesAllowed && c is '\'' or '"'))
+                continue;
+            if (c != '(')
+                return $"the attribute '{attribute}' contains '{c}', which an SVG icon's values do not use";
+
+            var nameEnd = i;
+            var nameStart = nameEnd;
+            while (nameStart > 0 && (char.IsAsciiLetter(value[nameStart - 1]) || value[nameStart - 1] == '-'))
+                nameStart--;
+            var function = value[nameStart..nameEnd];
+            if (!AllowedFunctions.Contains(function))
+                return $"the attribute '{attribute}' calls '{(function.Length == 0 ? "(" : function + "(")}', which an SVG icon may not use";
+            if (function.Equals("url", StringComparison.OrdinalIgnoreCase))
+            {
+                var j = i + 1;
+                while (j < value.Length && char.IsWhiteSpace(value[j]))
+                    j++;
+                if (j >= value.Length || value[j] != '#')
+                    return $"the attribute '{attribute}' references something outside the icon (url(…) must be a '#fragment')";
+            }
         }
         return null;
     }

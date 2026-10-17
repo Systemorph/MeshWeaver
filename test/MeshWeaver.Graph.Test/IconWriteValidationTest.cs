@@ -74,8 +74,9 @@ public class IconSafetyTest
         { $"<svg {Ns}><a href=\"#x\"><path d=\"M0 0\"/></a></svg>", "<a>" },
         { $"<svg {Ns}><use href=\"https://example.com/sprite.svg#a\"/></svg>", "href" },
         { $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><use xlink:href=\"java&#9;script:void 0\"/></svg>", "xlink:href" },
-        { $"<svg {Ns}><rect style=\"fill:url(https://example.com/a.svg#g)\"/></svg>", "url(" },
-        { $"<svg {Ns}><rect fill=\"url( 'https://example.com/a' )\"/></svg>", "url(" },
+        { $"<svg {Ns}><rect style=\"fill:url(https://example.com/a.svg#g)\"/></svg>", "'style'" },
+        { $"<svg {Ns}><rect fill=\"url( https://example.com/a )\"/></svg>", "outside the icon" },
+        { $"<svg {Ns}><rect fill=\"url( 'https://example.com/a' )\"/></svg>", "outside the icon" },
         { $"<svg {Ns}><rect class=\"x\" style=\"background:java script:void 0\"/></svg>", "style" },
         { $"<svg {Ns}><x:div xmlns:x=\"http://www.w3.org/1999/xhtml\"/></svg>", "namespace" },
         { $"<?xml-stylesheet href=\"a.css\"?><svg {Ns}/>", "processing instruction" },
@@ -101,7 +102,22 @@ public class IconSafetyTest
         { "data:image/png;charset=utf-8;base64,AAAA", "exactly" },
         { "data:image/png;base64,AA AA", "exactly" },
         // …and CSS escapes would hide a function name from the url( check.
-        { $"<svg {Ns}><rect style=\"fill:u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },
+        { $"<svg {Ns}><rect style=\"fill:u\\72l(https://example.com/p.svg#g)\"/></svg>", "'style'" },
+        // Review round 2 on #6910 — the exact bypass strings:
+        // (a) mutation through an HTML integration point: CDATA inside <title> is ignored by XML
+        //     and re-parsed as markup by HTML.
+        { "<svg xmlns=\"http://www.w3.org/2000/svg\"><title><g><![CDATA[><img src=x onerror=\"void 0\">]]></g></title></svg>", "<title>" },
+        { $"<svg {Ns}><g><![CDATA[><img src=x onerror=\"void 0\">]]></g></svg>", "CDATA" },
+        { $"<svg {Ns}><desc>x</desc></svg>", "<desc>" },
+        { $"<svg {Ns}><!-- x --><path d=\"M0 0\"/></svg>", "comment" },
+        { $"<svg {Ns}><text>a &gt; b</text></svg>", "'<' or '>'" },
+        // (b) CSS functions that load an image without a literal url(.
+        { $"<svg {Ns}><rect style=\"mask-image:image-set('https://example.com/mask.png' 1x)\"/></svg>", "'style'" },
+        { $"<svg {Ns}><rect style=\"background-image:image-set('https://example.com/mask.png' 1x)\"/></svg>", "'style'" },
+        { $"<svg {Ns}><rect fill=\"image-set(x 1x)\"/></svg>", "image-set(" },
+        { $"<svg {Ns}><rect fill=\"cross-fade(x)\"/></svg>", "cross-fade(" },
+        // (c) a whitespace-only value past the length bound.
+        { new string(' ', IconSafety.MaxIconLength + 1), "at most" },
         { $"<svg {Ns}><rect fill=\"u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },
     };
 
@@ -147,7 +163,7 @@ public class IconSafetyTest
     /// </summary>
     [Fact]
     public void FragmentReferences_AreNotExternalReferences()
-        => IconSafety.Refusal($"<svg {Ns}><rect fill=\"url('#g')\" clip-path=\"url(#c)\"/></svg>").Should().BeNull();
+        => IconSafety.Refusal($"<svg {Ns}><rect fill=\"url(#g)\" clip-path=\"url( #c)\" transform=\"rotate(45 12 12) translate(1,2)\" stroke=\"rgb(10, 20, 30)\"/></svg>").Should().BeNull();
 }
 
 /// <summary>
@@ -276,6 +292,73 @@ public class IconCorpusTest(ITestOutputHelper output)
         return dir?.FullName
                ?? throw new InvalidOperationException(
                    "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
+    }
+}
+
+/// <summary>
+/// Review round 2 on #6910: the validator judges the change against the node it READ, and another
+/// writer can move the node before the write applies. So <c>UpdateNode</c> and the upsert re-judge
+/// the icon INSIDE the write, against the live node. This class proves that second check stands on
+/// its own: <see cref="IconMarkupValidator"/> is removed from the mesh, and a refused icon is still
+/// refused at the write — the guarantee that covers the read-then-write window.
+/// </summary>
+public class IconWriteLambdaTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Active = "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>void 0</script></svg>";
+    private const string Clean = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\"><path d=\"M4 4h16\"/></svg>";
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).ConfigureServices(services =>
+        {
+            foreach (var d in services.Where(d => d.ImplementationType == typeof(IconMarkupValidator)).ToList())
+                services.Remove(d);
+            return services;
+        });
+
+    private IMeshService MeshService => Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+    private static MeshNode Node(string id, string? icon) => new(id, TestPartition)
+    {
+        Name = "Icon " + id,
+        NodeType = "Markdown",
+        State = MeshNodeState.Active,
+        Icon = icon,
+    };
+
+    [Fact(Timeout = 180_000)]
+    public async Task UpdateNode_ReJudgesTheIconAgainstTheLiveNode_InsideTheWrite()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Mesh.ServiceProvider.GetServices<INodeValidator>().OfType<IconMarkupValidator>()
+            .Should().BeEmpty("precondition: this class proves the in-write check WITHOUT the validator");
+
+        var id = "il" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Node(id, Clean)).Take(1).Timeout(60.Seconds()).Await(ct);
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.UpdateNode(Node(id, Active) with { Name = "renamed" })
+                .Take(1).Timeout(60.Seconds()).Await(ct));
+        failure.Should().NotBeNull("the write itself must refuse an icon change the live node does not hold");
+        failure!.Message.Should().Contain("<script>");
+
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(60.Seconds()).Await(ct);
+        after.Icon.Should().Be(Clean, "a refused write leaves the live node as it was");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task UpdateNode_LeavingAStoredIconAsItIs_StillLands()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = "il" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{TestPartition}/{id}";
+        await MeshService.CreateNode(Node(id, Clean)).Take(1).Timeout(60.Seconds()).Await(ct);
+
+        var updated = await MeshService.UpdateNode(Node(id, Clean) with { Name = "renamed" })
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+        updated.Name.Should().Be("renamed", "the control: an update that keeps the icon is not judged");
     }
 }
 
