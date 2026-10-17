@@ -655,13 +655,24 @@ public sealed class InstanceAutoRegistrationService(
         IObservable<IEnumerable<MeshNode>> Rows() => ConsentRowsOverride?.Invoke()
             ?? accessService.RunAsSystem(() => workspace.GetQuery(
                 $"consent|{path}", $"path:{path} nodeType:{MeshWeaverInstanceNodeType.ConsentNodeType}"));
+        IObservable<MeshNode> Content() => (ConsentContentOverride?.Invoke()
+                ?? accessService.RunAsSystem(() => workspace.GetMeshNodeStream(path)))
+            .Where(node => node is not null)
+            .Select(node => node!);
+        bool IsComplete(MeshNode node) =>
+            node.ContentAs<InstanceConsent>(hub.JsonSerializerOptions)?.IsComplete ?? false;
+        // One-shot: the record as it stands now.
         IObservable<bool> Verdict(IEnumerable<MeshNode> r) => r.Any()
-            ? (ConsentContentOverride?.Invoke()
-                    ?? accessService.RunAsSystem(() => workspace.GetMeshNodeStream(path)))
-                .Where(node => node is not null)
-                .Take(1)
-                .Timeout(TimeSpan.FromSeconds(10))
-                .Select(node => node!.ContentAs<InstanceConsent>(hub.JsonSerializerOptions)?.IsComplete ?? false)
+            ? Content().Take(1).Timeout(TimeSpan.FromSeconds(10)).Select(IsComplete)
+            : Observable.Return(false);
+        // 🚨 Waiting: the record's node stream stays LIVE. The query and the node stream are two
+        // independent feeds; a query emission can arrive before the node stream has the completed
+        // record, and a one-shot read then consumes the stale, incomplete one — with no further
+        // query emission guaranteed, registration would never run. Only the FIRST value is bounded.
+        IObservable<bool> LiveVerdict(IEnumerable<MeshNode> r) => r.Any()
+            ? Content()
+                .Timeout(Observable.Timer(TimeSpan.FromSeconds(10)), _ => Observable.Never<long>())
+                .Select(IsComplete)
             : Observable.Return(false);
 
         if (!wait)
@@ -681,7 +692,7 @@ public sealed class InstanceAutoRegistrationService(
         // and RE-OPENS after any fault on the standing-watch backoff, at Warning, for as long as
         // the waiter is subscribed.
         return StandingWatchRecovery.ReopenOnTransientFault(
-            () => Observable.Defer(Rows).Select(Verdict).Switch(),
+            () => Observable.Defer(Rows).Select(LiveVerdict).Switch(),
             maxConsecutive: int.MaxValue,
             backoff: StandingWatchRecovery.DefaultBackoff,
             scheduler: ConsentReopenScheduler ?? Scheduler.Default,

@@ -20,8 +20,10 @@ namespace MeshWeaver.Documentation.Test;
 /// shapes that are fine:</para>
 /// <list type="bullet">
 ///   <item>a ONE-SHOT read — <c>Take</c>, <c>FirstAsync</c>, <c>LastAsync</c>,
-///   <c>FirstOrDefaultAsync</c>, <c>SingleAsync</c> or <c>Timeout</c> anywhere in the chain, or
-///   <c>ToList</c>/<c>ToArray</c> at its top level: a request/response read ends anyway;</item>
+///   <c>FirstOrDefaultAsync</c> or <c>SingleAsync</c> anywhere in the chain, or
+///   <c>ToList</c>/<c>ToArray</c> at its top level: a request/response read ends anyway. A
+///   <c>Timeout</c> alone is NOT one: it bounds the gaps between values and leaves the watch
+///   standing, so a fault still ends it;</item>
 ///   <item>a write (<c>.Update(</c> at the top level of the chain);</item>
 ///   <item>a recognised re-open: <c>ReopenOnTransientFault</c>, <c>SelfHealing</c>,
 ///   <c>RetryWhen</c>/<c>Retry</c> anywhere, or a <c>.Catch</c> at the top level of the chain (a
@@ -62,7 +64,7 @@ public class StandingQueryWatchRatchetGuard
     private static readonly Regex SubscribeCall = new(@"\.Subscribe\s*\(", RegexOptions.Compiled);
     private static readonly Regex LiveQuery = new(@"(\.Query\s*<|\bGetQuery\s*\(|\bObserveQuery\b)", RegexOptions.Compiled);
     private static readonly Regex OneShotAnywhere = new(
-        @"\.(Take|FirstAsync|FirstOrDefaultAsync|LastAsync|LastOrDefaultAsync|SingleAsync|Timeout)\s*[<(]",
+        @"\.(Take|FirstAsync|FirstOrDefaultAsync|LastAsync|LastOrDefaultAsync|SingleAsync)\s*[<(]",
         RegexOptions.Compiled);
     private static readonly Regex ReopenAnywhere = new(
         @"(RetryWhen\s*\(|\.Retry\s*\(|ReopenOnTransientFault\s*\(|SelfHealing\s*\()", RegexOptions.Compiled);
@@ -138,6 +140,9 @@ public class StandingQueryWatchRatchetGuard
             W("HubWatcher.cs", "class K { void M() { sub = ActivityControlPlaneExtensions.SubscribeHubWatcher(hub,\n"
                 + "  () => mesh.Query<MeshNode>(r), OnChange, logger, \"catalog\"); } }");
             W("NodeStreamWrite.cs", "class L { void M() { hub.GetQuery(\"x\", q); stream.Update(n => n).Subscribe(_ => { }, ex => Log(ex)); } }");
+            // A Timeout bounds the gaps between values; the watch still stands and still dies on a fault.
+            W("TimeoutIsNotOneShot.cs", "class O { void M() { sub = mesh.Query<MeshNode>(r).Timeout(TimeSpan.FromSeconds(10))\n"
+                + "  .Subscribe(c => Apply(c), ex => Log(ex)); } }");
             W("Prose.cs", "// never mesh.Query<MeshNode>(r).Subscribe(c => f(c), ex => Log(ex))\nclass N { }");
 
             var found = Scan(dir.FullName, ["src"]).Select(p => Path.GetFileName(p.Split(':')[0])).ToHashSet();
@@ -146,6 +151,7 @@ public class StandingQueryWatchRatchetGuard
             Assert.Contains("RunnerGetQuery.cs", found);
             Assert.Contains("InboxPerItemCatch.cs", found);
             Assert.Contains("BareLambda.cs", found);
+            Assert.Contains("TimeoutIsNotOneShot.cs", found);
             Assert.DoesNotContain("OneShotRead.cs", found);
             Assert.DoesNotContain("OneShotFirst.cs", found);
             Assert.DoesNotContain("Forwarding.cs", found);
