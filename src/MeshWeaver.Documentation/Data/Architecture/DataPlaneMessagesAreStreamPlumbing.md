@@ -218,7 +218,7 @@ read's identity on every probe.
 |---|---|---|
 | `NodeTypeDataModelAreas.ProbeInstanceModel` | `GetDataRequest(SchemaReference)` posted to its own probe hub | wait for the probe's `RunLevelChanged` to reach `Started` (the gate the self-posted request used to provide), then read its `GetNullableStream(new SchemaReference())`. 🚨 The stream alone is NOT a gate: it can reduce off the empty store before the data sources initialize — the first version of this change did exactly that, and CI caught the probe being disposed before a virtual source's provider had subscribed |
 | `MeshDataSource` NodeType schema probe | same | same |
-| `NodeTypeLayoutAreas` Hub Configuration **Save** | read the node, post it back as a `DataChangeRequest` | `GetMeshNodeStream().Update(current => ApplyHubConfigForm(current, form))` |
+| `NodeTypeLayoutAreas` Hub Configuration **Save** | read the node, post it back as a `DataChangeRequest` | first `GetMeshNodeStream().Update(current => ApplyHubConfigForm(current, form))`; since then no Save at all — every field of the editor is bound to the node (`BuildHubConfigEditTemplate`, Doc/GUI/DataBinding) and writes itself |
 | `AccessControlLayoutArea` add-assignment | `DataChangeRequest` carrying the new node to the CURRENT node's hub | `IMeshService.CreateOrUpdateNode` (same create-or-replace semantics — the id is derived from the subject) |
 | `UserActivityLayoutAreas` reset / clear home body | `GetMeshNode` + `DataChangeRequest` | `ClearUserBody` → `GetMeshNodeStream(path).Update` |
 | `SatelliteEntityPatterns` verification example | `GetDataRequest(EntityReference(MeshNode))` | `GetMeshNodeStream(path)` + wait on the condition |

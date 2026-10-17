@@ -1680,12 +1680,16 @@ internal class MeshNodeCompilationService(
         // synchronous Emit touches the pool (see CompileCore → OnThreadPool/InvokeBlocking).
         IObservable<ImmutableArray<MetadataReference>> referencesObs =
             allNugetRefs.Count > 0
-                ? _ioPool.Run(ct => nugetResolver.ResolveAsync(allNugetRefs, targetFramework: null, ct))
+                ? nugetResolver.Resolve(allNugetRefs)
                     // One assembly per name (CompileReferences.WithPackageAssemblies) — the same
-                    // composition as the emit path, so diagnostics agree with the compile.
-                    .Select(resolved => CompileReferences
+                    // composition as the emit path, so diagnostics agree with the compile. It READS
+                    // the assembly files (AssemblyName.GetAssemblyName), and a warm resolution replays
+                    // on the subscriber's thread, so the composition is its own blocking leaf on the
+                    // file-system lane — taken only AFTER the resolution emits, so no slot is held
+                    // while waiting for it.
+                    .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => CompileReferences
                         .WithPackageAssemblies(References, resolved.AssemblyPaths)
-                        .ToImmutableArray())
+                        .ToImmutableArray()))
                 : Observable.Return(References.ToImmutableArray());
 
         return referencesObs.Select(references =>
@@ -2100,11 +2104,14 @@ internal class MeshNodeCompilationService(
                     .SelectMany(prepared => prepared.NuGetReferences.Length == 0
                         ? Observable.Return(
                             GeneratedInputDigestOf(assemblyName, prepared.Source, []))
-                        : _ioPool
-                            .Run(ct => nugetResolver.ResolveAsync(
-                                prepared.NuGetReferences, targetFramework: null, ct))
-                            .Select(resolved => GeneratedInputDigestOf(
-                                assemblyName, prepared.Source, resolved.AssemblyPaths)))
+                        : nugetResolver
+                            .Resolve(prepared.NuGetReferences)
+                            // The digest reads the generator assemblies (their MVIDs); a warm
+                            // resolution replays on the subscriber's thread, so the read is a
+                            // blocking leaf on the file-system lane, entered only once the
+                            // resolution has emitted.
+                            .SelectMany(resolved => _fileSystemPool.InvokeBlocking(_ => GeneratedInputDigestOf(
+                                assemblyName, prepared.Source, resolved.AssemblyPaths))))
                     .Take(1),
                 _cacheOptions.RoslynCompileTimeout, "regenerate-content-key", node.Path)
             .Select(digest => (string?)digest)
@@ -2183,7 +2190,7 @@ internal class MeshNodeCompilationService(
         IReadOnlyList<string> nugetAssemblyPaths = [];
         if (nugetRefs.Length > 0)
         {
-            var resolved = await nugetResolver.ResolveAsync(nugetRefs, targetFramework: null, ct);
+            var resolved = await nugetResolver.Resolve(nugetRefs).Await(ct);
             // One assembly per name, the copy the load context binds at run time: a closure assembly
             // the host set already provides (System.Text.Json,
             // Microsoft.Extensions.DependencyInjection.Abstractions, …) is not referenced a second

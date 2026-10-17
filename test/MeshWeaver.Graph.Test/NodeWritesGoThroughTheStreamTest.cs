@@ -29,7 +29,9 @@ namespace MeshWeaver.Graph.Test;
 ///   authenticated identity captured at the call; the bespoke post carried a node copy whose
 ///   authorship was whatever the read returned.</item>
 ///   <item><b>Unedited fields are carried from the node's CURRENT state</b>, never from a copy taken
-///   earlier — so a field another writer changed in between is not clobbered.</item>
+///   earlier — so a field another writer changed in between is not clobbered. (For the Hub
+///   Configuration editor, whose Save button this file used to pin, that is now a property of the
+///   per-field node binding: <c>NodeTypeAndSettingsPagesAreTemplatesTest</c>.)</item>
 /// </list>
 /// </summary>
 public class NodeWritesGoThroughTheStreamTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
@@ -69,53 +71,6 @@ public class NodeWritesGoThroughTheStreamTest(ITestOutputHelper output) : Monoli
             "the write is attributed to the user who asked — the stream write stamps the caller's "
             + "authenticated identity; a node copy posted back as a DataChangeRequest carries whatever "
             + "authorship the earlier read returned");
-    }
-
-    /// <summary>
-    /// The Hub Configuration editor's Save applies the form to the node's CURRENT state. A field the
-    /// form does not edit — here the compile status another writer set after the form rendered —
-    /// survives the save.
-    /// </summary>
-    [Fact]
-    public void HubConfigSave_CarriesUneditedFieldsFromTheCurrentNode()
-    {
-        var current = new MeshNode("Widget", "Acme")
-        {
-            NodeType = MeshNode.NodeTypePath,
-            Name = "Widget",
-            Category = "Tools",
-            Content = new NodeTypeDefinition
-            {
-                Description = "old",
-                CompilationStatus = CompilationStatus.Error,
-                CompilationError = "CS0103 set by the compiler after the form rendered",
-            },
-        };
-
-        var form = new NodeTypeLayoutAreas.HubConfigForm(
-            DisplayName: "Widget 2",
-            Description: "new",
-            IconName: "",
-            Order: "3",
-            ChildrenQuery: "",
-            Dependencies: "Acme/Base, Acme/Other",
-            Configuration: "config => config");
-
-        var saved = NodeTypeLayoutAreas.ApplyHubConfigForm(
-            current, current.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions), form);
-        var definition = saved.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
-
-        saved.Name.Should().Be("Widget 2");
-        saved.Order.Should().Be(3);
-        saved.Icon.Should().BeNull("a blank form field clears the value");
-        definition.Description.Should().Be("new");
-        definition.Dependencies.Should().Equal("Acme/Base", "Acme/Other");
-
-        saved.Category.Should().Be("Tools", "a node field the form does not edit is carried through");
-        definition.CompilationStatus.Should().Be(CompilationStatus.Error,
-            "a definition field the form does not edit is carried from the CURRENT node, never "
-            + "from a copy taken when the form rendered");
-        definition.CompilationError.Should().Be("CS0103 set by the compiler after the form rendered");
     }
 
     private async Task CreateUserAsync(string path, User content, CancellationToken cancellationToken)

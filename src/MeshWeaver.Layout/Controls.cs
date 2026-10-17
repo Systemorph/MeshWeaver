@@ -285,6 +285,17 @@ public static class Controls
     /// <returns>A new <see cref="VideoControl"/>.</returns>
     public static VideoControl Video(object src) => new(src);
 
+    /// <summary>Creates an info / success / warning / error banner (<see cref="MessageBarControl"/>); <see cref="MessageBarIntent.Info"/> until <see cref="MessageBarControl.WithIntent"/> says otherwise.</summary>
+    /// <param name="body">The message text, or a data-binding expression. User-facing: pass a localized string.</param>
+    /// <returns>A new <see cref="MessageBarControl"/>.</returns>
+    public static MessageBarControl MessageBar(object body) => new(body);
+
+    /// <summary>Creates an inline text link (<see cref="LinkControl"/>); renderers refuse an unsafe scheme and mark an external address <c>rel="noopener noreferrer"</c> (<see cref="LinkHrefs"/>).</summary>
+    /// <param name="text">The link text, or a data-binding expression. User-facing: pass a localized string.</param>
+    /// <param name="href">The address, or a data-binding expression.</param>
+    /// <returns>A new <see cref="LinkControl"/>.</returns>
+    public static LinkControl Link(object text, object href) => new(text, href);
+
     /// <summary>Creates a QR code drawn from a module matrix the server computed (<see cref="QrCodes.Encode"/>).</summary>
     /// <param name="modules">The matrix, or a data-binding expression pointing at one.</param>
     /// <returns>A new <see cref="QrCodeControl"/>.</returns>
@@ -323,6 +334,17 @@ public static class Controls
     /// <param name="data">The icon name, URL, or data-binding expression.</param>
     /// <returns>A new <see cref="IconControl"/>.</returns>
     public static IconControl Icon(object data) => new(data);
+
+    /// <summary>
+    /// Creates an image control — a picture, glyph or icon, sized and shaped: an image URL or
+    /// <c>data:image/…</c> URI (a node's <c>content:</c> reference with <see cref="ImageControl.WithNodePath"/>),
+    /// raw SVG markup (drawn only as an image, never injected), an emoji, or a Fluent icon name — the
+    /// forms a node icon holds. Unsafe sources are skipped in favour of the fallback.
+    /// </summary>
+    /// <param name="source">The picture, glyph or icon, or a data-binding expression.</param>
+    /// <param name="alt">The localized accessible name; <c>""</c> marks the image decorative.</param>
+    /// <returns>A new <see cref="ImageControl"/>.</returns>
+    public static ImageControl Image(object source, object alt) => new(source, alt);
 
     /// <summary>
     /// Creates a new instance of <see cref="MenuItemControl"/> with the specified title and icon.

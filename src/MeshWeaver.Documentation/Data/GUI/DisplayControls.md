@@ -1,7 +1,7 @@
 ---
 Name: Badges, Icons & Status
 Category: Documentation
-Description: Small display controls — badges, icons, progress bars, spacers, menu items, and card skins — each rendered live.
+Description: Small display controls — badges, icons, images, progress bars, spacers, menu items, and card skins.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.5 13 17 22l-5-3-5 3 1.5-9"/></svg>
 ---
 
@@ -34,7 +34,8 @@ Controls.Stack
 
 `IconControl` renders any icon from the `FluentIcons` catalog (in `MeshWeaver.Application.Styles`).
 Icons theme with `currentColor`; pass an explicit size with `IconSize` from `MeshWeaver.Domain`
-(e.g. `FluentIcons.Star(IconSize.Size16)`), or take the 24px default.
+(e.g. `FluentIcons.Star(IconSize.Size16)`), or take the 24px default. For a picture, an SVG, an
+emoji or a node's icon, which can be any of those, use [Image](#image).
 
 ```csharp --render DisplayIcons --show-code
 Controls.Stack
@@ -68,6 +69,75 @@ colour becomes the document's inherited default (a `color` attribute on the root
 when the root declares none); paint is never rewritten, so colours the icon declares itself still
 win. An icon without its own plate is unaffected, because plating already recolours `currentColor`
 to white.
+
+---
+
+# Image
+
+`ImageControl` draws one picture, glyph or icon in a sized, shaped box. Use it for a node icon,
+a logo, a thumbnail, a poster or an avatar — never an `<img>`, an inline `<svg>` or an emoji
+`<div>` inside `Controls.Html`. The source is any form a node's `Icon` holds:
+
+| Source | Drawn as |
+|---|---|
+| An image URL, `/api/content/…`, or a `data:image/…` URI | `<img>` |
+| A node's `content:logo.png` reference (with `WithNodePath`) | `<img>` of the access-controlled content URL |
+| Raw `<svg>` markup | `<img src="data:image/svg+xml,…">`, never injected markup |
+| A text glyph (an emoji) | text |
+| A Fluent icon name (`"Document"`) or a typed `Icon` | the Fluent icon |
+
+`Controls.Image(source, alt)` requires the alt text, and the caller localizes it. An empty `""`
+marks the image decorative, for an image that sits beside a label that already names it.
+
+```csharp
+Controls.Stack
+    .WithOrientation(Orientation.Horizontal)
+    .WithHorizontalGap("12px")
+    // A node's icon in a rounded tile, its type glyph as the fallback, decorative beside the title.
+    .WithView(Controls.Image(new JsonPointerReference("icon"), "")
+        .WithSize(48)
+        .WithShape(ImageShape.Rounded)
+        .WithNodePath(nodePath)
+        .WithFallback("/static/NodeTypeIcons/box.svg"))
+    // An avatar: the picture, cropped to a circle, or the person's initials.
+    .WithView(Controls.Image(new JsonPointerReference("picture"), pictureAlt) // localized by the caller
+        .WithShape(ImageShape.Circle)
+        .WithFit(ImageFit.Cover)
+        .WithInitials(ImageSources.InitialsOf(name) ?? ""))
+    // A poster: not square, so width and height override the size.
+    .WithView(Controls.Image(posterUrl, posterAlt)
+        .WithWidth("100%").WithHeight(180).WithFit(ImageFit.Cover))
+```
+
+| Property | Default | Meaning |
+|---|---|---|
+| `Size` | `32` | Side of the square box in pixels, or a CSS length (`2.5rem`, `100%`) |
+| `Width`, `Height` | — | Override `Size` for a box that is not square |
+| `Shape` | `ImageShape.Square` | `Square`, `Rounded` or `Circle` |
+| `Fit` | `ImageFit.Contain` | `Contain` (icons, logos) or `Cover` (photos, posters) |
+| `Fallback` | — | Drawn when the source is absent or refused; any source form |
+| `Initials` | — | Monogram drawn when neither source nor fallback can be |
+| `NodePath` | — | The node a `content:` reference belongs to |
+
+Every property takes a literal or a data-binding pointer.
+
+## Drawn safely
+
+Every renderer resolves the control through `ImageSources.Resolve`, the one rule set:
+
+- A URL is drawn only when `ImageSources.SafeUrl` accepts it: `http`, `https`, a relative path,
+  or a `data:` URI of an image type. `javascript:`, `vbscript:`, `file:`, `data:text/html` and any
+  value with a control character in it (`java⇥script:`) are refused. A refused source falls through to
+  `Fallback`, then `Initials`, then nothing.
+- SVG markup is drawn only as `<img src="ImageSources.SvgDataUri(…)">`. A browser runs no script,
+  fires no event handler and loads nothing external in an image context, so a `<script>` or an
+  `onload` inside the markup is inert. Renderers apply the icon backplate before encoding, as for
+  every inline icon.
+- A sized value is accepted only as a number or a number with a CSS unit (`ImageSources.CssLength`),
+  so a bound value cannot add a second style declaration.
+- A `content:` reference without a `NodePath` is not drawn. It is never shown as text.
+- An unknown `Shape` or `Fit` gets no styling, and the renderer logs it. It is never mapped onto a
+  known value.
 
 ---
 
@@ -178,5 +248,6 @@ catalog), in the viewer's language.
 # See Also
 
 - [Container Controls](../ContainerControl) — stacks, tabs, toolbars, splitters
+- [Message Bars & Links](../MessageBarAndLink) — banners and inline text links
 - [Node Menu](../NodeMenu) — where menu items appear on real nodes
 - [Form Input Controls](../InputControls) — the interactive counterparts

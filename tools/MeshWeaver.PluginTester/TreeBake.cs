@@ -1,3 +1,4 @@
+using MeshWeaver.Mesh.Threading;
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -305,10 +306,15 @@ public static class TreeBake
         // divergence across the whole samples tree (23 of 24 NodeTypes agreed; MathDemo/Matrix was
         // the miss), which is exactly the class of shortfall this issue is about: a bake that
         // quietly produces less than the runtime would. NuGetAssemblyResolver needs nothing from a
-        // mesh — a logger and an optional cache — so there was never a reason to leave it out.
-        var nugetResolver = new NuGetAssemblyResolver(
+        // mesh — a logger, its pools and an optional cache — so there was never a reason to leave it
+        // out. There is no mesh in this process, so the bake owns the pool registry a mesh would:
+        // the resolver gets the same bounded Http and PackageCache lanes it gets in a portal, and
+        // both are disposed with the bake.
+        using var ioPools = new IoPoolRegistry();
+        using var nugetResolver = new NuGetAssemblyResolver(
             options.LoggerFactory?.CreateLogger<NuGetAssemblyResolver>()
-            ?? NullLogger<NuGetAssemblyResolver>.Instance);
+            ?? NullLogger<NuGetAssemblyResolver>.Instance,
+            ioPools);
 
         var workDirectory = Path.Combine(
             Path.GetTempPath(), $"mw-compiler-bake-{Environment.ProcessId}-{Guid.NewGuid():N}");

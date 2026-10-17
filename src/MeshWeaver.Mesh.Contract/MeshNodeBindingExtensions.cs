@@ -393,7 +393,7 @@ public static class MeshNodeBindingExtensions
                 if (bindContent)
                 {
                     var content = ToJsonObject(node.Content, options) ?? new JsonObject();
-                    SetField(content, pointer, valueNode);
+                    SetField(content, pointer, valueNode, options.PropertyNamingPolicy, ContentRootType(hub, node));
                     return node with { Content = JsonSerializer.Deserialize<object>(content.ToJsonString(), options) };
                 }
 
@@ -402,7 +402,7 @@ public static class MeshNodeBindingExtensions
                 // field, deserialize back — so an arbitrary form pointer maps onto the node's own
                 // JSON shape without the editor hand-mapping every property.
                 var nodeObj = JsonSerializer.SerializeToNode(node, options) as JsonObject ?? new JsonObject();
-                SetField(nodeObj, pointer, valueNode);
+                SetField(nodeObj, pointer, valueNode, options.PropertyNamingPolicy, typeof(MeshNode));
                 return JsonSerializer.Deserialize<MeshNode>(nodeObj.ToJsonString(), options) ?? node;
             })
             .Subscribe(
@@ -415,6 +415,27 @@ public static class MeshNodeBindingExtensions
                     // a swallowed combobox/selection write is the silent "screen disappears on select".
                     onError?.Invoke(ex);
                 });
+    }
+
+    /// <summary>
+    /// The CLR type the content-mode write names missing keys against: the type of typed content; for
+    /// ABSENT content, the content type the node's NodeType declares — resolved the way the reader
+    /// materialises it (<see cref="IMeshContentTypeRegistry.TryResolveByNodeType"/>), so the first edit of
+    /// a node created without content (a NodeType's <c>Configuration</c>) lands under the key
+    /// <c>ContentAs&lt;T&gt;</c> reads; <c>null</c> for untyped (raw JSON) content, whose keys stay
+    /// verbatim.
+    /// </summary>
+    private static Type? ContentRootType(IMessageHub hub, MeshNode node)
+    {
+        if (node.Content is JsonElement or JsonNode)
+            return null;
+        if (node.Content is not null)
+            return node.Content.GetType();
+        return !string.IsNullOrEmpty(node.NodeType)
+               && hub.ServiceProvider.GetService<IMeshContentTypeRegistry>() is { } registry
+               && registry.TryResolveByNodeType(node.NodeType, out var declared)
+            ? declared
+            : null;
     }
 
     /// <summary>Joins an optional content sub-path (e.g. <c>"composer"</c>) with a field pointer
@@ -487,17 +508,108 @@ public static class MeshNodeBindingExtensions
 
     /// <summary>Sets the field at <paramref name="pointer"/> on <paramref name="root"/> (creating
     /// intermediate objects), matching an existing key case-insensitively so we patch the SAME key
-    /// the node already uses rather than adding a casing-variant duplicate.</summary>
-    internal static void SetField(JsonObject root, string pointer, JsonNode? value)
+    /// the node already uses rather than adding a casing-variant duplicate.
+    ///
+    /// <para>🚨 A key the object does NOT hold yet, whose segment names a CLR PROPERTY of
+    /// <paramref name="rootType"/> (followed down the pointer), is created under that property's
+    /// SERIALIZED name (<c>[JsonPropertyName]</c>, else <paramref name="namingPolicy"/>). Forms bind
+    /// with CLR names (<c>nameof(MeshNode.Order)</c> → <c>Order</c>) and the hub serializer omits
+    /// null members, so a field still unset on the node has no key to match: writing <c>Order</c>
+    /// next to the camelCase members was dropped on the case-sensitive deserialize back, and the first
+    /// edit of an unset field was silently lost.</para>
+    ///
+    /// <para>Every other missing key is written VERBATIM: a dictionary key, a key inside an untyped
+    /// (<c>object</c> / <see cref="JsonElement"/> / <see cref="JsonObject"/>) member, or any key when
+    /// the root type is unknown. Those keys are data, not member names — renaming
+    /// <c>defaultValues/CustomKey</c> to <c>customKey</c> would store the value where a
+    /// case-sensitive lookup for <c>CustomKey</c> never finds it.</para></summary>
+    /// <param name="root">The object the pointer resolves against.</param>
+    /// <param name="pointer">The field path, <c>/</c>-separated.</param>
+    /// <param name="value">The value to write.</param>
+    /// <param name="namingPolicy">The serializer's property naming policy.</param>
+    /// <param name="rootType">The CLR type <paramref name="root"/> serializes; <c>null</c> when
+    /// unknown, which keeps every missing key verbatim.</param>
+    internal static void SetField(JsonObject root, string pointer, JsonNode? value,
+        JsonNamingPolicy? namingPolicy = null, Type? rootType = null)
     {
         var segments = SplitPointer(pointer).ToArray();
         if (segments.Length == 0) return;
+        var names = SerializedNames(segments, rootType, namingPolicy);
         JsonNode current = root;
         for (var i = 0; i < segments.Length - 1; i++)
-            current = DescendForWrite(current, segments[i], pointer);
-        AssignLeaf(current, segments[^1], value, pointer);
+            current = DescendForWrite(current, segments[i], pointer, names[i]);
+        AssignLeaf(current, segments[^1], value, pointer, names[^1]);
     }
 
+    /// <summary>The key a write lands on: the existing key (case-insensitively), else the member's
+    /// serialized name when the segment names a typed member, else the segment verbatim.</summary>
+    private static string WriteKey(JsonObject obj, string segment, string? serializedName)
+        => ExistingKey(obj, segment) ?? serializedName ?? segment;
+
+    /// <summary>
+    /// For each segment, the serialized name of the CLR property it names — walking
+    /// <paramref name="rootType"/> down the pointer — or <c>null</c> where the segment is not a typed
+    /// member (a dictionary key, an array index, anything below an untyped member, or an unknown root).
+    /// </summary>
+    private static string?[] SerializedNames(string[] segments, Type? rootType, JsonNamingPolicy? namingPolicy)
+    {
+        var names = new string?[segments.Length];
+        var type = rootType;
+        for (var i = 0; i < segments.Length && type is not null; i++)
+        {
+            var segment = segments[i];
+            if (DictionaryValueType(type) is { } dictionaryValue)
+            {
+                type = dictionaryValue == typeof(object) ? null : dictionaryValue;
+                continue; // a dictionary key is data: verbatim
+            }
+            if (type != typeof(string) && ElementType(type) is { } element)
+            {
+                type = element == typeof(object) ? null : element;
+                continue; // an index
+            }
+            if (!IsTypedObject(type))
+                break;
+            var property = type.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+                .FirstOrDefault(p => p.GetIndexParameters().Length == 0
+                    && (string.Equals(p.Name, segment, StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(JsonNameAttribute(p), segment, StringComparison.OrdinalIgnoreCase)));
+            if (property is null)
+                break;
+            names[i] = JsonNameAttribute(property) ?? namingPolicy?.ConvertName(property.Name) ?? property.Name;
+            type = property.PropertyType;
+        }
+        return names;
+    }
+
+    private static string? JsonNameAttribute(System.Reflection.PropertyInfo property)
+        => (property.GetCustomAttributes(typeof(System.Text.Json.Serialization.JsonPropertyNameAttribute), true)
+            .FirstOrDefault() as System.Text.Json.Serialization.JsonPropertyNameAttribute)?.Name;
+
+    /// <summary>A CLR object whose members serialize as properties — not a primitive, not untyped JSON.</summary>
+    private static bool IsTypedObject(Type type)
+    {
+        var t = Nullable.GetUnderlyingType(type) ?? type;
+        return t != typeof(object) && t != typeof(string) && !t.IsPrimitive && !t.IsEnum
+               && !typeof(JsonNode).IsAssignableFrom(t) && t != typeof(JsonElement);
+    }
+
+    private static Type? DictionaryValueType(Type type)
+        => type.GetInterfaces().Append(type)
+            .Where(i => i.IsGenericType)
+            .Where(i => i.GetGenericTypeDefinition() == typeof(IDictionary<,>)
+                        || i.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>))
+            .Select(i => i.GetGenericArguments()[1])
+            .FirstOrDefault()
+           ?? (typeof(System.Collections.IDictionary).IsAssignableFrom(type) ? typeof(object) : null);
+
+    private static Type? ElementType(Type type)
+        => type.IsArray
+            ? type.GetElementType()
+            : type.GetInterfaces().Append(type)
+                .Where(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+                .Select(i => i.GetGenericArguments()[0])
+                .FirstOrDefault();
     /// <summary>
     /// One WRITE step: returns the container to descend into, creating a missing one as an object.
     ///
@@ -513,13 +625,13 @@ public static class MeshNodeBindingExtensions
     /// through its <c>onError</c> arm, so the edit fails visibly instead of committing a corrupted
     /// shape.</para>
     /// </summary>
-    private static JsonNode DescendForWrite(JsonNode current, string segment, string pointer)
+    private static JsonNode DescendForWrite(JsonNode current, string segment, string pointer, string? serializedName)
     {
         switch (current)
         {
             case JsonObject obj:
             {
-                var key = ExistingKey(obj, segment) ?? segment;
+                var key = WriteKey(obj, segment, serializedName);
                 switch (obj[key])
                 {
                     case JsonObject child: return child;
@@ -557,12 +669,12 @@ public static class MeshNodeBindingExtensions
     }
 
     /// <summary>Writes the final segment, on an object key or an array element.</summary>
-    private static void AssignLeaf(JsonNode current, string segment, JsonNode? value, string pointer)
+    private static void AssignLeaf(JsonNode current, string segment, JsonNode? value, string pointer, string? serializedName)
     {
         switch (current)
         {
             case JsonObject obj:
-                obj[ExistingKey(obj, segment) ?? segment] = value;
+                obj[WriteKey(obj, segment, serializedName)] = value;
                 return;
             case JsonArray arr when TryIndex(segment, arr.Count, out var index):
                 arr[index] = value;
