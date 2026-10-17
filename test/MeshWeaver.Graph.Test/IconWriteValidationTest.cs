@@ -448,6 +448,35 @@ public class IconWriteBoundaryTest(ITestOutputHelper output) : MonolithMeshTestB
         listed.Items.Should().NotContain(n => n.Id == id, "a refused create must leave no node behind");
     }
 
+    /// <summary>
+    /// Review on #6910: a CreateNodeRequest that CONFIRMS a transient node writes the confirmation
+    /// straight to storage, before the creation validators run — so the icon rule is applied on
+    /// that path itself. Confirming a clean transient with a refused icon is refused, and the row
+    /// keeps its icon and its transient state.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ConfirmingATransientNode_WithARefusedIcon_IsRefused_AndTheNodeKeepsItsIcon()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = NewId();
+        var path = $"{TestPartition}/{id}";
+        var store = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
+        await store.Write(Node(id, Clean) with { State = MeshNodeState.Transient }, Mesh.JsonSerializerOptions)
+            .Take(1).Timeout(60.Seconds()).Await(ct);
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(Node(id, Active))
+                .Take(1).Timeout(60.Seconds()).Await(ct));
+        failure.Should().NotBeNull(
+            "the transient-to-active confirmation writes to storage directly, so it must judge the icon itself");
+        failure!.Message.Should().Contain("<script>");
+
+        var row = await store.Read(path, Mesh.JsonSerializerOptions).Take(1).Timeout(60.Seconds()).Await(ct);
+        row.Should().NotBeNull();
+        row!.Icon.Should().Be(Clean, "a refused confirmation leaves the node as it was");
+        row.State.Should().Be(MeshNodeState.Transient);
+    }
+
     [Fact(Timeout = 180_000)]
     public async Task Create_WithACleanSvgIcon_Lands()
     {

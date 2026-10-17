@@ -1203,6 +1203,20 @@ public static class MeshExtensions
                             Category = node.Category ?? existingNode.Category,
                             Content = node.Content ?? existingNode.Content
                         };
+                        // 🚨 The icon rule (IconSafety) BEFORE this write: the confirmation writes
+                        // straight to storage and never reaches the creation validators below, so
+                        // an icon supplied here would otherwise land unchecked. Same CHANGE-not-state
+                        // rule as every other icon boundary; a refusal leaves the transient as it was.
+                        if (!string.Equals(confirmedNode.Icon, existingNode.Icon, StringComparison.Ordinal)
+                            && IconSafety.Refusal(confirmedNode.Icon) is { } iconRefusal)
+                        {
+                            logger.LogWarning("[CreateNode] REFUSED confirmation of {Path}: {Refusal}",
+                                node.Path, iconRefusal);
+                            Respond(CreateNodeResponse.FailWith(
+                                IconSafety.LocalizedRefusal(node.Path, iconRefusal),
+                                NodeCreationRejectionReason.ValidationFailed));
+                            return Observable.Empty<(string mode, MeshNode node)>();
+                        }
                         // Commit-then-publish: Updated event fires inside the helper's
                         // .Do operator, which runs only after the storage write emits
                         // (post-commit). The no-persistence fallback below skips the
