@@ -42,6 +42,16 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
 
     private static TimeSpan Budget => TestTimeouts.Convergence;
 
+    private const string FailingTabId = "FailingProbe";
+
+    /// <summary>A tab whose builder throws — the negative control for the failed-tab check.</summary>
+    private static SettingsMenuItemDefinition FailingTab { get; } = new(
+        Id: FailingTabId,
+        Label: "Failing probe",
+        ContentBuilder: (_, _, _) => throw new InvalidOperationException("probe tab failed on purpose"),
+        Order: PersonApp.SharingOrder + 1,
+        RequiredPermission: Permission.None);
+
     /// <summary>The page-private CSS classes the Settings page used to hand-roll its look with.</summary>
     private static readonly string[] RetiredClasses = ["settings-menu-search", "settings-section"];
 
@@ -56,7 +66,8 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
                 .AddApiTokensSettingsTab()
                 .AddStepUpSettingsTab()
                 .AddInstancesSettingsTab()
-                .AddNotificationsSettingsTab())
+                .AddNotificationsSettingsTab()
+                .AddPersonAppTab(FailingTab))
             .AddMeshNodes(
                 new MeshNode(Person)
                 {
@@ -111,6 +122,18 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
         })];
 
     /// <summary>
+    /// The tab-failure banners of a frame: <see cref="SettingsLayoutArea"/> catches a builder that
+    /// throws and paints an Error <see cref="MessageBarControl"/> instead — a frame showing one has
+    /// not rendered its tab, however standard the banner is.
+    /// </summary>
+    internal static IReadOnlyList<string> Failures(JsonElement frame)
+        => [.. Areas(frame)
+            .Where(a => TypeOf(a.Control) == nameof(MessageBarControl)
+                && a.Control.TryGetProperty("intent", out var intent)
+                && string.Equals(intent.GetString(), MessageBarIntent.Error, StringComparison.OrdinalIgnoreCase))
+            .Select(a => a.Id)];
+
+    /// <summary>
     /// Settled: the nav link of <paramref name="tab"/> is active, and the content pane and each of
     /// its direct children are in the frame.
     /// </summary>
@@ -135,6 +158,7 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
             .Should().Within(Budget)
             .Match(f => Settled(f, $"/Settings/{tab}"), $"the '{tab}' tab of {address}'s settings renders", ct);
 
+        Failures(frame).Should().BeEmpty($"the '{tab}' tab rendered rather than failing");
         NonStandard(frame).Should().BeEmpty(
             $"the '{tab}' tab and the menu around it are composed from the platform's standard controls only");
         Areas(frame).Should().Contain(a => TypeOf(a.Control) == nameof(TextFieldControl)
@@ -158,6 +182,43 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
     [InlineData("Metadata")]
     [InlineData("EffectiveAccess")]
     public Task ASpacesNodeSettings_AreComposedOfStandardControls(string tab) => AssertStandard(Space, tab, TestContext.Current.CancellationToken);
+
+    /// <summary>
+    /// The negative control for <see cref="Failures"/>: a tab whose builder throws settles with an
+    /// Error banner, and the check sees it — so a green tab above is a tab that rendered.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AFailedTab_IsDetected_NotPassedAsStandard()
+    {
+        var frame = await Frames(Person, FailingTabId)
+            .Should().Within(Budget)
+            .Match(f => Settled(f, $"/Settings/{FailingTabId}"), "the failing probe tab settles",
+                TestContext.Current.CancellationToken);
+
+        Failures(frame).Should().NotBeEmpty("the builder threw, so the pane holds the failure banner");
+    }
+
+    /// <summary>
+    /// The Profile tab EMBEDS the profile editor (<c>EditProfile</c>) through a
+    /// <see cref="LayoutAreaControl"/>, which runs on its own layout stream — so the Settings frame
+    /// alone does not see inside it. Read that stream too, settled on its own sections.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheEmbeddedProfileEditor_IsComposedOfStandardControls()
+    {
+        TestUsers.DevLogin(Mesh, new AccessContext
+            { ObjectId = Person, Name = "Standard Controls Person", Email = $"{Person}@meshweaver.io" });
+        var frame = await GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(Person),
+                new LayoutAreaReference(UserActivityLayoutAreas.EditProfileArea))
+            .Select(change => change.Value)
+            .Should().Within(Budget)
+            .Match(f => Areas(f).Any(a => TypeOf(a.Control) == nameof(MeshNodeContentEditorControl))
+                    && Areas(f).Count(a => TypeOf(a.Control) == nameof(MarkdownEditorControl)) >= 2,
+                "the profile editor renders its sections", TestContext.Current.CancellationToken);
+
+        NonStandard(frame).Should().BeEmpty("the embedded profile editor is standard controls only");
+    }
 
     /// <summary>
     /// The API tokens and Connected instances forms are platform cards (<see cref="CardSkin"/>), not

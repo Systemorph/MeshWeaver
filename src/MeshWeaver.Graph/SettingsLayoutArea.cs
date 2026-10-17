@@ -355,9 +355,9 @@ public static class SettingsLayoutArea
         // (Identity + Timestamps are read-only and rendered from the snapshot `meta`.)
         var nodeContext = LayoutAreaReference.GetMeshNodeDataContext(node.Path, bindContent: false);
 
-        stack = stack.WithView(BuildSection("Identity", BuildIdentitySection(meta)));
-        stack = stack.WithView(BuildSection("Display", BuildDisplaySection(host, node.Path, nodeContext)));
-        stack = stack.WithView(BuildSection("Timestamps", BuildTimestampsSection(meta, host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.identity"), BuildIdentitySection(host, meta)));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.display"), BuildDisplaySection(host, node.Path, nodeContext)));
+        stack = stack.WithView(BuildSection(host.Localize("settings.meta.timestamps"), BuildTimestampsSection(host, meta, host.Hub.ServiceProvider.GetService<AccessService>().ViewerZoneId())));
 
         return stack;
     }
@@ -543,30 +543,30 @@ public static class SettingsLayoutArea
         => facts.Aggregate(Controls.LayoutGrid.WithSkin(s => s.WithSpacing(3)),
             (grid, fact) => grid.WithView(fact, cell => cell.WithXs(12).WithSm(6).WithMd(4)));
 
-    private static UiControl BuildIdentitySection(MeshNodeMetadata meta)
+    private static UiControl BuildIdentitySection(LayoutAreaHost host, MeshNodeMetadata meta)
         => FactGrid([
             // Node Type first, as a direct link to the type's Configuration area.
-            NodeTypeFact(meta.NodeType),
-            Fact("Id", meta.Id),
-            Fact("Namespace", meta.Namespace),
-            Fact("State", meta.State.ToString()),
-            Fact("Version", meta.Version.ToString()),
+            NodeTypeFact(host.Localize("settings.meta.nodeType"), meta.NodeType),
+            Fact(host.Localize("settings.meta.id"), meta.Id),
+            Fact(host.Localize("settings.meta.namespace"), meta.Namespace),
+            Fact(host.Localize("settings.meta.state"), meta.State.ToString()),
+            Fact(host.Localize("settings.meta.version"), meta.Version.ToString()),
         ]);
 
     /// <summary>
     /// Node Type cell: NodeTypes are themselves MeshNodes, so the type name links straight
     /// to the type definition's Configuration area (same pattern as the header meta row).
     /// </summary>
-    private static UiControl NodeTypeFact(string? nodeType)
+    private static UiControl NodeTypeFact(string label, string? nodeType)
     {
         if (string.IsNullOrEmpty(nodeType) || nodeType == MeshNode.NodeTypePath)
-            return Fact("Node Type", nodeType);
+            return Fact(label, nodeType);
         var href = MeshNodeLayoutAreas.BuildUrl(nodeType, NodeTypeLayoutAreas.ConfigurationArea);
-        var label = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
+        var typeName = nodeType.Contains('/') ? nodeType.Split('/').Last() : nodeType;
         return Controls.Stack
             .WithVerticalGap(2)
-            .WithView(Controls.Subject("Node Type"))
-            .WithView(Controls.Link(label, href));
+            .WithView(Controls.Subject(label))
+            .WithView(Controls.Link(typeName, href));
     }
 
     /// <summary>A label/value fact: the label in the subject typography, the value as body text.</summary>
@@ -591,7 +591,7 @@ public static class SettingsLayoutArea
         stack = stack.WithView(Controls.Stack
             .WithWidth("100%")
             .WithVerticalGap(8)
-            .WithView(Controls.Subject("Description"))
+            .WithView(Controls.Subject(host.Localize("settings.meta.description")))
             .WithView(new MarkdownEditorControl
             {
                 Value = new JsonPointerReference(nameof(MeshNode.Description)),
@@ -635,7 +635,7 @@ public static class SettingsLayoutArea
         var editableCollection = collections.FirstOrDefault(c => c.IsEditable);
 
         var section = Controls.Stack.WithWidth("100%").WithVerticalGap(8);
-        section = section.WithView(Controls.Subject("Icon"));
+        section = section.WithView(Controls.Subject(host.Localize("settings.meta.icon")));
 
         // Live preview + Regenerate button. The preview is the platform's IconControl bound
         // DIRECTLY to the node's Icon (the same field the Icon Path box below binds to), so it is
@@ -841,13 +841,13 @@ public static class SettingsLayoutArea
         ctx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
     }
 
-    private static UiControl BuildTimestampsSection(MeshNodeMetadata meta, string? zoneId)
+    private static UiControl BuildTimestampsSection(LayoutAreaHost host, MeshNodeMetadata meta, string? zoneId)
         // Stored UTC → the viewer's zone. The "zzz" offset stays, so the rendered value
         // still says which offset it is rather than being an unlabelled wall clock.
         => FactGrid([
-            Fact("Created",
+            Fact(host.Localize("settings.meta.created"),
                 meta.CreatedDate == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.CreatedDate, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz")),
-            Fact("Last Modified",
+            Fact(host.Localize("settings.meta.lastModified"),
                 meta.LastModified == default ? "—" : DisplayTimeExtensions.ToDisplayTime(meta.LastModified, zoneId).ToString("yyyy-MM-dd HH:mm:ss zzz")),
         ]);
 
