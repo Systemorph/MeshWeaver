@@ -325,6 +325,17 @@ public static class Controls
     public static IconControl Icon(object data) => new(data);
 
     /// <summary>
+    /// Creates an image control — a picture, glyph or icon, sized and shaped: an image URL or
+    /// <c>data:image/…</c> URI (a node's <c>content:</c> reference with <see cref="ImageControl.WithNodePath"/>),
+    /// raw SVG markup (drawn only as an image, never injected), an emoji, or a Fluent icon name — the
+    /// forms a node icon holds. Unsafe sources are skipped in favour of the fallback.
+    /// </summary>
+    /// <param name="source">The picture, glyph or icon, or a data-binding expression.</param>
+    /// <param name="alt">The localized accessible name; <c>""</c> marks the image decorative.</param>
+    /// <returns>A new <see cref="ImageControl"/>.</returns>
+    public static ImageControl Image(object source, object alt) => new(source, alt);
+
+    /// <summary>
     /// Creates a new instance of <see cref="MenuItemControl"/> with the specified title and icon.
     /// </summary>
     /// <param name="title">The title of the menu item.</param>
