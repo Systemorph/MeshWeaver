@@ -85,6 +85,11 @@ public class InlineSvgEmissionBackplateGuard
             "carries the content's thumbnail/avatar/logo VALUE into MeshNodeThumbnailControl.ImageUrl; "
             + "the view packs that render it plate at their own emission seam (MeshWeaver.Plugins#1880), "
             + "and plating here would put generated markup into a property that is also compared and persisted"),
+        ("src/MeshWeaver.Graph/OverviewLayoutArea.cs", "trimmed",
+            "TitleIconSource only decides WHETHER the title shows an icon and hands the VALUE on to "
+            + "ImageControl.Source (OverviewLayoutArea.TitleIcon); every ImageControl renderer plates "
+            + "an svg source at its own emission seam (ImageView: IconBackplate.Ensure, then "
+            + "ImageSources.SvgDataUri) — pinned by InlineSvgRenderPathTest.TheOverviewTitleIcon_Plates"),
         ("src/MeshWeaver.Hosting/Persistence/Parsers/MarkdownFileParser.cs", "iconValue",
             "is the PERSISTENCE side — front matter into MeshNode.Icon on import. Plating here would "
             + "rewrite the author's icon in the store rather than in the rendering of it"),
@@ -133,11 +138,11 @@ public class InlineSvgEmissionBackplateGuard
     {
         var files = Scan().Select(c => c.File).Distinct().OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
 
+        // The node page tile, the create preview and the icon picker no longer classify: each hands
+        // the icon to an ImageControl. The tile's one decision lives in NodePageProjections (IconTile).
         string[] expected =
         [
-            "src/MeshWeaver.Graph/CreateLayoutArea.cs",
-            "src/MeshWeaver.Graph/MeshNodeLayoutAreas.cs",
-            "src/MeshWeaver.Graph/NodeIconPickerDialog.cs",
+            "src/MeshWeaver.Graph/NodePageProjections.cs",
             "src/MeshWeaver.Graph/OverviewLayoutArea.cs",
             "src/MeshWeaver.Graph/MeshNodeImageHelper.cs",
             "src/MeshWeaver.Graph/MeshNodeThumbnailControl.cs",

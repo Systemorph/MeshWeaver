@@ -437,18 +437,20 @@ public static class OverviewLayoutArea
         bool canEdit)
     {
         var title = node.Name ?? node.Id ?? "";
-        var titleHtml = $"<h1 style=\"margin: 0;\">{System.Web.HttpUtility.HtmlEncode(title)}</h1>";
 
         // The page title shows the node's OWN icon (MeshNode.Icon) beside its name — so a Space, a doc,
         // any node with an icon carries it on the page. No icon → just the title.
-        var iconHtml = RenderNodeIconHtml(node.Icon);
-        var heading = iconHtml.Length == 0
-            ? titleHtml
-            : $"<div style=\"display: flex; align-items: center; gap: 12px;\">{iconHtml}{titleHtml}</div>";
+        var heading = Controls.Stack
+            .WithOrientation(Orientation.Horizontal)
+            .WithHorizontalGap(12)
+            .WithStyle("align-items: center;");
+        if (TitleIconSource(node.Icon) is { } icon)
+            heading = heading.WithView(TitleIcon(icon, node.Path));
+        heading = heading.WithView(Controls.H1(title).WithStyle("margin: 0;"));
 
         var titleStack = Controls.Stack
             .WithStyle($"cursor: {(canEdit ? "pointer" : "default")};")
-            .WithView(Controls.Html(heading));
+            .WithView(heading);
 
         if (canEdit)
         {
@@ -463,45 +465,35 @@ public static class OverviewLayoutArea
     }
 
     /// <summary>
-    /// Renders a node's <see cref="MeshNode.Icon"/> as a title-sized (32px) icon: an inline
-    /// <c>&lt;svg&gt;</c> is embedded, an image URL (or <c>data:</c>/path) becomes an <c>&lt;img&gt;</c>,
-    /// and anything else (an emoji / short glyph) is shown as text. Empty when there is no icon.
+    /// The source of the title-sized icon for a node's <see cref="MeshNode.Icon"/>, or null when the
+    /// title shows none: inline <c>&lt;svg&gt;</c>, an image URL (or <c>data:</c>/path/filename), a node's
+    /// <c>content:</c> file (the <see cref="ImageControl"/> resolves it against the node's path) and
+    /// an emoji are drawn; a legacy Fluent icon NAME (an ASCII word like "Building") is not an image
+    /// and the title shows nothing rather than a stray glyph.
     /// </summary>
-    internal static string RenderNodeIconHtml(string? icon)
+    internal static string? TitleIconSource(string? icon)
     {
         if (string.IsNullOrWhiteSpace(icon))
-            return "";
+            return null;
         var trimmed = icon.Trim();
-        if (trimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return $"<span style=\"display:inline-flex; width:32px; height:32px; overflow:hidden;\">{SizeInlineSvg(trimmed)}</span>";
-        // A `content:` UCR needs node-context resolution to a served URL — render nothing rather than a
-        // broken <img src="content:…"> (proper resolution is a follow-up).
-        if (trimmed.StartsWith("content:", StringComparison.OrdinalIgnoreCase))
-            return "";
-        var looksLikeUrl = trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+        if (trimmed.StartsWith("<svg", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("content:", StringComparison.OrdinalIgnoreCase)
+            || trimmed.StartsWith("http", StringComparison.OrdinalIgnoreCase)
             || trimmed.StartsWith("/") || trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase)
-            || trimmed.Contains('.');
-        if (looksLikeUrl)
-            return $"<img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(trimmed)}\" alt=\"\" style=\"width:32px; height:32px; object-fit:contain;\" />";
-        // A bare token: an emoji (non-ASCII glyph) renders; a legacy Fluent icon NAME (an ASCII word like
-        // "Building") is not an image and renders nothing rather than literal text.
-        return trimmed.All(char.IsAscii)
-            ? ""
-            : $"<span style=\"font-size:28px; line-height:1;\">{System.Web.HttpUtility.HtmlEncode(trimmed)}</span>";
+            || trimmed.Contains('.'))
+            return trimmed;
+        return trimmed.All(char.IsAscii) ? null : trimmed;
     }
 
-    /// <summary>An inline <c>&lt;svg&gt;</c> icon as an INERT <c>&lt;img&gt;</c> that fills its container —
-    /// plated through the backplate policy (<see cref="IconBackplate.Ensure"/>) and loaded from a
-    /// <c>data:</c> URI (<see cref="MeshNodeImageHelper.InlineSvgImageSource"/>), never injected as markup.
-    ///
-    /// <para>🚨 This used to splice a fill-the-box style onto the authored root tag and inject the
-    /// markup into the raw-HTML title row. A node icon is user-settable content and SVG can carry
-    /// active content; an image-loaded SVG cannot run any of it, which is why the icon is an image
-    /// here exactly as it is at <see cref="MeshNodeImageHelper.InlineSvgImage"/>. The plate stays part
-    /// of this sizer for the reason that method carries (#4350).</para></summary>
-    internal static string SizeInlineSvg(string svg) =>
-        $"<img src=\"{MeshNodeImageHelper.InlineSvgImageSource(svg.Trim())}\" alt=\"\" "
-        + "style=\"width:100%;height:100%;display:block;object-fit:contain;\" />";
+    /// <summary>
+    /// The title-sized (32px) node icon — an <see cref="ImageControl"/>, decorative because the title
+    /// stands beside it. It draws inline svg as an inert, plated image and refuses an unsafe URL.
+    /// </summary>
+    /// <param name="icon">The source (<see cref="TitleIconSource"/>).</param>
+    /// <param name="nodePath">The node a <c>content:</c> icon belongs to.</param>
+    internal static ImageControl TitleIcon(string icon, string nodePath)
+        => Controls.Image(icon, "").WithSize(32).WithNodePath(nodePath);
+
 
     private static UiControl BuildTitleEditView(
         LayoutAreaHost _,

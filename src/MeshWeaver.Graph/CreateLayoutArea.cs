@@ -140,28 +140,36 @@ public static class CreateLayoutArea
     /// Renders an icon value as a 48x48 preview. Supports three forms:
     /// inline SVG markup, an http(s) or /api/content URL, and a FluentIcon name.
     /// </summary>
-    internal static UiControl BuildIconPreview(string icon) => Controls.Html(IconPreviewMarkup(icon));
+    internal static UiControl BuildIconPreview(string? icon)
+        => string.IsNullOrEmpty(icon)
+            ? Controls.Stack.WithStyle(EmptyIconPreviewStyle)
+            : IconPreviewTile(icon);
+
+    /// <summary>Text key of the preview's progress line while an icon is being generated.</summary>
+    internal const string GeneratingIconKey = "node.icon.generating";
+
+    /// <summary>The 48px box of an icon preview that has an icon.</summary>
+    internal const string IconPreviewStyle =
+        "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
+
+    /// <summary>The dashed 48px box shown while there is no icon.</summary>
+    internal const string EmptyIconPreviewStyle =
+        "width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;";
 
     /// <summary>
-    /// The markup of the 48px icon preview for <paramref name="icon"/> — an inline SVG plated and
-    /// sized, an image URL, or the raw value as text; a dashed empty box for no icon. Shared by the
-    /// Create form and the Settings icon picker, which binds to it as data.
+    /// The 48px icon preview: one 32px <see cref="ImageControl"/> in a bordered box. Shared by the
+    /// Create form (a literal value) and the Settings icon picker (a pointer to the node's Icon). The
+    /// image control draws what the portal draws everywhere — inline svg plated, as an inert image;
+    /// a URL only when it is safe; a <c>content:</c> file resolved against <paramref name="nodePath"/>
+    /// — so the preview shows exactly what the node will look like.
     /// </summary>
-    /// <param name="icon">The node's Icon value, or empty.</param>
-    internal static string IconPreviewMarkup(string? icon)
+    /// <param name="icon">The icon value, or a pointer to it.</param>
+    /// <param name="nodePath">The node a <c>content:</c> icon belongs to, when there is one yet.</param>
+    internal static StackControl IconPreviewTile(object icon, string? nodePath = null)
     {
-        if (string.IsNullOrEmpty(icon))
-            return "<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>";
-        const string boxStyle = "width:48px;height:48px;display:flex;align-items:center;justify-content:center;border:1px solid var(--neutral-stroke-rest);border-radius:6px;color:var(--neutral-foreground-rest);";
-        // Through MeshNodeImageHelper.SizeInlineSvg, which plates the icon (#4350) and sizes it into
-        // the 48px box — the preview has to show what the portal will actually draw, and drawn raw
-        // a currentColor outline is invisible on one of the two themes.
-        if (icon.TrimStart().StartsWith("<svg", StringComparison.OrdinalIgnoreCase))
-            return $"<div style=\"{boxStyle}\">{MeshNodeImageHelper.SizeInlineSvg(icon, 32)}</div>";
-        if (icon.StartsWith("http", StringComparison.OrdinalIgnoreCase) || icon.StartsWith("/")
-            || icon.StartsWith("data:image", StringComparison.OrdinalIgnoreCase))
-            return $"<div style=\"{boxStyle}\"><img src=\"{System.Web.HttpUtility.HtmlAttributeEncode(icon)}\" style=\"max-width:32px;max-height:32px;\" /></div>";
-        return $"<div style=\"{boxStyle}\"><span style=\"font-size:12px;\">{System.Web.HttpUtility.HtmlEncode(icon)}</span></div>";
+        var image = Controls.Image(icon, "").WithSize(32);
+        return Controls.Stack.WithStyle(IconPreviewStyle)
+            .WithView(nodePath is null ? image : image.WithNodePath(nodePath));
     }
 
     /// <summary>
@@ -616,6 +624,7 @@ public static class CreateLayoutArea
         // 9. Icon: "Icon" label, live preview, Regenerate button.
         // Preview is data-bound so it reflects live updates (default from the chosen type,
         // a regenerated SVG from the Node Initializer agent, or a spinner while generating).
+        var generatingIcon = host.Localize(GeneratingIconKey);
         stack = stack.WithView(Controls.Body(host.Localize("ui.icon"))
             .WithStyle("font-weight: 600; display: block; margin-bottom: 6px;"));
         stack = stack.WithView(Controls.Stack
@@ -630,11 +639,8 @@ public static class CreateLayoutArea
                     // Regenerate button looks dead. Value survives a JSON round-trip as either a
                     // CLR bool ("True") or a JsonElement ("true"), so compare case-insensitively.
                     if (string.Equals(form?.GetValueOrDefault("iconGenerating")?.ToString(), "true", StringComparison.OrdinalIgnoreCase))
-                        return Controls.Progress("Generating…", 0);
-                    var icon = form?.GetValueOrDefault("icon")?.ToString() ?? "";
-                    return string.IsNullOrEmpty(icon)
-                        ? Controls.Html("<div style=\"width:48px;height:48px;border:1px dashed var(--neutral-stroke-rest);border-radius:6px;\"></div>")
-                        : BuildIconPreview(icon);
+                        return Controls.Progress(generatingIcon, 0);
+                    return BuildIconPreview(form?.GetValueOrDefault("icon")?.ToString());
                 }))
             .WithView(Controls.Button(host.Localize("ui.regenerate"))
                 .WithAppearance(Appearance.Neutral)

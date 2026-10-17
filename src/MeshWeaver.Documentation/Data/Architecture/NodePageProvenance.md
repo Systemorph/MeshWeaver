@@ -14,6 +14,14 @@ The provenance line is the standard header's second row — `Type · Created · 
 `MeshNodeLayoutAreas.BuildMetaRow` from the node's own `CreatedDate` / `CreatedBy` /
 `LastModified` / `LastModifiedBy`, rendered in the viewer's time zone with every label localized.
 
+The line is platform controls, never markup: a wrapping horizontal `Stack` of three fixed segments,
+each a `Label` and its value — the node type as a `Link` to its Configuration area, the creation
+stamp and the last change as `Label`s. The segments are projected once (`MetaLine.Of`, pure, the
+viewer's language passed in) and then either fed into `/data` and bound by pointer (the standard
+header and the composed strip) or passed as literals (`BuildMetaRow`); both go through the same
+`MeshNodeLayoutAreas.MetaRow`, so the two shapes cannot drift. A segment the node has no value for
+is hidden through its bound style rather than removed, so the bound row keeps one shape.
+
 ## What went wrong
 
 The line rode on ONE renderer: the framework's `Overview`, registered by
