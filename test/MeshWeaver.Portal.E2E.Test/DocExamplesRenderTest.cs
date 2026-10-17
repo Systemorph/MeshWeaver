@@ -80,7 +80,7 @@ public class DocExamplesRenderTest(PortalFixture fixture)
         // EditorExtensions.GetEditorLabel). The previous marker ("Date/time picker") appears only in
         // the page PROSE, never inside .layout-area, so that row could not pass under any build.
         { "Doc/GUI/Editor", 1, EditorForm, "Full name" },
-        { "Doc/GUI/DataBinding", 1, Table, "NumberFieldControl" },
+        { "Doc/GUI/DataBinding", 1, DataGrid, "NumberFieldControl" },
         { "Doc/GUI/DataBinding/ItemTemplate", 1, Stack, "Alice" },
         { "Doc/GUI/Attributes", 1, Stack, "Attribute Quick Reference" },
         { "Doc/GUI/NodeMenu", 1, Table, "Permission" },
