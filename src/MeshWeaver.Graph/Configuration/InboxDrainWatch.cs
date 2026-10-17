@@ -72,9 +72,15 @@ internal static class InboxDrainWatch
                                 release(claimed.Select(n => n.Path).ToImmutableHashSet(StringComparer.Ordinal));
                             return;
                         }
+                        // The WHOLE batch is registered before anything is enqueued: a drain that runs
+                        // synchronously inside OnNext can tear the opening down, and teardown must then
+                        // release every claim of this batch, not only those already enqueued.
+                        foreach (var node in claimed)
+                            ImmutableInterlocked.Update(ref unfinished, set => set.Add(node.Path));
                         foreach (var node in claimed)
                         {
-                            ImmutableInterlocked.Update(ref unfinished, set => set.Add(node.Path));
+                            if (tornDown)
+                                break;   // released by the teardown that set it
                             queue.OnNext(node);
                         }
                     }

@@ -452,6 +452,47 @@ public class StandingWatchesReopenAfterAFaultTest(ITestOutputHelper output) : Mo
     }
 
     /// <summary>
+    /// A drain that runs SYNCHRONOUSLY inside the enqueue can tear the opening down mid-batch. For a
+    /// claimed batch [A, B], the teardown inside A's drain must release B as well — B was claimed but
+    /// not yet enqueued — and the loop must not enqueue B into the disposed queue. Before the fix B
+    /// was registered only as it was enqueued, so teardown released A alone, B's enqueue threw
+    /// ObjectDisposedException, and B stayed claimed until a restart.
+    /// </summary>
+    [Fact]
+    public void InboxDrainWatch_ATeardownInsideTheFirstDrain_ReleasesTheRestOfTheBatch()
+    {
+        var listing = new Subject<IEnumerable<MeshNode>>();
+        var claimed = ImmutableHashSet<string>.Empty;
+        var drained = new List<string>();
+        IDisposable? opening = null;
+        const string a = "Inbox/_Inbox/a", b = "Inbox/_Inbox/b";
+
+        opening = InboxDrainWatch.Open(
+                () => listing,
+                nodes =>
+                {
+                    var fresh = nodes.ToArray();
+                    foreach (var node in fresh)
+                        claimed = claimed.Add(node.Path);
+                    return fresh;
+                },
+                released => claimed = claimed.Except(released),
+                node =>
+                {
+                    drained.Add(node.Path);
+                    opening!.Dispose();   // A's synchronous drain tears the opening down
+                    return Observable.Return(System.Reactive.Unit.Default);
+                })
+            .Subscribe(_ => { }, _ => { });
+
+        var batch = () => listing.OnNext([NodeAt(a, "x"), NodeAt(b, "x")]);
+
+        batch.Should().NotThrow("B must never be enqueued into the queue A's drain disposed");
+        drained.Should().Equal([a], "B is not drained by an opening that was torn down");
+        claimed.Should().NotContain(b, "B's claim is released, so the re-opened watch drains it");
+    }
+
+    /// <summary>
     /// The negative control: the pre-fix shape — subscribe once, log the error — driven by the same
     /// flaky source and clock. It opens once and nothing ever opens it again, so a later emission is
     /// never seen. Every test above passes only because its site no longer has this shape.
