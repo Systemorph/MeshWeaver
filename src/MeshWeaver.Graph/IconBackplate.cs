@@ -285,7 +285,11 @@ public static partial class IconBackplate
             : fallback;
     }
 
-    [GeneratedRegex(@"<svg\b(?<attrs>[^>]*)>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    // Quote-aware: a '>' inside a quoted attribute value (aria-label="A > B") is part of the value,
+    // not the end of the tag. Read naively, the attributes after it looked absent and InsetRoot
+    // inserted a duplicate viewBox — tolerated by inline HTML, but an image-loaded SVG is XML and a
+    // duplicate attribute makes the whole document fail to parse.
+    [GeneratedRegex(@"<svg\b(?<attrs>(?:[^>""']|""[^""]*""|'[^']*')*)>", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex RootTag();
 
     [GeneratedRegex(

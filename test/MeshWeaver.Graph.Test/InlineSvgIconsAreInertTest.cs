@@ -148,6 +148,25 @@ public class InlineSvgIconsAreInertTest
         parsed.Root!.Name.Should().Be(System.Xml.Linq.XName.Get("svg", "http://www.w3.org/2000/svg"));
     }
 
+    /// <summary>
+    /// The same, through the WHOLE image path — plating included. A plateless icon is nested inside a
+    /// generated plate, and the backplate's own root-tag reader must be quote-aware too: read naively,
+    /// <c>aria-label="A &gt; B"</c> hid the authored <c>viewBox</c> and a duplicate was inserted.
+    /// </summary>
+    [Theory]
+    [InlineData("<svg aria-label=\"A > B\" viewBox=\"0 0 24 24\"><path d=\"M4 4h16v16H4z\"/></svg>")]
+    [InlineData("<svg aria-label=\"A > B\" width=\"24\" height=\"24\"><path d=\"M4 4h16v16H4z\"/></svg>")]
+    public void ThePlatedImageDocument_IsWellFormedXml(string svg)
+    {
+        var src = MeshNodeImageHelper.InlineSvgImageSource(svg);
+        var document = Uri.UnescapeDataString(src["data:image/svg+xml,".Length..]);
+
+        var parsed = System.Xml.Linq.XDocument.Parse(document);
+
+        parsed.Root!.Name.Should().Be(System.Xml.Linq.XName.Get("svg", "http://www.w3.org/2000/svg"));
+        document.Should().Contain("M4 4h16v16H4z", "the authored glyph survives plating");
+    }
+
     /// <summary>An explicit colour replaces <c>currentColor</c>, which an image-loaded svg cannot
     /// inherit from the page.</summary>
     [Fact]
