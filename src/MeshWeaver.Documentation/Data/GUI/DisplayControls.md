@@ -228,5 +228,6 @@ catalog), in the viewer's language.
 # See Also
 
 - [Container Controls](../ContainerControl) — stacks, tabs, toolbars, splitters
+- [Message Bars & Links](../MessageBarAndLink) — banners and inline text links
 - [Node Menu](../NodeMenu) — where menu items appear on real nodes
 - [Form Input Controls](../InputControls) — the interactive counterparts
