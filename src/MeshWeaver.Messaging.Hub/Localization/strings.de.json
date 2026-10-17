@@ -2402,5 +2402,14 @@
   "install.installed": "Installiert — Sie haben dies von Ihrem Home-Bildschirm aus geöffnet.",
   "install.desktop": "Öffnen Sie diese Seite auf Ihrem Telefon, um sie zum Home-Bildschirm hinzuzufügen:",
   "install.accepted": "Zum Home-Bildschirm hinzugefügt.",
-  "install.dismissed": "Installation abgebrochen. Es wurde nichts hinzugefügt."
+  "install.dismissed": "Installation abgebrochen. Es wurde nichts hinzugefügt.",
+  "nodeType.hubConfigEdit.title": "Konfiguration bearbeiten",
+  "nodeType.hubConfigEdit.lambdaHint": "Lambda-Ausdruck: config => config.AddData(...)",
+  "nodeType.field.displayName": "Anzeigename",
+  "nodeType.field.displayOrder": "Anzeigereihenfolge",
+  "nodeType.field.childrenQuery": "Abfrage für Unterknoten",
+  "nodeType.field.description": "Beschreibung",
+  "comments.reply": "Antworten",
+  "comments.replies": "Antworten",
+  "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen"
 }

@@ -393,7 +393,7 @@ public static class MeshNodeBindingExtensions
                 if (bindContent)
                 {
                     var content = ToJsonObject(node.Content, options) ?? new JsonObject();
-                    SetField(content, pointer, valueNode);
+                    SetField(content, pointer, valueNode, options.PropertyNamingPolicy);
                     return node with { Content = JsonSerializer.Deserialize<object>(content.ToJsonString(), options) };
                 }
 
@@ -402,7 +402,7 @@ public static class MeshNodeBindingExtensions
                 // field, deserialize back — so an arbitrary form pointer maps onto the node's own
                 // JSON shape without the editor hand-mapping every property.
                 var nodeObj = JsonSerializer.SerializeToNode(node, options) as JsonObject ?? new JsonObject();
-                SetField(nodeObj, pointer, valueNode);
+                SetField(nodeObj, pointer, valueNode, options.PropertyNamingPolicy);
                 return JsonSerializer.Deserialize<MeshNode>(nodeObj.ToJsonString(), options) ?? node;
             })
             .Subscribe(
@@ -487,16 +487,33 @@ public static class MeshNodeBindingExtensions
 
     /// <summary>Sets the field at <paramref name="pointer"/> on <paramref name="root"/> (creating
     /// intermediate objects), matching an existing key case-insensitively so we patch the SAME key
-    /// the node already uses rather than adding a casing-variant duplicate.</summary>
-    internal static void SetField(JsonObject root, string pointer, JsonNode? value)
+    /// the node already uses rather than adding a casing-variant duplicate.
+    ///
+    /// <para>🚨 A key the object does NOT hold yet is created under its SERIALIZED name
+    /// (<paramref name="namingPolicy"/> applied to the segment), never the segment verbatim. Forms
+    /// bind with CLR names (<c>nameof(MeshNode.Order)</c> → <c>Order</c>) and the hub serializer
+    /// omits null members, so a field still unset on the node has no key to match: writing
+    /// <c>Order</c> next to the camelCase members was dropped on the case-sensitive deserialize
+    /// back, and the first edit of an unset field was silently lost.</para></summary>
+    /// <param name="root">The object the pointer resolves against.</param>
+    /// <param name="pointer">The field path, <c>/</c>-separated.</param>
+    /// <param name="value">The value to write.</param>
+    /// <param name="namingPolicy">The serializer's property naming policy, used to name a key that
+    /// does not exist yet; <c>null</c> keeps the segment as written.</param>
+    internal static void SetField(JsonObject root, string pointer, JsonNode? value, JsonNamingPolicy? namingPolicy = null)
     {
         var segments = SplitPointer(pointer).ToArray();
         if (segments.Length == 0) return;
         JsonNode current = root;
         for (var i = 0; i < segments.Length - 1; i++)
-            current = DescendForWrite(current, segments[i], pointer);
-        AssignLeaf(current, segments[^1], value, pointer);
+            current = DescendForWrite(current, segments[i], pointer, namingPolicy);
+        AssignLeaf(current, segments[^1], value, pointer, namingPolicy);
     }
+
+    /// <summary>The key a write lands on: the existing key (case-insensitively), else the segment
+    /// under the serializer's naming policy.</summary>
+    private static string WriteKey(JsonObject obj, string segment, JsonNamingPolicy? namingPolicy)
+        => ExistingKey(obj, segment) ?? namingPolicy?.ConvertName(segment) ?? segment;
 
     /// <summary>
     /// One WRITE step: returns the container to descend into, creating a missing one as an object.
@@ -513,13 +530,13 @@ public static class MeshNodeBindingExtensions
     /// through its <c>onError</c> arm, so the edit fails visibly instead of committing a corrupted
     /// shape.</para>
     /// </summary>
-    private static JsonNode DescendForWrite(JsonNode current, string segment, string pointer)
+    private static JsonNode DescendForWrite(JsonNode current, string segment, string pointer, JsonNamingPolicy? namingPolicy)
     {
         switch (current)
         {
             case JsonObject obj:
             {
-                var key = ExistingKey(obj, segment) ?? segment;
+                var key = WriteKey(obj, segment, namingPolicy);
                 switch (obj[key])
                 {
                     case JsonObject child: return child;
@@ -557,12 +574,12 @@ public static class MeshNodeBindingExtensions
     }
 
     /// <summary>Writes the final segment, on an object key or an array element.</summary>
-    private static void AssignLeaf(JsonNode current, string segment, JsonNode? value, string pointer)
+    private static void AssignLeaf(JsonNode current, string segment, JsonNode? value, string pointer, JsonNamingPolicy? namingPolicy)
     {
         switch (current)
         {
             case JsonObject obj:
-                obj[ExistingKey(obj, segment) ?? segment] = value;
+                obj[WriteKey(obj, segment, namingPolicy)] = value;
                 return;
             case JsonArray arr when TryIndex(segment, arr.Count, out var index):
                 arr[index] = value;

@@ -263,6 +263,34 @@ public class MeshNodeBindingExtensionsTest
         root["composer"]!["harness"]!.GetValue<string>().Should().Be("agentic");
     }
 
+    /// <summary>
+    /// A field still UNSET on the node has no key to match (the serializer omits null members), and a
+    /// form binds with the CLR name (<c>nameof(MeshNode.Order)</c>). The key is created under its
+    /// serialized name, so the case-sensitive deserialize back picks it up; before, <c>Order</c> was
+    /// written beside the camelCase members and the first edit of an unset field was lost.
+    /// </summary>
+    [Fact]
+    public void SetField_AnAbsentKey_IsCreatedUnderItsSerializedName()
+    {
+        // The hub's shape: camelCase members, null members omitted, case-SENSITIVE reads.
+        var hubLike = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        };
+        var node = MeshNode.FromPath("acme/Widget") with { Name = "Widget" };
+        var root = (JsonObject)JsonSerializer.SerializeToNode(node, hubLike)!;
+        root.ContainsKey("order").Should().BeFalse("precondition: an unset Order is not serialized at all");
+
+        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Order), JsonValue.Create(7), hubLike.PropertyNamingPolicy);
+        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Name), JsonValue.Create("Widget 2"), hubLike.PropertyNamingPolicy);
+
+        var written = JsonSerializer.Deserialize<MeshNode>(root.ToJsonString(), hubLike)!;
+        written.Order.Should().Be(7, "the new key carries the serialized name, so the deserializer reads it");
+        written.Name.Should().Be("Widget 2", "an existing key is still matched case-insensitively");
+        root.ContainsKey(nameof(MeshNode.Order)).Should().BeFalse("no PascalCase duplicate is added");
+    }
+
     [Fact]
     public void ResolveField_AbsentField_ReturnsNull()
     {

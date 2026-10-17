@@ -2402,5 +2402,14 @@
   "install.installed": "Installed — you opened this from your home screen.",
   "install.desktop": "Open this page on your phone to add it to the home screen:",
   "install.accepted": "Added to your home screen.",
-  "install.dismissed": "Installation cancelled. Nothing was added."
+  "install.dismissed": "Installation cancelled. Nothing was added.",
+  "nodeType.hubConfigEdit.title": "Edit configuration",
+  "nodeType.hubConfigEdit.lambdaHint": "Lambda expression: config => config.AddData(...)",
+  "nodeType.field.displayName": "Display name",
+  "nodeType.field.displayOrder": "Display order",
+  "nodeType.field.childrenQuery": "Children query",
+  "nodeType.field.description": "Description",
+  "comments.reply": "Reply",
+  "comments.replies": "Replies",
+  "agent.edit.addConfiguration": "Add agent configuration"
 }

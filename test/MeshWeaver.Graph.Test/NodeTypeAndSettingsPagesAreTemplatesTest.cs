@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -96,6 +97,107 @@ public class NodeTypeAndSettingsPagesAreTemplatesTest(ITestOutputHelper output) 
                 ctx.Should().NotBeNull("the form edits the node directly — never a /data replica");
                 Assert.NotNull(ctx).NodePath.Should().Be(TypePath);
             });
+    }
+
+    /// <summary>
+    /// The Hub Configuration editor used to copy seven node fields into per-render <c>/data</c>
+    /// slots and write the copies back from a Save button (the replicate-then-save shape). Every
+    /// editable control must now carry the node-bound DataContext of THIS NodeType, none a
+    /// <c>/data</c> pointer, and there is no click action left to save anything.
+    /// </summary>
+    [Fact]
+    public void TheHubConfigEditor_IsATemplate_BoundToTheNode_WithNoSave()
+    {
+        var template = NodeTypeLayoutAreas.BuildHubConfigEditTemplate(TypePath, "en");
+
+        EveryViewIsStatic(template);
+
+        var editors = Descendants(template)
+            .Where(c => c is TextFieldControl or TextAreaControl or NumberFieldControl or CodeEditorControl)
+            .ToList();
+        editors.Should().HaveCount(6, "Name, Icon, Order, ChildrenQuery, Description and the Configuration lambda");
+        editors.Select(e => LayoutAreaReference.TryParseMeshNodeDataContext(e.DataContext))
+            .Should().AllSatisfy(ctx =>
+            {
+                ctx.Should().NotBeNull("each field edits the node directly — never a /data replica");
+                Assert.NotNull(ctx).NodePath.Should().Be(TypePath);
+            });
+        Descendants(template).Where(c => c.DataContext?.StartsWith("/data", StringComparison.Ordinal) == true)
+            .Should().BeEmpty("nothing in the editor reads or writes a layout-area copy of the node");
+
+        var code = editors.OfType<CodeEditorControl>().Should().ContainSingle().Subject;
+        code.Value.Should().BeOfType<JsonPointerReference>()
+            .Which.Pointer.Should().Be(nameof(NodeTypeDefinition.Configuration));
+
+        Descendants(template).OfType<ButtonControl>().Should().AllSatisfy(b =>
+            b.NavigateToHref.Should().NotBeNull("a node-bound editor has nothing to save — its one button only navigates"));
+    }
+
+    /// <summary>
+    /// An edit through the Hub Configuration editor's controls — driven through the renderer's write
+    /// seam (<c>BlazorView.UpdatePointer → MeshNodeBindingExtensions.Write</c>) with each control's
+    /// own DataContext and pointer — lands on the NodeType node, and fields the editor does not show
+    /// (the node's Category, the definition's DefaultNamespace) survive it. The order and children
+    /// query start UNSET, so their first edit creates the key: that is the case the per-field write
+    /// used to lose (a PascalCase key beside the camelCase members, dropped on the way back).
+    /// </summary>
+    [Fact]
+    public async Task AnEditInTheHubConfigEditor_LandsOnTheNode_AndCarriesUneditedFields()
+    {
+        var id = "edit-type-" + Guid.NewGuid().ToString("N")[..8];
+        var path = $"{TestPartition}/{id}";
+        await NodeFactory.CreateNode(new MeshNode(id, TestPartition)
+        {
+            Name = id,
+            Category = "Tools",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition
+            {
+                Configuration = "config => config",
+                DefaultNamespace = "acme/defaults",
+            },
+        }).Should().Within(TestTimeouts.Convergence).Emit();
+
+        var editors = Descendants(NodeTypeLayoutAreas.BuildHubConfigEditTemplate(path, "en")).ToList();
+        var faults = ImmutableList<Exception>.Empty;
+        void Type(UiControl control, object? value)
+        {
+            var ctx = Assert.NotNull(LayoutAreaReference.TryParseMeshNodeDataContext(control.DataContext));
+            var pointer = control switch
+            {
+                CodeEditorControl c => (JsonPointerReference)c.Value!,
+                IFormControl f => (JsonPointerReference)f.Data,
+                _ => throw new InvalidOperationException(control.GetType().Name),
+            };
+            MeshNodeBindingExtensions.Write(Mesh, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance,
+                ctx.NodePath, ctx.BindContent, ctx.SubPath, pointer, value,
+                onError: ex => faults = faults.Add(ex));
+        }
+        UiControl Field(string pointer) => editors.Single(c =>
+            c is IFormControl { Data: JsonPointerReference p } && p.Pointer == pointer);
+
+        Type(editors.OfType<CodeEditorControl>().Single(), "config => config.AddData(d => d)");
+        await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence).Match(
+            n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.Configuration == "config => config.AddData(d => d)",
+            "the lambda edit goes straight to NodeTypeDefinition.Configuration — no /data copy, no Save");
+
+        Type(Field(nameof(MeshNode.Order)), 7);
+        await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence).Match(
+            n => n.Order == 7, "the first edit of the unset Order lands on the node's top-level Order");
+
+        Type(Field(nameof(NodeTypeDefinition.ChildrenQuery)), "nodeType:Person");
+        var node = await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.Convergence).Match(
+            n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)?.ChildrenQuery == "nodeType:Person",
+            "the first edit of the unset ChildrenQuery lands on the definition");
+
+        faults.Should().BeEmpty("no write was refused");
+        node.Order.Should().Be(7, "a later field edit keeps the earlier one");
+        node.Category.Should().Be("Tools", "a per-field write never clobbers a node field the editor does not show");
+        var definition = node.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+        definition.Configuration.Should().Be("config => config.AddData(d => d)", "a later field edit keeps the earlier one");
+        definition.DefaultNamespace.Should().Be("acme/defaults",
+            "a per-field write never clobbers a definition field the editor does not show");
     }
 
     [Fact]

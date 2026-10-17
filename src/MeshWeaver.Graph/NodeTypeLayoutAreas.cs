@@ -27,7 +27,7 @@ namespace MeshWeaver.Graph;
 /// Uses standard MeshNodeView.Search with NodeTypeCatalogMode for showing instances.
 /// - Overview: Split view with left menu and configuration/code display (default)
 /// - HubConfigView: View HubConfiguration
-/// - HubConfigEdit: Monaco editor for HubConfiguration
+/// - HubConfigEdit: node-bound settings + Configuration lambda editor
 /// </summary>
 public static class NodeTypeLayoutAreas
 {
@@ -66,8 +66,6 @@ public static class NodeTypeLayoutAreas
     public const string ProgressArea = "Progress";
 
     // Data keys for data section
-    private const string DefinitionDataId = "definition";
-    private const string CodeFileDataId = "codeFile";
     private const string CodeNodesDataId = "codeNodes";
 
     /// <summary>
@@ -1527,253 +1525,92 @@ public static class NodeTypeLayoutAreas
 
 
     /// <summary>
-    /// Renders the Monaco editor for editing Configuration.
-    /// Returns static structure with data-bound editor.
+    /// Renders the HubConfiguration edit view: a TEMPLATE whose every field is bound DIRECTLY to the
+    /// NodeType node (see <see cref="BuildHubConfigEditTemplate"/>). The area loads nothing and
+    /// replicates nothing — each edit writes straight back to its field through the node stream.
     /// </summary>
     [Browsable(false)]
     public static UiControl HubConfigEdit(LayoutAreaHost host, RenderingContext ctx)
+        => BuildHubConfigEditTemplate(host.Hub.Address.ToString(), host.ViewerLocale());
+
+    /// <summary>
+    /// The HubConfiguration edit view's template: Display Name, Icon and Display Order (node
+    /// top-level fields), Children Query and Description (<see cref="NodeTypeDefinition"/> fields in
+    /// <c>Content</c>), and the Configuration lambda in a code editor bound to
+    /// <see cref="NodeTypeDefinition.Configuration"/>, laid out with a <see cref="LayoutGridControl"/>.
+    ///
+    /// <para>🚨 <b>No <c>/data</c> replica, no Save button.</b> This view used to copy seven node
+    /// fields into per-render <c>/data</c> slots, edit the copies, and write them back on Save — the
+    /// replicate-then-save shape (Doc/GUI/DataBinding). Every control now carries the node-bound
+    /// DataContext (<see cref="LayoutAreaReference.GetMeshNodeDataContext"/>), so the renderer reads
+    /// the field live and writes each edit to that ONE field through
+    /// <c>GetMeshNodeStream(path).Update</c>; a field the view does not show (the compile status, a
+    /// concurrent rename) is never touched. <b>Done</b> only navigates back.</para>
+    /// </summary>
+    /// <param name="nodeTypePath">The NodeType's path (the hub's own).</param>
+    /// <param name="locale">The viewer's locale, for the chrome's strings.</param>
+    internal static UiControl BuildHubConfigEditTemplate(string nodeTypePath, string? locale)
     {
-        // Subscribe to data streams
-        host.SubscribeToDataStream(DefinitionDataId, GetNodeStream(host));
-        host.SubscribeToDataStream(CodeFileDataId, host.Workspace.GetSingle<CodeConfiguration>());
+        string L(string key) => LocalizationCatalog.Get(key, locale);
+        var nodeFieldsContext = LayoutAreaReference.GetMeshNodeDataContext(nodeTypePath, bindContent: false);
+        var contentContext = LayoutAreaReference.GetMeshNodeDataContext(nodeTypePath, bindContent: true);
 
-        // Return structure with nested observable view
-        return Controls.Stack
-            .WithWidth("100%")
-            .WithView(
-                (h, c) => h.GetDataStream<MeshNode>(DefinitionDataId)
-                    .CombineLatest(h.GetDataStream<CodeConfiguration>(CodeFileDataId))
-                    .Select(tuple =>
-                    {
-                        var (node, codeFile) = tuple;
-                        if (node == null)
-                            return RenderLoading("Loading...");
-                        var allCode = codeFile?.Code ?? "";
-                        return BuildHubConfigEditContent(host, node, allCode);
-                    }),
-                "Editor"
-            );
-    }
+        static LayoutGridItemSkin Half(LayoutGridItemSkin s) => s.WithXs(12).WithMd(6);
 
-    private static UiControl BuildHubConfigEditContent(LayoutAreaHost host, MeshNode node, string allCodeForAutocomplete)
-    {
-        var content = node.ContentAs<NodeTypeDefinition>(host.Hub.JsonSerializerOptions);
-        var hubAddress = host.Hub.Address;
-        var stack = Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;");
-        // ID comes from hub address, not from content
-        var nodeId = hubAddress.Segments.LastOrDefault() ?? "Unknown";
-
-        // Data IDs for each editable field
-        var displayNameDataId = Guid.NewGuid().AsString();
-        var descriptionDataId = Guid.NewGuid().AsString();
-        var iconNameDataId = Guid.NewGuid().AsString();
-        var orderDataId = Guid.NewGuid().AsString();
-        var childrenQueryDataId = Guid.NewGuid().AsString();
-        var dependenciesDataId = Guid.NewGuid().AsString();
-        var configurationDataId = Guid.NewGuid().AsString();
-
-        // Initialize data streams
-        host.UpdateData(displayNameDataId, node.Name ?? "");
-        host.UpdateData(descriptionDataId, content?.Description ?? "");
-        host.UpdateData(iconNameDataId, node.Icon ?? "");
-        host.UpdateData(orderDataId, (node.Order ?? 0).ToString());
-        host.UpdateData(childrenQueryDataId, content?.ChildrenQuery ?? "");
-        host.UpdateData(dependenciesDataId, content?.Dependencies != null ? string.Join(", ", content.Dependencies) : "");
-        host.UpdateData(configurationDataId, content?.Configuration ?? "config => config");
-
-        // Header
-        stack = stack.WithView(Controls.H2($"Edit: {node.Name ?? nodeId}").WithStyle("margin-bottom: 16px;"));
-
-        // Form fields
-        var formStyle = "display: grid; grid-template-columns: 150px 1fr; gap: 12px; align-items: center; margin-bottom: 12px;";
-
-        // Display Name
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.displayName")).WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Enter display name...")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(displayNameDataId) }));
-
-        // Description
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.description")).WithStyle("font-weight: 500;"))
-            .WithView(new TextAreaControl(new JsonPointerReference(""))
-                .WithPlaceholder("Enter description...")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(descriptionDataId) }));
-
-        // Icon Name
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.iconName")).WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("e.g., Document, Folder...")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(iconNameDataId) }));
-
-        // Display Order
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.displayOrder")).WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("0")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(orderDataId) }));
-
-        // Children Query
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.childrenQuery")).WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Query for children (e.g., nodeType:Person)")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(childrenQueryDataId) }));
-
-        // Dependencies
-        stack = stack.WithView(Controls.Stack
-            .WithStyle(formStyle)
-            .WithView(Controls.Label(host.Localize("ui.dependencies")).WithStyle("font-weight: 500;"))
-            .WithView(new TextFieldControl(new JsonPointerReference(""))
-                .WithPlaceholder("Comma-separated node type paths...")
-                .WithImmediate(true) with
-            { DataContext = LayoutAreaReference.GetDataPointer(dependenciesDataId) }));
-
-        // Configuration (code editor)
-        stack = stack.WithView(Controls.H3(host.Localize("ui.configuration")).WithStyle("margin: 24px 0 8px 0;"));
-        stack = stack.WithView(Controls.Body("Lambda expression: config => config.AddData(...)").WithStyle("color: var(--neutral-foreground-hint); margin-bottom: 8px;"));
+        var fields = Controls.LayoutGrid.WithSkin(s => s.WithSpacing(2))
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Name)))
+            {
+                Label = L("nodeType.field.displayName"),
+                Immediate = true,
+                DataContext = nodeFieldsContext
+            }.WithWidth("100%"), Half)
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(MeshNode.Icon)))
+            {
+                Label = L("ui.icon"),
+                Immediate = true,
+                DataContext = nodeFieldsContext
+            }.WithWidth("100%"), Half)
+            .WithView(new NumberFieldControl(new JsonPointerReference(nameof(MeshNode.Order)), "Int32?")
+            {
+                Label = L("nodeType.field.displayOrder"),
+                Immediate = true,
+                DataContext = nodeFieldsContext
+            }.WithWidth("100%"), Half)
+            .WithView(new TextFieldControl(new JsonPointerReference(nameof(NodeTypeDefinition.ChildrenQuery)))
+            {
+                Label = L("nodeType.field.childrenQuery"),
+                Placeholder = "nodeType:Person scope:descendants",
+                Immediate = true,
+                DataContext = contentContext
+            }.WithWidth("100%"), Half)
+            .WithView(new TextAreaControl(new JsonPointerReference(nameof(NodeTypeDefinition.Description)))
+            {
+                Label = L("nodeType.field.description"),
+                Immediate = true,
+                DataContext = contentContext
+            }.WithRows(4).WithWidth("100%"), s => s.WithXs(12));
 
         var editor = new CodeEditorControl()
             .WithLanguage("csharp")
-            .WithHeight("250px")
+            .WithHeight("320px")
             .WithLineNumbers(true)
             .WithMinimap(false)
             .WithWordWrap(true)
-            .WithPlaceholder("config => config");
+            .WithPlaceholder("config => config")
+            .BindToNode(nodeTypePath, nameof(NodeTypeDefinition.Configuration));
 
-        if (!string.IsNullOrEmpty(allCodeForAutocomplete))
-        {
-            editor = editor.WithExtraTypeDefinitions(allCodeForAutocomplete);
-        }
-
-        editor = editor with
-        {
-            DataContext = LayoutAreaReference.GetDataPointer(configurationDataId),
-            Value = new JsonPointerReference("")
-        };
-
-        stack = stack.WithView(editor);
-
-        // Button row
-        var buttonRow = Controls.Stack
-            .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 8px; margin-top: 16px;");
-
-        // Cancel button
-        var viewHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.cancel"))
-            .WithAppearance(Appearance.Neutral)
-            .WithNavigateToHref(viewHref));
-
-        // Save button - sync click action: snapshot the form, then write THROUGH the node stream.
-        // The form values are applied to the node's CURRENT state inside Update — the owning hub
-        // serialises the write and merges it as a patch, so fields this form does not edit (a
-        // compile status landing meanwhile, a concurrent rename) are not clobbered by a stale copy
-        // of the whole node. This used to read the node once and post it back wholesale as a
-        // DataChangeRequest — see Doc/Architecture/DataPlaneMessagesAreStreamPlumbing.
-        buttonRow = buttonRow.WithView(Controls.Button(host.Localize("common.save"))
-            .WithAppearance(Appearance.Accent)
-            .WithIconStart(FluentIcons.Save())
-            .WithClickAction(actx =>
-            {
-                // 🚨 The identity is captured HERE, on the click's delivery turn. The write below
-                // runs after the form streams emit — possibly on another thread, where the
-                // AsyncLocal AccessContext is gone — so it is issued under this captured caller.
-                var access = host.Hub.ServiceProvider.GetService<AccessService>();
-                var caller = access?.Context ?? access?.CircuitContext;
-                Observable.CombineLatest(
-                    host.Stream.GetDataStream<string>(displayNameDataId).Take(1),
-                    host.Stream.GetDataStream<string>(descriptionDataId).Take(1),
-                    host.Stream.GetDataStream<string>(iconNameDataId).Take(1),
-                    host.Stream.GetDataStream<string>(orderDataId).Take(1),
-                    host.Stream.GetDataStream<string>(childrenQueryDataId).Take(1),
-                    host.Stream.GetDataStream<string>(dependenciesDataId).Take(1),
-                    host.Stream.GetDataStream<string>(configurationDataId).Take(1),
-                    (displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration) =>
-                        new HubConfigForm(displayName, description, iconName, orderStr, childrenQuery, dependenciesStr, configuration))
-                    .Take(1)
-                    .SelectMany(form => access.RunAs(caller, () => host.Workspace.GetMeshNodeStream()
-                        .Update<NodeTypeDefinition>((currentNode, currentDefinition) =>
-                            ApplyHubConfigForm(currentNode, currentDefinition, form))))
-                    .Take(1)
-                    .Subscribe(
-                        _ =>
-                        {
-                            var configNavHref = new LayoutAreaReference(ConfigurationArea).ToHref(hubAddress);
-                            actx.Host.UpdateArea(actx.Area, new RedirectControl(configNavHref));
-                        },
-                        ex =>
-                        {
-                            var errorDialog = Controls.Dialog(
-                                Controls.Markdown($"**Error saving:**\n\n{ex.Message}"),
-                                "Save Failed"
-                            ).WithSize("M");
-                            actx.Host.UpdateArea(DialogControl.DialogArea, errorDialog);
-                        });
-                return Task.CompletedTask;
-            }));
-
-        stack = stack.WithView(buttonRow);
-
-        return stack;
-    }
-
-    /// <summary>The Hub Configuration edit form's values, as snapshotted when Save is clicked.</summary>
-    internal sealed record HubConfigForm(
-        string? DisplayName,
-        string? Description,
-        string? IconName,
-        string? Order,
-        string? ChildrenQuery,
-        string? Dependencies,
-        string? Configuration);
-
-    /// <summary>
-    /// Applies the Hub Configuration edit form to the node's CURRENT state — the update lambda the
-    /// Save button hands to the typed <c>GetMeshNodeStream().Update&lt;NodeTypeDefinition&gt;</c>. Only the fields the form edits are
-    /// replaced; everything else on the node and its <see cref="NodeTypeDefinition"/> is carried
-    /// through from <paramref name="currentNode"/>, never from a copy taken when the form rendered.
-    /// </summary>
-    /// <param name="currentNode">The node as the owner holds it now.</param>
-    /// <param name="currentDefinition">Its content, read by the TYPED write: <c>null</c> only when the
-    /// node has no content yet — content that is present but unreadable fails the write before this
-    /// runs, so a default definition can never overwrite a real one.</param>
-    /// <param name="form">The snapshotted form values.</param>
-    internal static MeshNode ApplyHubConfigForm(MeshNode currentNode, NodeTypeDefinition? currentDefinition, HubConfigForm form)
-    {
-        if (!int.TryParse(form.Order, out var order)) order = 0;
-        List<string>? dependencies = null;
-        if (!string.IsNullOrWhiteSpace(form.Dependencies))
-        {
-            dependencies = form.Dependencies.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            if (dependencies.Count == 0) dependencies = null;
-        }
-        var updatedDefinition = (currentDefinition ?? new NodeTypeDefinition()) with
-        {
-            Description = string.IsNullOrWhiteSpace(form.Description) ? null : form.Description,
-            ChildrenQuery = string.IsNullOrWhiteSpace(form.ChildrenQuery) ? null : form.ChildrenQuery,
-            Dependencies = dependencies,
-            Configuration = string.IsNullOrWhiteSpace(form.Configuration) ? null : form.Configuration
-        };
-        return currentNode with
-        {
-            Name = string.IsNullOrWhiteSpace(form.DisplayName) ? null : form.DisplayName,
-            Icon = string.IsNullOrWhiteSpace(form.IconName) ? null : form.IconName,
-            Order = order,
-            Content = updatedDefinition
-        };
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithStyle("padding: 24px;")
+            .WithVerticalGap(16)
+            .WithView(Controls.H2(L("nodeType.hubConfigEdit.title")))
+            .WithView(fields)
+            .WithView(Controls.H3(L("ui.configurationLambda")))
+            .WithView(Controls.Body(L("nodeType.hubConfigEdit.lambdaHint")))
+            .WithView(editor)
+            .WithView(Controls.Button(L("common.done"))
+                .WithAppearance(Appearance.Accent)
+                .WithNavigateToHref(new LayoutAreaReference(ConfigurationArea).ToHref(nodeTypePath)));
     }
 
     private static UiControl BuildInfoRow(string label, string value)
@@ -1829,7 +1666,7 @@ public static class NodeTypeLayoutAreas
 /// Form DTO for the NodeType Configuration pane — carries the subset of MeshNode
 /// and NodeTypeDefinition fields that the user can edit directly inline (Name, Icon,
 /// Description, ChildrenQuery, DefaultNamespace, PageMaxWidth). The Configuration
-/// lambda and Dependencies are edited in the dedicated HubConfigEdit Monaco view.
+/// lambda is edited in the dedicated, node-bound HubConfigEdit view.
 /// </summary>
 public record NodeTypeConfigForm
 {
