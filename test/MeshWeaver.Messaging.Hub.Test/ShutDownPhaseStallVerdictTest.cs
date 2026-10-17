@@ -120,9 +120,13 @@ public class ShutDownPhaseStallVerdictTest : HubTestBase
             childVerdict.Should().NotContain("NO registrant has run",
                 "a registrant IS running; the no-registrant sentences belong to the other steps");
 
-            ownerVerdict.Should().Contain(child.Address.ToString(),
+            // The child's OWN diagnostic line, not merely its address: the 7313 text also carries
+            // `(last progress: sync/… → ShutDown)`, forwarded from the child's transitions, so the
+            // bare address appears even in an owner-only snapshot and would protect nothing.
+            ownerVerdict.Should().Contain($"Hub {child.Address} RunLevel=ShutDown",
                 "the owner's join is still waiting on the child, so its 'the diagnostics below name it' "
-                + "must actually name it — even though the child already took itself out of the registry");
+                + "must carry the child's own diagnostic line — even though the child already took itself "
+                + "out of the registry");
         }
         finally
         {
