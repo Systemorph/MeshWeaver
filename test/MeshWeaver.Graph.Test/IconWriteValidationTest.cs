@@ -51,6 +51,9 @@ public class IconSafetyTest
         $"<svg {Ns} width=\"24\" height=\"24\"><defs><linearGradient id=\"g\"><stop offset=\"0\" stop-color=\"#fff\"/></linearGradient></defs><rect width=\"24\" height=\"24\" rx=\"6\" fill=\"url(#g)\" data-mw-mark=\"1\"/><text x=\"4\" y=\"16\" font-size=\"10\">A</text></svg>",
         $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs><path id=\"p\" d=\"M0 0h1\"/></defs><use xlink:href=\"#p\"/><use href=\"#p\"/></svg>",
         "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M4%204h16'/%3E%3C/svg%3E",
+        "data:image/svg+xml;utf8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E",
+        "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E",
+        "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnLz4=",
     ];
 
     [Theory]
@@ -116,6 +119,14 @@ public class IconSafetyTest
         { $"<svg {Ns}><rect style=\"background-image:image-set('https://example.com/mask.png' 1x)\"/></svg>", "'style'" },
         { $"<svg {Ns}><rect fill=\"image-set(x 1x)\"/></svg>", "image-set(" },
         { $"<svg {Ns}><rect fill=\"cross-fade(x)\"/></svg>", "cross-fade(" },
+        // Review round 3 on #6910 — the SVG data-URI header: a renderer decodes '&comma;' into the
+        // first comma and '#' makes the validated tail a fragment, so the header is matched exactly
+        // and '&', '#' and ';' are refused in the payload.
+        { "data:image/svg+xml;x=a&comma;%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20onload='void%200'/%3E#,%3Csvg/%3E", "exactly one of" },
+        { "data:image/svg+xml;foo=bar,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E", "exactly one of" },
+        { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E#x", "'#'" },
+        { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E&amp;", "'&'" },
+        { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E;x", "';'" },
         // (c) a whitespace-only value past the length bound.
         { new string(' ', IconSafety.MaxIconLength + 1), "at most" },
         { $"<svg {Ns}><rect fill=\"u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },

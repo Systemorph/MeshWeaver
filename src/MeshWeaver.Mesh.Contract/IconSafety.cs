@@ -106,6 +106,15 @@ public static class IconSafety
 
     private static readonly ImmutableArray<string> AllowedSchemes = ["http", "https", "content"];
 
+    // The only headers an SVG data URI may carry — nothing else is a parameter an icon needs.
+    private static readonly ImmutableArray<string> SvgDataUriHeaders =
+    [
+        "data:image/svg+xml,",
+        "data:image/svg+xml;utf8,",
+        "data:image/svg+xml;charset=utf-8,",
+        "data:image/svg+xml;base64,",
+    ];
+
     // The only functions an attribute value may call: colours, transforms, and url(#fragment).
     private static readonly ImmutableHashSet<string> AllowedFunctions = ImmutableHashSet.Create(
         StringComparer.OrdinalIgnoreCase,
@@ -208,36 +217,13 @@ public static class IconSafety
 
     private static string? DataUriRefusal(string value)
     {
+        if (value.StartsWith("data:image/svg+xml", StringComparison.OrdinalIgnoreCase))
+            return SvgDataUriRefusal(value);
+
         var comma = value.IndexOf(',');
         if (comma < 0)
             return "a data: icon has no payload";
-        var header = value["data:".Length..comma];
-        var payload = value[(comma + 1)..];
-        var parts = header.Split(';');
-        var mediaType = parts[0].Trim().ToLowerInvariant();
-        var isBase64 = parts.Skip(1).Any(p => p.Trim().Equals("base64", StringComparison.OrdinalIgnoreCase));
-
-        if (mediaType == "image/svg+xml")
-        {
-            // The URI itself sits in an attribute; a percent-encoded document never needs these raw.
-            foreach (var c in value)
-                if (c is '"' or '<' or '>' or '`' or '\\' || char.IsControl(c) || char.IsWhiteSpace(c))
-                    return "a data:image/svg+xml icon must be percent- or base64-encoded (it carries a raw "
-                           + (char.IsWhiteSpace(c) || char.IsControl(c) ? "whitespace or control character" : $"'{c}'") + ")";
-            string document;
-            try
-            {
-                document = isBase64
-                    ? Encoding.UTF8.GetString(Convert.FromBase64String(payload))
-                    : Uri.UnescapeDataString(payload);
-            }
-            catch (FormatException)
-            {
-                return "a data:image/svg+xml icon's base64 payload does not decode";
-            }
-            var refusal = SvgRefusal(document.Trim());
-            return refusal is null ? null : $"the SVG inside the data: URI is refused: {refusal}";
-        }
+        var mediaType = value["data:".Length..comma].Split(';')[0].Trim().ToLowerInvariant();
 
         // A raster URI is judged as a WHOLE against one exact grammar —
         // `data:image/(png|jpeg|gif|webp);base64,` followed by base64 characters only — so its
@@ -261,6 +247,53 @@ public static class IconSafety
         return RasterMediaTypes.Contains(mediaType)
             ? $"a {mediaType} data: icon must be exactly 'data:{mediaType};base64,' followed by base64 characters"
             : $"a data: icon may only carry {string.Join(", ", RasterMediaTypes)} or image/svg+xml, not '{mediaType}'";
+    }
+
+    /// <summary>
+    /// An SVG data URI is judged as a WHOLE before anything is decoded: its header must be one of
+    /// <see cref="SvgDataUriHeaders"/> exactly, and the payload may carry none of <c>&amp; # ;</c>
+    /// (nor quotes, angle brackets, backslash, whitespace or control characters). A renderer that
+    /// places the URI in HTML decodes character references and treats '#' as the start of a
+    /// fragment — so a payload able to spell either could make the URI that loads differ from the
+    /// document this rule parsed.
+    /// </summary>
+    private static string? SvgDataUriRefusal(string value)
+    {
+        string? header = null;
+        foreach (var candidate in SvgDataUriHeaders)
+            if (value.StartsWith(candidate, StringComparison.OrdinalIgnoreCase))
+            {
+                header = candidate;
+                break;
+            }
+        if (header is null)
+            return "a data:image/svg+xml icon must start with exactly one of "
+                   + string.Join(", ", SvgDataUriHeaders.Select(h => $"'{h}'"));
+
+        var payload = value[header.Length..];
+        foreach (var c in payload)
+            if (c is '&' or '#' or ';' or '"' or '<' or '>' or '`' or '\\'
+                || char.IsControl(c) || char.IsWhiteSpace(c))
+                return "a data:image/svg+xml icon's payload must be percent- or base64-encoded (it carries a raw "
+                       + (char.IsWhiteSpace(c) || char.IsControl(c) ? "whitespace or control character" : $"'{c}'") + ")";
+
+        string document;
+        if (header.EndsWith(";base64,", StringComparison.Ordinal))
+        {
+            try
+            {
+                document = Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+            }
+            catch (FormatException)
+            {
+                return "a data:image/svg+xml icon's base64 payload does not decode";
+            }
+        }
+        else
+            document = Uri.UnescapeDataString(payload);
+
+        var refusal = SvgRefusal(document.Trim());
+        return refusal is null ? null : $"the SVG inside the data: URI is refused: {refusal}";
     }
 
     /// <summary>
