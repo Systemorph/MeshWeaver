@@ -4,6 +4,8 @@
 #                    --db-name <database> --db-password-secret <vault object>]
 #                   [--skip-registry-key | --registry-key-vault <name> --registry-key-object <object>]
 #                   [--values-half <release> [--vault-keys K1,K2,…]]
+#                   [--generate <vault object> …]
+# hosting-kv-ensure --vault <name> --namespace <ns> --generate-only --generate <vault object> […]
 #
 # Make sure the per-instance Key Vault secrets EXIST, and mint the ones only this step can mint.
 #
@@ -23,6 +25,17 @@
 # unreadable, with no error at the time and a broken AI stack later. So an existing secret is left
 # exactly as it is, and only an ABSENT one is created. That also makes a re-provision safe, which
 # is what lets the mesh treat provisioning as idempotent.
+#
+# --generate <object> (repeatable): an in-fleet KEY that no third party pastes anywhere and whose
+# two ends both read the vault — the deployment's self-update ANNOUNCEMENT key (record
+# `announcementKeySecret`, Doc/Architecture/SelfUpdateAnnouncementKey): the instance mounts it as
+# Hosting__ControlInbox__Secret and the control instance as Hosting__PlatformWebhookSecret__<id>.
+# Created ONLY when absent (32 random bytes, base64 — `hosting-kv-set --generate`'s shape), through
+# a mode-600 file and --file, tagged like kv-set (mw-fp, mw-set-by, mw-set-at, mw-source=generate);
+# never printed, never on an argv, NEVER regenerated — rotating it is `hosting-kv-set --generate`,
+# a separate, deliberate verb. --generate-only runs just this part (no master key, no registry
+# key, no database objects): what a Roll or Reconcile runs before it deploys a render that mounts
+# such a key, so a mapped-but-absent object can never fail the whole CSI mount.
 
 source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
 # shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
@@ -32,6 +45,7 @@ vault="" prefix="" namespace=""
 db_connection="" db_host="" db_port="" db_user="" db_name="" db_password_secret=""
 skip_registry_key=false registry_key_vault="" registry_key_object=""
 values_half="" vault_keys=""
+generate=() generate_only=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --vault)              vault="${2:-}";              shift 2 ;;
@@ -48,6 +62,9 @@ while [ $# -gt 0 ]; do
     --registry-key-object) registry_key_object="${2:-}"; shift 2 ;;
     --values-half)         values_half="${2:-}";         shift 2 ;;
     --vault-keys)          vault_keys="${2:-}";          shift 2 ;;
+    --generate)            [ $# -ge 2 ] || hosting::die "--generate needs an object name"
+                           generate+=("$2");             shift 2 ;;
+    --generate-only)       generate_only=true;           shift ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -80,6 +97,15 @@ if { [ -n "$registry_key_vault" ] && [ -z "$registry_key_object" ]; } \
     || { [ -z "$registry_key_vault" ] && [ -n "$registry_key_object" ]; }; then
   hosting::die "--registry-key-vault and --registry-key-object must be supplied together"
 fi
+for object in ${generate[@]+"${generate[@]}"}; do
+  [ -n "$object" ] || hosting::die "--generate names no object — an empty object name names nothing"
+  hosting::safe_name generate "$object"
+done
+if [ "$generate_only" = true ]; then
+  [ ${#generate[@]} -gt 0 ] || hosting::die "--generate-only names nothing to generate — pass at least one --generate <object>"
+  [ -z "$prefix$db_connection$db_host$db_port$db_user$db_name$db_password_secret$values_half$vault_keys$registry_key_vault$registry_key_object" ] && [ "$skip_registry_key" != true ] \
+    || hosting::die "--generate-only generates the --generate objects and nothing else; it cannot be combined with --prefix, the database, registry or values-half flags"
+fi
 if [ -n "$db_port" ] && ! [[ "$db_port" =~ ^[0-9]{1,5}$ ]]; then
   hosting::die "db-port '${db_port}' is not a port number — refusing to compose a connection string from it"
 fi
@@ -103,6 +129,62 @@ kv_exists_in_vault() {
   return "$rc"
 }
 kv_exists() { kv_exists_in_vault "$vault" "$1"; }
+
+# ── generated in-fleet keys (--generate) ──────────────────────────────────────────────────────
+# Create-if-absent, never overwrite (the master-key rule). The value goes /dev/urandom → a mode-600
+# file → az --file; the fingerprint tag lets both ends of the pairing be compared from metadata.
+ensure_generated() {
+  local object
+  for object in ${generate[@]+"${generate[@]}"}; do
+    if kv_exists "$object"; then
+      hosting::log "keep    ${object} (exists — NEVER regenerated: both ends of the pairing read it; rotate with hosting-kv-set --generate)"
+      kept=$((kept + 1))
+      hosting::say kv_generated "${object}:kept"
+      continue
+    fi
+    hosting::log "create  ${object} (256-bit, base64, generated in this job and never shown)"
+    if hosting::dry; then
+      created=$((created + 1))
+      hosting::say kv_generated "${object}:would-create"
+      continue
+    fi
+    local gen_dir fp set_at
+    gen_dir="$(umask 077; mktemp -d)" || hosting::die "could not create a private working directory for ${object}"
+    ( umask 077; head -c 32 /dev/urandom | base64 | tr -d '\n' > "$gen_dir/value" ) \
+      || { rm -rf "$gen_dir"; hosting::die "could not generate a value for ${object}. Nothing was written."; }
+    fp="$(hosting::fingerprint "$gen_dir/value")"
+    set_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if ! az keyvault secret set --vault-name "$vault" --name "$object" --file "$gen_dir/value" \
+          --tags "mw-fp=${fp}" "mw-set-by=hosting-operator" "mw-set-at=${set_at}" "mw-source=generate" --output none; then
+      rm -rf "$gen_dir"
+      hosting::die "could not create ${object} in vault ${vault}. Nothing was written."
+    fi
+    rm -rf "$gen_dir"
+    kv_exists "$object" \
+      || hosting::die "${object} was written to vault ${vault} but is not listed — refusing to report a key the CSI driver will not find"
+    # 🚨 Key Vault has no create-if-absent: two jobs that both read "absent" (the sender's and the
+    # control instance's first deploy of the same key, in the same seconds) both write, and the LATER
+    # version wins. Detected here from metadata — more than one version means another writer raced
+    # this one — and said, never hidden: both ends then read the latest version once the CSI driver
+    # rotates or the pods restart, and until then an announcement may be refused (it is re-sent hourly).
+    versions="$(az keyvault secret list-versions --vault-name "$vault" --name "$object" --query "length(@)" -o tsv 2>/dev/null || echo "?")"
+    if [ "$versions" != "1" ]; then
+      hosting::log "WARNING ${object} holds ${versions} version(s) right after creation — another job created it concurrently; the latest version wins and both ends converge on it at the next CSI rotation or pod restart"
+      hosting::say kv_generated_raced "$object"
+    fi
+    hosting::log "created ${object} in vault ${vault} (${fp})"
+    created=$((created + 1))
+    hosting::say kv_generated "${object}:created"
+  done
+}
+
+if [ "$generate_only" = true ]; then
+  ensure_generated
+  hosting::log "vault ${vault}: ${created} created, ${kept} already present"
+  hosting::say kv_created "$created"
+  hosting::say kv_kept "$kept"
+  exit 0
+fi
 
 for suffix in $GENERATED; do
   name="${prefix}${suffix}"
@@ -299,6 +381,8 @@ if [ -n "$values_half" ]; then
     fi
   fi
 fi
+
+ensure_generated
 
 hosting::log "vault ${vault}: ${created} created, ${kept} already present"
 hosting::say kv_created "$created"

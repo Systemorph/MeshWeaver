@@ -474,6 +474,71 @@ case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and re
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
 
+echo
+echo "── hosting-kv-ensure --generate: the announcement key is created once, never shown, never regenerated ──"
+# Doc/Architecture/SelfUpdateAnnouncementKey — a record declaring announcementKeySecret is mounted on
+# BOTH ends (the instance's Hosting__ControlInbox__Secret, the control instance's
+# Hosting__PlatformWebhookSecret__<id>). A mapped-but-absent object fails the WHOLE CSI mount, so the
+# Provision (and every Roll/Reconcile before it deploys such a render) creates it when absent.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure --generate creates an ABSENT announcement key" || bad "kv-ensure --generate creates an absent key" "exited ${_kve_rc}: ${_kve_out}"
+_kve_key="$(cat "$_kve_state/set.acme-Hosting-AnnouncementKey" 2>/dev/null || true)"
+[ "$(printf '%s' "$_kve_key" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" = "32" ] && ok "…256 random bits, base64 (kv-set --generate's shape)" || bad "the key is 32 random bytes, base64" "wrote ${#_kve_key} chars"
+case "$_kve_log" in *"secret set --vault-name Systemorph --name acme-Hosting-AnnouncementKey --file "*"mw-source=generate"*) ok "…reaches az through --file, tagged mw-source=generate" ;; *) bad "the key reaches az through --file, tagged" "az saw: ${_kve_log}" ;; esac
+case "$_kve_log" in *"mw-fp=sha256:"*) ok "…with its fingerprint tag, so both ends compare from metadata" ;; *) bad "the key carries an mw-fp tag" "az saw: ${_kve_log}" ;; esac
+if [ -n "$_kve_key" ]; then
+  case "$_kve_out$_kve_log" in *"$_kve_key"*) bad "the generated key is never printed or put on an argv" "it was" ;; *) ok "the generated key is never printed or put on an argv" ;; esac
+fi
+case "$_kve_out" in *"::hosting:: kv_generated=acme-Hosting-AnnouncementKey:created"*) ok "…and the run reports kv_generated=<object>:created" ;; *) bad "reports kv_generated created" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-Hosting-AnnouncementKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "an EXISTING announcement key is accepted" || bad "existing key is accepted" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and NEVER regenerated (both ends read it)" "az saw: ${_kve_log}" ;; *) ok "…and NEVER regenerated (both ends read it)" ;; esac
+case "$_kve_out" in *"::hosting:: kv_generated=acme-Hosting-AnnouncementKey:kept"*) ok "…reported as kept" ;; *) bad "reported kept" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_KVE_LIST_FAIL=1 \
+  -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -ne 0 ] && ok "a REFUSED listing is a refusal, never 'absent' (no overwrite on a blind read)" || bad "refused listing refuses" "exited 0: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and nothing is written" "az saw: ${_kve_log}" ;; *) ok "…and nothing is written" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true \
+  -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "a dry-run --generate-only succeeds" || bad "dry-run generate-only" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and writes nothing" "az saw: ${_kve_log}" ;; *) ok "…and writes nothing" ;; esac
+case "$_kve_out" in *"kv_generated=acme-Hosting-AnnouncementKey:would-create"*) ok "…reporting would-create" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# --generate-only: what a Roll/Reconcile runs before deploying a render that mounts such a key —
+# the key and NOTHING else (no master key minted, no registry key required, no database touched).
+kve -- --vault Systemorph --namespace control --generate-only --generate acme-Hosting-AnnouncementKey --generate fabrikam-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "--generate-only creates every named key" || bad "generate-only creates the keys" "exited ${_kve_rc}: ${_kve_out}"
+[ -f "$_kve_state/set.acme-Hosting-AnnouncementKey" ] && [ -f "$_kve_state/set.fabrikam-Hosting-AnnouncementKey" ] && ok "…both objects written" || bad "both keys written" "state: $(ls "$_kve_state")"
+case "$_kve_log" in *"MasterKey"*|*"RegistryToken"*) bad "…and touches nothing else (no master key, no registry key)" "az saw: ${_kve_log}" ;; *) ok "…and touches nothing else (no master key, no registry key)" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "--generate-only refuses to run with nothing to generate" "names nothing to generate" \
+  hosting-kv-ensure --vault V --namespace n --generate-only
+refuses_hard "--generate-only refuses the provisioning flags" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --prefix acme- --generate k
+refuses_hard "--generate refuses an object name with a metacharacter" "is not a plain name" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate 'k;id'
+kve HOSTING_KVE_VERSIONS=2 -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && case "$_kve_out" in *"kv_generated_raced=acme-Hosting-AnnouncementKey"*) true ;; *) false ;; esac \
+  && ok "a concurrent create (two versions right after the write) is SAID, never hidden" || bad "a raced create is reported" "rc=${_kve_rc}: ${_kve_out}"
+rm -rf "$_kve_state"
+kve -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+case "$_kve_out" in *"raced"*) bad "a lone create reports no race" "said: ${_kve_out}" ;; *) ok "a lone create reports no race" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "--generate-only refuses the database flags too" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate k --db-host pg.test
+refuses_hard "a trailing --generate with no object refuses (never a parser hang)" "needs an object name" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate
+unset _kve_out _kve_rc _kve_log _kve_state _kve_key
+
 # 🚨 Memex#648 — the helm VALUES HALF. A record declaring vaultValuesKeys deploys only with
 # helm-values-<release> in the vault, and on an external database with AdoNet clustering the chart
 # refuses to render without it; nothing composed it, so the control instance's was built by hand.
