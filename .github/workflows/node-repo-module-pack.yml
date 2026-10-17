@@ -3849,7 +3849,9 @@ jobs:
             if [ "$rc" -eq 0 ]; then
               bk set --module "$MODULE" tested=true
             else
-              bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              # Log-only: name-failing-tests.py below annotates this suite BY NAME within the step's ten
+              # `::error` slots; a generic one per red suite here would spend them first.
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
               red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")
               # Keep the failing suite's evidence — only what a diagnosis needs, only for this module.
               tests="$(dirname "$PROJECT").Test"
@@ -4772,7 +4774,9 @@ jobs:
             if [ "$rc" -eq 0 ]; then
               bk set --module "$MODULE" tested=true
             else
-              bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              # Log-only: name-failing-tests.py below annotates this suite BY NAME within the step's ten
+              # `::error` slots; a generic one per red suite here would spend them first.
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
               red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")
               out="$RUNNER_TEMP/test-evidence/$MODULE"; mkdir -p "$out"
               find "$tests" -path '*/test-logs/*.log' -print0 2>/dev/null | while IFS= read -r -d '' f; do

@@ -394,7 +394,15 @@ def cmd_fail(a: argparse.Namespace) -> int:
     rec["phase"] = a.phase
     rec["reason"] = a.reason
     st.save()
-    print(f"::error title=Module {a.module} failed ({a.phase})::{a.reason}")
+    # 🚨 MODULE_PACK_FAIL_LOG_ONLY=1: the CALLER annotates this failure itself, by name, within the
+    # step's ten `::error` slots (the test steps' name-failing-tests.py — one annotation per red
+    # suite, or one naming the rest). An `::error` here too would spend a slot per red suite before
+    # the failing tests are named: six red suites → twelve, the last names dropped by GitHub. The
+    # verdict is recorded either way and the leg's `verdict` step still reds it.
+    if os.environ.get("MODULE_PACK_FAIL_LOG_ONLY") == "1":
+        print(f"Module {a.module} failed ({a.phase}): {a.reason}")
+    else:
+        print(f"::error title=Module {a.module} failed ({a.phase})::{a.reason}")
     return 0
 
 
@@ -966,6 +974,18 @@ def self_test(workflow_path: Path | None = None) -> int:
         check("set/get round-trips a fact", out.strip() == "1.2.3", out)
         out = run("fail", "--module", "MeshWeaver.Maps", "--phase", "test", "--reason", "3 tests failed")
         check("fail prints a ::error naming module and phase", "::error title=Module MeshWeaver.Maps failed (test)::3 tests failed" in out, out)
+        # A caller that annotates the failure itself (the test steps' failing-test report) keeps
+        # the step's ten slots for the names: the verdict is recorded, the line is plain.
+        p = subprocess.run([sys.executable, here, "--state", str(s), "fail", "--module", "MeshWeaver.Mcp",
+                            "--phase", "test", "--reason", "1 test failed"], capture_output=True, text=True,
+                           env=dict(os.environ, MODULE_PACK_FAIL_LOG_ONLY="1"))
+        check("MODULE_PACK_FAIL_LOG_ONLY=1 records the failure and prints NO workflow command",
+              p.returncode == 0 and "::" not in p.stdout + p.stderr
+              and "Module MeshWeaver.Mcp failed (test): 1 test failed" in p.stdout
+              and State(s).load().record("MeshWeaver.Mcp")["status"] == "failed", p.stdout + p.stderr)
+        st2 = State(s).load()  # back to ok, so the cases below see the batch they expect
+        st2.record("MeshWeaver.Mcp").update(status="ok", phase="", reason="")
+        st2.save()
         out = run("list", "--ok")
         check("a failed module leaves the --ok list; siblings stay", out.split() == ["MeshWeaver.AI", "MeshWeaver.Mcp"], out)
         out = run("list", "--failed")
