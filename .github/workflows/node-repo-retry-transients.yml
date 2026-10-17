@@ -1,0 +1,143 @@
+name: Node repo retry known transients (reusable)
+
+# ♻️ REUSABLE (workflow_call) — ONE automatic retry for NAMED infrastructure transients, for every
+# repository in the fleet, core included (core's own retry-known-transients.yml calls this file).
+#
+# 🚨 WHY A LANE AND NOT A COPY (MeshWeaver.Manufacturing#84). The satellites carried hand-copied
+# inline shell that had drifted three ways: Manufacturing, Reinsurance and Crm read job LOGS only,
+# so when a self-hosted runner died — no log is ever uploaded, and the reason ("The self-hosted
+# runner lost communication with the server") exists only in the job's check-run ANNOTATION — they
+# printed "GitHub holds no log (HTTP 404) — cannot prove a transient, no retry" and the ci-main-red
+# sentinel reopened. SocialMedia's copy had the same blindness plus a whole-run rerun; Plugins
+# fixed the blindness in its own script (#1849, #2773); core's script never had it at all. A fix in
+# one copy reached none of the others. The decision now lives in ONE file —
+# `.github/scripts/retry-known-transients.py`, fetched here at `scripts-ref`, self-tested on EVERY
+# call, never fallen back to a local copy. Read its module docstring before changing any rule.
+#
+# 🚨 THIS IS NOT A FLAKE-RETRIER. It reruns only when EVERY failed job is proven (a named log
+# signature, a named annotation, or a verdict/consequential job beside a proven one); one unproven
+# job and it declines, NAMING the job — a real red stays red. It judges only the event's
+# run_attempt 1 (one retry, ever — never a loop). A read it cannot make (job list, log, annotations,
+# the rerun POST) is a RED naming the read, never a quiet decline (#4534).
+#
+# Caller contract — a SEPARATE workflow file, triggered by the caller's CI completing:
+#
+#   # .github/workflows/retry-known-transients.yml
+#   name: Retry known transients
+#   on:
+#     workflow_run:
+#       workflows: ["<the caller's CI workflow name>"]
+#       types: [completed]
+#   permissions:
+#     actions: write
+#     checks: read
+#     contents: read
+#   jobs:
+#     retry:
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-retry-transients.yml@main
+#       permissions:
+#         actions: write     # list the run's jobs, read their logs, POST the one rerun
+#         checks: read       # check-runs/<job>/annotations — the ONLY record of a runner death
+#         contents: read
+#       # with:
+#       #   rerun-scope: all  # only if this repository must re-run whole runs (see the input)
+#
+# The caller's row in .github/lane-caller-grants.yml lands in core FIRST (as `pending:`), because
+# every satellite asserts its roster row against core's main. This workflow is never a required
+# context: it judges a run AFTER it completed, so nothing should wait on it.
+#
+# 🛡️ What the caller must NOT add: a job-level `if:` (the lane decides which events it judges and
+# says so in its own log), or a `ref:`/checkout of the triggering head — this job holds
+# `actions: write`, and the triggering run may be a fork's pull request. The lane reads the caller's
+# repository only through the REST API, never by executing anything from it.
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: >
+          The Systemorph/MeshWeaver ref the decision script is fetched at. `main` (the default) is
+          what a fleet calling the lane at `@main` wants; a caller pinning the lane to a sha passes
+          the SAME sha here.
+        type: string
+        default: main
+      rerun-scope:
+        description: >
+          `failed-jobs` (the default) POSTs rerun-failed-jobs; `all` POSTs rerun (the whole run).
+          The script forces `all` by itself when a proven consequential/verdict job means something
+          was SKIPPED behind the transient — a skipped job does not come back from rerun-failed-jobs.
+        type: string
+        default: failed-jobs
+
+jobs:
+  retry:
+    name: Rerun iff EVERY failure is proven transient
+    # A GREEN completion has nothing to judge, so it is skipped (this is never a required context).
+    # Any event other than `workflow_run` is NOT skipped: the first step reds on it, so a miswired
+    # caller is visible rather than silently idle.
+    if: >
+      github.event_name != 'workflow_run'
+      || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      checks: read
+      contents: read
+    steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+
+      - name: The caller wired this lane to a workflow_run completion
+        env:
+          EVENT: ${{ github.event_name }}
+          SCOPE: ${{ inputs.rerun-scope }}
+        run: |
+          set -euo pipefail
+          [ "$EVENT" = "workflow_run" ] || { echo "::error::node-repo-retry-transients judges a COMPLETED run, so it must be called from a workflow_run trigger — this call came from '$EVENT'. Fix the caller's trigger (see the lane header's caller contract)."; exit 1; }
+          case "$SCOPE" in failed-jobs|all) ;; *) echo "::error::rerun-scope must be 'failed-jobs' or 'all', got '$SCOPE'"; exit 1 ;; esac
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # The script's self-test reads the two workflow files beside it (the verdict step's defining
+      # lane, and this lane's own grants), so they are fetched into the SAME layout, at the same ref.
+      - name: Fetch the decision script at the lane's scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the decision script has no ref to be fetched at"; exit 1; }
+          scripts="$RUNNER_TEMP/mwcore/scripts"
+          workflows="$RUNNER_TEMP/mwcore/workflows"
+          mkdir -p "$scripts" "$workflows"
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/retry-known-transients.py" > "$scripts/retry-known-transients.py" \
+            || { echo "::error::could not fetch the decision script at ${SCRIPTS_REF} from Systemorph/MeshWeaver — the reader's line above names the cause"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/node-repo-retry-transients.yml" > "$workflows/node-repo-retry-transients.yml" \
+            || { echo "::error::could not fetch node-repo-retry-transients.yml at ${SCRIPTS_REF} — the self-test reads its grants"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/node-repo-module-pack.yml" > "$workflows/node-repo-module-pack.yml" \
+            || { echo "::error::could not fetch node-repo-module-pack.yml at ${SCRIPTS_REF} — the self-test reads its verdict step"; exit 1; }
+          for fetched in "$scripts/retry-known-transients.py" "$workflows/node-repo-retry-transients.yml" "$workflows/node-repo-module-pack.yml"; do
+            [ -s "$fetched" ] || { echo "::error::$fetched arrived EMPTY at ${SCRIPTS_REF}"; exit 1; }
+          done
+          echo "MW_RETRY_SCRIPT=$scripts/retry-known-transients.py" >> "$GITHUB_ENV"
+
+      # An unproven gate is no gate. The self-test is offline and takes seconds; it drives the read
+      # failures, the runner-death annotation path in both directions, the every-job rule and the
+      # signature list, so a steward that has gone blind cannot reach the step below.
+      - name: The steward reads its inputs, refuses a real red, and reds when blind (self-test)
+        run: python3 "$MW_RETRY_SCRIPT" --self-test
+
+      # The attempt is the EVENT's, pinned: a hand rerun that starts before this step reads the jobs
+      # would otherwise be judged (the latest attempt), and the one-retry guarantee with it.
+      - name: Rerun iff EVERY failure is proven transient
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SCOPE: ${{ inputs.rerun-scope }}
+        run: >
+          python3 "$MW_RETRY_SCRIPT"
+          --repo "$REPO" --run-id "$RUN_ID" --attempt "$ATTEMPT" --rerun-scope "$SCOPE"

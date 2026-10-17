@@ -448,6 +448,31 @@ only shared if both ends are on the same one. The portal learnt the first half a
 copying on Azure Files ([#2190](https://github.com/Systemorph/MeshWeaver/issues/2190) →
 [#4547](https://github.com/Systemorph/MeshWeaver/issues/4547)); this is the second half, in CI.
 
+### 🚨 A pid is not a name on a shared store — every scratch name carries a random token
+
+A runner pod has its **own PID namespace**, and pods running the same job template walk the same
+process tree, so two of them reach the same step with the **same pid**. Measured on 2026-10-17
+(MeshWeaver.Plugins run 39019459631): `aks-silos-tv7h9-runner-bb4gd` and `…-cf9hl` ran the store
+probe of the same batch step 27 ms apart on one Azure Files share; the probe was named
+`.mw-store-write-probe.<pid>`, the first pod's `unlink` removed the second pod's file, and the second
+reported `/ci-artifacts is not writable by this job: [Errno 2] No such file or directory:
+'/ci-artifacts/.mw-store-write-probe.951'` — a healthy, mounted, writable share read as
+*unavailable*. The same day it hit both runner pools (`aks-silos`, `aks-silos-dind`), which is what a
+name race looks like and a missing mount does not: the job-started hook had written its
+`.runner-nodes` record to the same mount seconds earlier.
+
+`put`'s staging file (`<key>.tmp.<pid>`) had the same defect with a worse outcome: two pods putting
+one key copy into ONE staging file and the first rename takes the other's bytes.
+
+So every scratch name `FileStore` creates on the share comes from `scratch_token()` —
+`<host>.<pid>.<uuid4>`, where only the random part is load-bearing and host and pid just name the pod
+that left a stray file. The probe is created exclusively (`open(…, "x")`), so a collision can never
+again pass as a successful write, and `_verify_written` treats only **its own** staging file as a
+leftover — another pod's `.tmp.*` next to the destination is a concurrent writer, not a fault. Two
+self-test rules put a second same-pid writer inside the first one's window (probe write→unlink, and
+put copy→rename), and both were proved red against the pid-named version with the incident's exact
+message.
+
 ### How the module bundle splits in two
 
 `node-repo-module-pack.yml` takes `artifact-store` and `artifact-store-id` inputs. In `file:` mode:

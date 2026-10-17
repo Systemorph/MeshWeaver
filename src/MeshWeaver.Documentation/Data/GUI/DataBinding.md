@@ -622,20 +622,22 @@ host.Hub.Edit(new Calculator(), "calc");
 
 ## Live demo
 
-The cell below shows the property-type mapping in action — a `Calculator` record rendered as a table of controls, with a computed result:
+The cell below lists the property-type mapping for the `Calculator` record. Tabular data is a `DataGrid` with one `PropertyColumnControl<T>` per column — never an HTML string built from the rows:
 
 ```csharp --render EditMacroDemo --show-code
+record MappingRow(string Property, string Type, string GeneratedControl, string BoundPath);
+
 var rows = new[]
 {
-    ("X", "double", "NumberFieldControl", "/data/calc/x"),
-    ("Y", "double", "NumberFieldControl", "/data/calc/y"),
+    new MappingRow("X", "double", "NumberFieldControl", "/data/calc/x"),
+    new MappingRow("Y", "double", "NumberFieldControl", "/data/calc/y"),
 };
 
-var header = "<tr><th>Property</th><th>Type</th><th>Generated Control</th><th>Bound path (DataContext = /data/calc)</th></tr>";
-var body = string.Join("", System.Linq.Enumerable.Select(rows, r =>
-    $"<tr><td><code>{r.Item1}</code></td><td><code>{r.Item2}</code></td><td><code>{r.Item3}</code></td><td><code>{r.Item4}</code></td></tr>"));
-
-MeshWeaver.Layout.Controls.Html($"<table>{header}{body}</table>")
+MeshWeaver.Layout.Controls.DataGrid(rows)
+    .WithColumn(new PropertyColumnControl<string> { Property = "property" }.WithTitle("Property"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "type" }.WithTitle("Type"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "generatedControl" }.WithTitle("Generated Control"))
+    .WithColumn(new PropertyColumnControl<string> { Property = "boundPath" }.WithTitle("Bound path (DataContext = /data/calc)"))
 ```
 
 ---

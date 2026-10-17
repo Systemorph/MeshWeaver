@@ -331,7 +331,7 @@ The cell below shows a self-contained layout area composed from a stack of contr
 
 ```csharp --render LayoutAreaDemo --show-code
 MeshWeaver.Layout.Controls.Stack
-    .WithView(MeshWeaver.Layout.Controls.Html("<strong>Layout Area — live render</strong>"))
+    .WithView(MeshWeaver.Layout.Controls.H4("Layout Area — live render"))
     .WithView(MeshWeaver.Layout.Controls.Markdown(
         $"This area was rendered at **{DateTime.Now:HH:mm:ss}**. " +
         "In a real hub it would update reactively whenever its data changes."))

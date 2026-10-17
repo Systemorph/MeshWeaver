@@ -66,10 +66,10 @@ The simplest stack is vertical and requires no configuration at all — just cha
 
 ```csharp --render StackVertical --show-code
 Controls.Stack
-    .WithView(Controls.Html("<b>Stack layout demo</b>"))
-    .WithView(Controls.Html("First item"))
-    .WithView(Controls.Html("Second item, directly below"))
-    .WithView(Controls.Html("Third item, with default spacing"))
+    .WithView(Controls.H4("Stack layout demo"))
+    .WithView(Controls.Body("First item"))
+    .WithView(Controls.Body("Second item, directly below"))
+    .WithView(Controls.Body("Third item, with default spacing"))
 ```
 
 Switch to horizontal by adding a single `.WithOrientation` call:
@@ -190,7 +190,7 @@ Outer vertical stack for header/content/footer, inner horizontal stack for side-
 
 ```csharp
 Controls.Stack
-    .WithView(Controls.Html("<h1>Dashboard</h1>"))
+    .WithView(Controls.H1("Dashboard"))
     .WithView(
         Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -198,7 +198,7 @@ Controls.Stack
             .WithView(BuildLeftPanel())
             .WithView(BuildRightPanel())
     )
-    .WithView(Controls.Html("<footer>Footer</footer>"))
+    .WithView(Controls.Body("Footer"))
 ```
 
 ---
