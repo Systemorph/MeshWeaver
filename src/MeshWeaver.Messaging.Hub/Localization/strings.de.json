@@ -2410,6 +2410,7 @@
   "nodeType.field.childrenQuery": "Abfrage für Unterknoten",
   "nodeType.field.description": "Beschreibung",
   "comments.reply": "Antworten",
-  "comments.replies": "Antworten",
+  "comments.repliesCollapsed": "Antworten ({0}), eingeklappt",
+  "comments.repliesExpanded": "Antworten ({0}), ausgeklappt",
   "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen"
 }

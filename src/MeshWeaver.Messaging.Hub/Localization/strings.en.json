@@ -2410,6 +2410,7 @@
   "nodeType.field.childrenQuery": "Children query",
   "nodeType.field.description": "Description",
   "comments.reply": "Reply",
-  "comments.replies": "Replies",
+  "comments.repliesCollapsed": "Replies ({0}), collapsed",
+  "comments.repliesExpanded": "Replies ({0}), expanded",
   "agent.edit.addConfiguration": "Add agent configuration"
 }

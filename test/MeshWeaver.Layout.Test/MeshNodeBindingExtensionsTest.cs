@@ -282,13 +282,57 @@ public class MeshNodeBindingExtensionsTest
         var root = (JsonObject)JsonSerializer.SerializeToNode(node, hubLike)!;
         root.ContainsKey("order").Should().BeFalse("precondition: an unset Order is not serialized at all");
 
-        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Order), JsonValue.Create(7), hubLike.PropertyNamingPolicy);
-        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Name), JsonValue.Create("Widget 2"), hubLike.PropertyNamingPolicy);
+        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Order), JsonValue.Create(7), hubLike.PropertyNamingPolicy, typeof(MeshNode));
+        MeshNodeBindingExtensions.SetField(root, nameof(MeshNode.Name), JsonValue.Create("Widget 2"), hubLike.PropertyNamingPolicy, typeof(MeshNode));
 
         var written = JsonSerializer.Deserialize<MeshNode>(root.ToJsonString(), hubLike)!;
         written.Order.Should().Be(7, "the new key carries the serialized name, so the deserializer reads it");
         written.Name.Should().Be("Widget 2", "an existing key is still matched case-insensitively");
         root.ContainsKey(nameof(MeshNode.Order)).Should().BeFalse("no PascalCase duplicate is added");
+    }
+
+    /// <summary>Typed content carrying a dictionary, for the dictionary-key arms below.</summary>
+    public record SettingsContent
+    {
+        /// <summary>A typed member that may be unset.</summary>
+        public string? DisplayLabel { get; init; }
+
+        /// <summary>A dictionary whose keys are data, not member names.</summary>
+        public System.Collections.Generic.Dictionary<string, object>? DefaultValues { get; init; }
+    }
+
+    /// <summary>
+    /// A key that is DATA — a dictionary key — is written verbatim on its first write, even when it
+    /// is absent and mixed-case, while the typed member above it is still named by the serializer.
+    /// Renaming <c>CustomKey</c> to <c>customKey</c> would store the value where a case-sensitive
+    /// lookup never finds it.
+    /// </summary>
+    [Fact]
+    public void SetField_AnAbsentDictionaryKey_IsWrittenVerbatim()
+    {
+        var policy = JsonNamingPolicy.CamelCase;
+        var withDictionary = JsonNode.Parse("""{"defaultValues":{}}""")!.AsObject();
+        MeshNodeBindingExtensions.SetField(withDictionary, "DefaultValues/CustomKey", JsonValue.Create("v"), policy, typeof(SettingsContent));
+        withDictionary["defaultValues"]!.AsObject().ContainsKey("CustomKey").Should().BeTrue("a dictionary key is data: verbatim");
+        withDictionary["defaultValues"]!.AsObject().ContainsKey("customKey").Should().BeFalse();
+
+        var empty = new JsonObject();
+        MeshNodeBindingExtensions.SetField(empty, "DefaultValues/CustomKey", JsonValue.Create("v"), policy, typeof(SettingsContent));
+        empty.ContainsKey("defaultValues").Should().BeTrue("the missing typed member is created under its serialized name");
+        empty["defaultValues"]!.AsObject().ContainsKey("CustomKey").Should().BeTrue("the missing dictionary key below it stays verbatim");
+
+        MeshNodeBindingExtensions.SetField(empty, nameof(SettingsContent.DisplayLabel), JsonValue.Create("x"), policy, typeof(SettingsContent));
+        empty.ContainsKey("displayLabel").Should().BeTrue("control arm: an unset typed member is named by the serializer");
+    }
+
+    /// <summary>Untyped content (raw JSON, or no root type known) keeps every missing key verbatim.</summary>
+    [Fact]
+    public void SetField_UntypedRoot_KeepsMissingKeysVerbatim()
+    {
+        var root = new JsonObject();
+        MeshNodeBindingExtensions.SetField(root, "Settings/CustomKey", JsonValue.Create(1), JsonNamingPolicy.CamelCase, rootType: null);
+        root.ContainsKey("Settings").Should().BeTrue("no CLR type says this is a member — the key is kept as written");
+        root["Settings"]!.AsObject().ContainsKey("CustomKey").Should().BeTrue();
     }
 
     [Fact]
