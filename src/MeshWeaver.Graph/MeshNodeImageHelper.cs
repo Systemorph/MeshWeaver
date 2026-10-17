@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text.RegularExpressions;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
 using DomainIcon = MeshWeaver.Domain.Icon;
@@ -17,7 +18,11 @@ public enum IconRenderKind
     /// <summary>An image URL or <c>data:</c> URI — render as <c>&lt;img src="…"&gt;</c>.</summary>
     Image,
 
-    /// <summary>Raw inline <c>&lt;svg&gt;</c> markup — render verbatim, NEVER as an img source.</summary>
+    /// <summary>Inline <c>&lt;svg&gt;</c> markup — render it as an <c>&lt;img&gt;</c> whose source is
+    /// <see cref="MeshNodeImageHelper.SvgDataUri"/> of the value (or through
+    /// <see cref="MeshNodeImageHelper.InlineSvgImage"/>), NEVER as raw markup injected into the page and
+    /// never with the markup itself as the <c>src</c>. An icon is user-settable content, and an SVG
+    /// document loaded as an image is inert: no script and no event handler in it ever runs.</summary>
     InlineSvg,
 
     /// <summary>A text glyph (emoji) — render as text.</summary>
@@ -50,7 +55,7 @@ public readonly record struct IconLink(string Href, string? Type);
 /// whether an icon value is inline SVG, an image URL/data URI, an emoji, or a legacy
 /// Fluent icon name.
 /// </summary>
-public static class MeshNodeImageHelper
+public static partial class MeshNodeImageHelper
 {
     /// <summary>
     /// Returns the icon value for rendering. Accepts URLs, data URIs, inline SVG, and emojis.
@@ -388,48 +393,120 @@ public static class MeshNodeImageHelper
         => !string.IsNullOrEmpty(icon) && !IsImageUrl(icon) && !IsInlineSvg(icon) && !IsFluentIconName(icon);
 
     /// <summary>
-    /// An inline <c>&lt;svg&gt;</c> icon made ready for a raw-HTML surface: through the backplate
-    /// policy (<see cref="IconBackplate.Ensure"/>), then sized to an explicit pixel box.
+    /// An inline <c>&lt;svg&gt;</c> icon made ready for a raw-HTML surface — the same as
+    /// <see cref="InlineSvgImage"/>: plated, sized, and emitted as an INERT <c>&lt;img&gt;</c>, never as
+    /// the authored markup. A value that contains no <c>&lt;svg</c> at all passes through untouched (the
+    /// callers classify before they size).
     ///
-    /// <para>🚨 The plate is part of THIS function, not the caller's to remember — and that is the
-    /// fix for #4350. <see cref="ResolveRenderable"/> plated, and was described as "the ONE seam
-    /// every surface classifies through"; it was not. Five surfaces in this assembly built their
-    /// own icon markup instead of classifying — two of them reaching for this sizer, three
-    /// injecting the authored markup with nothing at all — so an ordinary house icon
-    /// (<c>stroke="currentColor"</c>, no plate of its own) inherited the surrounding text color and
-    /// rendered INVISIBLY on one of the two themes — the AppleMusic defect (2026-08-22) the
-    /// backplate was written to prevent, re-appearing at every seam that was not the one seam.
-    /// Sizing an icon into a raw-HTML box IS the moment the policy applies: there is no caller that
-    /// wants an inline icon injected unplated, so making the two inseparable here is what makes the
-    /// invariant hold by construction rather than by everyone remembering it. For an icon that
-    /// already paints its own full-bleed plate the POLICY is a no-op — <c>Ensure</c> returns the
-    /// same instance, so every authored store mark and every thread identicon keeps its own plate,
-    /// hue and glyph exactly as written; the sizing style below is then the only markup this method
-    /// adds, and adding it is the whole point of calling it.</para>
-    ///
-    /// <para>The size half: node icons are typically authored with a <c>viewBox</c> but NO
-    /// <c>width</c>/<c>height</c>, and on a raw-HTML surface (a <c>Controls.Html</c> tile) no
-    /// scoped CSS can reach the markup — without an intrinsic size such an svg renders at the
-    /// browser default (~300×150) and overflows/collapses into a blank tile. The <c>style</c>
-    /// attribute goes right after the opening <c>&lt;svg</c> tag; because a duplicate attribute's
-    /// FIRST occurrence wins in HTML parsing, the injected size takes precedence over any
-    /// author-supplied inline style.</para>
+    /// <para>🚨 This used to return the plated markup itself, with a size style spliced onto the root
+    /// tag, and every raw-HTML surface (a <c>Controls.Html</c> tile, a Blazor <c>MarkupString</c>)
+    /// injected that straight into the page. A node's icon is user-settable content and SVG can carry
+    /// active content, so injecting it is a stored-markup defect, not a styling choice. It now goes
+    /// through the one safe shape, and every existing caller — including in-mesh code no build here
+    /// can see — gets the safe output without a change.</para>
     /// </summary>
-    /// <param name="svg">The inline svg markup (anything before the first <c>&lt;svg</c> is preserved;
-    /// a value that is not svg at all passes through untouched).</param>
-    /// <param name="pixels">The square size, in CSS pixels, the svg should occupy.</param>
+    /// <param name="svg">The inline svg markup.</param>
+    /// <param name="pixels">The square size, in CSS pixels, the icon should occupy.</param>
     public static string SizeInlineSvg(string svg, int pixels)
     {
-        if (string.IsNullOrEmpty(svg))
+        if (string.IsNullOrEmpty(svg) || svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase) < 0)
             return svg;
-        var plated = IconBackplate.Ensure(svg);
-        var idx = plated.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
-        if (idx < 0)
-            return plated;
-        var insertAt = idx + "<svg".Length;
-        return plated.Insert(insertAt,
-            $" style=\"width: {pixels}px; height: {pixels}px; display: block;\"");
+        return InlineSvgImage(svg, pixels);
     }
+
+    /// <summary>
+    /// 🚨 THE ONE WAY an inline <c>&lt;svg&gt;</c> icon reaches a page as markup: an <c>&lt;img&gt;</c> whose
+    /// source is a <c>data:</c> URI of the icon, plated through <see cref="IconBackplate.Ensure"/> and
+    /// sized to an explicit pixel box.
+    ///
+    /// <para><b>Why an image and not the markup.</b> A node's <c>Icon</c> is a free string that anyone
+    /// allowed to update the node can set, and it is shown to OTHER people — in search results,
+    /// pickers, cards and catalogs. SVG supports script elements and event-handler attributes, so
+    /// injecting the authored markup into the page lets one user's icon run in another user's
+    /// session. An SVG document loaded through <c>&lt;img&gt;</c> is rendered in secure static mode by
+    /// every browser: scripts do not run, handlers do not fire, and it cannot load external
+    /// resources. The icon is percent-encoded into the URI (<see cref="SvgDataUri"/>), so nothing in it
+    /// can close the attribute either.</para>
+    ///
+    /// <para><b>What changes visually.</b> An image-loaded SVG cannot inherit the page's text colour:
+    /// <c>currentColor</c> inside it resolves to the image document's own default (black). The plate
+    /// already recolours <c>currentColor</c> to white for every icon it wraps, so only an icon that
+    /// paints its OWN plate and still uses <c>currentColor</c> for detail is affected — pass
+    /// <paramref name="currentColor"/> to supply the colour the page would have given it, as the
+    /// document's inherited default (<see cref="WithRootColor"/>).</para>
+    /// </summary>
+    /// <param name="svg">The inline svg markup.</param>
+    /// <param name="pixels">The square size, in CSS pixels, the icon should occupy.</param>
+    /// <param name="currentColor">A plain CSS colour supplied as the document's inherited default
+    /// (colours the icon declares itself still win), or null.</param>
+    public static string InlineSvgImage(string svg, int pixels, string? currentColor = null)
+        => $"<img src=\"{InlineSvgImageSource(svg, currentColor)}\" alt=\"\" width=\"{pixels}\" height=\"{pixels}\" "
+           + $"style=\"width: {pixels}px; height: {pixels}px; display: block; object-fit: contain;\" />";
+
+    /// <summary>
+    /// The <c>src</c> of <see cref="InlineSvgImage"/> on its own — for a renderer that builds the
+    /// <c>&lt;img&gt;</c> element itself (a Razor component binding <c>src="@…"</c>): the icon plated
+    /// through <see cref="IconBackplate.Ensure"/> and encoded as a <c>data:</c> URI.
+    /// </summary>
+    /// <param name="svg">The inline svg markup.</param>
+    /// <param name="currentColor">A plain CSS colour supplied as the document's inherited default
+    /// (<see cref="WithRootColor"/>), or null.</param>
+    public static string InlineSvgImageSource(string svg, string? currentColor = null)
+    {
+        var plated = IconBackplate.Ensure(svg);
+        if (PlainColor(currentColor) is { } color)
+            plated = WithRootColor(plated, color);
+        return SvgDataUri(plated);
+    }
+
+    /// <summary>
+    /// <paramref name="svg"/> with <paramref name="color"/> as the INHERITED DEFAULT colour of the
+    /// image document: a <c>color="…"</c> attribute on the root <c>&lt;svg&gt;</c>, set only when the root
+    /// declares no colour of its own (attribute or <c>style</c>). Paint values are never rewritten, so
+    /// every colour the icon declares itself — on the root or on a descendant
+    /// (<c>&lt;g color="blue"&gt;</c>) — still wins through ordinary inheritance, and <c>currentColor</c>
+    /// resolves against whichever is nearest: what the page's CSS colour did for the icon inline.
+    /// </summary>
+    /// <param name="svg">Inline svg markup.</param>
+    /// <param name="color">A plain CSS colour.</param>
+    public static string WithRootColor(string svg, string color)
+    {
+        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
+            return svg;
+        var raw = svg[(root.Start + "<svg".Length)..root.End];
+        if (ColorAttr().IsMatch(QuotedValue().Replace(raw, "\"\"")))
+            return svg;
+        var style = StyleAttr().Match(raw);
+        if (style.Success && StyleColor().IsMatch(style.Groups["v"].Value))
+            return svg;
+        return svg.Insert(root.Start + "<svg".Length, $" color=\"{color}\"");
+    }
+
+    /// <summary>
+    /// <paramref name="color"/> when it can be written into an image document: a plain CSS colour
+    /// (a name, <c>#hex</c>, <c>rgb()</c>/<c>hsl()</c>…). A <c>var(…)</c> cannot resolve inside an image,
+    /// and a quote or markup character would break the XML — both yield null.
+    /// </summary>
+    private static string? PlainColor(string? color)
+    {
+        var c = color?.Trim();
+        if (string.IsNullOrEmpty(c) || c.Contains("var(", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return PlainColorValue().IsMatch(c) ? c : null;
+    }
+
+    [GeneratedRegex(@"(?<![-:\w])color\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex ColorAttr();
+
+    [GeneratedRegex(@"(?<![-:\w])style\s*=\s*(?:""(?<v>[^""]*)""|'(?<v>[^']*)')", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StyleAttr();
+
+    [GeneratedRegex(@"(?:^|;)\s*color\s*:", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex StyleColor();
+
+    // "/" admits the slash alpha form, rgb(255 0 0 / 50%); quotes and markup characters stay out.
+    [GeneratedRegex(@"^[#\w\s(),./%+-]+$", RegexOptions.CultureInvariant)]
+    private static partial Regex PlainColorValue();
 
     /// <summary>The one media type that tells a browser "this icon scales losslessly".</summary>
     public const string SvgMediaType = "image/svg+xml";
@@ -524,9 +601,83 @@ public static class MeshNodeImageHelper
     }
 
     /// <summary>Inline <c>&lt;svg&gt;</c> markup as a <c>data:</c> URI — percent-encoded rather than
-    /// base64 so the markup stays readable in view-source and the URI stays short.</summary>
+    /// base64 so the markup stays readable in view-source and the URI stays short.
+    ///
+    /// <para>The markup is made a standalone SVG DOCUMENT first (<see cref="AsSvgDocument"/>): inline
+    /// HTML tolerates a root <c>&lt;svg&gt;</c> with no <c>xmlns</c>, but an image-loaded SVG is parsed as
+    /// XML and renders nothing without it.</para></summary>
     public static string SvgDataUri(string svg) =>
-        "data:" + SvgMediaType + "," + Uri.EscapeDataString(svg);
+        "data:" + SvgMediaType + "," + Uri.EscapeDataString(AsSvgDocument(svg));
+
+    /// <summary>
+    /// <paramref name="svg"/> with the namespace declarations a standalone SVG document needs added to
+    /// its root <c>&lt;svg&gt;</c> when the author left them out: the SVG namespace always, and the
+    /// <c>xlink</c> prefix when the markup uses it. Everything else is returned byte-identical.
+    /// </summary>
+    /// <param name="svg">Inline svg markup.</param>
+    public static string AsSvgDocument(string svg)
+    {
+        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
+            return svg;
+        // Attribute VALUES are blanked before looking for a declaration, so text inside one
+        // (aria-label="xmlns=…") is never mistaken for an attribute of its own.
+        var attrs = QuotedValue().Replace(svg[(root.Start + "<svg".Length)..root.End], "\"\"");
+        var added = "";
+        if (!XmlnsAttr().IsMatch(attrs))
+            added += " xmlns=\"http://www.w3.org/2000/svg\"";
+        if (svg.Contains("xlink:", StringComparison.Ordinal) && !XmlnsXlinkAttr().IsMatch(attrs))
+            added += " xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+        if (added.Length == 0)
+            return svg;
+        return svg.Insert(root.Start + "<svg".Length, added);
+    }
+
+    /// <summary>
+    /// The span of the root <c>&lt;svg …&gt;</c> start tag — from its <c>&lt;</c> to its closing
+    /// <c>&gt;</c> — scanned QUOTE-AWARE: a <c>&gt;</c> inside a quoted attribute value
+    /// (<c>aria-label="A &gt; B"</c>) is part of the value, not the end of the tag. Null when there is
+    /// no well-formed root tag.
+    /// </summary>
+    private static (int Start, int End)? RootSvgTag(string svg)
+    {
+        var start = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        while (start >= 0)
+        {
+            var next = start + "<svg".Length;
+            if (next >= svg.Length)
+                return null;
+            var c = svg[next];
+            if (char.IsWhiteSpace(c) || c is '>' or '/')
+                break;
+            start = svg.IndexOf("<svg", next, StringComparison.OrdinalIgnoreCase);
+        }
+        if (start < 0)
+            return null;
+        var quote = '\0';
+        for (var i = start + "<svg".Length; i < svg.Length; i++)
+        {
+            var ch = svg[i];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+            }
+            else if (ch is '"' or '\'')
+                quote = ch;
+            else if (ch == '>')
+                return (start, i);
+        }
+        return null;
+    }
+
+    [GeneratedRegex(@"""[^""]*""|'[^']*'", RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedValue();
+
+    [GeneratedRegex(@"(?<![-:\w])xmlns\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex XmlnsAttr();
+
+    [GeneratedRegex(@"(?<![-:\w])xmlns:xlink\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex XmlnsXlinkAttr();
 
     /// <summary>
     /// A text glyph (an emoji) wrapped in an SVG that draws it, because no <c>href</c> can carry a

@@ -25,7 +25,8 @@ public class SeoResolverIconTest
     /// <summary>
     /// The real shape the failing cards had: an inline <c>&lt;svg&gt;</c> on the node. It is markup,
     /// not a location, so it travels as a data URI — and the svg inside it is the node's icon
-    /// UNCHANGED, byte for byte.
+    /// UNCHANGED except for the one thing a standalone document needs: the SVG namespace. A
+    /// favicon is an image-loaded SVG, parsed as XML, and without <c>xmlns</c> it renders nothing.
     /// </summary>
     [Fact]
     public void InlineSvgIcon_BecomesADataUriCarryingThatExactSvg()
@@ -37,7 +38,9 @@ public class SeoResolverIconTest
         Assert.NotNull(icon);
         Assert.Equal("image/svg+xml", icon.Type);
         Assert.StartsWith("data:image/svg+xml,", icon.Href);
-        Assert.Equal(svg, Uri.UnescapeDataString(icon.Href["data:image/svg+xml,".Length..]));
+        Assert.Equal(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox='0 0 24 24'><rect width='24' height='24' fill='#4c1d95'/></svg>",
+            Uri.UnescapeDataString(icon.Href["data:image/svg+xml,".Length..]));
     }
 
     /// <summary>A <c>content:</c> reference resolves the SAME way the in-app icon does — through
