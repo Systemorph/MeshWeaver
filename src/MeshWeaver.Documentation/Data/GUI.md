@@ -82,6 +82,7 @@ Browse the full set of controls, layout primitives, and data-binding guides:
 | [DataGrid](DataGrid) | Tabular data with sorting, filtering, and row actions |
 | [Form Input Controls](InputControls) | Checkboxes, switches, date pickers, list selectors, radio groups, node picker — each rendered live |
 | [Badges, Icons & Status](DisplayControls) | Badges, icons, progress bars, spacers, menu items, and card skins |
+| [Message Bars & Links](MessageBarAndLink) | Info / success / warning / error banners with an optional action, and inline text links with safe hrefs — never hand-built HTML |
 | [Navigation Menus](Navigation) | NavMenu, NavGroup, NavLink — collapsible side navigation |
 | [Code, Diff & Markdown Editors](CodeEditor) | Monaco-backed source editing, diffs, and markdown authoring |
 | [Node Cards & Catalogs](NodeCards) | Cards, thumbnails, live node collections, and grouped catalogs |
