@@ -95,10 +95,14 @@ The renderer applies the rules in `LinkHrefs`, not the code that builds the cont
 
 - **Only `http`, `https`, `mailto` and `tel`, or a relative address.** Any other scheme is refused:
   `javascript:`, `vbscript:`, `data:` and `file:`. A refused link is drawn as plain text, never as a
-  link and never rewritten into a different address. The scheme is read the way a browser reads it.
-  Whitespace and control characters are dropped first, so `java` followed by a tab and `script:` is refused too.
+  link and never rewritten into a different address.
 - **An external address, or one that opens in another tab, carries `rel="noopener noreferrer"`.** The
   page it opens gets no handle on the portal's window and no referrer.
+- **Both rules read the address the way a browser's URL parser does** (`LinkHrefs.Normalize`, shared by
+  every rule). Tabs and line breaks are removed everywhere, leading and trailing control characters
+  and spaces are trimmed, and `\` counts as `/`. So `java` followed by a tab and `script:` is refused,
+  and `/` + tab + `/example.com`, `\\example.com`, `/\example.com` and `\/example.com` all count as
+  another site, exactly as a browser resolves them.
 
 ```csharp --render LinkSafety --show-code
 Controls.Stack

@@ -184,4 +184,42 @@ public class MessageBarAndLinkControlTest(ITestOutputHelper output) : HubTestBas
     [InlineData("mailto:someone@example.com", null, null)]
     public void LinkHrefs_RelFor_MarksExternalAndNewTabLinks(string href, string? target, string? rel) =>
         LinkHrefs.RelFor(href, target).Should().Be(rel);
+
+    /// <summary>
+    /// 🚨 Spellings a browser resolves to ANOTHER SITE although they do not start with a literal
+    /// <c>//</c>: the WHATWG URL parser strips ASCII tab and newline anywhere, trims leading C0
+    /// controls and spaces, and reads <c>\</c> as <c>/</c> in a scheme-relative or special-scheme
+    /// address. Each is safe to link to, and each must be external, so it carries
+    /// <c>noreferrer</c> whatever its target — otherwise the portal's URL leaks as the referrer.
+    /// </summary>
+    [Theory]
+    [InlineData("/\t/example.com/x")]
+    [InlineData("/\n/example.com/x")]
+    [InlineData("\t//example.com/x")]
+    [InlineData("\\\\example.com/x")]
+    [InlineData("/\\example.com/x")]
+    [InlineData("\\/example.com/x")]
+    [InlineData("\u0001//example.com/x")]
+    [InlineData(" //example.com/x")]
+    [InlineData("https:\\\\example.com/x")]
+    [InlineData("ht\ttps://example.com/x")]
+    public void LinkHrefs_BrowserNormalizedSchemeRelativeForms_AreExternal(string href)
+    {
+        LinkHrefs.IsSafe(href).Should().BeTrue();
+        LinkHrefs.IsExternal(href).Should().BeTrue();
+        LinkHrefs.RelFor(href, null).Should().Be(LinkHrefs.ExternalRel);
+        LinkHrefs.RelFor(href, "_self").Should().Be(LinkHrefs.ExternalRel);
+    }
+
+    /// <summary>A single leading slash or backslash, after the same normalization, is still a path on THIS site.</summary>
+    [Theory]
+    [InlineData("/Doc/GUI")]
+    [InlineData("\\Doc\\GUI")]
+    [InlineData("/Doc\\GUI")]
+    [InlineData("/Doc/\t/GUI")]
+    public void LinkHrefs_SingleSlashPaths_StayInternal(string href)
+    {
+        LinkHrefs.IsSafe(href).Should().BeTrue();
+        LinkHrefs.IsExternal(href).Should().BeFalse();
+    }
 }

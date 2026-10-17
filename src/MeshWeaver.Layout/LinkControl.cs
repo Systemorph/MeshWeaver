@@ -15,24 +15,51 @@ public static class LinkHrefs
     public const string ExternalRel = "noopener noreferrer";
 
     /// <summary>
-    /// The scheme of <paramref name="href"/>, lower-cased — what a browser would read: ASCII
-    /// whitespace and control characters are dropped first (a browser drops them too, so
-    /// <c>"java\tscript:"</c> IS <c>javascript:</c>), and a colon counts only before the first
-    /// <c>/</c>, <c>?</c> or <c>#</c>. <c>null</c> for a relative address (<c>/Doc/GUI</c>,
-    /// <c>../Sibling</c>, <c>#section</c>, <c>?q=1</c>, <c>//host/path</c>).
+    /// <paramref name="href"/> as a browser's URL parser (WHATWG) reads it before resolving it — the
+    /// ONE normalization <see cref="SchemeOf"/>, <see cref="IsSafe"/> and <see cref="IsExternal"/>
+    /// share, so no spelling can be judged by one rule and resolved by another:
+    /// <list type="bullet">
+    /// <item>ASCII tab, line feed and carriage return are removed EVERYWHERE (<c>"java\tscript:"</c>
+    /// is <c>javascript:</c>, <c>"/\t/host"</c> is <c>//host</c>);</item>
+    /// <item>leading and trailing C0 control characters and spaces are trimmed;</item>
+    /// <item><c>\</c> is read as <c>/</c> — a browser does so in a scheme-relative address and in a
+    /// special scheme (<c>http</c>, <c>https</c>, …), which are the only shapes that can reach
+    /// another site, so <c>\\host</c>, <c>/\host</c> and <c>\/host</c> are all <c>//host</c>.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="href">The address.</param>
+    /// <returns>The normalized address; empty for <c>null</c>.</returns>
+    public static string Normalize(string? href)
+    {
+        if (string.IsNullOrEmpty(href))
+            return string.Empty;
+        var kept = new string(href.Where(c => c is not ('\t' or '\n' or '\r')).ToArray());
+        var start = 0;
+        var end = kept.Length;
+        while (start < end && kept[start] <= ' ')
+            start++;
+        while (end > start && kept[end - 1] <= ' ')
+            end--;
+        return kept[start..end].Replace('\\', '/');
+    }
+
+    /// <summary>
+    /// The scheme of <paramref name="href"/>, lower-cased, read from the <see cref="Normalize"/>d
+    /// address: a colon counts only before the first <c>/</c>, <c>?</c> or <c>#</c>. <c>null</c> for
+    /// a relative address (<c>/Doc/GUI</c>, <c>../Sibling</c>, <c>#section</c>, <c>?q=1</c>,
+    /// <c>//host/path</c>).
     /// </summary>
     /// <param name="href">The address.</param>
     /// <returns>The scheme without its colon, or <c>null</c>.</returns>
-    public static string? SchemeOf(string? href)
+    public static string? SchemeOf(string? href) => SchemeOfNormalized(Normalize(href));
+
+    private static string? SchemeOfNormalized(string normalized)
     {
-        if (string.IsNullOrEmpty(href))
-            return null;
-        var cleaned = new string(href.Where(c => c > ' ' && c != '\u007f').ToArray());
-        for (var i = 0; i < cleaned.Length; i++)
+        for (var i = 0; i < normalized.Length; i++)
         {
-            var c = cleaned[i];
+            var c = normalized[i];
             if (c == ':')
-                return i == 0 ? null : cleaned[..i].ToLowerInvariant();
+                return i == 0 ? null : normalized[..i].ToLowerInvariant();
             if (c is '/' or '?' or '#')
                 return null;
         }
@@ -41,31 +68,37 @@ public static class LinkHrefs
 
     /// <summary>
     /// True when a renderer may put <paramref name="href"/> into an <c>href</c> attribute: a
-    /// non-blank relative address, or an absolute one whose scheme is in <see cref="AllowedSchemes"/>.
-    /// A refused address is drawn as plain text — never as a link, and never "fixed" into another one.
+    /// non-blank relative address, or an absolute one whose scheme is in <see cref="AllowedSchemes"/>
+    /// (both judged on the <see cref="Normalize"/>d address). A scheme that is not a plain one —
+    /// <c>"java\u0001script:"</c> — is not in the list and is refused too. A refused address is drawn
+    /// as plain text — never as a link, and never "fixed" into another one.
     /// </summary>
     /// <param name="href">The address.</param>
     /// <returns>True when the address is safe to link to.</returns>
     public static bool IsSafe(string? href)
     {
-        if (string.IsNullOrWhiteSpace(href))
+        var normalized = Normalize(href);
+        if (normalized.Length == 0)
             return false;
-        var scheme = SchemeOf(href);
+        var scheme = SchemeOfNormalized(normalized);
         return scheme is null || AllowedSchemes.Contains(scheme);
     }
 
     /// <summary>
     /// True when <paramref name="href"/> leaves the portal: an absolute <c>http</c>/<c>https</c>
-    /// address or a protocol-relative <c>//host</c> one.
+    /// address or a scheme-relative <c>//host</c> one — judged on the <see cref="Normalize"/>d
+    /// address, so every spelling a browser resolves to another site (<c>/\t/host</c>,
+    /// <c>\\host</c>, <c>/\host</c>, <c>\/host</c>) is external here too.
     /// </summary>
     /// <param name="href">The address.</param>
     /// <returns>True for an address on another site.</returns>
     public static bool IsExternal(string? href)
     {
-        if (string.IsNullOrWhiteSpace(href))
+        var normalized = Normalize(href);
+        if (normalized.Length == 0)
             return false;
-        var scheme = SchemeOf(href);
-        return scheme is "http" or "https" || (scheme is null && href.TrimStart().StartsWith("//", StringComparison.Ordinal));
+        var scheme = SchemeOfNormalized(normalized);
+        return scheme is "http" or "https" || (scheme is null && normalized.StartsWith("//", StringComparison.Ordinal));
     }
 
     /// <summary>
