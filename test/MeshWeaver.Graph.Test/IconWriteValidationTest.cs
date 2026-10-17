@@ -127,6 +127,12 @@ public class IconSafetyTest
         { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E#x", "'#'" },
         { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E&amp;", "'&'" },
         { "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'/%3E;x", "';'" },
+        // Review round 4 on #6910 — Unicode whitespace: XML decodes &#160; to U+00A0, which a
+        // TrimStart skips and a URL / CSS parser keeps, so the target was a relative resource.
+        { $"<svg {Ns}><defs><path id=\"p\" d=\"M0 0\"/></defs><use href=\"&#160;#p\"/></svg>", "fragment" },
+        { $"<svg {Ns} xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs><path id=\"p\" d=\"M0 0\"/></defs><use xlink:href=\"&#160;#p\"/></svg>", "fragment" },
+        { $"<svg {Ns}><rect fill=\"url(&#160;#p)\"/></svg>", "outside the icon" },
+        { $"<svg {Ns}><rect fill=\"red&#160;\"/></svg>", "non-ASCII" },
         // (c) a whitespace-only value past the length bound.
         { new string(' ', IconSafety.MaxIconLength + 1), "at most" },
         { $"<svg {Ns}><rect fill=\"u\\72l(https://example.com/p.svg#g)\"/></svg>", "backslash" },

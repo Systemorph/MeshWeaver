@@ -394,7 +394,9 @@ public static class IconSafety
             if (!allowed)
                 return $"the attribute '{reader.Name}' is not allowed in an SVG icon";
 
-            if (isHref && !value.TrimStart().StartsWith('#'))
+            // ASCII trimming only: a URL parser keeps U+00A0 and its kin, so a TrimStart that
+            // skips them would read "&#160;#p" as a fragment while the browser loads a resource.
+            if (isHref && !value.TrimStart(XmlSpace).StartsWith('#'))
                 return $"the attribute '{reader.Name}' may only reference a fragment inside the icon ('#id')";
 
             if (ValueRefusal(reader.Name, value) is { } valueRefusal)
@@ -404,6 +406,11 @@ public static class IconSafety
         reader.MoveToElement();
         return null;
     }
+
+    // XML's whitespace — the only whitespace an attribute value may carry.
+    private static readonly char[] XmlSpace = [' ', '\t', '\r', '\n'];
+
+    private static bool IsXmlSpace(char c) => c is ' ' or '\t' or '\r' or '\n';
 
     private static string? ValueRefusal(string attribute, string value)
     {
@@ -425,7 +432,11 @@ public static class IconSafety
         for (var i = 0; i < value.Length; i++)
         {
             var c = value[i];
-            if (char.IsAsciiLetterOrDigit(c) || char.IsWhiteSpace(c)
+            // Printable ASCII and XML whitespace only: any other character is refused here,
+            // which closes the whole Unicode-whitespace and lookalike class at once.
+            if (c > '~')
+                return $"the attribute '{attribute}' contains the non-ASCII character U+{(int)c:X4}, which an SVG icon's values do not use";
+            if (char.IsAsciiLetterOrDigit(c) || IsXmlSpace(c)
                 || c is '#' or '.' or ',' or '%' or '+' or '-' or '_' or ')'
                 || (quotesAllowed && c is '\'' or '"'))
                 continue;
@@ -442,7 +453,7 @@ public static class IconSafety
             if (function.Equals("url", StringComparison.OrdinalIgnoreCase))
             {
                 var j = i + 1;
-                while (j < value.Length && char.IsWhiteSpace(value[j]))
+                while (j < value.Length && IsXmlSpace(value[j]))
                     j++;
                 if (j >= value.Length || value[j] != '#')
                     return $"the attribute '{attribute}' references something outside the icon (url(…) must be a '#fragment')";
