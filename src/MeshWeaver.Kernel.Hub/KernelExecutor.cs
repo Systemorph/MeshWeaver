@@ -607,15 +607,9 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             localModuleBindings.Dispose();
             throw;
         }
-        var options = ScriptOptions.Default
-            .WithReferences(references)
-            // 🚨 Required for the sharing to be complete: the compilation resolves
-            // the globals type's transitive closure via ResolveMissingAssembly —
-            // with the default resolver that re-materializes every assembly's
-            // native metadata PER SESSION (the other half of the leak).
-            .WithMetadataResolver(MeshScriptEnvironment.MetadataResolver)
-            .WithImports(MeshScriptEnvironment.Imports)
-            .WithEmitDebugInformation(true);
+        // One definition of the session's options (resolver, imports, debug info) — shared with the
+        // doc-cell compile guard, so what CI type-checks is what the kernel runs.
+        var options = MeshScriptEnvironment.CreateScriptOptions(references);
 
         scriptLogger = localScriptLogger;
         scriptGlobals = localScriptGlobals;
