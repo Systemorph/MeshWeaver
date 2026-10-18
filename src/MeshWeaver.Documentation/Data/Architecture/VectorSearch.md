@@ -7,7 +7,7 @@ Icon: Search
 
 # Vector Search
 
-When you type `laptop nodeType:Story namespace:ACME` into a mesh query, something interesting happens: the bare word `laptop` drives a semantic cosine-similarity search through Postgres pgvector's HNSW index, while `nodeType:Story` and `namespace:ACME` remain as precise SQL filters. The result is a ranked list of Story nodes in ACME's subtree — nearest semantically to "laptop" — served in sub-linear time.
+When you type `laptop nodeType:Story namespace:ACME` into a mesh query, something interesting happens: the bare word `laptop` FILTERS the Story nodes in ACME's subtree to those that contain it, and drives a semantic cosine-similarity ranking through Postgres pgvector — which may also admit a node that does not contain the word but is a *close* semantic neighbour of it — while `nodeType:Story` and `namespace:ACME` remain as precise SQL filters.
 
 This page explains how the routing decision is made, what the write/read loop looks like, the schema it depends on, and where the edges are.
 <svg viewBox="0 0 760 320" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:760px;height:auto;display:block;margin:20px auto;" font-family="sans-serif" font-size="13">
@@ -64,9 +64,44 @@ The query parser splits tokens into two buckets:
 When the parsed query has a non-empty `TextSearch` **and** an `IEmbeddingProvider` is registered, the query is ranked by cosine similarity on **both** routes a query can take:
 
 - **Pinned** (`namespace:X …`, or a path whose first segment names a partition): `PostgreSqlMeshQuery.QueryRowsAsync` intercepts and routes through `PostgreSqlStorageAdapter.VectorSearchAsync`. Structured filters present in the same query are preserved on the WHERE clause of the vector query — see `PostgreSqlSqlGenerator.GenerateVectorSearchQuery`.
-- **Unpinned** (the omnibox, the MCP `search` tool and the agent `Search` tool with no `namespace:`): `PostgreSqlPartitionedMeshQuery` embeds the term once and hands the vector to `PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasSemanticAsync`, whose UNION gives every partition arm the same hybrid contract — eligible when the row carries an embedding *or* lexically matches the term on name/id/description, ranked by lexical tier then cosine distance, each arm capped at the top-K and merged by the outer ORDER BY (`GenerateCrossSchemaSelectQuery` with a `queryVector`).
+- **Unpinned** (the omnibox, the MCP `search` tool and the agent `Search` tool with no `namespace:`): `PostgreSqlPartitionedMeshQuery` embeds the term once and hands the vector to `PostgreSqlCrossSchemaQueryProvider.QueryAcrossSchemasSemanticAsync`, whose UNION gives every partition arm the same hybrid contract — eligible when the row contains *every* typed word *or* is a close semantic neighbour (see "Free text filters" below), ranked by lexical tier then cosine distance, each arm capped at the top-K and merged by the outer ORDER BY (`GenerateCrossSchemaSelectQuery` with a `queryVector`).
 
 🚨 **Until MeshWeaver.Plugins#1493 (2026-09-08) the unpinned route was lexical only.** `GenerateTextSearchClause` demanded every whitespace-separated term as an ILIKE substring of name/path/description/node_type, AND-ed, so a natural-language query returned nothing mesh-wide while the same words pinned to one partition found their documents — measured on both production portals on 2026-09-07 (`asynchronous calls observable subscribe never await task namespace:Doc scope:descendants` → 3 hits; the same words unpinned → 0; the hit count shrank with every added word). The 80k stored embeddings were consulted exactly when a caller already knew where to look. A host with no embedding provider, and the Snowflake fan-out, keep the lexical contract — the table below describes a Postgres host with a provider.
+
+### 🚨 Free text filters; semantics may only order and augment
+
+**A typed word restricts the answer to the nodes that contain it** — every whitespace-separated
+word a case-insensitive substring of the node's path (which carries its id), name, description,
+node type or one of its content **string values** (never a content property *name*: `status` is a
+key of every row). Semantic ranking orders that set, and may add a node that shares no word only
+when it is a **close** neighbour: cosine distance at most
+`PostgreSqlSqlGenerator.SemanticNeighbourMaxDistance` (0.5, i.e. similarity ≥ 0.5; the SQLite
+provider applies the same bar as `SqliteVectorMeshQuery.MinNeighbourSimilarity`). An authored
+`sort:` then orders the filtered set (the merge applies `ParsedQuery.EffectiveOrderBy`). The
+in-memory `QueryEvaluator` has always FILTERED this way (every word a substring, AND-ed), and the
+SQL routes now filter too. One difference in reach remains: `QueryEvaluator.ExtractSearchableText`
+walks the node to depth 3, counting the node itself, so it sees the content's TOP-LEVEL string
+values (`{"contact":"Jane Roe"}` matches `roe`) but not a nested one
+(`{"contact":{"name":"Jane Roe"}}` does not), while the Postgres routes read every string value at
+any depth. A word that matches only a deeply nested value is found on Postgres and not in memory.
+
+Until 2026-10-18 the hybrid eligibility read `n.embedding IS NOT NULL OR <lexical match>` — so
+**every embedded row was eligible**, and each arm returned its top-K (50) by distance. Under a
+structural filter smaller than K a typed word therefore narrowed nothing: measured on a production
+search control over a 48-row submission catalog (`namespace:(A/Submissions OR B/Submissions OR
+C/Submissions) nodeType:…` plus a company name), the answer was all 48 rows with the match merely
+ranked first, and once the tab's `sort:` applied even that was lost. Only an explicit field filter
+(`name:*maple*`) narrowed. The same shape answered an MCP `search` and the omnibox.
+
+| Typed | Answer |
+|---|---|
+| a word some nodes contain | exactly those nodes, plus any close semantic neighbour |
+| several words | the nodes that contain all of them, plus close neighbours |
+| a word no node contains, no close neighbour | nothing — the search control's empty state |
+| nothing | the hidden query alone |
+
+`IVectorSearchProvider.Search` with no lexical term is the one nearest-K call left: it asks for
+neighbours by definition.
 
 ### 🚨 The live half: a semantic query must not be gated by a lexical matcher
 
@@ -117,8 +152,8 @@ relevant" would score identically on the first.
 
 | Query | TextSearch | Vector path? |
 |---|---|---|
-| `laptop` | `"laptop"` | yes — full semantic search |
-| `laptop nodeType:Story` | `"laptop"` | yes — ranks Story rows by similarity to "laptop" |
+| `laptop` | `"laptop"` | yes — the nodes containing "laptop", plus close neighbours, ranked |
+| `laptop nodeType:Story` | `"laptop"` | yes — the Story rows containing "laptop" (plus close neighbours), ranked by similarity |
 | `nodeType:Story namespace:ACME` | `null` | no — pure structured filter, regular SQL |
 | `name:*laptop*` | `null` | no — explicit LIKE filter, regular SQL |
 | `path:ACME scope:descendants` | `null` | no — pure scope query |
@@ -281,13 +316,14 @@ The local/self-host stack already runs **Ollama on the host** for the chat model
 
 Rows are embedded **only at node-write time** (`PostgreSqlStorageAdapter.BuildUpsertAsync`), so on a stack that previously had no provider every existing row's `embedding` is NULL — and the column re-migration in step 3 nulls anything that was there. Two mechanisms keep that from breaking search:
 
-**1. Hybrid recall — un-embedded rows do not disappear.** When the query carries a bare-text term, `GenerateVectorSearchQuery` makes a row eligible if it has an embedding **OR** it lexically matches the term:
+**1. Hybrid recall — un-embedded rows do not disappear.** When the query carries a bare-text term, `GenerateVectorSearchQuery` makes a row eligible if it lexically contains every typed word **OR** it is a close semantic neighbour — an un-embedded row is found by its words exactly as before:
 
 ```sql
-WHERE (n.embedding IS NOT NULL
-       OR LOWER(COALESCE(n.name,''))        LIKE '%' || LOWER(@lexTerm) || '%'
-       OR LOWER(COALESCE(n.id,''))          LIKE '%' || LOWER(@lexTerm) || '%'
-       OR LOWER(COALESCE(n.description,'')) LIKE '%' || LOWER(@lexTerm) || '%')
+WHERE ( -- every word, bound one by one as @lexTerm0..n, compared literally (strpos, never LIKE)
+        ( strpos(LOWER(path || name || description || node_type), LOWER(@lexTerm0)) > 0
+          OR strpos(LOWER(<content string values>), LOWER(@lexTerm0)) > 0 )
+        AND …
+      OR (n.embedding IS NOT NULL AND (n.embedding <=> @queryVector) <= 0.5) )
 ```
 
 Only a *pure-semantic* call (no lexical term — i.e. `IVectorSearchProvider.Search` invoked with no text to blend) keeps the embedding-only filter. The `ORDER BY` then puts an exact name match first, then name-prefix, then id-prefix, then name-substring, with cosine distance breaking ties inside each tier — so typing an exact node name cannot be buried past the `LIMIT` by a semantically closer neighbour.
@@ -312,7 +348,7 @@ There is no Apple service you can call from a containerized .NET portal to get e
 
 **Embedding text is Name + NodeType only.** Content body is not embedded today. Two nodes with the same Name and different Content rank identically. Extending `WriteAsyncCore`'s `embeddingText` to include body content is the right fix — but be aware that re-embedding full content on every write is expensive.
 
-**Routing is binary; recall inside the vector path is hybrid.** The *route* decision is still all-or-nothing — `TextSearch` present (+ a provider) → vector SQL; otherwise → regular SQL. But the vector SQL itself is hybrid: it ORs in a lexical `LIKE` on name/id/description and ranks exact/prefix name matches ahead of pure-semantic neighbours (see "Re-embedding existing content"). What is still missing is issuing both *queries* and merging by score across providers.
+**Routing is binary; recall inside the vector path is hybrid.** The *route* decision is still all-or-nothing — `TextSearch` present (+ a provider) → vector SQL; otherwise → regular SQL. But the vector SQL itself is hybrid: a row is in when it contains every typed word or is a close neighbour, and exact/prefix name matches rank ahead of pure-semantic neighbours (see "Free text filters" and "Re-embedding existing content"). What is still missing is issuing both *queries* and merging by score across providers.
 
 **Per-user access control is honoured.** `VectorSearchAsync` applies the same access-control WHERE clause via the `userId` parameter that regular `QueryAsync` uses — the HNSW index ranks the access-filtered subset, not the full table.
 
