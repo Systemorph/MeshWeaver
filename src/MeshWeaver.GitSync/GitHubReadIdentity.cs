@@ -21,6 +21,10 @@ public enum GitHubReadIdentityKind
     /// <summary>The instance's own GitHub App installation (<c>GitHub:App:*</c>).</summary>
     AppInstallation,
 
+    /// <summary>The instance's OWN connected GitHub App (Administration › Package sources) — what an
+    /// instance-local package source, or a source declaring <c>Identity = instance</c>, is read with.</summary>
+    InstanceAppInstallation,
+
     /// <summary>No identity is available; the read is refused.</summary>
     None,
 }
@@ -70,6 +74,10 @@ public sealed record GitHubReadIdentity(
             .WithKey("activity.gitsync.identity.sourceInstallation", ("owner", InstallationOwner ?? "")),
         // Two keyed templates rather than an English fragment passed as an argument: the catalog
         // translates the template and never a string argument.
+        GitHubReadIdentityKind.InstanceAppInstallation => new LogMessage(
+                "GitHub identity: this instance's own connected GitHub App.",
+                LogLevel.Information)
+            .WithKey("activity.gitsync.identity.instanceApp"),
         GitHubReadIdentityKind.AppInstallation when InstallationOwner is { Length: > 0 } account =>
             new LogMessage(
                     $"GitHub identity: this instance's GitHub App, installation {Id} ({account}).",

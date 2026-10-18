@@ -134,8 +134,12 @@ vault inventory or from this store.
 - **The self-update announcement key.** The deployment's administrator GENERATES the key on the
   deployment under **/Admin/Settings/ControlLane**; the control instance registers that value as the
   deployment's per-sender key. See [Self-Update Announcement Key](../SelfUpdateAnnouncementKey).
+- **The instance-owned GitHub App.** The manifest flow stores the App's id, client id, private key
+  and webhook secret under `GitHub:InstanceApp:*`; the token service and the webhook verifier read
+  them live. See [Instance Repository Access](../InstanceRepositoryAccess).
 
 ## Related
 
 - [Self-Update Announcement Key](../SelfUpdateAnnouncementKey): the first user of this store.
 - [Access Control](../AccessControl): what a global administrator is.
+- [Instance Repository Access](../InstanceRepositoryAccess): the GitHub App whose credentials live here.
