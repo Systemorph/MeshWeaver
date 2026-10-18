@@ -548,4 +548,75 @@ public class OwnerDeleteSealRegistryTest
         secondPass.OnNext(false);
         secondPass.OnCompleted();
     }
+
+    /// <summary>
+    /// Review thread 4307955118: a version-guarded delete and an overlapping UNVERSIONED delete both
+    /// guard the path; the seal aborts first (the subtree scope still holds), then the other delete
+    /// aborts. The END of the last guard — here a subtree scope, which used to announce nothing — must
+    /// signal, so a save either guard refused is posted.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void TheLastGuardToEnd_SignalsTheRefusedSave_WhicheverKindItIs()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var signals = 0;
+        using var watch = registry.DeletionGuardsLifted(Path).Subscribe(_ => signals++);
+
+        var subtree = registry.BeginSubtreeDeletion(Path);           // the unversioned delete
+        registry.TakeOwnerDeleteSeal("overlap", Path, new FakeLifetime().Bind).Should().BeTrue();
+
+        registry.ReleaseOwnerDeleteSeal("overlap", Path, DeleteSealOutcome.Aborted).Should().BeTrue();
+        signals.Should().Be(0, "the subtree deletion still guards the path: no retry against it");
+
+        subtree.Dispose();                                           // the other delete aborts
+        signals.Should().Be(1, "the last guard ended: the refused save is posted now");
+    }
+
+    /// <summary>NEGATIVE CONTROL — 60f4aca6f's nudge listened to version-guard releases only.</summary>
+    [Fact(Timeout = 5000)]
+    public void NegativeControl_VersionGuardReleasesAlone_MissTheSubtreeScopesEnd()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var signals = 0;
+        using var watch = System.Reactive.Linq.Observable.Where(registry.VersionGuardReleases(Path),
+                _ => !registry.IsVersionGuardedDeletionInFlight(Path) && !registry.IsUnderActiveDeletion(Path, out string? _))
+            .Subscribe(_ => signals++);
+        var subtree = registry.BeginSubtreeDeletion(Path);
+        registry.TakeOwnerDeleteSeal("overlap", Path, new FakeLifetime().Bind);
+        registry.ReleaseOwnerDeleteSeal("overlap", Path, DeleteSealOutcome.Aborted);
+        subtree.Dispose();
+        signals.Should().Be(0, "the defect: the subtree scope's end is never announced");
+    }
+
+    /// <summary>
+    /// Holistic pass: an INDETERMINATE delete's fence failed while the owner lived, and the owner is
+    /// then torn down. The fence carries the confirmed state (it can hold an acknowledged write whose
+    /// own save the seal refused, which the dispose flush cannot write past the row guard), so the
+    /// teardown retries it.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void ATeardownAfterAFailedIndeterminateFence_RetriesTheFence()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        var runs = 0;
+        registry.TakeOwnerDeleteSeal("retry-on-teardown", Path, owner.Bind, _ =>
+        {
+            runs++;
+            return runs == 1
+                ? System.Reactive.Linq.Observable.Throw<bool>(new InvalidOperationException("store unavailable"))
+                : System.Reactive.Linq.Observable.Return(false);
+        }).Should().BeTrue();
+
+        registry.ReleaseOwnerDeleteSeal("retry-on-teardown", Path, DeleteSealOutcome.Indeterminate).Should().BeTrue();
+        runs.Should().Be(1);
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue("a failed fence settles nothing");
+
+        owner.OnTeardown.Dispose();
+        runs.Should().Be(2, "the owner's teardown is the last chance to fence its confirmed state");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse("the retried fence landed");
+    }
 }

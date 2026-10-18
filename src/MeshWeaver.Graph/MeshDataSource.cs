@@ -590,6 +590,8 @@ public static class MeshDataSourceExtensions
                     // way, never fall through to the "persisted" log for a refused write.
                     if (saved is not null && saved.Version > written.Version)
                     {
+                        // Superseded by a newer durable row: nothing for the final flush to re-write.
+                        pending?.MarkPersisted(sampled);
                         if (hub.RunLevel <= MessageHubRunLevel.Started)
                             AdoptDurableTruth(hub, saved, written.Version, logger);
                         else
@@ -600,6 +602,7 @@ public static class MeshDataSourceExtensions
                                 written.Version, saved.Path, saved.Version);
                         return;
                     }
+                    pending?.MarkPersisted(sampled);
                     logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
                         saved?.Path, saved?.Version);
                 },
@@ -1093,6 +1096,26 @@ public static class MeshDataSourceExtensions
         /// <summary>The latest gated state whose save was never dispatched — or null when
         /// everything the sampler saw has a dispatched save. Reference identity is exact
         /// here: <c>Sample</c> forwards the same instance the gate chain stamped.</summary>
+        private MeshNode? persisted;
+
+        /// <summary>
+        /// Records that <paramref name="node"/>'s store write SUCCEEDED (or was superseded by a newer
+        /// durable row). The final flush trusts only this — never a dispatch reservation (#6856).
+        /// </summary>
+        public void MarkPersisted(MeshNode node) => Volatile.Write(ref persisted, node);
+
+        /// <summary>
+        /// The latest tracked state that is not known to be PERSISTED — what the dispose-time flush
+        /// writes. 🚨 A save reserved for dispatch is NOT persisted: its post can still be rejected
+        /// (the hub began shutting down) after this flush decided, and a flush that trusted the
+        /// reservation would leave an acknowledged state unsaved for good (#6856).
+        /// </summary>
+        public MeshNode? TakeUnpersisted()
+        {
+            var l = latest;
+            return l is null || ReferenceEquals(l, Volatile.Read(ref persisted)) ? null : l;
+        }
+
         public MeshNode? TakeUnsaved()
         {
             var l = latest;
@@ -1502,15 +1525,10 @@ public static class MeshDataSourceExtensions
                 RecentlyDeletedRegistry? registry, OwnNodeCache nodeCache, string path)
                 => registry is null
                     ? Observable.Never<System.Reactive.Unit>()
-                    : registry.VersionGuardReleases(path)
-                        .Where(outcome => !string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
-                            && !string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
-                        .Where(_ => !nodeCache.IsDeleted
-                            && !registry.IsVersionGuardedDeletionInFlight(path)
-                            && !registry.IsUnderActiveDeletion(path, out string? _)
-                            && !registry.IsRecentlyDeleted(path))
-                        // A NUDGE, never a snapshot: the sampler reads the newest state itself.
-                        .Select(_ => System.Reactive.Unit.Default);
+                    // The end of the LAST deletion guard on the path — a seal's lift or a subtree / row
+                    // deletion scope's end — never one kind only (#6856). A NUDGE, never a snapshot:
+                    // the sampler reads the newest state itself.
+                    : registry.DeletionGuardsLifted(path).Where(_ => !nodeCache.IsDeleted);
 
             // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
             // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
@@ -1880,7 +1898,7 @@ public static class MeshDataSourceExtensions
         IStorageAdapter? persistence, RecentlyDeletedRegistry? recentlyDeleted,
         JsonSerializerOptions options, ILogger? logger)
     {
-        var node = pending.TakeUnsaved();
+        var node = pending.TakeUnpersisted();
         if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
             return Observable.Return(System.Reactive.Unit.Default);
 

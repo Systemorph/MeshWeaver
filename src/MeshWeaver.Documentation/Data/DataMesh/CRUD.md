@@ -468,6 +468,37 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   sender's `Delete` permission explicitly before it records an abort mark, because the message itself
   carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
   participant cannot send it at all.
+- **The seal and the persistence sampler, ordering by ordering.** An own write is acknowledged from
+  memory and stored later by the persistence sampler. While a delete seal is in play, every
+  acknowledged state X must end **persisted** (X or a newer state is stored), or **superseded**: the
+  delete committed and the path is tombstoned, or the store fence wrote the confirmed state, which
+  contains X.
+
+  Terms used in the table:
+  - *The sampler* is the only poster of own saves. Every own arrival and every nudge is a trigger
+    only. At each tick the sampler reads the newest unsaved state itself.
+  - *Reserve, then post*: a save is marked requested before it is posted, and the mark is rolled
+    back if the post is not accepted.
+  - *Refusal* means the row guard rejected the write. The save becomes pending again, and the
+    sampler is nudged only if no guard still holds.
+  - *The final flush* trusts only a save that is persisted, never a save that is merely reserved.
+
+  | Ordering | Ends as |
+  |---|---|
+  | X, tick, post, write OK | persisted |
+  | X, seal, tick, post, refusal, abort | the abort is the last guard to end and nudges the sampler, so X is posted: persisted |
+  | X, tick, reserve, refusal *inside* the post (sealed), abort | the refusal finds X reserved and makes it pending; the abort nudges the sampler: persisted |
+  | X, tick, post, seal, abort, tick (X still requested), then refusal | the refusal sees no guard holding and nudges the sampler itself: persisted |
+  | resume nudge held, X+1 written and posted, nudge released | the tick reads the newest state; nothing older is posted: X+1 persisted |
+  | any of the above, then **commit** | tombstoned before the path is unsealed; deferred writes are refused (never acknowledged): superseded |
+  | **indeterminate**, fence moves the row | settles as lifted, the sampler is nudged: persisted |
+  | **indeterminate**, fence finds the row gone | settles as committed, tombstoned: superseded |
+  | **indeterminate** fence fails, then owner teardown | the teardown retries the fence, which carries the confirmed state: superseded by the fence |
+  | seal plus an overlapping unversioned delete, seal aborts first, other delete aborts | the subtree or row scope's end is announced too (`DeletionGuardsLifted`), so the last guard to end nudges the sampler: persisted |
+  | X reserved, final flush decides, post then rejected (shutdown) | the final flush ignores the reservation and writes X: persisted |
+  | owner teardown while held or fencing | the fence writes the confirmed state; the dispose flush cannot pass the row guard: superseded by the fence |
+  | X acknowledged after the version check | impossible: every own write after the check is deferred until the seal settles |
+
 - **Not covered yet: a late root delete against a recreated node.** A root storage delete that is still
   running when another hub recreates the node at a low version (for example 1) can remove the recreated
   node, because `DeleteIfVersionAtMost(V)` compares versions, not the node's incarnation. The owner

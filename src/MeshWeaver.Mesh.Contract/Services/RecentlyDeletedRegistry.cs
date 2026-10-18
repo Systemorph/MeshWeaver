@@ -667,8 +667,18 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
                 return Settle(sealId, seal with { Terminal = teardown ? null : outcome }, rowGone: false,
                     detach: !teardown, emit: outcome);
             }
-            // Fencing or fence failed: a teardown changes nothing; a verdict is recorded and the fence
-            // stops before its next write. Committed tombstones NOW — before anything can lift.
+            // Fencing or fence failed. 🚨 A teardown of an owner whose fence FAILED (an indeterminate
+            // delete's fence, run while it lived) retries the fence now: the fence carries the
+            // confirmed state, which can hold an acknowledged write whose own save the seal refused —
+            // and this activation's dispose flush cannot write past the row guard. Otherwise a
+            // teardown changes nothing; a verdict is recorded and the fence stops before its next
+            // write. Committed tombstones NOW — before anything can lift.
+            if (teardown && seal.Phase is SealPhase.FenceFailed && seal.Terminal is null)
+            {
+                var retry = seal with { Phase = SealPhase.Fencing, Attempt = Interlocked.Increment(ref _fenceAttempts) };
+                Publish(_ownerSeals.SetItem(sealId, retry));
+                return SealStep<bool>.Of(true, () => StartFence(sealId, retry));
+            }
             if (teardown || indeterminate || seal.Terminal is not null)
                 return SealStep<bool>.Of(true);
             var decided = seal with { Terminal = outcome };
@@ -1086,12 +1096,43 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             {
                 if (active.TryRemove(
                         new KeyValuePair<string, int>(rootPath, count)))
-                    return;
+                    break;
             }
             else if (active.TryUpdate(rootPath, count - 1, count))
-                return;
+                break;
         }
+        // Announced, like a version guard's lift: a save a deletion guard refused may be waiting for
+        // the LAST guard on its path to end (#6856, DeletionGuardsLifted).
+        _deletionScopeEnded.OnNext(new DeletionScopeEnd(rootPath, rowOnly));
     }
+
+    private sealed record DeletionScopeEnd(string Root, bool RowOnly);
+
+    private readonly ISubject<DeletionScopeEnd> _deletionScopeEnded =
+        Subject.Synchronize(new Subject<DeletionScopeEnd>());
+
+    /// <summary>
+    /// Emits each time the LAST deletion guard over <paramref name="path"/> may have ended (#6856): a
+    /// version-guard seal lifted, or a subtree / row deletion scope covering the path ended — and, at
+    /// that moment, no guard holds the path and it is not tombstoned. A save one of those guards
+    /// refused is posted again on this: whichever guard ends last, its end is the signal, so the
+    /// refused save is never stranded behind a guard whose end was not announced.
+    /// </summary>
+    /// <param name="path">The node path whose refused save waits.</param>
+    /// <returns>A payload-free signal.</returns>
+    public IObservable<System.Reactive.Unit> DeletionGuardsLifted(string path)
+        => VersionGuardReleases(path)
+            .Where(outcome => !string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
+                && !string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
+            .Select(_ => System.Reactive.Unit.Default)
+            .Merge(_deletionScopeEnded
+                .Where(end => end.RowOnly
+                    ? string.Equals(path, end.Root, StringComparison.OrdinalIgnoreCase)
+                    : IsAtOrUnder(path, end.Root))
+                .Select(_ => System.Reactive.Unit.Default))
+            .Where(_ => !IsVersionGuardedDeletionInFlight(path)
+                && !IsUnderActiveDeletion(path, out string? _)
+                && !IsRecentlyDeleted(path));
 
     private sealed class SubtreeDeletionScope(
         RecentlyDeletedRegistry registry, string rootPath, bool rowOnly = false)

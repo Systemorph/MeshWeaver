@@ -233,4 +233,54 @@ public class SealResumeNeverPostsAnOlderSnapshotTest
         MeshDataSourceExtensions.DispatchOwnSave(pending, v, _ => false).Should().BeFalse();
         pending.TakeUnsaved().Should().BeSameAs(v, "a post the hub did not accept is not a dispatched save");
     }
+
+    /// <summary>
+    /// Review thread 4307955102: the sampler has RESERVED a save and is about to post it when the
+    /// owner's final (dispose) flush decides — then the post is rejected because shutdown began. The
+    /// final flush trusts only a PERSISTED save, never a reservation, so it writes the state itself.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void TheFinalFlush_DoesNotTrustAReservationWhosePostIsThenRejected()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "acknowledged just before teardown");
+        pending.Track(v);
+        MeshNode? flushWrites = null;
+        MeshDataSourceExtensions.DispatchOwnSave(pending, v, _ =>
+        {
+            flushWrites = pending.TakeUnpersisted(); // the final flush decides while the post is pending
+            return false;                            // … and the post is rejected: shutdown began
+        }).Should().BeFalse();
+        flushWrites.Should().BeSameAs(v, "the final flush writes the acknowledged state the reservation never saved");
+    }
+
+    /// <summary>NEGATIVE CONTROL — 60f4aca6f's final flush read the dispatch reservation as saved.</summary>
+    [Fact(Timeout = 5000)]
+    public void NegativeControl_AFlushThatTrustsTheReservation_WritesNothing()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "acknowledged just before teardown");
+        pending.Track(v);
+        MeshNode? flushWrites = v;
+        MeshDataSourceExtensions.DispatchOwnSave(pending, v, _ =>
+        {
+            flushWrites = pending.TakeUnsaved();
+            return false;
+        });
+        flushWrites.Should().BeNull("the defect: the reservation reads as dispatched and the flush skips the state");
+    }
+
+    [Fact(Timeout = 5000)]
+    public void APersistedSave_IsNotWrittenAgainByTheFinalFlush()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "stored");
+        pending.Track(v);
+        MeshDataSourceExtensions.DispatchOwnSave(pending, v, _ => true);
+        pending.MarkPersisted(v);
+        pending.TakeUnpersisted().Should().BeNull("control: a persisted state needs no final flush");
+    }
 }
