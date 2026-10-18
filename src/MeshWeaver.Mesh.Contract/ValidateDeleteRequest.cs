@@ -58,6 +58,75 @@ public sealed record ValidateDeleteRequest(string Path, string? RootPath = null)
     /// the durable row does not — that is the whole point of asking the owner.</para>
     /// </summary>
     public long? ExpectedVersion { get; init; }
+
+    /// <summary>
+    /// With <see cref="ExpectedVersion"/>: the id of the OWNER's seal this version-guarded delete asks
+    /// for (#6856). When the version matches, the owning hub takes the seal in the same commit turn
+    /// (<see cref="Services.RecentlyDeletedRegistry.TakeOwnerDeleteSeal"/>), defers its own writes to
+    /// the path while it is held, and keeps it until the deleter sends <see cref="ReleaseDeleteSeal"/>
+    /// with this id, or until the owning activation is torn down. Null asks for no seal (an older
+    /// deleter); an owner that predates the field ignores it and answers without
+    /// <see cref="ValidateDeleteResponse.SealedBy"/>.
+    /// </summary>
+    public string? SealId { get; init; }
+}
+
+/// <summary>
+/// The deleter's COMMIT or ABORT message for a version-guarded delete (#6856), posted to the
+/// node-operation hub of the process whose owner took the seal <see cref="SealId"/> when it confirmed
+/// the version (<see cref="ValidateDeleteResponse.SealedBy"/>), or to the node itself when no answer
+/// named that process. Either hub releases the seal in its process's registry. It releases that
+/// seal: on <see cref="DeleteSealOutcome.Committed"/> the owner tombstones the path and refuses every
+/// own write the seal deferred (the node is deleted); on <see cref="DeleteSealOutcome.Aborted"/> it
+/// applies them. A successful delete waits for the answer before it reports success, so a caller
+/// that recreates the path at once is not refused by the owner's row guard. A seal whose message never
+/// arrives — the deleter died — is released by the owning activation's own teardown, never by a timer.
+/// <para><see cref="InfrastructureOnlyAttribute"/>: only the mesh's own hubs may post it; a remote
+/// participant's delivery is refused at ingress. It carries no permission attribute, so it is NOT ordered behind the version check's
+/// permission fold, and an abort can overtake the check. The owner then leaves an abort mark for the
+/// seal id (bound to its activation), and the check that runs later refuses to take the seal. The
+/// seal id is an unguessable per-delete value, so the message can release only the seal of the delete
+/// that sent it.</para>
+/// </summary>
+/// <param name="Path">The node the delete targeted (the owning hub's own path).</param>
+/// <param name="SealId">The seal id the delete's <see cref="ValidateDeleteRequest.SealId"/> carried.</param>
+/// <param name="Outcome">A <see cref="DeleteSealOutcome"/> value.</param>
+[InfrastructureOnly]
+public sealed record ReleaseDeleteSeal(string Path, string SealId, string Outcome) : IRequest<ReleaseDeleteSealResponse>;
+
+/// <summary>The owner process's answer to <see cref="ReleaseDeleteSeal"/>.</summary>
+/// <param name="Released">True when a seal held for the id was released by this message.</param>
+public sealed record ReleaseDeleteSealResponse(bool Released);
+
+/// <summary>
+/// Why a delete seal was lifted (#6856) — an OPEN vocabulary of string constants. An own write the
+/// seal deferred is refused after <see cref="Committed"/> and <see cref="OwnerTeardown"/>, and re-runs
+/// its commit turn after anything else, where the turn's own checks (seal, tombstone) decide.
+/// </summary>
+public static class DeleteSealOutcome
+{
+    /// <summary>The delete removed the node: deferred writes are refused, the path is tombstoned.</summary>
+    public const string Committed = nameof(Committed);
+
+    /// <summary>The delete gave up after the owner's check: deferred writes are applied.</summary>
+    public const string Aborted = nameof(Aborted);
+
+    /// <summary>
+    /// The owning activation was torn down while it held the seal — the deleter's message never came.
+    /// Deferred writes are refused (they were never acknowledged); the next activation is unsealed.
+    /// </summary>
+    public const string OwnerTeardown = nameof(OwnerTeardown);
+
+    /// <summary>
+    /// The delete gave up while its root storage delete may still be running (its observing subscription
+    /// timed out or was cancelled after the call was issued): neither a commit nor an abort is known. The
+    /// owner runs the store fence, which decides — the row moved past the confirmed version (deferred
+    /// writes run) or the row is gone (refused, the path tombstoned) — and stays sealed until it has.
+    /// </summary>
+    public const string Indeterminate = nameof(Indeterminate);
+
+    /// <summary>A deleter-side seal in this process was lifted; the deferred write re-checks in its turn.</summary>
+    public const string Lifted = nameof(Lifted);
 }
 
 /// <summary>
@@ -107,6 +176,15 @@ public sealed record ValidateDeleteResponse
     /// <see cref="NodeDeletionRejectionReason.Unavailable"/> — never as a match.</para>
     /// </summary>
     public long? ConfirmedVersion { get; init; }
+
+    /// <summary>
+    /// On a confirmed version-guarded ask that carried <see cref="ValidateDeleteRequest.SealId"/>: the
+    /// node-operation hub of the PROCESS whose owner now holds the seal (#6856) — where the deleter
+    /// sends its <see cref="ReleaseDeleteSeal"/>. Not the node's own address: once the delete has
+    /// removed the row, that address no longer resolves, while the process's node-operation hub still
+    /// does. Null: no seal was taken (an owner that predates the field, or an ask without a seal id).
+    /// </summary>
+    public Address? SealedBy { get; init; }
 
     /// <summary>True when there are no blocking errors.</summary>
     public bool IsValid => Errors.IsEmpty;
