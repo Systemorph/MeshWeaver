@@ -106,4 +106,74 @@ public class SealResumeNeverPostsAnOlderSnapshotTest
         h.Posted.Select(n => n.Version).Should().Equal(new long[] { 2, 3, 2 },
             "the old composition posts the older snapshot after the newer save — the defect");
     }
+
+    /// <summary>
+    /// Review thread 4307389043: the seal's abort nudge and its sample tick run BEFORE the refused
+    /// save's failure callback — the tick sees the save still marked requested and posts nothing. The
+    /// refusal, arriving after the lift, nudges the sampler itself, so the next tick posts the pending
+    /// state. Control: a refusal while the seal still holds nudges nothing (its lift will).
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void ARefusalLandingAfterTheAbortsTick_StillSchedulesThePendingSave()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var h = new Harness();
+        using var _ = MeshDataSourceExtensions.OwnSaveTicks(h.Own, h.Nudges, h.Pending, h.Ticks, TimeSpan.FromMilliseconds(200))
+            .Subscribe(h.Post);
+
+        var v = Node(2, "acknowledged before the seal");
+        h.Own.OnNext(v);
+        h.Tick();                      // V posted; its store write is in flight and will be refused
+        h.Nudges.OnNext(Unit.Default); // the seal lifts first …
+        h.Tick();                      // … and its tick finds V still requested: nothing posted
+        h.Posted.Should().HaveCount(1);
+
+        // … then the refusal lands, the seal no longer holding.
+        MeshDataSourceExtensions.OnSealRefusedSave(h.Pending, v, sealStillHolds: () => false).Should().BeTrue();
+        h.Tick();
+        h.Posted.Select(n => n.Version).Should().Equal(new long[] { 2, 2 },
+            "the refusal after the lift schedules the pending save; a quiet node is not left unpersisted");
+    }
+
+    [Fact(Timeout = 5000)]
+    public void ARefusalWhileTheSealStillHolds_SchedulesNothing_TheLiftDoes()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var h = new Harness();
+        using var _ = MeshDataSourceExtensions.OwnSaveTicks(h.Own, h.Nudges, h.Pending, h.Ticks, TimeSpan.FromMilliseconds(200))
+            .Subscribe(h.Post);
+
+        var v = Node(2, "acknowledged before the seal");
+        h.Own.OnNext(v);
+        h.Tick();
+        MeshDataSourceExtensions.OnSealRefusedSave(h.Pending, v, sealStillHolds: () => true).Should().BeTrue();
+        h.Tick();
+        h.Posted.Should().HaveCount(1, "no retry against a row the seal still guards");
+
+        h.Nudges.OnNext(Unit.Default); // the lift
+        h.Tick();
+        h.Posted.Select(n => n.Version).Should().Equal(new long[] { 2, 2 });
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL — f278e37ff's bookkeeping: the refusal only unmarked the save (MarkWriteFailed)
+    /// and nudged nothing, so after the abort's tick had passed nothing ever posted it.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void NegativeControl_ARefusalThatOnlyUnmarks_LeavesTheSaveUnposted()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var h = new Harness();
+        using var _ = MeshDataSourceExtensions.OwnSaveTicks(h.Own, h.Nudges, h.Pending, h.Ticks, TimeSpan.FromMilliseconds(200))
+            .Subscribe(h.Post);
+
+        var v = Node(2, "acknowledged before the seal");
+        h.Own.OnNext(v);
+        h.Tick();
+        h.Nudges.OnNext(Unit.Default);
+        h.Tick();
+        h.Pending.MarkWriteFailed(v).Should().BeTrue(); // the old refusal handling
+        h.Tick();
+        h.Posted.Should().HaveCount(1, "the defect: the pending save is never posted again");
+    }
 }

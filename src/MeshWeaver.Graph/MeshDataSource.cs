@@ -567,6 +567,8 @@ public static class MeshDataSourceExtensions
     {
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
+        // Resolved on the handler's turn: the write's error callback can run after teardown.
+        var sealRegistry = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         // Storage adapter's own Changes feed publishes the Updated event
         // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
         // separate fan-out from the handler.
@@ -605,7 +607,12 @@ public static class MeshDataSourceExtensions
                 {
                     // Error, not Warning: an acknowledged own-node state is NOT durable. It stays
                     // pending (un-marked below) and is re-attempted — see the summary.
-                    var reattempted = pending?.MarkWriteFailed(sampled) == true;
+                    var reattempted = pending is not null
+                        && (ex is SubtreeDeletionInFlightException && sealRegistry is not null
+                            // A delete seal's row guard refused it (#6856): pending again, and if
+                            // the seal already lifted the sampler is nudged to post it.
+                            ? OnSealRefusedSave(pending, sampled, () => SealStillHolds(sealRegistry, node.Path))
+                            : pending.MarkWriteFailed(sampled));
                     logger?.LogError(ex,
                         "[SaveMeshNode] the store write of {Path} (version={Version}) FAILED — the state is "
                         + "not durable. {Disposition}",
@@ -968,12 +975,38 @@ public static class MeshDataSourceExtensions
             // so a write acked inside the Sample window survives hub teardown (see PendingOwnSave).
             .Do(pending.Track)
             .Select(_ => System.Reactive.Unit.Default)
-            .Merge(nudges);
+            .Merge(nudges)
+            .Merge(pending.RefusalNudges);
         return (ticks is null ? triggers.Sample(interval) : triggers.Sample(ticks))
             .Select(_ => pending.TakeUnsaved())
             .Where(node => node is not null)
             .Select(node => node!);
     }
+
+    /// <summary>
+    /// A save refused by a delete seal's row guard (#6856). It becomes pending again — and when the
+    /// seal has ALREADY lifted (its abort nudge and sample tick ran before this refusal arrived, and
+    /// found the save still marked requested), the sampler is nudged now, so a quiet node's
+    /// acknowledged state is posted without waiting for another edit or the teardown flush. Checked
+    /// AFTER the save is unmarked: if the seal still holds here, its later lift nudges the sampler and
+    /// finds the save pending — either ordering schedules it exactly once, and a refusal while the seal
+    /// still holds schedules nothing (no retry loop against a sealed row).
+    /// </summary>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="sampled">The refused save's instance.</param>
+    /// <param name="sealStillHolds">Whether a seal still guards the path.</param>
+    /// <returns><c>true</c> when the refused save is pending again.</returns>
+    internal static bool OnSealRefusedSave(PendingOwnSave pending, MeshNode sampled, Func<bool> sealStillHolds)
+    {
+        if (!pending.MarkWriteFailed(sampled))
+            return false; // a newer save superseded it
+        if (!sealStillHolds())
+            pending.NudgeAfterRefusal();
+        return true;
+    }
+
+    private static bool SealStillHolds(RecentlyDeletedRegistry registry, string path)
+        => registry.IsVersionGuardedDeletionInFlight(path) || registry.IsUnderActiveDeletion(path, out string? _);
 
     internal sealed class PendingOwnSave
     {
@@ -994,6 +1027,14 @@ public static class MeshDataSourceExtensions
         /// phase-advance <c>ShutdownRequest</c>s and the storage write runs on the
         /// mesh IO pool, which outlives the hub.</summary>
         public void MarkRequested(MeshNode node) => Volatile.Write(ref requested, node);
+
+        private readonly ISubject<Unit> _refusalNudges = Subject.Synchronize(new Subject<Unit>());
+
+        /// <summary>Nudges the sampler to post the latest unsaved state (see <see cref="OnSealRefusedSave"/>).</summary>
+        public void NudgeAfterRefusal() => _refusalNudges.OnNext(Unit.Default);
+
+        /// <summary>The nudges <see cref="NudgeAfterRefusal"/> sends; merged into the sampler's triggers.</summary>
+        public IObservable<Unit> RefusalNudges => _refusalNudges.AsObservable();
 
         /// <summary>
         /// The store write of <paramref name="node"/> FAILED: un-mark it, so the latest state reads

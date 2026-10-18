@@ -457,7 +457,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   save pipeline, so the acknowledged state is stored without waiting for the next change. The
   re-dispatch is a payload-free **nudge** to the persistence sampler, which reads the newest
   unsaved state itself at its next tick. No snapshot captured elsewhere can arrive after a newer
-  own write and be posted over it.
+  own write and be posted over it. If the row guard's refusal arrives only after the seal has
+  already lifted, which means the lift's tick found the save still marked as requested, the refusal
+  itself nudges the sampler. A refusal that arrives while the seal still holds nudges nothing, so
+  there is no retry against a guarded row. Either ordering schedules the save exactly once.
 - **An early abort leaves state only for a sender who may delete the node.** The owner checks the
   sender's `Delete` permission explicitly before it records an abort mark, because the message itself
   carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
