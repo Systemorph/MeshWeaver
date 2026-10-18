@@ -176,6 +176,70 @@ public static partial class ImageSources
     [GeneratedRegex(@"^(\d+(\.\d+)?)(px|rem|em|%|vw|vh)?$")]
     private static partial Regex CssLengthPattern();
 
+    [GeneratedRegex(@"""[^""]*""|'[^']*'", RegexOptions.CultureInvariant)]
+    private static partial Regex QuotedValue();
+
+    [GeneratedRegex(@"(?<![-:\w])xmlns\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex XmlnsAttr();
+
+    [GeneratedRegex(@"(?<![-:\w])xmlns:xlink\s*=", RegexOptions.CultureInvariant)]
+    private static partial Regex XmlnsXlinkAttr();
+
+    /// <summary>
+    /// <paramref name="svg"/> as a standalone SVG DOCUMENT: the namespace declarations an
+    /// image-loaded SVG needs are added to its root <c>&lt;svg&gt;</c> when the author left them out —
+    /// the SVG namespace always, the <c>xlink</c> prefix when the markup uses it. Inline HTML tolerated
+    /// both omissions; an image context parses XML and renders NOTHING without them. Everything else
+    /// is returned byte-identical. The root tag is read quote-aware, and attribute VALUES are blanked
+    /// before looking for a declaration, so <c>aria-label="xmlns=…"</c> is never taken for one.
+    /// </summary>
+    /// <param name="svg">Inline svg markup.</param>
+    public static string AsSvgDocument(string svg)
+    {
+        if (string.IsNullOrEmpty(svg) || RootSvgTag(svg) is not { } root)
+            return svg;
+        var attrs = QuotedValue().Replace(svg[(root.Start + "<svg".Length)..root.End], "\"\"");
+        var added = "";
+        if (!XmlnsAttr().IsMatch(attrs))
+            added += " xmlns=\"http://www.w3.org/2000/svg\"";
+        if (svg.Contains("xlink:", StringComparison.Ordinal) && !XmlnsXlinkAttr().IsMatch(attrs))
+            added += " xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+        return added.Length == 0 ? svg : svg.Insert(root.Start + "<svg".Length, added);
+    }
+
+    /// <summary>The span of the root <c>&lt;svg …&gt;</c> start tag, scanned quote-aware; null when there is none.</summary>
+    private static (int Start, int End)? RootSvgTag(string svg)
+    {
+        var start = svg.IndexOf("<svg", StringComparison.OrdinalIgnoreCase);
+        while (start >= 0)
+        {
+            var next = start + "<svg".Length;
+            if (next >= svg.Length)
+                return null;
+            var c = svg[next];
+            if (char.IsWhiteSpace(c) || c is '>' or '/')
+                break;
+            start = svg.IndexOf("<svg", next, StringComparison.OrdinalIgnoreCase);
+        }
+        if (start < 0)
+            return null;
+        var quote = '\0';
+        for (var i = start + "<svg".Length; i < svg.Length; i++)
+        {
+            var ch = svg[i];
+            if (quote != '\0')
+            {
+                if (ch == quote)
+                    quote = '\0';
+            }
+            else if (ch is '"' or '\'')
+                quote = ch;
+            else if (ch == '>')
+                return (start, i);
+        }
+        return null;
+    }
+
     /// <summary>
     /// <paramref name="url"/> when an <c>&lt;img src&gt;</c> may carry it, otherwise null: an
     /// <c>http</c>/<c>https</c> URL, a relative path (<c>/api/content/…</c>, <c>images/a.png</c>), or a
@@ -213,11 +277,13 @@ public static partial class ImageSources
     /// SVG markup as a <c>data:image/svg+xml</c> URI — the ONLY way an <see cref="ImageControl"/>
     /// renderer draws SVG. In an image context a browser runs no script, fires no event handler and
     /// loads no external resource, so markup that carries a <c>&lt;script&gt;</c> or an
-    /// <c>onload</c> is inert. Percent-encoded rather than base64 so the URI stays readable.
+    /// <c>onload</c> is inert. Percent-encoded rather than base64 so the URI stays readable. The
+    /// markup is made a standalone document first (<see cref="AsSvgDocument"/>): an image context
+    /// parses XML and draws nothing for an <c>&lt;svg&gt;</c> without its namespace.
     /// </summary>
     /// <param name="svg">The SVG markup.</param>
     public static string SvgDataUri(string svg) =>
-        "data:image/svg+xml," + Uri.EscapeDataString(svg);
+        "data:image/svg+xml," + Uri.EscapeDataString(AsSvgDocument(svg));
 
     /// <summary>
     /// A CSS length a style attribute may carry, or null: a positive number becomes pixels

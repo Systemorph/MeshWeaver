@@ -465,6 +465,39 @@ instance to a higher plan is a platform admin's edit of the instance's plan on t
 something the instance can ask for. `InstanceOpenRegistrationTest` pins the closed default and the
 plan the registration lands on.
 
+### Coupons — a deployment registers on its plan from the beginning
+
+A **coupon** is a registration key minted for ONE deployment: it carries a plan, expires, and
+registers at most `MaxUsages` instances (`RegistrationKey.MaxUsages`; `1` = single use). A spent
+coupon fails validation exactly as an expired or revoked one does (401); the instance it registered
+is untouched. Keys with no limit, which includes every key minted before coupons existed, behave as
+before. `RegistrationCouponTest` pins the single use, the plan the registration lands on and the
+mint's refusals.
+
+| act | how | who |
+|---|---|---|
+| mint by hand | Instance grants ▸ Registration keys: Plan, Expires (days), **Uses (max)** = 1 | a registry platform admin; the coupon is shown once |
+| mint into a vault | `POST /api/instances/coupons` (`{tier, description, expiresDays, maxUsages}`), header `X-MeshWeaver-Coupon-Secret`. Operator command: `hosting-registry-coupon`, which stores the coupon through `--file` and tags it `mw-plan`, `mw-expires`, `mw-max-usages` and `mw-coupon-id`. Nobody sees the value. | the operator, holding the registry's coupon-mint credential |
+| name it | the deployment record's `operator.environment.REGISTRY_BOOTSTRAP_SECRET` = the vault object | the record's author |
+| use it | the Provision's register step (`hosting-registry-register --bootstrap-secret`). The dry run states the plan from the `mw-plan` tag, a metadata read. | the Provision |
+
+**The mint credential is scoped to minting coupons.** The registry configures it as
+`PluginCatalog:Coupons:MintSecret`, and the owner of minted coupons, and of the instances they
+register, as `PluginCatalog:Coupons:Owner`. While the credential is unset the route answers 404. The
+credential can mint only a coupon that meets three bounds:
+
+- its plan is on the registry's ladder (`Admin/Tiers/*`). An unknown id is refused with 400 before
+  anything is written.
+- it expires within 1–90 days.
+- it registers 1–10 instances.
+
+It is deliberately not `Bootstrap:Secret`. That secret also creates a platform administrator
+(`/bootstrap/first-admin`), so giving it to an operator lane would give that lane the registry.
+
+**Known limit.** The usage count is stamped after the registration it counts. Two registrations
+presenting the same single-use coupon at the same moment could therefore both pass. The coupon is
+held only in the vault, and only one Provision presents it, so this is not hardened further.
+
 ## Short-lived tokens — `POST /api/instances/token`
 
 An instance exchanges its durable `mwi_` key for a short-lived, scoped JWT access token:

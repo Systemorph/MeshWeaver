@@ -790,7 +790,7 @@ public sealed class InstanceKeyRefusedException(string instanceId, string reason
     public string Reason { get; } = reason;
 }
 
-/// <summary>The presented registration bootstrap key is unknown, revoked or expired — the
+/// <summary>The presented registration bootstrap key is unknown, revoked, expired or used up — the
 /// registration endpoint's 401. The message deliberately does not say which.</summary>
 public sealed class InvalidBootstrapKeyException()
     : InvalidOperationException("A valid registration bootstrap key is required (mwr_…).");

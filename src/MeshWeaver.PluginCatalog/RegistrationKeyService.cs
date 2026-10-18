@@ -43,7 +43,29 @@ public sealed class RegistrationKeyService(
     public IObservable<RegistrationKeyMintResult> Mint(
         string userId, string userName, string userEmail,
         string description = "", DateTimeOffset? expiresAt = null, string? tier = null)
+        => Mint(userId, userName, userEmail, description, expiresAt, tier, maxUsages: null);
+
+    /// <summary>
+    /// As the overload above, with a usage limit — the COUPON shape (Doc/Architecture/PluginRegistry
+    /// → "Coupons"). An overload rather than an added optional parameter, so code compiled against
+    /// the six-parameter signature keeps binding.
+    /// </summary>
+    /// <param name="userId">The minting admin (owner of the key and of the instances it registers).</param>
+    /// <param name="userName">Their display name.</param>
+    /// <param name="userEmail">Their email.</param>
+    /// <param name="description">What the key is for — for a coupon, the deployment it is minted for.</param>
+    /// <param name="expiresAt">When it expires, or null.</param>
+    /// <param name="tier">The plan it enrols its instances into, or null.</param>
+    /// <param name="maxUsages">How many registrations the key may perform
+    /// (<see cref="RegistrationKey.MaxUsages"/>) — <c>1</c> for a single-use coupon — or null for
+    /// no limit. A value below 1 is refused: a key that can never register is not a key.</param>
+    public IObservable<RegistrationKeyMintResult> Mint(
+        string userId, string userName, string userEmail,
+        string description, DateTimeOffset? expiresAt, string? tier, int? maxUsages)
     {
+        if (maxUsages is < 1)
+            return Observable.Throw<RegistrationKeyMintResult>(new ArgumentOutOfRangeException(
+                nameof(maxUsages), maxUsages, "a registration key's usage limit must be at least 1 (or none)"));
         var rawKey = RegistrationKeys.Generate();
         var hash = InstanceKeys.Hash(rawKey);
         var id = InstanceKeys.HashPrefix(hash);
@@ -58,6 +80,7 @@ public sealed class RegistrationKeyService(
             OwnerUserEmail = userEmail,
             CreatedAt = DateTimeOffset.UtcNow,
             ExpiresAt = expiresAt,
+            MaxUsages = maxUsages,
         };
 
         var keyNode = new MeshNode(id, $"{userId}/{KeyNamespace}")
@@ -74,15 +97,16 @@ public sealed class RegistrationKeyService(
                 .Select(_ =>
                 {
                     logger.LogInformation(
-                        "Minted registration key {Id} for {UserId} (expires {ExpiresAt}, plan {Plan})",
-                        id, userId, expiresAt?.ToString("u") ?? "never", key.Tier ?? "none");
+                        "Minted registration key {Id} for {UserId} (expires {ExpiresAt}, plan {Plan}, uses {MaxUsages})",
+                        id, userId, expiresAt?.ToString("u") ?? "never", key.Tier ?? "none",
+                        maxUsages?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unlimited");
                     return new RegistrationKeyMintResult(rawKey, created, key);
                 }));
     }
 
     /// <summary>
     /// Resolves a presented bootstrap key to its record, or <c>null</c> when the key is unknown,
-    /// malformed, revoked or expired. Runs as System — this IS the step that authenticates an
+    /// malformed, revoked, expired or used up (a spent coupon). Runs as System — this IS the step that authenticates an
     /// anonymous registration call, so there is no identity to read with yet.
     /// </summary>
     public IObservable<ResolvedRegistrationKey?> Resolve(string? rawKey)
@@ -112,7 +136,7 @@ public sealed class RegistrationKeyService(
                         {
                             logger.LogWarning(
                                 "Registration key {Path} presented but {Reason}",
-                                index.KeyPath, key.IsRevoked ? "revoked" : "expired");
+                                index.KeyPath, key.IsRevoked ? "revoked" : key.IsUsedUp ? "used up" : "expired");
                             return null;
                         }
                         return new ResolvedRegistrationKey(key, index.KeyPath);

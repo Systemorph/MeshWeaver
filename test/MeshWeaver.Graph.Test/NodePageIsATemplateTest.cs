@@ -61,7 +61,9 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
             new MeshNode(GadgetType)
             {
                 Name = "Gadget",
-                HubConfiguration = config => config.AddMeshDataSource(s => s.WithContentType<TemplateGadget>()),
+                // Metadata is not a default area: a type opts in (the AI engine's ThreadMessage does).
+                HubConfiguration = config => config.AddMeshDataSource(s => s.WithContentType<TemplateGadget>())
+                    .AddLayout(layout => layout.WithView(MeshNodeLayoutAreas.MetadataArea, MeshNodeLayoutAreas.Metadata)),
             },
             new MeshNode(ProvenanceType)
             {
@@ -101,10 +103,63 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
         await bound.Should().Within(TestTimeouts.Convergence).Match(t => t == "Gizmo Renamed",
             "the page is not rebuilt — the bound title follows the edit");
 
-        var meta = Bound(stream, ContextOf(header), "metaHtml");
-        await meta.Should().Within(TestTimeouts.Convergence).Match(
-            t => t != null && t.Contains("Type:") && t.Contains(GadgetType),
-            "the provenance line is computed on the hub and bound into the NodeMeta row");
+        await Bound(stream, ContextOf(header), "meta/typeText").Should().Within(TestTimeouts.Convergence)
+            .Match(t => t == GadgetType, "the provenance line is computed on the hub and bound into the NodeMeta row");
+        await Bound(stream, ContextOf(header), "meta/typeHref").Should().Within(TestTimeouts.Convergence)
+            .Match(t => t != null && t.Contains(GadgetType), "the type segment links to the type's configuration");
+    }
+
+    /// <summary>
+    /// The header's icon tile and provenance line are PLATFORM CONTROLS bound by pointer — an
+    /// <see cref="ImageControl"/> whose source is the projection's <c>icon</c>, a <see cref="LinkControl"/>
+    /// whose text and href are the type segment's — never an <see cref="HtmlControl"/> carrying markup
+    /// computed on the hub. Before this change the tile was an <c>IconControl</c> and the whole line
+    /// one bound <c>HtmlControl</c> (<c>metaHtml</c>), so both waits below time out against it.
+    /// </summary>
+    [Fact]
+    public async Task TheHeaderIconAndProvenance_ArePlatformControlsBoundByPointer()
+    {
+        var stream = Open(GadgetPath, MeshNodeLayoutAreas.OverviewArea);
+        var header = await Find<StackControl>(stream, MeshNodeLayoutAreas.OverviewArea,
+            s => s.DataContext?.Contains(MeshNodeLayoutAreas.HeaderDataId) == true,
+            "the header is a template bound to its projection");
+
+        await Find<ImageControl>(stream, MeshNodeLayoutAreas.OverviewArea,
+            i => i.Source is JsonPointerReference { Pointer: "icon" },
+            "the icon tile is an ImageControl bound to the projected icon");
+        await Find<LinkControl>(stream, MeshNodeLayoutAreas.OverviewArea,
+            l => l.Text is JsonPointerReference { Pointer: "meta/typeText" }
+                 && l.Href is JsonPointerReference { Pointer: "meta/typeHref" },
+            "the type segment is a Link bound to the projected type");
+        await Bound(stream, ContextOf(header), "icon").Should().Within(TestTimeouts.Convergence)
+            .Match(t => !string.IsNullOrEmpty(t), "the projection carries an icon source (the node's, its type's, or the placeholder)");
+    }
+
+    /// <summary>
+    /// The Metadata page is a template too: a key/value list of Labels and Links bound to a
+    /// projection of the node, following a rename in place. It used to wait for the node and build
+    /// <c>&lt;p&gt;&lt;strong&gt;Name:&lt;/strong&gt; …&lt;/p&gt;</c> HTML out of its values.
+    /// </summary>
+    [Fact]
+    public async Task TheMetadataPage_IsBound_AndFollowsARename()
+    {
+        var stream = Open(GadgetPath, MeshNodeLayoutAreas.MetadataArea);
+        var page = await Find<StackControl>(stream, MeshNodeLayoutAreas.MetadataArea,
+            s => s.DataContext?.Contains(MeshNodeLayoutAreas.MetadataDataId) == true,
+            "the Metadata page is a template bound to its projection in /data");
+        await Find<LabelControl>(stream, MeshNodeLayoutAreas.MetadataArea,
+            l => l.Data is JsonPointerReference { Pointer: "name" },
+            "the name is a pointer, not the value baked in on the hub");
+
+        var name = Bound(stream, ContextOf(page), "name");
+        await name.Should().Within(TestTimeouts.Convergence).Match(t => t == "Gizmo One", "the projection carries the name");
+        await Bound(stream, ContextOf(page), "parentHref").Should().Within(TestTimeouts.Convergence)
+            .Match(t => t == $"/{Space}/{MeshNodeLayoutAreas.OverviewArea}", "the parent row links to the parent");
+
+        await Mesh.GetMeshNodeStream(GadgetPath).Update(n => n with { Name = "Gizmo Metadata" })
+            .Should().Within(TestTimeouts.Convergence).Emit();
+        await name.Should().Within(TestTimeouts.Convergence).Match(t => t == "Gizmo Metadata",
+            "the bound name follows the edit");
     }
 
     [Fact]
@@ -143,8 +198,8 @@ public class NodePageIsATemplateTest(ITestOutputHelper output) : MonolithMeshTes
             s => s.DataContext?.Contains(MeshNodeLayoutAreas.ProvenanceDataId) == true,
             "the composed provenance strip is a template bound to its projection");
 
-        await Bound(stream, ContextOf(strip), "metaHtml").Should().Within(TestTimeouts.Convergence).Match(
-            t => t != null && t.Contains("Type:") && t.Contains(ProvenanceType),
+        await Bound(stream, ContextOf(strip), "meta/typeText").Should().Within(TestTimeouts.Convergence).Match(
+            t => t == ProvenanceType,
             "the provenance line is computed on the hub and bound into the strip");
         await Find<MarkdownControl>(stream, MeshNodeLayoutAreas.OverviewArea,
             m => m.Markdown?.ToString() == "the landing page's own body",

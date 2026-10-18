@@ -441,6 +441,32 @@ alongside its assemblies. Until it does, `stage-repo`/`stage-modules` stay, mark
 gate already refuses to build when the upstream artifact is missing, which is the behaviour that
 does not change when the artifact grows.
 
+#### 🚨 While staging stays, the staged source is the SEALED commit — never the upstream's HEAD
+
+The staged node definitions and the composed upstream bytes must come from **one publication**,
+and each staged package from the commit **its own** bytes were baked from. The publish-bake lane
+therefore:
+
+- has the availability gate record the cleared publication's provenance — its
+  `source-commit.txt`, its generation, and its per-package `sealed-packages.json`;
+- stages every module with `stage-sealed-upstream.sh` at that package's `sourceCommit` from the
+  listing (a per-package seal carries a waiting package's older build forward, so the publication
+  commit can be newer than one package's bytes), at the publication commit for a bundle-less
+  package or a publication that predates listings, and RED for an unreadable listing or a listed
+  package with no commit;
+- re-reads the publication after composing module bytes and goes RED if it moved, since the module
+  composition is a separate read and a republish in between would pair one publication's
+  definitions with another's bytes;
+- refuses a staged source that is not one of `upstream-sources` (override the derived segment
+  with `stage-source`). It never falls back to the default branch.
+
+Staging HEAD made the verdict a function of *when the job started*. Measured on 2026-10-17: a
+Plugins merge stamped Store's `minMeshVersion` to `3.1.11117` while the newest sealed platform set
+was `3.1.11102`. Every satellite bake that started after that merge failed
+`PackagePlatformFloorException: Package 'Store' was not installed`, and then every package that
+requires `Store/Plugin` — while the same kind of dispatch, sent nine minutes earlier and started
+before the merge, was green (Manufacturing, Crm, SocialMedia and Reinsurance).
+
 ### What closing it looks like
 
 The gate (does the upstream exist?) is done. What is missing is the FETCH — a way for a build to

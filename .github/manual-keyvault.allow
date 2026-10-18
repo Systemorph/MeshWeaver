@@ -19,6 +19,7 @@ deploy/aks/operator/bin/hosting-kv-ensure  — TRANSITIONAL: the admin-password 
 deploy/aks/operator/bin/hosting-kv-copy  — TRANSITIONAL: copyFrom reads the source value to write the per-prefix copy
 deploy/aks/operator/bin/hosting-kv-rotate  — TRANSITIONAL: reads the vaulted registry key to compare before rotating
 deploy/aks/operator/bin/hosting-registry-register  — TRANSITIONAL: reads the held instance key and the bootstrap key to call the registry
+deploy/aks/operator/bin/hosting-registry-coupon  — TRANSITIONAL: reads the registry's coupon-mint credential to call the registry; writes the minted coupon through --file, existence checked with `list`
 deploy/aks/operator/bin/hosting-signin-app  — writes the minted Entra client secret through --file; existence is checked with `list`, no value read
 deploy/aks/operator/bin/hosting-image-mirror  — TRANSITIONAL: reads the registry publisher password to push the mirror
 deploy/aks/operator/bin/hosting-pull-secret  — TRANSITIONAL: reads the registry pull key to render the image pull Secret

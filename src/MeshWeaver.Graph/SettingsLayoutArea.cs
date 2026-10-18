@@ -646,11 +646,10 @@ public static class SettingsLayoutArea
             .WithOrientation(Orientation.Horizontal)
             .WithHorizontalGap(12)
             .WithVerticalAlignment(VerticalAlignment.Center)
-            // Decorative alt: the "Icon" label above already says what it is. NodePath lets the
-            // renderer resolve a `content:` reference (what "Use as Icon" writes) to its URL.
-            .WithView(Controls.Image(new JsonPointerReference(nameof(MeshNode.Icon)), "")
-                .WithNodePath(nodePath)
-                with { DataContext = nodeContext })
+            .WithView(CreateLayoutArea.IconPreviewTile(new JsonPointerReference(nameof(MeshNode.Icon)), nodePath) with
+            {
+                DataContext = nodeContext
+            })
             .WithView(Controls.Button(host.Localize("ui.generate"))
                 .WithAppearance(Appearance.Neutral)
                 .WithIconStart(FluentIcons.Sparkle())
