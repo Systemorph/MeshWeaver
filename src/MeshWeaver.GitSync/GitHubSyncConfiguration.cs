@@ -64,10 +64,10 @@ public static class GitHubSyncConfiguration
             sp.GetService<IConfiguration>(),
             sp.GetService<GitHubAppTokenService>(),
             sp.GetService<ILogger<GitSourceCredentials>>()));
-        // Azure Repos (MeshWeaver#5248, policy azure-repos-push-only): the client tenant's app
+        // Azure Repos (MeshWeaver#5248/#6500, policy azure-repos-two-way): the client tenant's app
         // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
         // AzureDevOps:ClientId (identifiers, not secrets); the instance's workload identity is
-        // federated to it. Unset ⇒ an Azure Repos export is refused by name.
+        // federated to it. Unset ⇒ every Azure Repos read and push is refused by name.
         services.AddOptions<AzureDevOpsOptions>()
             .Configure<IConfiguration>((options, configuration) =>
                 configuration.GetSection(AzureDevOpsOptions.ConfigSection).Bind(options));
@@ -94,12 +94,21 @@ public static class GitHubSyncConfiguration
         // The production repo client: BULK transfer (push/fetch) over the git protocol — REST
         // paid one request PER FILE, so one big-repo sync exhausted the GitHub App installation's
         // hourly budget — with refs/PRs/issues remaining on the Octokit REST client it wraps.
+        // 🚨 Behind ONE seam, per provider (MeshWeaver#6500): GitProviderRepoClient reads the provider
+        // off each URL and sends an Azure Repos one to the Azure DevOps REST client, every other one
+        // to the GitHub client — so the sync, its two-way rules and every caller stay one code path.
         services.AddSingleton<OctokitGitHubRepoClient>();
-        services.AddSingleton<IGitHubRepoClient>(sp => new GitProtocolRepoClient(
-            sp.GetRequiredService<OctokitGitHubRepoClient>(),
-            sp.GetRequiredService<GitCli>(),
+        services.AddSingleton(sp => new AzureReposRepoClient(
             sp.GetRequiredService<IoPoolRegistry>(),
-            sp.GetService<ILogger<GitProtocolRepoClient>>()));
+            httpClient: null,
+            sp.GetService<ILogger<AzureReposRepoClient>>()));
+        services.AddSingleton<IGitHubRepoClient>(sp => new GitProviderRepoClient(
+            new GitProtocolRepoClient(
+                sp.GetRequiredService<OctokitGitHubRepoClient>(),
+                sp.GetRequiredService<GitCli>(),
+                sp.GetRequiredService<IoPoolRegistry>(),
+                sp.GetService<ILogger<GitProtocolRepoClient>>()),
+            sp.GetRequiredService<AzureReposRepoClient>()));
         services.AddSingleton<GitHubCredentialService>();
         services.AddSingleton<GitHubSyncService>();
         services.AddSingleton<PullRequestService>();
