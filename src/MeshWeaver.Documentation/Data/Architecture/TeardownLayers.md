@@ -129,6 +129,20 @@ write's `PatchDataRequest`), a message the routing layer may not answer
 (`[CanBeIgnored]`, a `DeliveryFailure`) or a REPLY to a request this address issued (#6791) is
 re-asked or owed to nobody, and reports at Debug. The table is in [Retiring an Activation](../RetiringAnActivation) → *What is NOT a retirement*.
 
+#### A turn reads a token, never the source behind it (#6958)
+
+`CancelExecution()` runs OFF the action block — from the disposal of a hub that never finished
+starting, and from the stall detector — while the turn it cancels reads its token ON the block.
+The hub's `TurnCancellation` owns that rotation: each generation captures its token when its
+source is minted, `CancelAndRoll()` claims the current generation with one atomic exchange, then
+cancels and disposes it. A turn that read the generation just before the roll reads the captured,
+now-cancelled token and stops cooperatively. It used to read `.Token` off the source itself, and a
+turn landing between the swap and that read threw `ObjectDisposedException: The
+CancellationTokenSource has been disposed.` out of `RunHandler`, logged as an unhandled exception
+in the delivery pipeline of a `content-type-registration` hub torn down during its own bring-up.
+Because the exchange is the claim, two concurrent rolls retire two different generations and
+nothing on this path catches `ObjectDisposedException`.
+
 ---
 
 ## Instance singletons leave a pod when its drain BEGINS
