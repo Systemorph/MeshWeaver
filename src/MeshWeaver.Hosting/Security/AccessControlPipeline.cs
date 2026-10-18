@@ -181,9 +181,14 @@ public static class AccessControlPipeline
                         userId, check.Permission, logger);
                 }
 
-                var callerContext = delivery.AccessContext
-                                    ?? accessService?.Context
-                                    ?? accessService?.CircuitContext;
+                // 🚨 The caller is the identity the STANDARD check just evaluated (`userId`, resolved by
+                // ResolveIdentity from the delivery's own sources), never the ambient context, which
+                // can still hold the bootstrap's System identity. The delivery's context is kept only
+                // when it names that same identity, so its virtual / API-token flags survive.
+                var callerContext = delivery.AccessContext is { } delivered
+                                    && string.Equals(delivered.ObjectId, userId, StringComparison.OrdinalIgnoreCase)
+                    ? delivered
+                    : new AccessContext { ObjectId = userId };
                 // 🚨 ONLY a point read of THIS node — the node itself, or a layout area the type
                 // declares — may be re-decided through its declared point read. The hub's workspace
                 // holds more than the node (its satellites), so any other shape (a collection, an

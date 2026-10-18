@@ -55,6 +55,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
 
     // ConfigureMeshBase, never ConfigureMesh: the default test configuration grants Public Admin.
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
+        .WithMeshType(typeof(TicketContent), nameof(TicketContent))
         .AddMeshNodes(
             TypeNode(DeclaredType, Declaration),
             TypeNode(UndeclaredType, declaration: null),
@@ -154,8 +155,23 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         var unowned = await Issue("unowned", WellKnownUsers.Anonymous, ct, nodeType: "home/Ticket");
         Assert.False((await Rls(Visitor, unowned, true, ct)).IsValid, "a type in a partition the platform does not own declares nothing");
 
+        // Review of #6935 (thread 4306016282): a stored type's declaration is read from its OWNER — once
+        // the owner acknowledged its withdrawal, the very next point read is refused (no polling).
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream("pkg/Ticket").Update(node => node with { Content = new JsonObject { ["withdrawn"] = true } }))
+            .Should().Emit(cancellationToken: ct);
+        Assert.False((await Rls(Visitor, owned, true, ct)).IsValid, "a withdrawn declaration admits nobody from the next read on");
+
+        // Review of #6935 (thread 4306016260): a System identity in a caller's place is an ambient context leaking — refused.
+        var signedInOnly = await Issue("signedin-sys", WellKnownUsers.Public, ct);
+        Assert.False(await DeclaredPointRead.Admits(Mesh, signedInOnly, new AccessContext { ObjectId = WellKnownUsers.System }).Take(1)
+                .Should().Emit(cancellationToken: ct),
+            "a System caller is never admitted by a declaration (it would otherwise match a Public audience)");
+        Assert.True(await DeclaredPointRead.Admits(Mesh, signedInOnly, Dave).Take(1).Should().Emit(cancellationToken: ct),
+            "POSITIVE CONTROL: a signed-in caller is admitted");
+
         // Revoking the admitted node ends the point read at every seam.
-        await AsSystemUpdate(open, content => content["revokedAt"] = DateTimeOffset.UtcNow.ToString("O"), ct);
+        await AsSystemUpdate(open, content => content with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") }, ct);
         await Within(() => RlsDecision(Visitor, open, true), r => !r.IsValid, "a revoked node is refused at the RLS validator", ct);
         var cut = await StreamAs(Visitor, open).Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
         Assert.Equal(System.Reactive.NotificationKind.OnError, cut.Kind);
@@ -239,7 +255,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         using var openVerdict = verdict.Connect();
         await verdict.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the live verdict admits before the revocation", cancellationToken: ct);
 
-        await AsSystemUpdate(link, content => content["revokedAt"] = DateTimeOffset.UtcNow.ToString("O"), ct);
+        await AsSystemUpdate(link, content => content with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") }, ct);
         // No wait for persistence: the decision reads the OWNER's current node.
         Assert.False((await Rls(Visitor, link, true, ct)).IsValid, "a point read right after the acknowledged revocation is refused");
 
@@ -294,8 +310,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.False((await Rls(Visitor, forged.Path, true, ct)).IsValid, "a borrowed System stamp does not make a node platform-issued");
     }
 
-    private static bool IsRevoked(MeshNode? node)
-        => node?.Content is JsonObject content && content["revokedAt"] is not null;
+    private bool IsRevoked(MeshNode? node)
+        => node?.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)?.RevokedAt is not null;
 
     /// <summary>
     /// 🚨 Review of #6935 (thread 4305971990): the delivery gate admits a declaration-only caller to
@@ -377,7 +393,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "NodeType",
             Name = path,
             Content = new NodeTypeDefinition { PointRead = declaration },
-            HubConfiguration = config => config.AddDefaultLayoutAreas(),
+            HubConfiguration = config => config.WithContentType<TicketContent>().AddDefaultLayoutAreas(),
         };
     }
 
@@ -386,12 +402,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         {
             NodeType = nodeType,
             Name = id,
-            Content = new JsonObject
-            {
-                ["subject"] = subject,
-                ["expiresAt"] = expiresAt.ToString("O"),
-                ["revokedAt"] = revoked ? DateTimeOffset.UtcNow.ToString("O") : null,
-            },
+            Content = new TicketContent(subject, expiresAt.ToString("O"), revoked ? DateTimeOffset.UtcNow.ToString("O") : null),
         };
 
     private Task SeedPartition(CancellationToken ct) => SeedTopLevel(new MeshNode(Partition) { NodeType = "Markdown", Name = "t" });
@@ -434,14 +445,10 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         => (await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => NodeFactory.CreateNode(node)).Should().Emit(cancellationToken: ct))!;
 
-    private async Task AsSystemUpdate(string path, Action<JsonObject> change, CancellationToken ct)
+    private async Task AsSystemUpdate(string path, Func<TicketContent, TicketContent> change, CancellationToken ct)
         => await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => Mesh.GetMeshNodeStream(path).Update(node =>
-            {
-                var content = JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(node.Content, Mesh.JsonSerializerOptions))!.AsObject();
-                change(content);
-                return node with { Content = content };
-            }))
+                node with { Content = change(node.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)!) }))
             .Should().Emit(cancellationToken: ct);
 
     // ───────────────────────────── the seams ─────────────────────────────
@@ -504,8 +511,9 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
         {
             NodeType = "NodeType",
             Content = new NodeTypeDefinition { PointRead = new PointReadDeclaration { SubjectProperty = "subject", Namespace = "t" } },
-            HubConfiguration = config => config,
+            HubConfiguration = config => config.WithContentType<TicketContent>(),
         })
+        .WithMeshType(typeof(TicketContent), nameof(TicketContent))
         .ConfigureServices(services => services.AddSingleton<IConfiguration>(
             new ConfigurationBuilder().AddInMemoryCollection(
                 ImmutableDictionary<string, string?>.Empty.Add(AnonymousAccess.DenyAnonymousConfigKey, "true")).Build()));
@@ -519,7 +527,7 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
             .RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("a", "t")
             {
                 NodeType = "Kiosk/Ticket",
-                Content = new JsonObject { ["subject"] = WellKnownUsers.Anonymous },
+                Content = new TicketContent(WellKnownUsers.Anonymous, null, null),
             })).Should().Emit(cancellationToken: ct))!;
 
         var anonymous = new AccessContext { ObjectId = WellKnownUsers.Anonymous };
@@ -529,3 +537,9 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
             "POSITIVE CONTROL: a signed-in caller is in an Anonymous audience");
     }
 }
+
+/// <summary>The content of the test's declared node types — a REGISTERED type, so every hub that reads it can type it.</summary>
+/// <param name="Subject">The admitted grant subject.</param>
+/// <param name="ExpiresAt">The ISO instant the admission ends.</param>
+/// <param name="RevokedAt">Set when revoked.</param>
+public sealed record TicketContent(string? Subject, string? ExpiresAt, string? RevokedAt);

@@ -63,7 +63,10 @@ public static class DeclaredPointRead
             // 🚨 An API token is admitted by the permission fold or not at all: the fold clamps a
             // token by its scope's live `api` policy (PermissionEvaluator), which a declaration —
             // a browser surface — must not reopen.
+            // A System caller never needs a declaration (the fold grants it everything), so a System
+            // identity reaching this point is an ambient context leaking into a caller's place — refused.
             if (string.IsNullOrEmpty(path) || caller?.IsApiToken == true
+                || string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
                 || AnonymousAccess.Refuses(hub.ServiceProvider, userId, caller))
                 return Observable.Return(false);
             var options = hub.JsonSerializerOptions;
@@ -269,7 +272,9 @@ public static class DeclaredPointRead
             .Take(1)
             .DefaultIfEmpty(null)
             .SelectMany(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)
-                ? SystemRead(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
+                // The type node from its OWNER first, like the instance: a warm mirror must not keep
+                // admitting by a declaration the owner has already withdrawn or narrowed.
+                ? OwnerCurrent(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
                 : Observable.Return<PointReadDeclaration?>(null))
             .DistinctUntilChanged();
     }
