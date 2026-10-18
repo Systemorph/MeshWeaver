@@ -30,7 +30,7 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// to temporarily switch identity for hub-level operations.
 /// </para>
 /// </summary>
-public class MeshQuery : IMeshQueryCore
+public partial class MeshQuery : IMeshQueryCore
 {
     private readonly IReadOnlyList<IMeshQueryProvider> providers;
     private readonly IMessageHub hub;
@@ -376,6 +376,15 @@ public class MeshQuery : IMeshQueryCore
     {
         if (typeof(T) == typeof(object) && Projects(request))
             return (IObservable<QueryResultChange<T>>)(object)ProjectAfterMerge(Query<MeshNode>(request), request);
+        // sort:subtreeLastModified — ordered by the engine, not the providers (MeshQuery.SubtreeSort.cs).
+        // The identity is decided at SUBSCRIBE time, where the caller's ambient context is theirs.
+        if (SubtreeSortOf(request) is { } subtreeSorted)
+            return Observable.Defer(() =>
+            {
+                var (candidates, keys) = SecuredSubtreeIdentity(request);
+                return OrderBySubtreeActivity(candidates, keys, subtreeSorted,
+                    rq => Query<T>(rq), rq => Query<MeshNode>(rq));
+            });
         // Run the subscribe on the DRAINABLE Query pool (not a bare TaskPoolScheduler): keeps the
         // calling hub's action block free while providers open their change feeds, AND makes the
         // subscribe tracked so teardown's DrainAll cancel+joins it before the scope is disposed.
@@ -394,9 +403,13 @@ public class MeshQuery : IMeshQueryCore
     /// here never touches the mesh hub's action block.
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
-        // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
-        // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
-        => QueryPool.SubscribeThroughPool(WithMembers(matched => CombineAnswers(
+        // sort:subtreeLastModified — the providers cannot order by it (MeshQuery.SubtreeSort.cs), and
+        // MergeSnapshots would re-sort by score/path: the snapshot surface reads the RANKED stream.
+        => SubtreeSortOf(request) is not null
+            ? SubtreeSortedSnapshots(Query<MeshNode>(request))
+            // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
+            // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
+            : QueryPool.SubscribeThroughPool(WithMembers(matched => CombineAnswers(
             matched,
             p => p.Query(request, Options),
             MergeSnapshots,
@@ -691,6 +704,12 @@ public class MeshQuery : IMeshQueryCore
         var coreRequest = isSystem && !string.Equals(request.UserId, WellKnownUsers.System, StringComparison.Ordinal)
             ? request with { UserId = WellKnownUsers.System }
             : request;
+        // sort:subtreeLastModified — the key reads take this same surface with this same identity
+        // (System stays System; a real user stays that user), see MeshQuery.SubtreeSort.cs.
+        if (SubtreeSortOf(request) is { } subtreeSorted)
+            return OrderBySubtreeActivity(coreRequest, coreRequest, subtreeSorted,
+                rq => ((IMeshQueryCore)this).Query<T>(rq, options),
+                rq => ((IMeshQueryCore)this).Query<MeshNode>(rq, options));
         // Subscribe on the DRAINABLE Query pool (see Query<T>): tracked so teardown DrainAll
         // cancel+joins the subscribe before the scope disposes.
         return QueryPool.SubscribeThroughPool(WithMembers(matched =>
