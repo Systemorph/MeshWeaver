@@ -2965,7 +2965,10 @@ internal static class NodeTypeCompilationHelpers
     {
         var paths = requestedAgainst.CurrentSourceVersions?.Keys
             .OrderBy(p => p, StringComparer.Ordinal).ToArray() ?? [];
-        var current = ownStream.Where(n => n?.Content is NodeTypeDefinition).Take(1)
+        // ContentAs, never a type test on Content: the definition can arrive as a JsonObject /
+        // JsonElement, which a type test reads as absent (ObjectAsExtensions).
+        NodeTypeDefinition? DefinitionOf(MeshNode? n) => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+        var current = ownStream.Where(n => DefinitionOf(n) is not null).Take(1)
             .Select(n => new SourceSnapshotCurrency(n!, true));
         if (paths.Length == 0)
             return current;
@@ -2997,7 +3000,7 @@ internal static class NodeTypeCompilationHelpers
                         + "— deciding once it shows the versions the sources' owners hold",
                         hubPath, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
                 return ownStream
-                    .Where(n => n?.Content is NodeTypeDefinition d && SnapshotShows(d.CurrentSourceVersions, live))
+                    .Where(n => DefinitionOf(n) is { } d && SnapshotShows(d.CurrentSourceVersions, live))
                     .Take(1)
                     .Select(n => new SourceSnapshotCurrency(n!, true));
             });
