@@ -69,12 +69,14 @@ public class DataModelDiagramTest
         var book = registry.GetTypeDefinition(typeof(DmBook))!;
         var author = registry.GetTypeDefinition(typeof(DmAuthor))!;
 
-        var control = DataModelLayoutArea.RenderTypeDetails(book, new[] { book, author }, "/Test/DataModel");
+        // The page is a stack of controls (title row, summary hint, this Markdown body) — the
+        // header's controls are pinned end to end in MeshWeaver.Layout.Test's DomainLayoutServiceTest.
+        DataModelLayoutArea.RenderTypeDetails(book, new[] { book, author }, "/Test/DataModel")
+            .Should().BeOfType<StackControl>();
 
-        var md = control.Should().BeOfType<MarkdownControl>().Which.Markdown?.ToString();
-        md.Should().NotBeNull();
-        md!.Should().Contain("DmBook");
+        var md = DataModelLayoutArea.TypeDetailsMarkdown(book, new[] { book, author }, "/Test/DataModel");
         md.Should().Contain("## Properties");
+        md.Should().NotContain("<a ", "the navigation links are LinkControls in the header, not markup in the body");
         md.Should().Contain("Title");
         md.Should().Contain("/Test/DataModel/DmAuthor",
             "a property whose type is another domain type links to that type under linkBase");

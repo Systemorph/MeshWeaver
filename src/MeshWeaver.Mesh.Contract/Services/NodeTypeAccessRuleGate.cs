@@ -207,6 +207,39 @@ public static class NodeTypeAccessRuleGate
     }
 
     /// <summary>
+    /// The verdict of a POINT read of <paramref name="path"/>: <paramref name="outcome"/> unless it is
+    /// a definitive DENIAL and the node's type DECLARES a point read that admits
+    /// <paramref name="caller"/> (<see cref="DeclaredPointRead"/>) — then granted. A grant and an
+    /// undetermined outcome pass through unchanged ("we could not check" is never laundered into a
+    /// declaration question). Only seams that serve one node at its own path call this; a listing
+    /// never does.
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="path">The exact path being read.</param>
+    /// <param name="caller">The caller's context.</param>
+    /// <param name="outcome">The standard check's (and the type rule's) verdict.</param>
+    /// <param name="request">The request's shape (<see cref="DeclaredPointRead.RequestShape"/>) — null for any shape that is not a point read, which is never admitted.</param>
+    public static IObservable<PermissionCheckOutcome> ReconsiderPointRead(
+        IMessageHub hub, string path, AccessContext? caller, PermissionCheckOutcome outcome, PointReadRequest? request)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.IsGranted || outcome.IsUndetermined || request is null)
+            return Observable.Return(outcome);
+        // Bounded by the same budget the RLS validator holds a permission check to: a stalled
+        // admission answers Undetermined — fail closed, and never a denial nobody established.
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        return DeclaredPointRead.Admits(hub, path, caller, request.Area)
+            .TakeDecisionOutsideGate()
+            .DefaultIfEmpty(false)
+            .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome)
+            .Timeout(budget)
+            .Catch((TimeoutException _) => Observable.Return(PermissionCheckOutcome.Undetermined(
+                $"the declared point read of '{path}' reached no verdict within {budget.TotalSeconds:0.#}s")));
+    }
+
+    /// <summary>
     /// The non-CRUD twin of <see cref="Find"/>:the <see cref="INodeTypePermissionRule"/> that decides
     /// <paramref name="permission"/> (Comment, Thread, Execute, …) on a node of
     /// <paramref name="nodeType"/>, or <c>null</c> when none does. <c>null</c> is "no rule has an
