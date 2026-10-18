@@ -89,6 +89,29 @@ The verbs are `hosting-kv-set` (set, `--generate`), `hosting-kv-status` (status 
 already soft-deleted). Their behaviour tests run against a stub `az` that plays the writer: it **refuses**
 `secret show`, so a verb that reads a value is red in CI.
 
+### Where the writer Job runs, and what fences it
+
+The writer Job runs in a namespace of its own, `memex-secrets`, as the ServiceAccount
+`hosting-secret-writer` (core `deploy/aks/manifests/hosting-operator/secret-writer.yaml`, maintainer
+decision 2026-10-18: *"Own namespace"*). Four objects hold the fence, never configuration:
+
+| Property | Held by |
+|---|---|
+| A Job there can run as no identity but the writer | a pod runs only as a ServiceAccount of its own namespace, and `memex-secrets` holds only `hosting-secret-writer`; `hosting-operator` lives in `memex-ops` and is not resolvable from here |
+| The control instance can start Jobs there and nowhere else | its job-runner token (`hosting-secret-jobrunner`, in the control portal's namespace) is bound by ONE RoleBinding, in `memex-secrets`: create, get, list, watch and delete Jobs, read pods and their logs; no Secret, ServiceAccount or RBAC verb |
+| A restart is only a restart | the writer may `get`/`patch` the portal Deployment only (`resourceNames`), and the ValidatingAdmissionPolicy `hosting-secret-writer-restart-only` refuses any change from it but the `kubectl.kubernetes.io/restartedAt` annotation, so it cannot point a portal at another image or identity (a portal's identity CAN read the vault) |
+| A Job cannot reach the node | Pod Security `baseline` is enforced on the namespace: no privileged container, hostPath or host network |
+
+The Azure half is the `secret-writer` managed identity, federated to
+`system:serviceaccount:memex-secrets:hosting-secret-writer`. The Job's `AZURE_CLIENT_ID` comes from
+`Hosting:Operator:SecretWriterClientId`; the operator's own client id is stripped from the Job's
+environment, because the workload-identity webhook never overrides a variable the container already sets.
+The control instance turns the path on with `Hosting:Operator:SecretExecutor = Job`,
+`Hosting:Operator:SecretWriterServiceAccount = hosting-secret-writer` and
+`Hosting:Operator:SecretNamespace = memex-secrets`. The manifest reaches the cluster only through the
+`ApplyClusterManifest` action (the config repository's aks-ops lane, a mesh approval bound to the file's
+sha256, `hosting-manifest-apply`).
+
 ### Interim: the value-free verbs on the Actions lane
 
 🚧 **TRANSITIONAL** (policy `secret-actions-interim-actions-lane`, **proposed**: it takes effect once its executor half, MeshWeaver.Plugins#2528, is rolled onto the control instance; until then the control plane refuses both verbs at *Check executor*). The writer identity is not provisioned yet. The control instance runs its actions on the Actions executor (Systemorph/Memex `aks-ops.yml`), not as in-cluster Jobs. **Once that half is live**, and until the writer exists and every secret action moves to the in-cluster Job under it, the two verbs that carry **no value** run on that lane as `hosting-operator`:
