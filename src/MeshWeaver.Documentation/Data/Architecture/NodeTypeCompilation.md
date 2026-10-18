@@ -756,8 +756,10 @@ A publication writes its pdb before its dll, so eviction can meet a build that e
 pdb. Such a build never counts against the build budget, so it can never displace the last dll a
 version resolves to. It is never reclaimed while its writer may still be active, which is anything
 younger than `InFlightPublicationGrace` (10 minutes). Once older than that it was abandoned and is
-reclaimed. A refused dll publication removes the pdb the same call published, so a full volume
-leaves no orphan behind.
+reclaimed. A refused dll publication does not delete the pdb it published, because a concurrent
+writer of identical bytes shares that name and may be staging its own dll. The orphan is left to the
+grace rule. Only an openable dll counts as a build: an evicted dll that another replica still holds
+stays listed on the shared volume but cannot be opened, so it takes no slot.
 
 Pinned by `FileSystemAssemblyStoreTest.Twenty_recompiles_of_one_version_leave_a_bounded_directory`
 and `The_sibling_budget_is_per_version`, and by `VolumeFullIsANamedRefusalTest`, which has a

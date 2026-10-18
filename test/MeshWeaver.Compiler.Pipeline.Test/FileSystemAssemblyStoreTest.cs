@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Reactive.Linq;
 using System.Text;
 using MeshWeaver.Messaging;
@@ -404,24 +405,55 @@ public class FileSystemAssemblyStoreTest : IDisposable
     }
 
     /// <summary>
-    /// A refused dll publication removes the symbols the same call published, so a refusal (a full
-    /// volume, above all) leaves no orphan that would read as an in-flight build.
+    /// Review round 3 on #6969: no writer owns a pdb exclusively — a concurrent writer of IDENTICAL
+    /// bytes shares its name. Writer A's dll publication is refused after its pdb landed; writer B,
+    /// publishing the same bytes, then completes. B's build keeps its symbols: A's refusal deletes
+    /// nothing, and the pdb A left is the one B pairs with.
     /// </summary>
     [Fact]
-    public async Task A_refused_dll_publication_leaves_no_orphaned_pdb()
+    public async Task A_refused_dll_publication_never_deletes_symbols_a_same_bytes_publisher_shares()
     {
-        var refusing = new FileSystemAssemblyStore(
+        var writerA = new FileSystemAssemblyStore(
             root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
             path => path.Contains(".dll", StringComparison.Ordinal)
                 ? throw new IOException("No space left on device", OperatingSystem.IsWindows() ? unchecked((int)0x80070070) : 28)
                 : AtomicFileWrite.OpenTempForWrite(path));
+        var dll = Encoding.UTF8.GetBytes("same-bytes");
+        var pdb = Encoding.UTF8.GetBytes("same-pdb");
 
+        // Writer B has already passed its pdb step (A's pdb was there, so B published nothing) and
+        // is staging its dll when A's dll publication is refused. B then completes its dll — the
+        // rest of its Put. The pdb both of them supplied must still be there.
         await Assert.ThrowsAsync<VolumeFullException>(async () =>
-            await refusing.PutWithLocation("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9"), Encoding.UTF8.GetBytes("v9-pdb"))
-                .Timeout(TimeSpan.FromSeconds(10)).Await());
+            await writerA.PutWithLocation("Store/Plugin", 9, dll, pdb).Timeout(TimeSpan.FromSeconds(10)).Await());
+        var sharedPdb = Directory.GetFiles(Path.Combine(root, "Store_Plugin"), "*.pdb").Single();
+        var bDll = Path.ChangeExtension(sharedPdb, ".dll");
+        AtomicFileWrite.PublishBytesWith(bDll, dll, AtomicFileWrite.OpenTempForWrite).Should().BeTrue();
 
-        Directory.GetFiles(Path.Combine(root, "Store_Plugin")).Should().BeEmpty(
-            "neither the dll nor the pdb published for a refused build stays behind");
+        File.Exists(sharedPdb).Should().BeTrue("writer B's build carries the symbols it supplied");
+        (await store.TryGetAssemblyPath("Store/Plugin", 9).Should().Emit()).Should().Be(bDll);
+    }
+
+    /// <summary>
+    /// Review round 3 on #6969: a LISTED dll is not necessarily usable — an evicted dll another
+    /// replica still holds stays listed, delete-pending, and unopenable (a dangling link is the local
+    /// stand-in). Two such newer siblings must not take both slots and evict the version's last
+    /// openable build.
+    /// </summary>
+    [Fact]
+    public async Task Unopenable_siblings_never_displace_a_versions_last_openable_build()
+    {
+        var v9 = await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9"), null).Should().Emit();
+        File.SetLastWriteTimeUtc(v9!, DateTime.UtcNow.AddMinutes(-5));
+        foreach (var hash in new[] { "eeeeeeeeeeee", "ffffffffffff" })
+            File.CreateSymbolicLink(
+                Path.Combine(root, "Store_Plugin", $"v9-{FileSystemAssemblyStore.FrameworkTag}-{hash}.dll"),
+                Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+
+        await store.Put("Store/Plugin", 10, Encoding.UTF8.GetBytes("v10"), null).Should().Emit();
+
+        File.Exists(v9).Should().BeTrue("v9's only openable build is kept whatever unopenable names sit beside it");
+        (await store.TryGetAssemblyPath("Store/Plugin", 9).Should().Emit()).Should().Be(v9);
     }
 
     /// <summary>The sibling budget never reaches across versions: each kept version keeps its own

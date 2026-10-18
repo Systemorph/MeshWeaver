@@ -342,22 +342,14 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         // it as TERMINAL: no Release node, no version pointer, the previous build left in place.
         // Swallowing it here and returning the path would re-create the very incident: a name in
         // the discovery namespace whose bytes are not there.
-        var pdbPublishedHere = pdbBytes is { Length: > 0 }
-                               && AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
-        bool published;
-        try
-        {
-            published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
-        }
-        catch (IOException) when (pdbPublishedHere && !File.Exists(dllPath))
-        {
-            // 🚨 The publication is refused, so the symbols this call published for it are an
-            // ORPHAN (review on #6969): no dll will ever pair with them, and left behind they look
-            // like an in-flight build. Removed here, by the writer that created them; the refusal
-            // itself propagates unchanged.
-            TryDeleteOrphan(pdbPath);
-            throw;
-        }
+        // 🚨 A refused dll publication does NOT remove the pdb published before it (review round 3
+        // on #6969): a concurrent writer of IDENTICAL bytes shares that pdb name and may already be
+        // staging its own dll, so no writer owns it exclusively. An orphan is left to eviction,
+        // which never counts a pdb-only build against the budget and reclaims it only once it is
+        // older than InFlightPublicationGrace.
+        if (pdbBytes is { Length: > 0 })
+            AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
+        var published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
         if (published)
             logger.LogInformation(
                 "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
@@ -535,8 +527,7 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             //     InFlightPublicationGrace) — otherwise the writer finishes "successfully" without
             //     the symbols it supplied;
             //   • is reclaimed once older than the grace: a writer publishes its dll immediately
-            //     after its pdb, so a pdb that old was abandoned (a refused dll publication removes
-            //     its own pdb; a killed process does not).
+            //     after its pdb, so a pdb that old was abandoned (a refused or killed publication).
             var builds = mine
                 .Where(x => keptVersions.Contains(x.Identity.Version))
                 .GroupBy(x => (x.Identity.Version, x.Identity.Hash))
@@ -546,8 +537,11 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
                     Newest: build.Max(x => x.File.LastWriteTimeUtc)))
                 .ToList();
             var now = DateTime.UtcNow;
+            // Only an OPENABLE dll is a usable build (review round 3): on the shared volume an evicted
+            // dll another replica still holds stays LISTED, delete-pending, and every open of it
+            // fails — the lookup skips it (NewestOpenable), so it must not take a slot either.
             var keptBuilds = builds
-                .Where(build => build.Dll is not null)
+                .Where(build => build.Dll is not null && CanOpen(build.Dll.FullName))
                 .GroupBy(build => build.Key.Version)
                 .SelectMany(version => version
                     .OrderByDescending(build => build.Dll!.LastWriteTimeUtc)
@@ -599,20 +593,6 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogDebug(ex,
                 "Assembly cache: could not evict superseded versions under {Dir} — the write itself "
                 + "succeeded and the next one plans eviction again", dir);
-        }
-    }
-
-    private void TryDeleteOrphan(string pdbPath)
-    {
-        try
-        {
-            File.Delete(pdbPath);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            // Housekeeping behind a refusal that is already propagating; a pdb left here is
-            // reclaimed by eviction once it is older than InFlightPublicationGrace.
-            logger.LogDebug(ex, "Assembly cache: could not remove orphaned symbols {Path}", pdbPath);
         }
     }
 
