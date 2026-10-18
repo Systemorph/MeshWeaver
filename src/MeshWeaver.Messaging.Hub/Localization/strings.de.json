@@ -2454,5 +2454,14 @@
   "comments.reply": "Antworten",
   "comments.repliesCollapsed": "Antworten ({0}), eingeklappt",
   "comments.repliesExpanded": "Antworten ({0}), ausgeklappt",
-  "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen"
+  "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen",
+  "ui.none": "Keine",
+  "ui.dataModelOverview": "Datenmodell-Übersicht",
+  "ui.viewCatalog": "Katalog anzeigen",
+  "ui.baseTypeOf": "Basis: {0}",
+  "ui.editHomePage": "Startseite bearbeiten",
+  "gitSync.changes.status": "Status",
+  "gitSync.changes.path": "Pfad",
+  "gitSync.tree.clean": "Auf {0} — keine Änderungen.",
+  "gitSync.tree.pending": "Auf {0} — {1} ausstehende Änderung(en):"
 }

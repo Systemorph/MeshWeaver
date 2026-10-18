@@ -145,7 +145,7 @@ public static class WorkingTreeTab
         // Live status (branch + pending changes), re-queried on each refresh.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(RefreshId)
             .SelectMany(_ => wt.Status(userId, repoSlug)
-                .Select(s => (UiControl?)StatusView(s))
+                .Select(s => (UiControl?)StatusView(s, h.ViewerLocale()))
                 .Catch<UiControl?, Exception>(_ => Observable.Return((UiControl?)GitSyncViews.Hint(
                     "Not checked out yet — use the button above."))))
             .StartWith(GitSyncViews.Hint("…")));
@@ -266,16 +266,16 @@ public static class WorkingTreeTab
     // ── small helpers ─────────────────────────────────────────────────────────
 
     /// <summary>The working tree's branch and, when it is dirty, its first pending changes as a grid.</summary>
-    internal static UiControl StatusView(WorkingTreeStatus s)
+    internal static UiControl StatusView(WorkingTreeStatus s, string? locale = null)
     {
         if (s.IsClean)
-            return GitSyncViews.Hint($"On {s.Branch} — clean.");
+            return GitSyncViews.Hint(LocalizationCatalog.Get("gitSync.tree.clean", locale, s.Branch));
         return Controls.Stack.WithWidth("100%").WithVerticalGap(4)
-            .WithView(Controls.Body($"On {s.Branch} — {s.Changes.Count} pending change(s):"))
+            .WithView(Controls.Body(LocalizationCatalog.Get("gitSync.tree.pending", locale, s.Branch, s.Changes.Count)))
             .WithView(Controls.DataGrid(s.Changes.Take(20)
                     .Select(c => new PendingChangeRow(c.Status, c.Path)).ToArray())
-                .WithColumn(new PropertyColumnControl<string> { Property = "status" }.WithTitle("Status"))
-                .WithColumn(new PropertyColumnControl<string> { Property = "path" }.WithTitle("Path")));
+                .WithColumn(new PropertyColumnControl<string> { Property = "status" }.WithTitle(LocalizationCatalog.Get("gitSync.changes.status", locale)))
+                .WithColumn(new PropertyColumnControl<string> { Property = "path" }.WithTitle(LocalizationCatalog.Get("gitSync.changes.path", locale))));
     }
 
     /// <summary>One pending change in <see cref="StatusView"/>'s grid.</summary>

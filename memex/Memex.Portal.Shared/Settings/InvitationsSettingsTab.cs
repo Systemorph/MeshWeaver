@@ -109,7 +109,7 @@ public static class InvitationsSettingsTab
             h.NoticeView(ResultDataId));
 
         // ── Existing invitations ───────────────────────────────────────────────
-        stack = stack.WithView(Controls.H3("Invitations"));
+        stack = stack.WithView(Controls.H3(host.Localize("settings.invitations")));
 
         // The invitations — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the
         // grid is declared at once and fed by the synced Admin/Invitation query; each row carries its

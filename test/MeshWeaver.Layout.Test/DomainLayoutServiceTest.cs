@@ -235,7 +235,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
 
     /// <summary>
     /// The Catalog's header is the platform's controls (maintainer, 2026-10-18: hand-built HTML
-    /// replaced fleet-wide): the type's name as a heading LABEL, the ⧉ Data Model link as a
+    /// replaced fleet-wide): the type's name as a heading LABEL, the ⧉ Data model link as a
     /// <see cref="LinkControl"/> with its hover text — no <see cref="HtmlControl"/> anywhere in the frame.
     /// </summary>
     [HubFact]
@@ -247,7 +247,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
                 "the Catalog renders its header and grid");
 
         var link = NavLink(frame, "⧉")!.Value;
-        Prop(link, "tooltip").Should().Be("Data Model");
+        Prop(link, "tooltip").Should().Be("Data model", "the tooltip is the localized ui.dataModel (English viewer)");
         Prop(link, "href").Should().EndWith($"/DataModel/{nameof(DataRecord)}");
         Areas(frame).Should().Contain(a => Is(a.Control, nameof(LabelControl)) && !string.IsNullOrEmpty(Prop(a.Control, "data")),
             "the type's name is a heading label");
@@ -268,7 +268,7 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
                         && (Prop(a.Control, "markdown") ?? "").Contains("## Properties")),
                 "the type page renders its header and property table");
 
-        Prop(NavLink(frame, "⧉")!.Value, "tooltip").Should().Be("Data Model Overview");
+        Prop(NavLink(frame, "⧉")!.Value, "tooltip").Should().Be("Data model overview", "the tooltip is the localized ui.dataModelOverview");
         Areas(frame).Should().Contain(a => Is(a.Control, nameof(LabelControl)) && Prop(a.Control, "data") == nameof(DataRecord),
             "the type name is a heading label");
         Areas(frame).Should().NotContain(a => Is(a.Control, nameof(HtmlControl)), "the type page holds no hand-built markup");

@@ -152,10 +152,10 @@ public static class EditLayoutArea
         // Title with right-aligned navigation glyphs
         var links = new List<LinkControl>
         {
-            DomainViews.NavGlyph("⧉", "Data Model", $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}"),
+            DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}"),
         };
         if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
-            links.Add(DomainViews.NavGlyph("🗃️", "View Catalog", $"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}"));
+            links.Add(DomainViews.NavGlyph("🗃️", host.Localize("ui.viewCatalog"), $"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}"));
 
         var stack = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(typeDefinition.DisplayName).WithStyle("margin: 0;"), links.ToArray()));

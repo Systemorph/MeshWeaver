@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text;
 using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Namotion.Reflection;
 
@@ -222,7 +223,8 @@ public static class DataModelLayoutArea
             $"/{host.Hub.Address}/DataModel",
             td => string.IsNullOrWhiteSpace(td.CollectionName)
                 ? null
-                : $"/{host.Hub.Address}/Catalog/{td.CollectionName}");
+                : $"/{host.Hub.Address}/Catalog/{td.CollectionName}",
+            host.ViewerLocale());
 
     /// <summary>
     /// Renders the property/derived-type detail page for one type — the reusable
@@ -242,15 +244,34 @@ public static class DataModelLayoutArea
         IReadOnlyCollection<ITypeDefinition> allDomainTypes,
         string linkBase,
         Func<ITypeDefinition, string?>? catalogHref = null)
+        => RenderTypeDetails(typeDef, allDomainTypes, linkBase, catalogHref, locale: null);
+
+    /// <summary>
+    /// <see cref="RenderTypeDetails(ITypeDefinition, IReadOnlyCollection{ITypeDefinition}, string, Func{ITypeDefinition, string})"/>
+    /// with the navigation links' hover text in <paramref name="locale"/> (English when null).
+    /// </summary>
+    /// <param name="typeDef">The type to detail.</param>
+    /// <param name="allDomainTypes">The domain-type lookup for property links and derived types.</param>
+    /// <param name="linkBase">Href prefix for type links.</param>
+    /// <param name="catalogHref">Optional per-type catalog link factory; null suppresses the catalog link.</param>
+    /// <param name="locale">The viewer's locale.</param>
+    /// <returns>The detail page.</returns>
+    public static UiControl RenderTypeDetails(
+        ITypeDefinition typeDef,
+        IReadOnlyCollection<ITypeDefinition> allDomainTypes,
+        string linkBase,
+        Func<ITypeDefinition, string?>? catalogHref,
+        string? locale)
     {
         var type = typeDef.Type;
 
         // Title with right-aligned navigation glyphs
-        var links = new List<LinkControl> { DomainViews.NavGlyph("⧉", "Data Model Overview", linkBase) };
+        var links = new List<LinkControl>
+            { DomainViews.NavGlyph("⧉", LocalizationCatalog.Get("ui.dataModelOverview", locale), linkBase) };
         if (type.BaseType is { } bt && bt != typeof(object) && allDomainTypes.Any(td => td.Type == bt))
-            links.Add(DomainViews.NavGlyph("🔝", $"Base: {bt.Name}", $"{linkBase}/{bt.Name}"));
+            links.Add(DomainViews.NavGlyph("🔝", LocalizationCatalog.Get("ui.baseTypeOf", locale, bt.Name), $"{linkBase}/{bt.Name}"));
         if (catalogHref?.Invoke(typeDef) is { } catalogLink)
-            links.Add(DomainViews.NavGlyph("🗃️", "View Catalog", catalogLink));
+            links.Add(DomainViews.NavGlyph("🗃️", LocalizationCatalog.Get("ui.viewCatalog", locale), catalogLink));
 
         var details = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()));

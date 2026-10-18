@@ -90,7 +90,7 @@ public static class GitHubActionArea
         };
         if (action is null)   // unknown op — don't claim an activity started
             return Observable.Return<UiControl?>(Message(
-                "Unknown operation", GitSyncViews.Note($"Unrecognized GitHub operation `{op}`."), backHref));
+                "Unknown operation", GitSyncViews.Hint($"Unrecognized GitHub operation “{op}”."), backHref));
 
         // Fire the work. The activity node it creates streams its own live progress. A failure
         // BEFORE the activity node exists (authorization denied, sign-in required, a wedged

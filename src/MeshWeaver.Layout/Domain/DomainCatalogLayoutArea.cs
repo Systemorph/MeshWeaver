@@ -32,7 +32,7 @@ public static class DomainCatalogLayoutArea
         var ret = Controls.Stack
             .WithView(DomainViews.TitleRow(
                 Controls.H2(typeDefinition.DisplayName).WithStyle("margin: 0;"),
-                DomainViews.NavGlyph("⧉", "Data Model", $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}")));
+                DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}")));
 
         if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type)) is { } descriptionLine)
             ret = ret.WithView(descriptionLine);

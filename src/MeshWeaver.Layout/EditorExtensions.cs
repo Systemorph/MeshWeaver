@@ -1707,7 +1707,7 @@ public static class EditorExtensions
         bool isEditable)
     {
         if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return Controls.Hint("None");
+            return Controls.Hint(host.Localize("ui.none"));
 
         var chipStack = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -1748,7 +1748,7 @@ public static class EditorExtensions
         }
 
         if (index == 0)
-            return Controls.Hint("None");
+            return Controls.Hint(host.Localize("ui.none"));
 
         return chipStack;
     }
