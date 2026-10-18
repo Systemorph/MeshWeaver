@@ -100,6 +100,8 @@ internal static class NodeTypeMemberOwnership
         nameof(NodeTypeDefinition.Dependencies),
         nameof(NodeTypeDefinition.Description),
         nameof(NodeTypeDefinition.Emoji),
+        // The declared point read (MeshWeaver#4306): authored by the package — a reinstall that changes it must land.
+        nameof(NodeTypeDefinition.PointRead),
         nameof(NodeTypeDefinition.HubConfiguration),
         nameof(NodeTypeDefinition.IncludeGlobalTypes),
         nameof(NodeTypeDefinition.InstanceLocations),
