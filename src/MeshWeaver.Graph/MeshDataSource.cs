@@ -943,6 +943,38 @@ public static class MeshDataSourceExtensions
     /// from inside the sampler's timer chain cannot recreate the TimerQueue-roots-the-hub
     /// leak the sampler's static-local-function shape exists to prevent.</para>
     /// </summary>
+    /// <summary>
+    /// The persistence sampler's decision of WHAT to post, separated so its ordering is testable:
+    /// every gated own state is tracked, every arrival — and every NUDGE (a delete seal lifted
+    /// without a delete, #6856) — is a payload-free trigger, and at each sample tick the sampler reads
+    /// the LATEST tracked state that has no dispatched save (<see cref="PendingOwnSave.TakeUnsaved"/>).
+    /// 🚨 No trigger carries a snapshot: a value captured anywhere else could be delivered after a
+    /// newer one and make the tick post an older state over a newer row. Reading at the tick, the
+    /// sampler can only ever post the newest state it has seen.
+    /// </summary>
+    /// <param name="gatedOwn">The own-node states that passed the sampler's gates.</param>
+    /// <param name="nudges">Payload-free requests to post the latest unsaved state again.</param>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="ticks">The sample ticks; null samples on <paramref name="interval"/>.</param>
+    /// <param name="interval">The sample interval when <paramref name="ticks"/> is null.</param>
+    /// <returns>The states to post, newest only.</returns>
+    internal static IObservable<MeshNode> OwnSaveTicks(
+        IObservable<MeshNode> gatedOwn, IObservable<System.Reactive.Unit> nudges, PendingOwnSave pending,
+        IObservable<long>? ticks, TimeSpan interval)
+    {
+        var triggers = gatedOwn
+            // 🚨 Track every save-worthy state BEFORE the Sample buffer: the dispose-time
+            // FlushPendingOwnSave persists the latest tracked state whose save was never dispatched,
+            // so a write acked inside the Sample window survives hub teardown (see PendingOwnSave).
+            .Do(pending.Track)
+            .Select(_ => System.Reactive.Unit.Default)
+            .Merge(nudges);
+        return (ticks is null ? triggers.Sample(interval) : triggers.Sample(ticks))
+            .Select(_ => pending.TakeUnsaved())
+            .Where(node => node is not null)
+            .Select(node => node!);
+    }
+
     internal sealed class PendingOwnSave
     {
         private volatile MeshNode? latest;
@@ -1336,12 +1368,12 @@ public static class MeshDataSourceExtensions
             // keeps tracking so the dispose-time FlushPendingOwnSave persists the latest state —
             // teardown's DisposeImpl bounds the chain's lifetime via RegisterForDisposal(saveSub).
             static IDisposable InstallPersistenceSampler(
-                IObservable<MeshNode> own, IObservable<MeshNode> resumes, OwnNodeCache nodeCache,
+                IObservable<MeshNode> own, IObservable<System.Reactive.Unit> resumeNudges, OwnNodeCache nodeCache,
                 WeakReference<IMessageHub> weakHub, TimeSpan interval,
                 PendingOwnSave pending)
             {
                 var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-                sub.Disposable = own
+                sub.Disposable = OwnSaveTicks(own
                     // 🚨 Initial-load echo suppression: a state that ARRIVED from
                     // persistence/routing (reference-identical to PersistedSnapshot,
                     // stamped by MeshNodeTypeSource.BuildInstanceCollection) is already
@@ -1355,18 +1387,8 @@ public static class MeshDataSourceExtensions
                     // redundant (lossless) echo. See OwnNodeCache.PersistedSnapshot.
                     .Where(n => n != null && !nodeCache.IsDeleted
                         && !ReferenceEquals(n, nodeCache.PersistedSnapshot))
-                    .DistinctUntilChanged()
-                    // 🚨 Track every save-worthy state BEFORE the Sample buffer: the
-                    // dispose-time FlushPendingOwnSave persists the latest tracked state
-                    // whose save was never dispatched, so a write acked inside the Sample
-                    // window survives hub teardown (see PendingOwnSave). Holds only the
-                    // MeshNode — no hub reference enters the timer chain.
-                    .Do(pending.Track)
-                    // A save the delete seal refused re-enters HERE, ahead of the Sample: the sampler
-                    // stays the ONE poster of own saves, so an older snapshot can never be posted after
-                    // a newer one (Sample always emits the latest value it saw).
-                    .Merge(resumes)
-                    .Sample(interval)
+                    .DistinctUntilChanged(),
+                        resumeNudges, pending, ticks: null, interval)
                     .Subscribe(node =>
                     {
                         if (nodeCache.IsDeleted) return;
@@ -1417,10 +1439,10 @@ public static class MeshDataSourceExtensions
 
             // Static: captures no hub (only the registry, the cache and the pending-save tracker), so
             // the subscription the sampler holds on the mesh singleton's subject cannot pin a hub.
-            static IObservable<MeshNode> SealRefusedSaves(
-                RecentlyDeletedRegistry? registry, OwnNodeCache nodeCache, PendingOwnSave pending, string path)
+            static IObservable<System.Reactive.Unit> SealRefusedSaveNudges(
+                RecentlyDeletedRegistry? registry, OwnNodeCache nodeCache, string path)
                 => registry is null
-                    ? Observable.Never<MeshNode>()
+                    ? Observable.Never<System.Reactive.Unit>()
                     : registry.VersionGuardReleases(path)
                         .Where(outcome => !string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
                             && !string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
@@ -1428,9 +1450,8 @@ public static class MeshDataSourceExtensions
                             && !registry.IsVersionGuardedDeletionInFlight(path)
                             && !registry.IsUnderActiveDeletion(path, out string? _)
                             && !registry.IsRecentlyDeleted(path))
-                        .Select(_ => pending.TakeUnsaved())
-                        .Where(unsaved => unsaved is not null)
-                        .Select(unsaved => unsaved!);
+                        // A NUDGE, never a snapshot: the sampler reads the newest state itself.
+                        .Select(_ => System.Reactive.Unit.Default);
 
             // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
             // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
@@ -1454,10 +1475,10 @@ public static class MeshDataSourceExtensions
                 // reach the sampler while the path is sealed; that write is refused, stays pending, and
                 // nothing else would retry it until the next change or the dispose flush. The retry
                 // goes THROUGH the sampler, never beside it, so own saves keep one poster and one order.
-                var resumes = SealRefusedSaves(
-                    hub.ServiceProvider.GetService<RecentlyDeletedRegistry>(), cache, pending, hub.Address.Path);
+                var resumeNudges = SealRefusedSaveNudges(
+                    hub.ServiceProvider.GetService<RecentlyDeletedRegistry>(), cache, hub.Address.Path);
                 var saveSub = InstallPersistenceSampler(
-                    ownStream, resumes, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
+                    ownStream, resumeNudges, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
                 hub.RegisterForDisposal(saveSub);
                 // 🚨 Final flush — the update-path twin of MeshNodeTypeSource's
                 // FlushPendingWrites dispose action (which covers creates/deletes). A write

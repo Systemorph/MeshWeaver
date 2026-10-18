@@ -454,7 +454,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **A save the seal refused is resumed on abort.** An own write acknowledged just before the seal
   can reach the persistence sampler while the path is sealed, and the row guard refuses that save.
   When the seal lifts without a delete, the owner re-dispatches the pending save through its own
-  save pipeline, so the acknowledged state is stored without waiting for the next change.
+  save pipeline, so the acknowledged state is stored without waiting for the next change. The
+  re-dispatch is a payload-free **nudge** to the persistence sampler, which reads the newest
+  unsaved state itself at its next tick. No snapshot captured elsewhere can arrive after a newer
+  own write and be posted over it.
 - **An early abort leaves state only for a sender who may delete the node.** The owner checks the
   sender's `Delete` permission explicitly before it records an abort mark, because the message itself
   carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
