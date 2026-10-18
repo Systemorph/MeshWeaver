@@ -122,9 +122,16 @@ print in a public CI log. Such a repository carries the blocks byte-identical al
 checked from a private checkout — `check-shared-rules.py --manifest <a private copy of the register
 naming it> --local <repo>=<path>`. Never add one to `.github/shared-rules.json`.
 
+**The gate reads only the repositories the manifest registers**, so a `--local` naming one it does not
+register would be read by nothing while the run printed green. The checker therefore refuses such a
+`--local` outright, naming the repository and the fix (a `--manifest` that registers it); its
+self-test carries the case.
+
 **A new repository** copies its blocks from core's `AGENTS.md` (the hub text, slots filled with its
-own values the way an existing spoke of the same class fills them), verifies them with
-`check-shared-rules.py --local`, and — once that pull request has merged — is added to `repos`, to
+own values the way an existing spoke of the same class fills them), verifies them against a
+**temporary** copy of the register that adds it to `repos` and to the `required-in` of each block its
+class requires — `check-shared-rules.py --manifest <temporary copy> --local <repo>=<path-to-AGENTS.md>`
+— and — once that pull request has merged — is added to `repos`, to
 the `required-in` of each block its class requires, and to the fleet-reader mints' `repositories:`
 lists, in one core change. The `/new-repo` skill points here.
 
