@@ -196,6 +196,10 @@ public class InstanceRepositoryAccessUnitTest
         var refused = await Assert.ThrowsAsync<GitHubAppTokenMintException>(
             () => service.GetInstanceAppInstallationToken().FirstAsync().Timeout(Budget).Await());
         Assert.Equal(GitHubAppTokenMintStage.NotConfigured, refused.Stage);
+        // …and it carries its keyed refusal, so a German viewer reads it in German.
+        Assert.True(GitSyncRefusalException.TryGet(refused, out var keyed));
+        Assert.Equal("gitsync.instanceApp.notConnected", keyed.Key);
+        Assert.NotEqual(refused.Message, GitSyncRefusalException.Localize(refused, "de"));
     }
 
     [Fact]
@@ -291,6 +295,35 @@ public class InstanceRepositoryAccessUnitTest
         var twice = await Assert.ThrowsAsync<GitSourceCredentialException>(
             () => both.TokenFor(Local)!.FirstAsync().Timeout(Budget).Await());
         Assert.Equal("gitsync.source.instanceAndOther", twice.Refusal.Key);
+    }
+
+    [Fact]
+    public async Task AMisspelledIdentity_IsRefusedByName_NeverAFallback()
+    {
+        var service = new GitHubAppTokenService(
+            new IoPoolRegistry(), Options.Create(new GitHubAppOptions()), () => null);
+        var credentials = new GitSourceCredentials(Config(new()
+        {
+            ["PluginCatalog:Sources:0:Name"] = "Acme",
+            ["PluginCatalog:Sources:0:RepoPath"] = Local,
+            ["PluginCatalog:Sources:0:Identity"] = "instnace",
+        }), service);
+
+        Assert.NotNull(credentials.For(Local));
+        var refused = await Assert.ThrowsAsync<GitSourceCredentialException>(
+            () => credentials.TokenFor(Local)!.FirstAsync().Timeout(Budget).Await());
+        Assert.Equal("gitsync.source.unknownIdentity", refused.Refusal.Key);
+        Assert.Contains("instnace", refused.Message);
+    }
+
+    [Fact]
+    public void TheManifestDescription_SpeaksTheAdministratorsLanguage()
+    {
+        var english = (string?)JsonNode.Parse(InstanceGitHubApp.BuildManifest("https://portal.example.com", "en"))!["description"];
+        var german = (string?)JsonNode.Parse(InstanceGitHubApp.BuildManifest("https://portal.example.com", "de"))!["description"];
+        Assert.Contains("portal.example.com", english);
+        Assert.Contains("portal.example.com", german);
+        Assert.NotEqual(english, german);
     }
 
     // ───────────────────────────── the source record ─────────────────────────────

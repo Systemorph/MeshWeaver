@@ -2475,5 +2475,9 @@
   "instanceApp.error.conversionIncomplete": "GitHub's answer lacked the App's id, slug, client id or private key, so nothing was stored. Start again from Administration › Package sources.",
   "instanceApp.page.title": "Create this instance's GitHub App",
   "instanceApp.page.explain": "GitHub will show you the App this instance asks for: private, read-only access to repository contents and metadata, and a push webhook to this instance. Confirm it there; you then return here and install the App on the repositories this instance may read.",
-  "instanceApp.page.continue": "Continue to GitHub"
+  "instanceApp.page.continue": "Continue to GitHub",
+  "gitsync.app.notConfigured": "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey), and this instance has connected no GitHub App of its own (Administration › Package sources › Connect GitHub).",
+  "gitsync.instanceApp.notConnected": "This instance's own GitHub App is not connected (Administration › Package sources › Connect GitHub).",
+  "gitsync.source.unknownIdentity": "Plugin source '{source}' ({url}) asks to be read with the identity '{identity}', which this instance does not know (the one stated identity is 'instance'). The repository is not read — not with another identity, not anonymously.",
+  "instanceApp.manifest.description": "Reads the package and Space repositories of the MeshWeaver instance at {host}. Read-only."
 }

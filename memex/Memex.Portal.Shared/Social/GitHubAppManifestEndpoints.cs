@@ -149,7 +149,7 @@ public static class GitHubAppManifestEndpoints
         string T(string key) => WebUtility.HtmlEncode(MeshWeaver.Messaging.LocalizationCatalog.Get(key, locale));
         return $"""
             <!doctype html>
-            <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+            <html lang="{MeshWeaver.Messaging.Locales.Resolve(locale)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
             <title>{T("instanceApp.page.title")}</title></head>
             <body>
             <h1>{T("instanceApp.page.title")}</h1>

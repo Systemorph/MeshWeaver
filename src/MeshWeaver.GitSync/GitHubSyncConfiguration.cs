@@ -293,7 +293,10 @@ public static class GitHubSyncConfiguration
         builder.AddAutocompleteExcludedTypes(InstancePackageSources.NodeType, InstanceGitHubApp.NodeType);
         builder.ConfigureServices(s => s
             .AddSingleton<InstancePackageSourceCatalog>()
-            .AddSingleton<InstanceGitHubAppCatalog>());
+            .AddSingleton<InstanceGitHubAppCatalog>()
+            // …and ONLY through their verbs: a direct write, even under an Admin-partition Editor
+            // grant, is refused (the shape of the Instance Secrets write guard).
+            .AddScoped<INodeValidator, InstanceRepositoryAccessWriteGuard>());
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
         // GetQuery / GetMeshNodeStream resolve the typed content (and the $type discriminator).

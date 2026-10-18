@@ -56,9 +56,26 @@ public static class GitHubWebhookEndpoints
             // generated when the App was created and signs the App's push deliveries with. Either may
             // be absent; with neither there is nothing to verify against.
             var secret = config["GitHub:Webhook:Secret"];
-            var appSecret = InstanceGitHubApp.WebhookSecret(
-                http.RequestServices.GetService<MeshWeaver.Hosting.AspNetCore.Portal.PortalApplication>()?
-                    .Hub.ServiceProvider.GetService<MeshWeaver.Graph.Configuration.InstanceSecretCatalog>());
+            // The secret catalog loads lazily: on a cold replica its first read is empty, so wait for
+            // its first full listing — bounded, and with the request's cancellation — before asking
+            // it, or the first delivery after a start is refused although the App's secret is stored.
+            var secretCatalog = http.RequestServices.GetService<MeshWeaver.Hosting.AspNetCore.Portal.PortalApplication>()?
+                .Hub.ServiceProvider.GetService<MeshWeaver.Graph.Configuration.InstanceSecretCatalog>();
+            if (secretCatalog is not null)
+                await secretCatalog.WhenLoaded
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "GitHub webhook: the instance secret catalog did not load in time; verifying "
+                            + "against the deployment's secret only.");
+                        return Observable.Return(System.Reactive.Unit.Default);
+                    })
+                    .FirstAsync()
+                    .ObserveCompletion(
+                        ex => logger.LogWarning(ex, "GitHub webhook: waiting for the secret catalog faulted"),
+                        http.RequestAborted);
+            var appSecret = InstanceGitHubApp.WebhookSecret(secretCatalog);
             if (string.IsNullOrEmpty(secret) && string.IsNullOrEmpty(appSecret))
             {
                 logger.LogWarning(

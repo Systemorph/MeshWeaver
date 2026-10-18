@@ -26,6 +26,10 @@ public sealed record GitSourceCredential(
     /// <c>Identity = instance</c> (<see cref="GitSourceCredentials.InstanceIdentity"/>).
     /// </summary>
     public bool InstanceApp { get; init; }
+
+    /// <summary>A stated <c>Identity</c> this reader does not know (anything but
+    /// <see cref="GitSourceCredentials.InstanceIdentity"/>) — refused by name, never ignored.</summary>
+    public string? UnknownIdentity { get; init; }
 }
 
 /// <summary>
@@ -145,13 +149,18 @@ public sealed class GitSourceCredentials
             // the empty key and refused by name in Token.
             var tokenKey = source["TokenKey"] is { } stated ? stated.Trim() : null;
             var owner = Blank(source["InstallationOwner"]);
-            var instance = string.Equals(Blank(source["Identity"]), InstanceIdentity, StringComparison.OrdinalIgnoreCase);
-            if (tokenKey is null && owner is null && !instance)
+            // An Identity that is stated is a declaration: `instance` asks for the instance's own App,
+            // and anything else is kept VERBATIM and refused by name in Token — a misspelling must
+            // never silently fall back to the deployment's App or to anonymous access.
+            var identity = Blank(source["Identity"]);
+            var instance = string.Equals(identity, InstanceIdentity, StringComparison.OrdinalIgnoreCase);
+            if (tokenKey is null && owner is null && identity is null)
                 return null;
             return new GitSourceCredential(
                 Blank(source["Name"]) ?? source["RepoPath"]!.Trim(), source["RepoPath"]!.Trim(), tokenKey, owner)
             {
                 InstanceApp = instance,
+                UnknownIdentity = identity is not null && !instance ? identity : null,
             };
         }
         // 🚨 The instance's OWN sources, AFTER the configured ones: a repository the deployment
@@ -191,6 +200,11 @@ public sealed class GitSourceCredentials
             return Refuse(GitSyncRefusal.Of(
                 "gitsync.source.tokenKeyBlank",
                 ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
+
+        if (declared.UnknownIdentity is { } unknown)
+            return Refuse(GitSyncRefusal.Of(
+                "gitsync.source.unknownIdentity",
+                ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("identity", unknown)));
 
         if (declared.InstanceApp && (declared.TokenKey is not null || declared.InstallationOwner is { Length: > 0 }))
             return Refuse(GitSyncRefusal.Of(

@@ -108,11 +108,33 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
             subscription = ActivityControlPlaneExtensions.SubscribeHubWatcher(
                 hub,
                 () => Observable.Defer(() => accessService.RunAsSystem(
-                    () => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query)))),
+                        () => meshService.Query<MeshNode>(MeshQueryRequest.FromQuery(query))))
+                    .SelectMany(RejectIncompleteListing),
                 OnChange,
                 logger,
                 $"[{name}] catalog query");
         }
+    }
+
+    /// <summary>
+    /// 🚨 A full listing that is only a FLOOR is a fault, never a listing (the Instance Secrets
+    /// catalog's rule): an Initial/Reset whose fan-in names silent providers, or that is marked
+    /// incomplete, may be MISSING records — folded, it would read an unread source or a pending App
+    /// flow as absent, drop a default package or refuse a valid callback. It goes down the watcher's
+    /// error path instead, which re-opens the query; the previous snapshot stays, and a catalog that
+    /// never listed completely stays not-loaded.
+    /// </summary>
+    internal static IObservable<QueryResultChange<MeshNode>> RejectIncompleteListing(QueryResultChange<MeshNode> change)
+    {
+        if (change.ChangeType is not (QueryChangeType.Initial or QueryChangeType.Reset))
+            return Observable.Return(change);
+        if (change.SilentProviders is { Count: > 0 } silent)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                $"the listing is INCOMPLETE: query provider(s) [{string.Join(", ", silent)}] did not answer"));
+        if (change.SnapshotIncomplete)
+            return Observable.Throw<QueryResultChange<MeshNode>>(new InvalidOperationException(
+                "the listing is INCOMPLETE: a provider dropped part of its read"));
+        return Observable.Return(change);
     }
 
     private void OnChange(QueryResultChange<MeshNode> change)

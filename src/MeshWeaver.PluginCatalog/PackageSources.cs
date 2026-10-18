@@ -455,9 +455,13 @@ public static class PackageSources
     private static Func<IObservable<string>> AppInstallationTokenProvider(IMessageHub hub)
     {
         var appTokens = hub.ServiceProvider.GetService<GitHubAppTokenService>();
-        return appTokens is { IsConfigured: true }
-            ? appTokens.GetInstallationToken
-            : () => Observable.Return(string.Empty);
+        // The configured/anonymous choice is made PER CALL, not when the source is built: the
+        // instance's own App can be connected (or its secrets finish loading) after a long-lived
+        // source was constructed, and a delegate captured as anonymous would read anonymously for
+        // the rest of its life (Doc/Architecture/InstanceRepositoryAccess).
+        return () => appTokens is { IsConfigured: true }
+            ? appTokens.GetInstallationToken()
+            : Observable.Return(string.Empty);
     }
 
     /// <summary>

@@ -140,9 +140,7 @@ public sealed class GitHubAppTokenService
     /// <param name="installationOwner">The account the installation lives on, or null/blank for
     /// the instance's own installation.</param>
     public IObservable<string> GetInstallationToken(string? installationOwner) =>
-        Mint(Effective, installationOwner,
-            "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey, or connect "
-            + "the instance's own App under Administration).");
+        Mint(Effective, installationOwner, GitSyncRefusal.Of("gitsync.app.notConfigured"));
 
     /// <summary>
     /// An installation token of the instance's OWN App (<see cref="InstanceGitHubApp"/>), whatever the
@@ -155,9 +153,9 @@ public sealed class GitHubAppTokenService
     /// App's only installation (a private App installs only on its owning account).</param>
     public IObservable<string> GetInstanceAppInstallationToken(string? installationOwner = null) =>
         Mint(() => InstanceOptions() ?? new GitHubAppOptions(), installationOwner,
-            "The instance's own GitHub App is not connected (Administration › Package sources › Connect GitHub).");
+            GitSyncRefusal.Of("gitsync.instanceApp.notConnected"));
 
-    private IObservable<string> Mint(Func<GitHubAppOptions> identity, string? installationOwner, string notConfigured)
+    private IObservable<string> Mint(Func<GitHubAppOptions> identity, string? installationOwner, GitSyncRefusal notConfigured)
     {
         var owner = (installationOwner ?? "").Trim();
 
@@ -174,8 +172,14 @@ public sealed class GitHubAppTokenService
             // connect, a rotation or a disconnect of the instance's own App.
             var app = identity();
             if (!app.IsConfigured)
-                return Observable.Throw<string>(new GitHubAppTokenMintException(
-                    GitHubAppTokenMintStage.NotConfigured, notConfigured));
+            {
+                // The typed mint failure, carrying its keyed refusal so every surface that shows it
+                // renders it in the viewer's language (the shape of the named-owner refusal below).
+                var missing = new GitHubAppTokenMintException(
+                    GitHubAppTokenMintStage.NotConfigured, notConfigured.Render(null));
+                missing.Data[GitSyncRefusalException.DataKey] = notConfigured;
+                return Observable.Throw<string>(missing);
+            }
             // ONE promise per (identity, installation): two Apps never share a token, and a rotated
             // key or a different App re-mints instead of serving the old identity's token.
             var key = $"{app.ClientId}|{KeyFingerprint(app.PrivateKey!)}|{owner}";

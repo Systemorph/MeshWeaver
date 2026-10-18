@@ -200,8 +200,12 @@ public static class InstanceGitHubApp
     public static string? WebhookSecret(InstanceSecretCatalog? catalog) =>
         catalog is null ? null : Value(catalog, WebhookSecretKey);
 
+    // 🚨 Fail CLOSED while the catalog's query is down: its snapshot can no longer see a disable or a
+    // delete made on another replica, so a cached private key or webhook secret must not keep
+    // authenticating through the outage (the same rule InstanceSecrets.Candidates applies).
     private static string? Value(InstanceSecretCatalog catalog, string key) =>
-        catalog.Entry(key) is { IsDeleted: false, IsDisabled: false, Current: { Length: > 0 } value } ? value : null;
+        !catalog.Faulted
+        && catalog.Entry(key) is { IsDeleted: false, IsDisabled: false, Current: { Length: > 0 } value } ? value : null;
 
     // ——————————————————————————————————————————————————————— the manifest (pure)
 
@@ -211,7 +215,9 @@ public static class InstanceGitHubApp
     /// Pure.
     /// </summary>
     /// <param name="baseUrl">The instance's public origin, e.g. <c>https://portal.example.com</c>.</param>
-    public static string BuildManifest(string baseUrl)
+    /// <param name="locale">The initiating administrator's language — GitHub shows the App's
+    /// description on its creation page.</param>
+    public static string BuildManifest(string baseUrl, string? locale = null)
     {
         var origin = baseUrl.TrimEnd('/');
         var host = new Uri(origin).Host;
@@ -220,7 +226,8 @@ public static class InstanceGitHubApp
             ["name"] = AppName(host),
             ["url"] = origin,
             ["redirect_url"] = origin + CallbackPath,
-            ["description"] = $"Reads the package and Space repositories of the MeshWeaver instance at {host}. Read-only.",
+            ["description"] = LocalizationCatalog.GetNamed(
+                "instanceApp.manifest.description", locale, new Dictionary<string, object> { ["host"] = host }),
             ["public"] = false,
             ["hook_attributes"] = new JsonObject
             {
@@ -314,7 +321,8 @@ public static class InstanceGitHubApp
                 return Observable.Throw<InstanceGitHubAppFlow>(GitSyncRefusal.Of(
                     "instanceApp.error.badOrganization", ("organization", organization ?? "")).ToException());
             var org = string.IsNullOrWhiteSpace(organization) ? null : organization.Trim();
-            var flow = new InstanceGitHubAppFlow(state, postUrl, BuildManifest(baseUrl));
+            var locale = (hub.ServiceProvider.GetService<AccessService>() is { } a ? a.Context ?? a.CircuitContext : null)?.Locale;
+            var flow = new InstanceGitHubAppFlow(state, postUrl, BuildManifest(baseUrl, locale));
             return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user =>
                     WriteMetadata(hub, current => (current ?? new InstanceGitHubAppContent()) with
                     {
@@ -327,11 +335,13 @@ public static class InstanceGitHubApp
         });
 
     /// <summary>
-    /// Completes a manifest flow: checks the state (<see cref="CheckState"/>) for the CALLER, who must
-    /// be a global administrator; clears the pending flow FIRST (one use); exchanges the one-time
-    /// <paramref name="code"/> through <paramref name="convert"/>; stores the App's id, client id,
-    /// private key and webhook secret as Instance Secrets (encrypted, as the caller) and its metadata
-    /// on <c>Admin/GitHubApp</c>. Emits the metadata. Cold.
+    /// Completes a manifest flow: for the CALLER, who must be a global administrator, CONSUMES the
+    /// pending flow in one owner-serialized transition (<see cref="Consume"/>) — the state checked
+    /// (<see cref="CheckState"/>) against the node's authoritative content and the flow cleared in
+    /// the same update, so of two concurrent callbacks exactly one proceeds; only then exchanges the
+    /// one-time <paramref name="code"/> through <paramref name="convert"/>, stores the App's id,
+    /// client id, private key and webhook secret as Instance Secrets (encrypted, as the caller) and
+    /// its metadata on <c>Admin/GitHubApp</c>. Emits the metadata. Cold.
     /// </summary>
     /// <param name="hub">The caller's hub.</param>
     /// <param name="code">GitHub's one-time code.</param>
@@ -344,36 +354,19 @@ public static class InstanceGitHubApp
         Observable.Defer(() =>
         {
             var access = hub.ServiceProvider.GetService<AccessService>();
+            // Captured at SUBSCRIBE: every later step runs after a hop (the conversion's HTTP leaf),
+            // where the ambient identity is gone, and re-enters as this caller explicitly.
             var caller = access?.Context ?? access?.CircuitContext;
             if (string.IsNullOrEmpty(code))
                 return Observable.Throw<InstanceGitHubAppContent>(
                     GitSyncRefusal.Of("instanceApp.error.noCode").ToException());
-            var catalog = hub.ServiceProvider.GetRequiredService<InstanceGitHubAppCatalog>();
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceGitHubApp));
-            var checkedFlow = InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user =>
-                catalog.WhenLoaded.SelectMany(_ =>
-                {
-                    var app = catalog.Entry(Path);
-                    // Refused or not, a callback ENDS the pending flow: a state that was guessed,
-                    // replayed or expired is not offered a second attempt.
-                    var refusal = CheckState(app, state, cookieState, user, DateTimeOffset.UtcNow);
-                    var cleared = WriteMetadata(hub, current => (current ?? new InstanceGitHubAppContent()) with
-                    {
-                        PendingStateHash = null,
-                        PendingExpiresAt = null,
-                        PendingBy = refusal is null ? current?.PendingBy : null,
-                        PendingOrganization = refusal is null ? current?.PendingOrganization : null,
-                    });
-                    return refusal is null
-                        ? cleared.Select(_ => user)
-                        : cleared.SelectMany(_ => Observable.Throw<string>(refusal.ToException()));
-                }));
-            return checkedFlow
+            return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user => Consume(hub, state, cookieState, user))
                 .SelectMany(user => convert(code)
                     .Take(1)
                     .SelectMany(conversion => access.RunAs(caller, () => StoreSecrets(hub, conversion))
                         .Select(_ => (user, conversion))))
-                .SelectMany(x => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
+                .SelectMany(x => access.RunAs(caller, () => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
                     WriteMetadata(hub, current => (current ?? new InstanceGitHubAppContent()) with
                     {
                         Slug = x.conversion.Slug,
@@ -384,29 +377,72 @@ public static class InstanceGitHubApp
                         ConnectedBy = x.user,
                         PendingBy = null,
                         PendingOrganization = null,
-                    }))
+                    })))
                     .Do(app => logger?.LogInformation(
                         "[InstanceGitHubApp] connected the App '{Slug}' owned by '{Owner}' (by {User})",
                         app.Slug, app.Owner, x.user)));
         });
 
     /// <summary>
+    /// The one transition that validates AND consumes a pending flow, inside ONE update of
+    /// <c>Admin/GitHubApp</c> — which its owner serializes, so the check reads the authoritative
+    /// content, never a replica's lagging snapshot, and two callbacks cannot both pass. A callback
+    /// whose state IS the pending one ends that flow whether it passes or not (a guessed, replayed or
+    /// expired state gets no second attempt); a state that is not the pending one leaves the pending
+    /// flow untouched, so a stale or forged callback can never erase a newer flow. Emits the caller's
+    /// user id when the flow was consumed; faults with the refusal otherwise. Runs as system.
+    /// </summary>
+    private static IObservable<string> Consume(IMessageHub hub, string? state, string? cookieState, string user) =>
+        ExistsNow(hub, Path).SelectMany(exists =>
+        {
+            if (!exists)
+                return Observable.Throw<string>(GitSyncRefusal.Of("instanceApp.error.noPendingFlow").ToException());
+            GitSyncRefusal? refusal = GitSyncRefusal.Of("instanceApp.error.noPendingFlow");
+            return hub.GetWorkspace().GetMeshNodeStream(Path)
+                .Update<InstanceGitHubAppContent>((node, current) =>
+                {
+                    refusal = CheckState(current, state, cookieState, user, DateTimeOffset.UtcNow);
+                    var isThePendingFlow = current?.PendingStateHash is { Length: > 0 } pending
+                        && !string.IsNullOrEmpty(state) && FixedTimeEquals(HashState(state), pending);
+                    if (!isThePendingFlow)
+                        return node;
+                    return node with
+                    {
+                        Content = current! with
+                        {
+                            PendingStateHash = null,
+                            PendingExpiresAt = null,
+                            PendingBy = refusal is null ? current.PendingBy : null,
+                            PendingOrganization = refusal is null ? current.PendingOrganization : null,
+                        },
+                    };
+                })
+                .Take(1)
+                .SelectMany(_ => refusal is null
+                    ? Observable.Return(user)
+                    : Observable.Throw<string>(refusal.ToException()));
+        });
+
+    /// <summary>
     /// Disconnects the App: deletes its four secrets (recoverable for the Instance Secrets recovery
-    /// window) and clears the metadata. The App itself stays on GitHub until it is deleted there. A
-    /// global administrator only. Cold.
+    /// window) — once the secret catalog has READ the store, so a cold replica cannot skip a delete
+    /// it has not seen yet — and clears the metadata only after every delete succeeded. The App itself
+    /// stays on GitHub until it is deleted there. A global administrator only. Cold.
     /// </summary>
     public static IObservable<InstanceGitHubAppContent> Disconnect(IMessageHub hub) =>
         Observable.Defer(() =>
         {
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var caller = access?.Context ?? access?.CircuitContext;
             var secrets = hub.ServiceProvider.GetRequiredService<InstanceSecretCatalog>();
-            var deletes = SecretKeys
-                .Where(key => secrets.Entry(key) is { IsDeleted: false })
-                .Select(key => InstanceSecrets.Delete(hub, key).Take(1).Select(_ => key))
-                .Concat()
-                .ToList();
-            return deletes
-                .SelectMany(_ => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
-                    WriteMetadata(hub, _ => new InstanceGitHubAppContent())));
+            return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ => secrets.WhenLoaded)
+                .SelectMany(_ => access.RunAs(caller, () => SecretKeys
+                    .Where(key => secrets.Entry(key) is { IsDeleted: false })
+                    .Select(key => InstanceSecrets.Delete(hub, key).Take(1).Select(_ => key))
+                    .Concat()
+                    .ToList()))
+                .SelectMany(_ => access.RunAs(caller, () => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
+                    WriteMetadata(hub, _ => new InstanceGitHubAppContent()))));
         });
 
     private static IObservable<System.Reactive.Unit> StoreSecrets(IMessageHub hub, GitHubAppManifestConversion conversion)
@@ -432,7 +468,6 @@ public static class InstanceGitHubApp
     private static IObservable<InstanceGitHubAppContent> WriteMetadata(
         IMessageHub hub, Func<InstanceGitHubAppContent?, InstanceGitHubAppContent> fold)
     {
-        var catalog = hub.ServiceProvider.GetRequiredService<InstanceGitHubAppCatalog>();
         var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var options = hub.JsonSerializerOptions;
 
@@ -459,8 +494,18 @@ public static class InstanceGitHubApp
                     : Observable.Throw<InstanceGitHubAppContent>(ex));
         }
 
-        return catalog.WhenLoaded.SelectMany(_ => catalog.Entry(Path) is null ? Create() : Update());
+        // Existence from a fresh listing of the store, not the standing catalog: a replica whose
+        // catalog lags would otherwise try to create a node that exists, or update one that does not.
+        return ExistsNow(hub, Path).SelectMany(exists => exists ? Update() : Create());
     }
+
+    /// <summary>Whether <paramref name="path"/> exists, from a fresh listing — the existence half of
+    /// a read of a node that may not exist (never a point read of an absent node).</summary>
+    internal static IObservable<bool> ExistsNow(IMessageHub hub, string path) =>
+        hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+            .Take(1)
+            .Select(change => (change.Items ?? []).Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
 }
 
 /// <summary>The live <c>Admin/GitHubApp</c> metadata record (at most one).</summary>

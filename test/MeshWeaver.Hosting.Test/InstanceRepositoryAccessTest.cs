@@ -35,6 +35,8 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
     private const string PlatformAdmin = "platform-boss";
     private const string OtherAdmin = "platform-colleague";
     private const string PlainUser = "plain-jane";
+    /// <summary>An Editor on the Admin partition: Create and Update there, but NOT a global admin.</summary>
+    private const string AdminEditor = "admin-editor";
     private const string Repo = "https://github.com/acme/reporting";
     private const string BaseUrl = "https://portal.example.com";
 
@@ -49,7 +51,8 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
                 new MeshNode(PlainUser) { Name = "Plain Jane", NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(PlatformAdmin, "Admin", AdminPartition),
                 AssignmentNodeFactory.UserRole(OtherAdmin, "Admin", AdminPartition),
-                AssignmentNodeFactory.UserRole(PlainUser, "Admin", PlainUser))
+                AssignmentNodeFactory.UserRole(PlainUser, "Admin", PlainUser),
+                AssignmentNodeFactory.UserRole(AdminEditor, "Editor", AdminPartition))
             .AddGitHubSyncTypes()
             .ConfigureServices(services =>
             {
@@ -75,10 +78,24 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
             return work().FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
     }
 
+    /// <summary>The node at <paramref name="path"/> as one listing answers it — for ABSENCE checks
+    /// after a refused write, where nothing was ever written to wait for.</summary>
     private Task<MeshNode?> Stored(string path) =>
         Access.RunAsSystem(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1)
                 .Select(c => c.Items.FirstOrDefault()))
             .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+    /// <summary>The node at <paramref name="path"/> once the store answers it in the expected state —
+    /// re-read until it does, never judged on the first snapshot after a write.</summary>
+    private Task<MeshNode> StoredWhen(string path, Func<MeshNode, bool> expected) =>
+        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => Access.RunAsSystem(() => MeshService.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}")).Take(1)))
+            .Select(c => c.Items.FirstOrDefault())
+            .Where(n => n is not null && expected(n))
+            .Select(n => n!)
+            .FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+    private T? ContentOf<T>(MeshNode node) where T : class => node.ContentAs<T>(Mesh.JsonSerializerOptions);
 
     private static string RefusalKey(Exception ex) =>
         GitSyncRefusalException.TryGet(ex, out var refusal) ? refusal.Key : ex.Message;
@@ -98,9 +115,8 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         Assert.Equal("release", added.Ref);
         Assert.Equal(PlatformAdmin, added.AddedBy);
 
-        var node = await Stored(InstancePackageSources.PathOf(Repo)!);
-        Assert.NotNull(node);
-        Assert.Equal(InstancePackageSources.NodeType, node!.NodeType);
+        var node = await StoredWhen(InstancePackageSources.PathOf(Repo)!, n => ContentOf<InstancePackageSourceContent>(n)?.Ref == "release");
+        Assert.Equal(InstancePackageSources.NodeType, node.NodeType);
 
         await Sources.Changes.Where(_ => Sources.For(Repo) is not null)
             .Should().Within(Budget).Emit("an added source is what the catalog reads, without a restart");
@@ -114,7 +130,7 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         var removeRefused = await Assert.ThrowsAnyAsync<Exception>(
             () => As(PlainUser, () => InstancePackageSources.Remove(Mesh, Repo)));
         Assert.Equal("instanceSources.error.notAdmin", RefusalKey(removeRefused));
-        Assert.NotNull(await Stored(InstancePackageSources.PathOf(Repo)!));
+        Assert.NotNull(await StoredWhen(InstancePackageSources.PathOf(Repo)!, _ => true));
 
         await As(PlatformAdmin, () => InstancePackageSources.Remove(Mesh, Repo));
         await Sources.Changes.Where(_ => Sources.For(Repo) is null)
@@ -150,7 +166,8 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
 
         var flow = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
         Assert.StartsWith("https://github.com/organizations/acme/settings/apps/new?state=", flow.PostUrl);
-        var pending = (await Stored(InstanceGitHubApp.Path))!.ContentAs<InstanceGitHubAppContent>(Mesh.JsonSerializerOptions)!;
+        var pending = ContentOf<InstanceGitHubAppContent>(await StoredWhen(InstanceGitHubApp.Path,
+            n => ContentOf<InstanceGitHubAppContent>(n)?.PendingStateHash == InstanceGitHubApp.HashState(flow.State)))!;
         Assert.Equal(InstanceGitHubApp.HashState(flow.State), pending.PendingStateHash);
         Assert.Equal(PlatformAdmin, pending.PendingBy);
         Assert.DoesNotContain(flow.State, System.Text.Json.JsonSerializer.Serialize(pending));
@@ -190,13 +207,11 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
 
         // Encrypted at rest, every one of the four.
         foreach (var key in InstanceGitHubApp.SecretKeys)
-        {
-            var secret = (await Stored(InstanceSecrets.PathOf(key)))!.ContentAs<InstanceSecretContent>(Mesh.JsonSerializerOptions)!;
-            Assert.StartsWith("enc:", secret.EncryptedValue);
-        }
-        var keyNode = await Stored(InstanceSecrets.PathOf(InstanceGitHubApp.PrivateKeyKey));
+            await StoredWhen(InstanceSecrets.PathOf(key),
+                n => ContentOf<InstanceSecretContent>(n)?.EncryptedValue?.StartsWith("enc:", StringComparison.Ordinal) == true);
+        var keyNode = await StoredWhen(InstanceSecrets.PathOf(InstanceGitHubApp.PrivateKeyKey), _ => true);
         Assert.DoesNotContain("PRIVATE KEY", System.Text.Json.JsonSerializer.Serialize(keyNode, Mesh.JsonSerializerOptions));
-        var metadata = await Stored(InstanceGitHubApp.Path);
+        var metadata = await StoredWhen(InstanceGitHubApp.Path, n => ContentOf<InstanceGitHubAppContent>(n)?.Slug == "meshweaver-portal");
         Assert.DoesNotContain("PRIVATE KEY", System.Text.Json.JsonSerializer.Serialize(metadata, Mesh.JsonSerializerOptions));
         Assert.DoesNotContain("hook-secret", System.Text.Json.JsonSerializer.Serialize(metadata, Mesh.JsonSerializerOptions));
 
@@ -221,5 +236,80 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
             .Should().Within(Budget).Emit("a disconnected App is no identity any more");
         Assert.Null(Mesh.ServiceProvider.GetRequiredService<GitSourceCredentials>().For(Repo));
         Assert.Null(InstanceGitHubApp.WebhookSecret(Secrets));
+    }
+
+    // ───────────────────────────── only the verbs write ─────────────────────────────
+
+    [Fact]
+    public async Task ADirectWrite_ByAnAdminPartitionEditor_IsRefused_ForBothRecordTypes()
+    {
+        // Positive control: the Editor really may create a plain node in Admin, so the refusals below
+        // are the guard's verdict, not a missing grant.
+        var control = await ObserveNodeOperation(
+                new CreateNodeRequest(new MeshNode("EditorNote" + Guid.NewGuid().ToString("N")[..6], AdminPartition)
+                {
+                    NodeType = "Markdown", Name = "note", State = MeshNodeState.Active,
+                }),
+                o => o.WithAccessContext(Identity(AdminEditor)))
+            .Select(d => d.Message).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Assert.True(control.Success, $"an Admin-partition Editor creates a plain node: {control.Error}");
+
+        var source = await ObserveNodeOperation(
+                new CreateNodeRequest(new MeshNode(InstancePackageSources.IdOf(Repo)!, AdminPartition)
+                {
+                    NodeType = InstancePackageSources.NodeType, Name = "injected", State = MeshNodeState.Active,
+                    Content = new InstancePackageSourceContent { Repo = Repo },
+                }),
+                o => o.WithAccessContext(Identity(AdminEditor)))
+            .Select(d => d.Message).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Assert.False(source.Success, "a package source is never written around its verbs");
+        Assert.Null(await Stored(InstancePackageSources.PathOf(Repo)!));
+
+        var app = await ObserveNodeOperation(
+                new CreateNodeRequest(new MeshNode(InstanceGitHubApp.Id, AdminPartition)
+                {
+                    NodeType = InstanceGitHubApp.NodeType, Name = "injected", State = MeshNodeState.Active,
+                    Content = new InstanceGitHubAppContent { PendingStateHash = InstanceGitHubApp.HashState("forged"), PendingBy = AdminEditor },
+                }),
+                o => o.WithAccessContext(Identity(AdminEditor)))
+            .Select(d => d.Message).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+        Assert.False(app.Success, "the App's pending flow is never written around its verbs");
+        Assert.Null(await Stored(InstanceGitHubApp.Path));
+    }
+
+    [Fact]
+    public async Task TwoCallbacksForOneFlow_OnlyOneExchangesTheCode()
+    {
+        using var rsa = RSA.Create(2048);
+        var pem = rsa.ExportRSAPrivateKeyPem();
+        var conversions = 0;
+        var flow = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
+
+        IObservable<string> Callback() => InstanceGitHubApp.Complete(Mesh, "code", flow.State, flow.State,
+                _ => { System.Threading.Interlocked.Increment(ref conversions); return Observable.Return(Conversion(pem)); })
+            .Select(_ => "ok")
+            .Catch((Exception ex) => Observable.Return(RefusalKey(ex)));
+
+        string[] outcomes;
+        using (Access.SwitchAccessContext(Identity(PlatformAdmin)))
+            outcomes = await Observable.Merge(Callback(), Callback()).ToArray()
+                .Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, conversions);
+        Assert.Contains("ok", outcomes);
+        Assert.Contains("instanceApp.error.noPendingFlow", outcomes);
+    }
+
+    [Fact]
+    public async Task AStaleCallback_DoesNotEraseANewerFlow()
+    {
+        var older = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
+        var newer = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
+        var stale = await Assert.ThrowsAnyAsync<Exception>(() => As(PlatformAdmin,
+            () => InstanceGitHubApp.Complete(Mesh, "code", older.State, older.State,
+                _ => Observable.Throw<GitHubAppManifestConversion>(new InvalidOperationException("must not be asked")))));
+        Assert.Equal("instanceApp.error.noPendingFlow", RefusalKey(stale));
+        await StoredWhen(InstanceGitHubApp.Path,
+            n => ContentOf<InstanceGitHubAppContent>(n)?.PendingStateHash == InstanceGitHubApp.HashState(newer.State));
     }
 }

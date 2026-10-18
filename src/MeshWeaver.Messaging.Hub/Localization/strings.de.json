@@ -2475,5 +2475,9 @@
   "instanceApp.error.conversionIncomplete": "In der Antwort von GitHub fehlten ID, Slug, Client-ID oder privater Schlüssel der App; es wurde nichts gespeichert. Beginnen Sie erneut unter Administration › Paketquellen.",
   "instanceApp.page.title": "Die GitHub-App dieser Instanz erstellen",
   "instanceApp.page.explain": "GitHub zeigt Ihnen die App, die diese Instanz anfordert: privat, nur Lesezugriff auf Inhalte und Metadaten der Repositories, und ein Push-Webhook an diese Instanz. Bestätigen Sie sie dort; danach kehren Sie hierher zurück und installieren die App auf den Repositories, die diese Instanz lesen darf.",
-  "instanceApp.page.continue": "Weiter zu GitHub"
+  "instanceApp.page.continue": "Weiter zu GitHub",
+  "gitsync.app.notConfigured": "Die GitHub-App ist nicht konfiguriert (GitHub:App:ClientId + GitHub:App:PrivateKey setzen), und diese Instanz hat keine eigene GitHub-App verbunden (Administration › Paketquellen › GitHub verbinden).",
+  "gitsync.instanceApp.notConnected": "Die eigene GitHub-App dieser Instanz ist nicht verbunden (Administration › Paketquellen › GitHub verbinden).",
+  "gitsync.source.unknownIdentity": "Die Plugin-Quelle „{source}“ ({url}) soll mit der Identität „{identity}“ gelesen werden, die diese Instanz nicht kennt (die einzige angebbare Identität ist „instance“). Das Repository wird nicht gelesen — weder mit einer anderen Identität noch anonym.",
+  "instanceApp.manifest.description": "Liest die Paket- und Space-Repositories der MeshWeaver-Instanz unter {host}. Nur Lesezugriff."
 }

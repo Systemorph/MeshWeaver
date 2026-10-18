@@ -203,10 +203,9 @@ public static class InstancePackageSources
             if (PathOf(repo) is not { } path)
                 return Observable.Throw<System.Reactive.Unit>(
                     GitSyncRefusal.Of("instanceSources.error.notGitHubRepo", ("repo", repo ?? "")).ToException());
-            var catalog = hub.ServiceProvider.GetRequiredService<InstancePackageSourceCatalog>();
             var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
-                catalog.WhenLoaded.SelectMany(_ => catalog.Entry(path) is null
+                InstanceGitHubApp.ExistsNow(hub, path).SelectMany(exists => !exists
                     ? Observable.Throw<System.Reactive.Unit>(
                         GitSyncRefusal.Of("instanceSources.error.notFound", ("repo", repo)).ToException())
                     : mesh.DeleteNode(path).Take(1).Select(_ => System.Reactive.Unit.Default)));
@@ -222,7 +221,6 @@ public static class InstancePackageSources
             if (PathOf(url) is not { } path || IdOf(url) is not { } id)
                 return Observable.Throw<InstancePackageSourceContent>(
                     GitSyncRefusal.Of("instanceSources.error.notGitHubRepo", ("repo", url)).ToException());
-            var catalog = hub.ServiceProvider.GetRequiredService<InstancePackageSourceCatalog>();
             var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
             var options = hub.JsonSerializerOptions;
 
@@ -249,8 +247,9 @@ public static class InstancePackageSources
                         : Observable.Throw<InstancePackageSourceContent>(ex));
             }
 
+            // Existence from a fresh listing of the store, never the standing catalog's snapshot.
             return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user =>
-                catalog.WhenLoaded.SelectMany(_ => catalog.Entry(path) is null
+                InstanceGitHubApp.ExistsNow(hub, path).SelectMany(exists => !exists
                     ? mustExist
                         ? Observable.Throw<InstancePackageSourceContent>(
                             GitSyncRefusal.Of("instanceSources.error.notFound", ("repo", url)).ToException())

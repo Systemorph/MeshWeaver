@@ -898,15 +898,21 @@ public sealed class InstanceAutoRegistrationService(
         PluginCatalogOptions options, IReadOnlyList<InstancePackageSourceContent> instanceSources)
     {
         // The instance's own install-by-default choices (Admin/PackageSource-*.installByDefault) join
-        // the deployment's patterns as exact Source/Package entries. They never change what the
-        // RECORD's set means — the baseline decision below reads the record alone — and they carry
-        // no deployment-configuration authority, so a commercial package they name is installed from
-        // its Store card by an administrator, never unattended.
-        var wanted = options.InstallByDefault
-            .Concat(InstancePackageSources.InstallEntries(instanceSources))
+        // the deployment's patterns as exact Source/Package entries FOR SELECTION ONLY. They never
+        // change what the RECORD's set means — the baseline decision below reads the record alone —
+        // and they carry no deployment-configuration authority: that authority, and the dependency
+        // closure it admits, is derived from the record's own entries (`authorizing`) alone, so a
+        // locally chosen package can never pull a commercial requirement in as deployment-config.
+        var authorizing = options.InstallByDefault
             .Select(PluginGrantEntry.TryParse)
             .Where(e => e is not null)
             .Select(e => e!)
+            .ToList();
+        var wanted = authorizing
+            .Concat(InstancePackageSources.InstallEntries(instanceSources)
+                .Select(PluginGrantEntry.TryParse)
+                .Where(e => e is not null)
+                .Select(e => e!))
             .ToList();
         var malformed = options.InstallByDefault
             .Where(p => !string.IsNullOrWhiteSpace(p) && PluginGrantEntry.TryParse(p) is null)
@@ -947,7 +953,7 @@ public sealed class InstanceAutoRegistrationService(
                 })
             : Observable.Return(FeatureComposition.Empty);
 
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed));
+        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed, authorizing));
     }
 
     /// <summary>
@@ -996,7 +1002,8 @@ public sealed class InstanceAutoRegistrationService(
         PluginCatalogOptions options,
         IReadOnlyList<PluginGrantEntry> wanted,
         bool baseline,
-        FeatureComposition composition)
+        FeatureComposition composition,
+        IReadOnlyList<PluginGrantEntry>? authorizing = null)
     {
         var included = Parse(composition.Included);
         var excluded = Parse(composition.Excluded);
@@ -1047,7 +1054,7 @@ public sealed class InstanceAutoRegistrationService(
                         "Default-install ledger holds {Count} package(s) already seeded; they are "
                         + "not re-installed even if absent (an operator removed them).", seeded.Count);
 
-                return Candidates(sources, baseline, wanted, included, excluded)
+                return Candidates(sources, baseline, wanted, included, excluded, authorizing)
                     // Drop anything the seed has already delivered once. Done AFTER listing because
                     // the decision is per PACKAGE, and only the listing knows which packages a
                     // pattern covers.
@@ -1518,7 +1525,8 @@ public sealed class InstanceAutoRegistrationService(
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted,
         IReadOnlyList<FlagPattern> included,
-        IReadOnlyList<FlagPattern> excluded) =>
+        IReadOnlyList<FlagPattern> excluded,
+        IReadOnlyList<PluginGrantEntry>? authorizing = null) =>
         Observable.Defer(() =>
         {
             var sourceNames = sources.Select(s => s.Name).ToList();
@@ -1569,8 +1577,12 @@ public sealed class InstanceAutoRegistrationService(
                 bool IsWanted(InstallCandidate c) =>
                     wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id));
                 // Named EXACTLY by an operator entry (Source/Package), not merely covered by Source/*.
+                // The entries that carry the deployment configuration's AUTHORITY: the record's own
+                // (PluginCatalog:InstallByDefault). Selection reads `wanted`, which may also hold the
+                // instance's own choices; authority never does. Null keeps today's single list.
+                var named = authorizing ?? wanted;
                 bool IsNamed(InstallCandidate c) =>
-                    wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                    named.Any(w => w.PackageId != PluginGrantEntry.AllPackages
                                     && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
                     .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
@@ -1611,8 +1623,8 @@ public sealed class InstanceAutoRegistrationService(
                 // Only a candidate whose source is PROVEN may carry the configuration's authority
                 // (ProvenanceIsTrusted): a manifest a direct repository lists can AUTHOR any
                 // `source`, and must not borrow another configured source's Source/Package naming.
-                var named = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
-                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, named);
+                var namedPackages = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, namedPackages);
                 // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
                 // source), so the gate never authorizes the same id listed by another source.
                 var bySourceId = trustedPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
@@ -1622,13 +1634,13 @@ public sealed class InstanceAutoRegistrationService(
                         kv => DeploymentConfigAuthority.RequirementKey(bySourceId[kv.Key], kv.Key),
                         kv => kv.Value,
                         StringComparer.Ordinal));
-                var configAuthorized = named.Select(p => p.Id)
+                var configAuthorized = namedPackages.Select(p => p.Id)
                     .Concat(namedRequirements.Keys)
                     .ToImmutableHashSet(StringComparer.Ordinal);
                 string? ConfigAuthority(InstallCandidate c) =>
                     !ProvenanceIsTrusted(c) ? null
                     : IsNamed(c)
-                        ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
+                        ? $"named in PluginCatalog:InstallByDefault as '{named.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
                         : namedRequirements.TryGetValue(c.Package.Id, out var root)
                             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
                             : null;
