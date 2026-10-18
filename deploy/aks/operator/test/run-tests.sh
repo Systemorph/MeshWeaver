@@ -2912,7 +2912,7 @@ ma() {  # ma <args…>; sets $_ma_out $_ma_rc $_ma_log
 }
 ma_fixture good 'kind: ServiceAccount # fixture' \
   '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"example","namespace":"memex-secrets"}}
-{"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"t","namespace":"control"}}
+{"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"t","namespace":"control","annotations":{"kubernetes.io/service-account.name":"example"}}}
 {"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"r","namespace":"memex-secrets"},"rules":[{"apiGroups":["batch"],"resources":["jobs"],"verbs":["get","create"]}]}
 {"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"r","namespace":"memex-secrets"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"ServiceAccount","name":"example","namespace":"control"}]}'
 _ma_good="$(ma_sha good)"
@@ -2939,6 +2939,21 @@ ma_fixture placeholder 'metadata: {annotations: {azure.workload.identity/client-
 ma check --manifest demo/placeholder.yaml
 [ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"still carries a placeholder"*) true ;; *) false ;; esac \
   && ok "a placeholder left in the file is refused before kubectl" || bad "placeholder" "${_ma_out}"
+ma_tok() {  # ma_tok <env…>: check demo/good.yaml (its token Secret binds ServiceAccount "example") with a live Secret
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(env "$@" PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply check --manifest demo/good.yaml 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_tok MW_LIVE_TOKEN_SA=hosting-jobrunner
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"already holds a token for ServiceAccount 'hosting-jobrunner'"*) true ;; *) false ;; esac \
+  && ! printf '%s\n' "$_ma_log" | grep -q 'apply' \
+  && ok "a token Secret already filled for ANOTHER account is refused — an apply would keep the old token" || bad "foreign token" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_SA=example
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"exists, bound to example"*) true ;; *) false ;; esac \
+  && ok "…one already bound to the same account is fine" || bad "same token" "rc ${_ma_rc}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_FORBIDDEN=1
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is UNKNOWN"*) true ;; *) false ;; esac \
+  && ok "…and a refused read is UNKNOWN, never 'absent'" || bad "token read refused" "rc ${_ma_rc}; ${_ma_out}"
 ma_refuses() {  # ma_refuses <what> <phrase> <parsed json>
   ma_fixture bad "kind: x" "$3"
   ma check --manifest demo/bad.yaml

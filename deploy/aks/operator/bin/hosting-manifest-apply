@@ -144,6 +144,28 @@ jq -r '(if .kind == "List" then .items else [.] end)[] | "object    \(.kind) \(i
   "$work/objects.json" | while IFS= read -r line; do hosting::log "$line"; done
 hosting::say manifest_objects "$count"
 
+# A service-account TOKEN Secret already on the cluster, filled for ANOTHER account, is not re-pointed by
+# an apply: the token controller keeps the old account's UID and the old signed token, so the Secret would
+# go on authenticating as the old account under the new annotation (review of MeshWeaver#6946 — a control
+# portal bootstrapped with jobrunner.yaml holds `hosting-jobrunner-token` for `hosting-jobrunner`, which
+# is bound in memex-ops). Refused by name; the remedy is to delete that Secret (revoking its token) through
+# a governed change, then apply. Metadata only: the jsonpath reads the annotation, never `data`.
+jq -r '.items[] | select(.kind == "Secret") | "\(.metadata.namespace // "default")\t\(.metadata.name)\t\(.metadata.annotations["kubernetes.io/service-account.name"] // "")"' \
+  "$work/objects.json" > "$work/tokens"
+while IFS=$'\t' read -r t_ns t_name t_sa; do
+  [ -n "$t_name" ] || continue
+  if ! live="$(kubectl -n "$t_ns" get secret "$t_name" --ignore-not-found \
+                 -o 'jsonpath={.metadata.name}{"\t"}{.metadata.annotations.kubernetes\.io/service-account\.name}' 2>"$work/err")"; then
+    hosting::die "could not read Secret ${t_ns}/${t_name}'s metadata: $(head -1 "$work/err"). Whether a token for another account already sits there is UNKNOWN, so nothing was applied."
+  fi
+  [ -n "$live" ] || continue
+  live_sa="${live#*$'\t'}"
+  if [ "$live_sa" != "$t_sa" ]; then
+    hosting::die "Secret ${t_ns}/${t_name} already holds a token for ServiceAccount '${live_sa:-<none>}', and this file binds it to '${t_sa}'. An apply would keep the OLD account's token under the new annotation. Delete that Secret first (it revokes the old token) through a governed change, then re-request — nothing was applied."
+  fi
+  hosting::log "token     ${t_ns}/${t_name} exists, bound to ${live_sa} as this file says"
+done < "$work/tokens"
+
 if [ "$mode" = check ]; then
   hosting::step "Ask the API server what applying deploy/aks/manifests/${manifest} would change"
   # The server's own answer (admission, RBAC escalation checks, schema) — persisted nowhere. Each line
