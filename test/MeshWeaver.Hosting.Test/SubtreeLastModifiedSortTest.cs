@@ -347,7 +347,8 @@ public class SubtreeLastModifiedSortTest
         // snapshot ever holds more than the window (review #4306054491: it held three under limit:2).
         var cache = new Dictionary<string, MeshNode>();
         var sizes = new List<int>();
-        foreach (var frame in frames.Take(6).ToEnumerable())
+        var folded = await frames.Take(6).ToList().Timeout(TestTimeouts.Convergence).Await(ct);
+        foreach (var frame in folded)
         {
             foreach (var node in frame.Items)
                 if (frame.ChangeType == QueryChangeType.Removed) cache.Remove(node.Path);
