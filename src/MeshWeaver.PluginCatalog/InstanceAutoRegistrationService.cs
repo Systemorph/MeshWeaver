@@ -1372,10 +1372,12 @@ public sealed class InstanceAutoRegistrationService(
         var fromConfig = services.GetService<IConfiguration>() is { } config
             ? PackageSources.FromConfiguration(hub, config, logger)
             : [];
-        // Beside the record's sources, the ones the instance's administrators added ON the instance
-        // (Doc/Architecture/InstanceRepositoryAccess); a repository the record names stays the record's.
-        IReadOnlyList<ConfiguredPackageSource> configured =
-            [.. fromConfig, .. PackageSources.FromInstance(hub, fromConfig, logger)];
+        IReadOnlyList<ConfiguredPackageSource> configured = fromConfig;
+        // The sources the instance's administrators added ON the instance
+        // (Doc/Architecture/InstanceRepositoryAccess) come LAST — after the registries too — so they
+        // can never shadow a package the deployment's own sources list (the first listing of an id
+        // wins); a repository the record names stays the record's.
+        var instanceLocal = PackageSources.FromInstance(hub, fromConfig, logger);
 
         var tokenResolver = services.GetService<RegistryTokenResolver>();
         var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
@@ -1417,6 +1419,7 @@ public sealed class InstanceAutoRegistrationService(
         return remote.Select(remoteSources => (IReadOnlyList<ConfiguredPackageSource>)registered
             .Concat(configured)
             .Concat(remoteSources)
+            .Concat(instanceLocal)
             .ToList());
     }
 
@@ -1581,6 +1584,9 @@ public sealed class InstanceAutoRegistrationService(
                 // (PluginCatalog:InstallByDefault). Selection reads `wanted`, which may also hold the
                 // instance's own choices; authority never does. Null keeps today's single list.
                 var named = authorizing ?? wanted;
+                bool IsSelectedExactly(InstallCandidate c) =>
+                    wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                                    && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 bool IsNamed(InstallCandidate c) =>
                     named.Any(w => w.PackageId != PluginGrantEntry.AllPackages
                                     && w.Matches(c.Package.Source ?? "", c.Package.Id));
@@ -1706,8 +1712,10 @@ public sealed class InstanceAutoRegistrationService(
                         // Selected ONLY because a whole-source pattern (`Source/*`) covers it — no
                         // entry names it, no flag declares it, it is not the platform baseline.
                         // Read by the governed-provision hold in InstallSelection.
+                        // Exact-versus-wildcard reads EVERY exact selection (the record's and the
+                        // instance's own); only the configuration AUTHORITY is the record's alone.
                         WildcardOnly = IsWanted(c)
-                                       && !IsNamed(c)
+                                       && !IsSelectedExactly(c)
                                        && !IsIncluded(c)
                                        && !(baseline && c.Package.PreInstalled),
                         // Why the deployment configuration authorizes it — named exactly, or
@@ -2092,8 +2100,13 @@ public sealed class InstanceAutoRegistrationService(
     /// Selection itself is unchanged; only the authority is withheld. Pure.
     /// </summary>
     private static bool ProvenanceIsTrusted(InstallCandidate candidate) =>
-        candidate.Source.Source is RegistryPackageSource
-        || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase);
+        // 🚨 An instance-local source (Doc/Architecture/InstanceRepositoryAccess) is NEVER trusted to
+        // carry the deployment configuration's authority, whatever it is named: its administrator
+        // chose the name, so a local repository called like a configured source must not inherit
+        // that source's Source/Package entries — or the commercial requirements they admit.
+        !candidate.Source.InstanceLocal
+        && (candidate.Source.Source is RegistryPackageSource
+            || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether two source names are the same non-empty source (case-insensitive, like
     /// <see cref="PluginGrantEntry.Matches"/>). Pure.</summary>

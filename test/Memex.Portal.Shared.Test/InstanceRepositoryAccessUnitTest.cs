@@ -79,11 +79,11 @@ public class InstanceRepositoryAccessUnitTest
 
     // ───────────────────────────── the state ─────────────────────────────
 
-    private static InstanceGitHubAppContent Pending(string state, string by = "boss", DateTimeOffset? expires = null) => new()
+    private static InstanceGitHubAppFlowContent Pending(string state, string by = "boss", DateTimeOffset? expires = null) => new()
     {
-        PendingStateHash = InstanceGitHubApp.HashState(state),
-        PendingExpiresAt = expires ?? Now.AddMinutes(5),
-        PendingBy = by,
+        StateHash = InstanceGitHubApp.HashState(state),
+        ExpiresAt = expires ?? Now.AddMinutes(5),
+        StartedBy = by,
     };
 
     [Fact]
@@ -112,7 +112,7 @@ public class InstanceRepositoryAccessUnitTest
             InstanceGitHubApp.CheckState(Pending(state), null, null, "boss", Now)!.Key);
         // A replay, after the pending flow was cleared — or a state nobody recorded.
         Assert.Equal("instanceApp.error.noPendingFlow",
-            InstanceGitHubApp.CheckState(new InstanceGitHubAppContent(), state, state, "boss", Now)!.Key);
+            InstanceGitHubApp.CheckState(new InstanceGitHubAppFlowContent(), state, state, "boss", Now)!.Key);
         Assert.Equal("instanceApp.error.noPendingFlow",
             InstanceGitHubApp.CheckState(null, state, state, "boss", Now)!.Key);
         Assert.Equal("instanceApp.error.noPendingFlow",
@@ -164,6 +164,31 @@ public class InstanceRepositoryAccessUnitTest
         var refused = Assert.ThrowsAny<Exception>(() => GitHubAppManifestConversion.Parse(json));
         Assert.True(GitSyncRefusalException.TryGet(refused, out var refusal));
         Assert.Equal(key, refusal.Key);
+    }
+
+    [Fact]
+    public void AFlowsNode_IsNamedByItsStatesHash_NeverTheState()
+    {
+        var state = InstanceGitHubApp.NewState();
+        var path = InstanceGitHubApp.FlowPath(state);
+        Assert.StartsWith("Admin/GitHubAppFlow-", path);
+        Assert.DoesNotContain(state, path);
+        Assert.Equal(path, InstanceGitHubApp.FlowPath(state));
+        Assert.NotEqual(path, InstanceGitHubApp.FlowPath(InstanceGitHubApp.NewState()));
+    }
+
+    // ───────────────────────────── the credential bundle ─────────────────────────────
+
+    [Fact]
+    public void TheCredentialBundle_RoundTrips_AndIsNeverPrinted()
+    {
+        var bundle = new InstanceGitHubAppCredentials(4242, "Iv23liInstance", "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n", Now);
+        var back = InstanceGitHubAppCredentials.Parse(bundle.Serialize());
+        Assert.Equal(bundle, back);
+        Assert.DoesNotContain("PRIVATE KEY", bundle.ToString());
+        Assert.Null(InstanceGitHubAppCredentials.Parse("not json"));
+        Assert.Null(InstanceGitHubAppCredentials.Parse("{\"clientId\":\"c\"}"));
+        Assert.Null(InstanceGitHubAppCredentials.Parse(null));
     }
 
     // ───────────────────────────── which App mints ─────────────────────────────

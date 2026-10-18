@@ -191,8 +191,9 @@ public sealed class GitHubRepoIdentityResolver(
                 // it is — never an anonymous read in its place.
                 : SourceCredentials?.TokenFor(repositoryUrl) is { } declared
                     ? declared
-                : appTokens is { IsConfigured: true }
-                    ? appTokens.GetInstallationToken()
+                // Decided once the identity can be (a cold replica's instance App is not "absent").
+                : appTokens is not null
+                    ? appTokens.GetInstallationTokenOrAnonymous()
                     : Observable.Return(string.Empty));
     }
 

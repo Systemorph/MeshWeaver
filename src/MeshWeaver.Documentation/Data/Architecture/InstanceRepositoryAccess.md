@@ -71,7 +71,8 @@ shape. Its readers:
   preInstalled-baseline decision stays the record's. A commercial package an instance source names
   is not installed unattended — that needs the deployment configuration's authority, which only the
   record carries; the administrator installs it from its Store card instead, as the authorizing
-  principal.
+  principal. An instance source is listed AFTER the deployment's sources and registries, so it never
+  shadows a package they list, and it never carries their authority, whatever it is named.
 - **The credential resolution** (`GitSourceCredentials`, below).
 
 The configured list (`PackageSources.FromConfiguration`) is unchanged, so a REGISTRY instance never
@@ -96,15 +97,15 @@ sequenceDiagram
     participant I as This instance
     participant G as github.com
     A->>I: Administration › Package sources › Connect GitHub (organization)
-    I->>I: mint state, keep its hash + expiry + admin on Admin/GitHubApp, set state cookie
+    I->>I: mint state, create its flow node Admin/GitHubAppFlow-{hash} (hash, expiry, admin), set state cookie
     I-->>A: form that POSTs the manifest to github.com/organizations/{org}/settings/apps/new?state=…
     A->>G: submit (GitHub shows the app to be created; the admin confirms)
     G-->>A: redirect to {instance}/admin/github-app/callback?code=…&state=…
     A->>I: callback
-    I->>I: cookie == state, hash matches, not expired, same admin — then clear (one use)
+    I->>I: cookie == state, flow node found, not expired, same admin — then DELETE the flow node (one use)
     I->>G: POST /app-manifests/{code}/conversions
     G-->>I: id, slug, client_id, pem, webhook_secret, owner
-    I->>I: store app id, client id, private key, webhook secret ENCRYPTED (Admin/Secret-*), metadata on Admin/GitHubApp
+    I->>I: store the credential bundle (app id, client id, private key) + webhook secret ENCRYPTED (Admin/Secret-*), metadata on Admin/GitHubApp
     I-->>A: back to the page: "Install the app on your repositories"
     A->>G: install on the selected repositories
 ```
@@ -133,9 +134,10 @@ role).
 
 | what | where | how |
 |---|---|---|
-| App id, client id, private key (PEM), webhook secret | `Admin/Secret-github--instanceapp--{appid,clientid,privatekey,webhooksecret}` — keys `GitHub:InstanceApp:AppId`, `:ClientId`, `:PrivateKey`, `:WebhookSecret` | [Instance Secrets](../InstanceSecrets): `enc:`-tagged AES-256-GCM with the instance's master key (`Ai:KeyProtection:MasterKey`), write-only, never shown, never logged |
-| slug, name, owner login, html url, who connected it and when | `Admin/GitHubApp` (node type `InstanceGitHubApp`) | plain content — none of it is a credential; the page needs the slug to link the installation page |
-| the flow's pending state | `Admin/GitHubApp` → `pendingStateHash` (SHA-256), `pendingExpiresAt`, `pendingBy`, `pendingOrganization` | the hash only; the state itself lives in the browser's cookie and GitHub's redirect |
+| App id, client id, private key (PEM) — ONE bundle, with the instant its flow was consumed | `Admin/Secret-github--instanceapp--credentials` (key `GitHub:InstanceApp:Credentials`) | [Instance Secrets](../InstanceSecrets): `enc:`-tagged AES-256-GCM with the instance's master key (`Ai:KeyProtection:MasterKey`), write-only, never shown, never logged. One value, replaced as a whole: a reader never combines one App's client id with another App's key |
+| webhook secret | `Admin/Secret-github--instanceapp--webhooksecret` (key `GitHub:InstanceApp:WebhookSecret`) | the same; used only while the bundle is live |
+| slug, name, owner login, html url, who connected it and when, the last disconnect (`revokedBefore`) | `Admin/GitHubApp` (node type `InstanceGitHubApp`) | plain content — none of it is a credential; the page needs the slug to link the installation page |
+| a flow in progress | its own node, `Admin/GitHubAppFlow-{first 32 hex of SHA-256(state)}` (node type `InstanceGitHubAppFlow`): hash, expiry, who started it, the organization | the hash only; the state itself lives in the browser's cookie and GitHub's redirect |
 | the OAuth client secret GitHub also returns | **nowhere** | the instance never acts as an OAuth client of this App, so it does not keep a credential it never uses |
 
 Nothing of this reaches the control instance: no record field, no InstanceAction, no announcement.
@@ -172,27 +174,37 @@ App's webhook secret — whichever signs it. Either may be absent; with neither,
 ## Security review
 
 **CSRF and state.** The state is 32 random bytes, bound three ways: a `Secure`, `HttpOnly`,
-`SameSite=Lax` cookie in the admin's browser; its SHA-256 on `Admin/GitHubApp` with a 10-minute
-expiry and the admin's user id; and GitHub's redirect. The callback requires all three to agree
-(constant-time comparison) and clears the pending state in the same write that stores the App — one
-use. A code from a flow somebody else started, a replayed callback, an expired one or a different
-admin's all fail, by name, and nothing is stored. The manifest's `redirect_url` names this instance
+`SameSite=Lax` cookie in the admin's browser, scoped to the callback path; a flow node named by its
+SHA-256 with a 10-minute expiry and the admin's user id; and GitHub's redirect. The callback requires
+all three to agree (constant-time comparison); a mismatched cookie is refused before any node is read.
+It then CONSUMES the flow by deleting its node — a delete the node's owner decides, so of two callbacks
+for one flow exactly one proceeds, whichever replicas they land on, and only that one exchanges the
+code. A refused callback for that flow deletes it too. Every flow is its own node, so a callback can
+never touch another flow, a newer one included. A code from a flow somebody else started, a replayed
+callback, an expired one or a different admin's all fail, by name, and nothing is stored. The manifest's `redirect_url` names this instance
 only, so GitHub sends the one-time code nowhere else, and the code itself is good for one conversion
 within an hour.
 
 **Admin only.** Both endpoints require a signed-in user, and the start and the callback check
 `hub.IsGlobalAdmin` as that user before anything is written; the writes then run as system. The
+records themselves accept no other writer: `InstanceRepositoryAccessWriteGuard` refuses a direct
+create, update or delete of a source, the App's metadata or a flow by anyone but the platform — an
+Admin-partition Editor is not a global administrator. The
 Store page that offers the button is an admin-only Administration tab — the gate there is
 convenience; the endpoint's check is the control.
 
 **Key rotation.** GitHub owns the App's keys. To rotate: generate a new private key on the App's
-GitHub settings page, paste it into the page's write-only **Private key** field (it replaces the stored
-value; the next mint signs with it — tokens already minted stay valid until their hour ends), then
+GitHub settings page, paste it into the page's write-only **Private key** field
+(`InstanceGitHubApp.RotatePrivateKey` replaces the key inside the bundle, as one value; the next mint signs with it — tokens already minted stay valid until their hour ends), then
 delete the old key on GitHub. The webhook secret rotates the same way. Every replacement is an
 Instance Secrets `Set`, so its fingerprint, who set it and when are recorded.
 
-**Delete.** **Disconnect** deletes the four secrets (recoverable for the Instance Secrets recovery
-window, then gone) and clears the metadata. From the next mint the instance has no App; nothing falls
+**Delete.** **Disconnect** FIRST records the revocation instant on `Admin/GitHubApp`
+(`revokedBefore`) and only then deletes the secrets (recoverable for the Instance Secrets recovery
+window, then gone). A bundle consumed at or before the last disconnect is dead — including one a
+callback already in flight publishes after the disconnect — so a race cannot undo a disconnect. (The
+two instants come from two replicas' clocks; a connect consumed within clock skew of a disconnect is
+judged by those clocks.) From the next mint the instance has no App; nothing falls
 back to it. The App itself still exists on GitHub until the administrator deletes it there — the page
 links its settings page and says so, because an App that is only disconnected keeps its installation
 and its keys on GitHub's side.
@@ -209,8 +221,12 @@ them, and they decrypt only with the same master key:
 A backup is therefore no more sensitive than the master key that guards it — the same property every
 portal-entered secret has.
 
-**Multi-replica consistency.** Nothing lives in a pod: the pending state is on a node, the secrets
-are nodes, and every replica's secret catalog follows them live. The start can run on one replica and
+**Multi-replica consistency.** Nothing lives in a pod: a flow is a node, the secrets are nodes, and
+every replica's catalogs follow them live. A replica decides "this instance has no App" only after
+both catalogs have LISTED the store (`InstanceGitHubApp.WhenReadable`, `GitHubAppTokenService.WhenReady`),
+so a cold replica neither mints anonymously nor refuses a webhook its App signed; a catalog whose
+query is down fails closed. Writing a source or the metadata decides existence from a fresh listing,
+never a lagging snapshot. The start can run on one replica and
 the callback on another. Each replica mints and caches its own installation tokens (keyed by client
 id and installation owner, so a different App never reuses another's token).
 

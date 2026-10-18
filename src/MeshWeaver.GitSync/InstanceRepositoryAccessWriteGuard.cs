@@ -32,16 +32,16 @@ internal sealed class InstanceRepositoryAccessWriteGuard : INodeValidator, IOwne
         var guarded = IsGuarded(context.Node) || IsGuarded(context.ExistingNode);
         if (!guarded || IsPlatformWriter(context.AccessContext))
             return Pass;
+        // In the writer's language: the refusal reaches the rejected caller.
         return Observable.Return(NodeValidationResult.Unauthorized(
-            "An instance's package sources and its GitHub App record are written only through their verbs "
-            + "(InstancePackageSources, InstanceGitHubApp), which check that the caller is a global "
-            + "administrator. A direct write is refused."));
+            LocalizationCatalog.Get("instanceRepositoryAccess.error.directWrite", context.AccessContext?.Locale)));
     }
 
     /// <summary>Whether <paramref name="node"/> is one of the guarded record types. Pure.</summary>
     internal static bool IsGuarded(MeshNode? node) =>
         string.Equals(node?.NodeType, InstancePackageSources.NodeType, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(node?.NodeType, InstanceGitHubApp.NodeType, StringComparison.OrdinalIgnoreCase);
+        || string.Equals(node?.NodeType, InstanceGitHubApp.NodeType, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(node?.NodeType, InstanceGitHubApp.FlowNodeType, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>The platform's own writers: no identity (infrastructure), a hub, or the system user. Pure.</summary>
     internal static bool IsPlatformWriter(AccessContext? accessContext) =>

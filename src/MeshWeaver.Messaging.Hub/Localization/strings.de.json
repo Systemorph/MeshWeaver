@@ -2479,5 +2479,7 @@
   "gitsync.app.notConfigured": "Die GitHub-App ist nicht konfiguriert (GitHub:App:ClientId + GitHub:App:PrivateKey setzen), und diese Instanz hat keine eigene GitHub-App verbunden (Administration › Paketquellen › GitHub verbinden).",
   "gitsync.instanceApp.notConnected": "Die eigene GitHub-App dieser Instanz ist nicht verbunden (Administration › Paketquellen › GitHub verbinden).",
   "gitsync.source.unknownIdentity": "Die Plugin-Quelle „{source}“ ({url}) soll mit der Identität „{identity}“ gelesen werden, die diese Instanz nicht kennt (die einzige angebbare Identität ist „instance“). Das Repository wird nicht gelesen — weder mit einer anderen Identität noch anonym.",
-  "instanceApp.manifest.description": "Liest die Paket- und Space-Repositories der MeshWeaver-Instanz unter {host}. Nur Lesezugriff."
+  "instanceApp.manifest.description": "Liest die Paket- und Space-Repositories der MeshWeaver-Instanz unter {host}. Nur Lesezugriff.",
+  "instanceApp.error.notAPrivateKey": "Das ist kein privater Schlüssel im PEM-Format (er muss 'PRIVATE KEY' enthalten). Es wurde nichts gespeichert.",
+  "instanceRepositoryAccess.error.directWrite": "Die Paketquellen einer Instanz und die Einträge ihrer GitHub-App werden nur über ihre Verben geschrieben, die prüfen, dass der Aufrufer globaler Administrator ist. Ein direktes Schreiben wird abgelehnt."
 }

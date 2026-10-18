@@ -60,7 +60,8 @@ public static class GitHubSyncConfiguration
         services.AddSingleton(sp => new GitHubAppTokenService(
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
-            () => InstanceGitHubApp.Options(sp.GetService<InstanceSecretCatalog>()),
+            () => InstanceGitHubApp.Options(sp),
+            () => InstanceGitHubApp.WhenReadable(sp),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
         services.AddSingleton(sp => new GitHubAppManifestClient(sp.GetRequiredService<IoPoolRegistry>()));
         // Per-source credentials: a configured git source may name its own token (a configuration
@@ -286,11 +287,12 @@ public static class GitHubSyncConfiguration
             // package sources its global administrators add, and its GitHub App's metadata. Both in
             // the Admin partition, written only through their verbs (global admin, then as system).
             InstancePackageSources.CreateMeshNode(),
-            InstanceGitHubApp.CreateMeshNode());
+            InstanceGitHubApp.CreateMeshNode(),
+            InstanceGitHubApp.CreateFlowMeshNode());
         // The App's credentials are Instance Secrets: the portal may set exactly these four keys.
         foreach (var key in InstanceGitHubApp.SecretKeys)
             builder.AddInstanceSecretSlot(key);
-        builder.AddAutocompleteExcludedTypes(InstancePackageSources.NodeType, InstanceGitHubApp.NodeType);
+        builder.AddAutocompleteExcludedTypes(InstancePackageSources.NodeType, InstanceGitHubApp.NodeType, InstanceGitHubApp.FlowNodeType);
         builder.ConfigureServices(s => s
             .AddSingleton<InstancePackageSourceCatalog>()
             .AddSingleton<InstanceGitHubAppCatalog>()
@@ -308,7 +310,8 @@ public static class GitHubSyncConfiguration
             .WithType<BuildCompletion>(nameof(BuildCompletion))
             .WithType<MissedBuildFact>(nameof(MissedBuildFact))
             .WithType<InstancePackageSourceContent>(nameof(InstancePackageSourceContent))
-            .WithType<InstanceGitHubAppContent>(nameof(InstanceGitHubAppContent)));
+            .WithType<InstanceGitHubAppContent>(nameof(InstanceGitHubAppContent))
+            .WithType<InstanceGitHubAppFlowContent>(nameof(InstanceGitHubAppFlowContent)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))

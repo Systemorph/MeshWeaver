@@ -2479,5 +2479,7 @@
   "gitsync.app.notConfigured": "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey), and this instance has connected no GitHub App of its own (Administration › Package sources › Connect GitHub).",
   "gitsync.instanceApp.notConnected": "This instance's own GitHub App is not connected (Administration › Package sources › Connect GitHub).",
   "gitsync.source.unknownIdentity": "Plugin source '{source}' ({url}) asks to be read with the identity '{identity}', which this instance does not know (the one stated identity is 'instance'). The repository is not read — not with another identity, not anonymously.",
-  "instanceApp.manifest.description": "Reads the package and Space repositories of the MeshWeaver instance at {host}. Read-only."
+  "instanceApp.manifest.description": "Reads the package and Space repositories of the MeshWeaver instance at {host}. Read-only.",
+  "instanceApp.error.notAPrivateKey": "That is not a PEM private key (it must contain 'PRIVATE KEY'). Nothing was saved.",
+  "instanceRepositoryAccess.error.directWrite": "An instance's package sources and its GitHub App records are written only through their verbs, which check that the caller is a global administrator. A direct write is refused."
 }

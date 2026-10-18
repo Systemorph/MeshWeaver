@@ -53,6 +53,9 @@ public sealed class GitHubAppTokenService
     // a connect, a rotation or a disconnect on any replica takes effect at the next mint, with no
     // restart. Null when the host wires none (a bare test mesh, a CLI).
     private readonly Func<GitHubAppOptions?>? instanceApp;
+    // Emits once the stores the instance's App is read from have LISTED (InstanceGitHubApp.WhenReadable):
+    // a cold replica must not decide "no App" from catalogs that have read nothing yet.
+    private readonly Func<IObservable<System.Reactive.Unit>>? instanceAppReady;
 
     /// <summary>Initializes the service.</summary>
     /// <param name="ioPools">Registry the HTTP I/O pool is resolved from so every HTTP leaf runs off the hub.</param>
@@ -65,15 +68,17 @@ public sealed class GitHubAppTokenService
         ILogger<GitHubAppTokenService>? logger = null,
         HttpClient? httpClient = null,
         Func<DateTimeOffset>? clock = null)
-        : this(ioPools, options, instanceApp: null, logger, httpClient, clock)
+        : this(ioPools, options, instanceApp: null, instanceAppReady: null, logger, httpClient, clock)
     {
     }
 
     /// <summary>Initializes the service with the instance's own App beside the deployment's.</summary>
     /// <param name="ioPools">Registry the HTTP I/O pool is resolved from so every HTTP leaf runs off the hub.</param>
     /// <param name="options">The DEPLOYMENT's <see cref="GitHubAppOptions"/> (<c>GitHub:App</c>).</param>
-    /// <param name="instanceApp">Reads the instance's OWN App identity live (<see cref="InstanceGitHubApp.Options"/>);
+    /// <param name="instanceApp">Reads the instance's OWN App identity live (<see cref="InstanceGitHubApp.Options(System.IServiceProvider)"/>);
     /// null when the host wires none. Used whenever the deployment configures no App.</param>
+    /// <param name="instanceAppReady">Emits once the instance App's stores have listed; null treats
+    /// them as read.</param>
     /// <param name="logger">Optional logger.</param>
     /// <param name="httpClient">Optional <see cref="HttpClient"/> to reuse; a default one is created when null.</param>
     /// <param name="clock">Optional clock.</param>
@@ -81,6 +86,7 @@ public sealed class GitHubAppTokenService
         IoPoolRegistry ioPools,
         IOptions<GitHubAppOptions> options,
         Func<GitHubAppOptions?>? instanceApp,
+        Func<IObservable<System.Reactive.Unit>>? instanceAppReady = null,
         ILogger<GitHubAppTokenService>? logger = null,
         HttpClient? httpClient = null,
         Func<DateTimeOffset>? clock = null)
@@ -88,6 +94,7 @@ public sealed class GitHubAppTokenService
         this.ioPools = ioPools;
         this.options = options.Value;
         this.instanceApp = instanceApp;
+        this.instanceAppReady = instanceAppReady;
         this.logger = logger;
         now = clock ?? (() => DateTimeOffset.UtcNow);
         http = httpClient ?? new HttpClient();
@@ -108,6 +115,31 @@ public sealed class GitHubAppTokenService
 
     /// <summary>True when the instance's OWN App is connected and readable. Read live.</summary>
     public bool HasInstanceApp => InstanceOptions() is not null;
+
+    /// <summary>
+    /// Emits once the identity can be DECIDED: at once when the deployment configures an App, else
+    /// once the instance App's stores have listed — bounded, so an unreadable store answers "no App"
+    /// rather than holding its caller forever (logged). Ask <see cref="IsConfigured"/> after it.
+    /// </summary>
+    public IObservable<System.Reactive.Unit> WhenReady =>
+        Observable.Defer(() => options.IsConfigured || instanceAppReady is null
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : instanceAppReady().Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "The instance's own GitHub App could not be read within 30 s; deciding without it.");
+                    return Observable.Return(System.Reactive.Unit.Default);
+                }));
+
+    /// <summary>
+    /// The installation token when an App identity is available once the identity can be decided
+    /// (<see cref="WhenReady"/>), else an empty string (anonymous). The choice is made on every
+    /// subscription, so a long-lived consumer follows a connect or a disconnect.
+    /// </summary>
+    public IObservable<string> GetInstallationTokenOrAnonymous() =>
+        WhenReady.SelectMany(_ => IsConfigured ? GetInstallationToken() : Observable.Return(string.Empty));
 
     private GitHubAppOptions? InstanceOptions() =>
         instanceApp?.Invoke() is { IsConfigured: true } app ? app with { ApiBaseUrl = options.ApiBaseUrl } : null;
@@ -166,10 +198,11 @@ public sealed class GitHubAppTokenService
         // stale capture, never matched the current promise again, and handed the expired token
         // back on every pass — two token lifetimes after boot, every private source read as
         // "Bad credentials" until the process restarted (Systemorph/Memex#165).
-        return Observable.Defer(() =>
+        return WhenReady.SelectMany(_ => Observable.Defer(() =>
         {
-            // The identity is resolved at SUBSCRIPTION, like the promise: a held observable follows a
-            // connect, a rotation or a disconnect of the instance's own App.
+            // The identity is resolved at SUBSCRIPTION, like the promise — and only once it can be
+            // decided (WhenReady): a held observable follows a connect, a rotation or a disconnect of
+            // the instance's own App, and a cold replica does not answer "not configured" early.
             var app = identity();
             if (!app.IsConfigured)
             {
@@ -189,7 +222,7 @@ public sealed class GitHubAppTokenService
                 tok.ExpiresAt > now().AddMinutes(5)
                     ? Observable.Return(tok.Token)
                     : Refresh(key, app, owner, source).Select(t => t.Token));
-        })
+        }))
         // 🚨 EVERY fault out of this method is a GitHubAppTokenMintException — translate all of it
         // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
         // package feed does, so a public source keeps working) must be able to say WHICH failure it

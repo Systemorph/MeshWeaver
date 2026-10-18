@@ -72,6 +72,13 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     /// Cost when nothing changed: none — the install short-circuits on the content hash.
     /// </summary>
     public bool LocalCheckout { get; init; }
+
+    /// <summary>
+    /// True for a source the instance's own administrators added on the instance
+    /// (<see cref="PackageSources.FromInstance"/>). Such a source selects packages but never carries
+    /// the deployment configuration's authority, whatever its name (Doc/Architecture/InstanceRepositoryAccess).
+    /// </summary>
+    public bool InstanceLocal { get; init; }
 }
 
 /// <summary>
@@ -362,6 +369,7 @@ public static class PackageSources
                 ? new ConfiguredPackageSource(source, InstancePackageSources.RefOf(s), InstancePackageSources.NameOf(s))
                 {
                     RepoPath = s.Repo,
+                    InstanceLocal = true,
                 }
                 : null)
             .Where(s => s is not null)
@@ -459,9 +467,9 @@ public static class PackageSources
         // instance's own App can be connected (or its secrets finish loading) after a long-lived
         // source was constructed, and a delegate captured as anonymous would read anonymously for
         // the rest of its life (Doc/Architecture/InstanceRepositoryAccess).
-        return () => appTokens is { IsConfigured: true }
-            ? appTokens.GetInstallationToken()
-            : Observable.Return(string.Empty);
+        return () => appTokens is null
+            ? Observable.Return(string.Empty)
+            : appTokens.GetInstallationTokenOrAnonymous();
     }
 
     /// <summary>

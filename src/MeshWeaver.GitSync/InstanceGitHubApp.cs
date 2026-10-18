@@ -20,8 +20,8 @@ namespace MeshWeaver.GitSync;
 /// <summary>
 /// What an instance knows about its OWN GitHub App that is not a credential — stored on
 /// <c>Admin/GitHubApp</c> (node type <see cref="InstanceGitHubApp.NodeType"/>). The App's
-/// credentials (app id, client id, private key, webhook secret) are NOT here: they are Instance
-/// Secrets (<see cref="InstanceGitHubApp.AppIdKey"/> and siblings), encrypted at rest and never shown.
+/// credentials are NOT here: they are Instance Secrets (<see cref="InstanceGitHubApp.CredentialsKey"/>,
+/// <see cref="InstanceGitHubApp.WebhookSecretKey"/>), encrypted at rest and never shown.
 /// See <c>Doc/Architecture/InstanceRepositoryAccess</c>.
 /// </summary>
 public record InstanceGitHubAppContent
@@ -45,18 +45,82 @@ public record InstanceGitHubAppContent
     /// <summary>Who connected it (a user id; attribution only).</summary>
     public string? ConnectedBy { get; init; }
 
-    /// <summary>SHA-256 (hex) of the state of the manifest flow in progress, or null. The state
-    /// itself is never stored.</summary>
-    public string? PendingStateHash { get; init; }
+    /// <summary>
+    /// The last DISCONNECT: every credential bundle consumed at or before this instant is dead,
+    /// including one an in-flight callback publishes after the disconnect. Only a disconnect writes
+    /// it, so a field merge can never lose it.
+    /// </summary>
+    public DateTimeOffset? RevokedBefore { get; init; }
+}
 
-    /// <summary>When the flow in progress expires.</summary>
-    public DateTimeOffset? PendingExpiresAt { get; init; }
+/// <summary>
+/// ONE manifest flow in progress — its own node, <c>Admin/GitHubAppFlow-{hash}</c>, created when an
+/// administrator starts the flow and DELETED to consume it. A delete is decided by the node's owner,
+/// so of two callbacks for one flow exactly one consumes it, whatever replica each lands on; and a
+/// callback for one flow can never touch another. The state itself is never stored, only its hash.
+/// </summary>
+public record InstanceGitHubAppFlowContent
+{
+    /// <summary>SHA-256 (hex) of the flow's state.</summary>
+    public string StateHash { get; init; } = "";
 
-    /// <summary>Who started the flow in progress — only they may complete it.</summary>
-    public string? PendingBy { get; init; }
+    /// <summary>When the flow expires.</summary>
+    public DateTimeOffset ExpiresAt { get; init; }
 
-    /// <summary>The organization the flow in progress creates the App in; null for a personal account.</summary>
-    public string? PendingOrganization { get; init; }
+    /// <summary>Who started it — only they may complete it.</summary>
+    public string StartedBy { get; init; } = "";
+
+    /// <summary>The organization the App is created in; null for a personal account.</summary>
+    public string? Organization { get; init; }
+}
+
+/// <summary>
+/// The App's credentials as ONE secret value — replaced as a whole, so a reader never combines one
+/// App's client id with another App's key. <see cref="ConsumedAt"/> is when its flow was consumed;
+/// a bundle consumed at or before the last disconnect (<see cref="InstanceGitHubAppContent.RevokedBefore"/>)
+/// is dead.
+/// </summary>
+/// <param name="AppId">The App's numeric id.</param>
+/// <param name="ClientId">The App's client id (the JWT issuer).</param>
+/// <param name="PrivateKey">The App's private key, PEM.</param>
+/// <param name="ConsumedAt">When the flow that produced it was consumed.</param>
+public sealed record InstanceGitHubAppCredentials(long AppId, string ClientId, string PrivateKey, DateTimeOffset ConsumedAt)
+{
+    /// <summary>The bundle as the secret's value. Pure.</summary>
+    public string Serialize() => JsonSerializer.Serialize(new JsonObject
+    {
+        ["appId"] = AppId,
+        ["clientId"] = ClientId,
+        ["privateKey"] = PrivateKey,
+        ["consumedAt"] = ConsumedAt.ToUniversalTime().ToString("O", System.Globalization.CultureInfo.InvariantCulture),
+    });
+
+    /// <summary>Reads a bundle; null for anything that is not one. Pure.</summary>
+    public static InstanceGitHubAppCredentials? Parse(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return null;
+        try
+        {
+            var root = JsonNode.Parse(value);
+            var appId = root?["appId"]?.GetValue<long>() ?? 0;
+            var clientId = root?["clientId"]?.GetValue<string>();
+            var key = root?["privateKey"]?.GetValue<string>();
+            var consumed = root?["consumedAt"]?.GetValue<string>();
+            return clientId is { Length: > 0 } && key is { Length: > 0 }
+                   && DateTimeOffset.TryParse(consumed, System.Globalization.CultureInfo.InvariantCulture,
+                       System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+                ? new InstanceGitHubAppCredentials(appId, clientId, key, at)
+                : null;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Never print the key.</summary>
+    public override string ToString() => $"InstanceGitHubAppCredentials {{ AppId = {AppId}, ClientId = {ClientId} }}";
 }
 
 /// <summary>
@@ -135,23 +199,24 @@ public static class InstanceGitHubApp
     /// <summary>The metadata node's path.</summary>
     public const string Path = InstanceAdminRecords.Partition + "/" + Id;
 
+    /// <summary>The node type of a manifest flow in progress.</summary>
+    public const string FlowNodeType = "InstanceGitHubAppFlow";
+
+    /// <summary>The id prefix of a flow's node.</summary>
+    public const string FlowIdPrefix = "GitHubAppFlow-";
+
     /// <summary>The configuration section the App's secrets are kept under.</summary>
     public const string Section = "GitHub:InstanceApp";
 
-    /// <summary>The App's numeric id.</summary>
-    public const string AppIdKey = Section + ":AppId";
-
-    /// <summary>The App's client id (the JWT issuer).</summary>
-    public const string ClientIdKey = Section + ":ClientId";
-
-    /// <summary>The App's private key, PEM.</summary>
-    public const string PrivateKeyKey = Section + ":PrivateKey";
+    /// <summary>The App's credentials — app id, client id, private key — as ONE bundle
+    /// (<see cref="InstanceGitHubAppCredentials"/>), replaced as a whole.</summary>
+    public const string CredentialsKey = Section + ":Credentials";
 
     /// <summary>The App's webhook secret.</summary>
     public const string WebhookSecretKey = Section + ":WebhookSecret";
 
     /// <summary>Every secret key of the App, in the order they are written.</summary>
-    public static readonly IReadOnlyList<string> SecretKeys = [AppIdKey, ClientIdKey, PrivateKeyKey, WebhookSecretKey];
+    public static readonly IReadOnlyList<string> SecretKeys = [CredentialsKey, WebhookSecretKey];
 
     /// <summary>Where the browser starts the flow (a global administrator, signed in).</summary>
     public const string StartPath = "/admin/github-app/connect";
@@ -180,29 +245,63 @@ public static class InstanceGitHubApp
             .AddMeshDataSource(source => source.WithContentType<InstanceGitHubAppContent>()),
     };
 
+    /// <summary>The flow node's type definition.</summary>
+    public static MeshNode CreateFlowMeshNode() => new(FlowNodeType)
+    {
+        Name = "Instance GitHub App flow",
+        Icon = "/static/NodeTypeIcons/key.svg",
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(source => source.WithContentType<InstanceGitHubAppFlowContent>()),
+    };
+
+    /// <summary>The node path of the flow whose state is <paramref name="state"/>. Pure.</summary>
+    public static string FlowPath(string state) =>
+        $"{InstanceAdminRecords.Partition}/{FlowIdPrefix}{HashState(state)[..32]}";
+
     // ——————————————————————————————————————————————————————— reading the identity
 
     /// <summary>
-    /// The App identity the instance's secrets hold, or null when it has none — no client id or no
-    /// private key, either one disabled or deleted, or a value this installation cannot decrypt.
-    /// Read LIVE from the secret catalog on every call. Pure over the catalog.
+    /// The App identity the instance holds, or null when it has none: no credential bundle, a bundle
+    /// disabled, deleted or undecryptable here, a bundle REVOKED by a later disconnect
+    /// (<see cref="InstanceGitHubAppContent.RevokedBefore"/>), or a secret catalog whose query is
+    /// down. Read LIVE on every call. Pure over the two catalogs.
     /// </summary>
-    public static GitHubAppOptions? Options(InstanceSecretCatalog? catalog)
+    public static GitHubAppOptions? Options(InstanceSecretCatalog? secrets, InstanceGitHubAppContent? app)
     {
-        if (catalog is null)
+        if (secrets is null || InstanceGitHubAppCredentials.Parse(Value(secrets, CredentialsKey)) is not { } bundle)
             return null;
-        var clientId = Value(catalog, ClientIdKey) ?? Value(catalog, AppIdKey);
-        var key = Value(catalog, PrivateKeyKey);
-        return clientId is null || key is null ? null : new GitHubAppOptions { ClientId = clientId, PrivateKey = key };
+        if (app?.RevokedBefore is { } revoked && bundle.ConsumedAt <= revoked)
+            return null;
+        return new GitHubAppOptions { ClientId = bundle.ClientId, PrivateKey = bundle.PrivateKey };
     }
 
-    /// <summary>The App's webhook secret, or null. Pure over the catalog.</summary>
-    public static string? WebhookSecret(InstanceSecretCatalog? catalog) =>
-        catalog is null ? null : Value(catalog, WebhookSecretKey);
+    /// <summary>The App's webhook secret — only while its credentials are live. Pure over the catalogs.</summary>
+    public static string? WebhookSecret(InstanceSecretCatalog? secrets, InstanceGitHubAppContent? app) =>
+        Options(secrets, app) is null ? null : Value(secrets!, WebhookSecretKey);
+
+    /// <summary>The hub half: both catalogs off <paramref name="services"/>.</summary>
+    public static GitHubAppOptions? Options(IServiceProvider services) =>
+        Options(services.GetService<InstanceSecretCatalog>(), services.GetService<InstanceGitHubAppCatalog>()?.Current);
+
+    /// <summary>The hub half of <see cref="WebhookSecret(InstanceSecretCatalog?, InstanceGitHubAppContent?)"/>.</summary>
+    public static string? WebhookSecret(IServiceProvider services) =>
+        WebhookSecret(services.GetService<InstanceSecretCatalog>(), services.GetService<InstanceGitHubAppCatalog>()?.Current);
+
+    /// <summary>
+    /// Emits once both catalogs the identity is read from have LISTED the store — so a cold replica
+    /// does not decide "no App" from catalogs that have not read anything yet.
+    /// </summary>
+    public static IObservable<System.Reactive.Unit> WhenReadable(IServiceProvider services)
+    {
+        var secrets = services.GetService<InstanceSecretCatalog>()?.WhenLoaded ?? Observable.Return(System.Reactive.Unit.Default);
+        var app = services.GetService<InstanceGitHubAppCatalog>()?.WhenLoaded ?? Observable.Return(System.Reactive.Unit.Default);
+        return secrets.Zip(app, (_, _) => System.Reactive.Unit.Default).Take(1);
+    }
 
     // 🚨 Fail CLOSED while the catalog's query is down: its snapshot can no longer see a disable or a
-    // delete made on another replica, so a cached private key or webhook secret must not keep
-    // authenticating through the outage (the same rule InstanceSecrets.Candidates applies).
+    // delete made on another replica, so a cached key must not keep authenticating through the outage
+    // (the same rule InstanceSecrets.Candidates applies).
     private static string? Value(InstanceSecretCatalog catalog, string key) =>
         !catalog.Faulted
         && catalog.Entry(key) is { IsDeleted: false, IsDisabled: false, Current: { Length: > 0 } value } ? value : null;
@@ -280,21 +379,22 @@ public static class InstanceGitHubApp
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(state))).ToLowerInvariant();
 
     /// <summary>
-    /// Whether a callback may complete the flow: the browser's cookie state equals GitHub's state,
-    /// its hash equals the pending one, the flow has not expired, and the caller is the one who
-    /// started it. Null when it may; otherwise the refusal. Constant-time over the secrets. Pure.
+    /// Whether a callback may complete <paramref name="flow"/>: the browser's cookie state equals
+    /// GitHub's state, the flow node is the one that state names (its hash matches), it has not
+    /// expired, and the caller is the one who started it. Null when it may; otherwise the refusal.
+    /// Constant-time over the secrets. Pure.
     /// </summary>
     public static GitSyncRefusal? CheckState(
-        InstanceGitHubAppContent? app, string? state, string? cookieState, string user, DateTimeOffset now)
+        InstanceGitHubAppFlowContent? flow, string? state, string? cookieState, string user, DateTimeOffset now)
     {
         if (string.IsNullOrEmpty(state) || string.IsNullOrEmpty(cookieState)
             || !FixedTimeEquals(state, cookieState))
             return GitSyncRefusal.Of("instanceApp.error.stateMismatch");
-        if (app?.PendingStateHash is not { Length: > 0 } pending || !FixedTimeEquals(HashState(state), pending))
+        if (flow?.StateHash is not { Length: > 0 } pending || !FixedTimeEquals(HashState(state), pending))
             return GitSyncRefusal.Of("instanceApp.error.noPendingFlow");
-        if (app.PendingExpiresAt is not { } expires || expires <= now)
+        if (flow.ExpiresAt <= now)
             return GitSyncRefusal.Of("instanceApp.error.flowExpired");
-        if (!string.Equals(app.PendingBy, user, StringComparison.Ordinal))
+        if (!string.Equals(flow.StartedBy, user, StringComparison.Ordinal))
             return GitSyncRefusal.Of("instanceApp.error.otherAdmin");
         return null;
     }
@@ -306,9 +406,9 @@ public static class InstanceGitHubApp
 
     /// <summary>
     /// Starts a manifest flow for the CALLER, who must be a global administrator: mints the state,
-    /// records its hash, expiry, the caller and the organization on <c>Admin/GitHubApp</c> (as
-    /// system), and returns what the browser posts to GitHub. A flow started earlier is replaced.
-    /// Cold.
+    /// creates its flow node (<see cref="FlowPath"/>: hash, expiry, the caller, the organization) as
+    /// system, and returns what the browser posts to GitHub. Every flow is its own node, so starting
+    /// one never disturbs another. Cold.
     /// </summary>
     /// <param name="hub">The caller's hub.</param>
     /// <param name="baseUrl">The instance's public origin.</param>
@@ -323,25 +423,40 @@ public static class InstanceGitHubApp
             var org = string.IsNullOrWhiteSpace(organization) ? null : organization.Trim();
             var locale = (hub.ServiceProvider.GetService<AccessService>() is { } a ? a.Context ?? a.CircuitContext : null)?.Locale;
             var flow = new InstanceGitHubAppFlow(state, postUrl, BuildManifest(baseUrl, locale));
+            var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+            var path = FlowPath(state);
             return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user =>
-                    WriteMetadata(hub, current => (current ?? new InstanceGitHubAppContent()) with
-                    {
-                        PendingStateHash = HashState(state),
-                        PendingExpiresAt = DateTimeOffset.UtcNow + StateLifetime,
-                        PendingBy = user,
-                        PendingOrganization = org,
-                    }))
+                    mesh.CreateNode(new MeshNode(path[(InstanceAdminRecords.Partition.Length + 1)..], InstanceAdminRecords.Partition)
+                        {
+                            NodeType = FlowNodeType,
+                            Name = "GitHub App flow",
+                            State = MeshNodeState.Active,
+                            Content = new InstanceGitHubAppFlowContent
+                            {
+                                StateHash = HashState(state),
+                                ExpiresAt = DateTimeOffset.UtcNow + StateLifetime,
+                                StartedBy = user,
+                                Organization = org,
+                            },
+                        })
+                        .Take(1))
                 .Select(_ => flow);
         });
 
     /// <summary>
-    /// Completes a manifest flow: for the CALLER, who must be a global administrator, CONSUMES the
-    /// pending flow in one owner-serialized transition (<see cref="Consume"/>) — the state checked
-    /// (<see cref="CheckState"/>) against the node's authoritative content and the flow cleared in
-    /// the same update, so of two concurrent callbacks exactly one proceeds; only then exchanges the
-    /// one-time <paramref name="code"/> through <paramref name="convert"/>, stores the App's id,
-    /// client id, private key and webhook secret as Instance Secrets (encrypted, as the caller) and
-    /// its metadata on <c>Admin/GitHubApp</c>. Emits the metadata. Cold.
+    /// Completes a manifest flow for the CALLER, who must be a global administrator:
+    /// <list type="number">
+    ///   <item>checks the state (<see cref="CheckState"/>) against the flow node it names;</item>
+    ///   <item>CONSUMES the flow by deleting its node — a delete its owner decides, so of two callbacks
+    ///     exactly one proceeds, on whatever replicas they land; a refused callback for that flow
+    ///     deletes it too (a guessed, replayed or expired state gets no second attempt);</item>
+    ///   <item>only then exchanges the one-time <paramref name="code"/> through <paramref name="convert"/>;</item>
+    ///   <item>stores the App's credentials as ONE bundle and its webhook secret as Instance Secrets
+    ///     (encrypted, as the caller), stamped with the consumption instant — a disconnect after it
+    ///     revokes the bundle even if this publish lands later;</item>
+    ///   <item>records the App's metadata on <c>Admin/GitHubApp</c>.</item>
+    /// </list>
+    /// Emits the metadata. Cold.
     /// </summary>
     /// <param name="hub">The caller's hub.</param>
     /// <param name="code">GitHub's one-time code.</param>
@@ -360,12 +475,15 @@ public static class InstanceGitHubApp
             if (string.IsNullOrEmpty(code))
                 return Observable.Throw<InstanceGitHubAppContent>(
                     GitSyncRefusal.Of("instanceApp.error.noCode").ToException());
+            if (string.IsNullOrEmpty(state) || string.IsNullOrEmpty(cookieState) || !FixedTimeEquals(state, cookieState))
+                return Observable.Throw<InstanceGitHubAppContent>(
+                    GitSyncRefusal.Of("instanceApp.error.stateMismatch").ToException());
             var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InstanceGitHubApp));
             return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, user => Consume(hub, state, cookieState, user))
-                .SelectMany(user => convert(code)
+                .SelectMany(consumed => convert(code)
                     .Take(1)
-                    .SelectMany(conversion => access.RunAs(caller, () => StoreSecrets(hub, conversion))
-                        .Select(_ => (user, conversion))))
+                    .SelectMany(conversion => access.RunAs(caller, () => StoreSecrets(hub, conversion, consumed.At))
+                        .Select(_ => (consumed.User, conversion))))
                 .SelectMany(x => access.RunAs(caller, () => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
                     WriteMetadata(hub, current => (current ?? new InstanceGitHubAppContent()) with
                     {
@@ -374,59 +492,69 @@ public static class InstanceGitHubApp
                         Owner = x.conversion.Owner,
                         HtmlUrl = x.conversion.HtmlUrl,
                         ConnectedAt = DateTimeOffset.UtcNow,
-                        ConnectedBy = x.user,
-                        PendingBy = null,
-                        PendingOrganization = null,
+                        ConnectedBy = x.User,
                     })))
                     .Do(app => logger?.LogInformation(
                         "[InstanceGitHubApp] connected the App '{Slug}' owned by '{Owner}' (by {User})",
-                        app.Slug, app.Owner, x.user)));
+                        app.Slug, app.Owner, x.User)));
         });
 
     /// <summary>
-    /// The one transition that validates AND consumes a pending flow, inside ONE update of
-    /// <c>Admin/GitHubApp</c> — which its owner serializes, so the check reads the authoritative
-    /// content, never a replica's lagging snapshot, and two callbacks cannot both pass. A callback
-    /// whose state IS the pending one ends that flow whether it passes or not (a guessed, replayed or
-    /// expired state gets no second attempt); a state that is not the pending one leaves the pending
-    /// flow untouched, so a stale or forged callback can never erase a newer flow. Emits the caller's
-    /// user id when the flow was consumed; faults with the refusal otherwise. Runs as system.
+    /// Reads the flow the state names and consumes it by DELETING its node. A delete is decided by the
+    /// node's owner, so only one of two concurrent callbacks gets <c>true</c>; the loser is refused as
+    /// <c>noPendingFlow</c> and never reaches the code exchange. Emits the caller and the consumption
+    /// instant. Runs as system.
     /// </summary>
-    private static IObservable<string> Consume(IMessageHub hub, string? state, string? cookieState, string user) =>
-        ExistsNow(hub, Path).SelectMany(exists =>
+    private static IObservable<(string User, DateTimeOffset At)> Consume(
+        IMessageHub hub, string state, string cookieState, string user)
+    {
+        var path = FlowPath(state);
+        var mesh = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        return ReadNow(hub, path).SelectMany(node =>
         {
-            if (!exists)
-                return Observable.Throw<string>(GitSyncRefusal.Of("instanceApp.error.noPendingFlow").ToException());
-            GitSyncRefusal? refusal = GitSyncRefusal.Of("instanceApp.error.noPendingFlow");
-            return hub.GetWorkspace().GetMeshNodeStream(Path)
-                .Update<InstanceGitHubAppContent>((node, current) =>
-                {
-                    refusal = CheckState(current, state, cookieState, user, DateTimeOffset.UtcNow);
-                    var isThePendingFlow = current?.PendingStateHash is { Length: > 0 } pending
-                        && !string.IsNullOrEmpty(state) && FixedTimeEquals(HashState(state), pending);
-                    if (!isThePendingFlow)
-                        return node;
-                    return node with
-                    {
-                        Content = current! with
-                        {
-                            PendingStateHash = null,
-                            PendingExpiresAt = null,
-                            PendingBy = refusal is null ? current.PendingBy : null,
-                            PendingOrganization = refusal is null ? current.PendingOrganization : null,
-                        },
-                    };
-                })
-                .Take(1)
-                .SelectMany(_ => refusal is null
-                    ? Observable.Return(user)
-                    : Observable.Throw<string>(refusal.ToException()));
+            if (node is null)
+                return Observable.Throw<(string, DateTimeOffset)>(GitSyncRefusal.Of("instanceApp.error.noPendingFlow").ToException());
+            var flow = node.ContentAs<InstanceGitHubAppFlowContent>(hub.JsonSerializerOptions);
+            var refusal = CheckState(flow, state, cookieState, user, DateTimeOffset.UtcNow);
+            return mesh.DeleteNode(path).Take(1)
+                .Catch((Exception _) => Observable.Return(false))
+                .SelectMany(deleted => refusal is not null
+                    ? Observable.Throw<(string, DateTimeOffset)>(refusal.ToException())
+                    : deleted
+                        ? Observable.Return((user, MeshNode.StorageStableNow()))
+                        : Observable.Throw<(string, DateTimeOffset)>(GitSyncRefusal.Of("instanceApp.error.noPendingFlow").ToException()));
+        });
+    }
+
+    /// <summary>
+    /// Replaces the App's private key (a rotation): the live bundle with the new key, written as one
+    /// value. A global administrator only (checked by the secret store's own verb, as the caller).
+    /// Refused when no App is connected. Cold.
+    /// </summary>
+    public static IObservable<SecretStatus> RotatePrivateKey(IMessageHub hub, string privateKeyPem) =>
+        Observable.Defer(() =>
+        {
+            var secrets = hub.ServiceProvider.GetRequiredService<InstanceSecretCatalog>();
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var caller = access?.Context ?? access?.CircuitContext;
+            return WhenReadable(hub.ServiceProvider).SelectMany(_ =>
+            {
+                var bundle = InstanceGitHubAppCredentials.Parse(Value(secrets, CredentialsKey));
+                if (bundle is null || Options(hub.ServiceProvider) is null)
+                    return Observable.Throw<SecretStatus>(GitSyncRefusal.Of("gitsync.instanceApp.notConnected").ToException());
+                if (string.IsNullOrWhiteSpace(privateKeyPem) || !privateKeyPem.Contains("PRIVATE KEY", StringComparison.Ordinal))
+                    return Observable.Throw<SecretStatus>(GitSyncRefusal.Of("instanceApp.error.notAPrivateKey").ToException());
+                return access.RunAs(caller, () => InstanceSecrets.Set(
+                        hub, CredentialsKey, (bundle with { PrivateKey = privateKeyPem.Trim() + "\n" }).Serialize()))
+                    .Select(s => s.Secret);
+            });
         });
 
     /// <summary>
-    /// Disconnects the App: deletes its four secrets (recoverable for the Instance Secrets recovery
-    /// window) — once the secret catalog has READ the store, so a cold replica cannot skip a delete
-    /// it has not seen yet — and clears the metadata only after every delete succeeded. The App itself
+    /// Disconnects the App: FIRST revokes every credential bundle consumed so far
+    /// (<see cref="InstanceGitHubAppContent.RevokedBefore"/> — which also kills a bundle an in-flight
+    /// callback publishes afterwards), then — once the secret catalog has listed the store — deletes
+    /// the App's secrets as the caller (recoverable for the Instance Secrets recovery window). The App
     /// stays on GitHub until it is deleted there. A global administrator only. Cold.
     /// </summary>
     public static IObservable<InstanceGitHubAppContent> Disconnect(IMessageHub hub) =>
@@ -435,23 +563,24 @@ public static class InstanceGitHubApp
             var access = hub.ServiceProvider.GetService<AccessService>();
             var caller = access?.Context ?? access?.CircuitContext;
             var secrets = hub.ServiceProvider.GetRequiredService<InstanceSecretCatalog>();
-            return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ => secrets.WhenLoaded)
-                .SelectMany(_ => access.RunAs(caller, () => SecretKeys
-                    .Where(key => secrets.Entry(key) is { IsDeleted: false })
-                    .Select(key => InstanceSecrets.Delete(hub, key).Take(1).Select(_ => key))
-                    .Concat()
-                    .ToList()))
-                .SelectMany(_ => access.RunAs(caller, () => InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
-                    WriteMetadata(hub, _ => new InstanceGitHubAppContent()))));
+            return InstanceAdminRecords.AsGlobalAdmin(hub, NotAdmin, _ =>
+                    WriteMetadata(hub, current => new InstanceGitHubAppContent { RevokedBefore = MeshNode.StorageStableNow() }))
+                .SelectMany(revoked => secrets.WhenLoaded
+                    .SelectMany(_ => access.RunAs(caller, () => SecretKeys
+                        .Where(key => secrets.Entry(key) is { IsDeleted: false })
+                        .Select(key => InstanceSecrets.Delete(hub, key).Take(1).Select(_ => key))
+                        .Concat()
+                        .ToList()))
+                    .Select(_ => revoked));
         });
 
-    private static IObservable<System.Reactive.Unit> StoreSecrets(IMessageHub hub, GitHubAppManifestConversion conversion)
+    private static IObservable<System.Reactive.Unit> StoreSecrets(
+        IMessageHub hub, GitHubAppManifestConversion conversion, DateTimeOffset consumedAt)
     {
+        var bundle = new InstanceGitHubAppCredentials(conversion.AppId, conversion.ClientId, conversion.PrivateKey, consumedAt);
         var writes = new List<(string Key, string? Value)>
         {
-            (AppIdKey, conversion.AppId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            (ClientIdKey, conversion.ClientId),
-            (PrivateKeyKey, conversion.PrivateKey),
+            (CredentialsKey, bundle.Serialize()),
             (WebhookSecretKey, conversion.WebhookSecret),
         };
         return writes
@@ -498,6 +627,13 @@ public static class InstanceGitHubApp
         // catalog lags would otherwise try to create a node that exists, or update one that does not.
         return ExistsNow(hub, Path).SelectMany(exists => exists ? Update() : Create());
     }
+
+    /// <summary>The node at <paramref name="path"/> from a fresh listing, or null.</summary>
+    internal static IObservable<MeshNode?> ReadNow(IMessageHub hub, string path) =>
+        hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}"))
+            .Take(1)
+            .Select(change => (change.Items ?? []).FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)));
 
     /// <summary>Whether <paramref name="path"/> exists, from a fresh listing — the existence half of
     /// a read of a node that may not exist (never a point read of an absent node).</summary>

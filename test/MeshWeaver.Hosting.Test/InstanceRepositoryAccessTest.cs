@@ -166,11 +166,11 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
 
         var flow = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
         Assert.StartsWith("https://github.com/organizations/acme/settings/apps/new?state=", flow.PostUrl);
-        var pending = ContentOf<InstanceGitHubAppContent>(await StoredWhen(InstanceGitHubApp.Path,
-            n => ContentOf<InstanceGitHubAppContent>(n)?.PendingStateHash == InstanceGitHubApp.HashState(flow.State)))!;
-        Assert.Equal(InstanceGitHubApp.HashState(flow.State), pending.PendingStateHash);
-        Assert.Equal(PlatformAdmin, pending.PendingBy);
-        Assert.DoesNotContain(flow.State, System.Text.Json.JsonSerializer.Serialize(pending));
+        var pendingNode = await StoredWhen(InstanceGitHubApp.FlowPath(flow.State), _ => true);
+        var pending = ContentOf<InstanceGitHubAppFlowContent>(pendingNode)!;
+        Assert.Equal(InstanceGitHubApp.HashState(flow.State), pending.StateHash);
+        Assert.Equal(PlatformAdmin, pending.StartedBy);
+        Assert.DoesNotContain(flow.State, System.Text.Json.JsonSerializer.Serialize(pendingNode, Mesh.JsonSerializerOptions));
 
         // Another administrator cannot complete it — and the attempt ends the pending flow.
         var other = await Assert.ThrowsAnyAsync<Exception>(() => As(OtherAdmin,
@@ -185,7 +185,7 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
                 _ => { conversions++; return Observable.Return(Conversion(pem)); })));
         Assert.Equal("instanceApp.error.noPendingFlow", RefusalKey(replay));
         Assert.Equal(0, conversions);
-        Assert.Null(await Stored(InstanceSecrets.PathOf(InstanceGitHubApp.PrivateKeyKey)));
+        Assert.Null(await Stored(InstanceSecrets.PathOf(InstanceGitHubApp.CredentialsKey)));
 
         // A fresh flow, with a cookie from ANOTHER flow: refused before GitHub is asked.
         var second = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
@@ -203,13 +203,13 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         Assert.Equal("meshweaver-portal", app.Slug);
         Assert.Equal("acme", app.Owner);
         Assert.Equal(PlatformAdmin, app.ConnectedBy);
-        Assert.Null(app.PendingStateHash);
+        Assert.Null(await Stored(InstanceGitHubApp.FlowPath(third.State)));
 
         // Encrypted at rest, every one of the four.
         foreach (var key in InstanceGitHubApp.SecretKeys)
             await StoredWhen(InstanceSecrets.PathOf(key),
                 n => ContentOf<InstanceSecretContent>(n)?.EncryptedValue?.StartsWith("enc:", StringComparison.Ordinal) == true);
-        var keyNode = await StoredWhen(InstanceSecrets.PathOf(InstanceGitHubApp.PrivateKeyKey), _ => true);
+        var keyNode = await StoredWhen(InstanceSecrets.PathOf(InstanceGitHubApp.CredentialsKey), _ => true);
         Assert.DoesNotContain("PRIVATE KEY", System.Text.Json.JsonSerializer.Serialize(keyNode, Mesh.JsonSerializerOptions));
         var metadata = await StoredWhen(InstanceGitHubApp.Path, n => ContentOf<InstanceGitHubAppContent>(n)?.Slug == "meshweaver-portal");
         Assert.DoesNotContain("PRIVATE KEY", System.Text.Json.JsonSerializer.Serialize(metadata, Mesh.JsonSerializerOptions));
@@ -220,8 +220,8 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
             .Should().Within(Budget).Emit("a connected App is the instance identity at once");
         Assert.True(Tokens.IsConfigured);
         Assert.False(Tokens.IsDeploymentConfigured);
-        Assert.Equal("hook-secret", InstanceGitHubApp.WebhookSecret(Secrets));
-        Assert.Equal("Iv23liInstance", InstanceGitHubApp.Options(Secrets)!.ClientId);
+        Assert.Equal("hook-secret", InstanceGitHubApp.WebhookSecret(Mesh.ServiceProvider));
+        Assert.Equal("Iv23liInstance", InstanceGitHubApp.Options(Mesh.ServiceProvider)!.ClientId);
 
         // An instance source is now read with it.
         await As(PlatformAdmin, () => InstancePackageSources.Add(Mesh, Repo));
@@ -235,7 +235,7 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         await Secrets.Changes.Where(_ => !Tokens.HasInstanceApp)
             .Should().Within(Budget).Emit("a disconnected App is no identity any more");
         Assert.Null(Mesh.ServiceProvider.GetRequiredService<GitSourceCredentials>().For(Repo));
-        Assert.Null(InstanceGitHubApp.WebhookSecret(Secrets));
+        Assert.Null(InstanceGitHubApp.WebhookSecret(Mesh.ServiceProvider));
     }
 
     // ───────────────────────────── only the verbs write ─────────────────────────────
@@ -265,16 +265,17 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         Assert.False(source.Success, "a package source is never written around its verbs");
         Assert.Null(await Stored(InstancePackageSources.PathOf(Repo)!));
 
+        var forgedFlow = InstanceGitHubApp.FlowPath("forged");
         var app = await ObserveNodeOperation(
-                new CreateNodeRequest(new MeshNode(InstanceGitHubApp.Id, AdminPartition)
+                new CreateNodeRequest(new MeshNode(forgedFlow[(AdminPartition.Length + 1)..], AdminPartition)
                 {
-                    NodeType = InstanceGitHubApp.NodeType, Name = "injected", State = MeshNodeState.Active,
-                    Content = new InstanceGitHubAppContent { PendingStateHash = InstanceGitHubApp.HashState("forged"), PendingBy = AdminEditor },
+                    NodeType = InstanceGitHubApp.FlowNodeType, Name = "injected", State = MeshNodeState.Active,
+                    Content = new InstanceGitHubAppFlowContent { StateHash = InstanceGitHubApp.HashState("forged"), StartedBy = AdminEditor },
                 }),
                 o => o.WithAccessContext(Identity(AdminEditor)))
             .Select(d => d.Message).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
-        Assert.False(app.Success, "the App's pending flow is never written around its verbs");
-        Assert.Null(await Stored(InstanceGitHubApp.Path));
+        Assert.False(app.Success, "a GitHub App flow is never written around its verbs");
+        Assert.Null(await Stored(forgedFlow));
     }
 
     [Fact]
@@ -301,15 +302,41 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
     }
 
     [Fact]
-    public async Task AStaleCallback_DoesNotEraseANewerFlow()
+    public async Task ACallbackForOneFlow_LeavesAnotherFlowIntact()
     {
         var older = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
         var newer = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
-        var stale = await Assert.ThrowsAnyAsync<Exception>(() => As(PlatformAdmin,
-            () => InstanceGitHubApp.Complete(Mesh, "code", older.State, older.State,
+        // A forged cookie for the OLDER flow is refused before any flow is touched…
+        var forged = await Assert.ThrowsAnyAsync<Exception>(() => As(PlatformAdmin,
+            () => InstanceGitHubApp.Complete(Mesh, "code", older.State, newer.State,
                 _ => Observable.Throw<GitHubAppManifestConversion>(new InvalidOperationException("must not be asked")))));
-        Assert.Equal("instanceApp.error.noPendingFlow", RefusalKey(stale));
-        await StoredWhen(InstanceGitHubApp.Path,
-            n => ContentOf<InstanceGitHubAppContent>(n)?.PendingStateHash == InstanceGitHubApp.HashState(newer.State));
+        Assert.Equal("instanceApp.error.stateMismatch", RefusalKey(forged));
+        // …and both flows are still there to be completed by their own callbacks.
+        await StoredWhen(InstanceGitHubApp.FlowPath(older.State), _ => true);
+        await StoredWhen(InstanceGitHubApp.FlowPath(newer.State), _ => true);
+    }
+
+    [Fact]
+    public async Task ADisconnectWhileACallbackIsInFlight_RevokesWhatThatCallbackPublishes()
+    {
+        using var rsa = RSA.Create(2048);
+        var pem = rsa.ExportRSAPrivateKeyPem();
+        var flow = await As(PlatformAdmin, () => InstanceGitHubApp.Start(Mesh, BaseUrl, "acme"));
+
+        // The conversion is "in flight" while another administrator disconnects.
+        await As(PlatformAdmin, () => InstanceGitHubApp.Complete(Mesh, "code", flow.State, flow.State,
+            _ => Access.RunAs(Identity(OtherAdmin), () => InstanceGitHubApp.Disconnect(Mesh))
+                .Select(_ => Conversion(pem))));
+
+        // The callback published its bundle AFTER the disconnect — and it is dead on arrival.
+        await StoredWhen(InstanceSecrets.PathOf(InstanceGitHubApp.CredentialsKey),
+            n => ContentOf<InstanceSecretContent>(n) is { DeletedAt: null, EncryptedValue: not null });
+        // The identity is read from TWO live catalogs (the secret and the App's metadata, which
+        // carries the revocation): re-judge on a change of either.
+        var apps = Mesh.ServiceProvider.GetRequiredService<InstanceGitHubAppCatalog>();
+        await Observable.Merge(Secrets.Changes, apps.Changes.Select(_ => System.Reactive.Unit.Default))
+            .Where(_ => apps.Current?.RevokedBefore is not null
+                        && InstanceGitHubApp.Options(Mesh.ServiceProvider) is null && !Tokens.HasInstanceApp)
+            .Should().Within(Budget).Emit("a bundle consumed before a disconnect never becomes the instance's identity");
     }
 }

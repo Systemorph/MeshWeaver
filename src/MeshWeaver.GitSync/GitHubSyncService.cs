@@ -893,11 +893,14 @@ public sealed class GitHubSyncService
                 ? Observable.Return(new ResolvedGitHubAuth(token, cred))
                 : hub.ServiceProvider.GetService<GitSourceCredentials>()?.TokenFor(repositoryUrl) is { } declared
                     ? declared.Select(t => new ResolvedGitHubAuth(t, null))
-                : appTokens is { IsConfigured: true }
-                    ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
-                    : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
-                        "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
-                        "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
+                // The App fallback is decided once the identity can be — a cold replica's own
+                // instance App is not "absent" (Doc/Architecture/InstanceRepositoryAccess).
+                : (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default)).SelectMany(_ =>
+                    appTokens is { IsConfigured: true }
+                        ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
+                        : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
+                            "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
+                            "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey)."))));
 
     /// <summary>
     /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a
