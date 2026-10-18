@@ -922,6 +922,70 @@ public sealed class GitHubSyncService
                             "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
                             "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
+    /// <summary>The decision <see cref="ResolveAuth"/> mints from, with what it needs to mint.</summary>
+    private sealed record ReadDecision(
+        GitHubReadIdentity Identity, GitHubCredential? Credential,
+        GitSourceCredentials? Sources, GitSourceCredential? Declared);
+
+    /// <summary>
+    /// The ONE decision of which identity reads <paramref name="repositoryUrl"/> for
+    /// <paramref name="userId"/>: the person's connected credential, else the source's declared
+    /// credential (a configured source's, or the instance's own App for an instance-local source),
+    /// else the GitHub App, else none — the order <see cref="ResolveAuth"/> takes through
+    /// <see cref="GitSourceCredentials.TokenOrDefault"/>; <see cref="ReadIdentityFor"/> names it.
+    /// </summary>
+    private IObservable<ReadDecision> DecideRead(string userId, string? repositoryUrl) =>
+        credentials.Get(userId).Take(1).SelectMany(cred =>
+        {
+            if (cred?.AccessToken is { Length: > 0 })
+                return Observable.Return(new ReadDecision(
+                    new GitHubReadIdentity(GitHubReadIdentityKind.PersonConnected, Login: cred.GitHubLogin),
+                    cred, null, null));
+            // Decided once the App identity and the instance's own stores can be (the read waits the
+            // same way — ResolveAuth / GitSourceCredentials.TokenOrDefault), so a cold replica does not
+            // name the default identity for a repository an instance-local source declares.
+            return (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default)).Take(1).Select(_ =>
+            {
+                var sources = hub.ServiceProvider.GetService<GitSourceCredentials>();
+                if (repositoryUrl is not null && sources?.For(repositoryUrl) is { } declared)
+                    return new ReadDecision(
+                        declared.InstanceApp
+                            ? new GitHubReadIdentity(GitHubReadIdentityKind.InstanceAppInstallation)
+                            : declared.TokenKey is not null
+                                ? new GitHubReadIdentity(GitHubReadIdentityKind.SourceToken,
+                                    TokenKey: GitSourceCredentials.ConfigurationKey(declared.TokenKey))
+                                : new GitHubReadIdentity(GitHubReadIdentityKind.SourceInstallation,
+                                    InstallationOwner: declared.InstallationOwner),
+                        null, sources, declared);
+                return appTokens is { IsConfigured: true }
+                    ? new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.AppInstallation), null, null, null)
+                    : new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.None), null, null, null);
+            });
+        });
+
+    /// <summary>
+    /// Which identity a GitHub READ of <paramref name="repositoryUrl"/> by <paramref name="userId"/>
+    /// authenticates as — by name, never a token. Naming the App installation reads (and, when none is cached, makes) the same cached mint the read uses. The same decision
+    /// the import, update and branch check take (<see cref="ResolveAuth"/>); the GitSync activities
+    /// write it on their log so an operator can read WHO read the repository (an App installation,
+    /// not a personal access token).
+    ///
+    /// <para>The instance's App installation is named from the installation its token was MINTED
+    /// for (<see cref="GitHubAppTokenService.GetInstallation"/>, the same cached mint the read uses),
+    /// never from configuration: with no <c>GitHub:App:InstallationId</c> and no installation on the
+    /// configured owner, the mint falls back to the first installation, and naming the configured
+    /// owner would attribute the read to an account that did not perform it.</para>
+    /// </summary>
+    public IObservable<GitHubReadIdentity> ReadIdentityFor(string userId, string? repositoryUrl) =>
+        DecideRead(userId, repositoryUrl).SelectMany(d =>
+            d.Identity.Kind == GitHubReadIdentityKind.AppInstallation && appTokens is not null
+                ? appTokens.GetInstallation().Select(installation => d.Identity with
+                {
+                    InstallationId = installation.Id,
+                    InstallationOwner = installation.Account,
+                })
+                : Observable.Return(d.Identity));
+
     /// <summary>
     /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a
     /// mesh that registers no module host — and on one whose reading FAULTS, said at Warning: an

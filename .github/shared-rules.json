@@ -382,7 +382,13 @@
       "id": "finish-autonomously",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver"
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
       ],
       "slots": [],
       "why": [
