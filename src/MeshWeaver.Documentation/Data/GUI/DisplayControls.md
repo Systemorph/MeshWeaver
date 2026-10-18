@@ -28,6 +28,31 @@ Controls.Stack
         .WithColor("white"))
 ```
 
+## A navigating chip
+
+A compact, clickable status pill that opens a node is a badge with `Href`. Do not draw it as an
+anchor in `Controls.Html`. `Tooltip` carries the full label, and `MaxWidth` cuts longer text with an
+ellipsis. Colors take theme tokens (`var(--accent-fill-rest)`, `var(--error, #d13438)`), so the chip
+follows light and dark themes.
+
+```csharp --render DisplayBadgeChips --show-code
+Controls.Stack
+    .WithOrientation(Orientation.Horizontal)
+    .WithHorizontalGap("8px")
+    .WithView(Controls.Badge("Badges, Icons & Status")
+        .WithHref("/Doc/GUI/DisplayControls")
+        .WithTooltip("Badges, Icons & Status")
+        .WithMaxWidth("120px")
+        .WithBackgroundColor("var(--accent-fill-rest)")
+        .WithColor("var(--foreground-on-accent-rest)"))
+```
+
+The renderer applies the same address rules as `LinkControl`. A mesh path such as `/Doc/GUI`
+navigates inside the portal. An `http(s)` address opens with `rel="noopener noreferrer"`. Any other
+scheme draws the badge without a link. The text and the tooltip are free text that the renderer
+encodes, so the caller never escapes them. The tooltip is user-facing, so pass a localized string,
+for example from `host.Localize(...)`.
+
 ---
 
 # Icon
