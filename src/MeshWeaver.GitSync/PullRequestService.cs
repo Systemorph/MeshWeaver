@@ -85,17 +85,25 @@ public sealed class PullRequestService
     /// <paramref name="baseRef"/> (a branch name or commit SHA), authenticated as
     /// <paramref name="userId"/>. Emits the created branch + the SHA it points at.
     /// </summary>
+    /// <remarks>An Azure Repos source creates the branch too (MeshWeaver#6500): it is a ref
+    /// operation, not a pull request, and authenticates with the instance's DECLARED Azure DevOps
+    /// identity (<see cref="AzureReposTokenService"/>) — never a GitHub credential.</remarks>
     public IObservable<GitHubBranchResult> CreateBranch(
         string spacePath, string newBranch, string baseRef, string userId)
     {
-        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
-            repoClient.CreateBranch(new GitHubCreateBranchRequest
-            {
-                RepositoryUrl = repoUrl,
-                NewBranch = newBranch,
-                BaseRef = string.IsNullOrWhiteSpace(baseRef) ? "main" : baseRef,
-                AccessToken = token,
-            }));
+        GitHubCreateBranchRequest Request(string repoUrl, string token) => new()
+        {
+            RepositoryUrl = repoUrl,
+            NewBranch = newBranch,
+            BaseRef = string.IsNullOrWhiteSpace(baseRef) ? "main" : baseRef,
+            AccessToken = token,
+        };
+        return sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
+            GitRepositoryProvider.IsAzureRepos(config?.RepositoryUrl)
+                ? (hub.ServiceProvider.GetService<AzureReposTokenService>() is { } azure
+                    ? azure.GetToken().SelectMany(token => repoClient.CreateBranch(Request(config!.RepositoryUrl!, token)))
+                    : Observable.Throw<GitHubBranchResult>(GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException()))
+                : WithRepoAndToken(spacePath, userId, (repoUrl, _, token) => repoClient.CreateBranch(Request(repoUrl, token))));
     }
 
     /// <summary>
@@ -143,9 +151,10 @@ public sealed class PullRequestService
         return ReadSpace(spacePath).SelectMany(space =>
             sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
             {
-                // Policy azure-repos-push-only: no pull request is drafted for an Azure Repos source.
-                if (AzureReposPushPolicy.RefuseInbound(config?.RepositoryUrl,
-                        AzureReposPushPolicy.InboundOperation.PullRequest) is { } refusal)
+                // Policy azure-repos-two-way: pull requests are not offered on an Azure Repos source
+                // in this version, so none is drafted for one.
+                if (AzureReposSyncPolicy.Refuse(config?.RepositoryUrl,
+                        AzureReposSyncPolicy.Unsupported.PullRequest) is { } refusal)
                     return Observable.Throw<MeshNode>(refusal.ToException());
                 var head = !string.IsNullOrWhiteSpace(headBranch) ? headBranch!
                     : !string.IsNullOrWhiteSpace(config?.Branch) ? config!.Branch : "main";
@@ -359,9 +368,9 @@ public sealed class PullRequestService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<T>(new InvalidOperationException(
                     "No repository URL is set for this Space. Set one in the Repository section, then try again."));
-            // Policy azure-repos-push-only (MeshWeaver#5248): no pull-request operation is offered on an
-            // Azure Repos source — a GitHub token against an Azure URL could never work.
-            if (AzureReposPushPolicy.RefuseInbound(repoUrl, AzureReposPushPolicy.InboundOperation.PullRequest) is { } refusal)
+            // Policy azure-repos-two-way (MeshWeaver#6500): no pull-request operation is offered on an
+            // Azure Repos source in this version — a GitHub token against an Azure URL could never work.
+            if (AzureReposSyncPolicy.Refuse(repoUrl, AzureReposSyncPolicy.Unsupported.PullRequest) is { } refusal)
                 return Observable.Throw<T>(refusal.ToException());
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {

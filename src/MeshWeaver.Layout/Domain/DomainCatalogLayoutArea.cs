@@ -28,15 +28,14 @@ public static class DomainCatalogLayoutArea
     {
         var _= ctx;
 
-        // Title with right-aligned navigation icon
-        var navigationIcon = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
-        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h2 style=\"margin: 0; flex-grow: 1;\">{typeDefinition.DisplayName}</h2><div style=\"flex-shrink: 0;\">{navigationIcon}</div></div>";
+        // Title with right-aligned navigation glyph
         var ret = Controls.Stack
-            .WithView(Controls.Html(titleWithNav));
-        
-        var description = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type);
-        if (!string.IsNullOrWhiteSpace(description))
-            ret = ret.WithView(Controls.Html($"<p>{description}</p>"));
+            .WithView(DomainViews.TitleRow(
+                Controls.H2(typeDefinition.DisplayName).WithStyle("margin: 0;"),
+                DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}")));
+
+        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type)) is { } descriptionLine)
+            ret = ret.WithView(descriptionLine);
         
         return ret.WithView((areaHost, ctx) => RenderCatalog(areaHost, ctx, typeDefinition));
     }

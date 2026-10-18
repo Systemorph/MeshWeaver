@@ -44,6 +44,17 @@ public record NavMenuSkin : Skin<NavMenuSkin>
     public NavMenuSkin WithSearchNamespace(string? ns) => this with { SearchNamespace = ns };
 
     /// <summary>
+    /// The sort choices for the menu's top-level entries, shown as a dropdown beside the search box;
+    /// choosing one navigates to its <see cref="NavSortOption.Href"/>. Empty (the default) shows none.
+    /// </summary>
+    public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
+
+    /// <summary>Offers <paramref name="options"/> as the sort dropdown of the top-level entries.</summary>
+    /// <param name="options">The choices, the active one marked.</param>
+    /// <returns>A new <see cref="NavMenuSkin"/> with the sort dropdown.</returns>
+    public NavMenuSkin WithSortOptions(IReadOnlyList<NavSortOption> options) => this with { SortOptions = options };
+
+    /// <summary>
     /// Sets whether the menu is expanded.
     /// </summary>
     public object? Expanded { get; init; } = true;
@@ -242,4 +253,25 @@ public record NavGroupSkin(object Title) : Skin<NavGroupSkin>
     /// <returns>A new <see cref="NavGroupSkin"/> with the updated icon.</returns>
     public NavGroupSkin WithIcon(object icon)
         => this with { Icon = icon };
+
+    /// <summary>
+    /// The sort choices for the group's entries, shown as a dropdown on its heading; choosing one
+    /// navigates to its <see cref="NavSortOption.Href"/>. Empty (the default) shows none.
+    /// </summary>
+    public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
+
+    /// <summary>Offers <paramref name="options"/> as the sort dropdown of the group's entries.</summary>
+    /// <param name="options">The choices, the active one marked.</param>
+    /// <returns>A new <see cref="NavGroupSkin"/> with the sort dropdown.</returns>
+    public NavGroupSkin WithSortOptions(IReadOnlyList<NavSortOption> options) => this with { SortOptions = options };
 }
+
+/// <summary>
+/// One choice of a navigation sort dropdown: a label, the URL that shows the entries sorted that
+/// way, and whether it is the sort in effect. Choosing navigates — the sort lives in the URL, so a
+/// sorted index is a link that can be shared and reloaded.
+/// </summary>
+/// <param name="Label">The text shown for the choice.</param>
+/// <param name="Href">The URL that applies it.</param>
+/// <param name="IsCurrent">Whether this is the sort in effect.</param>
+public record NavSortOption(string Label, string Href, bool IsCurrent);

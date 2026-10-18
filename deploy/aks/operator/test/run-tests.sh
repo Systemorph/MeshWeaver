@@ -2895,6 +2895,83 @@ refuses_hard "kv-set rejects unknown flags"               "unknown argument"    
 unset _kvs_out _kvs_rc _kvs_log _kvs_state KVS_JSON KVS_SECRET
 
 echo
+echo "── hosting-manifest-apply: a committed cluster manifest, verbatim, bound to its digest ──"
+# The ApplyClusterManifest action's one command (the config repo's aks-ops lane runs it). What is
+# tested: the path and digest refusals, the validation that refuses a widening the approval might
+# miss, and that `check` never sends a real apply. Parsing is kubectl's — the stub answers a fixture.
+MA_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/manifest-apply" && pwd)"
+_ma_root="$(mktemp -d)"; mkdir -p "$_ma_root/demo"
+ma_fixture() {  # ma_fixture <name> <yaml text> <parsed json>
+  printf '%s\n' "$2" > "$_ma_root/demo/$1.yaml"; printf '%s\n' "$3" > "$_ma_root/demo/$1.yaml.json"
+}
+ma_sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$_ma_root/demo/$1.yaml" | cut -d' ' -f1; else shasum -a 256 "$_ma_root/demo/$1.yaml" | cut -d' ' -f1; fi; }
+ma() {  # ma <args…>; sets $_ma_out $_ma_rc $_ma_log
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply "$@" 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_fixture good 'kind: ServiceAccount # fixture' \
+  '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"example","namespace":"memex-secrets"}}
+{"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"t","namespace":"control","annotations":{"kubernetes.io/service-account.name":"example"}}}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"r","namespace":"memex-secrets"},"rules":[{"apiGroups":["batch"],"resources":["jobs"],"verbs":["get","create"]}]}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"r","namespace":"memex-secrets"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"ServiceAccount","name":"example","namespace":"control"}]}'
+_ma_good="$(ma_sha good)"
+ma check --manifest demo/good.yaml
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"::hosting:: manifest_digest=sha256:${_ma_good}"*"::hosting:: manifest_objects=4"*"::hosting:: manifest_check=sha256:${_ma_good}"*) true ;; *) false ;; esac \
+  && ok "check prints the digest, the objects and the server's dry-run answer" || bad "check" "rc ${_ma_rc}: ${_ma_out}"
+case "$_ma_log" in *"apply --dry-run=server"*) ;; *) bad "check asks the server for a DRY RUN" "kubectl saw: ${_ma_log}" ;; esac
+if printf '%s\n' "$_ma_log" | grep -q '^kubectl apply -f'; then bad "check never sends a real apply" "kubectl saw: ${_ma_log}"; else ok "check never sends a real apply"; fi
+ma apply --manifest demo/good.yaml --sha256 "sha256:${_ma_good}"
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"::hosting:: manifest_applied=demo/good.yaml@sha256:${_ma_good}"*) true ;; *) false ;; esac \
+  && ok "apply with the approved digest applies and reports what it applied" || bad "apply" "rc ${_ma_rc}: ${_ma_out}"
+ma apply --manifest demo/good.yaml
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"apply needs --sha256"*) true ;; *) false ;; esac \
+  && ok "apply without a digest is refused before kubectl is asked anything" || bad "apply without digest" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+ma apply --manifest demo/good.yaml --sha256 "$(printf '0%.0s' $(seq 1 64))"
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"not the bytes that were approved"*) true ;; *) false ;; esac \
+  && ok "apply with another digest is refused, nothing sent" || bad "digest mismatch" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+refuses_hard "a path out of deploy/aks/manifests is refused" "is not a path under deploy/aks/manifests" hosting-manifest-apply check --manifest ../etc/x.yaml
+refuses_hard "the mode is check or apply" "check or apply" hosting-manifest-apply delete --manifest demo/good.yaml
+ln -s "$_ma_root/demo/good.yaml" "$_ma_root/demo/link.yaml"
+ma check --manifest demo/link.yaml
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is a symlink"*) true ;; *) false ;; esac && ok "a symlinked manifest is refused" || bad "symlink" "${_ma_out}"
+ma_fixture placeholder 'metadata: {annotations: {azure.workload.identity/client-id: "<clientId>"}}' '{"kind":"ServiceAccount","metadata":{"name":"x"}}'
+ma check --manifest demo/placeholder.yaml
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"still carries a placeholder"*) true ;; *) false ;; esac \
+  && ok "a placeholder left in the file is refused before kubectl" || bad "placeholder" "${_ma_out}"
+ma_tok() {  # ma_tok <env…>: check demo/good.yaml (its token Secret binds ServiceAccount "example") with a live Secret
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(env "$@" PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply check --manifest demo/good.yaml 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_tok MW_LIVE_TOKEN_SA=hosting-jobrunner
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"already holds a token for ServiceAccount 'hosting-jobrunner'"*) true ;; *) false ;; esac \
+  && ! printf '%s\n' "$_ma_log" | grep -q 'apply' \
+  && ok "a token Secret already filled for ANOTHER account is refused — an apply would keep the old token" || bad "foreign token" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_SA=example
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"exists, bound to example"*) true ;; *) false ;; esac \
+  && ok "…one already bound to the same account is fine" || bad "same token" "rc ${_ma_rc}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_FORBIDDEN=1
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is UNKNOWN"*) true ;; *) false ;; esac \
+  && ok "…and a refused read is UNKNOWN, never 'absent'" || bad "token read refused" "rc ${_ma_rc}; ${_ma_out}"
+ma_refuses() {  # ma_refuses <what> <phrase> <parsed json>
+  ma_fixture bad "kind: x" "$3"
+  ma check --manifest demo/bad.yaml
+  if [ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"$2"*) true ;; *) false ;; esac \
+     && ! printf '%s\n' "$_ma_log" | grep -q '^kubectl apply'; then ok "$1"; else bad "$1" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"; fi
+}
+ma_refuses "a kind outside the lane's set is refused (a Deployment)" "kind Deployment is not one this lane applies" '{"kind":"Deployment","metadata":{"name":"d","namespace":"n"}}'
+ma_refuses "a Secret carrying data is refused" "carries data" '{"kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"s"},"data":{"k":"dg=="}}'
+ma_refuses "an Opaque Secret is refused" "may only be an empty kubernetes.io/service-account-token" '{"kind":"Secret","type":"Opaque","metadata":{"name":"s"}}'
+ma_refuses "a wildcard rule is refused" "with * in its verbs" '{"kind":"ClusterRole","metadata":{"name":"c"},"rules":[{"apiGroups":[""],"resources":["*"],"verbs":["get"]}]}'
+ma_refuses "the escalate verb is refused" "verb escalate is refused" '{"kind":"Role","metadata":{"name":"c","namespace":"n"},"rules":[{"apiGroups":["rbac.authorization.k8s.io"],"resources":["roles"],"verbs":["escalate"]}]}'
+ma_refuses "an aggregated ClusterRole is refused" "aggregated ClusterRole" '{"kind":"ClusterRole","metadata":{"name":"c"},"aggregationRule":{"clusterRoleSelectors":[]}}'
+ma_refuses "a binding to cluster-admin is refused" "binds cluster-admin" '{"kind":"ClusterRoleBinding","metadata":{"name":"b"},"roleRef":{"kind":"ClusterRole","name":"cluster-admin"},"subjects":[{"kind":"ServiceAccount","name":"x","namespace":"y"}]}'
+ma_refuses "a binding to a system: role is refused" "binds system:" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"ClusterRole","name":"system:auth-delegator"},"subjects":[{"kind":"ServiceAccount","name":"x","namespace":"y"}]}'
+ma_refuses "a binding to a person or group is refused" "subject Group devs is not a ServiceAccount" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"Group","name":"devs"}]}'
+rm -rf "$_ma_root"
+unset _ma_out _ma_rc _ma_log _ma_root _ma_good
+
 echo "── hosting-kv-status / hosting-kv-state: status and lifecycle from METADATA, never a value ──"
 # The write-only secret GUI's read side (policy secrets-write-only-entry): existence, enabled,
 # dates, soft-delete and the write-time tags — from `list` alone. The stub is the WRITER identity:
