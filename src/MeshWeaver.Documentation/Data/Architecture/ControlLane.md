@@ -291,8 +291,16 @@ it states the request and the instance decides who sees it (MeshWeaver.Plugins
   `Admin/_ApprovalsElsewhere`, which only the instance's global administrators read. It then raises
   their `approvals` notices, which point at the copy. Its link must be the https address of exactly the
   stated `Ops/Actions/<id>` on the stated source host. It moves forward only.
-- **It decides nothing.** The copy answers every decision with where to approve: on the control
-  instance, at the gate. A decision that travels back is designed, not built, in the same doc.
+- **It decides nothing by itself.** A decision travels back only as its own signed message (below).
+
+**The way back: an instance's decision.** For the kinds the instance's record declares
+(`extraPortalConfig.Hosting__InstanceApprovals__Kinds`), one of the instance's global administrators may
+decide such an action. The instance posts an `instance-approval-decision` into the control inbox, signed
+with its own lane key exactly like a report. Control verifies it with that deployment's own key and never
+the fleet secret, inside the 15-minute window. It admits the decision against the record, binds it to the
+round, request identity and plan digest the administrator was shown, and writes it onto the action as
+System. The gate accepts it only as that router's write (MeshWeaver.Plugins `InstanceApprovalDecisions`,
+`ActionsExecutor.InstanceDecidedGate`). Estate, secret, database and content kinds can never be declared.
 
 No other forwarded event may be acted on by its word. A new exception is a design decision of its
 own, recorded here with what bounds it.
