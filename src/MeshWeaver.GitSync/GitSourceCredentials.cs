@@ -176,9 +176,20 @@ public sealed class GitSourceCredentials
         return null;
     }
 
+    /// <summary>Whether ANY configured source names the repository — with or without a credential.
+    /// A repository the deployment configures keeps the deployment's identity: an instance-local
+    /// source for the same repository never switches it to the instance App.</summary>
+    private bool IsConfiguredRepository(string? repositoryUrl) =>
+        configuration is not null
+        && NormalizeRepository(repositoryUrl) is { Length: > 0 } wanted
+        && configuration.GetSection(SourcesSection).GetChildren().Any(source =>
+            string.Equals(NormalizeRepository(source["RepoPath"]), wanted, StringComparison.OrdinalIgnoreCase));
+
     /// <summary>The instance App for an instance-local source while it is connected, else null.</summary>
     private GitSourceCredential? InstanceFor(string? repositoryUrl)
     {
+        if (IsConfiguredRepository(repositoryUrl))
+            return null;
         // 🚨 The instance's OWN sources, AFTER the configured ones: a repository the deployment
         // record declares is read as the record says (policy declared-not-derived). An instance
         // source is read with the instance's own App while it is connected — also on an instance
@@ -213,6 +224,8 @@ public sealed class GitSourceCredentials
     public IObservable<string> TokenOrDefault(string? repositoryUrl, Func<IObservable<string>> fallback) =>
         Observable.Defer(() => ConfiguredFor(repositoryUrl) is { } configured
             ? Token(configured)
+            : IsConfiguredRepository(repositoryUrl)
+                ? fallback()
             : (instanceReady?.Invoke() ?? Observable.Return(System.Reactive.Unit.Default))
                 .Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
@@ -279,11 +292,14 @@ public sealed class GitSourceCredentials
         }
 
         var owner = declared.InstallationOwner!;
-        return appTokens is { IsConfigured: true }
-            ? appTokens.GetInstallationToken(owner)
-            : Refuse(GitSyncRefusal.Of(
-                "gitsync.source.appNotConfigured",
-                ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("owner", owner)));
+        // Decided once the App identity can be (a cold replica's persisted instance App is not
+        // "absent"); a token-key credential above stays immediate.
+        return (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default))
+            .SelectMany(_ => appTokens is { IsConfigured: true }
+                ? appTokens.GetInstallationToken(owner)
+                : Refuse(GitSyncRefusal.Of(
+                    "gitsync.source.appNotConfigured",
+                    ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("owner", owner))));
     });
 
     private IObservable<string> Refuse(GitSyncRefusal refusal)

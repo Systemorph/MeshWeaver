@@ -38,7 +38,11 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
     private IDisposable? subscription;
     // Down from a fault until the re-opened query lists the store completely again. Readers that
     // must fail closed (the App's revocation) ask this.
-    private volatile bool faulted;
+    // 🚨 The entries AND the health, swapped as ONE reference (the Instance Secrets catalog's rule): a
+    // reader between two separate writes could see the feed healthy while the entries were still the
+    // pre-outage set — a revocation made during the outage would read as absent.
+    private sealed record Snapshot(ImmutableDictionary<string, TContent> Entries, bool Faulted);
+    private Snapshot snapshot = new(ImmutableDictionary<string, TContent>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), false);
 
     /// <summary>Creates the catalog over <paramref name="nodeType"/> in the <c>Admin</c> partition.</summary>
     /// <param name="hub">The mesh hub.</param>
@@ -61,7 +65,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         get
         {
             EnsureSubscribed();
-            return state.Value;
+            return Volatile.Read(ref snapshot).Entries;
         }
     }
 
@@ -99,7 +103,7 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         get
         {
             EnsureSubscribed();
-            return faulted;
+            return Volatile.Read(ref snapshot).Faulted;
         }
     }
 
@@ -140,8 +144,8 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                 OnChange,
                 logger,
                 $"[{name}] catalog query",
-                onTransientFault: () => faulted = true,
-                onPoisonedContent: _ => faulted = true);
+                onTransientFault: OnFault,
+                onPoisonedContent: _ => OnFault());
         }
     }
 
@@ -168,7 +172,8 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
 
     private void OnChange(QueryResultChange<MeshNode> change)
     {
-        var current = state.Value;
+        var prior = Volatile.Read(ref snapshot);
+        var current = prior.Entries;
         switch (change.ChangeType)
         {
             case QueryChangeType.Initial:
@@ -188,12 +193,20 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                         current = current.Remove(path);
                 break;
         }
-        // A complete listing is the re-opened feed reading again: the fail-closed window ends here.
-        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
-            faulted = false;
+        // A complete listing is the re-opened feed reading again: the fail-closed window ends here —
+        // in the SAME publish as the entries it read, and observers are told only after it.
+        var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
+        Volatile.Write(ref snapshot, new Snapshot(current, full ? false : prior.Faulted));
         state.OnNext(current);
         if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
             loaded.OnNext(true);
+    }
+
+    private void OnFault()
+    {
+        var faulted = Volatile.Read(ref snapshot) with { Faulted = true };
+        Volatile.Write(ref snapshot, faulted);
+        state.OnNext(faulted.Entries);
     }
 
     private ImmutableDictionary<string, TContent> Fold(ImmutableDictionary<string, TContent> current, MeshNode? node)

@@ -897,12 +897,16 @@ public sealed class GitHubSyncService
                 : hub.ServiceProvider.GetService<GitSourceCredentials>() is { } sourceCredentials && repositoryUrl is not null
                     ? sourceCredentials.TokenOrDefault(repositoryUrl, () => DefaultAppToken().Select(a => a.Token))
                         .Select(t => new ResolvedGitHubAuth(t, null))
-                    : DefaultAppToken());
+                    : DefaultAppToken(forExport: repositoryUrl is null));
 
-    /// <summary>The instance's App installation token, decided once the identity can be.</summary>
-    private IObservable<ResolvedGitHubAuth> DefaultAppToken() =>
+    /// <summary>
+    /// The App installation token, decided once the identity can be. 🚨 An EXPORT (a push; no
+    /// repository read credential applies) takes only the DEPLOYMENT's App: the instance's own App is
+    /// read-only (contents: read) and would be refused by GitHub at the push.
+    /// </summary>
+    private IObservable<ResolvedGitHubAuth> DefaultAppToken(bool forExport = false) =>
                 (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default)).SelectMany(_ =>
-                    appTokens is { IsConfigured: true }
+                    (forExport ? appTokens is { IsDeploymentConfigured: true } : appTokens is { IsConfigured: true })
                         ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
                         : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
                             "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +

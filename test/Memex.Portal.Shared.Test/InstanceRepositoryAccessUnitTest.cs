@@ -359,6 +359,54 @@ public class InstanceRepositoryAccessUnitTest
     }
 
     [Fact]
+    public async Task ARepositoryTheDeploymentConfigures_KeepsTheDeploymentsIdentity_EvenWhenAlsoAddedLocally()
+    {
+        using var deploymentKey = RSA.Create(2048);
+        using var instanceKey = RSA.Create(2048);
+        var service = new GitHubAppTokenService(
+            new IoPoolRegistry(),
+            Options.Create(new GitHubAppOptions { ClientId = "Iv23liPlatform", PrivateKey = deploymentKey.ExportRSAPrivateKeyPem() }),
+            () => new GitHubAppOptions { ClientId = "Iv23liInstance", PrivateKey = instanceKey.ExportRSAPrivateKeyPem() },
+            httpClient: new HttpClient(new AppHandler()), clock: () => Now);
+        var local = new InstancePackageSourceContent { Repo = Local };
+        var credentials = new GitSourceCredentials(Config(new()
+            {
+                // Configured WITHOUT a credential of its own: the deployment's default identity reads it.
+                ["PluginCatalog:Sources:0:Name"] = "Acme",
+                ["PluginCatalog:Sources:0:RepoPath"] = Local,
+            }), service, repo => IsLocal(repo) ? local : null);
+
+        Assert.Null(credentials.For(Local));
+        Assert.StartsWith("ghs_Iv23liPlatform_",
+            await credentials.TokenOrDefault(Local, () => service.GetInstallationToken()).FirstAsync().Timeout(Budget).Await());
+    }
+
+    [Fact]
+    public async Task ANamedInstallation_OnAColdReplica_WaitsForTheInstanceApp_InsteadOfRefusing()
+    {
+        using var instanceKey = RSA.Create(2048);
+        var read = new System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit>(1);
+        var loaded = false;
+        var service = new GitHubAppTokenService(
+            new IoPoolRegistry(), Options.Create(new GitHubAppOptions()),
+            () => loaded ? new GitHubAppOptions { ClientId = "Iv23liInstance", PrivateKey = instanceKey.ExportRSAPrivateKeyPem() } : null,
+            () => read,
+            httpClient: new HttpClient(new AppHandler()), clock: () => Now);
+        var credentials = new GitSourceCredentials(Config(new()
+        {
+            ["PluginCatalog:Sources:0:Name"] = "Acme",
+            ["PluginCatalog:Sources:0:RepoPath"] = Local,
+            ["PluginCatalog:Sources:0:InstallationOwner"] = "acme",
+        }), service);
+
+        var pending = credentials.TokenFor(Local)!.FirstAsync().Timeout(Budget).Await();
+        Assert.False(pending.IsCompleted);
+        loaded = true;
+        read.OnNext(System.Reactive.Unit.Default);
+        Assert.StartsWith("ghs_Iv23liInstance_", await pending);
+    }
+
+    [Fact]
     public async Task AMisspelledIdentity_IsRefusedByName_NeverAFallback()
     {
         var service = new GitHubAppTokenService(
