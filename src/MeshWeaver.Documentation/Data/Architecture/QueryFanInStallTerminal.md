@@ -569,9 +569,19 @@ that is NOT an `IScopedQueryStorageAdapter`, whose `ListChildPaths` and `Read` r
 |---|---|---|
 | Admin/Thread, `DeferToNativeProvider` on: storage requests | 0 | the full walk; no Initial within 5 s |
 | Admin/Thread, defer off: peak outstanding on the pool | ≤ 8 | 2,001 (about 2×N) |
-| a second scoped query's Initial while the walk runs | under 2 s | 14.4 s |
+| walk requests granted ahead of any one request of a second scoped query, counted at the pool's gate | 2 (bound: 8) | 958 (14.4 s) |
 
 The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**The third row is a queue position read at the gate, not a stopwatch.** It used to read "the
+second query's Initial arrives in under 2 s", and that measured the runner rather than the walk: every
+leaf of the rig is a 20 ms timer plus thread-pool hops, so on a loaded CI host the same fair walk read
+5.1 s and failed (core `main`, run 39147246595, shard 2, 2026-10-18). Stretching each leaf to 400 ms
+reads 2.4 s on the clock for an unchanged walk. The test now stamps each of the second query's
+requests when it ARRIVES at the pool's gate (the pool's prologue hook, on the request's own flow) and
+counts the walk requests granted before it is granted. No hop before the gate, between the second
+query's stages or after its Initial falls inside that window, so the reading does not move with the
+host's load. With a FIFO gate and a walk of at most 8 outstanding, it cannot exceed 8.
 
 **Not established.**
 
