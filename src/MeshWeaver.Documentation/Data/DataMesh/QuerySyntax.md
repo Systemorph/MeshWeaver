@@ -378,6 +378,7 @@ sort:name-desc          # Name descending
 sort:lastModified-desc  # Most recently modified first
 sort:content.inception  # A content field, earliest first
 sort:content.terms.renewal-desc   # A nested content field, latest first
+sort:subtreeLastModified-desc     # Containers by the newest change BELOW them ("last activity")
 ```
 
 #### Sorting on a content field
@@ -410,6 +411,68 @@ memory but as text on Postgres, so in a field that mixes offsets the pre-`limit:
 differ. A sort function (`length`, `lower`, `upper`) runs on the value as written. The in-memory
 contract is `QuerySortKey`; the Postgres one is `PostgreSqlSqlGenerator.OrderByTerms`
 (MeshWeaver.Plugins).
+
+#### Sorting containers by last activity — `sort:subtreeLastModified`
+
+`sort:lastModified` keys a node on its **own** stamp. For a container that is the wrong question:
+a client partition root, a project folder or a case is stamped by the platform (a retype, a
+provisioning pass, a sync) far more often than by the work done under it, and the work itself
+lands on its descendants. Measured on a live portal: a client root read `lastModified`
+2026-09-21 while thousands of versions had been written below it since. `source:activity` does
+not answer it either — it returns only nodes that carry their own `_activity` satellites (3 of 10
+clients there).
+
+`sort:subtreeLastModified` orders by the newest change **anywhere below** the node:
+
+```
+nodeType:Crm/Counterparty scope:subtree partitions:all sort:subtreeLastModified-desc   # most recently worked-on client first
+namespace:ACME/Projects sort:subtreeLastModified-desc limit:10                 # the ten liveliest projects
+```
+
+| | |
+|---|---|
+| **Key** | The `LastModified` of the newest row the SAME caller gets from `namespace:{node} scope:descendants sort:lastModified-desc` — the node's **strict** descendants, at any depth, exactly as that caller's own descendants query returns them. |
+| **Empty container** | No descendant the caller can read → the node's **own** `LastModified`. An empty container ranks by when it was itself touched, never as never-touched. |
+| **No key** | No readable descendant and an unset own stamp → **last in both directions**, like every other selector. |
+| **Why strict** | The node's own stamp is excluded while anything below it is readable, because a platform re-stamp of a root is not activity: with it included, a root re-stamped yesterday would outrank a client worked on this morning. |
+| **Access** | The descendants read runs under the **caller's identity**, through the normal query path, so every backend applies its own row-level security to it. A key can only come from a row the caller could have found with that query themselves — the order a viewer sees says nothing about rows they cannot read. Nothing is read as System on the caller's behalf. |
+| **Ties** | Path ascending — a total order, so `skip`/`limit` page rather than sample. |
+
+**How it runs — and what it costs.** No backend can order by this key: it is not a column of the
+row, so a provider's `ORDER BY … LIMIT` (and the in-memory provider's pre-cap sort, and the merge's
+re-sort) would key every row null and clip in path order — the wrong rows, before any later stage
+could see the right ones. So the **query engine** computes it (`MeshQuery`, the
+`SubtreeSort` contract in `MeshWeaver.Mesh.Contract`): it runs the query **without** any `sort:`
+(cut by the parser's own tokenizer, so a quoted `sort:"…"` goes too) and the window, reads one key per candidate through the same surface and identity (eight at a
+time), orders by the `QuerySortKey` contract above, and only then applies `skip` / `limit`. It
+therefore works identically on every backend — in-memory, Postgres, any other — with no backend
+change, and on Postgres each key read is one partition-pinned `limit:1` read.
+
+The price is **one read per candidate**, and the candidates are the query's whole match set. That
+is cheap for what the selector is for — a roster, a project list, tens of rows — and ruinous for
+what it is not (`nodeType:Document partitions:all sort:subtreeLastModified-desc limit:20` would
+read once per document in the mesh to keep twenty). So it refuses: past
+`MeshOperationOptions.SubtreeSortMaxCandidates` candidates (500 by default) the query **fails** with
+an error naming the bound and the remedy — narrow the query to the containers you mean to rank —
+rather than paying that silently or ordering a subset and presenting it as the whole.
+
+**Live results stay inside the window.** The candidate read is unlimited, so its live deltas
+name rows on and off the page alike. The engine keeps every candidate and its key, folds each
+delta in (one key read per changed candidate), re-takes the window and emits it as a **`Reset`**
+whenever its membership, order or one of its rows changed — so a `limit:2` list never grows to
+three, an added container is ranked into the window, and a deleted one is backfilled. A key read
+that did not complete (a silent provider, a `SnapshotIncomplete` frame) marks the ranked frame
+`SnapshotIncomplete` too: a ranking resting on a partial read is a floor and says so. The
+candidate path is written into each key read as a quoted literal, so a space, `|` or `*` in a
+path is data, never syntax.
+
+**Two limits worth knowing.** A change below a container does not re-emit the container itself,
+so a live list re-ranks on changes to the candidates and when it is re-queried, not on every
+descendant write. And the hub-side synced read (`hub.GetQuery`, `workspace.GetQuery`)
+hands back a path-keyed SET, as it does for every `sort:` — the order reaches readers of the
+query stream itself, which is what `MeshSearchControl` renders. To list containers by last
+activity in a page, see [Mesh Search](/Doc/GUI/MeshSearch) → *Listing containers by last
+activity*.
 
 #### The default when you write no `sort:`
 
