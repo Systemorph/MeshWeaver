@@ -92,6 +92,9 @@ public static class SuppliedNavigationRail
         /// are not in it. Walk <see cref="Items"/> for the whole subtree.
         /// </summary>
         public IReadOnlyList<RailLink> Links => [.. Items.OfType<RailLink>()];
+
+        /// <summary>The sort choices for the group's entries — a dropdown on its heading.</summary>
+        public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
     }
 
     /// <summary>The whole rail: the heading link, then the supplied entries in the supplied order.</summary>
@@ -101,6 +104,9 @@ public static class SuppliedNavigationRail
     /// bucket per kind: see the class remarks, defect 4.</param>
     public sealed record Rail(RailLink Home, IReadOnlyList<RailItem> Items)
     {
+        /// <summary>The sort choices for the top-level entries — a dropdown beside the search box.</summary>
+        public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
+
         /// <summary>
         /// The flat entries, in rail order. <b>A filter, never the render order</b> — reading this
         /// and <see cref="Groups"/> in turn is precisely how #3406 put every leaf page ahead of
@@ -150,7 +156,7 @@ public static class SuppliedNavigationRail
             .Select(entry => Project(entry, currentPath))
             .ToList();
 
-        return new Rail(home, items);
+        return new Rail(home, items) { SortOptions = supplied.SortOptions };
     }
 
     /// <summary>
@@ -167,7 +173,8 @@ public static class SuppliedNavigationRail
                 IsAtOrBelow(currentPath, entry.Path),
                 // The entry's own link first, then its children.
                 [Link(entry), .. entry.Children.Select(child => Project(child, currentPath))],
-                entry.Icon);
+                entry.Icon)
+            { SortOptions = entry.SortOptions };
 
     /// <summary>
     /// Renders a plan as the nav menu: the heading link, then every supplied entry in the order the
@@ -195,7 +202,8 @@ public static class SuppliedNavigationRail
         var menu = Controls.NavMenu
             // The search box searches the space the index covers: the tree is for where you are,
             // the box is for everything under it.
-            .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible).WithSearchNamespace(searchNamespace))
+            .WithSkin(s => s.WithWidth(width).WithCollapsible(collapsible).WithSearchNamespace(searchNamespace)
+                .WithSortOptions(rail.SortOptions))
             .WithNavLink(RenderLink(rail.Home));
 
         // ONE walk, in plan order. WithNavLink and WithNavGroup both append to the container's
@@ -222,7 +230,8 @@ public static class SuppliedNavigationRail
 
     private static NavGroupControl RenderGroup(RailGroup group)
     {
-        var rendered = new NavGroupControl(group.Label).WithSkin(s => s.WithExpanded(group.Expanded));
+        var rendered = new NavGroupControl(group.Label)
+            .WithSkin(s => s.WithExpanded(group.Expanded).WithSortOptions(group.SortOptions));
         if (group.Icon is not null)
             rendered = rendered.WithIcon(group.Icon);
         // The same one walk as the rail's own: a nested group renders as a group INSIDE this one
@@ -239,7 +248,7 @@ public static class SuppliedNavigationRail
     }
 
     private static RailLink Link(NodeNavigationEntry entry)
-        => new(entry.Label, entry.Path, "/" + entry.Path, entry.IsCurrent, entry.Icon);
+        => new(entry.Label, entry.Path, entry.Href ?? "/" + entry.Path, entry.IsCurrent, entry.Icon);
 
     private static NavLinkControl RenderLink(RailLink link)
         => new NavLinkControl(link.Label, link.Icon, link.Href).WithIsActive(link.IsCurrent);
