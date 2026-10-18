@@ -149,6 +149,7 @@ public static class AccessControlPipeline
         string hubPath,
         (string Path, Permission Permission) check,
         string userId,
+        AccessContext? trustedCaller,
         ILogger? logger)
     {
         if (!string.Equals(check.Path, hubPath, StringComparison.OrdinalIgnoreCase))
@@ -181,19 +182,18 @@ public static class AccessControlPipeline
                         userId, check.Permission, logger);
                 }
 
-                // 🚨 The caller is the identity the STANDARD check just evaluated (`userId`, resolved by
-                // ResolveIdentity from the delivery's own sources), never the ambient context, which
-                // can still hold the bootstrap's System identity. The delivery's context is kept only
-                // when it names that same identity, so its virtual / API-token flags survive.
-                var callerContext = delivery.AccessContext is { } delivered
-                                    && string.Equals(delivered.ObjectId, userId, StringComparison.OrdinalIgnoreCase)
-                    ? delivered
-                    : new AccessContext { ObjectId = userId };
+                // 🚨 The caller is EXACTLY the trusted context the standard check's identity came from
+                // (ResolveCaller: the delivery's own context, or the circuit's) — with ALL its flags, so
+                // a virtual visitor stays virtual and an API token stays a token. Never the ambient
+                // context, which can still hold the bootstrap's System identity, and never a context
+                // rebuilt from an id, which drops those flags. When the source context is unknown (an
+                // identity carried only as a string, or none at all), the declaration is NOT consulted.
+                var callerContext = trustedCaller;
                 // 🚨 ONLY a point read of THIS node — the node itself, or a layout area the type
                 // declares — may be re-decided through its declared point read. The hub's workspace
                 // holds more than the node (its satellites), so any other shape (a collection, an
                 // entity, a pointer, another path, any other message) keeps the standard denial.
-                var pointRead = DeclaredPointRead.RequestShape(delivery.Message, hubPath);
+                var pointRead = callerContext is null ? null : DeclaredPointRead.RequestShape(delivery.Message, hubPath);
                 if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation.Value) is not { } rule)
                     return operation == NodeOperation.Read
                         ? NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, PermissionCheckOutcome.Denied, pointRead)
@@ -300,6 +300,7 @@ public static class AccessControlPipeline
                 bool rlsDisabled;
                 bool unsecuredDeclared;
                 string? userId = null;
+                AccessContext? trustedCaller = null;
                 var hubPath = string.Empty;
                 var pendingChecks = ImmutableList<(string Path, Permission Permission)>.Empty;
                 try
@@ -315,6 +316,9 @@ public static class AccessControlPipeline
                         var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
 
                         userId = ResolveIdentity(delivery, accessService);
+                        // The CONTEXT that identity came from, flags and all — what a declared point
+                        // read decides about (null when the identity carries no trusted context).
+                        trustedCaller = ResolveCaller(delivery, accessService);
 
                         // Restore the sender's AccessContext onto this scope's AccessService so
                         // the permission fold snapshots the CALLER (PermissionEvaluator captures
@@ -595,7 +599,7 @@ public static class AccessControlPipeline
                         .SelectMany(outcome => outcome.IsGranted || outcome.IsUndetermined
                             ? Observable.Return(outcome)
                             : ReconsiderThroughNodeTypeRule(
-                                hub, delivery, hubPath, check, effectiveUserId, logger))
+                                hub, delivery, hubPath, check, effectiveUserId, trustedCaller, logger))
                         .Select(outcome => new EvaluatedCheck(check.Path, check.Permission, outcome)))
                     // Concat, not Merge: the checks run ONE AT A TIME, in order — which is what
                     // makes the termination below actually save the remaining evaluations, and
@@ -985,6 +989,27 @@ public static class AccessControlPipeline
         // 3. Blazor circuit context (monolith only — set per-circuit-activity,
         //    not contaminated by hub-init impersonations).
         return accessService.CircuitContext?.ObjectId;
+    }
+
+    /// <summary>
+    /// The trusted CONTEXT behind <see cref="ResolveIdentity"/>'s answer, taken from the same sources in
+    /// the same order — the delivery's own context, or the Blazor circuit's — and returned WHOLE, so
+    /// its flags (<see cref="AccessContext.IsVirtual"/>, <see cref="AccessContext.IsApiToken"/>) reach a
+    /// declared point read intact. Null when the identity is carried only as a string
+    /// (<c>SubscribeRequest.Identity</c>, whose flags are unknown) or when there is none: a declared
+    /// point read then admits nothing. Never the ambient <see cref="AccessService.Context"/>.
+    /// </summary>
+    /// <param name="delivery">The delivery being gated.</param>
+    /// <param name="accessService">The receiving hub's access service (its CIRCUIT context only — never its ambient one).</param>
+    public static AccessContext? ResolveCaller(IMessageDelivery delivery, AccessService accessService)
+    {
+        ArgumentNullException.ThrowIfNull(delivery);
+        ArgumentNullException.ThrowIfNull(accessService);
+        if (!string.IsNullOrEmpty(delivery.AccessContext?.ObjectId))
+            return delivery.AccessContext;
+        if (delivery.Message is SubscribeRequest sub && !string.IsNullOrEmpty(sub.Identity))
+            return null;
+        return string.IsNullOrEmpty(accessService.CircuitContext?.ObjectId) ? null : accessService.CircuitContext;
     }
 
     private static RequiresPermissionAttribute? GetAttribute(Type messageType)

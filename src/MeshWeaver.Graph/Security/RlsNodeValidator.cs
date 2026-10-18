@@ -255,10 +255,11 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
     private IObservable<NodeValidationResult> ReconsiderPointRead(
         NodeValidationContext context, string? userId, NodeValidationResult result)
     {
+        // The declaration decides about the caller's CONTEXT, flags and all — never a context
+        // rebuilt from an id, which would drop IsVirtual / IsApiToken. No context, no declaration.
         if (result.IsValid || !context.IsPointRead || context.Operation != NodeOperation.Read
-            || result.Reason != NodeRejectionReason.Unauthorized)
+            || result.Reason != NodeRejectionReason.Unauthorized || context.AccessContext is not { } caller)
             return Observable.Return(result);
-        var caller = context.AccessContext ?? new AccessContext { ObjectId = userId ?? WellKnownUsers.Anonymous };
         return DeclaredPointRead.Admits(_hub, context.Node.Path, caller)
             .TakeDecisionOutsideGate()
             .DefaultIfEmpty(false)

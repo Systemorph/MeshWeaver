@@ -376,6 +376,66 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.Equal(System.Reactive.NotificationKind.OnNext, admin.Kind);
     }
 
+    /// <summary>
+    /// 🚨 Review of #6935 (thread 4306187851): a DIRECT node subscription is decided about the caller's
+    /// trusted context WITH its flags. A virtual (logged-out) circuit — <c>guest-…</c>, IsVirtual — is
+    /// refused a <c>Public</c>-audience node, however it is addressed; a signed-in circuit is admitted.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ADirectSubscription_KeepsTheCircuitsFlags()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("public-only", WellKnownUsers.Public, ct);
+        var address = new Address(link);
+
+        var guest = new AccessContext { ObjectId = "guest-9c41", Name = "Guest", IsVirtual = true };
+        var refused = await DirectSubscribe(ClientAs(guest), address).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, refused.Kind);
+
+        var admitted = await DirectSubscribe(ClientAs(Dave), address).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnNext, admitted.Kind);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #6935 (thread 4306187851), the CIRCUIT source: a delivery carrying NO context whose
+    /// identity therefore comes from the receiving hub's circuit — a VIRTUAL guest — is decided about
+    /// that circuit context WHOLE, so the guest stays logged-out and is refused a <c>Public</c>
+    /// audience; an identity carried only as a string (<c>SubscribeRequest.Identity</c>) has no trusted
+    /// context and consults no declaration at all. POSITIVE CONTROL: a signed-in circuit is admitted.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AContextlessDelivery_IsDecidedAboutTheCircuitWithItsFlags()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("public-circuit", WellKnownUsers.Public, ct);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        IMessageDelivery Delivery(string? identity = null)
+            => new MessageDelivery<SubscribeRequest>(
+                new SubscribeRequest("s", new MeshNodeReference()) { Identity = identity },
+                new PostOptions(new Address("client", "x")).WithTarget(new Address(link)),
+                Mesh.JsonSerializerOptions);
+
+        access.SetHostIdentity(new AccessContext { ObjectId = "guest-c0de", Name = "Guest", IsVirtual = true });
+        var guest = MeshWeaver.Hosting.Security.AccessControlPipeline.ResolveCaller(Delivery(), access);
+        Assert.True(guest?.IsVirtual, "the circuit's context is carried WHOLE — the guest stays virtual");
+        Assert.False(await DeclaredPointRead.Admits(Mesh, link, guest).Take(1).Should().Emit(cancellationToken: ct),
+            "a virtual circuit is not in a Public audience");
+        Assert.Null(MeshWeaver.Hosting.Security.AccessControlPipeline.ResolveCaller(Delivery(identity: "dave"), access));
+
+        access.SetHostIdentity(Dave);
+        var signedIn = MeshWeaver.Hosting.Security.AccessControlPipeline.ResolveCaller(Delivery(), access);
+        Assert.True(await DeclaredPointRead.Admits(Mesh, link, signedIn).Take(1).Should().Emit(cancellationToken: ct),
+            "POSITIVE CONTROL: a signed-in circuit is in a Public audience");
+    }
+
+    /// <summary>A raw node subscription to the node's own hub — the shape that bypasses MeshDataSource's GetData-only validator.</summary>
+    internal static IObservable<System.Reactive.Notification<IMessageDelivery<SubscribeAck>>> DirectSubscribe(IMessageHub client, Address address)
+        => client.Observe(new SubscribeRequest($"direct-{Guid.NewGuid():N}", new MeshNodeReference()), o => o.WithTarget(address))
+            .Materialize()
+            .Take(1);
+
     private IMessageHub ClientAs(AccessContext caller)
     {
         var client = GetClient(config => ConfigureClient(config).AddLayoutClient());
@@ -535,6 +595,14 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
             "an instance that denies anonymous access admits no logged-out caller, whatever a type declares");
         Assert.True(await DeclaredPointRead.Admits(Mesh, node.Path, new AccessContext { ObjectId = "dave" }).Take(1).Should().Emit(cancellationToken: ct),
             "POSITIVE CONTROL: a signed-in caller is in an Anonymous audience");
+
+        // A DIRECT subscription from a VIRTUAL circuit is refused under the switch (thread 4306187851).
+        var client = GetClient();
+        client.ServiceProvider.GetRequiredService<AccessService>()
+            .SetHostIdentity(new AccessContext { ObjectId = "guest-41aa", Name = "Guest", IsVirtual = true });
+        var refused = await DeclaredPointReadTest.DirectSubscribe(client, new Address(node.Path))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, refused.Kind);
     }
 }
 
