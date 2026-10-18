@@ -101,6 +101,9 @@ public static class MeshExtensions
         // node in the subtree. Owning hub runs local INodeValidators + domain rules.
         config.TypeRegistry.WithType(typeof(ValidateDeleteRequest), nameof(ValidateDeleteRequest));
         config.TypeRegistry.WithType(typeof(ValidateDeleteResponse), nameof(ValidateDeleteResponse));
+        // The version-guarded delete's commit/abort message to the owner that took its seal (#6856).
+        config.TypeRegistry.WithType(typeof(ReleaseDeleteSeal), nameof(ReleaseDeleteSeal));
+        config.TypeRegistry.WithType(typeof(ReleaseDeleteSealResponse), nameof(ReleaseDeleteSealResponse));
 
         // NodeType compilation lookup. Posted by NodeTypeService → owning per-node hub
         // (per the GetCompilationPathRequest contract). Registered here so that any hub
@@ -659,6 +662,7 @@ public static class MeshExtensions
             .WithHandler<CreateOrUpdateNodeRequest>(HandleCreateOrUpdateNodeRequest)
             .WithHandler<DeleteNodeRequest>(HandleDeleteNodeRequest)
             .WithHandler<ValidateDeleteRequest>(HandleValidateDeleteRequest)
+            .WithHandler<ReleaseDeleteSeal>(HandleReleaseDeleteSeal)
             .WithHandler<MoveNodeRequest>(HandleMoveNodeRequest)
             .WithHandler<CopyNodeRequest>(HandleCopyNodeRequest)
             .WithHandler<HeartBeatEvent>(HandleHeartBeat);
@@ -3629,11 +3633,13 @@ public static class MeshExtensions
     /// stored. Compared against the DURABLE row, a delete expecting V matched while the owner had
     /// already acknowledged V+1, and then removed that acknowledged change (#6673). The owner's live
     /// version includes every write it has acknowledged. The comparison runs on the turn every own
-    /// write and every cross-hub patch commits on, and the caller has sealed the path
-    /// (<see cref="RecentlyDeletedRegistry.BeginVersionGuardedDeletion"/>) BEFORE asking, so each
-    /// own write is either committed before the comparison (and seen by it) or refused in its own
-    /// turn (and never acknowledged). A cross-hub patch is acknowledged only after its durable flush,
-    /// which the subtree-deletion scope already refuses. Check and seal are therefore one step.</para>
+    /// write and every cross-hub patch commits on, and on a match the OWNER seals the path in that
+    /// same turn, in its own process (<see cref="RecentlyDeletedRegistry.TakeOwnerDeleteSeal"/>,
+    /// #6856), so each own write is either committed before the comparison (and seen by it) or
+    /// deferred until this delete's commit or abort (and never acknowledged before it). A cross-hub
+    /// patch is acknowledged only after its durable flush, which the owner's row guard refuses. Check
+    /// and seal are therefore one step, whichever process runs the delete. The seal is released by the
+    /// commit/abort message <see cref="ReleaseOwnerSeal"/> sends, or by the owner's teardown.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> ExpectedVersionHoldsOnTheOwner(
         IMessageHub issuingHub,
@@ -3641,6 +3647,7 @@ public static class MeshExtensions
         System.Text.Json.JsonSerializerOptions options,
         string path,
         long? expectedVersion,
+        DeleteSealLease? sealLease,
         AccessContext? callerAccessContext,
         TimeSpan budget,
         ILogger logger,
@@ -3651,15 +3658,23 @@ public static class MeshExtensions
         if (expectedVersion is not { } expected)
             return Observable.Return(System.Reactive.Unit.Default);
 
-        var ask = new ValidateDeleteRequest(path) { ExpectedVersion = expected };
+        var ask = new ValidateDeleteRequest(path) { ExpectedVersion = expected, SealId = sealLease?.SealId };
         IObservable<IMessageDelivery<ValidateDeleteResponse>> Ask() => Observable
-            .Defer(() => issuingHub.Observe(ask, o => callerAccessContext is null
-                ? o.WithTarget(new Address(path))
-                : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext)))
+            .Defer(() =>
+            {
+                sealLease?.MarkAsked();
+                return issuingHub.Observe(ask, o => callerAccessContext is null
+                    ? o.WithTarget(new Address(path))
+                    : o.WithTarget(new Address(path)).WithAccessContext(callerAccessContext));
+            })
             .Take(1);
 
         return OwnerVersionVerdict(
-                () => RideOutRecyclingLeaf(Ask, path, DeleteStage.CheckExpectedVersion, logger).Select(d => d.Message),
+                () => RideOutRecyclingLeaf(Ask, path, DeleteStage.CheckExpectedVersion, logger)
+                    .Select(d => d.Message)
+                    // The owner's own answer, before it is read as a verdict: whether it names a
+                    // seal it took decides where this delete's commit/abort message goes (#6856).
+                    .Do(answer => sealLease?.Answered(answer)),
                 () => persistence.Read(path, options),
                 path, expected)
             .TimeoutAtStage(budget, () => DeleteStageTimeout(
@@ -3695,6 +3710,122 @@ public static class MeshExtensions
                 return Observable.Empty<System.Reactive.Unit>();
             });
     }
+
+    /// <summary>
+    /// What a version-guarded delete knows about the OWNER's seal it asked for (#6856): its id,
+    /// whether the ask went out, and the owner's answer (which names the process holding the seal).
+    /// Written by the ask's pipeline, read once when the delete's scope is disposed.
+    /// </summary>
+    internal sealed class DeleteSealLease(string sealId)
+    {
+        private int _asked;
+        private ValidateDeleteResponse? _answer;
+
+        /// <summary>The seal id the ask carries (<see cref="ValidateDeleteRequest.SealId"/>).</summary>
+        public string SealId { get; } = sealId;
+
+        /// <summary>True once the version-guarded ask was sent.</summary>
+        public bool Asked => System.Threading.Volatile.Read(ref _asked) != 0;
+
+        /// <summary>The owner's last answer, or null when none arrived.</summary>
+        public ValidateDeleteResponse? Answer => System.Threading.Volatile.Read(ref _answer);
+
+        /// <summary>Records that the ask was sent.</summary>
+        public void MarkAsked() => System.Threading.Volatile.Write(ref _asked, 1);
+
+        /// <summary>Records the owner's answer.</summary>
+        /// <param name="answer">The answer as the owner sent it.</param>
+        public void Answered(ValidateDeleteResponse answer) => System.Threading.Volatile.Write(ref _answer, answer);
+
+        private int _released;
+
+        /// <summary>True for the one caller that sends this delete's release.</summary>
+        public bool TryClaimRelease() => System.Threading.Interlocked.Exchange(ref _released, 1) == 0;
+    }
+
+    /// <summary>
+    /// Sends the version-guarded delete's COMMIT or ABORT to the owner that took its seal (#6856).
+    /// Committed when the root row was removed (by this delete, or found already gone), aborted on
+    /// every other terminal. It goes to the node-operation hub of the owner's process
+    /// (<see cref="ValidateDeleteResponse.SealedBy"/>) — that address still resolves after the row is
+    /// gone, and the owner's own address does not — and that hub releases the seal in its process.
+    /// An owner that answered without naming a seal took none. When no answer arrived at all, the owner
+    /// may still have sealed, so an abort is sent to the node itself, which still exists; a seal its
+    /// process does not hold is a no-op there.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> ReleaseOwnerSeal(
+        DeleteSealLease lease,
+        IMessageHub issuingHub,
+        string path,
+        bool rootRemoved,
+        AccessContext? callerAccessContext,
+        TimeSpan bound,
+        ILogger logger,
+        RecentlyDeletedRegistry? registry)
+        => Observable.Defer(() =>
+        {
+            // Once per delete: the success path releases before its response, the scope's disposal
+            // is the release on every other path.
+            if (!lease.TryClaimRelease())
+                return Observable.Return(System.Reactive.Unit.Default);
+            // The STORE's answer decides, as the mesh observed it — not how far this pipeline got:
+            // Committed when the root row was removed, Indeterminate while a root delete this process
+            // issued has not answered (an unsubscribe does not stop it), an abort only otherwise.
+            // Taken first, on every path, so the record never outlives this delete.
+            // Keyed by THIS delete (its seal id), never by path: a concurrent delete of the same path
+            // must not consume — or be answered by — another delete's storage call.
+            var verdict = registry?.TakeRootDeleteVerdict(lease.SealId) ?? RootDeleteVerdict.NotRemoved;
+            if (!lease.Asked)
+                return Observable.Return(System.Reactive.Unit.Default); // the owner was never asked: no seal
+            var answer = lease.Answer;
+            Address target;
+            if (answer is null)
+            {
+                if (rootRemoved)
+                    return Observable.Return(System.Reactive.Unit.Default); // a removal needs a confirmed verdict
+                target = new Address(path);
+            }
+            else if (answer.SealedBy is { } sealedBy)
+                target = sealedBy;
+            else
+                return Observable.Return(System.Reactive.Unit.Default); // the owner took no seal
+            var outcome = SealOutcomeFor(rootRemoved, verdict);
+            logger.LogDebug("[DeleteNode] owner seal release sent path={Path} seal={SealId} outcome={Outcome} to={Target}",
+                path, lease.SealId, outcome, target);
+            return issuingHub
+                .Observe(new ReleaseDeleteSeal(path, lease.SealId, outcome), o => callerAccessContext is null
+                    ? o.WithTarget(target)
+                    : o.WithTarget(target).WithAccessContext(callerAccessContext))
+                .Take(1)
+                .Timeout(bound)
+                .Select(_ => System.Reactive.Unit.Default)
+                // Not swallowed into silence: the owner still releases on its own teardown, and this
+                // line says why its writes waited for that. The delete's own verdict stands either way.
+                .Catch((Exception ex) =>
+                {
+                    logger.LogWarning(ex,
+                        "[DeleteNode] the {Outcome} for '{Path}' was not acknowledged by its owner (seal {SealId}); "
+                        + "the owner's writes to it stay deferred until that activation is torn down",
+                        outcome, path, lease.SealId);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                });
+        });
+
+    /// <summary>
+    /// The outcome a version-guarded delete's release names (#6856). 🚨 A root storage delete still
+    /// running decides first: Indeterminate even when an earlier pass removed the row, because that
+    /// late call can still remove a node created after the release — the owner fences. Then a removal
+    /// (recorded by the pipeline, or answered by the store) is Committed; otherwise Aborted.
+    /// </summary>
+    /// <param name="rootRemoved">The pipeline recorded the root's removal.</param>
+    /// <param name="verdict">What the store answered, per <see cref="RecentlyDeletedRegistry.TakeRootDeleteVerdict"/>.</param>
+    /// <returns>A <see cref="DeleteSealOutcome"/> value.</returns>
+    internal static string SealOutcomeFor(bool rootRemoved, RootDeleteVerdict verdict)
+        => verdict == RootDeleteVerdict.Unanswered
+            ? DeleteSealOutcome.Indeterminate
+            : rootRemoved || verdict == RootDeleteVerdict.Removed
+                ? DeleteSealOutcome.Committed
+                : DeleteSealOutcome.Aborted;
 
     /// <summary>
     /// Waits, inside the delete's open subtree scope, for every write the storage guard ADMITTED at
@@ -3775,7 +3906,9 @@ public static class MeshExtensions
     /// It writes nothing (the turn returns no change).
     /// </summary>
     private static IObservable<ValidateDeleteResponse> CompareLiveVersionInOwnerTurn(
-        IMessageHub hub, string path, long expected, TimeSpan bound)
+        IMessageHub hub, string path, long expected, TimeSpan bound,
+        string? sealId = null, RecentlyDeletedRegistry? sealRegistry = null, Address? sealReleaseAddress = null,
+        Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = null)
     {
         var workspace = hub.GetWorkspace();
         var primary = workspace.DataContext.GetDataSourceForType(typeof(MeshNode))?.GetStreamForPartition(null);
@@ -3793,27 +3926,152 @@ public static class MeshExtensions
             .Timeout(bound, Observable.Defer(() => Observable.Throw<ChangeItem<MeshNode>>(
                 new TimeoutException(
                     $"[ValidateDelete] the own node at '{path}' did not load within {bound.TotalSeconds:0}s"))))
-            .SelectMany(_ => Observable.Create<ValidateDeleteResponse>(observer =>
+            .SelectMany(_ => Observable.Create<(ValidateDeleteResponse Answer, bool Sealed)>(observer =>
             {
                 primary.Update(store =>
                 {
+                    var sealedHere = false;
                     var current = store?.Collections.GetValueOrDefault(nameof(MeshNode))?.Instances.Values
                         .OfType<MeshNode>()
                         .FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase));
-                    observer.OnNext(current is null
-                        ? ValidateDeleteResponse.FromError(
-                            $"Node not found at path: {path}", NodeDeletionRejectionReason.NodeNotFound)
-                        : current.Version == expected
-                            ? ValidateDeleteResponse.Ok() with { ConfirmedVersion = expected }
-                            :ValidateDeleteResponse.FromError(
+                    ValidateDeleteResponse answer;
+                    if (current is null)
+                        answer = ValidateDeleteResponse.FromError(
+                            $"Node not found at path: {path}", NodeDeletionRejectionReason.NodeNotFound);
+                    else if (current.Version != expected)
+                        answer = ValidateDeleteResponse.FromError(
                                 $"'{path}' is at version {current.Version}, not {expected}",
-                                NodeDeletionRejectionReason.Conflict) with { ActualVersion = current.Version });
+                                NodeDeletionRejectionReason.Conflict) with { ActualVersion = current.Version };
+                    else if (sealId is not null && sealRegistry is not null && sealReleaseAddress is not null)
+                    {
+                        // 🚨 THE OWNER'S SEAL (#6856), taken in the turn that confirmed the version:
+                        // every own write either committed before this turn (and is in the version
+                        // compared) or runs after it and is deferred until the deleter commits or
+                        // aborts. Held by THIS process, so it stops this owner whichever process the
+                        // delete runs in; released by ReleaseDeleteSeal or by this hub's teardown.
+                        // 🚨 Refused when this delete's abort overtook the comparison: it has already
+                        // given up, and a seal taken now would have no release left to receive.
+                        sealedHere = sealRegistry.TakeOwnerDeleteSeal(sealId, path, hub.RegisterForDisposalDetachable,
+                            fenceFor?.Invoke(current));
+                        answer = sealedHere
+                            ? ValidateDeleteResponse.Ok() with
+                            {
+                                ConfirmedVersion = expected, SealedBy = sealReleaseAddress
+                            }
+                            : ValidateDeleteResponse.FromError(
+                                $"the delete of '{path}' was aborted before its version check ran",
+                                NodeDeletionRejectionReason.Unavailable);
+                    }
+                    else
+                        answer = ValidateDeleteResponse.Ok() with { ConfirmedVersion = expected };
+                    observer.OnNext((answer, sealedHere));
                     observer.OnCompleted();
                     return (ChangeItem<EntityStore>?)null; // a comparison, not a write
                 }, observer.OnError);
                 return System.Reactive.Disposables.Disposable.Empty;
-            }));
+            }))
+            // 🚨 And confirmed only once every write of the row this PROCESS admitted before the seal
+            // has settled. The seal's row guard stops new ones, but a flush already below the guard
+            // (an own write acknowledged before the comparison, on its way to the store) would land
+            // after a delete on another silo removed the row, and store the node again; the deleter's
+            // own settle step sees only ITS process. Bounded like the compare: a write that does not
+            // settle releases the seal and the answer is "no verdict", never a match.
+            .SelectMany(result => !result.Sealed || sealRegistry is null || sealId is null
+                ? Observable.Return(result.Answer)
+                : sealRegistry.AdmittedWritesSettled(path, rowOnly: true)
+                    .Select(_ => result.Answer)
+                    .Timeout(bound, Observable.Defer(() =>
+                    {
+                        sealRegistry.ReleaseOwnerDeleteSeal(sealId, path, DeleteSealOutcome.Aborted);
+                        return Observable.Return(ValidateDeleteResponse.FromError(
+                            $"write(s) of '{path}' admitted before its seal did not settle within "
+                            + $"{bound.TotalSeconds:0}s: "
+                            + $"{string.Join(", ", sealRegistry.AdmittedWritesUnder(path, rowOnly: true).Take(10))}",
+                            NodeDeletionRejectionReason.Unavailable));
+                    })));
     }
+
+    /// <summary>
+    /// The STORE FENCE an owner runs when it is torn down while it holds a version-guarded delete's
+    /// seal (#6856, the owner's decision on its review). The deleter may still be alive and paused
+    /// before the store; once this activation is gone a replacement could acknowledge a write that
+    /// the paused delete, still holding the confirmed version, would then remove. So the stored row is
+    /// moved past the confirmed version with a compare-and-set (<see cref="IStorageAdapter.WriteIfVersion"/>,
+    /// the store's own atomic primitive, which the backend runs on its I/O pool): the paused delete's
+    /// compare-and-delete then refuses with Conflict, and the node survives with the state the owner
+    /// confirmed (<paramref name="confirmed"/>, one version on). Emits <c>true</c> when the row is
+    /// already gone (the delete won — nothing to fence, and the caller tombstones the path), <c>false</c>
+    /// otherwise. A row already past the confirmed version needs no fence; a lost compare-and-set reads
+    /// again, because whatever moved the row decides what is left to do.
+    /// </summary>
+    internal static IObservable<bool> FenceTheConfirmedRow(
+        IStorageAdapter storage, MeshNode confirmed, System.Text.Json.JsonSerializerOptions options, ILogger logger,
+        Func<bool> stop, RecentlyDeletedRegistry? registry = null, int attempt = 0)
+        // 🚨 The WRITABLE row is what the fence moves and what it may find gone. A plain read also
+        // serves read-only fallback content (shipped content under a removed override, at version 0),
+        // and a compare-and-set expecting that version would INSERT the deleted override again.
+        => Observable.Defer(() => stop()
+                ? Observable.Return(false)
+                : storage.ExistsInWritableStorage(confirmed.Path).Take(1))
+            .SelectMany(exists => stop()
+                ? Observable.Return(false)
+                : !exists
+                    ? Observable.Return(true)
+                    : storage.Read(confirmed.Path, options).Take(1).DefaultIfEmpty(null)
+                        .SelectMany(stored =>
+                        {
+                            if (stop())
+                                return Observable.Return(false); // the delete's own verdict arrived
+                            if (stored is null)
+                                return Observable.Return(true);
+                            // Already past the confirmed version: the paused delete is refused anyway.
+                            // A version-0 row is no versioned writable row (fallback content): never
+                            // fence it — expecting 0 is the insert-if-absent form.
+                            if (stored.Version > confirmed.Version || stored.Version <= 0)
+                                return Observable.Return(false);
+                            // 🚨 Another INCARNATION — the node was deleted and created again (a new
+                            // CreatedDate). Its version can be at or below the confirmed one, and the
+                            // fence would overwrite the new node with the old confirmed state. Leave it.
+                            if (stored.CreatedDate != confirmed.CreatedDate)
+                                return Observable.Return(false);
+                            var fence = confirmed with { Version = MeshNode.NextVersion(confirmed.Version) };
+                            // The fence's write — and only it — passes the row guard its seal holds.
+                            return Observable.Using(
+                                    () => registry?.AdmitFenceWrite(fence) ?? System.Reactive.Disposables.Disposable.Empty,
+                                    _ => storage.WriteIfVersion(fence, stored.Version, options).Take(1))
+                                .Take(1)
+                                .DefaultIfEmpty(null)
+                                .SelectMany(applied =>
+                                {
+                                    if (applied == true)
+                                    {
+                                        logger.LogInformation(
+                                            "[DeleteNode] owner torn down holding a delete seal: fenced '{Path}' at "
+                                            + "version {Fence} (confirmed {Confirmed}) — a delete still on its way is refused",
+                                            confirmed.Path, fence.Version, confirmed.Version);
+                                        return Observable.Return(false);
+                                    }
+                                    if (attempt < MaxFenceAttempts)
+                                        return FenceTheConfirmedRow(storage, confirmed, options, logger, stop, registry, attempt + 1);
+                                    // The row kept moving: that is a FAULT, not a proof — the guard stays.
+                                    return Observable.Throw<bool>(new InvalidOperationException(
+                                        $"could not fence '{confirmed.Path}' after {attempt + 1} compare-and-set attempts"));
+                                });
+                        }))
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[DeleteNode] the store fence for '{Path}' failed — the owner keeps the path sealed until the "
+                    + "delete's commit or abort arrives, or the next deferred write runs the fence again",
+                    confirmed.Path);
+                return Observable.Throw<bool>(ex);
+            });
+
+    /// <summary>The I/O pool the owner-teardown store fence runs on (#6856).</summary>
+    internal const string OwnerDeleteFencePool = "owner-delete-fence";
+
+    /// <summary>How often the store fence re-reads after a lost compare-and-set.</summary>
+    private const int MaxFenceAttempts = 4;
 
     /// <summary>Stage names — one per bounded stage of <see cref="HandleDeleteNodeRequest"/>.</summary>
     private static class DeleteStage
@@ -4319,6 +4577,19 @@ public static class MeshExtensions
                                 //    subtree scope would refuse writers the operation never
                                 //    touches, and the row guard still keeps the precondition
                                 //    below sound for the one node it deletes.
+                                //    🚨 And the OWNER takes a seal of its own when it confirms the
+                                //    version (#6856): the seal above lives in THIS process, and an
+                                //    owner on another silo never reads it. The owner's seal is
+                                //    released by this delete's commit or abort message, sent when
+                                //    the scope below is disposed — on every terminal path, success
+                                //    included (the success path disposes it before its response).
+                                var sealLease = capturedRequest.ExpectedVersion is null || recentlyDeleted is null
+                                    ? null
+                                    : new DeleteSealLease(Guid.NewGuid().ToString("N"));
+                                // Its root storage calls are recorded per delete from here on, and the
+                                // record closes when the release decides the outcome (#6856).
+                                if (sealLease is not null)
+                                    recentlyDeleted!.OpenRootDeletes(sealLease.SealId);
                                 return Observable.Using(
                                     () =>
                                     {
@@ -4327,16 +4598,25 @@ public static class MeshExtensions
                                         var deletionScope = capturedRequest.KeepDescendants
                                             ? recentlyDeleted.BeginRowDeletion(path)
                                             : recentlyDeleted.BeginSubtreeDeletion(path);
-                                        return capturedRequest.ExpectedVersion is null
+                                        return sealLease is null
                                             ? deletionScope
+                                            // The owner's release FIRST (CompositeDisposable disposes in
+                                            // order): a write the owner deferred hears this delete's
+                                            // outcome, not the anonymous lift of the local seal behind it.
                                             : new System.Reactive.Disposables.CompositeDisposable(
+                                                System.Reactive.Disposables.Disposable.Create(() => ReleaseOwnerSeal(
+                                                        sealLease, issuingHub, path,
+                                                        SnapshotProgress().Contains(path, StringComparer.OrdinalIgnoreCase),
+                                                        request.AccessContext, budget, logger, recentlyDeleted)
+                                                    .Subscribe(_ => { }, ex => logger.LogWarning(ex,
+                                                        "[DeleteNode] owner seal release for '{Path}' faulted", path))),
                                                 deletionScope,
                                                 recentlyDeleted.BeginVersionGuardedDeletion(path));
                                     },
                                     subtreeScope => AdmittedWritesSettled(recentlyDeleted, path, capturedRequest.KeepDescendants, budget)
                                     .SelectMany(_ => ExpectedVersionHoldsOnTheOwner(
                                         issuingHub, persistence, hub.JsonSerializerOptions, path,
-                                        capturedRequest.ExpectedVersion, request.AccessContext, budget, logger,
+                                        capturedRequest.ExpectedVersion, sealLease, request.AccessContext, budget, logger,
                                         onChanged: actual =>
                                         {
                                             var msg = $"Did not delete '{path}': it changed since it was read "
@@ -4550,7 +4830,8 @@ public static class MeshExtensions
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
                                                     capturedRequest, executionContext,
                                                     recentlyDeleted, logger, collectedMessages,
-                                                    deletedProgress, drainProgress, absenceProbeBudget)
+                                                    deletedProgress, drainProgress, absenceProbeBudget,
+                                                    sealLease?.SealId)
                                                 .Select(d => (IReadOnlyList<string>?)d))
                                             .TimeoutAtStage(budget, () =>
                                             {
@@ -4644,6 +4925,17 @@ public static class MeshExtensions
                                             .SelectMany(deletedPaths =>
                                                 RunPostDeletionHandlersObs(
                                                         postDeletionHandlers, rootNode, capturedRequest.DeletedBy, logger, collectedMessages)
+                                                    .Select(_ => deletedPaths))
+                                            // 🚨 The owner's seal is released — and the release ACKNOWLEDGED —
+                                            // BEFORE the success response (#6856). The owner's row guard is
+                                            // held by another hub, so posting the release and answering at
+                                            // once let a caller that recreates the path immediately reach
+                                            // that guard first and be refused as "being deleted".
+                                            .SelectMany(deletedPaths => sealLease is null
+                                                ? Observable.Return(deletedPaths)
+                                                : ReleaseOwnerSeal(sealLease, issuingHub, path,
+                                                        SnapshotProgress().Contains(path, StringComparer.OrdinalIgnoreCase),
+                                                        request.AccessContext, budget, logger, recentlyDeleted)
                                                     .Select(_ => deletedPaths))
                                             .Do(deletedPaths =>
                                             {
@@ -5319,11 +5611,12 @@ public static class MeshExtensions
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
-        TimeSpan absenceProbeBudget)
+        TimeSpan absenceProbeBudget,
+        string? rootDeleteKey = null)
         => RunDeletePass(
             meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
             recentlyDeleted, logger, collectedMessages, deletedProgress, progress,
-            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty);
+            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty, rootDeleteKey);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
         IMessageHub meshHub,
@@ -5340,7 +5633,8 @@ public static class MeshExtensions
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
         int pass,
-        ImmutableList<string> deletedSoFar)
+        ImmutableList<string> deletedSoFar,
+        string? rootDeleteKey = null)
     {
         // 🚨 "Delete wins" — tombstone every path of THIS pass BEFORE the fan-out.
         // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to process its own
@@ -5357,7 +5651,7 @@ public static class MeshExtensions
         return FanOutDeleteSubtree(
                 meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
                 logger, collectedMessages, deletedProgress, progress, absenceProbeBudget,
-                rootAlreadyDeleted: pass > 1)
+                rootAlreadyDeleted: pass > 1, rootDeleteKey)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
@@ -5436,7 +5730,7 @@ public static class MeshExtensions
                         return RunDeletePass(
                             meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc);
+                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc, rootDeleteKey);
                     });
             });
     }
@@ -5484,7 +5778,8 @@ public static class MeshExtensions
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
-        bool rootAlreadyDeleted = false)
+        bool rootAlreadyDeleted = false,
+        string? rootDeleteKey = null)
     {
         // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
         // with one Timeout, and a timeout UNSUBSCRIBES — discarding the deleted-path list
@@ -5526,6 +5821,7 @@ public static class MeshExtensions
         // pipeline rather than only the one an incident happened to name.
         var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
         var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        var rootDeletes = meshHub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         // 🚨 ONE LANE FOR EVERY LEAF OF THE CASCADE (#6351). Unbounded, the bottom-up walk posted
         // a leaf delete per planned path at once, every one of them ended in a write on the cap-1
         // `pg:{provider}` pool, and the leaves at the back of that self-made queue tripped their own
@@ -5571,7 +5867,18 @@ public static class MeshExtensions
         // reached this one, so without the publish, the stream-cache invalidation and the owner's
         // disposal a live stream here would go on replaying the pre-delete node.
         IObservable<string> GuardedRootDelete(string path, long confirmedVersion)
-            => storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
+            => Observable.Defer(() =>
+                {
+                    // 🚨 OBSERVED BY THE MESH, through to the store's real answer (#6856): a timed-out or
+                    // cancelled pipeline does not stop a storage delete that is already running, so the
+                    // call is subscribed once by the registry and recorded on its actual termination;
+                    // this pipeline only reads the replay. The release asks that record whether the row
+                    // was removed, not whether this pipeline got as far as noting it.
+                    var call = storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions);
+                    return rootDeletes is null || rootDeleteKey is null
+                        ? call
+                        : rootDeletes.ObserveRootDelete(rootDeleteKey, call);
+                })
                 .Take(1)
                 .SelectMany(removed => removed
                     ? Observable.Return(path)
@@ -6603,6 +6910,76 @@ public static class MeshExtensions
     /// the same argument, applied one level out, that <see cref="MeshOperationOptions"/> states for
     /// the ladder as a whole.</para>
     /// </summary>
+    /// <summary>
+    /// The owner's half of the version-guarded delete's commit/abort message (#6856): releases the
+    /// seal this hub took when it confirmed the version (<see cref="CompareLiveVersionInOwnerTurn"/>).
+    /// A seal this process does not hold — already released by a teardown, or never taken — is a no-op.
+    /// </summary>
+    private static IMessageDelivery HandleReleaseDeleteSeal(
+        IMessageHub hub,
+        IMessageDelivery<ReleaseDeleteSeal> request)
+    {
+        var release = request.Message;
+        var registry = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+        var logger = hub.ServiceProvider.GetRequiredService<ILogger<MeshNode>>();
+        void Answer(bool released)
+        {
+            logger.LogDebug("[DeleteNode] owner seal release path={Path} seal={SealId} outcome={Outcome} released={Released}",
+                release.Path, release.SealId, release.Outcome, released);
+            hub.Post(new ReleaseDeleteSealResponse(released), o => o.ResponseFor(request));
+        }
+
+        if (!RecentlyDeletedRegistry.IsKnownSealOutcome(release.Outcome))
+        {
+            // An open vocabulary: an unknown outcome is reported, and it releases nothing.
+            logger.LogWarning("[DeleteNode] seal release for '{Path}' names the unknown outcome '{Outcome}' — "
+                + "the seal is left in place until a known outcome or the owner's teardown releases it",
+                release.Path, release.Outcome);
+            Answer(false);
+            return request.Processed();
+        }
+        if (registry?.ReleaseOwnerDeleteSeal(release.SealId, release.Path, release.Outcome) == true)
+        {
+            // A seal whose owner was torn down may still be fencing: answer once it settled, so the
+            // delete's success never reaches its caller while the fence could still write the row.
+            registry.OwnerSealSettled(release.SealId).Take(1).Subscribe(
+                _ => Answer(true),
+                ex =>
+                {
+                    logger.LogWarning(ex, "[DeleteNode] seal {SealId} for '{Path}' did not settle", release.SealId, release.Path);
+                    Answer(true);
+                });
+            return request.Processed();
+        }
+        // No seal held. On the node's OWN hub an abort may have overtaken the version check (the
+        // deleter got no answer and addressed the node), and it then leaves a mark that makes the check
+        // refuse the seal. The mark is STATE a message creates, so it is created only for a sender who
+        // may delete this node — checked here, explicitly, since the message itself carries no
+        // permission attribute. The second release call re-reads the registry, so a seal taken while
+        // the check ran is released rather than marked.
+        var onOwner = string.Equals(hub.Address.Path, release.Path, StringComparison.OrdinalIgnoreCase);
+        var userId = request.AccessContext?.ObjectId;
+        if (registry is null || !onOwner || string.IsNullOrEmpty(userId)
+            || !string.Equals(release.Outcome, DeleteSealOutcome.Aborted, StringComparison.Ordinal))
+        {
+            Answer(false);
+            return request.Processed();
+        }
+        var bind = (Func<IDisposable, IDisposable>)hub.RegisterForDisposalDetachable;
+        hub.CheckPermissionOutcome(release.Path, userId, Permission.Delete)
+            .Take(1)
+            .Subscribe(
+                outcome => Answer(outcome.IsGranted
+                    && registry.ReleaseOwnerDeleteSeal(release.SealId, release.Path, release.Outcome, bind)),
+                ex =>
+                {
+                    logger.LogWarning(ex, "[DeleteNode] early abort for '{Path}' (seal {SealId}): the sender's "
+                        + "delete permission could not be checked — no mark left", release.Path, release.SealId);
+                    Answer(false);
+                });
+        return request.Processed();
+    }
+
     private static IMessageDelivery HandleValidateDeleteRequest(
         IMessageHub hub,
         IMessageDelivery<ValidateDeleteRequest> request)
@@ -6646,7 +7023,29 @@ public static class MeshExtensions
         // version, in the commit turn, and nothing else — see ValidateDeleteRequest.ExpectedVersion.
         if (request.Message.ExpectedVersion is { } expectedVersion)
         {
-            CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested)
+            // The owner's seal (#6856) is taken in the comparing turn itself, so the registry is
+            // resolved here, while this hub is provably alive.
+            var sealRegistry = request.Message.SealId is null
+                ? null
+                : hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
+            // Where the deleter sends its commit/abort: this PROCESS's node-operation hub, which still
+            // resolves after the row is gone (the node's own address does not).
+            var sealReleaseAddress = sealRegistry is null ? null : hub.NodeOperationTarget();
+            // The store fence the seal runs if this activation is torn down while it holds it — the
+            // store and options resolved now, while this hub is alive.
+            var jsonOptions = hub.JsonSerializerOptions;
+            // The fence's store I/O runs on the I/O pool, off every hub and off the seal lane; only
+            // its completion returns to the lane, as a command.
+            var fencePool = sealRegistry is null
+                ? null
+                : hub.ServiceProvider.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()?.Get(OwnerDeleteFencePool);
+            Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = sealRegistry is null
+                ? null
+                : confirmed => stop => fencePool is null
+                    ? FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop, sealRegistry)
+                    : fencePool.InvokeObservable(_ => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop, sealRegistry));
+            CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested, request.Message.SealId, sealRegistry,
+                    sealReleaseAddress, fenceFor)
                 .Select(answer => (object)answer)
                 // 🚨 Teardown is classified exactly as the validator branch below classifies it
                 // (#6750): ShuttingDown, which RideOutRecyclingLeaf re-asks on — never Unavailable,

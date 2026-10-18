@@ -10,9 +10,9 @@ namespace MeshWeaver.Mesh;
 /// per-node hub commits a write to its in-memory node FIRST and stores it afterwards. A write that
 /// committed while the scope was open was therefore refused only at its flush: the writer was told
 /// it failed, while the owner kept serving it and its next save stored it anyway once the scope
-/// closed — or, after a move that succeeded, lost it to the tombstone. Refused in its commit turn, a
-/// write either lands before the scope opened or is refused with nothing committed and nothing
-/// pending.</para>
+/// closed — or, after a move that succeeded, lost it to the tombstone. Asked in its commit turn, a
+/// write either lands before the scope opened or commits nothing: a cross-hub patch is refused, an
+/// owner's own write is deferred until the scope lifts (as behind a version-guarded delete's seal).</para>
 ///
 /// <para>It lives in <c>MeshWeaver.Data.Contract</c> for the reason
 /// <see cref="SubtreeDeletionInFlightException"/> does: the layer that commits patches

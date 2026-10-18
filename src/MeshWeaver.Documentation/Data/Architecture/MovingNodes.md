@@ -198,10 +198,13 @@ only when the owner stores it. A per-node hub commits a write to its in-memory n
 afterwards, so a guard at the store alone refused the FLUSH of a write that had already committed: the
 writer heard "not applied", the owner went on serving the change, and its next save stored it once the
 scope closed (measured, Systemorph/MeshWeaver#6953: two writes to a feedback record under its hand-over
-move, refused at `SaveMeshNodeHandler` and stored after the move failed). Both commit turns — the
-owner's own `UpdateOwn` and a cross-hub patch (`ApplyMeshNodePatchInTurn`) — now ask
-`IActiveDeletionScopes` and refuse with *"Node being deleted"* before anything is committed, so a write
-either landed before the scope opened or is refused with nothing pending. Pinned by
+move, refused at `SaveMeshNodeHandler` and stored after the move failed). Both commit turns now ask the
+scope before anything is committed. The owner's own write (`UpdateOwn`) is DEFERRED exactly as it is
+behind a version-guarded delete's seal (#6856): the turn commits nothing and re-runs when the scope
+lifts (`RecentlyDeletedRegistry.ActiveDeletionLifted`), and the tombstone check then refuses it if the
+node went away, or applies it if the operation aborted. A cross-hub patch (`ApplyMeshNodePatchInTurn`,
+through `IActiveDeletionScopes`) is refused with *"Node being deleted"* — its acknowledgement is bounded,
+so deferring it past a long move would answer the writer before the write — and the writer retries. Pinned by
 `AWriteUnderADeletionInFlightIsRefusedAtCommitTest`. What the scope does not cover is the same thing the recursive delete's scope does not cover: a writer in
 ANOTHER process. The delete answers that with its storage-verified drain; the move has no drain, so a
 cross-process write landing in the window is still carried and removed without a validator having been

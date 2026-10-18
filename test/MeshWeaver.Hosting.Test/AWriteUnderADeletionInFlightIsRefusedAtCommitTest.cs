@@ -1,4 +1,6 @@
 using System;
+using System.Reactive;
+using System.Reactive.Subjects;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -7,6 +9,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -81,5 +84,87 @@ public class AWriteUnderADeletionInFlightIsRefusedAtCommitTest(ITestOutputHelper
         stored!.Description.Should().Be("after", "the later write is durable");
         stored.Name.Should().Be("before",
             "a write its writer was told failed must never be stored behind its back by a later save");
+    }
+    /// <summary>
+    /// The OWNER's own write under the same scope is DEFERRED, never acknowledged — the same contract
+    /// the version-guarded delete's seal gives it (#6856): it re-runs when the scope lifts. Here the
+    /// operation aborted (nothing was tombstoned), so the deferred write then applies.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOwnWriteUnderAMoveInFlight_IsDeferred_AndAppliedWhenTheMoveAborts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await SeedOwned("own-abort", ct);
+
+        IConnectableObservable<Notification<MeshNode>> write;
+        IDisposable connection;
+        using (Scopes.BeginSubtreeDeletion(path))
+        {
+            write = owner.GetWorkspace().GetMeshNodeStream()
+                .Update(n => n with { Name = "during" })
+                .Materialize()
+                .Where(n => n.Kind != NotificationKind.OnCompleted)
+                .Replay();
+            connection = write.Connect();
+            await write.Should().NotEmit(TimeSpan.FromSeconds(1),
+                "a write the move may remove is neither acknowledged nor refused while its scope is open", ct);
+        }
+
+        using (connection)
+        {
+            var answer = await write.Should().Within(TestTimeouts.Convergence)
+                .Emit("the scope lifted with nothing deleted, so the deferred write runs", ct);
+            answer.Kind.Should().Be(NotificationKind.OnNext, answer.Exception?.Message ?? "the scope lifted");
+            answer.Value!.Name.Should().Be("during");
+        }
+    }
+
+    /// <summary>The same deferred own write, when the operation COMPLETES (the path is tombstoned):
+    /// it is refused, never acknowledged for a node that is gone.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnOwnWriteUnderAMoveInFlight_IsRefusedWhenTheMoveCompletes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await SeedOwned("own-commit", ct);
+
+        IConnectableObservable<Notification<MeshNode>> write;
+        IDisposable connection;
+        using (Scopes.BeginSubtreeDeletion(path))
+        {
+            write = owner.GetWorkspace().GetMeshNodeStream()
+                .Update(n => n with { Name = "during" })
+                .Materialize()
+                .Where(n => n.Kind != NotificationKind.OnCompleted)
+                .Replay();
+            connection = write.Connect();
+            await write.Should().NotEmit(TimeSpan.FromSeconds(1), "deferred while the scope is open", ct);
+            Scopes.MarkDeleted(path);
+        }
+
+        using (connection)
+        {
+            var answer = await write.Should().Within(TestTimeouts.Convergence)
+                .Emit("the scope lifted on a removed node, so the deferred write is answered", ct);
+            answer.Kind.Should().Be(NotificationKind.OnError, "a write to a node that went away is never acknowledged");
+        }
+    }
+
+    private async Task<(string Path, IMessageHub Owner)> SeedOwned(string prefix, System.Threading.CancellationToken ct)
+    {
+        var path = $"{TestPartition}/{prefix}-{Guid.NewGuid().ToString("N")[..8]}";
+        await NodeFactory.CreateNode(MeshNode.FromPath(path) with
+        {
+            Name = "before",
+            NodeType = "Markdown",
+            State = MeshNodeState.Active,
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        await Mesh.GetMeshNodeStream(path).Where(n => n is not null)
+            .Should().Within(TestTimeouts.Convergence).Emit("the node is readable", cancellationToken: ct);
+        var owner = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never))
+            .Where(h => h is { IsDisposing: false } && h.Started.IsCompletedSuccessfully)
+            .Select(h => h!)
+            .Should().Within(TestTimeouts.Convergence).Emit("the node's own hub is hosted", cancellationToken: ct);
+        return (path, owner);
     }
 }
