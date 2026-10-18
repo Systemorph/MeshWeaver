@@ -3311,7 +3311,8 @@ def retention_windows(root: str) -> tuple[list[str], str]:
             filters = " ".join(re.findall(r"--filter '([^']+)'", step)) or "?"
             ago = (re.search(r"--ago (\S+)", step) or [None, "?"])[1]
             keep = (re.search(r"--keep (\S+)", step) or [None, "none"])[1]
-            lines.append(f"{task.get('schedule', '?')}  {filters}  --ago {ago} --keep {keep}")
+            dry = "  (DRY RUN — reports, deletes nothing)" if "--dry-run" in step else ""
+            lines.append(f"{task.get('schedule', '?')}  {filters}  --ago {ago} --keep {keep}{dry}")
     if not lines:
         # 🚨 "NO ENABLED PURGE" IS A FACT WHEN IT IS DECLARED AND A DEFECT WHEN IT IS NOT — the same
         # rule the instance roster follows. On 2026-09-12 the true cause became the third one: the
@@ -3423,6 +3424,7 @@ def check_retention_record(root: str) -> int:
                         "--include-locked assertion inspected nothing.")
 
     problems.extend(check_pause_coherence(manifest))
+    problems.extend(check_dry_run_declaration(root, manifest))
 
     for problem in problems:
         print(f"::error::{problem}")
@@ -3434,6 +3436,189 @@ def check_retention_record(root: str) -> int:
           "no --keep build-count quota (#3842), and the record's pause declaration agrees with "
           "the statuses it is recorded beside.")
     return 0
+
+
+# ── What a recorded purge step would SELECT — the window as a set, not as a flag ───────────────
+#
+# 🚨 THE FLAG CHECKS ABOVE PROVE WHAT THE STEP SAYS; THIS PROVES WHAT IT WOULD DELETE. `--ago 30d`
+# with no `--keep` and no `--include-locked` is the decided policy (#3842), but "the flags are right"
+# and "only unreferenced artifacts older than 30 days are selected" are different claims, and only
+# the second is what MeshWeaver#3438 asks of the purge. So the selection is MODELLED here, from
+# Azure/acr-cli's own decision order as quoted in this file (`getTagsToDelete`, `Registry.tags`;
+# `GetUntaggedManifests`, `expand_platform_closure`), and the self-test drives the COMMITTED record
+# through it over a fixture the lock planner has just protected:
+#
+#   * a TAG is eligible when its `lastUpdateTime` is older than `--ago` AND the TAG is unlocked
+#     (`deleteEnabled && writeEnabled`) unless `--include-locked`; `--keep N` then spares the N
+#     newest ELIGIBLE tags (it runs AFTER the age filter — measured from acr-cli, Memex#219).
+#   * with `--untagged`, a MANIFEST left with no tag is deleted when it is older than `--ago`,
+#     unlocked (unless `--include-locked`), and not under a TAGGED, UNLOCKED index — the one walk
+#     that ignore-lists children. A LOCKED index is skipped before that walk, so its children are
+#     judged on their own (the inversion `expand_platform_closure` exists for).
+#   * `--dry-run` selects the same set and deletes NOTHING — the record's way of being enabled
+#     first as a report (`dryRun` in tasks.json).
+#
+# 🚨 THIS IS A MODEL OF A TOOL WE DO NOT OWN. It falsifies the RECORD against acr-cli's semantics as
+# read; it does not prove acr-cli still behaves that way. The live answer to that is the task's own
+# dry-run log on the registry, which is why the record ships with `--dry-run` first.
+
+
+@dataclass(frozen=True)
+class PurgeSubject:
+    """One object a purge step can delete: a TAG (`tag` set) or a MANIFEST (`tag` None)."""
+
+    acr_repo: str
+    digest: str
+    tag: str | None
+    age_days: float
+    locked: bool          # the object's OWN deleteEnabled false (a tag's, or a manifest's)
+
+
+@dataclass
+class PurgeSelection:
+    tags: set[tuple[str, str]] = field(default_factory=set)
+    manifests: set[tuple[str, str]] = field(default_factory=set)
+    dry_run: bool = False
+    problem: str = ""
+
+    @property
+    def deleted_tags(self) -> set[tuple[str, str]]:
+        return set() if self.dry_run else self.tags
+
+    @property
+    def deleted_manifests(self) -> set[tuple[str, str]]:
+        return set() if self.dry_run else self.manifests
+
+
+def purge_selection(tokens: list[str], subjects: list[PurgeSubject],
+                    media_types: dict[tuple[str, str], str],
+                    children: dict[tuple[str, str], list[str]]) -> PurgeSelection:
+    """What ONE `acr purge` invocation would select from `subjects`. Pure over its inputs."""
+    selection = PurgeSelection(dry_run="--dry-run" in tokens)
+    filters = [tokens[i + 1] for i in range(len(tokens) - 1) if tokens[i] == "--filter"]
+    has_ago, ago_value = option_value(tokens, "--ago")
+    ago_days = parse_ago_days(ago_value or "") if has_ago else 0.0
+    if ago_days is None:
+        selection.problem = f"`--ago {ago_value}` is unreadable, so nothing was selected"
+        return selection
+    has_keep, keep_value = option_value(tokens, "--keep")
+    try:
+        keep = int(keep_value) if has_keep and keep_value else 0
+    except ValueError:
+        selection.problem = f"`--keep {keep_value}` is unreadable, so nothing was selected"
+        return selection
+    include_locked = "--include-locked" in tokens
+    untagged = "--untagged" in tokens
+    patterns: list[tuple[re.Pattern[str], re.Pattern[str]]] = []
+    for value in filters:
+        repo_part, _, tag_part = value.partition(":")
+        if not repo_part or not tag_part:
+            selection.problem = f"`--filter {value}` is not `repository:regex`"
+            return selection
+        patterns.append((re.compile(repo_part), re.compile(tag_part)))
+    if not patterns:
+        selection.problem = "the invocation carries no `--filter`, so nothing was selected"
+        return selection
+
+    def eligible(subject: PurgeSubject) -> bool:
+        return subject.age_days > ago_days and (include_locked or not subject.locked)
+
+    repos = {s.acr_repo for s in subjects
+             if any(repo.fullmatch(s.acr_repo) for repo, _ in patterns)}
+    for acr_repo in sorted(repos):
+        tag_regexes = [tag for repo, tag in patterns if repo.fullmatch(acr_repo)]
+        tags = [s for s in subjects if s.acr_repo == acr_repo and s.tag is not None
+                and any(regex.fullmatch(s.tag) for regex in tag_regexes)]
+        candidates = sorted((s for s in tags if eligible(s)), key=lambda s: s.age_days)
+        for subject in candidates[keep:]:
+            selection.tags.add((acr_repo, subject.tag or ""))
+        if not untagged:
+            continue
+        surviving_tags: dict[str, int] = {}
+        for subject in subjects:
+            if (subject.acr_repo == acr_repo and subject.tag is not None
+                    and (acr_repo, subject.tag) not in selection.tags):
+                surviving_tags[subject.digest] = surviving_tags.get(subject.digest, 0) + 1
+        manifests = [s for s in subjects if s.acr_repo == acr_repo and s.tag is None]
+        ignored: set[str] = set()
+        for manifest in manifests:
+            # acr-cli's order: a LOCKED manifest `continue`s BEFORE the walk, so only an unlocked
+            # index that is protected by a tag or by its age ignore-lists its children.
+            if manifest.locked and not include_locked:
+                continue
+            protected = (surviving_tags.get(manifest.digest, 0) > 0
+                         or manifest.age_days <= ago_days)
+            if protected and media_types.get((acr_repo, manifest.digest)) in INDEX_MEDIA_TYPES:
+                ignored.update(children.get((acr_repo, manifest.digest), []))
+        for manifest in manifests:
+            if surviving_tags.get(manifest.digest, 0) > 0 or manifest.digest in ignored:
+                continue
+            if eligible(manifest):
+                selection.manifests.add((acr_repo, manifest.digest))
+    return selection
+
+
+def recorded_purge_invocations(root: str, task: str) -> tuple[list[list[str]], str]:
+    """Every `acr purge` invocation of one RECORDED task, in step order; plus why it could not be
+    read. An unreadable record is an error, never zero invocations."""
+    path = Path(root) / ".github" / "acr-retention" / f"{task}.yaml"
+    if not path.is_file():
+        return [], f"{path} is not there"
+    invocations: list[list[str]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not re.match(r"^\s*-\s+cmd:", line):
+            continue
+        found, error = purge_invocations(line)
+        if error:
+            return [], f"{path.name}: {error}"
+        invocations.extend(found)
+    if not invocations:
+        return [], f"{path.name} records no `acr purge` invocation"
+    return invocations, ""
+
+
+def check_dry_run_declaration(root: str, manifest: dict) -> list[str]:
+    """Is every `--dry-run` in the record DECLARED, and every declaration still TRUE?
+
+    🚨 A DRY-RUN PURGE IS A RETENTION THAT DELETES NOTHING, AND IT READS LIKE ONE THAT DOES. The
+    record ships the decided window with `--dry-run` first, so that re-enabling the task produces a
+    nightly log of what WOULD go before anything goes (MeshWeaver#3438). Undeclared, that flag is a
+    silently stopped retention; declared and absent, the declaration claims a safety the task no
+    longer has. Both directions red, the same way `pause` and `recordAheadOfRegistry` do."""
+    problems = check_in_force_is_boolean(manifest, "dryRun")
+    if problems:
+        return problems
+    block = manifest.get("dryRun") or {}
+    in_force = block.get("inForce") is True
+    declared = set(block.get("tasks") or []) if in_force else set()
+    if in_force:
+        for field_name in ("liftWhen", "issue"):
+            if not str(block.get(field_name, "")).strip():
+                problems.append(f"tasks.json: `dryRun.inForce` is true with no `{field_name}`. "
+                                "A dry run nobody can say how to end is a purge that never runs.")
+        if not declared:
+            problems.append("tasks.json: `dryRun.inForce` is true and names no `tasks`, so it "
+                            "declares nothing.")
+    for task in manifest.get("tasks") or []:
+        name = str(task.get("name"))
+        invocations, error = recorded_purge_invocations(root, name)
+        if error:
+            continue      # check_retention_record already reds on an unreadable step
+        dry = [("--dry-run" in tokens) for tokens in invocations]
+        if name in declared and not all(dry):
+            problems.append(
+                f"tasks.json declares `dryRun` for {name!r} and {dry.count(False)} of its "
+                f"{len(dry)} purge invocation(s) carry no `--dry-run`. The declaration then claims "
+                "a report-only task that would DELETE — lift it in the same diff that drops the "
+                "flag, or put the flag back.")
+        if name not in declared and any(dry):
+            problems.append(
+                f"{name}: a recorded purge invocation carries `--dry-run` and tasks.json declares "
+                "no in-force `dryRun` for it. A purge that deletes nothing reads exactly like a "
+                "retention that runs; declare it (`inForce`/`tasks`/`liftWhen`/`issue`).")
+    for name in declared - {str(t.get("name")) for t in manifest.get("tasks") or []}:
+        problems.append(f"tasks.json: `dryRun.tasks` names {name!r}, which is not a recorded task.")
+    return problems
 
 
 # ── The SECOND question about a registry: what DELETES from it (#4230) ─────────────────────────
@@ -4559,6 +4744,7 @@ def describe_purge_file(path: str) -> int:
                 "includeLocked": "--include-locked" in tokens,
                 "ago": option_value(tokens, "--ago")[1],
                 "keep": option_value(tokens, "--keep")[1],
+                "dryRun": "--dry-run" in tokens,
             })
         if not invocations:
             described.append({"notAPurge": step.strip()[:160],
@@ -7497,6 +7683,155 @@ env:
     check("probe" in sink.getvalue() and _Flushes.flushed >= 1,
           "ARM 39: a progress line was not flushed — the three cancelled runs left logs with no "
           "count and no timing in them for exactly this reason")
+
+    # ── ARM 40: the COMMITTED window selects only unreferenced artifacts older than 30 days ─────
+    # MeshWeaver#3438. ARM 31 proves the record's FLAGS; this proves what those flags would DELETE.
+    # The committed `purge-old-images` record is driven through `purge_selection` over the fixture
+    # fleet AFTER the lock planner has protected it, with every fixture artifact aged 400 days —
+    # past any window — so the only thing that can spare a referenced item is the protection.
+    _root = str(Path(__file__).resolve().parents[2])
+    _recorded, _record_error = recorded_purge_invocations(_root, "purge-old-images")
+    check(not _record_error and _recorded,
+          f"ARM 40: the committed purge-old-images record could not be read ({_record_error}), so "
+          "what it selects was NOT checked")
+    OLD_UNREF, YOUNG_UNREF = "sha256:" + "c" * 64, "sha256:" + "d" * 64
+    OLD_UNTAGGED, YOUNG_UNTAGGED = "sha256:" + "e" * 64, "sha256:" + "f" * 64
+    HAND_LOCKED = "sha256:" + "9" * 64
+    _ages = {OLD_UNREF: 31.0, YOUNG_UNREF: 29.0, OLD_UNTAGGED: 31.0, YOUNG_UNTAGGED: 29.0}
+
+    def _controls() -> list[Manifest]:
+        return [Manifest("memex-portal-ai", OLD_UNREF, True, True, ["3.0.0-ci.1"]),
+                Manifest("memex-portal-ai", YOUNG_UNREF, True, True, ["3.0.0-ci.2"]),
+                Manifest("memex-portal-ai", OLD_UNTAGGED, True, True, []),
+                Manifest("memex-portal-ai", YOUNG_UNTAGGED, True, True, []),
+                Manifest("mw-plugin-test", HAND_LOCKED, False, True, ["3.0.0-ci.3"])]
+
+    def _subjects(registry: FakeRegistry) -> tuple[list[PurgeSubject], dict, dict]:
+        subjects: list[PurgeSubject] = []
+        media: dict[tuple[str, str], str] = {}
+        for group in registry._manifests.values():
+            for m in group:
+                age = _ages.get(m.digest, 400.0)
+                media[(m.acr_repo, m.digest)] = m.media_type
+                subjects.append(PurgeSubject(m.acr_repo, m.digest, None, age,
+                                             not (m.delete_enabled and m.write_enabled)))
+                subjects.extend(PurgeSubject(m.acr_repo, m.digest, tag, age,
+                                             (m.acr_repo, tag) in registry.locked_tags)
+                                for tag in m.tags)
+        return subjects, media, registry._children
+
+    def _select(invocations: list[list[str]], registry: FakeRegistry,
+                strip_dry_run: bool = True) -> PurgeSelection:
+        union = PurgeSelection()
+        subjects, media, children = _subjects(registry)
+        for tokens in invocations:
+            one = purge_selection([t for t in tokens if not (strip_dry_run and t == "--dry-run")],
+                                  subjects, media, children)
+            check(not one.problem, f"ARM 40: a recorded invocation could not be modelled: "
+                                   f"{one.problem} — {' '.join(tokens)}")
+            union.tags |= one.deleted_tags
+            union.manifests |= one.deleted_manifests
+        return union
+
+    if _recorded:
+        plan, fails, registry = _drive(
+            clean1, clean2, FakeRegistry(_inventory(extra=_controls()), FAKE_TAGS,
+                                         locked_tags={("mw-plugin-test", "3.0.0-ci.3")}))
+        check(not fails and not plan.blockers,
+              f"ARM 40: the fixture fleet did not lock cleanly, so the selection below would be "
+              f"measured over an unprotected fleet: {fails} {plan.blockers}")
+        referenced_digests = {(w.acr_repo, w.digest) for w in plan.wanted if w.digest}
+        referenced_tags = {(t.acr_repo, t.tag) for t in plan.wanted_tags}
+        check(len(referenced_digests) >= 5 and referenced_tags,
+              f"ARM 40: the fixture references {len(referenced_digests)} manifest(s) and "
+              f"{len(referenced_tags)} tag(s); a selection proven over nothing referenced proves "
+              "nothing about referenced items")
+        chosen = _select(_recorded, registry)
+        check(not (chosen.manifests & referenced_digests),
+              f"ARM 40: the committed window would DELETE referenced manifest(s) "
+              f"{sorted(chosen.manifests & referenced_digests)} — a pinned, running or released "
+              "artifact, protected by the lock, selected anyway")
+        check(not (chosen.tags & referenced_tags),
+              f"ARM 40: the committed window would DELETE referenced tag(s) "
+              f"{sorted(chosen.tags & referenced_tags)} — the manifest survives and the pull "
+              "still answers `manifest unknown`")
+        _age_of = {(s.acr_repo, s.tag if s.tag is not None else s.digest): s.age_days
+                   for s in _subjects(registry)[0]}
+        too_young = sorted(k for k in chosen.tags | chosen.manifests
+                           if _age_of.get(k, 0.0) <= MINIMUM_PURGE_AGE_DAYS)
+        check(not too_young,
+              f"ARM 40: the committed window selects artifact(s) NOT older than "
+              f"{MINIMUM_PURGE_AGE_DAYS} days: {too_young}")
+        check(("memex-portal-ai", "3.0.0-ci.1") in chosen.tags
+              and ("memex-portal-ai", OLD_UNTAGGED) in chosen.manifests,
+              f"ARM 40: an UNREFERENCED 31-day-old tag and untagged manifest were NOT selected — "
+              f"a window that selects nothing passes every assertion above: {chosen}")
+        check(("memex-portal-ai", "3.0.0-ci.2") not in chosen.tags
+              and ("memex-portal-ai", YOUNG_UNTAGGED) not in chosen.manifests,
+              "ARM 40: a 29-day-old unreferenced artifact was selected — under the decided floor")
+        check(("mw-plugin-test", "3.0.0-ci.3") not in chosen.tags
+              and ("mw-plugin-test", HAND_LOCKED) not in chosen.manifests,
+              "ARM 40: a LOCKED 400-day-old artifact was selected; `acr purge` skips locked objects "
+              "and the record passes no `--include-locked`")
+        # 40b — DRY-RUN FIRST: the record as committed deletes nothing at all.
+        check(all("--dry-run" in tokens for tokens in _recorded),
+              "ARM 40b: a recorded purge-old-images invocation carries no `--dry-run`. The window "
+              "ships report-first (MeshWeaver#3438); dropping the flag is its own reviewed diff "
+              "that also lifts `dryRun` in tasks.json")
+        as_recorded = _select(_recorded, registry, strip_dry_run=False)
+        check(not as_recorded.tags and not as_recorded.manifests,
+              f"ARM 40b: the record AS COMMITTED would delete {as_recorded} — a dry run that "
+              "deletes is not a dry run")
+        # 40c — NEGATIVE CONTROLS: each assertion above can fail.
+        _, _, unlocked = _drive(
+            clean1, clean2, FakeRegistry(_inventory(extra=_controls()), FAKE_TAGS), apply=False)
+        unprotected = _select(_recorded, unlocked)
+        check(bool(unprotected.manifests & referenced_digests
+                   or unprotected.tags & referenced_tags),
+              "ARM 40c: with NO lock written the window still spared every referenced item — so "
+              "the fixture's referenced items are not past the window, and 'never a referenced "
+              "item' above was measured over nothing the window could reach")
+        forced = _select([tokens + ["--include-locked"] for tokens in _recorded], registry)
+        check(bool(forced.manifests & referenced_digests),
+              "ARM 40c: `--include-locked` still spared every referenced manifest — the model "
+              "does not honour the one flag the whole protection rests on")
+        short = _select([[t if t != "30d" else "7d" for t in tokens] for tokens in _recorded],
+                        registry)
+        check(("memex-portal-ai", "3.0.0-ci.2") in short.tags,
+              "ARM 40c: a 7-day window spared a 29-day-old unreferenced tag — the age half of the "
+              "model cannot fail")
+        kept = purge_selection(["acr", "purge", "--filter", "memex-portal-ai:3\\.0\\.0-ci\\.[12]",
+                                "--ago", "7d", "--keep", "1"], *_subjects(registry))
+        check(kept.tags == {("memex-portal-ai", "3.0.0-ci.1")},
+              f"ARM 40c: `--keep 1` did not spare the NEWEST eligible tag only: {kept.tags}")
+
+    # ── ARM 40d: a `--dry-run` is DECLARED, and a declaration is still TRUE — both directions ──
+    with tempfile.TemporaryDirectory() as _tmp:
+        _record_dir = Path(_tmp) / ".github" / "acr-retention"
+        _record_dir.mkdir(parents=True)
+
+        def _dry_problems(step: str, block: dict | None) -> list[str]:
+            (_record_dir / "t.yaml").write_text(f"steps:\n  - cmd: {step}\n", encoding="utf-8")
+            record = {"tasks": [{"name": "t", "file": "t.yaml"}]}
+            if block is not None:
+                record["dryRun"] = block
+            return check_dry_run_declaration(_tmp, record)
+
+        _declared = {"inForce": True, "tasks": ["t"], "liftWhen": "x", "issue": "y"}
+        check(not _dry_problems("acr purge --filter 'a:.*' --ago 30d --dry-run", _declared),
+              "ARM 40d: a DECLARED dry run was refused — the gate would red on the record it ships")
+        check(_dry_problems("acr purge --filter 'a:.*' --ago 30d --dry-run", None),
+              "ARM 40d: an UNDECLARED `--dry-run` passed — a purge that deletes nothing then reads "
+              "exactly like a retention that runs")
+        check(_dry_problems("acr purge --filter 'a:.*' --ago 30d", _declared),
+              "ARM 40d: a `dryRun` declaration over a step that DELETES passed — it claims a "
+              "report-only task that is not one")
+        check(_dry_problems("acr purge --filter 'a:.*' --ago 30d --dry-run",
+                            {"inForce": "true", "tasks": ["t"], "liftWhen": "x", "issue": "y"}),
+              "ARM 40d: `dryRun.inForce` as the STRING \"true\" was accepted")
+        check(_dry_problems("acr purge --filter 'a:.*' --ago 30d --dry-run",
+                            {"inForce": True, "tasks": ["t"]}),
+              "ARM 40d: an in-force dry run with no `liftWhen` passed — nobody could say how it ends")
 
     # ── ARM 29: the harness drives the SAME path as run(), or it guards nothing ─────────────────
     # A self-test whose subject moved and whose roots did not keeps passing about code that is no
