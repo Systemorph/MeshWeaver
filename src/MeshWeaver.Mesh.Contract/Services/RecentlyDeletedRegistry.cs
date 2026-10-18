@@ -698,17 +698,26 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         return true;
     }
 
+    /// <summary>
+    /// Settles a fencing seal. 🚨 The entry stays DISCOVERABLE, in its settling phase, until the
+    /// tombstone and the guard cleanup are done, and only then completes <see cref="OwnerDeleteSeal.Settled"/>
+    /// and leaves the registry. A commit that arrives meanwhile is handed to the seal
+    /// (<see cref="ReleaseFencingSeal"/>) and its answer waits for <see cref="OwnerSealSettled"/> — so
+    /// the delete can never be acknowledged, and its caller recreate the path, before a "row gone"
+    /// tombstone that would then drop the recreated node's saves.
+    /// </summary>
     private void Settle(string sealId, OwnerDeleteSeal seal, bool rowGone)
     {
-        if (!seal.TrySettle())
+        if (!seal.TryBeginSettling())
             return;
-        _ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal));
         if (rowGone)
             MarkDeleted(seal.Path);
         seal.VersionGuard!.Dispose();
         _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, seal.Terminal ?? DeleteSealOutcome.Lifted));
+        seal.FinishSettling();
         seal.Settled.OnNext(System.Reactive.Unit.Default);
         seal.Settled.OnCompleted();
+        _ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal));
     }
 
     /// <summary>
@@ -776,7 +785,7 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
 
     private sealed class OwnerDeleteSeal
     {
-        // 0 held, 1 fencing, 2 fence failed, 3 settled.
+        // 0 held, 1 fencing, 2 fence failed, 3 settled (or claimed by a terminal release), 4 settling.
         private int _phase;
         private string? _terminal;
 
@@ -807,7 +816,8 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         /// <summary>The delete's own commit or abort, once it arrived during the fence.</summary>
         public string? Terminal => Volatile.Read(ref _terminal);
 
-        public bool IsFencing => Volatile.Read(ref _phase) is 1 or 2;
+        /// <summary>Fencing, failed or still settling: a release is handed to the fence and waits for it.</summary>
+        public bool IsFencing => Volatile.Read(ref _phase) is 1 or 2 or 4;
         public bool IsSettled => Volatile.Read(ref _phase) == 3;
         public bool FenceFailed => Volatile.Read(ref _phase) == 2;
         public bool TryBeginFencing() => Interlocked.CompareExchange(ref _phase, 1, 0) == 0;
@@ -815,7 +825,9 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         public bool TryClaimHeld() => Interlocked.CompareExchange(ref _phase, 3, 0) == 0;
         public void MarkFenceFailed() => Interlocked.CompareExchange(ref _phase, 2, 1);
         public bool TryRetryFence() => Interlocked.CompareExchange(ref _phase, 1, 2) == 2;
-        public bool TrySettle() => Interlocked.Exchange(ref _phase, 3) != 3;
+        public bool TryBeginSettling()
+            => Interlocked.CompareExchange(ref _phase, 4, 1) == 1 || Interlocked.CompareExchange(ref _phase, 4, 2) == 2;
+        public void FinishSettling() => Volatile.Write(ref _phase, 3);
         public bool TrySetTerminal(string outcome) => Interlocked.CompareExchange(ref _terminal, outcome, null) is null;
     }
 

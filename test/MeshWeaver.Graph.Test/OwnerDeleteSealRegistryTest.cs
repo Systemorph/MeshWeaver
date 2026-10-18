@@ -247,4 +247,54 @@ public class OwnerDeleteSealRegistryTest
             registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse($"round {round}: everything settled");
         }
     }
+
+    /// <summary>
+    /// Review round 6: the fence reports the row GONE and settles while the delete's commit arrives.
+    /// Before, settling removed the entry first and tombstoned the path after, so a commit landing in
+    /// between found no seal and was acknowledged at once — its caller could recreate the path, and the
+    /// late tombstone then dropped the recreated node's saves. Now the entry stays discoverable while it
+    /// settles and the commit's acknowledgement waits for it: at the moment the commit is acknowledged,
+    /// the path is ALREADY tombstoned. Raced on two threads, many times.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void ACommitArrivingWhileTheFenceSettles_IsAcknowledgedOnlyAfterTheTombstone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        for (var round = 0; round < 5000; round++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var registry = new RecentlyDeletedRegistry();
+            var owner = new FakeLifetime();
+            var fence = new System.Reactive.Subjects.AsyncSubject<bool>();
+            var sealId = $"settle-{round}";
+            registry.TakeOwnerDeleteSeal(sealId, Path, owner.Bind, _ => fence).Should().BeTrue();
+            owner.OnTeardown.Dispose(); // fencing now
+
+            var go = 0;
+            var tombstonedAtAck = (bool?)null;
+            var fenceSide = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                fence.OnNext(true); // the row is gone: the delete won
+                fence.OnCompleted();
+            });
+            var commitSide = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                registry.ReleaseOwnerDeleteSeal(sealId, Path, DeleteSealOutcome.Committed);
+                // What the release handler does before it answers the deleter.
+                System.Reactive.Linq.Observable.Take(registry.OwnerSealSettled(sealId), 1)
+                    .Subscribe(_ => tombstonedAtAck = registry.IsRecentlyDeleted(Path));
+            });
+            fenceSide.Start();
+            commitSide.Start();
+            System.Threading.Volatile.Write(ref go, 1);
+            fenceSide.Join();
+            commitSide.Join();
+
+            tombstonedAtAck.Should().BeTrue(
+                $"round {round}: the commit is acknowledged only once the settling fence has tombstoned the path");
+            registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse($"round {round}: settled");
+        }
+    }
 }
