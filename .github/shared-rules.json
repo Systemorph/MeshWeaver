@@ -377,6 +377,27 @@
         "Landing in the three change sets this register's header describes: step 1 (this entry) names",
         "the hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
       ]
+    },
+    {
+      "id": "finish-autonomously",
+      "hub": "Systemorph/MeshWeaver",
+      "required-in": [
+        "Systemorph/MeshWeaver"
+      ],
+      "slots": [],
+      "why": [
+        "Maintainer directives, 2026-09-09 ('ALWAYS bring requested fixes to production … Do not ask for a second",
+        "ship-it instruction') and 2026-10-18 ('see that it is all being merged automatically. see that in central",
+        "place it is clearly stated to finish autonomously'). Before this block the rule existed as three",
+        "differently-worded passages — core's Git Workflow and GitHub PR Operations paragraphs and Plugins'",
+        "'Ship it' / 'At the end' sections — so each repo's agents stopped at a different stage.",
+        "",
+        "No slots: 'the supported pipeline' and 'the target instance' are written generically so the text reads",
+        "identically in a content repo with no image and in core.",
+        "",
+        "Landing in the three change sets this register's header describes: step 1 (this entry) names the hub",
+        "only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
+      ]
     }
   ]
 }
