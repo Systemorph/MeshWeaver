@@ -372,44 +372,84 @@ public class DefaultNodeNavigationTest
         ImmutableList<MeshNode> level =
         [
             Stamped("S/B", "Bravo", 1, 50),
-            Stamped("S/A", "Alpha", null, 10),
+            Stamped("S/A", "alpha", null, 10),
             Stamped("S/C", "Charlie", null, 5),
         ];
 
         DefaultNodeNavigation.SortLevel(level, IndexSort.Modified).Select(n => n.Id).Should().Equal("C", "A", "B");
-        DefaultNodeNavigation.SortLevel(level, IndexSort.Name).Select(n => n.Id).Should().Equal("A", "B", "C");
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Name).Select(n => n.Id).Should().Equal(["A", "B", "C"], "case-insensitive");
         DefaultNodeNavigation.SortLevel(level, IndexSort.Order).Select(n => n.Id).Should().Equal("B", "C", "A");
         var viewed = ImmutableDictionary<string, int>.Empty.Add("S/A", 0);
         DefaultNodeNavigation.SortLevel(level, IndexSort.Viewed, viewed).Select(n => n.Id)
             .Should().Equal(["A", "C", "B"], "opened first, then the never-opened newest first");
+        DefaultNodeNavigation.SortLevel(level, "future-mode").Select(n => n.Id)
+            .Should().Equal(["B", "C", "A"], "an unknown sort renders the default order");
     }
 
     [Fact]
-    public void ALevelReadsOnlyWhatItShowsPlusOne_OrderedByTheStore()
+    public void NameSortsUnnamedEntriesLast_TheWayTheStoreClipsThem()
+    {
+        // The store sorts lower(name) with NULLS LAST; rendering by `Name ?? Id` would put an unnamed
+        // "A" first — a row the clip never read (review on #6947).
+        ImmutableList<MeshNode> level =
+        [
+            new MeshNode("A", "S") { Name = null },
+            Node("S/Z1", "Zulu"),
+            Node("S/Y1", "yankee"),
+        ];
+
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Name).Select(n => n.Id).Should().Equal("Y1", "Z1", "A");
+        DefaultNodeNavigation.LevelQueries("S", IndexSort.Name, 10).Should().ContainSingle()
+            .Which.Should().Contain("sort:lower(name)-asc");
+    }
+
+    [Fact]
+    public void ALevelReadsOnlyWhatItShowsPlusOne_OrderedByTheStore_WithoutHiddenRows()
     {
         var order = DefaultNodeNavigation.LevelQueries("S", IndexSort.Order, 10);
-        order.Should().HaveCount(2, "two keys are two legs: the ordered rows and the newest rows");
-        order.Should().OnlyContain(q => q.Contains("namespace:S ") && q.Contains("limit:11"),
-            "never the whole level — Cap + 1 rows says whether there is more");
-        order.Should().Contain(q => q.Contains("sort:order-asc"));
-        order.Should().Contain(q => q.Contains("sort:lastModified-desc"));
+        order.Should().HaveCount(2, "the ordered rows and the newest rows (the tie leg is added once the first answers)");
+        order.Should().OnlyContain(q => q.Contains("namespace:S ") && q.Contains("limit:11") && q.Contains("-id:_*"),
+            "never the whole level, and a hidden `_` row never takes a visible row's place in the window");
+        order[0].Should().Contain("sort:order-asc");
+        order[1].Should().Contain("sort:lastModified-desc");
         DefaultNodeNavigation.LevelQueries("S", IndexSort.Modified, 20).Should().ContainSingle()
             .Which.Should().Contain("sort:lastModified-desc").And.Contain("limit:21");
-        DefaultNodeNavigation.LevelQueries("S", IndexSort.Name, 10).Should().ContainSingle()
-            .Which.Should().Contain("sort:name-asc");
         var viewed = DefaultNodeNavigation.LevelQueries("S", IndexSort.Viewed, 10);
-        viewed[0].Should().Contain("source:accessed", "the ranking leg comes first — RankedRows.Union keeps its order");
+        viewed[0].Should().Contain("source:accessed").And.Contain("sort:lastModified-desc",
+            "without an explicit sort the merge re-orders an accessed read by score and path");
         viewed[1].Should().Contain("sort:lastModified-desc", "a page never opened is still listed");
+        DefaultNodeNavigation.LevelQueries("S", "future-mode", 10).Should().Equal(order, "an unknown sort reads as the default");
     }
 
     [Fact]
-    public void SortTravelsInTheUrlAndRoundTrips()
+    public void RowsTiedOnTheCutOrder_AreReadNewestFirst()
     {
-        foreach (var mode in Enum.GetValues<IndexSort>())
-            DefaultNodeNavigation.ParseSort($"Doc/Architecture:{DefaultNodeNavigation.SortToken(mode)}")
-                .Should().Be(("Doc/Architecture", mode));
-        DefaultNodeNavigation.ParseSort("Doc:bogus").Should().BeNull();
+        // Review on #6947: A01–A11 and Z share Order 1, Z is the newest; eleven still-newer unordered
+        // rows. The Order leg (cut by path) keeps A01–A11, the newest leg only unordered rows — Z,
+        // which leads the rail, was in neither.
+        var orderLeg = Enumerable.Range(1, 11).Select(i => Stamped($"S/A{i:D2}", $"A{i:D2}", 1, 100 + i)).ToList();
+        DefaultNodeNavigation.TieOrder(orderLeg, 10).Should().Be(1, "the leg is full, so rows beyond it may share Order 1");
+        DefaultNodeNavigation.TieOrder(orderLeg.Take(5), 10).Should().BeNull("a short leg already holds every ordered row");
+        DefaultNodeNavigation.TieLegQuery("S", 1, 10).Should().Contain("order:1").And.Contain("sort:lastModified-desc")
+            .And.Contain("limit:11").And.Contain("-id:_*");
+
+        var z = Stamped("S/Z", "Z", 1, 1);
+        var newest = Enumerable.Range(1, 11).Select(i => Stamped($"S/N{i:D2}", $"N{i:D2}", null, 0)).ToList();
+        var tieLeg = new[] { z }.Concat(orderLeg.Take(10)).ToList();
+        var rows = DefaultNodeNavigation.LevelRows.Of(IndexSort.Order,
+            [Dict(orderLeg), Dict(newest), Dict(tieLeg)]);
+        DefaultNodeNavigation.VisibleInOrder(rows.Nodes.Values, IndexSort.Order, null).First().Path
+            .Should().Be("S/Z", "the newest of the rows sharing the first Order value leads");
+    }
+
+    [Fact]
+    public void SortTravelsInTheUrl_AndAnUnknownModeIsKeptNotGuessed()
+    {
+        foreach (var mode in IndexSort.All)
+            DefaultNodeNavigation.ParseSort($"Doc/Architecture:{mode}").Should().Be(("Doc/Architecture", mode));
+        DefaultNodeNavigation.ParseSort("Doc:Future").Should().Be(("Doc", "future"), "kept as written, so the page can report it");
         DefaultNodeNavigation.ParseSort(":name").Should().BeNull();
+        DefaultNodeNavigation.ParseSort("Doc:").Should().BeNull();
         DefaultNodeNavigation.ParseSort(null).Should().BeNull();
     }
 
@@ -419,25 +459,62 @@ public class DefaultNodeNavigationTest
         var href = DefaultNodeNavigation.ShowAllHref("Doc/Architecture", IndexSort.Order);
         href.Should().StartWith("/search?ns=Doc%2FArchitecture&hq=");
         Uri.UnescapeDataString(href[(href.IndexOf("hq=", StringComparison.Ordinal) + 3)..])
-            .Should().Be("namespace:Doc/Architecture is:main sort:order-asc", "the level's direct children, not its subtree");
+            .Should().Be("namespace:Doc/Architecture is:main -id:_* sort:order-asc", "the level's direct children, not its subtree");
     }
 
     [Fact]
-    public void TheRankOfAnAccessOrderedReadFollowsTheStoreAndMovesAnOpenedPageToTheFront()
+    public void RecentlyViewedRanksByTheAccessTime_NotByTheFeedsDeltas()
     {
-        var rows = DefaultNodeNavigation.FoldRanked(DefaultNodeNavigation.RankedRows.Empty,
-            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = [Node("S/A"), Node("S/B"), Node("S/C")] });
-        rows.Rank.Should().Equal("S/A", "S/B", "S/C");
+        // Review on #6947: an Updated row (a rename) or an Added one (a backfill after a delete) is
+        // not "just opened". The rank comes from the access leg's own timestamps.
+        var accessLeg = Dict([Stamped("S/Old", "Old", null, 300), Stamped("S/Recent", "Recent", null, 1)]);
+        var plainLeg = Dict([Stamped("S/Old", "Old", null, 0), Stamped("S/Never", "Never", null, 5)]);
+        var rows = DefaultNodeNavigation.LevelRows.Of(IndexSort.Viewed, [accessLeg, plainLeg]);
 
-        rows = DefaultNodeNavigation.FoldRanked(rows,
-            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Updated, Items = [Node("S/C")] });
-        rows.Rank.Should().Equal("S/C", "S/A", "S/B");
-
-        rows = DefaultNodeNavigation.FoldRanked(rows,
-            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Removed, Items = [Node("S/A")] });
-        rows.Rank.Should().Equal("S/C", "S/B");
-        rows.Nodes.Keys.Order(StringComparer.Ordinal).Should().Equal("S/B", "S/C");
+        rows.ViewedRank!["S/Recent"].Should().Be(0);
+        rows.ViewedRank!["S/Old"].Should().Be(1);
+        rows.ViewedRank.Should().NotContainKey("S/Never");
+        rows.Nodes["S/Old"].LastModified.Should().Be(plainLeg["S/Old"].LastModified,
+            "the row's own lastModified, not the access time the accessed read projects into it");
+        DefaultNodeNavigation.LevelRows.Of(IndexSort.Order, [accessLeg]).ViewedRank.Should().BeNull();
     }
+
+    [Fact]
+    public void TheStoreReadsEveryLevelQueryTheWayTheRailMeansIt()
+    {
+        // A qualifier the parser does not know becomes FREE TEXT — a relevance search that matches
+        // nothing like the level. So each query is parsed by the real parser and run by the real
+        // in-memory evaluator, not just string-compared.
+        var parser = new QueryParser();
+        var queries = IndexSort.All.SelectMany(m => DefaultNodeNavigation.LevelQueries("S", m, 10))
+            .Append(DefaultNodeNavigation.TieLegQuery("S", 1, 10));
+        foreach (var query in queries)
+        {
+            var parsed = parser.Parse(query);
+            parsed.TextSearch.Should().BeNullOrEmpty($"'{query}' must parse to qualifiers only");
+            parsed.Limit.Should().Be(11, query);
+            parsed.OrderBy.Should().NotBeNull($"'{query}' is clipped, so the store must order it");
+        }
+
+        var evaluator = new MeshWeaver.Hosting.Persistence.Query.QueryEvaluator();
+        var hidden = Node("S/_Access");
+        var tied = Node("S/Tied", order: 1);
+        var other = Node("S/Other", order: 2);
+        var tie = parser.Parse(DefaultNodeNavigation.TieLegQuery("S", 1, 10));
+        evaluator.Matches(hidden, tie).Should().BeFalse("-id:_* keeps internal rows out of the window");
+        evaluator.Matches(tied, tie).Should().BeTrue("order:1 matches the tied row");
+        evaluator.Matches(other, tie).Should().BeFalse("…and only it");
+
+        var byName = parser.Parse(DefaultNodeNavigation.LevelQueries("S", IndexSort.Name, 10).Single());
+        evaluator.OrderResults(
+                [new MeshNode("A", "S") { Name = null }, Node("S/Z1", "Zulu"), Node("S/Y1", "yankee")],
+                byName.OrderBy!)
+            .Select(n => n.Id)
+            .Should().Equal(["Y1", "Z1", "A"], "the store's clip order is the rail's render order (SortLevel)");
+    }
+
+    private static ImmutableDictionary<string, MeshNode> Dict(IEnumerable<MeshNode> rows)
+        => rows.ToImmutableDictionary(n => n.Path, StringComparer.Ordinal);
 
     [Fact]
     public void ALoadedLevelOffersItsSortDropdown_AndEndsWithLoadMoreAndShowAll()
@@ -453,7 +530,7 @@ public class DefaultNodeNavigationTest
             })
             .Add("Infrastructure/Inference", new IndexLevel { SortOptions = options });
         var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Inference",
-            levels, new IndexLabels("Mehr laden", "Alle anzeigen", m => m.ToString()))!;
+            levels, new IndexLabels("Mehr laden", "Alle anzeigen", m => m))!;
 
         nav.Entries.Take(3).Select(e => e.Label).Should().Equal(["AI Inference", "Options & Decisions", "Platform"],
             "the level renders in ITS sort — Name here");

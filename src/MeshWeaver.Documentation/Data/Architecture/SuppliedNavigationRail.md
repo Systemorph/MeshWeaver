@@ -40,11 +40,16 @@ index of the Space, with the page being read marked and only the groups on the r
   the most recently modified), **Recently modified**, **Recently viewed** (the viewer's own access
   log, then the newest of the rest) and **Name A–Z**. The choice travels in the URL as
   `?sort={level}:{order|modified|viewed|name}`, so a sorted index is a link; re-sorting a level resets
-  its Load more. A two-key order is read as two bounded legs whose union holds the first `Cap + 1`
-  rows of the combined order — the ordered rows (`sort:order-asc`) and the newest
-  (`sort:lastModified-desc`); for Recently viewed the `source:accessed` leg ranks and the newest
-  leg lists what the viewer never opened. This relies on nulls sorting last in both directions on
-  every backend (QuerySyntax, `sort:`). The dropdown is offered only where a level is loaded — a
+  its Load more. Every leg excludes internal `_` entries in the query (`-id:_*`), so they cannot
+  use up the window. A two-key order is read as bounded legs whose union holds the first `Cap + 1`
+  rows of the combined order: the ordered rows (`sort:order-asc`), the newest
+  (`sort:lastModified-desc`) and a **tie leg** — the rows sharing the Order value the first leg was
+  cut at, newest first (`order:{n}`), because that leg is clipped by Order alone. For Recently
+  viewed the `source:accessed` leg (sorted on the access time it projects into `lastModified`)
+  ranks, and the newest leg lists what the viewer never opened. Name A–Z clips and renders by
+  `lower(name)`, unnamed entries last. This relies on nulls sorting last in both directions on
+  every backend (QuerySyntax, `sort:`). The sort values are open string constants (`IndexSort`);
+  an unknown one in a URL is logged and the level keeps the default order. The dropdown is offered only where a level is loaded — a
   folder off the reader's path is a link. The control is `NavGroupSkin.SortOptions` /
   `NavMenuSkin.SortOptions` (`NavSortOption`: label, href, current); the Blazor views that render
   it ship in MeshWeaver.Plugins.

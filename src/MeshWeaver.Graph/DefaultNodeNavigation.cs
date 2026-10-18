@@ -95,21 +95,41 @@ public static class DefaultNodeNavigation
         var sort = ParseSort(host.Reference.HasParameter(SortParameter)
             ? host.Reference.GetParameterValue(SortParameter) : null);
         int CapOf(string ns) => more is { } m && string.Equals(m.Level, ns, StringComparison.Ordinal) ? m.Cap : LevelCap;
-        IndexSort SortOf(string ns) => sort is { } s && string.Equals(s.Level, ns, StringComparison.Ordinal) ? s.Sort : IndexSort.Order;
-        // 🚨 A level reads only what it SHOWS, plus one row to know there is more: every leg below
-        // is a query bounded to Cap + 1, ordered BY THE STORE in the key the level renders by
-        // (LevelQueries). A two-key order (Order, then newest) is two legs — the ordered rows and
-        // the newest rows — whose union holds the first Cap + 1 of the combined order, because
-        // nulls sort last in both directions on every backend (QuerySyntax, "sort:").
-        IObservable<(string Level, RankedRows Rows)> Level(string ns) =>
-            LevelQueries(ns, SortOf(ns), CapOf(ns))
-                .Select(query => meshService
+        string SortOf(string ns) => sort is { } s && string.Equals(s.Level, ns, StringComparison.Ordinal) ? s.Sort : IndexSort.Order;
+        // A sort value this build does not know (a link from a newer build, a hand-edited URL) is
+        // REPORTED, and the level keeps the default order — never silently read as one of ours.
+        if (sort is { } asked && !IndexSort.All.Contains(asked.Sort))
+            logger?.LogWarning("The index sort '{Sort}' requested for {Level} is not one this build knows ({Known}) — the level keeps the default order",
+                asked.Sort, asked.Level, string.Join(", ", IndexSort.All));
+        // 🚨 A level reads only what it SHOWS, plus one row to know there is more: every leg is a
+        // query bounded to Cap + 1, ordered BY THE STORE in the key the level renders by
+        // (LevelQueries), with internal `_` entries excluded IN the query so they cannot use up the
+        // window. A two-key order is several legs whose union holds the first Cap + 1 rows of the
+        // combined order — see LevelQueries and TieLegQuery for why each leg is there.
+        IObservable<(string Level, LevelRows Rows)> Level(string ns)
+        {
+            var levelSort = SortOf(ns);
+            var cap = CapOf(ns);
+            IObservable<ImmutableDictionary<string, MeshNode>> Read(string query) =>
+                meshService
                     .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-                    .Scan(RankedRows.Empty, FoldRanked)
+                    .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
                     // Each leg paints on its own: a slow leg never holds the others back.
-                    .StartWith(RankedRows.Empty))
-                .CombineLatest()
-                .Select(legs => (ns, RankedRows.Union(legs)));
+                    .StartWith(ImmutableDictionary<string, MeshNode>.Empty);
+            var legs = LevelQueries(ns, levelSort, cap).Select(Read).ToImmutableList();
+            // The Order leg is clipped by Order ALONE, so rows sharing the Order value at its cut
+            // are cut by path, not by recency. The tie leg re-reads exactly that value newest
+            // first, once the Order leg says which value it is.
+            if (IsDefaultOrder(levelSort))
+                legs = legs.Add(legs[0]
+                    .Select(rows => TieOrder(rows.Values, cap))
+                    .DistinctUntilChanged()
+                    .Select(tie => tie is { } order
+                        ? Read(TieLegQuery(ns, order, cap))
+                        : Observable.Return(ImmutableDictionary<string, MeshNode>.Empty))
+                    .Switch());
+            return legs.CombineLatest().Select(read => (ns, LevelRows.Of(levelSort, read)));
+        }
         var pathLevels = PathLevels(root, currentPath);
         var levels = pathLevels.Select(Level).ToImmutableList();
         // The reader's own branch: every node on the path below the root, read BY PATH (one light
@@ -153,26 +173,26 @@ public static class DefaultNodeNavigation
                 {
                     var shown = read
                         .Select(l => (l.Level, Cap: CapOf(l.Level), Sort: SortOf(l.Level), l.Rows,
-                            Visible: VisibleInOrder(l.Rows.Nodes.Values, SortOf(l.Level), l.Rows.RankOf)))
+                            Visible: VisibleInOrder(l.Rows.Nodes.Values, SortOf(l.Level), l.Rows.ViewedRank)))
                         .ToImmutableList();
                     var views = shown.ToImmutableDictionary(
                         l => l.Level,
                         l => new IndexLevel
                         {
                             Sort = l.Sort,
-                            ViewedRank = l.Rows.RankOf,
+                            ViewedRank = l.Rows.ViewedRank,
                             // Nothing more to load once a level sits at the hard bound — Show all
                             // still opens the whole level in the search.
                             MoreHref = l.Visible.Count > l.Cap && l.Cap < MaxCap
                                 ? PageHref(currentPath, (MoreParameter, $"{l.Level}:{Math.Min(l.Cap + MoreStep, MaxCap)}"),
-                                    sort is { } s ? (SortParameter, $"{s.Level}:{SortToken(s.Sort)}") : null)
+                                    sort is { } s ? (SortParameter, $"{s.Level}:{s.Sort}") : null)
                                 : null,
                             ShowAllHref = l.Visible.Count > l.Cap ? ShowAllHref(l.Level, l.Sort) : null,
                             // Re-sorting resets the level's "Load more": the batch is a window
                             // over ONE order, and a new order starts at its first page.
                             SortOptions = SortChoices(l.Sort,
                                 mode => PageHref(currentPath,
-                                    (SortParameter, $"{l.Level}:{SortToken(mode)}"),
+                                    (SortParameter, $"{l.Level}:{mode}"),
                                     more is { } m && !string.Equals(m.Level, l.Level, StringComparison.Ordinal)
                                         ? (MoreParameter, $"{m.Level}:{m.Cap}") : null),
                                 labels.SortLabel),
@@ -194,49 +214,83 @@ public static class DefaultNodeNavigation
 
     /// <summary>
     /// The queries that read ONE level of the index for <paramref name="sort"/>, each bounded to
-    /// <paramref name="cap"/> + 1 rows and ordered by the store in the key the level renders by — so
-    /// the level never reads more than it shows plus the one row that says there is more. A two-key
-    /// order is two legs whose union contains the first <c>cap + 1</c> rows of the combined order:
+    /// <paramref name="cap"/> + 1 rows, ordered by the store in the key the level renders by, and
+    /// excluding internal <c>_</c> entries — so the level never reads more than it shows plus the
+    /// one row that says there is more, and a hidden row never takes a visible one's place. A
+    /// two-key order is several legs whose union contains the first <c>cap + 1</c> rows of the
+    /// combined order (nulls sort last in both directions on every backend — QuerySyntax, sort:):
     /// <list type="bullet">
-    ///   <item><see cref="IndexSort.Order"/> — the ordered rows (<c>sort:order-asc</c>; unordered
-    ///     ones sort last) and the newest rows (<c>sort:lastModified-desc</c>).</item>
+    ///   <item><see cref="IndexSort.Order"/> — the ordered rows (<c>sort:order-asc</c>: every row
+    ///     ordered before the cut value), the newest rows (<c>sort:lastModified-desc</c>: the head of
+    ///     the unordered tail) and, once the first leg names its cut value, the TIE leg
+    ///     (<see cref="TieLegQuery"/>: the rows sharing it, newest first).</item>
     ///   <item><see cref="IndexSort.Viewed"/> — the viewer's most recently opened rows
-    ///     (<c>source:accessed</c>, an INNER join on their access log) and the newest rows, so a page
-    ///     the viewer never opened is still listed after the ones they did.</item>
-    ///   <item><see cref="IndexSort.Modified"/> and <see cref="IndexSort.Name"/> — one leg each.</item>
+    ///     (<c>source:accessed</c>, which projects the access time into <c>lastModified</c>, sorted
+    ///     on it) and the newest rows: if the first leg holds every opened row, the newest
+    ///     <c>cap + 1</c> contain at least the never-opened rows still needed.</item>
+    ///   <item><see cref="IndexSort.Modified"/> — newest first. <see cref="IndexSort.Name"/> —
+    ///     <c>lower(name)</c>, the key <see cref="SortLevel"/> renders by; unnamed rows last.</item>
     /// </list>
-    /// The read is a path-tree level (<c>namespace:{level}</c>, direct children) of main nodes. Pure.
+    /// An unknown sort reads as the default. The read is a path-tree level (<c>namespace:{level}</c>,
+    /// direct children) of main nodes. Pure.
     /// </summary>
     /// <param name="level">The namespace whose direct children the level lists.</param>
-    /// <param name="sort">How the level is sorted.</param>
+    /// <param name="sort">How the level is sorted (<see cref="IndexSort"/>).</param>
     /// <param name="cap">How many entries the level shows.</param>
-    public static ImmutableList<string> LevelQueries(string level, IndexSort sort, int cap)
+    public static ImmutableList<string> LevelQueries(string level, string sort, int cap)
     {
-        var read = $"namespace:{level} is:main select:{SelectFields} limit:{cap + 1}";
+        var read = LevelRead(level, cap);
         var newest = $"{read} sort:lastModified-desc";
         return sort switch
         {
             IndexSort.Modified => [newest],
-            IndexSort.Name => [$"{read} sort:name-asc"],
-            IndexSort.Viewed => [$"{read} source:accessed", newest],
+            IndexSort.Name => [$"{read} sort:lower(name)-asc"],
+            IndexSort.Viewed => [$"{read} source:accessed sort:lastModified-desc", newest],
             _ => [$"{read} sort:order-asc", newest],
         };
     }
+
+    /// <summary>
+    /// The tie leg of the default order: the level's rows whose Order IS <paramref name="order"/>,
+    /// newest first, bounded like every leg. Pure.
+    /// </summary>
+    /// <param name="level">The namespace whose direct children the level lists.</param>
+    /// <param name="order">The Order value the Order leg was cut at (<see cref="TieOrder"/>).</param>
+    /// <param name="cap">How many entries the level shows.</param>
+    public static string TieLegQuery(string level, int order, int cap)
+        => $"{LevelRead(level, cap)} order:{order} sort:lastModified-desc";
+
+    /// <summary>
+    /// The Order value the Order leg was cut at — the largest Order among its rows when the leg is
+    /// FULL (<c>cap + 1</c> rows), so rows beyond it may share that value; null when the leg holds
+    /// every ordered row, or none. Pure.
+    /// </summary>
+    /// <param name="orderLeg">The Order leg's rows.</param>
+    /// <param name="cap">How many entries the level shows.</param>
+    public static int? TieOrder(IEnumerable<MeshNode> orderLeg, int cap)
+    {
+        var ordered = orderLeg.Where(n => n.Order is not null).Select(n => n.Order!.Value).ToList();
+        return ordered.Count >= cap + 1 ? ordered.Max() : null;
+    }
+
+    private static string LevelRead(string level, int cap)
+        => $"namespace:{level} is:main -id:_* select:{SelectFields} limit:{cap + 1}";
+
+    private static bool IsDefaultOrder(string sort) => !IndexSort.All.Contains(sort) || sort == IndexSort.Order;
 
     /// <summary>The mesh-search URL that lists a level whole — its direct children, in the level's
     /// primary sort key ("Show all"). Pure.</summary>
     /// <param name="level">The namespace whose children the level lists.</param>
     /// <param name="sort">The level's sort; the search orders by its primary key.</param>
-    public static string ShowAllHref(string level, IndexSort sort)
+    public static string ShowAllHref(string level, string sort)
     {
         var order = sort switch
         {
-            IndexSort.Name => "sort:name-asc",
-            IndexSort.Order => "sort:order-asc",
-            // The access log hides what the viewer never opened; the whole level is newest first.
-            _ => "sort:lastModified-desc",
+            IndexSort.Name => "sort:lower(name)-asc",
+            IndexSort.Modified or IndexSort.Viewed => "sort:lastModified-desc",
+            _ => "sort:order-asc",
         };
-        return $"/search?ns={Uri.EscapeDataString(level)}&hq={Uri.EscapeDataString($"namespace:{level} is:main {order}")}";
+        return $"/search?ns={Uri.EscapeDataString(level)}&hq={Uri.EscapeDataString($"namespace:{level} is:main -id:_* {order}")}";
     }
 
     /// <summary>The page's own URL with the index parameters given — a null pair is left out. Pure.</summary>
@@ -250,38 +304,25 @@ public static class DefaultNodeNavigation
 
     /// <summary>The dropdown of one level: every <see cref="IndexSort"/>, the one in effect marked. Pure.</summary>
     private static ImmutableList<NavSortOption> SortChoices(
-        IndexSort current, Func<IndexSort, string> href, Func<IndexSort, string> label) =>
-        [.. Enum.GetValues<IndexSort>().Select(mode => new NavSortOption(label(mode), href(mode), mode == current))];
+        string current, Func<string, string> href, Func<string, string> label) =>
+        [.. IndexSort.All.Select(mode => new NavSortOption(label(mode), href(mode), mode == current))];
 
     /// <summary>The localization key naming a sort mode in the dropdown.</summary>
     /// <param name="sort">The mode.</param>
-    public static string SortLabelKey(IndexSort sort) => "nav.sort." + SortToken(sort);
+    public static string SortLabelKey(string sort) => "nav.sort." + sort;
 
-    /// <summary>The URL spelling of a sort mode (<c>?sort={level}:{token}</c>).</summary>
-    /// <param name="sort">The mode.</param>
-    public static string SortToken(IndexSort sort) => sort switch
-    {
-        IndexSort.Modified => "modified",
-        IndexSort.Viewed => "viewed",
-        IndexSort.Name => "name",
-        _ => "order",
-    };
-
-    /// <summary>Reads the DECODED value of <c>?sort={level}:{mode}</c>: the one level re-sorted, and
-    /// how — null for a missing or malformed value. Pure.</summary>
+    /// <summary>Reads the DECODED value of <c>?sort={level}:{mode}</c>: the one level re-sorted and
+    /// the mode AS WRITTEN — an unknown mode is kept (and reported by the caller), never mapped to
+    /// a known one; null only for a missing or malformed value. Pure.</summary>
     /// <param name="value">The parameter value.</param>
-    public static (string Level, IndexSort Sort)? ParseSort(string? value)
+    public static (string Level, string Sort)? ParseSort(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
             return null;
         var colon = value.LastIndexOf(':');
-        if (colon <= 0)
+        if (colon <= 0 || colon == value.Length - 1)
             return null;
-        var token = value[(colon + 1)..];
-        var mode = Enum.GetValues<IndexSort>()
-            .Select(m => (IndexSort?)m)
-            .FirstOrDefault(m => string.Equals(SortToken(m!.Value), token, StringComparison.OrdinalIgnoreCase));
-        return mode is { } sort ? (value[..colon], sort) : null;
+        return (value[..colon], value[(colon + 1)..].Trim().ToLowerInvariant());
     }
 
     /// <summary>
@@ -337,33 +378,36 @@ public static class DefaultNodeNavigation
     /// <param name="viewedRank">For <see cref="IndexSort.Viewed"/>: each opened row's position in the
     /// viewer's access order (0 = most recent).</param>
     public static IReadOnlyList<MeshNode> VisibleInOrder(
-        IEnumerable<MeshNode> level, IndexSort sort, IReadOnlyDictionary<string, int>? viewedRank) =>
+        IEnumerable<MeshNode> level, string sort, IReadOnlyDictionary<string, int>? viewedRank) =>
         SortLevel(level.Where(n => !LastSegment(n.Path).StartsWith('_')), sort, viewedRank);
 
     /// <summary>
-    /// The order of one level. <see cref="IndexSort.Order"/>, the default: declared
-    /// <see cref="MeshNode.Order"/> first (unordered last), then the most recently modified.
-    /// <see cref="IndexSort.Viewed"/>: the viewer's most recently opened first, then the most recently
-    /// modified. <see cref="IndexSort.Modified"/>: newest first. <see cref="IndexSort.Name"/>: A–Z.
-    /// Ties fall back to the name, so the order is total. Pure.
+    /// The order of one level — the SAME key the level's queries clip by (<see cref="LevelQueries"/>),
+    /// so the rows a clip keeps are the rows this order puts first. <see cref="IndexSort.Order"/>,
+    /// the default (and the reading of an unknown sort): declared <see cref="MeshNode.Order"/> first
+    /// (unordered last), then the most recently modified. <see cref="IndexSort.Viewed"/>: the
+    /// viewer's most recently opened first, then the most recently modified.
+    /// <see cref="IndexSort.Modified"/>: newest first. <see cref="IndexSort.Name"/>: lower-cased name,
+    /// unnamed rows last. Ties fall back to the id (= the path within a level), so the order is total. Pure.
     /// </summary>
     /// <param name="level">The level's rows.</param>
     /// <param name="sort">How the level is sorted.</param>
     /// <param name="viewedRank">For <see cref="IndexSort.Viewed"/>: each opened row's access position.</param>
     public static ImmutableList<MeshNode> SortLevel(
-        IEnumerable<MeshNode> level, IndexSort sort, IReadOnlyDictionary<string, int>? viewedRank = null)
+        IEnumerable<MeshNode> level, string sort, IReadOnlyDictionary<string, int>? viewedRank = null)
     {
-        static string NameOf(MeshNode n) => n.Name ?? n.Id;
         var ordered = sort switch
         {
-            IndexSort.Name => level.OrderBy(NameOf, StringComparer.OrdinalIgnoreCase),
+            IndexSort.Name => level
+                .OrderBy(n => n.Name is null ? 1 : 0)
+                .ThenBy(n => n.Name?.ToLowerInvariant(), StringComparer.Ordinal),
             IndexSort.Modified => level.OrderByDescending(n => n.LastModified),
             IndexSort.Viewed => level
                 .OrderBy(n => viewedRank is not null && viewedRank.TryGetValue(n.Path, out var rank) ? rank : int.MaxValue)
                 .ThenByDescending(n => n.LastModified),
             _ => level.OrderBy(n => n.Order ?? int.MaxValue).ThenByDescending(n => n.LastModified),
         };
-        return [.. ordered.ThenBy(NameOf, StringComparer.OrdinalIgnoreCase)];
+        return [.. ordered.ThenBy(n => n.Id, StringComparer.Ordinal)];
     }
 
     /// <summary>Reads the DECODED value of <c>?more={level}:{cap}</c>: the one level whose cap is raised, and to what —
@@ -458,57 +502,35 @@ public static class DefaultNodeNavigation
     }
 
     /// <summary>
-    /// One leg's rows of a level, with the ORDER the store returned them in — which is the only
-    /// place a <c>source:accessed</c> read carries the viewer's access recency (the row has no field
-    /// for it). <see cref="RankOf"/> is that order by path.
+    /// One level's rows, read by its legs: every row by path, and — for
+    /// <see cref="IndexSort.Viewed"/> — each opened row's ACCESS position, taken from the access
+    /// leg's own timestamps (<c>source:accessed</c> projects the access time into
+    /// <c>lastModified</c>), never from the order or the kind of the feed's deltas.
     /// </summary>
-    /// <param name="Nodes">The rows by path.</param>
-    /// <param name="Rank">The paths in the store's order.</param>
-    public sealed record RankedRows(ImmutableDictionary<string, MeshNode> Nodes, ImmutableList<string> Rank)
+    /// <param name="Nodes">The rows by path. Where legs disagree on a row, the LAST leg's copy wins:
+    /// for Viewed that is the plain read, whose <c>lastModified</c> is the real one.</param>
+    /// <param name="ViewedRank">Each opened row's access position (0 = most recent); null for any
+    /// other sort.</param>
+    public sealed record LevelRows(ImmutableDictionary<string, MeshNode> Nodes, ImmutableDictionary<string, int>? ViewedRank)
     {
-        /// <summary>No rows yet.</summary>
-        public static RankedRows Empty { get; } = new(
-            ImmutableDictionary<string, MeshNode>.Empty.WithComparers(StringComparer.Ordinal), []);
-
-        /// <summary>Each path's position in <see cref="Rank"/>.</summary>
-        public ImmutableDictionary<string, int> RankOf =>
-            Rank.Select((path, i) => (path, i)).ToImmutableDictionary(p => p.path, p => p.i, StringComparer.Ordinal);
-
-        /// <summary>
-        /// The legs of one level as one: every row by path, and the FIRST leg's order — the leg the
-        /// level ranks by (the access log for <see cref="IndexSort.Viewed"/>; the others rank by row
-        /// fields and ignore it). Pure.
-        /// </summary>
-        /// <param name="legs">The level's legs, the ranking one first.</param>
-        public static RankedRows Union(IList<RankedRows> legs) =>
-            new(legs.SelectMany(l => l.Nodes)
-                    .GroupBy(kv => kv.Key, StringComparer.Ordinal)
-                    .ToImmutableDictionary(g => g.Key, g => g.First().Value, StringComparer.Ordinal),
-                legs.Count == 0 ? [] : legs[0].Rank);
-    }
-
-    /// <summary>
-    /// <see cref="Fold"/> that also keeps the store's ORDER: Initial/Reset take the rows' order,
-    /// an Added or Updated row moves to the FRONT (on an access-ordered read that is the page just
-    /// opened), a Removed row leaves. Pure.
-    /// </summary>
-    /// <param name="rows">The rows so far.</param>
-    /// <param name="change">The next change.</param>
-    public static RankedRows FoldRanked(RankedRows rows, QueryResultChange<MeshNode> change)
-    {
-        ArgumentNullException.ThrowIfNull(rows);
-        ArgumentNullException.ThrowIfNull(change);
-        var nodes = Fold(rows.Nodes, change);
-        var items = (change.Items ?? []).Where(n => !string.IsNullOrEmpty(n.Path)).Select(n => n.Path).ToList();
-        var rank = change.ChangeType switch
+        /// <summary>The legs of one level as one. Pure.</summary>
+        /// <param name="sort">The level's sort.</param>
+        /// <param name="legs">The legs' rows, in <see cref="LevelQueries"/> order (the access leg first for Viewed).</param>
+        public static LevelRows Of(string sort, IList<ImmutableDictionary<string, MeshNode>> legs)
         {
-            QueryChangeType.Initial or QueryChangeType.Reset => items.Distinct(StringComparer.Ordinal).ToImmutableList(),
-            QueryChangeType.Added or QueryChangeType.Updated =>
-                items.Distinct(StringComparer.Ordinal).Concat(rows.Rank.Where(p => !items.Contains(p, StringComparer.Ordinal))).ToImmutableList(),
-            QueryChangeType.Removed => rows.Rank.Where(p => !items.Contains(p, StringComparer.Ordinal)).ToImmutableList(),
-            _ => rows.Rank,
-        };
-        return new RankedRows(nodes, rank);
+            var nodes = legs.Reverse()
+                .SelectMany(l => l.Values)
+                .GroupBy(n => n.Path, StringComparer.Ordinal)
+                .ToImmutableDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+            var rank = sort == IndexSort.Viewed && legs.Count > 0
+                ? legs[0].Values
+                    .OrderByDescending(n => n.LastModified)
+                    .ThenBy(n => n.Id, StringComparer.Ordinal)
+                    .Select((n, i) => (n.Path, i))
+                    .ToImmutableDictionary(p => p.Path, p => p.i, StringComparer.Ordinal)
+                : null;
+            return new LevelRows(nodes, rank);
+        }
     }
 
     /// <summary>
@@ -542,7 +564,7 @@ public static class DefaultNodeNavigation
         => Build(root, subtree, currentPath,
             (moreLinks ?? ImmutableDictionary<string, string>.Empty)
                 .ToImmutableDictionary(kv => kv.Key, kv => new IndexLevel { MoreHref = "/" + kv.Value }, StringComparer.Ordinal),
-            new IndexLabels(loadMoreLabel ?? LoadMoreLabel, ShowAllLabel, SortToken));
+            new IndexLabels(loadMoreLabel ?? LoadMoreLabel, ShowAllLabel, mode => mode));
 
     /// <summary>
     /// The index of the loaded nodes, each loaded level rendered as <paramref name="levels"/> says:
@@ -617,24 +639,35 @@ public static class DefaultNodeNavigation
     }
 }
 
-/// <summary>How one level of the default index is sorted — the choices of its dropdown.</summary>
-public enum IndexSort
+/// <summary>
+/// How one level of the default index can be sorted — the choices of its dropdown, as OPEN string
+/// constants (policy <c>open-vocabulary-string-constants</c>): they travel in shareable URLs
+/// (<c>?sort={level}:{mode}</c>), so a value this build does not know is kept and reported, and the
+/// level falls back to <see cref="Order"/>.
+/// </summary>
+public static class IndexSort
 {
     /// <summary>Declared <see cref="MeshNode.Order"/> first, then the most recently modified (the default).</summary>
-    Order,
+    public const string Order = "order";
+
     /// <summary>The most recently modified first.</summary>
-    Modified,
+    public const string Modified = "modified";
+
     /// <summary>The viewer's most recently opened first, then the most recently modified.</summary>
-    Viewed,
-    /// <summary>By name, A–Z.</summary>
-    Name,
+    public const string Viewed = "viewed";
+
+    /// <summary>By name, A–Z (case-insensitive), unnamed entries last.</summary>
+    public const string Name = "name";
+
+    /// <summary>The choices this build offers, in dropdown order — the starting set, not the permitted one.</summary>
+    public static readonly ImmutableArray<string> All = [Order, Modified, Viewed, Name];
 }
 
 /// <summary>How one loaded level of the default index renders.</summary>
 public sealed record IndexLevel
 {
     /// <summary>The level's sort.</summary>
-    public IndexSort Sort { get; init; } = IndexSort.Order;
+    public string Sort { get; init; } = IndexSort.Order;
 
     /// <summary>For <see cref="IndexSort.Viewed"/>: each opened row's access position (0 = most recent).</summary>
     public IReadOnlyDictionary<string, int>? ViewedRank { get; init; }
@@ -653,4 +686,4 @@ public sealed record IndexLevel
 /// <param name="LoadMore">The load-more entry.</param>
 /// <param name="ShowAll">The show-all entry.</param>
 /// <param name="SortLabel">Each sort mode's name in the dropdown.</param>
-public sealed record IndexLabels(string LoadMore, string ShowAll, Func<IndexSort, string> SortLabel);
+public sealed record IndexLabels(string LoadMore, string ShowAll, Func<string, string> SortLabel);
