@@ -667,9 +667,13 @@ Two details of the seam's gate that are decisions, not incidentals:
 `IMeshService.Query(request)` and `IMeshService.Autocomplete(...)` combine every provider's latest
 snapshot progressively — a fast provider's rows render before a slow one answers — but **every frame
 they emit is an answer** (`MeshQuery.CombineAnswers`). A frame with rows is emitted as soon as any
-provider has rows; a frame with **no** rows only once EVERY provider has answered (a provider that
-completes without emitting counts as an empty answer). So an empty frame always means "nothing
-matches", never "not yet".
+provider has rows. Only a **leading** empty frame — one from before anything was ever published —
+is withheld, until EVERY provider has answered (a provider that completes without emitting counts as
+an empty answer). So a first empty frame always means "nothing matches", never "not yet".
+
+That distinction is the whole rule: an empty frame AFTER rows were published is an **update** that
+clears them (a provider removed its last row), and it is emitted at once, even while a peer is still
+silent — withholding it would leave removed rows on screen for ever.
 
 Before MeshWeaver#6827 each provider was seeded with an empty snapshot, and until the slowest provider
 answered the fan-out emitted frames byte-identical to a definitive empty result. Every consumer read

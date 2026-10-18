@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive;
@@ -12,6 +13,8 @@ using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Reactive.Assertions;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -28,8 +31,14 @@ namespace MeshWeaver.Hosting.Test;
 /// stalled provider with nothing to show faults the query naming it (policy
 /// <c>query-fanin-stall-terminal</c>).
 /// </summary>
-public class SnapshotFanOutEmitsOnlyAnswersTest(ITestOutputHelper output) : HubTestBase(output)
+public class SnapshotFanOutEmitsOnlyAnswersTest : HubTestBase
 {
+    private readonly WarningLines warnings = new();
+
+    /// <summary>Captures Warning-and-above lines from every logger the mesh creates.</summary>
+    public SnapshotFanOutEmitsOnlyAnswersTest(ITestOutputHelper output) : base(output)
+        => Services.AddLogging(l => l.Services.AddSingleton<ILoggerProvider>(warnings));
+
     private static readonly JsonSerializerOptions Options = new();
 
     /// <summary>Contracts the fan-in's rung to half a second — the SUBJECT of the stall tests, not a
@@ -184,6 +193,36 @@ public class SnapshotFanOutEmitsOnlyAnswersTest(ITestOutputHelper output) : HubT
     }
 
     /// <summary>
+    /// Only the LEADING empty frame is withheld. Once rows have been published, a provider removing
+    /// its last row is an UPDATE that clears them — it must reach the consumer even while a peer is
+    /// still silent, or the removed rows stay on screen for ever.
+    /// </summary>
+    [Theory(Timeout = 240_000)]
+    [MemberData(nameof(Surfaces))]
+    public async Task RowsThenEmpty_WithASilentPeer_TheClearingFrameIsEmitted(string surface)
+    {
+        var rows = new ReplaySubject<IReadOnlyCollection<QueryResult>>();
+        var mesh = new MeshQuery(
+            [
+                new SnapshotProvider("rows", () => rows),
+                new SnapshotProvider("silent", Observable.Never<IReadOnlyCollection<QueryResult>>),
+            ],
+            hub: Mesh, ShortLadder);
+        var stream = Surface(mesh, surface).Replay();
+        using var connection = stream.Connect();
+
+        rows.OnNext(Rows("a/alpha"));
+        var shown = await stream.Should().Within(TestTimeouts.Convergence)
+            .Emit("the rows are published at once", TestContext.Current.CancellationToken);
+        shown.Select(r => r.Path).Should().Equal("a/alpha");
+
+        rows.OnNext(NoRows);
+        await stream.Where(frame => frame.Count == 0).Should().Within(TestTimeouts.Convergence)
+            .Emit("a frame that CLEARS previously published rows is an answer, not the seed — "
+                + "withholding it leaves a removed row on screen", TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
     /// Withholding the seed must never become a hang: a provider that neither answers nor completes,
     /// with nothing else to show, faults the query at the fan-in's rung — naming it.
     /// </summary>
@@ -203,12 +242,16 @@ public class SnapshotFanOutEmitsOnlyAnswersTest(ITestOutputHelper output) : HubT
         fault.Should().BeOfType<QueryProviderStalledException>(
             "with no answer to show, silence would leave the consumer spinning for ever");
         ((QueryProviderStalledException)fault!).Providers.Should().Contain("stalled").And.NotContain("answers");
+        warnings.Lines.Should().Contain(line => line.Contains("TERMINATED") && line.Contains("stalled"),
+            "an ACCEPTED terminal is still reported by name — and this is the control proving the "
+            + "warning capture sees the fan-out's logger at all");
     }
 
     /// <summary>
     /// The control for the terminal: once rows have been shown, a laggard does not fault the query —
     /// the consumer holds a real answer, and the laggard's rows simply join when they come. Asserted
-    /// past the budget the terminal fires at in the test above.
+    /// past the budget the terminal fires at in the test above. Nor is the stall WARNING logged: it
+    /// says the query was terminated, which a declined terminal is not.
     /// </summary>
     [Fact(Timeout = 240_000)]
     public async Task AStalledProvider_AfterRowsWereShown_DoesNotFault()
@@ -230,6 +273,35 @@ public class SnapshotFanOutEmitsOnlyAnswersTest(ITestOutputHelper output) : HubT
             .NotEmit(ShortLadder.QueryInitialBudget * 3,
                 "the stall terminal is for a query with NO answer; this one has shown rows",
                 TestContext.Current.CancellationToken);
+
+        warnings.Lines.Should().NotContain(line => line.Contains("TERMINATED"),
+            "the query was kept alive, so a warning saying it was terminated would be false");
+    }
+
+    /// <summary>Records Warning-and-above log lines from every logger the mesh creates.</summary>
+    private sealed class WarningLines : ILoggerProvider
+    {
+        private readonly ConcurrentQueue<string> lines = new();
+
+        public string[] Lines => lines.ToArray();
+
+        public ILogger CreateLogger(string categoryName) => new Capturing(this, categoryName);
+
+        public void Dispose() { }
+
+        private sealed class Capturing(WarningLines owner, string category) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Warning;
+
+            public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (logLevel >= LogLevel.Warning)
+                    owner.lines.Enqueue($"{category}: {formatter(state, exception)}");
+            }
+        }
     }
 
     /// <summary>Observes a query's TERMINAL: the fault, or null when it completed.</summary>

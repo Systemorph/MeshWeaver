@@ -481,20 +481,25 @@ public class MeshQuery : IMeshQueryCore
                 .DefaultIfEmpty(new ProviderAnswer(true, empty))
                 .Do(_ => probe.MarkSeen(i))
                 // The not-yet-answered seed keeps CombineLatest progressive (it emits as soon as ANY
-                // provider produces); the Where below keeps the seed itself from being emitted.
+                // provider produces); the subscriber below keeps the seed itself from being emitted.
                 .StartWith(new ProviderAnswer(false, empty)))
                 .ToList();
             var subscription = Observable.CombineLatest(legs)
                 .Select(answers => (
                     Complete: answers.All(a => a.Answered),
                     Rows: merge(answers.Select(a => a.Rows).ToList())))
-                .Where(frame => frame.Complete || frame.Rows.Count > 0)
                 .Subscribe(
                     frame =>
                     {
                         lock (gate)
                         {
                             if (terminated) return;
+                            // Only a LEADING empty frame is withheld — one from before anything was
+                            // published, which is "not yet", not an answer. Once rows have been
+                            // published, an empty frame is an UPDATE that clears them (a provider
+                            // removed its last row) and must reach the consumer even while a peer is
+                            // still silent, or the removed rows would stay on screen for ever.
+                            if (!emitted && !frame.Complete && frame.Rows.Count == 0) return;
                             emitted = true;
                             observer.OnNext(frame.Rows);
                         }
@@ -517,14 +522,15 @@ public class MeshQuery : IMeshQueryCore
                             observer.OnCompleted();
                         }
                     });
-            var arm = probe.Arm(budget, logger, query, userId, stalled =>
+            var arm = probe.Arm(budget, logger, query, userId, (stalled, reportTermination) =>
             {
                 lock (gate)
                 {
                     // Something real was already shown, or the stream already ended: a laggard
-                    // provider is then not an unanswered query.
+                    // provider is then not an unanswered query, and the terminal is declined.
                     if (terminated || emitted) return;
                     terminated = true;
+                    reportTermination();
                     observer.OnError(stalled);
                 }
             });
@@ -816,7 +822,7 @@ public class MeshQuery : IMeshQueryCore
                 var terminated = false;
                 var probeArm = singleProbe.Arm(
                     singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser,
-                    stalled =>
+                    (stalled, reportTermination) =>
                     {
                         lock (singleGate)
                         {
@@ -825,6 +831,7 @@ public class MeshQuery : IMeshQueryCore
                             // is what makes the terminal exactly-once.
                             if (terminated || sawInitial) return;
                             terminated = true;
+                            reportTermination();
                             observer.OnError(stalled);
                         }
                     });
@@ -1161,7 +1168,7 @@ public class MeshQuery : IMeshQueryCore
             // than adding one (MeshHubDisposalLeakTest's TimerQueue shape).
             subscriptions.Add(stallProbe.Arm(
                 OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId,
-                stalled =>
+                (stalled, reportTermination) =>
                 {
                     lock (gate)
                     {
@@ -1170,6 +1177,7 @@ public class MeshQuery : IMeshQueryCore
                         // terminal exactly-once.
                         if (terminated || initialCount == initialTarget) return;
                         terminated = true;
+                        reportTermination();
                         observer.OnError(stalled);
                     }
                 }));
@@ -1248,20 +1256,25 @@ public class MeshQuery : IMeshQueryCore
         /// <summary>
         /// Arms the stall timer. The returned subscription is added to the merge's disposables, so
         /// an unsubscribed query cancels it; <see cref="MarkSeen"/> cancels it earlier, on the
-        /// answer. When it fires with providers still missing it logs the laggards BY NAME and then
-        /// hands <paramref name="onStalled"/> the <see cref="QueryProviderStalledException"/> that
-        /// carries that attribution — the caller decides what a terminal means for its observer
-        /// (the merge faults it; nothing else may).
+        /// answer. When it fires with providers still missing it hands <paramref name="onStalled"/>
+        /// the <see cref="QueryProviderStalledException"/> that carries the laggards' attribution —
+        /// the caller decides what a terminal means for its observer (the merge faults it; nothing
+        /// else may). The laggards are logged BY NAME only when the caller ACCEPTS the terminal, by
+        /// invoking the report action it is handed — before it faults the observer, so the warning
+        /// precedes the fault the consumer sees. A declined terminal (the query already has an
+        /// answer to show) is no termination, and a warning saying "terminated" there would be false.
         /// </summary>
         /// <param name="delay">The fan-in's rung of the budget ladder
         /// (<see cref="MeshOperationOptions.QueryInitialBudget"/>).</param>
         /// <param name="logger">Diagnostic sink; absent on the hub-less unsecured registration.</param>
         /// <param name="query">The query text, for attribution.</param>
         /// <param name="userId">The identity the query ran under, for attribution.</param>
-        /// <param name="onStalled">Delivers the terminal. Invoked at most once, on a timer thread.</param>
+        /// <param name="onStalled">Delivers the terminal: given the exception and the action that
+        /// reports the termination, which it invokes only when it accepts the terminal. Invoked at
+        /// most once, on a timer thread.</param>
         public IDisposable Arm(
             TimeSpan delay, ILogger? logger, string? query, string? userId,
-            Action<QueryProviderStalledException> onStalled)
+            Action<QueryProviderStalledException, Action> onStalled)
         {
             var sub = Observable.Timer(delay).Subscribe(_ =>
             {
@@ -1269,14 +1282,13 @@ public class MeshQuery : IMeshQueryCore
                 if (missing is null)
                     return;
                 var stalled = new QueryProviderStalledException(missing, delay, query, userId);
-                logger?.LogWarning(stalled,
+                onStalled(stalled, () => logger?.LogWarning(stalled,
                     "Query provider(s) [{Providers}] did not emit an Initial within {Delay}s for query "
                     + "'{Query}' (user '{UserId}') — the query is stalled on its all-providers Initial "
                     + "gate and has NO snapshot to answer with, so it is TERMINATED as unavailable "
                     + "(retryable) rather than left hanging with no error. Fix the stalled provider; "
                     + "never bump the consumer's timeout.",
-                    missing, delay.TotalSeconds, query, userId);
-                onStalled(stalled);
+                    missing, delay.TotalSeconds, query, userId));
             });
             // Publish the arm so MarkSeen can release it — and re-check, because a provider may have
             // answered synchronously between the subscribe above and this line, in which case the
