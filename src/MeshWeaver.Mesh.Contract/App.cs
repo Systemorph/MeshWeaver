@@ -61,6 +61,19 @@ public record App
     public bool CustomGroup { get; init; }
 
     /// <summary>
+    /// Where this tile's GROUP sorts among the launcher's groups: lower first, <c>0</c> (the default)
+    /// = no preference, so the group sits by the position of its first tile as before. A group sorts
+    /// by the greatest value among its tiles. DATA, not code: a package declares
+    /// <c>launcherGroupOrder</c> on its root, and the platform's own Settings and Administration
+    /// tiles carry the directory's <c>LastGroupOrder</c> so the
+    /// <c>Settings</c> group lands at the bottom (maintainer, 2026-10-18: "all the settings at
+    /// bottom under Settings"). Wire name <c>groupOrder</c>. Not a per-viewer value: the directory
+    /// derives it from the app root, and a viewer's own regrouping (<see cref="CustomGroup"/>) drops it.
+    /// </summary>
+    [Browsable(false)]
+    public int GroupOrder { get; init; }
+
+    /// <summary>
     /// Optional navigation override — where the icon opens. Empty resolves to the
     /// <see cref="Plugin"/> node itself.
     /// </summary>

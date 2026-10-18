@@ -134,6 +134,11 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
         entries.Select(entry =>
         {
             var placed = arrangement?.For(entry.Id);
+            // A group the package or the platform DECLARED wins over a placement that is only the
+            // legacy seed's copy; a group the viewer chose (CustomGroup) always wins, and then the
+            // declared sort preference no longer applies to the tile.
+            var viewerChose = placed is { CustomGroup: true, Group: not null };
+            var group = entry.GroupDeclared && !viewerChose ? entry.Category : placed?.Group ?? entry.Category;
             return new MeshNode(LauncherArrangementPaths.RowIdFor(entry.Id), LauncherArrangementPaths.DirectoryNamespaceFor(owner))
             {
                 NodeType = AppNodeType.NodeType,
@@ -148,7 +153,8 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                     Plugin = entry.BuiltIn ? "" : entry.Id,
                     OpenPath = entry.OpenPath,
                     // null = never grouped → the app's category; "" = deliberately ungrouped, kept.
-                    Group = placed?.Group ?? entry.Category,
+                    Group = group,
+                    GroupOrder = viewerChose ? 0 : entry.GroupOrder,
                     Order = placed?.Order ?? 0,
                     Source = AppSources.Directory,
                     LabelKey = entry.LabelKey,

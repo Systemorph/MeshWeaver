@@ -177,6 +177,27 @@ and its writers switch together.
 `LauncherArrangementPaths.Place(cache, rowPath, group, order, options)`. The launcher view routes a
 drop on a `{user}/_Apps/…` row there. A move keeps the tile's `hidden` flag.
 
+### Top-level tiles and the Settings group (2026-10-18)
+
+Maintainer, 2026-10-18: *"let's then put the Threads app also top level"* and *"all the settings at
+bottom under Settings"*. Both are DATA on the app root, read by the directory shape-tolerantly
+(`AppRoot`), so core carries no list of which apps are top-level:
+
+| Content field | Effect |
+|---|---|
+| `launcherGroup` | The launcher group, overriding the store `category`. `""` is a real value: a TOP-LEVEL tile, in no folder, like the Inbox. Absent = the store category. |
+| `launcherGroupOrder` | Where the tile's group sorts among the groups (`App.GroupOrder`, lower first; 0 = no preference). A group sorts by the greatest value among its tiles. |
+
+The platform's own **Settings** (the person app) and **Administration** tiles declare the group
+`Settings` with `AppDirectory.LastGroupOrder`, so one `Settings` group sits at the bottom of the
+launcher. The Inbox stays top-level. Ungrouped tiles still paint first, then groups by `GroupOrder`,
+then by the position of their first tile, then by name.
+
+A **declared** group (`AppDirectoryEntry.GroupDeclared`) beats a viewer placement that is only the
+legacy seed's copy of an old category (`customGroup` false); a group the viewer chose
+(`customGroup: true`, written by every drag, drop and rename) always wins and then drops the declared
+sort preference.
+
 ### Hiding a tile (2026-10-13)
 
 **A viewer can hide an app tile they have access to, and show it again.** The tile's right-click

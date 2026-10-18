@@ -28,7 +28,21 @@ public sealed record AppDirectoryEntry(
     string? Category,
     string OpenPath,
     string? LabelKey = null,
-    bool BuiltIn = false);
+    bool BuiltIn = false)
+{
+    /// <summary>
+    /// Whether <see cref="Category"/> was DECLARED as the launcher group (a package's
+    /// <c>launcherGroup</c>, or the platform's own <c>Settings</c> group) rather than inherited from
+    /// the root's store category. A declared group wins over a viewer's NON-custom placement — that
+    /// placement is only the copy the legacy seed took — while a group the viewer chose themselves
+    /// (<see cref="LauncherEntry.CustomGroup"/>) always wins. Init-only, so the constructor keeps its
+    /// binary shape.
+    /// </summary>
+    public bool GroupDeclared { get; init; }
+
+    /// <summary>Where the tile's group sorts among the groups (<see cref="App.GroupOrder"/>); 0 = no preference.</summary>
+    public int GroupOrder { get; init; }
+}
 
 /// <summary>What the person tile shows for the viewer: their display name, their picture (null =
 /// the settings icon) and their language, for the description.</summary>
@@ -51,6 +65,17 @@ public sealed record AppRoot(
     /// (<c>Doc/Architecture/InAppExtensions</c>), when declared. An init property rather than a
     /// constructor parameter, so the record's constructor keeps its binary shape.</summary>
     public string? HostedIn { get; init; }
+
+    /// <summary>
+    /// The content's <c>launcherGroup</c>: the launcher group the tile sits in, overriding the
+    /// store <see cref="Category"/>. <c>""</c> is a real value — a TOP-LEVEL tile, in no folder, like
+    /// the Inbox — so null means "not declared" and nothing else. Data on the package root; core
+    /// carries no list of which apps are top-level.
+    /// </summary>
+    public string? LauncherGroup { get; init; }
+
+    /// <summary>The content's <c>launcherGroupOrder</c> — see <see cref="App.GroupOrder"/>; 0 = none.</summary>
+    public int LauncherGroupOrder { get; init; }
 
     /// <summary>Where the tile opens: the entry point, else the root.</summary>
     public string OpenPath => string.IsNullOrWhiteSpace(EntryPoint) ? Path : EntryPoint!.Trim('/');
@@ -196,6 +221,18 @@ public sealed class AppDirectory
 
     /// <summary>The Settings built-in's id (the person app at <c>/{viewer}/Settings</c>).</summary>
     public const string SettingsId = "Settings";
+
+    /// <summary>
+    /// The launcher group the platform's own settings tiles — the person app and Administration —
+    /// sit in. One group, last: <see cref="LastGroupOrder"/>.
+    /// </summary>
+    public const string SettingsGroup = "Settings";
+
+    /// <summary>
+    /// The <see cref="App.GroupOrder"/> that sorts a group after every group with no preference.
+    /// Large and fixed so a package declaring <c>launcherGroupOrder</c> below it stays above Settings.
+    /// </summary>
+    public const int LastGroupOrder = 1000;
 
     /// <summary>The Inbox built-in's id (the Inbox area on the viewer's own hub).</summary>
     public const string InboxId = "Inbox";
@@ -460,7 +497,12 @@ public sealed class AppDirectory
             .Where(r => !builtInIds.Contains(r.Path))
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.Path, StringComparer.OrdinalIgnoreCase)
-            .Select(r => new AppDirectoryEntry(r.Path, r.Name, r.Icon, r.Description, r.Category, r.OpenPath));
+            .Select(r => new AppDirectoryEntry(
+                r.Path, r.Name, r.Icon, r.Description, r.LauncherGroup ?? r.Category, r.OpenPath)
+            {
+                GroupDeclared = r.LauncherGroup is not null,
+                GroupOrder = r.LauncherGroupOrder,
+            });
         return builtIns.AddRange(apps);
     }
 
@@ -480,17 +522,21 @@ public sealed class AppDirectory
         var settingsPath = $"{viewer}/{MeshNodeLayoutAreas.SettingsArea}";
         var settings = person is { Name.Length: > 0 }
             ? new AppDirectoryEntry(SettingsId, person.Name, person.Icon ?? SettingsIcon,
-                LocalizationCatalog.Get(PersonSettingsDescriptionKey, person.Locale), null,
+                LocalizationCatalog.Get(PersonSettingsDescriptionKey, person.Locale), SettingsGroup,
                 settingsPath, LabelKey: null, BuiltIn: true)
-            : new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, null,
+            : new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, SettingsGroup,
                 settingsPath, LabelKey: "common.settings", BuiltIn: true);
+        // The settings tiles sit in ONE group, last (maintainer, 2026-10-18: "all the settings at
+        // bottom under Settings"); the Inbox stays top-level, in no group.
+        settings = settings with { GroupDeclared = true, GroupOrder = LastGroupOrder };
         var list = ImmutableList.Create(
             settings,
             new AppDirectoryEntry(InboxId, "Inbox", UserActivityLayoutAreas.InboxIcon, null, null,
                 $"{viewer}/{InboxLayoutArea.AreaName}", LabelKey: UserActivityLayoutAreas.InboxLabelKey, BuiltIn: true));
         return isGlobalAdmin
-            ? list.Add(new AppDirectoryEntry(AdminId, "Administration", SettingsIcon, null, null,
-                AdminAppNodeType.Path, LabelKey: "adminApp.title", BuiltIn: true))
+            ? list.Add(new AppDirectoryEntry(AdminId, "Administration", SettingsIcon, null, SettingsGroup,
+                AdminAppNodeType.Path, LabelKey: "adminApp.title", BuiltIn: true)
+            { GroupDeclared = true, GroupOrder = LastGroupOrder })
             : list;
     }
 
@@ -523,6 +569,13 @@ public sealed class AppDirectory
         var hostedIn = Property(content, "hostedIn") is { ValueKind: JsonValueKind.String } h
             ? h.GetString()
             : null;
+        var launcherGroup = Property(content, "launcherGroup") is { ValueKind: JsonValueKind.String } g
+            ? g.GetString()?.Trim()
+            : null;
+        var groupOrder = Property(content, "launcherGroupOrder") is { ValueKind: JsonValueKind.Number } o
+            && o.TryGetInt32(out var parsedOrder)
+            ? parsedOrder
+            : 0;
         return new AppRoot(
             node.Path,
             string.IsNullOrWhiteSpace(node.Name) ? node.Path : node.Name!,
@@ -532,6 +585,8 @@ public sealed class AppDirectory
             string.IsNullOrWhiteSpace(entryPoint) ? null : entryPoint)
         {
             HostedIn = string.IsNullOrWhiteSpace(hostedIn) ? null : hostedIn.Trim(),
+            LauncherGroup = launcherGroup,
+            LauncherGroupOrder = groupOrder,
         };
     }
 
