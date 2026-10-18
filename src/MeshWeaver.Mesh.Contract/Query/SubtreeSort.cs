@@ -1,5 +1,3 @@
-using System.Text.RegularExpressions;
-
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -45,23 +43,21 @@ public static class SubtreeSort
         => orderBy is not null
            && string.Equals(orderBy.Property, SubtreeLastModified, StringComparison.OrdinalIgnoreCase);
 
-    // Only the subtree selector's own token, with an optional direction — never any other sort:,
-    // so a query is otherwise passed through exactly as written.
-    private static readonly Regex SortToken = new(
-        @"(?<=^|\s)sort:subtreeLastModified(-(asc|desc))?(?=\s|$)",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-
     /// <summary>
-    /// <paramref name="query"/> without its <c>sort:subtreeLastModified</c> token — the CANDIDATE
-    /// query. No backend can order by the key, so it must not clip by an order it cannot compute.
+    /// <paramref name="query"/> without ANY <c>sort:</c> term — the CANDIDATE query. No backend can
+    /// order by the key, so it must not clip by an order it cannot compute; the engine orders.
+    ///
+    /// <para>🚨 Cut by the parser's own tokenizer (<see cref="QueryParser.RemoveQualifier"/>), never
+    /// a pattern: <c>sort:"subtreeLastModified-desc"</c> parses to the same ordering, and a regex
+    /// that missed the quoted spelling left the candidate query asking for the subtree sort again —
+    /// an engine that re-entered itself until the stack overflowed. Every <c>sort:</c> goes, so the
+    /// candidate query provably has no ordering of its own. Every other byte is kept verbatim
+    /// (<c>name:"A  B"</c> keeps both spaces).</para>
     /// </summary>
     /// <param name="query">A query string.</param>
-    /// <returns>The same query with the subtree sort token removed.</returns>
+    /// <returns>The same query with its <c>sort:</c> terms removed.</returns>
     public static string WithoutSort(string query)
-        => string.IsNullOrEmpty(query)
-            ? query
-            : string.Join(' ', SortToken.Replace(query, " ")
-                .Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        => new QueryParser().RemoveQualifier(query, "sort");
 
     /// <summary>
     /// The read whose newest row is the key of <paramref name="path"/>: its strict descendants,
@@ -69,6 +65,10 @@ public static class SubtreeSort
     /// </summary>
     /// <param name="path">The candidate node's path.</param>
     /// <returns>The descendants query string.</returns>
+    /// <remarks>The path is written as a quoted LITERAL (<see cref="QueryParser.QuoteLiteral"/>):
+    /// spliced bare, <c>acme/Project Files</c> split into a namespace and a free-text term, and a
+    /// <c>|</c> or <c>*</c> in a path turned the read into an alternation or a glob — a key read over
+    /// a different set of rows than the node's own descendants.</remarks>
     public static string NewestDescendantQuery(string path)
-        => $"namespace:{path} scope:descendants sort:lastModified-desc limit:1";
+        => $"namespace:{QueryParser.QuoteLiteral(path)} scope:descendants sort:lastModified-desc limit:1";
 }

@@ -442,8 +442,8 @@ namespace:ACME/Projects sort:subtreeLastModified-desc limit:10                 #
 row, so a provider's `ORDER BY … LIMIT` (and the in-memory provider's pre-cap sort, and the merge's
 re-sort) would key every row null and clip in path order — the wrong rows, before any later stage
 could see the right ones. So the **query engine** computes it (`MeshQuery`, the
-`SubtreeSort` contract in `MeshWeaver.Mesh.Contract`): it runs the query **without** the selector
-and the window, reads one key per candidate through the same surface and identity (eight at a
+`SubtreeSort` contract in `MeshWeaver.Mesh.Contract`): it runs the query **without** any `sort:`
+(cut by the parser's own tokenizer, so a quoted `sort:"…"` goes too) and the window, reads one key per candidate through the same surface and identity (eight at a
 time), orders by the `QuerySortKey` contract above, and only then applies `skip` / `limit`. It
 therefore works identically on every backend — in-memory, Postgres, any other — with no backend
 change, and on Postgres each key read is one partition-pinned `limit:1` read.
@@ -456,9 +456,19 @@ read once per document in the mesh to keep twenty). So it refuses: past
 an error naming the bound and the remedy — narrow the query to the containers you mean to rank —
 rather than paying that silently or ordering a subset and presenting it as the whole.
 
-**Two limits worth knowing.** The order is computed on the **snapshot**: a change below a
-container does not re-emit the container itself, so a live list re-ranks when it is re-queried,
-not on every descendant write. And the hub-side synced read (`hub.GetQuery`, `workspace.GetQuery`)
+**Live results stay inside the window.** The candidate read is unlimited, so its live deltas
+name rows on and off the page alike. The engine keeps every candidate and its key, folds each
+delta in (one key read per changed candidate), re-takes the window and emits it as a **`Reset`**
+whenever its membership, order or one of its rows changed — so a `limit:2` list never grows to
+three, an added container is ranked into the window, and a deleted one is backfilled. A key read
+that did not complete (a silent provider, a `SnapshotIncomplete` frame) marks the ranked frame
+`SnapshotIncomplete` too: a ranking resting on a partial read is a floor and says so. The
+candidate path is written into each key read as a quoted literal, so a space, `|` or `*` in a
+path is data, never syntax.
+
+**Two limits worth knowing.** A change below a container does not re-emit the container itself,
+so a live list re-ranks on changes to the candidates and when it is re-queried, not on every
+descendant write. And the hub-side synced read (`hub.GetQuery`, `workspace.GetQuery`)
 hands back a path-keyed SET, as it does for every `sort:` — the order reaches readers of the
 query stream itself, which is what `MeshSearchControl` renders. To list containers by last
 activity in a page, see [Mesh Search](/Doc/GUI/MeshSearch) → *Listing containers by last
