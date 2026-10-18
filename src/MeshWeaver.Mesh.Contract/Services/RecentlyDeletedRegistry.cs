@@ -531,8 +531,9 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             {
                 if (!existing.IsAbortMark)
                     // The same delete asked twice: one seal — unless the activation that took it was
-                    // torn down and is fencing. A re-ask then gets no seal: the fence answers the delete.
-                    return !existing.IsFencing;
+                    // torn down and is fencing (a re-ask then gets no seal: the fence answers the
+                    // delete), or the delete's verdict already released it.
+                    return !existing.IsFencing && !existing.IsSettled;
                 // The abort arrived first. Consume its mark; the delete is over.
                 if (_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, existing)))
                 {
@@ -593,6 +594,8 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             {
                 if (seal.IsAbortMark || !string.Equals(seal.Path, path, StringComparison.OrdinalIgnoreCase))
                     return false;
+                if (seal.IsSettled)
+                    return false; // another release claimed it and is removing it
                 if (seal.IsFencing)
                     return ReleaseFencingSeal(sealId, seal, outcome);
                 if (string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal)
@@ -605,8 +608,13 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
                     ReleaseThroughFence(sealId, seal);
                     return true;
                 }
-                if (!_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal)))
+                // 🚨 Claim the HELD seal atomically: a concurrent teardown that begins fencing first
+                // makes this fail, and the loop then hands the verdict to the running fence
+                // (ReleaseFencingSeal) — never removes the entry from under it, which would leave the
+                // fence running without the delete's verdict.
+                if (!seal.TryClaimHeld())
                     continue;
+                _ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal));
                 if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal))
                     MarkDeleted(seal.Path);
                 // Detach from the owner's lifetime; a teardown release is already running inside it.
@@ -800,8 +808,11 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         public string? Terminal => Volatile.Read(ref _terminal);
 
         public bool IsFencing => Volatile.Read(ref _phase) is 1 or 2;
+        public bool IsSettled => Volatile.Read(ref _phase) == 3;
         public bool FenceFailed => Volatile.Read(ref _phase) == 2;
         public bool TryBeginFencing() => Interlocked.CompareExchange(ref _phase, 1, 0) == 0;
+        /// <summary>Held → settled by a terminal release; mutually exclusive with <see cref="TryBeginFencing"/>.</summary>
+        public bool TryClaimHeld() => Interlocked.CompareExchange(ref _phase, 3, 0) == 0;
         public void MarkFenceFailed() => Interlocked.CompareExchange(ref _phase, 2, 1);
         public bool TryRetryFence() => Interlocked.CompareExchange(ref _phase, 1, 2) == 2;
         public bool TrySettle() => Interlocked.Exchange(ref _phase, 3) != 3;

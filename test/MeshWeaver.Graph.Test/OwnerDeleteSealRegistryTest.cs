@@ -195,4 +195,56 @@ public class OwnerDeleteSealRegistryTest
         settled.Should().BeTrue();
         registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
     }
+
+    /// <summary>
+    /// Review round 5: a commit release and the owner's teardown RACE. Before, the commit could read
+    /// "not fencing", the teardown could then begin fencing, and the commit still removed the entry —
+    /// so the running fence never heard the delete's verdict (and a late "row gone" could tombstone a
+    /// path the caller had already recreated). Now claiming the held seal and beginning to fence are
+    /// one atomic choice: whichever wins, a fence that runs always receives the verdict. Raced on two
+    /// threads, many times; each round must end in one of the two consistent states.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void ACommitRacingTheOwnersTeardown_AlwaysReachesARunningFence()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        for (var round = 0; round < 3000; round++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var registry = new RecentlyDeletedRegistry();
+            var owner = new FakeLifetime();
+            var fence = new System.Reactive.Subjects.AsyncSubject<bool>();
+            Func<bool>? stop = null;
+            registry.TakeOwnerDeleteSeal($"race-{round}", Path, owner.Bind, s =>
+            {
+                stop = s;
+                return fence;
+            }).Should().BeTrue();
+
+            var go = 0;
+            var committer = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                registry.ReleaseOwnerDeleteSeal($"race-{round}", Path, DeleteSealOutcome.Committed);
+            });
+            var teardown = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                owner.OnTeardown.Dispose();
+            });
+            committer.Start();
+            teardown.Start();
+            System.Threading.Volatile.Write(ref go, 1);
+            committer.Join();
+            teardown.Join();
+
+            if (stop is not null)
+                stop().Should().BeTrue(
+                    $"round {round}: the teardown's fence ran, so the commit must have reached it — not removed the entry from under it");
+            registry.IsRecentlyDeleted(Path).Should().BeTrue($"round {round}: the commit tombstones the path either way");
+            fence.OnNext(false);
+            fence.OnCompleted();
+            registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse($"round {round}: everything settled");
+        }
+    }
 }
