@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -296,7 +297,7 @@ public class DefaultNodeNavigationTest
         // a literal escape in a level name stays as it is.
         DefaultNodeNavigation.ParseMore("Infrastructure/Inference:100").Should().Be(("Infrastructure/Inference", 100));
         DefaultNodeNavigation.ParseMore("Odd%2FName:100").Should().Be(("Odd%2FName", 100));
-        DefaultNodeNavigation.ParseMore("Infrastructure:50").Should().BeNull("never below the first batch");
+        DefaultNodeNavigation.ParseMore($"Infrastructure:{DefaultNodeNavigation.LevelCap}").Should().BeNull("never below the first batch");
         DefaultNodeNavigation.ParseMore("garbage").Should().BeNull();
         DefaultNodeNavigation.ParseMore(null).Should().BeNull();
         DefaultNodeNavigation.ParseMore("X:999999")!.Value.Cap.Should().Be(DefaultNodeNavigation.MaxCap, "bounded");
@@ -320,7 +321,7 @@ public class DefaultNodeNavigationTest
     [Fact]
     public void TheReadersOwnBranch_SurvivesTheCut()
     {
-        // Sixty siblings; the reader is on the 60th, past the 50-entry cut, and on its child.
+        // Sixty siblings; the reader is on the 60th, past the cut, and on its child.
         var siblings = Enumerable.Range(1, 60).Select(i => Node($"S/Item{i:D3}")).ToImmutableList();
         var page = Node("S/Item060");
         var child = Node("S/Item060/Detail");
@@ -331,11 +332,145 @@ public class DefaultNodeNavigationTest
 
         rows.Select(n => n.Path).Should().Contain("S/Item060", "the page the reader is on is never cut");
         rows.Count(n => n.Namespace == "S").Should().Be(DefaultNodeNavigation.LevelCap + 1,
-            "the level still shows its first 50, plus the reader's own entry");
+            "the level still shows its first LevelCap, plus the reader's own entry");
 
         var nav = DefaultNodeNavigation.Build("S", rows, "S/Item060/Detail")!;
         Paths(nav.Entries).Should().Contain("S/Item060/Detail",
             "the reader's child hangs from its parent instead of being orphaned");
+    }
+
+    private static MeshNode Stamped(string path, string name, int? order, int minutesAgo) =>
+        Node(path, name, order) with { LastModified = new DateTimeOffset(2026, 10, 18, 12, 0, 0, TimeSpan.Zero).AddMinutes(-minutesAgo) };
+
+    [Fact]
+    public void ALevelShowsTenAtFirst()
+    {
+        DefaultNodeNavigation.LevelCap.Should().Be(10, "the rail loads a short level, then Load more / Show all");
+        DefaultNodeNavigation.MoreStep.Should().Be(10);
+    }
+
+    [Fact]
+    public void TheDefaultOrderIsDeclaredOrderThenMostRecentlyModified()
+    {
+        ImmutableList<MeshNode> level =
+        [
+            Stamped("S/Old", "Aardvark", null, 300),
+            Stamped("S/Fresh", "Zebra", null, 1),
+            Stamped("S/Second", "Mid", 2, 900),
+            Stamped("S/First", "Yak", 1, 999),
+            Stamped("S/_Access", "internal", null, 0),
+        ];
+
+        DefaultNodeNavigation.VisibleInOrder(level).Select(n => n.Path)
+            .Should().Equal(["S/First", "S/Second", "S/Fresh", "S/Old"],
+                "declared Order first, then newest — never alphabetical (2026-10-18)");
+    }
+
+    [Fact]
+    public void EachSortModeOrdersTheLevelItsOwnWay()
+    {
+        ImmutableList<MeshNode> level =
+        [
+            Stamped("S/B", "Bravo", 1, 50),
+            Stamped("S/A", "Alpha", null, 10),
+            Stamped("S/C", "Charlie", null, 5),
+        ];
+
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Modified).Select(n => n.Id).Should().Equal("C", "A", "B");
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Name).Select(n => n.Id).Should().Equal("A", "B", "C");
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Order).Select(n => n.Id).Should().Equal("B", "C", "A");
+        var viewed = ImmutableDictionary<string, int>.Empty.Add("S/A", 0);
+        DefaultNodeNavigation.SortLevel(level, IndexSort.Viewed, viewed).Select(n => n.Id)
+            .Should().Equal(["A", "C", "B"], "opened first, then the never-opened newest first");
+    }
+
+    [Fact]
+    public void ALevelReadsOnlyWhatItShowsPlusOne_OrderedByTheStore()
+    {
+        var order = DefaultNodeNavigation.LevelQueries("S", IndexSort.Order, 10);
+        order.Should().HaveCount(2, "two keys are two legs: the ordered rows and the newest rows");
+        order.Should().OnlyContain(q => q.Contains("namespace:S ") && q.Contains("limit:11"),
+            "never the whole level — Cap + 1 rows says whether there is more");
+        order.Should().Contain(q => q.Contains("sort:order-asc"));
+        order.Should().Contain(q => q.Contains("sort:lastModified-desc"));
+        DefaultNodeNavigation.LevelQueries("S", IndexSort.Modified, 20).Should().ContainSingle()
+            .Which.Should().Contain("sort:lastModified-desc").And.Contain("limit:21");
+        DefaultNodeNavigation.LevelQueries("S", IndexSort.Name, 10).Should().ContainSingle()
+            .Which.Should().Contain("sort:name-asc");
+        var viewed = DefaultNodeNavigation.LevelQueries("S", IndexSort.Viewed, 10);
+        viewed[0].Should().Contain("source:accessed", "the ranking leg comes first — RankedRows.Union keeps its order");
+        viewed[1].Should().Contain("sort:lastModified-desc", "a page never opened is still listed");
+    }
+
+    [Fact]
+    public void SortTravelsInTheUrlAndRoundTrips()
+    {
+        foreach (var mode in Enum.GetValues<IndexSort>())
+            DefaultNodeNavigation.ParseSort($"Doc/Architecture:{DefaultNodeNavigation.SortToken(mode)}")
+                .Should().Be(("Doc/Architecture", mode));
+        DefaultNodeNavigation.ParseSort("Doc:bogus").Should().BeNull();
+        DefaultNodeNavigation.ParseSort(":name").Should().BeNull();
+        DefaultNodeNavigation.ParseSort(null).Should().BeNull();
+    }
+
+    [Fact]
+    public void ShowAllOpensTheLevelInTheMeshSearch()
+    {
+        var href = DefaultNodeNavigation.ShowAllHref("Doc/Architecture", IndexSort.Order);
+        href.Should().StartWith("/search?ns=Doc%2FArchitecture&hq=");
+        Uri.UnescapeDataString(href[(href.IndexOf("hq=", StringComparison.Ordinal) + 3)..])
+            .Should().Be("namespace:Doc/Architecture is:main sort:order-asc", "the level's direct children, not its subtree");
+    }
+
+    [Fact]
+    public void TheRankOfAnAccessOrderedReadFollowsTheStoreAndMovesAnOpenedPageToTheFront()
+    {
+        var rows = DefaultNodeNavigation.FoldRanked(DefaultNodeNavigation.RankedRows.Empty,
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = [Node("S/A"), Node("S/B"), Node("S/C")] });
+        rows.Rank.Should().Equal("S/A", "S/B", "S/C");
+
+        rows = DefaultNodeNavigation.FoldRanked(rows,
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Updated, Items = [Node("S/C")] });
+        rows.Rank.Should().Equal("S/C", "S/A", "S/B");
+
+        rows = DefaultNodeNavigation.FoldRanked(rows,
+            new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Removed, Items = [Node("S/A")] });
+        rows.Rank.Should().Equal("S/C", "S/B");
+        rows.Nodes.Keys.Order(StringComparer.Ordinal).Should().Equal("S/B", "S/C");
+    }
+
+    [Fact]
+    public void ALoadedLevelOffersItsSortDropdown_AndEndsWithLoadMoreAndShowAll()
+    {
+        NavSortOption[] options = [new("Order", "/Infrastructure?sort=Infrastructure:order", true)];
+        var levels = ImmutableDictionary<string, IndexLevel>.Empty
+            .Add("Infrastructure", new IndexLevel
+            {
+                Sort = IndexSort.Name,
+                MoreHref = "/Infrastructure/Options?more=Infrastructure:20",
+                ShowAllHref = "/search?ns=Infrastructure",
+                SortOptions = options,
+            })
+            .Add("Infrastructure/Inference", new IndexLevel { SortOptions = options });
+        var nav = DefaultNodeNavigation.Build("Infrastructure", Space(), "Infrastructure/Inference",
+            levels, new IndexLabels("Mehr laden", "Alle anzeigen", m => m.ToString()))!;
+
+        nav.Entries.Take(3).Select(e => e.Label).Should().Equal(["AI Inference", "Options & Decisions", "Platform"],
+            "the level renders in ITS sort — Name here");
+        (nav.Entries[^2].Label, nav.Entries[^2].Href).Should().Be(("Mehr laden", "/Infrastructure/Options?more=Infrastructure:20"));
+        (nav.Entries[^1].Label, nav.Entries[^1].Href).Should().Be(("Alle anzeigen", "/search?ns=Infrastructure"));
+        nav.SortOptions.Should().Equal(options, "the top level's dropdown sits on the menu");
+        nav.Entries.Single(e => e.Path == "Infrastructure/Inference").SortOptions.Should().Equal(options,
+            "a loaded folder offers the dropdown for its own children");
+        nav.Entries.Single(e => e.Path == "Infrastructure/Platform").SortOptions.Should().BeEmpty(
+            "a folder off the reader's path is not loaded, so there is nothing to sort");
+
+        var rail = SuppliedNavigationRail.Plan(nav, "Infrastructure/Inference");
+        rail.SortOptions.Should().Equal(options);
+        rail.Items.OfType<SuppliedNavigationRail.RailGroup>().Single(g => g.Path == "Infrastructure/Inference")
+            .SortOptions.Should().Equal(options);
+        rail.Items.OfType<SuppliedNavigationRail.RailLink>().Last().Href.Should().Be("/search?ns=Infrastructure",
+            "Show all links to the search, not to a node");
     }
 
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)
