@@ -705,6 +705,63 @@ things follow from the declaration rather than from anyone remembering it:
   into a file whose comments explain at length why it must not say that.
 - The gate above reds on the restored window on the very next pull request.
 
+## What the window SELECTS — modelled from acr-cli, and shipped dry-run first
+
+The flag checks above prove what a recorded step **says**. They do not prove what it would
+**delete**, and "the flags are right" and "only unreferenced artifacts older than 30 days are
+selected" are different claims. Only the second is what #3438 asks of the purge.
+
+So `lock-pinned-digests.py` carries `purge_selection`, a pure model of one `acr purge` invocation.
+It follows Azure/acr-cli's decision order as quoted in that script:
+
+- **A tag** is eligible when its age exceeds `--ago` and the **tag** is unlocked, unless
+  `--include-locked` is passed. `--keep N` then spares the N newest *eligible* tags. It runs after
+  the age filter.
+- **With `--untagged`, a manifest** left with no tag is deleted when it is older than `--ago` and
+  unlocked, and is not under an unlocked index that a tag or its age protects. A locked index is
+  skipped before that walk, so its children are judged on their own. That is the inversion
+  described above under *And a locked index does not protect its platform manifests*.
+- **`--dry-run`** selects the same set and deletes nothing.
+
+The self-test (ARM 40) drives the **committed** `purge-old-images.yaml` through that model. It
+runs over the fixture fleet after the lock planner has protected it, and every fixture artifact is
+400 days old, so only the protection can spare a referenced item. It asserts:
+
+- no referenced manifest or tag is selected;
+- nothing 30 days old or younger is selected;
+- an unreferenced 31-day-old tag and an unreferenced 31-day-old untagged manifest **are** selected,
+  so a window that selects nothing cannot pass;
+- a locked 400-day-old artifact is not selected.
+
+Negative controls show that each of these can fail. With no lock written, referenced items are
+selected. `--include-locked` selects them too. A 7-day window takes a 29-day-old tag, and `--keep 1`
+spares only the newest eligible tag.
+
+🚨 **It is a model of a tool this fleet does not own.** It shows the record is right against acr-cli's
+semantics as they were read. It does not show acr-cli still behaves that way. The only live answer
+to that is the task's own output on the real registry, so **the record ships with `--dry-run` on
+both steps of `purge-old-images`**. tasks.json declares this under `dryRun`, with a `liftWhen`.
+`--check-retention-record` reds in both directions: on a `--dry-run` that no declaration covers (a
+purge that deletes nothing reads like one that runs), and on a declaration over a step that would
+delete. ARM 40b asserts that the record as committed deletes nothing at all.
+
+**What the owner runs, in order.** Each step is a governed act on the control instance, and no
+agent files or approves it:
+
+1. Land the `Container Registry Tasks Contributor` grant for the operator identity through an
+   approved `InfraDeploy`. Without it, `RegistryRetention` cannot write the tasks.
+2. Run `RegistryRetention` for deployment `control` with `dryRun: true`. It reads the live tasks back
+   and shows the declared drift.
+3. Run `RegistryRetention` with `dryRun: false` and `confirmation: control`, then approve it. This
+   installs `--ago 30d --untagged --dry-run` with no `--keep` on the still-disabled task. Then
+   delete `recordAheadOfRegistry` in a core pull request.
+4. Lift `pause` and record `purge-old-images` as `Enabled` in a reviewed diff, then run another
+   approved `RegistryRetention` apply. The apply interlock refuses unless the lock lane's newest run
+   on main is green and under 36 hours old. The task now runs nightly **as a report**.
+5. Read back at least one nightly run. When nothing it lists is a tag or manifest the fleet
+   references, one reviewed diff drops `--dry-run` and the `dryRun` block together. Re-declare
+   `recordAheadOfRegistry`, and apply once more with approval.
+
 ## The re-enable interlock — the one edge this repository owns
 
 #3859's first acceptance criterion is *failed / unavailable / incomplete protection collection
@@ -738,8 +795,9 @@ not downstream of that night's protection verdict.
    names); whether **unbounded growth** is accepted as the policy, with a storage bound measured the
    way the ACR's is; and whether to build the **last-pulled receiver** the registry's notification
    socket is already wired for but pointed at nothing.
-1. **The decided window has not been APPLIED to the registry.** The record states it; the live
-   (disabled) task still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
+1. **The decided window has not been APPLIED to the registry.** The record states it, dry-run
+   first (see *What the window SELECTS* above for the owner's sequence); the live (disabled) task
+   still carries `--ago 7d --keep 10`. Applying it is the same act as lifting the
    pause, and it belongs to whoever owns the registry. Its cost is storage: dropping `--keep 10`
    and moving 7d → 30d retains strictly more, over five repositories that republish many times a
    day.
