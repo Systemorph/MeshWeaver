@@ -626,3 +626,27 @@ public sealed record PaymentMethodSetupCapabilities
                ?? PaymentMethodReuse.Unverified;
     }
 }
+
+/// <summary>
+/// An open setup's one-time client secret, as <see cref="IPaymentMethodSetupProvider.RevealClientSecret"/>
+/// hands it to the buyer's embedded form. 🚨 The secret is <see cref="JsonIgnoreAttribute">never
+/// serialized</see> and masked in <see cref="ToString"/>, like
+/// <see cref="PaymentMethodSetupSession.ClientSecret"/>: it reaches the buyer's browser through the
+/// renderer's own call into the provider's script, and nowhere else.
+/// </summary>
+public sealed record PaymentSetupClientSecret
+{
+    /// <summary>The setup the secret completes.</summary>
+    public required string SetupId { get; init; }
+
+    /// <summary>The one-time secret. Never serialized (and therefore not <c>required</c>, which System.Text.Json refuses on an ignored member).</summary>
+    [JsonIgnore]
+    public string Secret { get; init; } = "";
+
+    /// <summary>The provider's publishable key the in-page script loads with. Public by nature.</summary>
+    public string? ClientPublicKey { get; init; }
+
+    /// <inheritdoc />
+    public override string ToString() =>
+        $"PaymentSetupClientSecret {{ SetupId = {SetupId}, ClientPublicKey = {ClientPublicKey}, Secret = (redacted) }}";
+}
