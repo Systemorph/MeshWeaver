@@ -133,6 +133,30 @@ public partial class MeshQuery
         });
     }
 
+    /// <summary>
+    /// The ranked stream as <see cref="QueryResult"/> snapshots, for the snapshot surface
+    /// (<see cref="Query(MeshQueryRequest)"/>). Each snapshot is the current window IN RANK ORDER:
+    /// a full frame replaces it, a Removed takes rows out (the evictions that precede a Reset), and
+    /// a Removed is emitted as the smaller window so no snapshot exceeds the window either.
+    /// </summary>
+    private static IObservable<IReadOnlyCollection<QueryResult>> SubtreeSortedSnapshots(
+        IObservable<QueryResultChange<MeshNode>> ranked)
+        => ranked
+            .Scan((IReadOnlyList<QueryResult>)[], (window, change) => change.ChangeType switch
+            {
+                QueryChangeType.Initial or QueryChangeType.Reset => change.Items
+                    .Select((node, i) => QueryResult.FromNode(node,
+                        score: change.Scores is { } s && i < s.Count ? s[i] : 0.0))
+                    .ToList(),
+                QueryChangeType.Removed => window
+                    .Where(row => !change.Items.Any(node =>
+                        string.Equals(node.Path, row.Path, StringComparison.OrdinalIgnoreCase)))
+                    .ToList(),
+                // The ranking emits only full frames and evictions; anything else leaves the window.
+                _ => window,
+            })
+            .Select(window => (IReadOnlyCollection<QueryResult>)window);
+
     /// <summary>A subtree key and whether the read it came from was complete.</summary>
     private readonly record struct SubtreeKey(object? Key, bool Incomplete, IReadOnlyList<string>? SilentProviders);
 
@@ -152,19 +176,36 @@ public partial class MeshQuery
         private bool emittedIncomplete;
         private IReadOnlyList<string>? emittedSilent;
         private bool initialized;
+        // Deltas that arrived before the first full frame. A multi-provider merge forwards one
+        // provider's change while another is still loading; its combined Initial then carries the
+        // first provider's OLDER snapshot, so the deltas are replayed over it (review #4306596210).
+        private readonly List<QueryResultChange<T>> early = [];
         // The candidate read's own incompleteness, as of its last full frame.
         private bool candidatesIncomplete;
         private IReadOnlyList<string>? candidatesSilent;
 
         public IObservable<QueryResultChange<T>> Apply(QueryResultChange<T> change)
         {
-            // A batch that is not all nodes has nothing to key (the same guard ClipMergedInitial uses).
-            if (change.Items.Any(item => item is not MeshNode))
-                return Observable.Return(change);
+            // 🚨 A row that is not a node has no subtree to key. Passing the batch through would hand
+            // back an UNLIMITED, unranked result — the candidate read dropped skip and limit — so the
+            // node-only selector refuses it by name (review #4306596197).
+            if (change.Items.FirstOrDefault(item => item is not MeshNode) is { } stray)
+                return Observable.Throw<QueryResultChange<T>>(new InvalidOperationException(
+                    $"sort:{SubtreeSort.SubtreeLastModified} ranks mesh nodes by their descendants, and "
+                    + $"'{request.EffectiveQueries.FirstOrDefault()}' returned a {stray?.GetType().Name ?? "null"} row. "
+                    + "Narrow the query to nodes (a nodeType:, a namespace:) or sort by a field the row carries."));
 
             var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
             if (!full && !initialized)
-                return Observable.Empty<QueryResultChange<T>>();   // a delta before any frame has no window to change
+            {
+                early.Add(change);   // replayed over the first full frame
+                return Observable.Empty<QueryResultChange<T>>();
+            }
+            if (full && !initialized && early.Count > 0)
+            {
+                change = change with { Items = ReplayEarly(change), Scores = null };
+                early.Clear();
+            }
 
             if (change.ChangeType == QueryChangeType.Removed)
             {
@@ -206,6 +247,36 @@ public partial class MeshQuery
                     var touchesWindow = !full && keyed.Any(k => emitted.Any(e => SamePath(e, k.Item)));
                     return Window(change, forceEmit: full || touchesWindow);
                 });
+        }
+
+        /// <summary>
+        /// The first full frame's rows with the early deltas folded over them in arrival order: an
+        /// Added or Updated replaces or adds its row, a Removed takes it out.
+        /// </summary>
+        private IReadOnlyList<T> ReplayEarly(QueryResultChange<T> first)
+        {
+            var rows = new Dictionary<string, T>(StringComparer.OrdinalIgnoreCase);
+            var order = new List<string>();
+            void Put(T item)
+            {
+                if (PathOf(item) is not { } path)
+                    return;
+                if (!rows.ContainsKey(path))
+                    order.Add(path);
+                rows[path] = item;
+            }
+            foreach (var item in first.Items)
+                Put(item);
+            foreach (var delta in early)
+                foreach (var item in delta.Items)
+                    if (delta.ChangeType == QueryChangeType.Removed)
+                    {
+                        if (PathOf(item) is { } path)
+                            rows.Remove(path);
+                    }
+                    else
+                        Put(item);
+            return order.Where(rows.ContainsKey).Select(path => rows[path]).ToList();
         }
 
         /// <summary>

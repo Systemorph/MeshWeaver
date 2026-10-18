@@ -380,6 +380,7 @@ public class SubtreeLastModifiedSortTest
         // Waiting for the held read to be ASKED FOR proves the candidate stream is subscribed (it
         // already delivered the Initial being ranked), so the push cannot be lost at the source.
         await requested.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        await live.CandidatesSubscribed.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         live.Add(Child("Kickoff", "Epsilon", Day(40)));
         live.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
         release.OnNext(System.Reactive.Unit.Default);
@@ -436,6 +437,102 @@ public class SubtreeLastModifiedSortTest
             .SnapshotIncomplete.Should().BeTrue("a complete-looking ranking must not rest on an incomplete read");
     }
 
+    /// <summary>
+    /// A candidate batch carrying a row that is not a node is refused by name (review #4306596197).
+    /// Passed through, it came back UNLIMITED and unranked — the candidate read had dropped skip and
+    /// limit — so three rows answered a <c>Skip = 1, Limit = 1</c> request.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ABatchWithANonNodeRowIsRefused_NotReturnedUnlimited()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var query = await Engine(Fixture, ct, provider => new StrayRowCandidates(provider));
+        var outcome = await query.Query<object>(
+                new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Skip = 1, Limit = 1 }, Options)
+            .Select(change => change.Items.Count.ToString())
+            .Catch<string, InvalidOperationException>(error => Observable.Return(error.Message))
+            .FirstAsync()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        outcome.Should().Contain("ranks mesh nodes", "a non-node row has no subtree, so the request is refused, not answered unlimited");
+    }
+
+    /// <summary>Candidate reads answer one extra row that is not a node.</summary>
+    private sealed class StrayRowCandidates(IMeshQueryProvider inner) : DelegatingProvider(inner)
+    {
+        public override IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => request.Query.StartsWith("namespace:\"", StringComparison.Ordinal)
+                ? Inner.Query<T>(request, options)
+                : Inner.Query<T>(request, options).Select(c => c.ChangeType == QueryChangeType.Initial
+                    ? c with { Items = [.. c.Items, (T)(object)"not a node"], Scores = null }
+                    : c);
+    }
+
+    /// <summary>
+    /// A delta the multi-provider merge forwards BEFORE its combined Initial — one provider answered
+    /// and changed while another was still loading — is ranked, not dropped (review #4306596210).
+    /// The combined Initial still carries the first provider's older snapshot, so the delta has to
+    /// be replayed over it.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ADeltaBeforeTheCombinedInitialIsReplayedOverIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fast = new LiveProvider(Fixture);
+        var slow = new SlowEmptyProvider();
+        var query = (IMeshQueryCore)new MeshQuery([fast, slow], hub: null!);
+        var frames = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
+        using var subscription = query.Query<MeshNode>(
+                new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Limit = 2, UserId = "viewer" }, Options)
+            .Subscribe(frames);
+
+        // The fast provider has answered (its candidate read is live); the slow one has not.
+        await fast.CandidatesSubscribed.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        fast.Add(Child("Kickoff", "Epsilon", Day(40)));
+        fast.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
+        slow.Release.OnNext(System.Reactive.Unit.Default);
+
+        var ranked = await frames
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Select(c => string.Join(",", c.Items.Select(n => n.Id)))
+            .FirstAsync(ids => ids.Contains("Epsilon"))
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        ranked.Should().Be("Epsilon,Gamma", "the early Added is folded over the combined Initial and ranked");
+    }
+
+    /// <summary>A second provider whose candidate Initial (empty) waits for <see cref="Release"/>.</summary>
+    private sealed class SlowEmptyProvider : IMeshQueryProvider
+    {
+        private readonly System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> release = new(1);
+
+        public IObserver<System.Reactive.Unit> Release => release;
+
+        public string Name => "slow";
+
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
+
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+        {
+            var empty = new QueryResultChange<T> { ChangeType = QueryChangeType.Initial, Items = [], Timestamp = DateTimeOffset.UtcNow };
+            return request.Query.StartsWith("namespace:\"", StringComparison.Ordinal)
+                ? Observable.Return(empty)
+                : release.Take(1).Select(_ => empty).Concat(Observable.Never<QueryResultChange<T>>());
+        }
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => Observable.Return((IReadOnlyCollection<QueryResult>)Array.Empty<QueryResult>());
+
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => Observable.Return<T?>(default);
+    }
+
     /// <summary>Key reads (the <c>namespace:"…" scope:descendants</c> reads) answer incomplete.</summary>
     private sealed class IncompleteKeyReads(IMeshQueryProvider inner) : DelegatingProvider(inner)
     {
@@ -458,6 +555,10 @@ public class SubtreeLastModifiedSortTest
 
         private readonly Dictionary<string, (System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> Release, System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> Requested)> held = new(StringComparer.Ordinal);
         private readonly HashSet<string> incomplete = new(StringComparer.Ordinal);
+        private readonly System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> candidatesSubscribed = new(1);
+
+        /// <summary>Fires once a candidate read is SUBSCRIBED to the deltas, so a push cannot be lost.</summary>
+        public IObservable<System.Reactive.Unit> CandidatesSubscribed => candidatesSubscribed;
 
         public void Add(MeshNode node) { lock (rows) rows.Add(node); }
 
@@ -498,7 +599,13 @@ public class SubtreeLastModifiedSortTest
             {
                 MeshNode[] clients;
                 lock (rows) clients = [.. rows.Where(r => r.NodeType == "Client")];
-                return (IObservable<QueryResultChange<T>>)(object)deltas
+                var listening = Observable.Create<QueryResultChange<MeshNode>>(observer =>
+                {
+                    var subscription = deltas.Subscribe(observer);
+                    candidatesSubscribed.OnNext(System.Reactive.Unit.Default);
+                    return subscription;
+                });
+                return (IObservable<QueryResultChange<T>>)(object)listening
                     .StartWith(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = clients, Query = parsed, Timestamp = DateTimeOffset.UtcNow });
             }
             var ns = parsed.Path ?? "";

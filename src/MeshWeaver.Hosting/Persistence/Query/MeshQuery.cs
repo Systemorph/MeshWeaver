@@ -403,9 +403,13 @@ public partial class MeshQuery : IMeshQueryCore
     /// here never touches the mesh hub's action block.
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
-        // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
-        // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
-        => QueryPool.SubscribeThroughPool(WithMembers(matched => CombineAnswers(
+        // sort:subtreeLastModified — the providers cannot order by it (MeshQuery.SubtreeSort.cs), and
+        // MergeSnapshots would re-sort by score/path: the snapshot surface reads the RANKED stream.
+        => SubtreeSortOf(request) is not null
+            ? SubtreeSortedSnapshots(Query<MeshNode>(request))
+            // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
+            // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
+            : QueryPool.SubscribeThroughPool(WithMembers(matched => CombineAnswers(
             matched,
             p => p.Query(request, Options),
             MergeSnapshots,

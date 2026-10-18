@@ -58,6 +58,32 @@ public class SubtreeLastModifiedSortMeshTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
+    /// The snapshot surface (<see cref="QueryResult"/> rows) answers the same window in the same
+    /// order as the change surface (review #4306596226). It used to hand the selector to the
+    /// providers and re-sort by score and path, which never sees a subtree.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheSnapshotSurfaceAnswersTheRankedWindow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        foreach (var (window, expected) in new (string, string[])[]
+                 {
+                     ("", ["Gamma", "Beta", "Alpha"]),
+                     (" limit:2", ["Gamma", "Beta"]),
+                 })
+        {
+            var request = MeshQueryRequest.FromQuery($"namespace:{Org} nodeType:Group sort:subtreeLastModified-desc{window}");
+            var changes = await MeshQuery.Query<MeshNode>(request)
+                .Where(c => c.ChangeType == QueryChangeType.Initial)
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            var snapshot = await MeshQuery.Query(request)
+                .FirstAsync(rows => rows.Count > 0).Timeout(TestTimeouts.Convergence).Await(ct);
+            changes.Items.Select(n => n.Id).Should().Equal(expected, "control: the change surface ranks");
+            snapshot.Select(r => r.Id).Should().Equal(expected, $"the snapshot surface ranks the same window ('{window}')");
+        }
+    }
+
+    /// <summary>
     /// The window holds through <c>hub.GetQuery</c>, the synced cache a hub-side reader binds to
     /// (review #4306054491). That cache folds a <see cref="QueryChangeType.Reset"/> additively, so a
     /// container ranked into a <c>limit:2</c> window must evict the row it pushed out — or the cache
@@ -76,6 +102,16 @@ public class SubtreeLastModifiedSortMeshTest(ITestOutputHelper output) : Monolit
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
 
+        // Record BEFORE the create: the cache replays only its latest snapshot, so a transient
+        // over-limit snapshot emitted before a later subscription would escape the assertion.
+        var snapshots = cache
+            .Select(nodes => nodes.Select(n => n.Id).Order(StringComparer.Ordinal).ToArray())
+            .TakeUntil(ids => ids.Contains("Epsilon"))
+            .ToList()
+            .Timeout(TestTimeouts.Convergence)
+            .Replay();
+        using var recording = snapshots.Connect();
+
         // Created now, so its own stamp is newer than every fixture row: it enters at the top.
         await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
             .CreateNode(new MeshNode("Epsilon", Org) { Name = "Epsilon", NodeType = "Group" })
@@ -83,13 +119,8 @@ public class SubtreeLastModifiedSortMeshTest(ITestOutputHelper output) : Monolit
             .Await(ct);
 
         // Every snapshot until Epsilon lands, and the one it lands in: none may exceed the window.
-        var snapshots = await cache
-            .Select(nodes => nodes.Select(n => n.Id).Order(StringComparer.Ordinal).ToArray())
-            .TakeUntil(ids => ids.Contains("Epsilon"))
-            .ToList()
-            .Timeout(TestTimeouts.Convergence)
-            .Await(ct);
-        snapshots.Should().AllSatisfy(ids => ids.Length.Should().BeLessThanOrEqualTo(2));
-        snapshots[^1].Should().Equal(["Epsilon", "Gamma"], "Beta left the window and the cache dropped it");
+        var recorded = await snapshots.Await(ct);
+        recorded.Should().AllSatisfy(ids => ids.Length.Should().BeLessThanOrEqualTo(2));
+        recorded[^1].Should().Equal(["Epsilon", "Gamma"], "Beta left the window and the cache dropped it");
     }
 }
