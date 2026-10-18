@@ -1760,127 +1760,164 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                 EmitOnce(node);
             }, observer.OnError);
 
-            try
+            // An own write the OWNER's delete seal defers (#6856) waits here for the seal to lift, then
+            // re-runs this commit turn; disposed with the write's subscription.
+            var deferral = new System.Reactive.Disposables.SerialDisposable();
+            void Commit(bool deferredRetry)
             {
-                dsStream.Update(state =>
+                try
                 {
-                    var store = state ?? new EntityStore();
-                    var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
-                    if (collection is null)
-                        throw new InvalidOperationException(
-                            $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
-
-                    var current = string.IsNullOrEmpty(targetPath)
-                        ? collection.Instances.Values.OfType<MeshNode>().FirstOrDefault()
-                        : collection.Instances.Values.OfType<MeshNode>()
-                            .FirstOrDefault(n => string.Equals(n.Path, targetPath, StringComparison.OrdinalIgnoreCase));
-                    if (current == null)
-                        throw new InvalidOperationException(
-                            $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
-
-                    var updated = update(current);
-                    // 🚨 No-op completion. When the update makes no net change to the node
-                    // (a guard `return node`, an empty drain, or a lambda that rebuilds
-                    // IDENTICAL content), there is nothing to version and nothing to write:
-                    // the reduced stream emits nothing (DistinctUntilChanged drops an
-                    // identical value), the refStream subscription above never sees a second
-                    // emission and this observable would HANG forever — the host-hang behind
-                    // check_inbox's no-timeout TCS (InboxToolIntegrationTest
-                    // .CheckInbox_TwoCallsBackToBack exceeded the 90s blame-hang deadline →
-                    // test-host crash → shard abort). Complete the observable directly with
-                    // the unchanged node and skip the meaningless write.
-                    // 🚨 SerializedEquals is the load-bearing third check: record Equals is
-                    // reference-based for Content / collection fields, so a lambda that
-                    // rebuilds identical content slips past it — and every such "write"
-                    // minted a Version and persisted a history row for an edit that never
-                    // happened (the v1170-without-edits report).
-                    if (ReferenceEquals(updated, current) || Equals(updated, current)
-                        || MeshNode.SerializedEquals(current, updated, _jsonOptions))
+                    dsStream.Update(state =>
                     {
-                        EmitOnce(current);
-                        return null; // nothing to apply — true no-op
-                    }
-                    // 🚨 Version is the ONE reliable ordering field and it is stamped
-                    // by the OWNING hub here (this is an own write on the owner).
-                    // DateTime/LastModified is NOT a cross-machine clock, so it must
-                    // never drive reconciliation; the owner's monotonic Version does.
-                    // 🚨 The counter is the NODE's own — `current.Version + 1`, never the hub
-                    // clock (which counts unrelated messages and resets to 0 on reactivation,
-                    // stamping a LOWER version after a recycle → rollback + split-brain, #325).
-                    // See MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
-                    // Take the max with the version the update lambda RETURNED: a durable-truth
-                    // rebase (AdoptDurableTruth — the owner re-adopting a stored row that is
-                    // AHEAD of its in-memory state after a MonotonicWriteGuard refusal) hands
-                    // back a node carrying the stored Version; re-stamping it off the stale
-                    // in-memory `current` alone would discard that signal and keep minting
-                    // below the durable row forever. Ordinary lambdas (`current with {…}`)
-                    // carry current.Version, so the extra term is a no-op for them; version
-                    // restore writes Version = 0 and is likewise unaffected.
-                    if (adoptPersisted)
-                    {
-                        // 🚨 ADOPTION — an OBSERVATION of state that is ALREADY durable, so it
-                        // neither mints nor writes. See AdoptPersisted for the full contract.
-                        //
-                        // Forward-only, checked HERE against the authoritative in-turn `current`
-                        // (a caller-side check reads a snapshot that the action block may have
-                        // already moved past): a persisted snapshot may replace in-RAM state only
-                        // when it is STRICTLY NEWER. A lagged echo of our own write completes with
-                        // the unchanged node, so the in-RAM stream only ever moves forward.
-                        if (updated.Version <= current.Version)
+                        var store = state ?? new EntityStore();
+                        var collection = store.Collections.GetValueOrDefault(nameof(MeshNode));
+                        if (collection is null)
+                            throw new InvalidOperationException(
+                                $"MeshNode collection not found. Available: [{string.Join(", ", store.Collections.Keys)}]");
+
+                        var current = string.IsNullOrEmpty(targetPath)
+                            ? collection.Instances.Values.OfType<MeshNode>().FirstOrDefault()
+                            : collection.Instances.Values.OfType<MeshNode>()
+                                .FirstOrDefault(n => string.Equals(n.Path, targetPath, StringComparison.OrdinalIgnoreCase));
+                        if (current == null)
+                            throw new InvalidOperationException(
+                                $"MeshNode '{targetPath ?? "<own>"}' not found. Available: [{string.Join(", ", collection.Instances.Keys.Select(k => k.ToString()))}]");
+
+                        var updated = update(current);
+                        // 🚨 No-op completion. When the update makes no net change to the node
+                        // (a guard `return node`, an empty drain, or a lambda that rebuilds
+                        // IDENTICAL content), there is nothing to version and nothing to write:
+                        // the reduced stream emits nothing (DistinctUntilChanged drops an
+                        // identical value), the refStream subscription above never sees a second
+                        // emission and this observable would HANG forever — the host-hang behind
+                        // check_inbox's no-timeout TCS (InboxToolIntegrationTest
+                        // .CheckInbox_TwoCallsBackToBack exceeded the 90s blame-hang deadline →
+                        // test-host crash → shard abort). Complete the observable directly with
+                        // the unchanged node and skip the meaningless write.
+                        // 🚨 SerializedEquals is the load-bearing third check: record Equals is
+                        // reference-based for Content / collection fields, so a lambda that
+                        // rebuilds identical content slips past it — and every such "write"
+                        // minted a Version and persisted a history row for an edit that never
+                        // happened (the v1170-without-edits report).
+                        if (ReferenceEquals(updated, current) || Equals(updated, current)
+                            || MeshNode.SerializedEquals(current, updated, _jsonOptions))
                         {
                             EmitOnce(current);
-                            return null;
+                            return null; // nothing to apply — true no-op
                         }
-                        // The adopted version IS durable — record it on the same per-path
-                        // high-water HandleSaveMeshNode / FlushPendingOwnSave consult, so neither
-                        // the 200 ms persistence sampler nor the dispose-time flush writes this
-                        // observation back to storage (#1432; mechanism and soundness: #1249 /
-                        // PostCommitFlushRegistry). Recorded inside the commit turn, so an
-                        // adoption that did NOT apply never raises the mark.
-                        _workspace.Hub.ServiceProvider.GetService<PostCommitFlushRegistry>()
-                            ?.Record(updated.Path, updated.Version);
-                    }
-                    else
-                    {
-                        // 🚨 A VERSION-GUARDED DELETE OF THIS NODE IS IN FLIGHT (#6673) — refuse
-                        // the write IN THIS TURN. An own write is acknowledged from this commit,
-                        // before the persistence sampler stores it, so letting it commit here would
-                        // acknowledge a change the guarded delete — whose version comparison this
-                        // turn is serialised behind — is about to remove. Refused, the caller hears
-                        // "being deleted" and nothing was acknowledged. Checked AFTER the no-op gate
-                        // (an unchanged node acknowledges nothing) and never for an adoption (an
-                        // observation of state that is already durable).
-                        if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
-                            throw new SubtreeDeletionInFlightException(current.Path, current.Path);
-                        // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
-                        // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
-                        // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
-                        // version and left LastModified where the last CROSS-HUB write put it, so
-                        // every reader of "when did this node last change" (ThreadSupervisor's
-                        // quiet gauge, sort:LastModified-desc, the node page's Updated line) saw a
-                        // busy node as idle. Stamped after the no-op gate, so an unchanged node is
-                        // still not touched; never for an adoption, which is not a change.
-                        updated = ApplyAuditStamp(current, updated, auditContext, out _);
-                        updated = updated with
+                        // 🚨 Version is the ONE reliable ordering field and it is stamped
+                        // by the OWNING hub here (this is an own write on the owner).
+                        // DateTime/LastModified is NOT a cross-machine clock, so it must
+                        // never drive reconciliation; the owner's monotonic Version does.
+                        // 🚨 The counter is the NODE's own — `current.Version + 1`, never the hub
+                        // clock (which counts unrelated messages and resets to 0 on reactivation,
+                        // stamping a LOWER version after a recycle → rollback + split-brain, #325).
+                        // See MeshNode.NextVersion / Doc/Architecture/MeshNodeVersioning.md.
+                        // Take the max with the version the update lambda RETURNED: a durable-truth
+                        // rebase (AdoptDurableTruth — the owner re-adopting a stored row that is
+                        // AHEAD of its in-memory state after a MonotonicWriteGuard refusal) hands
+                        // back a node carrying the stored Version; re-stamping it off the stale
+                        // in-memory `current` alone would discard that signal and keep minting
+                        // below the durable row forever. Ordinary lambdas (`current with {…}`)
+                        // carry current.Version, so the extra term is a no-op for them; version
+                        // restore writes Version = 0 and is likewise unaffected.
+                        if (adoptPersisted)
                         {
-                            Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
-                        };
-                    }
-                    // Stamp BEFORE the commit — the echo subscription above only emits
-                    // once it can see this write's Version on the target node.
-                    System.Threading.Volatile.Write(ref stampedVersion, updated.Version);
-                    var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
-                    return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
-                        [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
-                        dsStream.StreamId));
-                }, observer.OnError);
-            }
-            catch (Exception ex)
-            {
-                observer.OnError(ex);
+                            // 🚨 ADOPTION — an OBSERVATION of state that is ALREADY durable, so it
+                            // neither mints nor writes. See AdoptPersisted for the full contract.
+                            //
+                            // Forward-only, checked HERE against the authoritative in-turn `current`
+                            // (a caller-side check reads a snapshot that the action block may have
+                            // already moved past): a persisted snapshot may replace in-RAM state only
+                            // when it is STRICTLY NEWER. A lagged echo of our own write completes with
+                            // the unchanged node, so the in-RAM stream only ever moves forward.
+                            if (updated.Version <= current.Version)
+                            {
+                                EmitOnce(current);
+                                return null;
+                            }
+                            // The adopted version IS durable — record it on the same per-path
+                            // high-water HandleSaveMeshNode / FlushPendingOwnSave consult, so neither
+                            // the 200 ms persistence sampler nor the dispose-time flush writes this
+                            // observation back to storage (#1432; mechanism and soundness: #1249 /
+                            // PostCommitFlushRegistry). Recorded inside the commit turn, so an
+                            // adoption that did NOT apply never raises the mark.
+                            _workspace.Hub.ServiceProvider.GetService<PostCommitFlushRegistry>()
+                                ?.Record(updated.Path, updated.Version);
+                        }
+                        else
+                        {
+                            // 🚨 A VERSION-GUARDED DELETE OF THIS NODE IS IN FLIGHT (#6673) — refuse
+                            // the write IN THIS TURN. An own write is acknowledged from this commit,
+                            // before the persistence sampler stores it, so letting it commit here would
+                            // acknowledge a change the guarded delete — whose version comparison this
+                            // turn is serialised behind — is about to remove. Refused, the caller hears
+                            // "being deleted" and nothing was acknowledged. Checked AFTER the no-op gate
+                            // (an unchanged node acknowledges nothing) and never for an adoption (an
+                            // observation of state that is already durable).
+                            //
+                            // 🚨 And DEFERRED, not refused, when the seal is held (#6856): the turn
+                            // returns no change and waits for the seal to lift. The deleter's commit (or
+                            // the owner's teardown) then refuses it — the node is gone, nothing was ever
+                            // acknowledged — and its abort re-runs this turn, which applies it. The seal
+                            // is held by the OWNER's process, so this holds whichever process deletes.
+                            if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
+                            {
+                                var sealedPath = current.Path;
+                                // A seal whose owner was torn down and whose store fence FAILED is still holding
+                                // this path: this write needs the answer, so the fence runs again — driven by the
+                                // write, never by a timer.
+                                versionGuard.RetryFailedFence(sealedPath);
+                                deferral.Disposable = versionGuard.VersionGuardLifted(sealedPath).Subscribe(
+                                    outcome =>
+                                    {
+                                        if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
+                                            || string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
+                                            observer.OnError(new SubtreeDeletionInFlightException(sealedPath, sealedPath));
+                                        else
+                                            Commit(deferredRetry: true);
+                                    },
+                                    observer.OnError);
+                                return null;
+                            }
+                            // 🚨 A path a delete went through is tombstoned, and NO own write may be
+                            // acknowledged on it — a deferred one re-running after its seal lifted, or a
+                            // fresh one on a still-live owner the delete's invalidation has not reached
+                            // yet: the save path drops a tombstoned path's writes ("delete wins"), so an
+                            // acknowledgement here would be one for a write that is never stored (#6856).
+                            if (versionGuard?.IsRecentlyDeleted(current.Path) == true)
+                                throw new SubtreeDeletionInFlightException(current.Path, current.Path);
+                            // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
+                            // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
+                            // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
+                            // version and left LastModified where the last CROSS-HUB write put it, so
+                            // every reader of "when did this node last change" (ThreadSupervisor's
+                            // quiet gauge, sort:LastModified-desc, the node page's Updated line) saw a
+                            // busy node as idle. Stamped after the no-op gate, so an unchanged node is
+                            // still not touched; never for an adoption, which is not a change.
+                            updated = ApplyAuditStamp(current, updated, auditContext, out _);
+                            updated = updated with
+                            {
+                                Version = MeshNode.NextVersion(Math.Max(current.Version, updated.Version))
+                            };
+                        }
+                        // Stamp BEFORE the commit — the echo subscription above only emits
+                        // once it can see this write's Version on the target node.
+                        System.Threading.Volatile.Write(ref stampedVersion, updated.Version);
+                        var newStore = store.Update(nameof(MeshNode), c => c.Update(updated.Id, updated));
+                        return dsStream.ApplyChanges(new EntityStoreAndUpdates(newStore,
+                            [new EntityUpdate(nameof(MeshNode), updated.Id, updated) { OldValue = current }],
+                            dsStream.StreamId));
+                    }, observer.OnError);
+                }
+                catch (Exception ex)
+                {
+                    observer.OnError(ex);
+                }
             }
 
-            return sub;
+            Commit(deferredRetry: false);
+            return new System.Reactive.Disposables.CompositeDisposable(sub, deferral);
         });
 
     /// <summary>

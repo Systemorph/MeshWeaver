@@ -99,7 +99,11 @@
 #      MeshWeaver.Graph.Test was the one after that: listed at 64 s, it measured 406 s solo on
 #      run 37158590539 (85% of the cap) and was killed at 480 s exit=124 on run 37159733607,
 #      still progressing through its classes (no TEST START without its TEST END). It runs in
-#      two parts since. Messaging.Hub.Test grew from 76 s in the old table to
+#      two parts since — and outgrew those too: on PR runs 39101376911 and 39125662679 part 1/2
+#      hit the 480 s cap exit=124 (the first FINISHED its classes at 480 s, the second was cut
+#      starting its last class), while part 2/2 measured 250 s; locally the same half measured
+#      304-325 s on main and on the PR alike, so this is growth, not a hang. It runs in three
+#      parts since. Messaging.Hub.Test grew from 76 s in the old table to
 #      428 s on each of the three green runs and 435 s on 37830774943; it now
 #      runs in two parts.
 #
@@ -147,7 +151,7 @@ WEIGHTS=$(cat <<'EOF'
 91 MeshWeaver.Data.Test
 435 MeshWeaver.Messaging.Hub.Test 2
 49 MeshWeaver.PluginTester.Test
-480 MeshWeaver.Graph.Test 2
+730 MeshWeaver.Graph.Test 3
 61 MeshWeaver.FaultInjection.Test
 20 MeshWeaver.Updates.Test
 600 MeshWeaver.Hosting.Test 3

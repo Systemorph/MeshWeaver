@@ -567,6 +567,8 @@ public static class MeshDataSourceExtensions
     {
         logger?.LogDebug("[SaveMeshNode] start path={Path} version={Version}",
             node.Path, node.Version);
+        // Resolved on the handler's turn: the write's error callback can run after teardown.
+        var sealRegistry = hub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         // Storage adapter's own Changes feed publishes the Updated event
         // (see IStorageAdapter.Changes / InMemoryStorageAdapter.Write) — no
         // separate fan-out from the handler.
@@ -588,6 +590,8 @@ public static class MeshDataSourceExtensions
                     // way, never fall through to the "persisted" log for a refused write.
                     if (saved is not null && saved.Version > written.Version)
                     {
+                        // Superseded by a newer durable row: nothing for the final flush to re-write.
+                        pending?.MarkPersisted(sampled);
                         if (hub.RunLevel <= MessageHubRunLevel.Started)
                             AdoptDurableTruth(hub, saved, written.Version, logger);
                         else
@@ -598,6 +602,7 @@ public static class MeshDataSourceExtensions
                                 written.Version, saved.Path, saved.Version);
                         return;
                     }
+                    pending?.MarkPersisted(sampled);
                     logger?.LogDebug("[SaveMeshNode] persisted path={Path} version={Version}",
                         saved?.Path, saved?.Version);
                 },
@@ -605,7 +610,12 @@ public static class MeshDataSourceExtensions
                 {
                     // Error, not Warning: an acknowledged own-node state is NOT durable. It stays
                     // pending (un-marked below) and is re-attempted — see the summary.
-                    var reattempted = pending?.MarkWriteFailed(sampled) == true;
+                    var reattempted = pending is not null
+                        && (ex is SubtreeDeletionInFlightException && sealRegistry is not null
+                            // A delete seal's row guard refused it (#6856): pending again, and if
+                            // the seal already lifted the sampler is nudged to post it.
+                            ? OnSealRefusedSave(pending, sampled, () => SealStillHolds(sealRegistry, node.Path))
+                            : pending.MarkWriteFailed(sampled));
                     logger?.LogError(ex,
                         "[SaveMeshNode] the store write of {Path} (version={Version}) FAILED — the state is "
                         + "not durable. {Disposition}",
@@ -943,6 +953,84 @@ public static class MeshDataSourceExtensions
     /// from inside the sampler's timer chain cannot recreate the TimerQueue-roots-the-hub
     /// leak the sampler's static-local-function shape exists to prevent.</para>
     /// </summary>
+    /// <summary>
+    /// The persistence sampler's decision of WHAT to post, separated so its ordering is testable:
+    /// every gated own state is tracked, every arrival — and every NUDGE (a delete seal lifted
+    /// without a delete, #6856) — is a payload-free trigger, and at each sample tick the sampler reads
+    /// the LATEST tracked state that has no dispatched save (<see cref="PendingOwnSave.TakeUnsaved"/>).
+    /// 🚨 No trigger carries a snapshot: a value captured anywhere else could be delivered after a
+    /// newer one and make the tick post an older state over a newer row. Reading at the tick, the
+    /// sampler can only ever post the newest state it has seen.
+    /// </summary>
+    /// <param name="gatedOwn">The own-node states that passed the sampler's gates.</param>
+    /// <param name="nudges">Payload-free requests to post the latest unsaved state again.</param>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="ticks">The sample ticks; null samples on <paramref name="interval"/>.</param>
+    /// <param name="interval">The sample interval when <paramref name="ticks"/> is null.</param>
+    /// <returns>The states to post, newest only.</returns>
+    internal static IObservable<MeshNode> OwnSaveTicks(
+        IObservable<MeshNode> gatedOwn, IObservable<System.Reactive.Unit> nudges, PendingOwnSave pending,
+        IObservable<long>? ticks, TimeSpan interval)
+    {
+        var triggers = gatedOwn
+            // 🚨 Track every save-worthy state BEFORE the Sample buffer: the dispose-time
+            // FlushPendingOwnSave persists the latest tracked state whose save was never dispatched,
+            // so a write acked inside the Sample window survives hub teardown (see PendingOwnSave).
+            .Do(pending.Track)
+            .Select(_ => System.Reactive.Unit.Default)
+            .Merge(nudges)
+            .Merge(pending.RefusalNudges);
+        return (ticks is null ? triggers.Sample(interval) : triggers.Sample(ticks))
+            .Select(_ => pending.TakeUnsaved())
+            .Where(node => node is not null)
+            .Select(node => node!);
+    }
+
+    /// <summary>
+    /// Dispatches one own save (#6856): the save is RESERVED (marked requested) BEFORE it is posted,
+    /// and the reservation is rolled back when the post is not accepted. Marked after the post, a
+    /// refusal that came back before the mark found nothing to unmark — the failure was then taken for
+    /// "superseded", the late mark recorded a failed save as dispatched, and a quiet node's
+    /// acknowledged state was never posted again.
+    /// </summary>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="node">The state to save.</param>
+    /// <param name="post">Posts the save; <c>true</c> when the hub accepted it.</param>
+    /// <returns><c>true</c> when the save was accepted.</returns>
+    internal static bool DispatchOwnSave(PendingOwnSave pending, MeshNode node, Func<MeshNode, bool> post)
+    {
+        pending.MarkRequested(node);
+        var accepted = post(node);
+        if (!accepted)
+            pending.MarkWriteFailed(node);
+        return accepted;
+    }
+
+    /// <summary>
+    /// A save refused by a delete seal's row guard (#6856). It becomes pending again — and when the
+    /// seal has ALREADY lifted (its abort nudge and sample tick ran before this refusal arrived, and
+    /// found the save still marked requested), the sampler is nudged now, so a quiet node's
+    /// acknowledged state is posted without waiting for another edit or the teardown flush. Checked
+    /// AFTER the save is unmarked: if the seal still holds here, its later lift nudges the sampler and
+    /// finds the save pending — either ordering schedules it exactly once, and a refusal while the seal
+    /// still holds schedules nothing (no retry loop against a sealed row).
+    /// </summary>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="sampled">The refused save's instance.</param>
+    /// <param name="sealStillHolds">Whether a seal still guards the path.</param>
+    /// <returns><c>true</c> when the refused save is pending again.</returns>
+    internal static bool OnSealRefusedSave(PendingOwnSave pending, MeshNode sampled, Func<bool> sealStillHolds)
+    {
+        if (!pending.MarkWriteFailed(sampled))
+            return false; // a newer save superseded it
+        if (!sealStillHolds())
+            pending.NudgeAfterRefusal();
+        return true;
+    }
+
+    private static bool SealStillHolds(RecentlyDeletedRegistry registry, string path)
+        => registry.IsVersionGuardedDeletionInFlight(path) || registry.IsUnderActiveDeletion(path, out string? _);
+
     internal sealed class PendingOwnSave
     {
         private volatile MeshNode? latest;
@@ -962,6 +1050,14 @@ public static class MeshDataSourceExtensions
         /// phase-advance <c>ShutdownRequest</c>s and the storage write runs on the
         /// mesh IO pool, which outlives the hub.</summary>
         public void MarkRequested(MeshNode node) => Volatile.Write(ref requested, node);
+
+        private readonly ISubject<Unit> _refusalNudges = Subject.Synchronize(new Subject<Unit>());
+
+        /// <summary>Nudges the sampler to post the latest unsaved state (see <see cref="OnSealRefusedSave"/>).</summary>
+        public void NudgeAfterRefusal() => _refusalNudges.OnNext(Unit.Default);
+
+        /// <summary>The nudges <see cref="NudgeAfterRefusal"/> sends; merged into the sampler's triggers.</summary>
+        public IObservable<Unit> RefusalNudges => _refusalNudges.AsObservable();
 
         /// <summary>
         /// The store write of <paramref name="node"/> FAILED: un-mark it, so the latest state reads
@@ -1000,6 +1096,26 @@ public static class MeshDataSourceExtensions
         /// <summary>The latest gated state whose save was never dispatched — or null when
         /// everything the sampler saw has a dispatched save. Reference identity is exact
         /// here: <c>Sample</c> forwards the same instance the gate chain stamped.</summary>
+        private MeshNode? persisted;
+
+        /// <summary>
+        /// Records that <paramref name="node"/>'s store write SUCCEEDED (or was superseded by a newer
+        /// durable row). The final flush trusts only this — never a dispatch reservation (#6856).
+        /// </summary>
+        public void MarkPersisted(MeshNode node) => Volatile.Write(ref persisted, node);
+
+        /// <summary>
+        /// The latest tracked state that is not known to be PERSISTED — what the dispose-time flush
+        /// writes. 🚨 A save reserved for dispatch is NOT persisted: its post can still be rejected
+        /// (the hub began shutting down) after this flush decided, and a flush that trusted the
+        /// reservation would leave an acknowledged state unsaved for good (#6856).
+        /// </summary>
+        public MeshNode? TakeUnpersisted()
+        {
+            var l = latest;
+            return l is null || ReferenceEquals(l, Volatile.Read(ref persisted)) ? null : l;
+        }
+
         public MeshNode? TakeUnsaved()
         {
             var l = latest;
@@ -1336,12 +1452,12 @@ public static class MeshDataSourceExtensions
             // keeps tracking so the dispose-time FlushPendingOwnSave persists the latest state —
             // teardown's DisposeImpl bounds the chain's lifetime via RegisterForDisposal(saveSub).
             static IDisposable InstallPersistenceSampler(
-                IObservable<MeshNode> own, OwnNodeCache nodeCache,
+                IObservable<MeshNode> own, IObservable<System.Reactive.Unit> resumeNudges, OwnNodeCache nodeCache,
                 WeakReference<IMessageHub> weakHub, TimeSpan interval,
                 PendingOwnSave pending)
             {
                 var sub = new System.Reactive.Disposables.SingleAssignmentDisposable();
-                sub.Disposable = own
+                sub.Disposable = OwnSaveTicks(own
                     // 🚨 Initial-load echo suppression: a state that ARRIVED from
                     // persistence/routing (reference-identical to PersistedSnapshot,
                     // stamped by MeshNodeTypeSource.BuildInstanceCollection) is already
@@ -1355,14 +1471,8 @@ public static class MeshDataSourceExtensions
                     // redundant (lossless) echo. See OwnNodeCache.PersistedSnapshot.
                     .Where(n => n != null && !nodeCache.IsDeleted
                         && !ReferenceEquals(n, nodeCache.PersistedSnapshot))
-                    .DistinctUntilChanged()
-                    // 🚨 Track every save-worthy state BEFORE the Sample buffer: the
-                    // dispose-time FlushPendingOwnSave persists the latest tracked state
-                    // whose save was never dispatched, so a write acked inside the Sample
-                    // window survives hub teardown (see PendingOwnSave). Holds only the
-                    // MeshNode — no hub reference enters the timer chain.
-                    .Do(pending.Track)
-                    .Sample(interval)
+                    .DistinctUntilChanged(),
+                        resumeNudges, pending, ticks: null, interval)
                     .Subscribe(node =>
                     {
                         if (nodeCache.IsDeleted) return;
@@ -1396,20 +1506,29 @@ public static class MeshDataSourceExtensions
                         // this gate chain runs in the same synchronous fan-out as the flush (and, having
                         // subscribed at hub init, runs BEFORE it), so nothing the flush stamps can be
                         // visible at this point. The handler reads the mark after the flush settled (#1249).
-                        var posted = saveHub.Post(new SaveMeshNodeRequest(node));
                         // Only a delivery the hub ACCEPTED counts as dispatched — Post returns
                         // Failed("Hub is shutting down") from the hoisted teardown guard when the
                         // RunLevel flipped between our check above and the post. An accepted
                         // delivery is FIFO-ordered ahead of the phase-advance ShutdownRequests,
                         // so its handler runs and the storage write lands on the IO pool.
                         // 🚨 WasAcceptedForDelivery, not `!= Failed` (MeshWeaver#1174): a post the
-                        // intake DROPPED comes back Ignored, and marking the save as requested then
-                        // records a write that was never enqueued.
-                        if (posted is { WasAcceptedForDelivery: true })
-                            pending.MarkRequested(node);
+                        // intake DROPPED comes back Ignored, and the reservation is rolled back.
+                        DispatchOwnSave(pending, node,
+                            n => saveHub.Post(new SaveMeshNodeRequest(n)) is { WasAcceptedForDelivery: true });
                     });
                 return sub;
             }
+
+            // Static: captures no hub (only the registry, the cache and the pending-save tracker), so
+            // the subscription the sampler holds on the mesh singleton's subject cannot pin a hub.
+            static IObservable<System.Reactive.Unit> SealRefusedSaveNudges(
+                RecentlyDeletedRegistry? registry, OwnNodeCache nodeCache, string path)
+                => registry is null
+                    ? Observable.Never<System.Reactive.Unit>()
+                    // The end of the LAST deletion guard on the path — a seal's lift or a subtree / row
+                    // deletion scope's end — never one kind only (#6856). A NUDGE, never a snapshot:
+                    // the sampler reads the newest state itself.
+                    : registry.DeletionGuardsLifted(path).Where(_ => !nodeCache.IsDeleted);
 
             // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
             // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
@@ -1428,8 +1547,15 @@ public static class MeshDataSourceExtensions
             if (FindServedStaticNode(hub.ServiceProvider, hub.Address.Path) is null)
             {
                 var pending = cache.PendingSave;
+                // 🚨 A save the OWNER's delete seal refused (its row guard, #6856) is re-dispatched
+                // when the seal lifts without a delete. An own write acknowledged before the seal can
+                // reach the sampler while the path is sealed; that write is refused, stays pending, and
+                // nothing else would retry it until the next change or the dispose flush. The retry
+                // goes THROUGH the sampler, never beside it, so own saves keep one poster and one order.
+                var resumeNudges = SealRefusedSaveNudges(
+                    hub.ServiceProvider.GetService<RecentlyDeletedRegistry>(), cache, hub.Address.Path);
                 var saveSub = InstallPersistenceSampler(
-                    ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
+                    ownStream, resumeNudges, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
                 hub.RegisterForDisposal(saveSub);
                 // 🚨 Final flush — the update-path twin of MeshNodeTypeSource's
                 // FlushPendingWrites dispose action (which covers creates/deletes). A write
@@ -1772,7 +1898,7 @@ public static class MeshDataSourceExtensions
         IStorageAdapter? persistence, RecentlyDeletedRegistry? recentlyDeleted,
         JsonSerializerOptions options, ILogger? logger)
     {
-        var node = pending.TakeUnsaved();
+        var node = pending.TakeUnpersisted();
         if (node is null || cache.IsDeleted || ReferenceEquals(node, cache.PersistedSnapshot))
             return Observable.Return(System.Reactive.Unit.Default);
 
