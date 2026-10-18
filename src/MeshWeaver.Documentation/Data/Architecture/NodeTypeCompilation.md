@@ -295,29 +295,34 @@ Use this to capture a named release with author-written `ReleaseNotes`.
 The watcher may consume a request without compiling — "satisfied by the existing current build" —
 when the record reads `Ok` and not `IsDirty`. `IsDirty` compares `CompiledSources` with
 `CurrentSourceVersions`, and `CurrentSourceVersions` is what the sources watcher publishes from the
-type's synced source query. That query trails a source write. A source edit commits on its own hub
-and reaches the query a moment later. So "edit, then press Compile" can land the request inside
-that window. The request is then stamped handled against the snapshot from before the edit, and
-nothing is dispatched. The snapshot arrives afterwards, and the record sits at `Ok` + `IsDirty`
-with its request spent. The edit is never built, and the Compile button appears to have done
-nothing. Measured on CI as the platform-compatibility ladder's rung 4 (`IsDirty = True`,
+type's synced source query. That query trails a source write: the edit commits on the source node's
+own hub and reaches the query a moment later. So "edit, then press Compile" could land the request
+inside that window. The request was then stamped handled against the snapshot from before the edit,
+nothing was dispatched, and the record sat at `Ok` + `IsDirty` with its request spent — the edit was
+never built. Measured on CI as the platform-compatibility ladder's rung 4 (`IsDirty = True`,
 `LastReleaseRequestHandledAt == RequestedReleaseAt`, the previous assembly). The race predates the
 day it was found: the deterministic repro fails on a build a day older as well.
 
-`InstallUnfulfilledReleaseRequestWatcher` closes it from the other side. A settled `Ok` record of a
-`Compiled` build with a source version written **at or before** `LastReleaseRequestHandledAt`, which
-its `CompiledSources` does not contain, carries an unfulfilled request. The watcher dispatches the
-compile that request asked for, through the one Pending door. Three cases are left alone:
+**The decision is now never drawn from a snapshot older than the request**
+(`NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent`). Before deciding, the watcher reads the
+LIVE version of every source the record names from that source's OWNER — one authoritative point
+read each, as System — which are the versions the request was made against. It then waits,
+reactively on the own node stream, until the published snapshot shows them (a path the owner no
+longer holds must be gone from it too), and only then runs the unchanged decision: satisfied,
+absorbed by the compile in flight, or dispatched. Waiting also means a dispatched compile is
+dispatched against a record that names the edit, so its source read cannot settle on the pre-edit
+set (a set older than the record is refused — "A compile NEVER runs against an unestablished source set" below).
+If a source's owner cannot be read, currency is unknown and the request is never treated as
+satisfied — it compiles. The legacy `CreateReleaseRequest` handler (`MeshDataSource.HandleCreateRelease`)
+decides `AlreadyUpToDate` through the same gate.
 
-- Sources written after the request belong to a later request. A healthy type still never
-  auto-compiles on an edit.
-- A version that is not an instant (the `Version` fallback) is never judged.
-- An adopted build's drift belongs to the adoption judgement.
+What it does NOT cover: a source ADDED in the window. The live read only asks for paths the record
+already names — a point read of an absent path is the storm shape — so discovering a new source is
+still the source query's job.
 
-It is bounded. The compile replaces `CompiledSources` with the set it consumed, and a failure settles
-at `Error`. The same request-and-snapshot pair is re-driven at most once per activation; a second
-match is logged at Error instead of dispatched. Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`
-(every edit-then-request is built; an edit with no request after it is not).
+Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`: every edit followed immediately by a
+request is built (fails on the pre-fix code on every run), and an edit with no request after it is
+not compiled.
 
 ### Re-triggering after a source edit
 

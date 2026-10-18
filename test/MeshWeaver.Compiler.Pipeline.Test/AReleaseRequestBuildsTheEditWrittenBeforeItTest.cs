@@ -25,6 +25,9 @@ namespace MeshWeaver.Compiler.Pipeline.Test;
 /// <c>LastReleaseRequestHandledAt == RequestedReleaseAt</c>, the old assembly) and, before the fix,
 /// reproduced here on every run: the second edit-then-request was absorbed.</para>
 ///
+/// <para>The fix is at the decision: it is drawn only once the published snapshot shows the
+/// versions the sources' owners hold (<c>NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent</c>).</para>
+///
 /// <para>The negative control is the other half of the rule: an edit with NO request after it is
 /// never compiled — a healthy type does not auto-compile on an edit.</para>
 /// </summary>

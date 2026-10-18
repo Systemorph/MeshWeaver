@@ -2719,7 +2719,7 @@ internal static class NodeTypeCompilationHelpers
         // trigger replayed by the fresh subscription fails the IsPast gate — no double compile.
         // Poisoned own content stops loudly (the compile watcher parks the type on the same
         // emission — the visible sink).
-        var requestWatcher = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+        return ActivityControlPlaneExtensions.SubscribeHubWatcher(
             hub,
             () => ownStream
             .Where(node => node?.Content is NodeTypeDefinition def
@@ -2760,7 +2760,17 @@ internal static class NodeTypeCompilationHelpers
                         hubPath, triggerAt,
                         node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseForce,
                         node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.LastReleaseRequestHandledAt);
-                    workspace.GetMeshNodeStream().Update(curr =>
+                    // 🚨 Decide only against a source snapshot at least as new as THIS REQUEST.
+                    // CurrentSourceVersions is published from a synced query that trails a source
+                    // write, so "edit, then Compile" could be judged "satisfied" against the
+                    // pre-edit snapshot and stamped handled with nothing dispatched — the edit was
+                    // then never built (PlatformCompatibilityLadderTest rung 4). The versions the
+                    // request is made against are read from each source's OWNER, and the decision
+                    // below waits until the published snapshot shows them. See
+                    // AwaitSourceSnapshotCurrent.
+                    var requestedAgainst = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)!;
+                    AwaitSourceSnapshotCurrent(hub, ownStream, requestedAgainst, hubPath, logger)
+                    .SelectMany(snapshot => workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
                         // 🚨 #1834 — fulfil a pending adoption stamp BEFORE the satisfied-branch
@@ -2822,7 +2832,7 @@ internal static class NodeTypeCompilationHelpers
                             // absorbing against an unknown input set would be a guess.
                             var requestedToken = BuildInputsToken(
                                 GuardsOf(hub).ModulesHash, def.CurrentSourceVersions);
-                            if (IsSatisfiedByInFlightCompile(def, requestedToken))
+                            if (snapshot.Established && IsSatisfiedByInFlightCompile(def, requestedToken))
                             {
                                 logger?.LogInformation(
                                     "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
@@ -2853,6 +2863,9 @@ internal static class NodeTypeCompilationHelpers
                         // RequestedReleaseForce stays the user's escape hatch: an explicit force
                         // always compiles.
                         if (!def.RequestedReleaseForce
+                            // A snapshot whose currency could not be established never satisfies
+                            // a request — compiling is the safe direction (AwaitSourceSnapshotCurrent).
+                            && snapshot.Established
                             && def.CompilationStatus is CompilationStatus.Ok
                             && !def.IsDirty
                             && HasUsableBuild(curr, def, GuardsOf(hub)))
@@ -2897,141 +2910,117 @@ internal static class NodeTypeCompilationHelpers
                                         : triggerAt
                             }
                         };
-                    }).Subscribe(
+                    })).Subscribe(
                         _ => { },
                         ex => logger?.LogWarning(ex,
                             "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
                 },
             logger,
             "ReleaseRequestWatcher");
-        return new CompositeDisposable(
-            requestWatcher,
-            InstallUnfulfilledReleaseRequestWatcher(hub, workspace, logger));
     }
 
     /// <summary>
-    /// 🚨 <b>A release request covers every source edit written BEFORE it</b> — the re-drive that
-    /// makes that true when the request was consumed against a source snapshot that had not yet
-    /// caught up with the edit.
-    ///
-    /// <para><b>The race.</b> <see cref="InstallReleaseRequestWatcher"/> decides "satisfied by the
-    /// existing current build" (and "absorbed by the compile in flight") from
-    /// <see cref="NodeTypeDefinition.CurrentSourceVersions"/>, the snapshot
-    /// <see cref="InstallSourcesWatcher"/> publishes from the type's synced source query. That query
-    /// trails a source write: the edit commits on the source node's own hub and reaches the query
-    /// through the change feed a moment later. A release request that lands inside that window —
-    /// the ordinary "edit, then press Compile" sequence, and exactly what the platform-compatibility
-    /// ladder test does — reads <c>IsDirty == false</c>, is stamped handled, and dispatches nothing.
-    /// The snapshot then arrives, the record reads <c>Ok</c> + <c>IsDirty</c> with its request
-    /// spent, and nothing ever builds the edit: the Compile button silently did nothing. Measured
-    /// on CI (PlatformCompatibilityLadderTest rung 4: <c>IsDirty = True</c>,
-    /// <c>LastReleaseRequestHandledAt == RequestedReleaseAt</c>, old assembly), and reproduced
-    /// deterministically by <c>AReleaseRequestBuildsTheEditWrittenBeforeItTest</c>.</para>
-    ///
-    /// <para><b>The rule.</b> On a settled <c>Ok</c> record whose last handled request is at or
-    /// after the write time of a source version the build does not contain, that request was not
-    /// fulfilled — dispatch the compile it should have dispatched. Sources written AFTER the
-    /// request stay a later request's business (a healthy type never auto-compiles on an edit), and
-    /// a version that is not an instant (<see cref="NodeTypeDefinition.UnknownSourceVersionTicks"/>,
-    /// a <c>Version</c> fallback) is never judged. Only a <see cref="BuildProvenance.Compiled"/> build is judged: an adopted build's
-    /// drift belongs to the adoption judgement, and a record with a pending adoption stamp has no
-    /// settled <c>CompiledSources</c> yet.</para>
-    ///
-    /// <para><b>Bounded.</b> The Pending flip stamps <see cref="NodeTypeDefinition.DispatchedBuildInputs"/>
-    /// and the compile's terminal write replaces <c>CompiledSources</c> with the set it consumed, so
-    /// the predicate is false once the edit is built. A compile that fails settles at <c>Error</c>
-    /// (the failed-verdict re-drive's ground, not this one's), and the same (request, snapshot)
-    /// pair is re-driven at most once per hub lifetime — a second match is logged at Error rather
-    /// than dispatched, so a non-converging rebuild is loud and never a storm.</para>
+    /// The outcome of <see cref="AwaitSourceSnapshotCurrent"/>: the NodeType's own node once its
+    /// published source snapshot is at least as new as the versions the sources' owners hold, and
+    /// whether that could be ESTABLISHED at all.
     /// </summary>
-    internal static IDisposable InstallUnfulfilledReleaseRequestWatcher(
-        IMessageHub hub, IWorkspace workspace, ILogger? logger)
+    /// <param name="Node">The own node to decide against.</param>
+    /// <param name="Established">False when a source's owner could not be read: the snapshot's
+    /// currency is then unknown, and no "already satisfied" / "already up to date" verdict may be
+    /// drawn from it — the caller compiles instead.</param>
+    public sealed record SourceSnapshotCurrency(MeshNode Node, bool Established);
+
+    /// <summary>
+    /// 🚨 <b>A release decision is never drawn from a source snapshot older than the request.</b>
+    ///
+    /// <para><see cref="NodeTypeDefinition.CurrentSourceVersions"/> is published by
+    /// <see cref="InstallSourcesWatcher"/> from the type's SYNCED source query, which trails a
+    /// source write: the edit commits on the source node's own hub and reaches the query through the
+    /// change feed a moment later. A release request written inside that window ("edit, then
+    /// Compile") read <c>IsDirty == false</c>, was stamped handled as "satisfied by the existing
+    /// current build", and dispatched nothing — the edit was never built.</para>
+    ///
+    /// <para>This reads the LIVE version of every source the record names from that source's OWNER
+    /// (one authoritative point read each, as System — the same identity the source-set read uses,
+    /// for the same self-call reason), i.e. the versions the request was made against, and emits the
+    /// own node the first time its published snapshot shows all of them (a path the owner no longer
+    /// holds must be gone from it too). Reactive: the own stream IS the wait, no timer. A source
+    /// whose owner cannot be read makes the result <see cref="SourceSnapshotCurrency.Established"/>
+    /// = false, emitted at once.</para>
+    ///
+    /// <para>Paths are taken from <see cref="NodeTypeDefinition.CurrentSourceVersions"/> only — a
+    /// path the mesh has published, never a guess (a point read of an absent path is the storm
+    /// shape). A source ADDED in the window is therefore not covered here; its discovery is the
+    /// source query's job.</para>
+    /// </summary>
+    /// <param name="hub">The NodeType's own hub.</param>
+    /// <param name="ownStream">The own node stream.</param>
+    /// <param name="requestedAgainst">The definition as the request was observed.</param>
+    /// <param name="hubPath">The NodeType path, for logs.</param>
+    /// <param name="logger">Logger.</param>
+    /// <returns>One emission: the own node to decide against.</returns>
+    public static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrent(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger)
     {
-        var hubPath = hub.Address.Path;
-        var ownStream = workspace.GetMeshNodeStream();
-        var redriven = System.Collections.Immutable.ImmutableHashSet<string>.Empty;
-        return ActivityControlPlaneExtensions.SubscribeHubWatcher(
-            hub,
-            () => ownStream
-                .Where(node => node?.Content is NodeTypeDefinition def
-                    && !IsStaticOnlyNodeType(node, def)
-                    && UnfulfilledReleaseRequestSource(def) is not null)
-                .DistinctUntilChanged(node => UnfulfilledReleaseRequestKey((NodeTypeDefinition)node!.Content!)),
-            node =>
+        var paths = requestedAgainst.CurrentSourceVersions?.Keys
+            .OrderBy(p => p, StringComparer.Ordinal).ToArray() ?? [];
+        var current = ownStream.Where(n => n?.Content is NodeTypeDefinition).Take(1)
+            .Select(n => new SourceSnapshotCurrency(n!, true));
+        if (paths.Length == 0)
+            return current;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => paths
+                .Select(path => hub.GetMeshNodeOutcome(path, onTimeout: ReadTimeoutBehavior.EmitNull)
+                    .Take(1)
+                    .Select(outcome => (Path: path, Outcome: outcome)))
+                .Merge()
+                .ToList())
+            .SelectMany(reads =>
             {
-                var def = (NodeTypeDefinition)node!.Content!;
-                var key = UnfulfilledReleaseRequestKey(def);
-                if (redriven.Contains(key))
+                var unreadable = reads.FirstOrDefault(r => r.Outcome.Status == NodeReadStatus.Unavailable);
+                if (unreadable.Path is not null)
                 {
-                    logger?.LogError(
-                        "[ReleaseRequestWatcher] {HubPath}: the release request handled at {Handled} is STILL "
-                        + "unfulfilled after one re-drive for the same source snapshot ({Source} not built) — "
-                        + "not dispatching again; the compile is not converging on the sources it was asked for",
-                        hubPath, def.LastReleaseRequestHandledAt, UnfulfilledReleaseRequestSource(def));
-                    return;
+                    logger?.LogWarning(
+                        "[ReleaseRequestWatcher] {HubPath}: the owner of source {Source} could not be read, so "
+                        + "whether the source snapshot is current is unknown — deciding as NOT up to date",
+                        hubPath, unreadable.Path);
+                    return current.Select(c => c with { Established = false });
                 }
-                redriven = redriven.Add(key);
-                logger?.LogInformation(
-                    "[ReleaseRequestWatcher] {HubPath}: the release request handled at {Handled} was consumed "
-                    + "before the source snapshot showed {Source}, written before it — dispatching the compile "
-                    + "it asked for",
-                    hubPath, def.LastReleaseRequestHandledAt, UnfulfilledReleaseRequestSource(def));
-                // A framework re-drive of a request whose writer was authorized when it wrote it —
-                // the same System scope the stale-build kickoff uses.
-                using var system = hub.ServiceProvider.GetService<AccessService>()?.ImpersonateAsSystem();
-                workspace.GetMeshNodeStream().Update(curr =>
-                {
-                    if (curr.Content is not NodeTypeDefinition live
-                        || UnfulfilledReleaseRequestSource(live) is null)
-                        return curr;
-                    return curr with { Content = DispatchPending(live, GuardsOf(hub).ModulesHash) };
-                }).Subscribe(
-                    _ => { },
-                    ex => logger?.LogWarning(ex,
-                        "[ReleaseRequestWatcher] {HubPath}: failed to re-drive an unfulfilled release request",
-                        hubPath));
-            },
-            logger,
-            "UnfulfilledReleaseRequestWatcher");
+                var live = System.Collections.Immutable.ImmutableDictionary.ToImmutableDictionary(
+                    reads,
+                    r => r.Path,
+                    r => r.Outcome.Node is { } n ? NodeTypeDefinition.SourceVersionOf(n) : (long?)null);
+                if (!SnapshotShows(requestedAgainst.CurrentSourceVersions, live))
+                    logger?.LogInformation(
+                        "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "
+                        + "— deciding once it shows the versions the sources' owners hold",
+                        hubPath, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
+                return ownStream
+                    .Where(n => n?.Content is NodeTypeDefinition d && SnapshotShows(d.CurrentSourceVersions, live))
+                    .Take(1)
+                    .Select(n => new SourceSnapshotCurrency(n!, true));
+            });
     }
 
-    /// <summary>
-    /// The source path whose version a handled release request should have built and the record's
-    /// build does not contain, or <c>null</c> when every request is fulfilled — see
-    /// <see cref="InstallUnfulfilledReleaseRequestWatcher"/>.
-    /// </summary>
-    /// <param name="def">The NodeType's definition.</param>
-    /// <returns>The first unbuilt source path written at or before the last handled request, or null.</returns>
-    internal static string? UnfulfilledReleaseRequestSource(NodeTypeDefinition def)
+    /// <summary>Whether <paramref name="snapshot"/> shows every live version (present at that
+    /// version or newer; an owner-absent path absent).</summary>
+    internal static bool SnapshotShows(
+        IReadOnlyDictionary<string, long>? snapshot, IReadOnlyDictionary<string, long?> live)
+        => FirstBehind(snapshot, live) is null;
+
+    private static string? FirstBehind(
+        IReadOnlyDictionary<string, long>? snapshot, IReadOnlyDictionary<string, long?> live)
     {
-        if (def.CompilationStatus is not CompilationStatus.Ok
-            // Only a build THIS mesh compiled: an adopted build's source drift is the adoption
-            // judgement's call (StaleAdopted keeps serving with CompiledSources cleared on a mesh
-            // that does not compile module content), never a compile this rule may force.
-            || def.BuildProvenance is not BuildProvenance.Compiled
-            || def.LastReleaseRequestHandledAt is not { } handled
-            || def.RequestedSourceStampAt is not null
-            || def.CurrentSourceVersions is not { Count: > 0 } current)
-            return null;
-        var handledTicks = handled.UtcTicks;
-        var compiled = def.CompiledSources;
-        foreach (var (path, version) in current.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        foreach (var (path, version) in live.OrderBy(kv => kv.Key, StringComparer.Ordinal))
         {
-            // Not an instant (an un-timestamped source falls back to its Version) — never judged.
-            if (version <= NodeTypeDefinition.UnknownSourceVersionTicks)
-                continue;
-            // Written after the request: a later request's business.
-            if (version > handledTicks)
-                continue;
-            if (compiled is not null && compiled.TryGetValue(path, out var built) && built >= version)
-                continue;
-            return path;
+            long published = 0;
+            var has = snapshot is not null && snapshot.TryGetValue(path, out published);
+            if (version is null ? has : !has || published < version.Value)
+                return path;
         }
         return null;
     }
-
-    private static string UnfulfilledReleaseRequestKey(NodeTypeDefinition def)
-        => $"{def.LastReleaseRequestHandledAt?.UtcTicks}|{SourceToken(def.CurrentSourceVersions)}|{SourceToken(def.CompiledSources)}";
 
     /// <summary>
     /// One pass of <see cref="InstallAdoptedSourceStampWatcher"/>'s write, as a pure function of the

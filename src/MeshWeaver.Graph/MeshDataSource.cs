@@ -1950,11 +1950,22 @@ public static class MeshDataSourceExtensions
         // hub, and the two activities then squabble over the parent's
         // LatestReleasePath + ReleaseNotes — the explicit release's
         // notes-carrying write gets clobbered last-write-wins).
-        workspace.GetMeshNodeStream()
+        var ownStream = workspace.GetMeshNodeStream();
+        ownStream
             .AwaitCompilationSettled(hub.JsonSerializerOptions)
             .Take(1)
-            .Subscribe(ownNode =>
+            // 🚨 AlreadyUpToDate is decided from IsDirty, i.e. from the PUBLISHED source snapshot,
+            // which trails a source write — so it is decided only once that snapshot shows the
+            // versions the sources' owners hold (or is refused when that cannot be established).
+            // Same rule as the release-request watcher: NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent.
+            .SelectMany(settled => settled.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } requestedAgainst
+                ? NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent(
+                    hub, ownStream, requestedAgainst, hub.Address.Path,
+                    hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease"))
+                : Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(settled, true)))
+            .Subscribe(snapshot =>
             {
+                var ownNode = snapshot.Node;
                 var def = ownNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 if (def is null)
                 {
@@ -1982,7 +1993,7 @@ public static class MeshDataSourceExtensions
                     def.CompiledFrameworkVersion,
                     NodeTypeCompilationHelpers.FrameworkVersion,
                     StringComparison.Ordinal);
-                if (!force && !def.IsDirty && frameworkCurrent
+                if (!force && snapshot.Established && !def.IsDirty && frameworkCurrent
                     && !string.IsNullOrEmpty(def.LatestReleasePath))
                 {
                     hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
