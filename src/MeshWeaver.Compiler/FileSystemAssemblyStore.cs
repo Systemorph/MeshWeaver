@@ -32,6 +32,15 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     public const int DefaultKeepVersionsPerType = 3;
 
     /// <summary>
+    /// How many BUILDS of one kept version survive eviction: the newest publication of that version
+    /// and one behind it (#6940). Emit is not deterministic — every compile mints a fresh MVID, so a
+    /// recompile that does not move the node version (a forced release, each replica compiling the
+    /// same version, a retry) publishes a NEW content-hashed sibling. The version budget alone never
+    /// bounded those: every sibling of a kept version was kept, for ever.
+    /// </summary>
+    public const int KeepBuildsPerVersion = 2;
+
+    /// <summary>
     /// Initializes a new instance of the filesystem-backed assembly store rooted at the
     /// given directory (created if it does not exist).
     /// </summary>
@@ -428,8 +437,9 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     }
 
     /// <summary>
-    /// 🚨 <b>Keep the newest <see cref="KeepVersionsPerType"/> VERSIONS of this type, in this
-    /// process's own framework generation. Delete the rest. Nothing else.</b>
+    /// 🚨 <b>Keep the newest <see cref="KeepVersionsPerType"/> VERSIONS of this type, and of each
+    /// of those the newest <see cref="KeepBuildsPerVersion"/> BUILDS, in this process's own
+    /// framework generation. Delete the rest. Nothing else.</b>
     ///
     /// <para><b>Why the version axis, and why it needed its own collector.</b> The cache accumulates
     /// on TWO independent axes and they need two different arguments. Across framework generations a
@@ -488,11 +498,27 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
                 .Take(keepVersionsPerType)
                 .ToHashSet();
 
+            // 🚨 The SIBLING axis (#6940). Within a kept version, keep only the newest
+            // KeepBuildsPerVersion BUILDS — a build is a (version, content hash) pair, its dll and
+            // pdb together — ranked by the dll's write time, which is what the version-only lookup
+            // answers by and what a rollback's TryTouch moves. An older sibling is superseded on
+            // exactly the argument an older version is: the record names the newest publication by
+            // identity, an activation that already loaded the older one keeps its mapping, and a
+            // reader that still asks for it gets a recoverable MISS that recompiles.
+            var keptBuilds = mine
+                .Where(x => !x.Identity.IsPdb && keptVersions.Contains(x.Identity.Version))
+                .GroupBy(x => x.Identity.Version)
+                .SelectMany(g => g
+                    .OrderByDescending(x => x.File.LastWriteTimeUtc)
+                    .Take(KeepBuildsPerVersion)
+                    .Select(x => (x.Identity.Version, x.Identity.Hash)))
+                .ToHashSet();
+
             var evicted = 0;
             var bytes = 0L;
             foreach (var (file, identity) in mine)
             {
-                if (keptVersions.Contains(identity.Version))
+                if (keptBuilds.Contains((identity.Version, identity.Hash)))
                     continue;
                 if (string.Equals(file.FullName, keep, StringComparison.Ordinal)
                     || string.Equals(file.FullName, Path.ChangeExtension(keep, ".pdb"), StringComparison.Ordinal))

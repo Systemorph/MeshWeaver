@@ -294,6 +294,49 @@ public class FileSystemAssemblyStoreTest : IDisposable
     }
 
     /// <summary>
+    /// #6940 — the SIBLING axis. Emit is not deterministic, so every recompile that does not move the
+    /// node version (a forced release, each replica compiling the same version, a retry) publishes a
+    /// NEW content-hashed build of that version. The version budget kept every one of them: twenty
+    /// recompiles of one version left forty files that no record named. Pre-fix this test sees 40.
+    /// </summary>
+    [Fact]
+    public async Task Twenty_recompiles_of_one_version_leave_a_bounded_directory()
+    {
+        string? newest = null;
+        for (var build = 1; build <= 20; build++)
+            newest = await store.Put(
+                "Hosting/InstanceRequest", version: 7,
+                Encoding.UTF8.GetBytes($"build-{build}"),
+                Encoding.UTF8.GetBytes($"pdb-{build}")).Should().Emit();
+
+        var files = Directory.GetFiles(Path.Combine(root, "Hosting_InstanceRequest"));
+        files.Length.Should().BeLessThanOrEqualTo(
+            2 * FileSystemAssemblyStore.KeepBuildsPerVersion,
+            "a dll+pdb pair per kept BUILD — twenty same-version recompiles wrote forty files");
+
+        File.Exists(newest!).Should().BeTrue("the build just published is never a candidate");
+        (await store.TryGetAssemblyPath("Hosting/InstanceRequest", version: 7).Should().Emit())
+            .Should().Be(newest, "the version still resolves to its newest publication");
+    }
+
+    /// <summary>The sibling budget never reaches across versions: each kept version keeps its own
+    /// newest build, so a mixed-replica window over the last versions still resolves.</summary>
+    [Fact]
+    public async Task The_sibling_budget_is_per_version()
+    {
+        for (var version = 1; version <= store.KeepVersionsPerType; version++)
+            for (var build = 1; build <= 4; build++)
+                await store.Put("Store/Plugin", version, Encoding.UTF8.GetBytes($"v{version}-b{build}"), null)
+                    .Should().Emit();
+
+        for (var version = 1; version <= store.KeepVersionsPerType; version++)
+            (await store.TryGetAssemblyPath("Store/Plugin", version).Should().Emit())
+                .Should().NotBeNull($"v{version} is inside the version window and keeps its newest build");
+        Directory.GetFiles(Path.Combine(root, "Store_Plugin")).Length.Should().Be(
+            store.KeepVersionsPerType * FileSystemAssemblyStore.KeepBuildsPerVersion);
+    }
+
+    /// <summary>
     /// The keep window is per TYPE, not per cache: evicting one type's history must never touch a
     /// sibling's. (The incident's directory sat among 317 others.)
     /// </summary>

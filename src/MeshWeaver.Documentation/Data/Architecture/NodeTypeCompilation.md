@@ -719,6 +719,41 @@ Pinned by `ShortWriteIsNotAPublicationTest` (the writer, the store, the reader, 
 each arm with a production-writer control) and `FullShareRefusesTheCompileTest` (the record a real
 mesh writes: `Error` with the numbers, no Release, no pointer, "NOT PUBLISHED" on the activity).
 
+#### A volume that REPORTS it is full is named too (#6940)
+
+The volume can also refuse the write outright: `ENOSPC` (or `EDQUOT` on a share quota) at the
+staging file's open, write or flush. That used to surface as the runtime's bare
+`IOException: No space left on device : '/data/assembly-cache/<Type>/.tmp-….pdb.tmp'`, which names a
+staging file and reads like a defect in the assembly store. `AtomicFileWrite.PublishBytesWith` now
+turns it into a `VolumeFullException` (`VolumeFullException.IsOutOfSpace` reads the errno the runtime
+carries as `HResult`, the Win32 code on Windows). The exception names the file, the bytes it carried,
+and the volume's free and total space read at the moment of refusal, and it says nothing was
+published. The staging file is removed as before. Every other IO fault keeps its own type.
+
+Measured on memex-cloud, 2026-10-18 (governed `Logs` actions under `Ops/Actions/bug6940-*` on the
+control instance): the first out-of-space line was **not** the assembly store. It was
+`/data/modules/sets/000020982-….proposed.json` at 05:25:40Z. The assembly store's first refusal
+came at 05:46:16Z, and the last refusal was at 06:42:15Z, on a pod started by the 06:41:43Z reboot.
+So the assembly cache was one victim of a shared `/data` volume running out of space. What filled
+the volume is **not established**. The retention reports that would say so log at Information, and
+the portal's production log level is Warning, so none of them reached Loki.
+
+#### The store's own share: the sibling axis
+
+Within the store, one growth axis was unbounded. Emit is not deterministic, so every compile mints
+a fresh MVID and therefore a new content-hashed name. A recompile that does not move the node
+version publishes a new **sibling** of that version: a forced release, each replica compiling the
+same version, a park-registry retry. Eviction at write kept the newest `KeepVersionsPerType`
+**versions** and every sibling of each. Twenty recompiles of one version left forty files that no
+record named. Eviction now also keeps only the newest `KeepBuildsPerVersion` (2) **builds** of each
+kept version, ranked by write time. A build is a `(version, content hash)` pair, its dll and pdb
+together. The just-written build is never a candidate. The safety argument is the one that already
+covers an older version: the record names the newest publication by identity, an activation that
+loaded an older sibling keeps its mapping, and a reader that still asks for it gets a recoverable
+miss. Pinned by `FileSystemAssemblyStoreTest.Twenty_recompiles_of_one_version_leave_a_bounded_directory`
+and `The_sibling_budget_is_per_version`, and by `VolumeFullIsANamedRefusalTest`, which has a
+negative control: a non-space IO fault is not renamed.
+
 ---
 
 ## Pinning an instance to a fixed release
