@@ -648,16 +648,40 @@ Two details of the seam's gate that are decisions, not incidentals:
   the gate exists to withhold.
 - 🚨 **The gate reads `IMeshService.Query<T>` — the CHANGE-STREAM surface — and never
   `IMeshService.Query(request)`, the unified snapshot one.** This is not a preference, and it is the
-  kind of thing only a measurement settles. `MeshQuery.Query(request)` seeds every provider with
+  kind of thing only a measurement settles. `MeshQuery.Query(request)` used to seed every provider with
   `.StartWith(empty)` before `CombineLatest` so a fast provider need not wait for a slow one; its own
-  comment calls the result *"the brief leading all-empty frame"*. A gate built on it therefore answers
+  comment called the result *"the brief leading all-empty frame"*. A gate built on it therefore answered
   **`false` FIRST, always** — including for a node that plainly exists — so every binding in the portal
-  would flash empty and log "does not exist" about a node that does. `Query<T>` instead merges the
+  would flash empty and log "does not exist" about a node that does. (The snapshot surface no longer
+  emits that frame — see *The snapshot surface emits only answers* below — but it is still PROGRESSIVE:
+  its first frame can be one fast provider's rows, not the whole set, which is no existence verdict
+  either.) `Query<T>` instead merges the
   providers' `Initial` frames into ONE authoritative full set and forwards deltas after it, so the
   gate's first answer is a real one; membership is folded per frame (`Initial`/`Reset` are
   authoritative both ways, deltas only speak about what they name). Caught by review on #3536 and
   pinned by the third arm of the test below, which asserts the **first** emission for an existing
   node — an assertion on a *later* one sails straight past a leading null.
+
+### The snapshot surface emits only answers
+
+`IMeshService.Query(request)` and `IMeshService.Autocomplete(...)` combine every provider's latest
+snapshot progressively — a fast provider's rows render before a slow one answers — but **every frame
+they emit is an answer** (`MeshQuery.CombineAnswers`). A frame with rows is emitted as soon as any
+provider has rows; a frame with **no** rows only once EVERY provider has answered (a provider that
+completes without emitting counts as an empty answer). So an empty frame always means "nothing
+matches", never "not yet".
+
+Before MeshWeaver#6827 each provider was seeded with an empty snapshot, and until the slowest provider
+answered the fan-out emitted frames byte-identical to a definitive empty result. Every consumer read
+them as the answer: the portal search bar settled on one and closed its dropdown while a mesh-wide
+fan-out was still running ("autocomplete shows up and disappears"), and a suggest widget fed the
+empty snapshot was closed by it.
+
+Withholding that frame must not turn a stalled provider into a hang (policy
+`query-fanin-stall-terminal`): when the fan-in's rung (`MeshOperationOptions.QueryInitialBudget`)
+elapses with nothing emitted and a provider still silent, the query faults with
+`QueryProviderStalledException` naming it. Once rows have been emitted a laggard never faults the
+query; its rows join when it answers. Pinned by `SnapshotFanOutEmitsOnlyAnswersTest`.
 
 `NodeBoundBindingToleratesAnAbsentNodeTest` pins both live shapes — bind-then-create, and
 re-bind-after-delete — and asserts the storm window stays shut, which is the half the log flood
