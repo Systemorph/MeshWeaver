@@ -23,8 +23,9 @@ namespace MeshWeaver.Mesh.Security;
 /// and the Postgres permission table knows nothing of it — so a node admitted this way is invisible
 /// to every listing. It is not a grant row and it never enters the permission fold.</para>
 ///
-/// <para><b>Live.</b> <see cref="Admits"/> reads the node from its OWNER's current state (the node
-/// stream, as System — never a stored snapshot the owner has already moved past), follows the type's
+/// <para><b>Live.</b> <see cref="Admits"/> reads the node from its OWNER's current state (the owner's
+/// own answer first, then the node stream, as System — never a stored snapshot or a mirror the owner
+/// has already moved past), follows the type's
 /// declaration, withdraws at the node's expiry and follows a group audience's memberships. A seam
 /// takes the first verdict; the node stream keeps following it and cuts an admitted subscription
 /// when it turns false (revocation, expiry, a changed audience, a removed declaration).</para>
@@ -70,7 +71,7 @@ public static class DeclaredPointRead
                 .DefaultIfEmpty(null)
                 .SelectMany(stored => stored is null
                     ? Observable.Return(false)
-                    : SystemRead(hub, access, path)
+                    : OwnerCurrent(hub, access, path)
                         .Select(node => Decide(hub, access, node, userId, caller, options))
                         .Switch())
                 .DistinctUntilChanged()
@@ -226,7 +227,28 @@ public static class DeclaredPointRead
             .DistinctUntilChanged();
     }
 
-    /// <summary>The owner's CURRENT node at <paramref name="path"/>, live, read as System — the node-stream read gate passes System straight through, so this never re-enters it.</summary>
+    /// <summary>
+    /// The node at <paramref name="path"/> as its OWNER holds it now, then live. The first revision is
+    /// the owner's own answer (a point read of its node, as System), so a write the owner has
+    /// acknowledged — a revocation above all — decides the very next read; the process-wide node
+    /// stream mirror can trail that acknowledgement, so it only FOLLOWS afterwards, and any mirror
+    /// revision older than the owner's is ignored.
+    /// </summary>
+    private static IObservable<MeshNode?> OwnerCurrent(IMessageHub hub, AccessService? access, string path)
+    {
+        var ownerRead = access is null
+            ? hub.GetMeshNode(path)
+            : access.RunAsSystem(() => hub.GetMeshNode(path));
+        return ownerRead
+            .Take(1)
+            .SelectMany(current => current is null
+                ? Observable.Return<MeshNode?>(null)
+                : SystemRead(hub, access, path)
+                    .Where(mirror => mirror is null || mirror.Version >= current.Version)
+                    .StartWith(current));
+    }
+
+    /// <summary>The node at <paramref name="path"/> from the node-stream mirror, live, read as System — the node-stream read gate passes System straight through, so this never re-enters it.</summary>
     private static IObservable<MeshNode?> SystemRead(IMessageHub hub, AccessService? access, string path)
         => access is null
             ? hub.GetMeshNodeStream(path).Select(n => (MeshNode?)n)
