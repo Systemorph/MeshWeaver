@@ -348,8 +348,8 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   - **Aborted** (any other end, for example `Conflict`, `HasChildren` or a timeout): the deferred
     writes run their commit turn again and are applied.
   - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
-    Its teardown releases the seal and refuses the deferred writes, and the next activation is
-    unsealed. No timer releases a seal: one that fired while the delete was still running would let
+    Its teardown refuses the deferred writes, fences the row (below) and then unseals the path for the
+    next activation. No timer releases a seal: one that fired while the delete was still running would let
     through a write that the delete then removes.
 - **Why the live version, not the stored one.** An own write is acknowledged from the owner's
   in-memory commit, about one persistence-sampler interval before it is stored. A check against the
@@ -397,13 +397,30 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
   it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
   activation, within the same time budget.
-- **Not covered yet: the owner is recycled while the delete is still running.** The owner's
-  teardown releases the seal, so a replacement activation can acknowledge a write while the stored
-  row is still at the confirmed version. If the paused delete then reaches the store before that
-  write is flushed, it removes the row, and the flush stores the node again. Keeping the seal across
-  activations would instead block every write to the path forever when the deleter has died. The
-  sound fix is a fence in the store, and that is an open design decision on #6856.
+- **The owner is torn down while it holds the seal.** Its deleter may still be alive and paused
+  before the store. So the teardown first refuses the writes it deferred, then **fences the stored
+  row**: a compare-and-set (`WriteIfVersion`) moves the row one version past the confirmed version,
+  carrying the confirmed state. The paused delete's compare-and-delete then refuses it, and the delete
+  answers `Conflict`. A replacement activation in the same process defers its own writes until the
+  fence has landed. If the fence finds the row already gone, the delete won: the path is tombstoned,
+  and nothing deferred stores it again. A deleter that died leaves exactly this case, so no timer is
+  needed. One window remains: a replacement activation on **another** silo is not deferred. It can
+  acknowledge a write in the moment between the teardown and the fence landing, and that write is
+  removed only if the paused delete also reaches the store in that same moment. The window is the
+  fence's own write latency, not the length of the delete's pause.
+- **An unknown outcome releases nothing.** `DeleteSealOutcome` is an open vocabulary. A release that
+  names a value this process does not know is reported, and the seal stays until a known outcome or
+  the owner's teardown releases it.
+- **A save the seal refused is resumed on abort.** An own write acknowledged just before the seal
+  can reach the persistence sampler while the path is sealed, and the row guard refuses that save.
+  When the seal lifts without a delete, the owner re-dispatches the pending save through its own
+  save pipeline, so the acknowledged state is stored without waiting for the next change.
+- **An early abort leaves state only for a sender who may delete the node.** The owner checks the
+  sender's `Delete` permission explicitly before it records an abort mark, because the message itself
+  carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
+  participant cannot send it at all.
 - **Not covered yet.** Only the in-memory and Postgres stores implement `DeleteIfVersionAtMost`
+  (and the fence's `WriteIfVersion`)
   atomically (Postgres in MeshWeaver.Plugins, as one conditional `DELETE` whose row count is the
   verdict; its path router forwards the call). The file-system store (and the caching adapter over
   it) and Snowflake use the interface default: they read, compare, then delete. That checks the

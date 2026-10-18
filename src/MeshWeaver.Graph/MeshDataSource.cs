@@ -1408,6 +1408,29 @@ public static class MeshDataSourceExtensions
                 return sub;
             }
 
+            // Static, for the same reason as InstallPersistenceSampler: the subscription lives on a
+            // mesh singleton's subject, and must not pin an abandoned hub.
+            static IDisposable InstallSealResume(
+                RecentlyDeletedRegistry registry, OwnNodeCache nodeCache, PendingOwnSave pending,
+                WeakReference<IMessageHub> weakHub, string path)
+                => registry.VersionGuardReleases(path)
+                    .Where(outcome => !string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
+                        && !string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
+                    .Subscribe(_ =>
+                    {
+                        if (nodeCache.IsDeleted
+                            || registry.IsVersionGuardedDeletionInFlight(path)
+                            || registry.IsUnderActiveDeletion(path, out string? _)
+                            || registry.IsRecentlyDeleted(path)
+                            || !weakHub.TryGetTarget(out IMessageHub? saveHub)
+                            || saveHub.RunLevel > MessageHubRunLevel.Started
+                            || pending.TakeUnsaved() is not { } unsaved)
+                            return;
+                        var posted = saveHub.Post(new SaveMeshNodeRequest(unsaved));
+                        if (posted is { WasAcceptedForDelivery: true })
+                            pending.MarkRequested(unsaved);
+                    });
+
             // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
             // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
             // built-in type definitions like Code/Markdown/User, static partition definitions)
@@ -1428,6 +1451,14 @@ public static class MeshDataSourceExtensions
                 var saveSub = InstallPersistenceSampler(
                     ownStream, cache, new WeakReference<IMessageHub>(hub), SaveSampleInterval, pending);
                 hub.RegisterForDisposal(saveSub);
+                // 🚨 A save the OWNER's delete seal refused (its row guard, #6856) is re-dispatched
+                // when the seal lifts without a delete. An own write acknowledged before the seal can
+                // reach the sampler while the path is sealed; that write is refused, stays pending, and
+                // nothing else would retry it until the next change or the dispose flush — an
+                // acknowledged state not durable for as long as the node stays quiet.
+                if (hub.ServiceProvider.GetService<RecentlyDeletedRegistry>() is { } sealRegistry)
+                    hub.RegisterForDisposal(InstallSealResume(
+                        sealRegistry, cache, pending, new WeakReference<IMessageHub>(hub), hub.Address.Path));
                 // 🚨 Final flush — the update-path twin of MeshNodeTypeSource's
                 // FlushPendingWrites dispose action (which covers creates/deletes). A write
                 // that commits and ACKS during the Quiescing window sits in the 200 ms Sample

@@ -253,6 +253,67 @@ public class OwnerHeldDeleteSealTest(OwnerHeldDeleteSealTest.Cluster cluster)
             .Should().Within(TestTimeouts.Convergence).Emit("the path can be recreated the moment the delete answers", ct);
     }
 
+    /// <summary>
+    /// THE STORE FENCE (the owner's decision on #6856): the owner is RECYCLED while its deleter is alive
+    /// and paused before the store. Its teardown moves the stored row past the confirmed version with a
+    /// compare-and-set, so the paused delete's compare-and-delete is refused with Conflict, and a
+    /// replacement activation's acknowledged write survives. Negative control (recorded, PR #6933 head
+    /// d4f88c31bb, which has no fence): nothing moved the row, the replacement acknowledged its write,
+    /// the delete removed the row at the confirmed version and answered SUCCESS, and the acknowledged
+    /// write was gone — in this harness the owner silo heard the delete before the held flush landed and
+    /// dropped it; when the flush wins that race instead, the node is stored again behind a delete that
+    /// reported success. Either way the delete's verdict contradicts an acknowledged write.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AnOwnerRecycledWhileTheDeleteIsPaused_FencesTheRow_AndTheDeleteIsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-fence");
+        var read = StoredVersion(path);
+
+        using var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the guarded delete passed the owner's verdict and is paused at the deleter's store", ct);
+
+        owner.Dispose(); // the owner is recycled; its deleter is alive and paused
+        var fenced = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.Stored(path))
+            .Where(n => n is not null && n.Version > read)
+            .Amb(Observable.Timer(TimeSpan.FromSeconds(10)).Select(_ => (MeshNode?)null))
+            .Should().Within(TestTimeouts.Convergence).Emit("the fence lands, or the window closes", ct);
+        TestContext.Current.TestOutputHelper?.WriteLine($"[fence] stored after the recycle: v{fenced?.Version.ToString() ?? "-"}");
+
+        // A replacement activation acknowledges an own write; its flush is held until after the delete.
+        var services = Mesh.Silo(OwnerSilo);
+        await services.GetRequiredService<AccessService>().RunAsSystem(() => Mesh.Hub(OwnerSilo).NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+            .Should().Within(TestTimeouts.Convergence).Emit("a replacement activation answers", ct);
+        var replacement = Mesh.Hub(OwnerSilo).GetHostedHub(new Address(path), HostedHubCreation.Never);
+        replacement.Should().NotBeNull("the replacement is activated on the owner's silo");
+        using var flushHold = Mesh.Storage(OwnerSilo).HoldWrites(path);
+        var write = OwnWrite(replacement!, "written by the replacement");
+        using var writeConnection = write.Connect();
+        var ack = await write.Should().Within(TestTimeouts.Convergence).Emit("the replacement acknowledges its write", ct);
+        ack.Kind.Should().Be(NotificationKind.OnNext, ack.Exception?.Message ?? "the replacement is unsealed");
+
+        deleteHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        flushHold.Release();
+        var stored = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.Stored(path))
+            .Where(n => n?.Name == "written by the replacement")
+            .Amb(Observable.Timer(TimeSpan.FromSeconds(10)).Select(_ => (MeshNode?)null))
+            .Should().Within(TestTimeouts.Convergence).Emit("the replacement's flush lands, or the window closes", ct);
+
+        response.Success.Should().BeFalse(
+            $"the fence moved the row past the confirmed version {read}; a delete that still went through reported "
+            + $"success for a node that is now stored again (v{stored?.Version.ToString() ?? "-"})");
+        response.RejectionReason.Should().Be(NodeDeletionRejectionReason.Conflict);
+        stored.Should().NotBeNull("the acknowledged write of the replacement survives");
+    }
+
     /// <summary>Its own cluster.</summary>
     public class Cluster : FaultInjectionCluster;
 }
@@ -291,7 +352,13 @@ public class OwnerHeldDeleteSealDeleterDeathTest(OwnerHeldDeleteSealDeleterDeath
         var answer = await write.Should().Within(TestTimeouts.Convergence)
             .Emit("the owner's teardown releases the seal and answers the deferred write", ct);
         answer.Kind.Should().Be(NotificationKind.OnError, "a write deferred by a seal the teardown released was never acknowledged");
-        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeFalse("the teardown released the seal");
+        // The teardown fences the row (the deleter may only be paused, as far as the owner can tell) and
+        // then lifts the guard.
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => !OwnerRegistry.IsVersionGuardedDeletionInFlight(path))
+            .Should().Within(TestTimeouts.Convergence).Emit("the teardown's fence lands and the seal is lifted", ct);
+        Mesh.Stored(path)!.Version.Should().BeGreaterThan(read,
+            "the fence moved the row past the confirmed version, so no delete still on its way can remove it");
 
         // The delete never reached the store, so the node lives on and the next activation is unsealed.
         Mesh.Stored(path).Should().NotBeNull("the deleter died before its delete reached the store");

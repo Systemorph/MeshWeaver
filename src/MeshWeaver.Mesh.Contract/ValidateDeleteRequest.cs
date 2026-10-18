@@ -81,7 +81,8 @@ public sealed record ValidateDeleteRequest(string Path, string? RootPath = null)
 /// applies them. A successful delete waits for the answer before it reports success, so a caller
 /// that recreates the path at once is not refused by the owner's row guard. A seal whose message never
 /// arrives — the deleter died — is released by the owning activation's own teardown, never by a timer.
-/// <para>It carries no permission attribute, so it is NOT ordered behind the version check's
+/// <para><see cref="InfrastructureOnlyAttribute"/>: only the mesh's own hubs may post it; a remote
+/// participant's delivery is refused at ingress. It carries no permission attribute, so it is NOT ordered behind the version check's
 /// permission fold, and an abort can overtake the check. The owner then leaves an abort mark for the
 /// seal id (bound to its activation), and the check that runs later refuses to take the seal. The
 /// seal id is an unguessable per-delete value, so the message can release only the seal of the delete
@@ -90,6 +91,7 @@ public sealed record ValidateDeleteRequest(string Path, string? RootPath = null)
 /// <param name="Path">The node the delete targeted (the owning hub's own path).</param>
 /// <param name="SealId">The seal id the delete's <see cref="ValidateDeleteRequest.SealId"/> carried.</param>
 /// <param name="Outcome">A <see cref="DeleteSealOutcome"/> value.</param>
+[InfrastructureOnly]
 public sealed record ReleaseDeleteSeal(string Path, string SealId, string Outcome) : IRequest<ReleaseDeleteSealResponse>;
 
 /// <summary>The owner process's answer to <see cref="ReleaseDeleteSeal"/>.</summary>

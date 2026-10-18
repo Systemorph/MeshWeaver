@@ -510,9 +510,16 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <param name="path">The node the delete targets.</param>
     /// <param name="bindToOwnerLifetime">Couples a release to the owning activation's lifetime and
     /// returns a handle that detaches it — the hub's <c>RegisterForDisposalDetachable</c>.</param>
+    /// <param name="fenceOnTeardown">The STORE FENCE run when the owning activation is torn down while
+    /// it still holds the seal (#6856): a compare-and-set that moves the stored row past the confirmed
+    /// version, so the delete that may still be on its way is refused at its compare-and-delete. It
+    /// emits <c>true</c> when it found the row already gone (the delete won), which tombstones the path.
+    /// Until it terminates, this process keeps the version guard, so a replacement activation here
+    /// defers its own writes rather than acknowledging one the delete could still remove.</param>
     /// <returns><c>true</c> when the seal is held for <paramref name="sealId"/>; <c>false</c> when the
     /// delete was already aborted.</returns>
-    public bool TakeOwnerDeleteSeal(string sealId, string path, Func<IDisposable, IDisposable> bindToOwnerLifetime)
+    public bool TakeOwnerDeleteSeal(string sealId, string path, Func<IDisposable, IDisposable> bindToOwnerLifetime,
+        Func<IObservable<bool>>? fenceOnTeardown = null)
     {
         if (string.IsNullOrEmpty(sealId) || string.IsNullOrEmpty(path))
             return false;
@@ -532,12 +539,13 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             }
             var seal = OwnerDeleteSeal.Held(path,
                 new CountedScope(_versionGuardedDeletions, path, onDisposed: null, register: true),
-                BeginRowDeletion(path));
+                BeginRowDeletion(path), fenceOnTeardown);
             if (!_ownerSeals.TryAdd(sealId, seal))
             {
                 // Lost a race to a concurrent take or abort mark: undo, and tell any write that saw
                 // the momentary seal to look again.
-                seal.Scopes!.Dispose();
+                seal.RowGuard!.Dispose();
+                seal.VersionGuard!.Dispose();
                 _versionGuardReleased.OnNext(new VersionGuardRelease(path, DeleteSealOutcome.Lifted));
                 continue;
             }
@@ -570,7 +578,10 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     public bool ReleaseOwnerDeleteSeal(string sealId, string path, string outcome,
         Func<IDisposable, IDisposable>? markAbortOnOwner = null)
     {
-        if (string.IsNullOrEmpty(sealId))
+        // 🚨 The outcome is an OPEN wire vocabulary: a value this process does not know (a newer
+        // deleter, a malformed message) must not silently mean "aborted" and resume deferred writes.
+        // Nothing is touched; the seal stays until a known outcome or the owner's teardown lifts it.
+        if (string.IsNullOrEmpty(sealId) || !IsKnownSealOutcome(outcome))
             return false;
         while (true)
         {
@@ -580,12 +591,19 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
                     return false;
                 if (!_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal)))
                     continue;
+                if (string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal)
+                    && seal.Fence is { } fence)
+                {
+                    ReleaseThroughFence(seal, fence);
+                    return true;
+                }
                 if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal))
                     MarkDeleted(seal.Path);
                 // Detach from the owner's lifetime; a teardown release is already running inside it.
                 if (!string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
                     seal.Teardown.Dispose();
-                seal.Scopes!.Dispose();
+                seal.RowGuard!.Dispose();
+                seal.VersionGuard!.Dispose();
                 _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, outcome));
                 return true;
             }
@@ -603,6 +621,49 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     }
 
     /// <summary>
+    /// The owner's teardown while it still holds the seal (#6856). Its deleter may be alive and paused
+    /// before the store, and a replacement activation must not acknowledge a write that delete could
+    /// still remove. So: the dying activation's deferred writes are refused at once; the row guard is
+    /// lifted so the fence itself can write; the fence moves the stored row past the confirmed
+    /// version, which makes the paused delete's compare-and-delete refuse; and only when the fence has
+    /// terminated is the version guard lifted, which lets a replacement here run its deferred writes.
+    /// A fence that found the row gone tombstones the path first — the delete won, and nothing deferred
+    /// may store the node again.
+    /// </summary>
+    private void ReleaseThroughFence(OwnerDeleteSeal seal, Func<IObservable<bool>> fence)
+    {
+        _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, DeleteSealOutcome.OwnerTeardown));
+        seal.RowGuard!.Dispose();
+        var lifted = 0;
+        void Lift(bool rowGone)
+        {
+            if (Interlocked.Exchange(ref lifted, 1) != 0)
+                return;
+            if (rowGone)
+                MarkDeleted(seal.Path);
+            seal.VersionGuard!.Dispose();
+            _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, DeleteSealOutcome.Lifted));
+        }
+        IObservable<bool> run;
+        try
+        {
+            run = fence();
+        }
+        catch (Exception)
+        {
+            // A fence that cannot even be composed (the owner's scope is already gone) must not keep
+            // the guard: holding it would block this path's writes for good.
+            Lift(rowGone: false);
+            return;
+        }
+        run.Take(1).DefaultIfEmpty(false).Subscribe(
+            Lift,
+            // The fence reports its own failure (it logs before it faults); the guard is lifted either
+            // way — holding it would block this path's writes for good.
+            _ => Lift(rowGone: false));
+    }
+
+    /// <summary>
     /// Emits once, the next time a version-guard seal on <paramref name="path"/> is lifted, with the
     /// <see cref="DeleteSealOutcome"/> it was lifted for — or at once with
     /// <see cref="DeleteSealOutcome.Lifted"/> when no seal holds it any more. An own write the seal
@@ -613,33 +674,57 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <param name="path">The sealed path.</param>
     /// <returns>The outcome of the lift.</returns>
     public IObservable<string> VersionGuardLifted(string path)
-        => _versionGuardReleased
-            .Where(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase))
-            .Select(r => r.Outcome)
+        => VersionGuardReleases(path)
             .Merge(Observable.Defer(() => IsVersionGuardedDeletionInFlight(path)
                 ? Observable.Never<string>()
                 : Observable.Return(DeleteSealOutcome.Lifted)))
             .Take(1);
 
+    /// <summary>
+    /// Every lift of a version-guard seal on <paramref name="path"/>, with its
+    /// <see cref="DeleteSealOutcome"/> — hot, no replay. The owner's persistence pipeline listens, so a
+    /// save its row guard refused while sealed is re-dispatched when the delete aborts (#6856).
+    /// </summary>
+    /// <param name="path">The sealed path.</param>
+    /// <returns>The outcome of each lift.</returns>
+    public IObservable<string> VersionGuardReleases(string path)
+        => _versionGuardReleased
+            .Where(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.Outcome);
+
+    /// <summary>True for the <see cref="DeleteSealOutcome"/> values a seal can be released for.</summary>
+    /// <param name="outcome">The outcome a release names.</param>
+    /// <returns><c>true</c> for Committed, Aborted and OwnerTeardown.</returns>
+    public static bool IsKnownSealOutcome(string? outcome)
+        => string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
+           || string.Equals(outcome, DeleteSealOutcome.Aborted, StringComparison.Ordinal)
+           || string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal);
+
     private sealed record VersionGuardRelease(string Path, string Outcome);
 
     private sealed class OwnerDeleteSeal
     {
-        private OwnerDeleteSeal(string path, System.Reactive.Disposables.CompositeDisposable? scopes)
+        private OwnerDeleteSeal(string path, IDisposable? versionGuard, IDisposable? rowGuard,
+            Func<IObservable<bool>>? fence)
         {
             Path = path;
-            Scopes = scopes;
+            VersionGuard = versionGuard;
+            RowGuard = rowGuard;
+            Fence = fence;
         }
 
-        public static OwnerDeleteSeal Held(string path, IDisposable versionGuard, IDisposable rowGuard)
-            => new(path, new System.Reactive.Disposables.CompositeDisposable(versionGuard, rowGuard));
+        public static OwnerDeleteSeal Held(string path, IDisposable versionGuard, IDisposable rowGuard,
+            Func<IObservable<bool>>? fence)
+            => new(path, versionGuard, rowGuard, fence);
 
         /// <summary>The delete was aborted before the owner compared: no guards, only the refusal.</summary>
-        public static OwnerDeleteSeal AbortMark(string path) => new(path, null);
+        public static OwnerDeleteSeal AbortMark(string path) => new(path, null, null, null);
 
         public string Path { get; }
-        public System.Reactive.Disposables.CompositeDisposable? Scopes { get; }
-        public bool IsAbortMark => Scopes is null;
+        public IDisposable? VersionGuard { get; }
+        public IDisposable? RowGuard { get; }
+        public Func<IObservable<bool>>? Fence { get; }
+        public bool IsAbortMark => VersionGuard is null;
         public System.Reactive.Disposables.SingleAssignmentDisposable Teardown { get; } = new();
     }
 

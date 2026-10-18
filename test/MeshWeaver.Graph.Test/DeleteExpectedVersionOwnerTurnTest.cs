@@ -473,6 +473,47 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     }
 
     /// <summary>
+    /// #6856 review: an own write ACKNOWLEDGED just before the owner took a delete seal reaches the
+    /// persistence sampler while the path is sealed, and the owner's row guard refuses that save. When
+    /// the delete then ABORTS and nothing else changes the node, the refused save must be re-dispatched
+    /// — before, it stayed pending until the next change or the dispose flush, so an acknowledged state
+    /// was not durable for as long as the node stayed quiet.
+    /// </summary>
+    [Fact]
+    public async Task AnAcknowledgedSaveRefusedWhileSealed_IsStored_WhenTheDeleteAborts()
+    {
+        var node = await Seed("owner-seal-resume");
+        var owner = await OwnerOf(node.Path);
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        var stored = (await Stored(node.Path))!.Version;
+
+        var acked = await owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "acknowledged before the seal" })
+            .Should().Within(TestTimeouts.Convergence).Emit("an own write is acknowledged from memory", Ct);
+        // Sealed at once — well inside the sampler's 200 ms window, so the save meets the row guard.
+        registry.TakeOwnerDeleteSeal("resume-seal", node.Path, owner.RegisterForDisposalDetachable)
+            .Should().BeTrue();
+        try
+        {
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+                .Where(n => n?.Version >= acked.Version)
+                .Should().NotEmit(TimeSpan.FromSeconds(1), "the sealed row refuses the sampled save", Ct);
+        }
+        finally
+        {
+            registry.ReleaseOwnerDeleteSeal("resume-seal", node.Path, DeleteSealOutcome.Aborted);
+        }
+
+        var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Name == "acknowledged before the seal")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the abort re-dispatches the refused save, with no further change to the node", Ct);
+        persisted!.Version.Should().BeGreaterThan(stored);
+    }
+
+    /// <summary>
     /// MIXED-VERSION ROLL (#6750): an owner on an image that predates the version-guarded check skips
     /// the unknown <see cref="ValidateDeleteRequest.ExpectedVersion"/>, runs its validators and answers
     /// a plain Ok. That is no verdict about the version, so it is Unavailable — never a match. Control:

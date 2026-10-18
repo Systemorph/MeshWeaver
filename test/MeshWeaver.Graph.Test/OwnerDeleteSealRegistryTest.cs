@@ -84,4 +84,59 @@ public class OwnerDeleteSealRegistryTest
         registry.TakeOwnerDeleteSeal("seal-4", Path, new FakeLifetime().Bind)
             .Should().BeTrue("only the owner's own hub records an early abort");
     }
+
+    [Fact(Timeout = 5000)]
+    public void AReleaseNamingAnUnknownOutcome_LeavesTheSealInPlace()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        registry.TakeOwnerDeleteSeal("seal-5", Path, owner.Bind).Should().BeTrue();
+
+        registry.ReleaseOwnerDeleteSeal("seal-5", Path, "CommittedV2", owner.Bind)
+            .Should().BeFalse("an outcome this process does not know must not silently mean 'aborted'");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue("the deferred writes stay deferred");
+        registry.IsUnderActiveDeletion(Path, out _).Should().BeTrue("the row guard stays");
+
+        registry.ReleaseOwnerDeleteSeal("seal-5", Path, DeleteSealOutcome.Committed).Should().BeTrue(
+            "control: a known outcome still releases it");
+    }
+
+    [Fact(Timeout = 5000)]
+    public void ATeardownWithAFence_HoldsTheVersionGuardUntilTheFenceTerminates()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        var fence = new System.Reactive.Subjects.AsyncSubject<bool>();
+        var fenced = 0;
+        registry.TakeOwnerDeleteSeal("seal-6", Path, owner.Bind, () =>
+        {
+            fenced++;
+            return fence;
+        }).Should().BeTrue();
+
+        owner.OnTeardown.Dispose();
+
+        fenced.Should().Be(1, "the owner's teardown runs the store fence");
+        registry.IsUnderActiveDeletion(Path, out _).Should().BeFalse("the row guard is lifted so the fence can write");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue(
+            "until the fence lands, a replacement here defers its writes");
+        fence.OnNext(false);
+        fence.OnCompleted();
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse("the fence landed");
+        registry.IsRecentlyDeleted(Path).Should().BeFalse("the row survived, so nothing is tombstoned");
+    }
+
+    [Fact(Timeout = 5000)]
+    public void AFenceThatFindsTheRowGone_TombstonesThePath()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        registry.TakeOwnerDeleteSeal("seal-7", Path, owner.Bind, () => System.Reactive.Linq.Observable.Return(true));
+        owner.OnTeardown.Dispose();
+        registry.IsRecentlyDeleted(Path).Should().BeTrue("the delete won the race; nothing deferred may store the node again");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
+    }
 }
