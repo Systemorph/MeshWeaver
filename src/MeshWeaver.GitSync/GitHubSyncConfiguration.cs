@@ -1,4 +1,5 @@
 using MeshWeaver.Graph;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -52,17 +53,26 @@ public static class GitHubSyncConfiguration
         // personal credential. The host binds GitHub:App next to GitHub:OAuth; left unconfigured,
         // GitHubSyncService.ResolveAuth simply skips the App fallback.
         services.AddOptions<GitHubAppOptions>();
+        // Beside the deployment's App, the instance's OWN App (Doc/Architecture/InstanceRepositoryAccess):
+        // its credentials are Instance Secrets, read LIVE from the secret catalog on every mint, and
+        // used whenever the deployment configures no App. Resolved lazily — the catalog is a mesh
+        // singleton that needs the hub, and a mint never happens before the mesh is up.
         services.AddSingleton(sp => new GitHubAppTokenService(
             sp.GetRequiredService<IoPoolRegistry>(),
             sp.GetRequiredService<IOptions<GitHubAppOptions>>(),
+            () => InstanceGitHubApp.Options(sp.GetService<InstanceSecretCatalog>()),
             sp.GetService<ILogger<GitHubAppTokenService>>()));
+        services.AddSingleton(sp => new GitHubAppManifestClient(sp.GetRequiredService<IoPoolRegistry>()));
         // Per-source credentials: a configured git source may name its own token (a configuration
         // key the vault fills) or the App installation on another account. One reader, consulted
         // by the package sources AND by the sync below, so both routes read a repository with the
         // same identity.
+        // The instance's own package sources (Admin/PackageSource-*) are read with the instance's own
+        // App — after the configured ones, which keep the identity the record declares.
         services.AddSingleton(sp => new GitSourceCredentials(
             sp.GetService<IConfiguration>(),
             sp.GetService<GitHubAppTokenService>(),
+            repo => sp.GetService<InstancePackageSourceCatalog>()?.For(repo),
             sp.GetService<ILogger<GitSourceCredentials>>()));
         // Azure Repos (MeshWeaver#5248, policy azure-repos-push-only): the client tenant's app
         // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
@@ -271,7 +281,19 @@ public static class GitHubSyncConfiguration
                 ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
                 HubConfiguration = config => config
                     .AddMeshDataSource(source => source.WithContentType<MissedBuildFact>()),
-            });
+            },
+            // The instance's OWN repository access (Doc/Architecture/InstanceRepositoryAccess): the
+            // package sources its global administrators add, and its GitHub App's metadata. Both in
+            // the Admin partition, written only through their verbs (global admin, then as system).
+            InstancePackageSources.CreateMeshNode(),
+            InstanceGitHubApp.CreateMeshNode());
+        // The App's credentials are Instance Secrets: the portal may set exactly these four keys.
+        foreach (var key in InstanceGitHubApp.SecretKeys)
+            builder.AddInstanceSecretSlot(key);
+        builder.AddAutocompleteExcludedTypes(InstancePackageSources.NodeType, InstanceGitHubApp.NodeType);
+        builder.ConfigureServices(s => s
+            .AddSingleton<InstancePackageSourceCatalog>()
+            .AddSingleton<InstanceGitHubAppCatalog>());
 
         // Also register the content types on the mesh hub + every per-node hub so reads via
         // GetQuery / GetMeshNodeStream resolve the typed content (and the $type discriminator).
@@ -281,7 +303,9 @@ public static class GitHubSyncConfiguration
             .WithType<GitHubPullRequest>(nameof(GitHubPullRequest))
             .WithType<GitHubIssue>(nameof(GitHubIssue))
             .WithType<BuildCompletion>(nameof(BuildCompletion))
-            .WithType<MissedBuildFact>(nameof(MissedBuildFact)));
+            .WithType<MissedBuildFact>(nameof(MissedBuildFact))
+            .WithType<InstancePackageSourceContent>(nameof(InstancePackageSourceContent))
+            .WithType<InstanceGitHubAppContent>(nameof(InstanceGitHubAppContent)));
         builder.ConfigureDefaultNodeHub(c => c
             .WithType<GitHubCredential>(nameof(GitHubCredential))
             .WithType<GitHubSyncConfig>(nameof(GitHubSyncConfig))

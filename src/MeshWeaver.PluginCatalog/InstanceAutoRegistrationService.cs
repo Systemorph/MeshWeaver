@@ -866,9 +866,44 @@ public sealed class InstanceAutoRegistrationService(
     /// nodes and may compile node types; a parallel fan-out on a cold starting pod is how you
     /// saturate it.</para>
     /// </summary>
-    private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options)
+    private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options) =>
+        InstanceSourcesRead().SelectMany(instance => InstallDefaultsWith(options, instance));
+
+    /// <summary>
+    /// The instance's OWN package sources (<c>Admin/PackageSource-*</c>,
+    /// Doc/Architecture/InstanceRepositoryAccess) once their catalog has read the store — so a boot
+    /// pass never mistakes "not read yet" for "none". A catalog that does not answer within its
+    /// bound is said at Error and the pass proceeds with the deployment's own sources: the instance's
+    /// additions are then installed by the next pass, and the deployment's never wait on them.
+    /// </summary>
+    private IObservable<IReadOnlyList<InstancePackageSourceContent>> InstanceSourcesRead()
     {
+        var catalog = hub.ServiceProvider.GetService<InstancePackageSourceCatalog>();
+        if (catalog is null)
+            return Observable.Return<IReadOnlyList<InstancePackageSourceContent>>([]);
+        return catalog.WhenLoaded
+            .Select(_ => catalog.Sources)
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex,
+                    "[DefaultInstall] the instance's own package sources (Admin/PackageSource-*) could not "
+                    + "be read; this pass installs from the deployment's sources only, and what the "
+                    + "instance's administrators chose to install by default waits for the next pass.");
+                return Observable.Return<IReadOnlyList<InstancePackageSourceContent>>([]);
+            });
+    }
+
+    private IObservable<DefaultInstallSummary> InstallDefaultsWith(
+        PluginCatalogOptions options, IReadOnlyList<InstancePackageSourceContent> instanceSources)
+    {
+        // The instance's own install-by-default choices (Admin/PackageSource-*.installByDefault) join
+        // the deployment's patterns as exact Source/Package entries. They never change what the
+        // RECORD's set means — the baseline decision below reads the record alone — and they carry
+        // no deployment-configuration authority, so a commercial package they name is installed from
+        // its Store card by an administrator, never unattended.
         var wanted = options.InstallByDefault
+            .Concat(InstancePackageSources.InstallEntries(instanceSources))
             .Select(PluginGrantEntry.TryParse)
             .Where(e => e is not null)
             .Select(e => e!)
@@ -1327,9 +1362,13 @@ public sealed class InstanceAutoRegistrationService(
             .Select((s, i) => new ConfiguredPackageSource(s, "HEAD", $"registered-{i}"))
             .ToList();
 
-        var configured = services.GetService<IConfiguration>() is { } config
+        var fromConfig = services.GetService<IConfiguration>() is { } config
             ? PackageSources.FromConfiguration(hub, config, logger)
             : [];
+        // Beside the record's sources, the ones the instance's administrators added ON the instance
+        // (Doc/Architecture/InstanceRepositoryAccess); a repository the record names stays the record's.
+        IReadOnlyList<ConfiguredPackageSource> configured =
+            [.. fromConfig, .. PackageSources.FromInstance(hub, fromConfig, logger)];
 
         var tokenResolver = services.GetService<RegistryTokenResolver>();
         var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);

@@ -630,14 +630,17 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    ```
 
    Keep it in the Key Vault and surface it as `GitHub__Webhook__Secret`. Deliveries are
-   HMAC-verified (`X-Hub-Signature-256`) against it; absent the secret the endpoint logs a
+   HMAC-verified (`X-Hub-Signature-256`) against it — or against the instance-owned App's own
+   webhook secret, which signs that App's `push` deliveries; absent both the endpoint logs a
    warning and returns **503**, and issue nodes refresh only on an explicit sync.
 
 4. **A GitHub App (optional — machine identity for server-side sync).** Operations that run
    with no signed-in user — the plugin registry's sync of the plugins repo, boot imports —
    authenticate as a **GitHub App installation** rather than someone's personal OAuth token.
-   The host binds `GitHub:App` next to `GitHub:OAuth`; left unconfigured,
-   `GitHubSyncService.ResolveAuth` simply skips the App fallback and only user credentials work.
+   The host binds `GitHub:App` next to `GitHub:OAuth`; left unconfigured, the instance's OWN App
+   is used when its administrator connected one (Administration › Package sources › Connect
+   GitHub — [Instance Repository Access](../InstanceRepositoryAccess)), and with neither,
+   `GitHubSyncService.ResolveAuth` skips the App fallback and only user credentials work.
 
    ```jsonc
    "GitHub": { "App": {
