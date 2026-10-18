@@ -184,9 +184,14 @@ public static class AccessControlPipeline
                 var callerContext = delivery.AccessContext
                                     ?? accessService?.Context
                                     ?? accessService?.CircuitContext;
+                // 🚨 ONLY a point read of THIS node — the node itself, or a layout area the type
+                // declares — may be re-decided through its declared point read. The hub's workspace
+                // holds more than the node (its satellites), so any other shape (a collection, an
+                // entity, a pointer, another path, any other message) keeps the standard denial.
+                var pointRead = DeclaredPointRead.RequestShape(delivery.Message, hubPath);
                 if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation.Value) is not { } rule)
                     return operation == NodeOperation.Read
-                        ? NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, PermissionCheckOutcome.Denied)
+                        ? NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, PermissionCheckOutcome.Denied, pointRead)
                         : Observable.Return(PermissionCheckOutcome.Denied);
 
                 var context = new NodeValidationContext
@@ -211,7 +216,7 @@ public static class AccessControlPipeline
                 // A Read on the hub's OWN path is a point read: a type's declared point read may
                 // still admit it when the type's rule refused (DeclaredPointRead).
                 return operation == NodeOperation.Read
-                    ? verdict.SelectMany(outcome => NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, outcome))
+                    ? verdict.SelectMany(outcome => NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, outcome, pointRead))
                     : verdict;
             })
             .Catch((Exception ex) =>

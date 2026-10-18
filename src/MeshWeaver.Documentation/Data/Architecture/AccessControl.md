@@ -2022,11 +2022,13 @@ link's id is its only secret.
 namespace it is honoured in, and three content properties of the node:
 
 ```json
-"pointRead": { "subjectProperty": "audienceSubject", "namespace": "l", "revokedProperty": "revokedAt", "expiresProperty": "expiresAt" }
+"pointRead": { "subjectProperty": "audienceSubject", "namespace": "l", "areas": ["", "Overview"], "revokedProperty": "revokedAt", "expiresProperty": "expiresAt" }
 ```
 
 - `namespace` is required. Only a DIRECT child of it is admitted, never a node elsewhere and never a
   descendant. It must be a namespace only the platform writes (public links: `l`).
+- `areas` lists the layout areas of the node an admitted caller may render (`""` = the hub's default
+  area, the page opened at the node's bare path). Empty admits the node itself and no area.
 - `subjectProperty` holds the one grant subject admitted. `Anonymous` admits every caller, `Public`
   admits every signed-in user, a group path admits its members (transitively, through the same
   membership expansion the permission fold uses), and a user id admits that user.
@@ -2070,9 +2072,10 @@ declaration). Later revisions are therefore never delivered to a caller who lost
 | Seam | Point read? | Consults the declaration |
 |---|---|---|
 | The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
-| The `[RequiresPermission]` delivery gate, for a Read on the hub's own path (`NodeTypeAccessRuleGate.ReconsiderPointRead`) | yes | yes |
+| The `[RequiresPermission]` delivery gate, for a Read on the hub's own path, and ONLY for the allow-listed shapes `DeclaredPointRead.RequestShape` names: a `GetDataRequest`/`SubscribeRequest` for the node itself (`MeshNodeReference`) or for a layout area the declaration lists | yes | yes |
+| Any other message to that hub, including a `CollectionReference`, an entity or pointer reference, or another path: the hub's workspace holds the node's satellites too | no | **no** |
 | The node-stream read gate (`MeshNodeStreamCache`), never cached, and followed live for the whole subscription | yes | yes |
-| `NodeTypeAccessRuleGate.CheckFor` for Read | yes | yes |
+| `NodeTypeAccessRuleGate.CheckFor` | n/a | **no** |
 | A listing or query row (`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`), where `IsPointRead` stays false | no | **no** |
 | The Postgres permission table (`user_effective_permissions`) | no | **no** |
 
@@ -2092,7 +2095,9 @@ Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
 - an open node stream cut on revocation, the original live verdict turning false on revocation and
   at expiry, and a refusal right after the owner acknowledged a revocation;
 - an undetermined type rule not re-decided, and a borrowed System stamp not making a node
-  platform-issued.
+  platform-issued;
+- a collection read or subscription on an admitted node's hub refused (no satellite returned), an
+  undeclared layout area refused, and a declared one admitted.
 
 # Message-level permission enforcement
 

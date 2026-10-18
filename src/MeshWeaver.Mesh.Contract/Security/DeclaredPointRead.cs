@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -16,8 +17,9 @@ namespace MeshWeaver.Mesh.Security;
 /// denied.</b> The seams that serve a single node at its own path ask it on a denial: the RLS node
 /// validator for a read whose context says it is a point read
 /// (<see cref="NodeValidationContext.IsPointRead"/>, set by the node hub's own data read), the
-/// <c>[RequiresPermission]</c> delivery gate for a Read on the hub's own path, the node-stream
-/// cache's read gate, and <see cref="NodeTypeAccessRuleGate.CheckFor"/>. An undetermined check is
+/// <c>[RequiresPermission]</c> delivery gate for a Read on the hub's own path — and there ONLY for
+/// the allow-listed request shapes (<see cref="RequestShape"/>: the node itself, or a layout area the
+/// type declares) — and the node-stream cache's read gate. An undetermined check is
 /// never re-decided here. Its answer replaces the denial only when it ADMITS. Listings and queries
 /// never ask it — a query's row filter leaves <see cref="NodeValidationContext.IsPointRead"/> false,
 /// and the Postgres permission table knows nothing of it — so a node admitted this way is invisible
@@ -49,7 +51,10 @@ public static class DeclaredPointRead
     /// <param name="hub">The hub asking.</param>
     /// <param name="path">The exact path being read.</param>
     /// <param name="caller">The caller's context; null or virtual is the anonymous caller.</param>
-    public static IObservable<bool> Admits(IMessageHub hub, string path, AccessContext? caller)
+    /// <param name="area">Null for a read of the node itself; otherwise the layout area of the node to
+    /// render (<c>""</c> = the default area), admitted only when the declaration lists it
+    /// (<see cref="PointReadDeclaration.Areas"/>).</param>
+    public static IObservable<bool> Admits(IMessageHub hub, string path, AccessContext? caller, string? area = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         return Observable.Defer(() =>
@@ -72,7 +77,7 @@ public static class DeclaredPointRead
                 .SelectMany(stored => stored is null
                     ? Observable.Return(false)
                     : OwnerCurrent(hub, access, path)
-                        .Select(node => Decide(hub, access, node, userId, caller, options))
+                        .Select(node => Decide(hub, access, node, userId, caller, options, area))
                         .Switch())
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
@@ -153,6 +158,46 @@ public static class DeclaredPointRead
                && string.Equals((node.Namespace ?? "").Trim().Trim('/'), declared, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// The ONE shape of request a declared point read may admit at a node's own hub, or null for
+    /// every other shape — an ALLOW-list, never a deny-list (the read's reference comes from the data
+    /// layer, <see cref="ReadRequests.ReferenceOf"/>):
+    /// <list type="bullet">
+    ///   <item><description>a data read or subscription for the node
+    ///     itself — a <see cref="MeshNodeReference"/> naming no path or exactly <paramref name="hubPath"/>
+    ///     — answered as a read of the node (<see cref="PointReadRequest.Area"/> null);</description></item>
+    ///   <item><description>a data read or subscription for a
+    ///     LAYOUT AREA of the node — answered with that area's name (<c>""</c> for the default area),
+    ///     which the declaration must list.</description></item>
+    /// </list>
+    /// A collection, an entity or pointer reference, a query, a stream of another path and every
+    /// other message is NOT a point read: the hub's workspace holds more than the node (its
+    /// satellites), so admitting such a request would serve rows the declaration never named. Pure.
+    /// </summary>
+    /// <param name="message">The delivered message.</param>
+    /// <param name="hubPath">The path of the hub it was delivered to.</param>
+    public static PointReadRequest? RequestShape(object? message, string hubPath)
+    {
+        return ReadRequests.ReferenceOf(message) switch
+        {
+            MeshNodeReference node when string.IsNullOrEmpty(node.Path)
+                                        || string.Equals(node.Path.Trim().Trim('/'), hubPath.Trim().Trim('/'), StringComparison.OrdinalIgnoreCase)
+                => new PointReadRequest(Area: null),
+            LayoutAreaReference layout => new PointReadRequest(Area: layout.Area ?? ""),
+            _ => null,
+        };
+    }
+
+    /// <summary>Whether <paramref name="declaration"/> lists <paramref name="area"/> among the areas a point read may render (<c>""</c> = the default area). Pure.</summary>
+    /// <param name="declaration">The type's declaration.</param>
+    /// <param name="area">The requested area.</param>
+    public static bool DeclaresArea(PointReadDeclaration declaration, string area)
+    {
+        ArgumentNullException.ThrowIfNull(declaration);
+        var requested = (area ?? "").Trim();
+        return declaration.Areas.Any(a => string.Equals((a ?? "").Trim(), requested, StringComparison.OrdinalIgnoreCase));
+    }
+
     /// <summary>Whether the node's last write was made by the platform's System identity — the only issuer a declared point read admits. Pure.</summary>
     /// <param name="node">The node.</param>
     public static bool IsPlatformIssued(MeshNode node)
@@ -160,7 +205,8 @@ public static class DeclaredPointRead
 
     /// <summary>The verdict for ONE revision of the node: issuance, declaration, namespace, content, then the audience and the expiry, live.</summary>
     private static IObservable<bool> Decide(
-        IMessageHub hub, AccessService? access, MeshNode? node, string userId, AccessContext? caller, JsonSerializerOptions options)
+        IMessageHub hub, AccessService? access, MeshNode? node, string userId, AccessContext? caller, JsonSerializerOptions options,
+        string? area)
     {
         if (node is null || !IsPlatformIssued(node) || string.IsNullOrEmpty(node.NodeType))
             return Observable.Return(false);
@@ -168,6 +214,7 @@ public static class DeclaredPointRead
             .Select(declaration =>
                 declaration is not null
                 && InDeclaredNamespace(declaration, node)
+                && (area is null || DeclaresArea(declaration, area))
                 && Admission(declaration, ContentOf(node, options), DateTimeOffset.UtcNow) is { } admission
                     ? SubjectAdmits(hub, admission.Subject, userId, caller)
                         .CombineLatest(Open(admission.Until), (subject, open) => subject && open)
@@ -283,6 +330,10 @@ public static class DeclaredPointRead
             ? WellKnownUsers.Anonymous
             : caller.ObjectId;
 }
+
+/// <summary>A request a declared point read may admit: a read of the node itself (<paramref name="Area"/> null) or of one of its layout areas.</summary>
+/// <param name="Area">Null for the node itself; the layout area's name otherwise (<c>""</c> = the default area).</param>
+public sealed record PointReadRequest(string? Area);
 
 /// <summary>What a declared point read admits on one node revision: the subject, and the instant the admission ends (null when nothing ends it).</summary>
 /// <param name="Subject">The admitted grant subject.</param>

@@ -194,12 +194,7 @@ public static class NodeTypeAccessRuleGate
                     Operation = operation,
                     Node = node,
                     AccessContext = caller,
-                    IsPointRead = operation == NodeOperation.Read,
                 }, userId, logger))
-            // A Read checked on ONE path is a point read: the type's declared point read may admit it.
-            .SelectMany(outcome => operation == NodeOperation.Read
-                ? ReconsiderPointRead(hub, path, caller, outcome)
-                : Observable.Return(outcome))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
@@ -223,18 +218,19 @@ public static class NodeTypeAccessRuleGate
     /// <param name="path">The exact path being read.</param>
     /// <param name="caller">The caller's context.</param>
     /// <param name="outcome">The standard check's (and the type rule's) verdict.</param>
+    /// <param name="request">The request's shape (<see cref="DeclaredPointRead.RequestShape"/>) — null for any shape that is not a point read, which is never admitted.</param>
     public static IObservable<PermissionCheckOutcome> ReconsiderPointRead(
-        IMessageHub hub, string path, AccessContext? caller, PermissionCheckOutcome outcome)
+        IMessageHub hub, string path, AccessContext? caller, PermissionCheckOutcome outcome, PointReadRequest? request)
     {
         ArgumentNullException.ThrowIfNull(hub);
         ArgumentNullException.ThrowIfNull(outcome);
-        if (outcome.IsGranted || outcome.IsUndetermined)
+        if (outcome.IsGranted || outcome.IsUndetermined || request is null)
             return Observable.Return(outcome);
         // Bounded by the same budget the RLS validator holds a permission check to: a stalled
         // admission answers Undetermined — fail closed, and never a denial nobody established.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
-        return DeclaredPointRead.Admits(hub, path, caller)
+        return DeclaredPointRead.Admits(hub, path, caller, request.Area)
             .TakeDecisionOutsideGate()
             .DefaultIfEmpty(false)
             .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome)

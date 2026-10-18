@@ -1,7 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Client;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
@@ -46,6 +49,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Namespace = Partition,
         RevokedProperty = "revokedAt",
         ExpiresProperty = "expiresAt",
+        // The DEFAULT area only — so an explicitly named area, even the one the default renders, is not declared.
+        Areas = [""],
     };
 
     // ConfigureMeshBase, never ConfigureMesh: the default test configuration grants Public Admin.
@@ -292,6 +297,76 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
     private static bool IsRevoked(MeshNode? node)
         => node?.Content is JsonObject content && content["revokedAt"] is not null;
 
+    /// <summary>
+    /// 🚨 Review of #6935 (thread 4305971990): the delivery gate admits a declaration-only caller to
+    /// the ONE point-read shape — the node itself, or a layout area the type declares — and to nothing
+    /// else on that hub. The hub's workspace also holds the node's satellites, so a COLLECTION read or
+    /// subscription, a request for another path, or an undeclared area keeps the standard denial.
+    /// POSITIVE CONTROLS: the node itself and the declared default area are served; the same
+    /// collection request is answered for a reader with a grant (so the refusal is the gate's).
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task OnlyTheNodeAndADeclaredArea_AreAdmittedOnItsHub()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("hub", WellKnownUsers.Anonymous, ct);
+        const string Secret = "SATELLITE-SECRET-6f1d";
+        await AsSystem(new MeshNode("_Secret", link) { NodeType = "Markdown", Name = Secret, Content = new JsonObject { ["content"] = Secret } }, ct);
+
+        var visitor = ClientAs(Visitor);
+        var address = new Address(link);
+        await visitor.Observe(new PingRequest(), o => o.WithTarget(address)).Should().Emit(cancellationToken: ct);
+
+        // POSITIVE CONTROL: the node itself.
+        var node = await visitor.Observe(new GetDataRequest(new MeshNodeReference()), o => o.WithTarget(address))
+            .Select(d => d.Message).Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.NotNull(node.Data);
+
+        // (1) A COLLECTION read on the admitted hub is refused and returns nothing of the satellite.
+        var collection = await visitor.Observe(new GetDataRequest(new CollectionReference(nameof(MeshNode))), o => o.WithTarget(address))
+            .Select(d => d.Message).Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.False(collection.HasValue && collection.Value.Data is not null
+                     && JsonSerializer.Serialize(collection.Value.Data, Mesh.JsonSerializerOptions).Contains(Secret),
+            "a declaration-only caller's collection read must not return the hub's satellites");
+        Assert.True(collection.Kind == System.Reactive.NotificationKind.OnError || collection.Value.Data is null,
+            $"the collection read is refused: {collection.Kind} {collection.Exception?.Message}");
+
+        // (2) A COLLECTION subscription is refused the same way.
+        var subscribed = await visitor.GetWorkspace()
+            .GetRemoteStream<JsonElement, CollectionReference>(address, new CollectionReference(nameof(MeshNode)))
+            .Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, subscribed.Kind);
+        Assert.Contains("Access denied", subscribed.Exception!.Message);
+
+        // A request naming ANOTHER path through the node reference is not the node's own point read.
+        Assert.Null(DeclaredPointRead.RequestShape(new GetDataRequest(new MeshNodeReference($"{Partition}/other")), link));
+
+        // (3) The declared default area renders; an UNDECLARED area is refused.
+        var page = await visitor.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(address, new LayoutAreaReference((string?)null) { Id = "" })
+            .Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnNext, page.Kind);
+        var undeclared = await visitor.GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(address, new LayoutAreaReference(MeshNodeLayoutAreas.OverviewArea))
+            .Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, undeclared.Kind);
+
+        // POSITIVE CONTROL: the same collection request is ANSWERED for a reader holding a grant, so the
+        // visitor's refusal above is the gate's doing, not a request shape nobody may send.
+        var admin = await ClientAs(new AccessContext { ObjectId = "alice", Name = "alice" })
+            .Observe(new GetDataRequest(new CollectionReference(nameof(MeshNode))), o => o.WithTarget(address))
+            .Select(d => d.Message).Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnNext, admin.Kind);
+    }
+
+    private IMessageHub ClientAs(AccessContext caller)
+    {
+        var client = GetClient(config => ConfigureClient(config).AddLayoutClient());
+        client.ServiceProvider.GetRequiredService<AccessService>().SetHostIdentity(caller);
+        return client;
+    }
+
     // ───────────────────────────── fixtures ─────────────────────────────
 
     private static MeshNode TypeNode(string path, PointReadDeclaration? declaration)
@@ -302,7 +377,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             NodeType = "NodeType",
             Name = path,
             Content = new NodeTypeDefinition { PointRead = declaration },
-            HubConfiguration = config => config,
+            HubConfiguration = config => config.AddDefaultLayoutAreas(),
         };
     }
 

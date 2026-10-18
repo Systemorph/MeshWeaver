@@ -45,6 +45,14 @@ public sealed record PointReadDeclaration
     public string? Namespace { get; init; }
 
     /// <summary>
+    /// The layout areas of the node a point read may RENDER for an admitted caller — an allow-list,
+    /// each area the type has made safe to show its audience. <c>""</c> names the hub's DEFAULT area
+    /// (a page opened at the node's bare path). Empty (the default) admits the node itself and no
+    /// layout area at all.
+    /// </summary>
+    public IReadOnlyList<string> Areas { get; init; } = [];
+
+    /// <summary>
     /// The content property that, when it holds any non-null value, revokes the point read
     /// (e.g. <c>revokedAt</c>). Optional.
     /// </summary>
