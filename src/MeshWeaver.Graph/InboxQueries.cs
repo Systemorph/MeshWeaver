@@ -165,7 +165,7 @@ public static class InboxQueries
                || bare.StartsWith("path:", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool InPartition(string path, string viewer)
+    internal static bool InPartition(string path, string viewer)
     {
         var trimmed = path.TrimStart('/');
         return trimmed.Equals(viewer, StringComparison.OrdinalIgnoreCase)
@@ -213,7 +213,7 @@ public static class InboxQueries
 
     private static string Substitute(string template, string viewer, DateTimeOffset now)
         => template.Replace(ViewerToken, viewer, StringComparison.Ordinal)
-            .Replace(DecidedSinceToken, now.UtcDateTime.Subtract(DecidedWindow).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+            .Replace(DecidedSinceToken, now.UtcDateTime.Subtract(DecidedWindow).ToString("O", System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
     /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
@@ -361,8 +361,8 @@ public static class InboxQueries
         // 🚨 Pending is the enum DEFAULT and omitted from stored JSON: pending negates the stamped decisions.
         Query = $"nodeType:{ApprovalNodeType} content.{party}:{ViewerToken} "
                 + (kind == ApprovalLedgerKind.Requested
-                    ? $"-content.status:{nameof(ApprovalStatus.Approved)} -content.status:{nameof(ApprovalStatus.Rejected)} sort:LastModified-desc "
-                    : $"content.status:{nameof(ApprovalStatus.Approved)}|{nameof(ApprovalStatus.Rejected)} content.approvalDate:>={DecidedSinceToken} sort:LastModified-desc ")
+                    ? $"-content.status:{nameof(ApprovalStatus.Approved)} -content.status:{nameof(ApprovalStatus.Rejected)} sort:content.createdAt-desc "
+                    : $"content.status:{nameof(ApprovalStatus.Approved)}|{nameof(ApprovalStatus.Rejected)} content.approvalDate:>={DecidedSinceToken} sort:content.approvalDate-desc ")
                 + $"{TimedRowProjection} {ParsedQuery.CrossPartitionQualifier}",
     };
 
@@ -373,21 +373,18 @@ public static class InboxQueries
         => template.StartsWith($"nodeType:{ApprovalNodeType} ", StringComparison.Ordinal);
 
     /// <summary>
-    /// Whether a RESOLVED query is one of core's ledger shapes for <paramref name="viewer"/>: the
-    /// approval node type, keyed to the viewer by exactly one of requester/approver, mesh-wide by
-    /// declaration, and anchored by nothing else.
+    /// Whether a RESOLVED query is EXACTLY one of core's three ledger templates for
+    /// <paramref name="viewer"/> — the same text, the decided window's start being the only part that
+    /// may differ (any instant). Anything looser (an extra branch, a missing status or window) is
+    /// refused: these are the only legs allowed past the partition guard, so they are admitted by
+    /// identity, never by shape.
     /// </summary>
     internal static bool IsLedgerQuery(string resolvedQuery, string viewer)
     {
-        var parsed = new QueryParser().Parse(resolvedQuery);
-        var terms = resolvedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        var keyed = terms.Count(t => t == $"content.{RequestedByViewer}:{viewer}" || t == $"content.{ApproverIsViewer}:{viewer}");
-        return parsed.CrossPartition
-               && keyed == 1
-               && terms.Length > 0 && terms[0] == $"nodeType:{ApprovalNodeType}"
-               && !terms.Any(t => t.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase)
-                                  || t.StartsWith("path:", StringComparison.OrdinalIgnoreCase)
-                                  || t.StartsWith("scope:", StringComparison.OrdinalIgnoreCase));
+        var normalized = System.Text.RegularExpressions.Regex.Replace(
+            resolvedQuery, @"content\.approvalDate:>=\S+", $"content.approvalDate:>={DecidedSinceToken}");
+        return BuiltIn.Where(leg => IsLedgerTemplate(leg.Query))
+            .Any(leg => string.Equals(normalized, leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal), StringComparison.Ordinal));
     }
 
     /// <summary>What kind of ledger leg a RESOLVED query is, or null when it is none.</summary>

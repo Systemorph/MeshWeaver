@@ -180,7 +180,7 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
         ledger.Should().OnlyContain(l => l.Source == InboxQueries.ApprovalsSource && l.ShownByDefault);
         ledger.Count(l => InboxQueries.LedgerKindOf(l.Query) == ApprovalLedgerKind.Requested).Should().Be(1);
         ledger.Where(l => InboxQueries.LedgerKindOf(l.Query) == ApprovalLedgerKind.Decided)
-            .Should().OnlyContain(l => l.Query.Contains("content.approvalDate:>=2026-10-04 "), "14 days before the clock");
+            .Should().OnlyContain(l => l.Query.Contains("content.approvalDate:>=2026-10-04T12:00:00.0000000Z "), "exactly 14 days before the clock, to the instant");
         // As the page orders them: what waits on the viewer first, then what they are waiting for, then what was decided.
         InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Where(s => s.Source == InboxQueries.ApprovalsSource)
             .Select(s => s.Band).Should().Equal(
@@ -197,11 +197,47 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
     [InlineData("nodeType:Approvals/Approval content.requester:alice content.approver:alice partitions:all")]
     [InlineData("nodeType:Approvals/Approval content.requester:alice namespace:bob partitions:all")]
     [InlineData("nodeType:Approvals/Approval content.requester:alice")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice OR content.requester:bob partitions:all")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice partitions:all")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice content.status:Approved|Rejected partitions:all")]
     public void AContributedCrossPartitionLeg_IsRefused(string query)
     {
         var leg = new InboxQueryLeg { Source = "Mine", Query = query.Replace("alice", InboxQueries.ViewerToken) };
         InboxQueries.Resolve([leg], "alice").Should().BeEmpty();
         InboxQueries.Refused([leg], "alice").Should().ContainSingle();
+    }
+
+    /// <summary>A ledger leg's window starts at the exact instant, not at midnight, and a stray copy of a core template with another shape never passes.</summary>
+    [Fact]
+    public void TheDecidedWindow_StartsAtTheExactInstant_AndOnlyCoreTemplatesPass()
+    {
+        var at = new DateTimeOffset(2026, 10, 18, 12, 0, 0, TimeSpan.Zero);
+        var decided = InboxQueries.Resolve(InboxQueries.BuiltIn, "alice", at)
+            .Where(l => InboxQueries.LedgerKindOf(l.Query) == ApprovalLedgerKind.Decided).ToArray();
+        decided.Should().HaveCount(2);
+        foreach (var leg in decided)
+        {
+            InboxQueries.IsLedgerQuery(leg.Query, "alice").Should().BeTrue();
+            InboxQueries.IsLedgerQuery(leg.Query, "bob").Should().BeFalse("keyed to alice");
+            InboxQueries.IsLedgerQuery(leg.Query + " OR content.requester:bob", "alice").Should().BeFalse();
+        }
+        // Just before the cutoff is out, the cutoff itself and anything after is in (stored instants compare as text).
+        var cutoff = "2026-10-04T12:00:00.0000000Z";
+        decided.Should().OnlyContain(l => l.Query.Contains($">={cutoff}"));
+        string.CompareOrdinal("2026-10-04T11:59:59.0000000Z", cutoff).Should().BeNegative();
+        string.CompareOrdinal("2026-10-04T12:00:00.0000000Z", cutoff).Should().Be(0);
+        string.CompareOrdinal("2026-10-04T12:00:01.0000000Z", cutoff).Should().BePositive();
+    }
+
+    /// <summary>A ledger row opens at the approval's own page — the owner's reading view refuses another partition.</summary>
+    [Fact]
+    public void ALedgerRowInAnotherPartition_OpensAtItsOwnPage()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var row = new InboxRow { Path = "team/doc/_Approval/a1", NodeType = InboxQueries.ApprovalNodeType };
+        InboxLayoutArea.OpenTarget(row, options, "alice", _ => false).Should().Be(("/team/doc/_Approval/a1", false));
+        var own = new InboxRow { Path = "alice/_Notification/n1", NodeType = "Notification" };
+        InboxLayoutArea.OpenTarget(own, options, "alice", _ => false)!.Value.Url.Should().Be(InboxReadingView.Url("alice", own.Path));
     }
 
     /// <summary>
@@ -239,10 +275,12 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
         await Approve("ledger-dec-doc-a", "d1", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-2), ct);
         await Approve("ledger-dec-doc-b", "d2", "ledger-dec-carol", "ledger-dec-alice", ApprovalStatus.Rejected, now.AddDays(-3), ct);
         await Approve("ledger-dec-doc-a", "old", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-30), ct);
+        await Approve("ledger-dec-doc-a", "justout", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-14).AddHours(-1), ct);
+        await Approve("ledger-dec-doc-a", "justin", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-14).AddHours(1), ct);
         await Approve("ledger-dec-doc-b", "other", "ledger-dec-carol", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-1), ct);
         await Approve("ledger-dec-doc-b", "waiting", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Pending, null, ct);
 
-        (await LedgerIds("ledger-dec-alice", ApprovalLedgerKind.Decided, ids => ids.Length >= 2, ct)).Should().Equal(["d1", "d2"]);
+        (await LedgerIds("ledger-dec-alice", ApprovalLedgerKind.Decided, ids => ids.Length >= 3, ct)).Should().Equal(["d1", "d2", "justin"]);
 
         var rows = await LedgerRows("ledger-dec-alice", ApprovalLedgerKind.Decided, "UTC", ct);
         rows.Single(r => r.Path.EndsWith("/d1")).From.Should().Be("Approved by ledger-dec-bob");

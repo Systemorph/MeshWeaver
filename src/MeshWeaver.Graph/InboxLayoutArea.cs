@@ -736,6 +736,10 @@ public static class InboxLayoutArea
     {
         if (item.As<InboxRow>(options) is not { Path: { Length: > 0 } path } row || owner.Length == 0)
             return null;
+        // An approval of the ledger lives beside its document, in ANY partition: the owner's reading view
+        // would refuse it ("not in your inbox"), so it opens at its own page, under the normal access check.
+        if (string.Equals(row.NodeType, InboxQueries.ApprovalNodeType, StringComparison.Ordinal) && !InboxQueries.InPartition(path, owner))
+            return ("/" + path.TrimStart('/'), false);
         return InboxReadingView.IsHttps(row.Link) && !readable(path)
             ? (row.Link, true)
             : (InboxReadingView.Url(owner, path), false);
