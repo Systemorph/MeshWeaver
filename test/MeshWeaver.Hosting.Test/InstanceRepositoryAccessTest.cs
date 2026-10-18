@@ -278,6 +278,33 @@ public class InstanceRepositoryAccessTest(ITestOutputHelper output) : MonolithMe
         Assert.Null(await Stored(forgedFlow));
     }
 
+    /// <summary>
+    /// The guard protects the reserved PATHS, not only the record types: a wrong-typed node pre-created
+    /// at <c>Admin/GitHubApp</c> or at a source/flow path would otherwise pass, and the App's metadata
+    /// catalog (which lists by type) would never see the record the verbs later write into it.
+    /// </summary>
+    [Fact]
+    public async Task AWrongTypedNode_AtAReservedPath_IsRefused()
+    {
+        foreach (var path in new[]
+                 {
+                     InstanceGitHubApp.Path,
+                     InstancePackageSources.PathOf(Repo)!,
+                     InstanceGitHubApp.FlowPath("pre-created"),
+                 })
+        {
+            var result = await ObserveNodeOperation(
+                    new CreateNodeRequest(new MeshNode(path[(AdminPartition.Length + 1)..], AdminPartition)
+                    {
+                        NodeType = "Markdown", Name = "pre-created", State = MeshNodeState.Active,
+                    }),
+                    o => o.WithAccessContext(Identity(AdminEditor)))
+                .Select(d => d.Message).FirstAsync().Timeout(Budget).Await(TestContext.Current.CancellationToken);
+            Assert.False(result.Success, $"a Markdown node at the reserved path {path} is refused");
+            Assert.Null(await Stored(path));
+        }
+    }
+
     [Fact]
     public async Task TwoCallbacksForOneFlow_OnlyOneExchangesTheCode()
     {

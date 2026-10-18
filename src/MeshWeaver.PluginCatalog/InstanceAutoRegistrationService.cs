@@ -915,6 +915,28 @@ public sealed class InstanceAutoRegistrationService(
     internal static IObservable<Unit> WhenHealthy(IObservable<Unit> whenLoaded, IObservable<Unit> changes, Func<bool> faulted)
         => whenLoaded.Take(1).SelectMany(_ => changes.Where(_ => !faulted()).Take(1));
 
+    /// <summary>
+    /// Each instance source whose repository a configured source also names, renamed to that
+    /// configured source's name — the one the listing carries, because the configured source wins
+    /// the duplicate. Every other source is returned unchanged. Pure.
+    /// </summary>
+    /// <param name="instanceSources">The instance's own sources.</param>
+    /// <param name="configured">The deployment's configured sources: name and repository.</param>
+    internal static IReadOnlyList<InstancePackageSourceContent> UnderWinningNames(
+        IReadOnlyList<InstancePackageSourceContent> instanceSources,
+        IReadOnlyList<(string Name, string RepoPath)> configured)
+    {
+        var byRepo = configured
+            .Select(c => (Repo: GitSourceCredentials.NormalizeRepository(c.RepoPath), c.Name))
+            .Where(c => c.Repo is not null && !string.IsNullOrWhiteSpace(c.Name))
+            .GroupBy(c => c.Repo!, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
+        return [.. instanceSources.Select(s =>
+            GitSourceCredentials.NormalizeRepository(s.Repo) is { } repo && byRepo.TryGetValue(repo, out var name)
+                ? s with { Name = name }
+                : s)];
+    }
+
     private IObservable<DefaultInstallSummary> InstallDefaultsWith(
         PluginCatalogOptions options, IReadOnlyList<InstancePackageSourceContent> instanceSources)
     {
@@ -929,8 +951,18 @@ public sealed class InstanceAutoRegistrationService(
             .Where(e => e is not null)
             .Select(e => e!)
             .ToList();
+        // A local source naming a repository the deployment's configuration already names is
+        // dropped from the source list (PackageSources.FromInstance — the record's source wins), so
+        // its selections are spelled under the WINNING source's name; otherwise "reporting/Reporting"
+        // could never match the listing under "Acme" and the package would never be installed. This
+        // renames only — the entries still join `wanted`, never `authorizing`.
+        var configured = hub.ServiceProvider.GetService<IConfiguration>() is { } configuration
+            ? PackageSources.FromConfiguration(hub, configuration, logger)
+                .Select(c => (c.Name, c.RepoPath))
+                .ToList()
+            : [];
         var wanted = authorizing
-            .Concat(InstancePackageSources.InstallEntries(instanceSources)
+            .Concat(InstancePackageSources.InstallEntries(UnderWinningNames(instanceSources, configured))
                 .Select(PluginGrantEntry.TryParse)
                 .Where(e => e is not null)
                 .Select(e => e!))
