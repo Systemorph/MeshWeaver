@@ -518,13 +518,15 @@ public record DeleteNodeRequest(string Path)
     ///
     /// <para>🚨 <b>Checked by the owning node hub, in its commit turn, against its LIVE version.</b>
     /// A read-then-delete on a shared node cannot be made safe from outside: another writer can add
-    /// to the node after the caller's last read and before the delete lands. So the delete seals the
-    /// path against the owner's own writes and opens the subtree-deletion scope, then asks the owner
-    /// (a <see cref="ValidateDeleteRequest"/> carrying <see cref="ValidateDeleteRequest.ExpectedVersion"/>)
-    /// to compare. The owner compares on the turn its own writes and cross-hub patches commit on, so
-    /// every write it has acknowledged is in the compared version, including an own write it has not
-    /// stored yet (#6673). Any later write is refused rather than acknowledged. Check and delete are
-    /// therefore one step.</para>
+    /// to the node after the caller's last read and before the delete lands. So the delete opens the
+    /// subtree-deletion scope, then asks the owner (a <see cref="ValidateDeleteRequest"/> carrying
+    /// <see cref="ValidateDeleteRequest.ExpectedVersion"/>) to compare. The owner compares on the turn
+    /// its own writes and cross-hub patches commit on, so every write it has acknowledged is in the
+    /// compared version, including an own write it has not stored yet (#6673). On a match it seals the
+    /// path in that same turn, in its own process (#6856): any later own write is deferred rather than
+    /// acknowledged, until the delete's commit (refused) or abort (applied) message — or the owner's
+    /// teardown — releases the seal. Check and delete are therefore one step, whichever process
+    /// runs the delete.</para>
     ///
     /// <para>A mismatch answers <see cref="NodeDeletionRejectionReason.Conflict"/> and removes
     /// nothing; re-read the node and decide again. A node that is already gone still answers the
@@ -532,9 +534,8 @@ public record DeleteNodeRequest(string Path)
     /// asked while the node is still stored answers <see cref="NodeDeletionRejectionReason.Unavailable"/>
     /// and removes nothing.</para>
     ///
-    /// <para>Not covered yet (#6673): the seal lives in the deleting process, so an owning activation
-    /// on ANOTHER silo is not sealed after the comparison, and the storage delete itself is not a
-    /// compare-and-delete.</para>
+    /// <para>The storage delete is a compare-and-delete as well (#6856), so a row written past the
+    /// owner — straight into the store — is refused there.</para>
     ///
     /// <para><b>Root only.</b> For a <see cref="Recursive"/> delete the check applies to the node at
     /// <see cref="DeleteNodeRequest.Path"/>; descendants are not version-checked (the cascade's leaf
