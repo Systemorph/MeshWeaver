@@ -117,6 +117,14 @@ public static class DeleteSealOutcome
     /// </summary>
     public const string OwnerTeardown = nameof(OwnerTeardown);
 
+    /// <summary>
+    /// The delete gave up while its root storage delete may still be running (its observing subscription
+    /// timed out or was cancelled after the call was issued): neither a commit nor an abort is known. The
+    /// owner runs the store fence, which decides — the row moved past the confirmed version (deferred
+    /// writes run) or the row is gone (refused, the path tombstoned) — and stays sealed until it has.
+    /// </summary>
+    public const string Indeterminate = nameof(Indeterminate);
+
     /// <summary>A deleter-side seal in this process was lifted; the deferred write re-checks in its turn.</summary>
     public const string Lifted = nameof(Lifted);
 }

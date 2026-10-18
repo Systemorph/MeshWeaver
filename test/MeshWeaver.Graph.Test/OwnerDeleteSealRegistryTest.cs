@@ -297,4 +297,127 @@ public class OwnerDeleteSealRegistryTest
             registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse($"round {round}: settled");
         }
     }
+
+    /// <summary>
+    /// Review round 7 (4306349698): a FAILED fence attempt must not settle the retry that replaced it.
+    /// Each attempt's completion is a lane command naming its attempt; the seal settles only when the
+    /// CURRENT attempt finishes — a commit that arrives while the retry runs waits for that retry.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void AFailedAttempt_NeverSettlesTheRetryThatReplacedIt()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        var attempts = new System.Collections.Generic.List<System.Reactive.Subjects.AsyncSubject<bool>>();
+        registry.TakeOwnerDeleteSeal("attempts", Path, owner.Bind, _ =>
+        {
+            var attempt = new System.Reactive.Subjects.AsyncSubject<bool>();
+            attempts.Add(attempt);
+            return attempt;
+        }).Should().BeTrue();
+        owner.OnTeardown.Dispose();                                // attempt 1 runs
+        attempts[0].OnError(new InvalidOperationException("store unavailable"));
+        registry.RetryFailedFence(Path);                           // attempt 2 runs
+        attempts.Should().HaveCount(2);
+
+        registry.ReleaseOwnerDeleteSeal("attempts", Path, DeleteSealOutcome.Committed).Should().BeTrue();
+        var settled = false;
+        using var _ = registry.OwnerSealSettled("attempts").Subscribe(__ => settled = true);
+        settled.Should().BeFalse("attempt 2 can still write: the commit waits for it, not for attempt 1's fault");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue();
+
+        attempts[1].OnNext(false);
+        attempts[1].OnCompleted();
+        settled.Should().BeTrue();
+        registry.IsRecentlyDeleted(Path).Should().BeTrue();
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// Review round 7 (4306349715): a commit racing the fence's completion must never expose the path
+    /// UNSEALED before it is tombstoned. The commit records its verdict and the tombstone in ONE lane
+    /// command; settling is another. Raced on two threads: at the moment the path unseals for a
+    /// committed delete, the tombstone is already there.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public void ACommitRacingTheFencesCompletion_NeverUnsealsThePathBeforeItsTombstone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        for (var round = 0; round < 3000; round++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var registry = new RecentlyDeletedRegistry();
+            var owner = new FakeLifetime();
+            var fence = new System.Reactive.Subjects.AsyncSubject<bool>();
+            var sealId = $"unseal-{round}";
+            registry.TakeOwnerDeleteSeal(sealId, Path, owner.Bind, _ => fence).Should().BeTrue();
+            owner.OnTeardown.Dispose();
+            string? unsealedFor = null;
+            var tombstonedWhenUnsealed = false;
+            using var watch = System.Reactive.Linq.Observable.Where(
+                    registry.VersionGuardReleases(Path), o => o != DeleteSealOutcome.OwnerTeardown)
+                .Subscribe(o =>
+                {
+                    unsealedFor = o;
+                    tombstonedWhenUnsealed = registry.IsRecentlyDeleted(Path);
+                });
+
+            var go = 0;
+            var commitReached = false;
+            var commitSide = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                commitReached = registry.ReleaseOwnerDeleteSeal(sealId, Path, DeleteSealOutcome.Committed);
+            });
+            var fenceSide = new System.Threading.Thread(() =>
+            {
+                System.Threading.SpinWait.SpinUntil(() => System.Threading.Volatile.Read(ref go) == 1);
+                fence.OnNext(false); // the fence stood down (or fenced) — not "row gone"
+                fence.OnCompleted();
+            });
+            commitSide.Start();
+            fenceSide.Start();
+            System.Threading.Volatile.Write(ref go, 1);
+            commitSide.Join();
+            fenceSide.Join();
+
+            unsealedFor.Should().NotBeNull($"round {round}: the seal settled");
+            if (commitReached)
+            {
+                unsealedFor.Should().Be(DeleteSealOutcome.Committed,
+                    $"round {round}: the commit reached the seal, so the path unseals as committed");
+                tombstonedWhenUnsealed.Should().BeTrue(
+                    $"round {round}: a committed delete is tombstoned before the path is unsealed");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Review round 7 (4306349658): an INDETERMINATE outcome (the delete gave up while its storage delete
+    /// may still be running) is no abort. The owner runs the store fence and stays sealed until it
+    /// lands; only then do its deferred writes run.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void AnIndeterminateOutcome_FencesBeforeTheSealLifts()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var owner = new FakeLifetime();
+        var fence = new System.Reactive.Subjects.AsyncSubject<bool>();
+        var ran = 0;
+        registry.TakeOwnerDeleteSeal("indeterminate", Path, owner.Bind, _ =>
+        {
+            ran++;
+            return fence;
+        }).Should().BeTrue();
+
+        registry.ReleaseOwnerDeleteSeal("indeterminate", Path, DeleteSealOutcome.Indeterminate).Should().BeTrue();
+        ran.Should().Be(1, "the fence decides an indeterminate delete");
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue("not an abort: deferred writes wait for the fence");
+        fence.OnNext(false);
+        fence.OnCompleted();
+        registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse("the fence moved the row; the delete can no longer remove it");
+        registry.IsRecentlyDeleted(Path).Should().BeFalse();
+    }
 }

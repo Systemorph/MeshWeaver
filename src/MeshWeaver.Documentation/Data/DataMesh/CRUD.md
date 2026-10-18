@@ -345,8 +345,13 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   - **Committed** (the root row is gone): the owner tombstones the path, and every deferred write is
     refused with `SubtreeDeletionInFlightException`. Nothing it deferred was acknowledged, and its
     pending flush cannot store the node again.
-  - **Aborted** (any other end, for example `Conflict`, `HasChildren` or a timeout): the deferred
-    writes run their commit turn again and are applied.
+  - **Aborted** (the delete gave up and its root storage delete was never issued, or answered:
+    for example `Conflict` or `HasChildren`): the deferred writes run their commit turn again and are
+    applied.
+  - **Indeterminate** (the delete gave up while its root storage delete may still be running, for
+    example when the commit stage timed out after issuing it): neither a commit nor an abort is known,
+    because unsubscribing does not stop a storage call that is already running. The owner runs the
+    store fence below, while it still lives, and its writes wait until the fence has decided.
   - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
     Its teardown refuses the deferred writes, fences the row (below) and then unseals the path for the
     next activation. No timer releases a seal: one that fired while the delete was still running would let
@@ -397,6 +402,18 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
   it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
   activation, within the same time budget.
+- **Every seal transition is serialized.** Taking a seal, a release (commit, abort, indeterminate),
+  an abort-before-check mark, the teardown, the start of a fence, a fence's completion, a fence retry,
+  settling and removal are each ONE command on ONE serialized lane in the owner's process (a
+  `Subject` + `Select(Run)` + `Concat`). No two transitions can interleave. The lane belongs to the
+  process, not to the owning activation, because a seal must outlive the activation that took it:
+  its teardown is exactly when the fence runs. Seal state is immutable and replaced by a command, and
+  the commit turns that defer own writes only read the published snapshot. A command tombstones a
+  committed path before it publishes the path as unsealed, so a reader that sees the path unsealed
+  already sees the tombstone. The fence's store I/O runs off the lane, on the I/O pool
+  (`owner-delete-fence`). Its completion comes back as a command that names its attempt, so a stale
+  attempt can never settle the retry that replaced it. Events and answers a command decides run
+  after it, outside the lane.
 - **The owner is torn down while it holds the seal.** Its deleter may still be alive and paused
   before the store. So the teardown first refuses the writes it deferred, then **fences the stored
   row**: a compare-and-set (`WriteIfVersion`) moves the row one version past the confirmed version,

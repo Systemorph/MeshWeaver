@@ -418,3 +418,69 @@ public class OwnerHeldDeleteSealDeleterDeathTest(OwnerHeldDeleteSealDeleterDeath
     /// <summary>Its own cluster: the case kills a silo.</summary>
     public class Cluster : FaultInjectionCluster;
 }
+
+/// <summary>
+/// Review round 7 (#6856): a delete whose COMMIT stage times out while its root storage delete is
+/// still running. Unsubscribing does not stop that storage call, so the outcome is INDETERMINATE —
+/// never an abort. The owner runs the store fence and keeps its deferred writes waiting until it has
+/// landed; the late storage delete is then refused at its compare-and-delete, and the write survives.
+/// Before, the deleter sent Aborted, the owner applied the deferred write at once, and the storage
+/// delete — still running — could remove the row that write was about to update.
+/// </summary>
+public class AnIndeterminateDeleteIsFencedTest(AnIndeterminateDeleteIsFencedTest.Cluster cluster)
+    : OwnerHeldDeleteSealTestBase(cluster), IClassFixture<AnIndeterminateDeleteIsFencedTest.Cluster>
+{
+    [Fact(Timeout = 180_000)]
+    public async Task ACommitStageTimeout_WhileTheStorageDeleteRuns_IsFenced_NotAborted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-indeterminate");
+        var read = StoredVersion(path);
+
+        using var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the root storage delete was issued and is held at the deleter's store", ct);
+
+        var write = OwnWrite(owner, "written while the delete was undecided");
+        using var writeConnection = write.Connect();
+        using var flushHold = Mesh.Storage(OwnerSilo).HoldWrites(path); // holds the fence's write too
+        var response = (await delete.Should().Within(TestTimeouts.Convergence)
+            .Emit("the commit stage times out while its storage delete is still held", ct)).Message;
+        response.Success.Should().BeFalse("the commit stage gave up");
+
+        await write.Should().NotEmit(DeferredWindow,
+            "the outcome is indeterminate: the deferred write waits for the fence, it is not resumed as if aborted",
+            ct);
+
+        flushHold.Release(); // the fence lands: the row moves past the confirmed version
+        var answer = await write.Should().Within(TestTimeouts.Convergence)
+            .Emit("the fence settled the seal and the deferred write runs", ct);
+        answer.Kind.Should().Be(NotificationKind.OnNext, answer.Exception?.Message ?? "the fence moved the row");
+
+        deleteHold.Release(); // the storage delete, still running, now meets the fenced row
+        var stored = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.Stored(path))
+            .Where(n => n?.Name == "written while the delete was undecided")
+            .Amb(Observable.Timer(TimeSpan.FromSeconds(10)).Select(_ => (MeshNode?)null))
+            .Should().Within(TestTimeouts.Convergence).Emit("the write is stored, or the window closes", ct);
+        stored.Should().NotBeNull("the late storage delete was refused at the fenced row; the acknowledged write survives");
+    }
+
+    /// <summary>A cluster whose node operations time out quickly, so the commit stage gives up in seconds.</summary>
+    public class Cluster : FaultInjectionCluster
+    {
+        /// <inheritdoc />
+        protected override Type SiloConfiguratorType => typeof(ShortBudgetSiloConfigurator);
+    }
+
+    /// <summary>The fault-injection silo with a 4 s node-operation budget.</summary>
+    public class ShortBudgetSiloConfigurator : FaultInjectionSiloConfigurator
+    {
+        /// <inheritdoc />
+        protected override MeshBuilder ConfigureAdditional(MeshBuilder builder)
+            => builder.ConfigureServices(services =>
+                services.AddSingleton(new MeshOperationOptions { Timeout = TimeSpan.FromSeconds(4) }));
+    }
+}

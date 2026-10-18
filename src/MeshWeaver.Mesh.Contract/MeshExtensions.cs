@@ -3753,7 +3753,8 @@ public static class MeshExtensions
         bool rootRemoved,
         AccessContext? callerAccessContext,
         TimeSpan bound,
-        ILogger logger)
+        ILogger logger,
+        RecentlyDeletedRegistry? registry)
         => Observable.Defer(() =>
         {
             // Once per delete: the success path releases before its response, the scope's disposal
@@ -3772,7 +3773,13 @@ public static class MeshExtensions
                 target = sealedBy;
             else
                 return Observable.Return(System.Reactive.Unit.Default); // the owner took no seal
-            var outcome = rootRemoved ? DeleteSealOutcome.Committed : DeleteSealOutcome.Aborted;
+            // Committed only on a recorded removal; Indeterminate while a root storage delete this process
+        // issued has not answered (an unsubscribe does not stop it); an abort only when neither holds.
+        var outcome = rootRemoved
+            ? DeleteSealOutcome.Committed
+            : registry?.IsRootDeleteUnsettled(path) == true
+                ? DeleteSealOutcome.Indeterminate
+                : DeleteSealOutcome.Aborted;
             logger.LogDebug("[DeleteNode] owner seal release sent path={Path} seal={SealId} outcome={Outcome} to={Target}",
                 path, lease.SealId, outcome, target);
             return issuingHub
@@ -4030,6 +4037,9 @@ public static class MeshExtensions
                     confirmed.Path);
                 return Observable.Throw<bool>(ex);
             });
+
+    /// <summary>The I/O pool the owner-teardown store fence runs on (#6856).</summary>
+    internal const string OwnerDeleteFencePool = "owner-delete-fence";
 
     /// <summary>How often the store fence re-reads after a lost compare-and-set.</summary>
     private const int MaxFenceAttempts = 4;
@@ -4564,7 +4574,7 @@ public static class MeshExtensions
                                                 System.Reactive.Disposables.Disposable.Create(() => ReleaseOwnerSeal(
                                                         sealLease, issuingHub, path,
                                                         SnapshotProgress().Contains(path, StringComparer.OrdinalIgnoreCase),
-                                                        request.AccessContext, budget, logger)
+                                                        request.AccessContext, budget, logger, recentlyDeleted)
                                                     .Subscribe(_ => { }, ex => logger.LogWarning(ex,
                                                         "[DeleteNode] owner seal release for '{Path}' faulted", path))),
                                                 deletionScope,
@@ -4891,7 +4901,7 @@ public static class MeshExtensions
                                                 ? Observable.Return(deletedPaths)
                                                 : ReleaseOwnerSeal(sealLease, issuingHub, path,
                                                         SnapshotProgress().Contains(path, StringComparer.OrdinalIgnoreCase),
-                                                        request.AccessContext, budget, logger)
+                                                        request.AccessContext, budget, logger, recentlyDeleted)
                                                     .Select(_ => deletedPaths))
                                             .Do(deletedPaths =>
                                             {
@@ -5774,6 +5784,7 @@ public static class MeshExtensions
         // pipeline rather than only the one an incident happened to name.
         var changeFeed = meshHub.ServiceProvider.GetService<IMeshChangeFeed>();
         var streamCache = meshHub.ServiceProvider.GetService<IMeshNodeStreamCache>();
+        var rootDeletes = meshHub.ServiceProvider.GetService<RecentlyDeletedRegistry>();
         // 🚨 ONE LANE FOR EVERY LEAF OF THE CASCADE (#6351). Unbounded, the bottom-up walk posted
         // a leaf delete per planned path at once, every one of them ended in a write on the cap-1
         // `pg:{provider}` pool, and the leaves at the back of that self-made queue tripped their own
@@ -5819,7 +5830,16 @@ public static class MeshExtensions
         // reached this one, so without the publish, the stream-cache invalidation and the owner's
         // disposal a live stream here would go on replaying the pre-delete node.
         IObservable<string> GuardedRootDelete(string path, long confirmedVersion)
-            => storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
+            => Observable.Defer(() =>
+                {
+                    // 🚨 Noted from ISSUE to RESULT — never cleared by an unsubscribe: a timed-out or
+                    // cancelled observer does not stop a storage delete that is already running, so
+                    // until the store has answered, this delete's outcome is Indeterminate, not an
+                    // abort (#6856).
+                    var issued = rootDeletes?.BeginRootDelete(path);
+                    return storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
+                        .Do(_ => issued?.Dispose(), _ => issued?.Dispose(), () => issued?.Dispose());
+                })
                 .Take(1)
                 .SelectMany(removed => removed
                     ? Observable.Return(path)
@@ -6975,9 +6995,16 @@ public static class MeshExtensions
             // The store fence the seal runs if this activation is torn down while it holds it — the
             // store and options resolved now, while this hub is alive.
             var jsonOptions = hub.JsonSerializerOptions;
+            // The fence's store I/O runs on the I/O pool, off every hub and off the seal lane; only
+            // its completion returns to the lane, as a command.
+            var fencePool = sealRegistry is null
+                ? null
+                : hub.ServiceProvider.GetService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()?.Get(OwnerDeleteFencePool);
             Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = sealRegistry is null
                 ? null
-                : confirmed => stop => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop);
+                : confirmed => stop => fencePool is null
+                    ? FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop)
+                    : fencePool.InvokeObservable(_ => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop));
             CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested, request.Message.SealId, sealRegistry,
                     sealReleaseAddress, fenceFor)
                 .Select(answer => (object)answer)
