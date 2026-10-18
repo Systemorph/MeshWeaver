@@ -162,10 +162,9 @@ public sealed class GitHubSyncService
                     "URL like https://github.com/owner/repo (the repo is created automatically if it doesn't " +
                     "exist), then Sync."));
 
-            // The guard SEQUENCE (AzureReposPushPolicy.ExportGuard): the Azure Repos push-only rule
-            // (policy azure-repos-push-only, MeshWeaver#5248) FIRST, so an Azure source declared in
-            // any direction gets the provider's refusal; then the generic import-only rule.
-            if (AzureReposPushPolicy.ExportGuard(config) is { } refusal)
+            // The guard (AzureReposSyncPolicy.ExportGuard): the import-only direction rule, the same
+            // for every provider (policy azure-repos-two-way, MeshWeaver#6500).
+            if (AzureReposSyncPolicy.ExportGuard(config) is { } refusal)
                 return Observable.Throw<GitHubPushResult>(refusal.ToException());
 
             return ResolveAuthFor(repoUrl, userId).SelectMany(auth =>
@@ -384,9 +383,7 @@ public sealed class GitHubSyncService
         // UpdateConfig / EnsureConfigNode — the GitSync CI access-context flake.)
         var accessService = hub.ServiceProvider.GetService<AccessService>();
         var ctx = accessService?.Context ?? accessService?.CircuitContext;
-        if (AzureReposPushPolicy.RefuseInbound(repositoryUrl, AzureReposPushPolicy.InboundOperation.Import) is { } azureRefusal)
-            return Observable.Throw<StaticRepoImportResult>(azureRefusal.ToException());
-        return ResolveAuth(userId, repositoryUrl).SelectMany(auth =>
+        return ResolveReadAuth(userId, repositoryUrl).SelectMany(auth =>
         {
             var token = auth.Token;
             // Pre-create the Space under the USER so they become its admin and the
@@ -450,10 +447,9 @@ public sealed class GitHubSyncService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<StaticRepoImportResult>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
-            // The guard SEQUENCE (AzureReposPushPolicy.ReimportGuard): the Azure Repos push-only rule
-            // FIRST, then the generic export-only rule — so an Azure source declared Export-only gets
-            // the provider's refusal, not the generic one.
-            if (AzureReposPushPolicy.ReimportGuard(config) is { } refusal)
+            // The guard (AzureReposSyncPolicy.ReimportGuard): the export-only direction rule, the
+            // same for every provider (policy azure-repos-two-way, MeshWeaver#6500).
+            if (AzureReposSyncPolicy.ReimportGuard(config) is { } refusal)
                 return Observable.Throw<StaticRepoImportResult>(refusal.ToException());
             // Two-way (config.TwoWay): don't overwrite/prune nodes changed on the server since the last
             // recorded sync (config.LastSyncedAt) — they are carried back on the next commit. `force`
@@ -467,7 +463,7 @@ public sealed class GitHubSyncService
             {
                 Reconcile = reconcile,
             };
-            return ResolveAuth(userId, repoUrl).SelectMany(auth =>
+            return ResolveReadAuth(userId, repoUrl).SelectMany(auth =>
             {
                 var token = auth.Token;
                 logger?.LogInformation("Re-importing {Space} at {Ref} (twoWay={TwoWay}, force={Force})",
@@ -818,9 +814,7 @@ public sealed class GitHubSyncService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<BranchState>(new InvalidOperationException(
                     "No GitHub repository configured for this Space."));
-            if (AzureReposPushPolicy.RefuseInbound(repoUrl, AzureReposPushPolicy.InboundOperation.CheckBranch) is { } azureRefusal)
-                return Observable.Throw<BranchState>(azureRefusal.ToException());
-            return ResolveAuth(userId, repoUrl).SelectMany(auth =>
+            return ResolveReadAuth(userId, repoUrl).SelectMany(auth =>
             {
                 var token = auth.Token;
                 var branch = string.IsNullOrWhiteSpace(config.Branch) ? "main" : config.Branch;
@@ -846,18 +840,37 @@ public sealed class GitHubSyncService
     /// <param name="userId">Whose GitHub credential authenticates the lookup (the App when they
     /// have none).</param>
     public IObservable<string> GetBranchHead(string repositoryUrl, string branch, string userId)
-        => AzureReposPushPolicy.RefuseInbound(repositoryUrl, AzureReposPushPolicy.InboundOperation.BranchHead) is { } azureRefusal
-            ? Observable.Throw<string>(azureRefusal.ToException())
-            : ResolveAuth(userId, repositoryUrl).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
+        => ResolveReadAuth(userId, repositoryUrl).SelectMany(auth => repoClient.GetHeadSha(repositoryUrl, branch, auth.Token));
 
     /// <summary>A resolved GitHub authentication: the token plus the user credential when the token is theirs (null = App identity).</summary>
     private sealed record ResolvedGitHubAuth(string Token, GitHubCredential? Credential);
 
     /// <summary>
-    /// The authentication for an operation against <paramref name="repositoryUrl"/>: an Azure Repos
-    /// URL takes the instance's declared Azure DevOps identity (<see cref="AzureReposTokenService"/>,
-    /// MeshWeaver#5248) — never a user's GitHub credential; every other URL takes
-    /// <see cref="ResolveAuth"/>.
+    /// The authentication for a READ of <paramref name="repositoryUrl"/> (import, re-import, branch
+    /// state, branch head): an Azure Repos URL takes the instance's declared Azure DevOps identity
+    /// (<see cref="AzureReposAuth"/>) — never a user's GitHub credential, which means nothing there;
+    /// every other URL takes <see cref="ResolveAuth"/>, unchanged.
+    /// </summary>
+    private IObservable<ResolvedGitHubAuth> ResolveReadAuth(string userId, string repositoryUrl)
+        => GitRepositoryProvider.IsAzureRepos(repositoryUrl)
+            ? AzureReposAuth()
+            : ResolveAuth(userId, repositoryUrl);
+
+    /// <summary>
+    /// The instance's declared Azure DevOps identity (<see cref="AzureReposTokenService"/>,
+    /// MeshWeaver#5248): one Entra token, for reads and pushes alike. Refused by name when GitSync
+    /// was registered without it.
+    /// </summary>
+    private IObservable<ResolvedGitHubAuth> AzureReposAuth()
+        => azureRepos is null
+            ? Observable.Throw<ResolvedGitHubAuth>(
+                GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException())
+            : azureRepos.GetToken().Select(token => new ResolvedGitHubAuth(token, null));
+
+    /// <summary>
+    /// The authentication for an EXPORT to <paramref name="repositoryUrl"/>: an Azure Repos URL
+    /// takes the instance's declared Azure DevOps identity (<see cref="AzureReposAuth"/>); every
+    /// other URL takes <see cref="ResolveAuth"/> without a source's read credential.
     /// </summary>
     private IObservable<ResolvedGitHubAuth> ResolveAuthFor(string repositoryUrl, string userId)
     {
@@ -865,12 +878,9 @@ public sealed class GitHubSyncService
         // credential — provisioned with Contents: Read, for the import and reconcile call sites
         // that pass their repository to ResolveAuth. A push therefore keeps the identity it always
         // had: the user's, else the instance's own App installation.
-        if (!GitRepositoryProvider.IsAzureRepos(repositoryUrl))
-            return ResolveAuth(userId, repositoryUrl: null);
-        return azureRepos is null
-            ? Observable.Throw<ResolvedGitHubAuth>(
-                GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException())
-            : azureRepos.GetToken().Select(token => new ResolvedGitHubAuth(token, null));
+        return GitRepositoryProvider.IsAzureRepos(repositoryUrl)
+            ? AzureReposAuth()
+            : ResolveAuth(userId, repositoryUrl: null);
     }
 
     /// <summary>

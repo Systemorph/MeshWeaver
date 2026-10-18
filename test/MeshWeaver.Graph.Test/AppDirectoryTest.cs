@@ -372,6 +372,69 @@ public class AppDirectoryPureTest
         rows[0].ContentAs<App>(Options)!.Source.Should().Be(AppSources.Directory);
     }
 
+    /// <summary>A package declares <c>launcherGroup: ""</c> to sit TOP-LEVEL (the Inbox's shape) and
+    /// <c>launcherGroupOrder</c> to sort its group; both are read off the root content, shape-tolerantly.</summary>
+    [Fact]
+    public void AnAppRoot_DeclaresATopLevelTile_AndAGroupOrder_AsData()
+    {
+        var threads = AppDirectory.ReadRoot(
+            new MeshNode("AI") { Name = "Threads", Category = "AI & learning", Content = System.Text.Json.JsonDocument.Parse(
+                """{"app":true,"entryPoint":"AI/AiThreads","launcherGroup":""}""").RootElement.Clone() }, Options)!;
+        var crm = AppDirectory.ReadRoot(
+            new MeshNode("Crm") { Name = "CRM", Category = "Business", Content = System.Text.Json.JsonDocument.Parse(
+                """{"app":true,"launcherGroupOrder":7}""").RootElement.Clone() }, Options)!;
+
+        threads.LauncherGroup.Should().Be("", "an empty group is a real value: top-level, in no folder");
+        crm.LauncherGroup.Should().BeNull("not declared → the store category applies");
+        crm.LauncherGroupOrder.Should().Be(7);
+
+        var entries = AppDirectory.Compose("alice", [threads, crm], isGlobalAdmin: false);
+        entries.Single(e => e.Id == "AI").Category.Should().Be("");
+        entries.Single(e => e.Id == "AI").GroupDeclared.Should().BeTrue();
+        entries.Single(e => e.Id == "Crm").Category.Should().Be("Business");
+        entries.Single(e => e.Id == "Crm").GroupDeclared.Should().BeFalse();
+    }
+
+    /// <summary>Settings and Administration share ONE group, sorted last; the Inbox stays top-level.</summary>
+    [Fact]
+    public void TheSettingsTiles_ShareOneLastGroup_TheInboxStaysTopLevel()
+    {
+        var entries = AppDirectory.BuiltIns("alice", isGlobalAdmin: true);
+        entries.Where(e => e.Id is AppDirectory.SettingsId or AppDirectory.AdminId)
+            .Should().OnlyContain(e => e.Category == AppDirectory.SettingsGroup
+                                       && e.GroupDeclared && e.GroupOrder == AppDirectory.LastGroupOrder
+                                       && e.GroupLabelKey == "common.settings");
+        entries.Single(e => e.Id == AppDirectory.InboxId).Category.Should().BeNull();
+        entries.Single(e => e.Id == AppDirectory.InboxId).GroupOrder.Should().Be(0);
+    }
+
+    /// <summary>A DECLARED group beats the legacy seed's non-custom copy, never the viewer's own choice.</summary>
+    [Fact]
+    public void ADeclaredGroup_BeatsTheSeedCopy_NeverTheViewersChoice()
+    {
+        var declared = new AppDirectoryEntry("AI", "Threads", "t.svg", null, "", "AI/AiThreads") { GroupDeclared = true, GroupOrder = 5 };
+        var seeded = new LauncherArrangement
+        {
+            Entries = ImmutableDictionary.CreateRange(StringComparer.OrdinalIgnoreCase, new[]
+            {
+                KeyValuePair.Create("AI", new LauncherEntry { Group = "AI", Order = 2 }),
+            }),
+        };
+        var seededRow = AppDirectoryQueryProvider.Rows("alice", [declared], seeded, Options)[0].ContentAs<App>(Options)!;
+        seededRow.Group.Should().Be("", "the seed's copy of an old category yields to the declared group");
+        seededRow.GroupOrder.Should().Be(5);
+        var labelled = declared with { GroupLabelKey = "common.settings" };
+        AppDirectoryQueryProvider.Rows("alice", [labelled], seeded, Options)[0].ContentAs<App>(Options)!
+            .GroupLabelKey.Should().Be("common.settings", "the heading is localized by key; Group stays the identity");
+
+        var chosen = new LauncherArrangement().Place("AI", "Mine", 1);
+        var chosenRow = AppDirectoryQueryProvider.Rows("alice", [declared], chosen, Options)[0].ContentAs<App>(Options)!;
+        chosenRow.Group.Should().Be("Mine", "a group the viewer chose always wins");
+        chosenRow.GroupOrder.Should().Be(0, "the declared sort preference belongs to the declared group");
+        AppDirectoryQueryProvider.Rows("alice", [labelled], chosen, Options)[0].ContentAs<App>(Options)!
+            .GroupLabelKey.Should().BeNull("a viewer-authored group name is shown as written");
+    }
+
     /// <summary>The snapshot fold behind the provider's unified surface applies EVERY delta kind —
     /// a Removed path leaves the snapshot (the interface's default bridge drops Removed).</summary>
     [Fact]

@@ -546,10 +546,19 @@ keeps the supersede model in the next section.
 
 ### The rules
 
-1. **A push run on the trunk is never cancelled** — not by the concurrency group
+1. **A RUNNING push run on the trunk is never cancelled** — not by the concurrency group
    (`cancel-in-progress` is already false on the default branch) and not by the supersede lane, which
    a per-module repo does not call (`scripts/check-main-runs-not-cancelled.py` refuses the call).
-   Every merge's run reaches its own verdict.
+   Every trunk run that STARTS reaches its own verdict. A run that has not started yet is a different
+   matter: trunk pushes share ONE concurrency group, so a merge burst collapses to the running run
+   plus the newest pending one, and a displaced pending run ends `cancelled` with no job. Rules 2, 4
+   and 5 make that loss-free. The union scope carries every change the displaced run held, an older
+   leg would have stood down anyway, and the seal never goes backwards. What it gives up is a
+   separate verdict per merge inside a burst. A RE-RUN of a trunk push keeps a per-commit group, so
+   re-running an older commit never displaces the tip's pending run. Until MeshWeaver.Plugins#3928
+   each push was keyed on its commit, and every merge ran its full run concurrently. Measured on
+   2026-10-18: 7 main runs of 50–70 jobs in flight at once, while 28 runs, pull requests among them,
+   waited for the same runner pools.
 2. **A push builds its DEPENDENCY NETWORK, never everything.** The scope is the affected closure —
    the in-mesh `requires`/dependents walk plus the `ProjectReference` compile tree — over the history
    union since the newest SUCCESSFUL trunk run (`node-repo-publication-base.py`). Failed, cancelled
@@ -640,8 +649,12 @@ keeps the supersede model in the next section.
 
 ### What it costs, and what it does not cover
 
-* **Overlap.** A push landing while an earlier run still builds rebuilds that run's network too
-  (rule 2's union). That is the price of never cancelling; rule 4 makes it harmless.
+* **Overlap.** A push landing while an earlier run still builds waits as the one pending trunk run
+  (rule 1) and starts once that run ends. If the earlier run SUCCEEDED and withheld nothing, it is
+  the newest successful baseline (rule 2), so the waiting run builds only what landed after it. If
+  it FAILED, or withheld its publication, it is walked past and its changes stay in the waiting
+  run's union. A run that overlaps in time (a re-run, or the release lane) can still rebuild a
+  network that another run is building; rule 4 makes that harmless.
 * **A red newest leg.** When the newest run's leg for a module fails, rule 4 has already stood the
   older leg down, so the module stays at its previously published version until the fix lands. The
   red is on the trunk and names the module.

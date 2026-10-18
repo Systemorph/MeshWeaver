@@ -60,6 +60,51 @@ Controls.MessageBar("Connect your GitHub account to sync this space.")
 The body is plain text. When the message itself needs a link or emphasis, give it an action, or put
 a `Markdown` control next to the bar. Never put markup in the body.
 
+## The outcome of a click: `ActionNotice`
+
+A click that reports back ("Sending invitation…", "Draft created.", "Couldn't connect: …") writes an
+`ActionNotice` into a data id, and the page renders that slot as a message bar. The notice is DATA:
+an intent and a text, never a pre-rendered HTML string. `ActionNotice.Info`, `Success`, `Warning`
+and `Error` build one; `host.ShowNotice(id, notice)` writes it; `host.NoticeView(id)` is the slot's
+view, empty until the first notice arrives.
+
+```csharp
+const string ResultId = "inviteResult";
+
+stack = stack
+    .WithView(Controls.Button("Invite").WithClickAction(ctx =>
+    {
+        ctx.Host.ShowNotice(ResultId, ActionNotice.Info("Sending invitation…"));
+        invitations.Send(email).Subscribe(
+            _ => ctx.Host.ShowNotice(ResultId, ActionNotice.Success($"Invitation sent to {email}.")),
+            ex => ctx.Host.ShowNotice(ResultId, ActionNotice.Error(ex.Message)));
+        return Task.CompletedTask;
+    }))
+    .WithView((h, _) => h.NoticeView(ResultId));
+```
+
+Use "Info" for work in progress. Choose the intent by what happened, because it also sets the
+bar's live-region role.
+
+---
+
+# Hint
+
+`Controls.Hint(text)` is the muted line under a heading, an empty state ("No additional sync
+sources."), or a loading placeholder. It is a `Body` label in the theme's hint colour
+(`Controls.HintColor`, `var(--neutral-foreground-hint)`), so it follows light and dark mode. It
+replaces `Controls.Html("<p style=\"color: var(--neutral-foreground-hint)\">…</p>")`.
+
+```csharp --render HintLine --show-code
+Controls.Stack
+    .WithVerticalGap("4px")
+    .WithView(Controls.H3("Additional sync sources"))
+    .WithView(Controls.Hint("Sync this Space with more repositories, each with its own branch and direction."))
+    .WithView(Controls.Hint("No additional sync sources."))
+```
+
+When the line needs a link or code formatting, use `Controls.Markdown` instead.
+
 ---
 
 # Link

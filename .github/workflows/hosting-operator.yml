@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 38 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 38 (34 commands + run.sh + _common.sh + _audit.jq + _values_half.py). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 42 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 42 (37 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -229,6 +229,13 @@ jobs:
           # real pod script runs). Its plan step is the Plugins half, which merges after this image is on
           # hosting-operator:main, for the same reason as hosting-migrate above.
           hosting-dump-analyze       #6432 — ships and is behaviour-tested; the plan half is the Plugins AnalyzeDump action
+          #
+          # hosting-manifest-apply is the governed apply of a COMMITTED cluster manifest (the Plugins
+          # `ApplyClusterManifest` InstanceAction; Systemorph/Memex aks-ops.yml runs it on the lane from a
+          # MeshWeaver checkout — never in a Job, and it refuses to run where deploy/aks/manifests is not
+          # beside bin/). Behaviour-tested against test/stubs/manifest-apply. The plan half is the Plugins
+          # ApplyClusterManifest action; the line moves up into the plan list once that has merged.
+          hosting-manifest-apply     ApplyClusterManifest — ships and is behaviour-tested; the plan half is the Plugins ApplyClusterManifest action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
