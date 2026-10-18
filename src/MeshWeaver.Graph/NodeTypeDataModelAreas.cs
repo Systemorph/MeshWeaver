@@ -62,7 +62,7 @@ internal static class NodeTypeDataModelAreas
                 return Controls.Stack.WithWidth("100%").WithStyle("padding: 24px;")
                     .WithView(typeDef == null
                         ? Controls.Markdown($"# Type not found\n\nType '{typeName}' was not found in this NodeType's data model.")
-                        : DataModelLayoutArea.RenderTypeDetails(typeDef, model.AllTypes, linkBase));
+                        : DataModelLayoutArea.RenderTypeDetails(typeDef, model.AllTypes, linkBase, catalogHref: null, host.ViewerLocale()));
             }
 
             return (UiControl?)Controls.Stack.WithWidth("100%").WithStyle("padding: 24px; gap: 8px;")

@@ -45,11 +45,10 @@ public static class InvitationsSettingsTab
         // (watches Pending invitations, stamps EmailSentAt). This handler just creates the node.
 
         stack = stack.WithView(Controls.H2(host.Localize("settings.invitations")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "When invitation-only onboarding is enabled (<code>Features:Onboarding:InvitationOnly</code>), " +
+        stack = stack.WithView(Controls.Markdown(
+            "When invitation-only onboarding is enabled (`Features:Onboarding:InvitationOnly`), " +
             "only invited emails may complete onboarding. Invite someone below — they receive an email and " +
-            "may sign in with that address to get started.</p>"));
+            "may sign in with that address to get started."));
 
         // ── Invite form ───────────────────────────────────────────────────────
         host.UpdateData(FormDataId, new Dictionary<string, object?>
@@ -80,7 +79,7 @@ public static class InvitationsSettingsTab
             .WithClickAction(clickCtx =>
             {
                 var h = clickCtx.Host;
-                h.UpdateData(ResultDataId, PendingHtml("Sending invitation…"));
+                h.UpdateData(ResultDataId, ActionNotice.Info("Sending invitation…"));
                 h.Stream.GetDataStream<Dictionary<string, object?>>(FormDataId)
                     .Take(1)
                     .Subscribe(data =>
@@ -89,16 +88,16 @@ public static class InvitationsSettingsTab
                         var note = data?.GetValueOrDefault("note")?.ToString()?.Trim();
                         if (string.IsNullOrEmpty(inviteEmail) || !inviteEmail.Contains('@'))
                         {
-                            h.UpdateData(ResultDataId, ErrorHtml("Enter a valid email address."));
+                            h.UpdateData(ResultDataId, ActionNotice.Error("Enter a valid email address."));
                             return;
                         }
 
                         invitationService.CreateInvitation(inviteEmail, viewerId, note)
                             .Subscribe(
                                 _ => h.UpdateData(ResultDataId,
-                                    SuccessHtml($"Invited {Esc(inviteEmail)} — an invitation email will be sent shortly.")),
+                                    ActionNotice.Success($"Invited {inviteEmail} — an invitation email will be sent shortly.")),
                                 ex => h.UpdateData(ResultDataId,
-                                    ErrorHtml($"Failed to create invitation: {ex.Message}")));
+                                    ActionNotice.Error($"Failed to create invitation: {ex.Message}")));
                     });
                 return Task.CompletedTask;
             }));
@@ -107,15 +106,10 @@ public static class InvitationsSettingsTab
 
         // Result area (live HTML for invite / revoke outcomes).
         stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<string>(ResultDataId)
-                .Select(html => string.IsNullOrEmpty(html)
-                    ? (UiControl?)Controls.Stack.WithWidth("100%")
-                    : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
-                .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+            h.NoticeView(ResultDataId));
 
         // ── Existing invitations ───────────────────────────────────────────────
-        stack = stack.WithView(Controls.Html(
-            "<h3 style=\"margin: 24px 0 12px 0; font-size: 1rem;\">Invitations</h3>"));
+        stack = stack.WithView(Controls.H3(host.Localize("settings.invitations")));
 
         // The invitations — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the
         // grid is declared at once and fed by the synced Admin/Invitation query; each row carries its
@@ -177,19 +171,19 @@ public static class InvitationsSettingsTab
         {
             if (row is null || !row.IsPending)
             {
-                ctx.Host.UpdateData(ResultDataId, PendingHtml(Esc(host.Localize("invitations.notPending"))));
+                ctx.Host.UpdateData(ResultDataId, ActionNotice.Info(host.Localize("invitations.notPending")));
                 return;
             }
-            ctx.Host.UpdateData(ResultDataId, PendingHtml($"Revoking {Esc(row.Email)}…"));
+            ctx.Host.UpdateData(ResultDataId, ActionNotice.Info($"Revoking {row.Email}…"));
             // The node itself, read once for the write (it exists: the invitation query just listed it).
             ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
                 .SelectMany(node => InvitationService.TryGetInvitation(node, ctx.Hub.JsonSerializerOptions) is { } inv
                     ? invitationService.Revoke(node, inv)
                     : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no invitation.")))
                 .Subscribe(
-                    _ => ctx.Host.UpdateData(ResultDataId, SuccessHtml($"Revoked invitation for {Esc(row.Email)}.")),
-                    ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
-        }, ex => ctx.Host.UpdateData(ResultDataId, ErrorHtml(ex.Message)));
+                    _ => ctx.Host.UpdateData(ResultDataId, ActionNotice.Success($"Revoked invitation for {row.Email}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, ActionNotice.Error(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, ActionNotice.Error(ex.Message)));
 
     /// <summary>The row of the invitation query, as it is NOW, whose path is
     /// <paramref name="path"/> — or null when the query lists no such invitation.</summary>
@@ -240,18 +234,4 @@ public static class InvitationsSettingsTab
             node.Path ?? "",
             inv.Status == InvitationStatus.Pending);
     }
-
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
-
-    private static string SuccessHtml(string msg) =>
-        "<p style=\"padding: 8px 12px; color: #4ade80; background: var(--neutral-layer-2); " +
-        $"border-radius: 6px;\">{msg}</p>";
-
-    private static string ErrorHtml(string msg) =>
-        "<p style=\"padding: 8px 12px; color: #f87171; background: var(--neutral-layer-2); " +
-        $"border-radius: 6px;\">{Esc(msg)}</p>";
-
-    private static string PendingHtml(string msg) =>
-        "<p style=\"padding: 8px 12px; color: var(--neutral-foreground-hint); " +
-        $"background: var(--neutral-layer-2); border-radius: 6px;\">{msg}</p>";
 }

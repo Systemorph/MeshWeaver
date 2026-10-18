@@ -27,7 +27,7 @@ For a dynamically-compiled node type, the instance model is resolved *passively*
 
 # Reusable cores
 
-Two public helpers on `DataModelLayoutArea` produce the markdown, parameterized by a `linkBase` so the same code serves `/DataModel` and `/{nodeType}/$Model`:
+Public helpers on `DataModelLayoutArea` build these views, parameterized by a `linkBase` so the same code serves `/DataModel` and `/{nodeType}/$Model`:
 
 ```csharp
 // Mermaid classDiagram for an explicit set of types.
@@ -36,8 +36,13 @@ string diagram = DataModelLayoutArea.BuildMermaidDiagram(
     allDomainTypes,    // lookup used to resolve property targets / derived types
     linkBase: "/MyNode/$Model");   // href prefix for clickable class nodes
 
-// Per-type detail page (properties table + derived types), links under linkBase.
+// Per-type detail page, links under linkBase: a title row (the type name as an H1 and the
+// ⧉ overview / 🔝 base / 🗃️ catalog navigation links), the type's summary as a hint line,
+// and the properties table + derived types as Markdown.
 UiControl detail = DataModelLayoutArea.RenderTypeDetails(typeDef, allDomainTypes, "/MyNode/$Model");
+
+// Just that Markdown body, when you compose the header yourself.
+string body = DataModelLayoutArea.TypeDetailsMarkdown(typeDef, allDomainTypes, "/MyNode/$Model");
 ```
 
 The diagram seeds from the given types and grows the group to include the domain types reached through their properties, so a single seed type pulls in the types it references. Reference properties become relationship arrows labelled by the property name; each class gets a `click … href` into the detail view under `linkBase`.

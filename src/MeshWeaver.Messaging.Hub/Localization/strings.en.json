@@ -2479,5 +2479,14 @@
   "comments.reply": "Reply",
   "comments.repliesCollapsed": "Replies ({0}), collapsed",
   "comments.repliesExpanded": "Replies ({0}), expanded",
-  "agent.edit.addConfiguration": "Add agent configuration"
+  "agent.edit.addConfiguration": "Add agent configuration",
+  "ui.none": "None",
+  "ui.dataModelOverview": "Data model overview",
+  "ui.viewCatalog": "View catalog",
+  "ui.baseTypeOf": "Base: {0}",
+  "ui.editHomePage": "Edit your home page",
+  "gitSync.changes.status": "Status",
+  "gitSync.changes.path": "Path",
+  "gitSync.tree.clean": "On {0} — clean.",
+  "gitSync.tree.pending": "On {0} — {1} pending change(s):"
 }

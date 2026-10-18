@@ -35,8 +35,8 @@ public static class NorthwindHelpers
         var delta = current - previous;
         var percentage = delta / previous;
         var sign = delta >= 0 ? "+" : "-";
-        var color = delta >= 0 ? "green" : "red";
-        return Controls.Html($"<span style='color:{color}'>{sign}{percentage:P0}</span>");
+        var color = delta >= 0 ? "var(--success, #107c10)" : "var(--error, #d13438)";
+        return Controls.Body($"{sign}{percentage:P0}").WithColor(color);
     }
 
     /// <summary>

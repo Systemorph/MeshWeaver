@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -133,24 +134,13 @@ public static class EditLayoutArea
     {
         var headerStack = Controls.Stack.WithWidth("100%");
 
-        if (headerActions != null)
-        {
-            // Header with title and actions side by side
-            headerStack = headerStack.WithView(Controls.Html($@"
-                <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; width: 100%;"">
-                    <h2 style=""margin: 0; flex-grow: 1;"">{System.Web.HttpUtility.HtmlEncode(title)}</h2>
-                </div>"));
-            // Note: headerActions would need to be positioned, but for simplicity we add it separately
-        }
-        else
-        {
-            headerStack = headerStack.WithView(Controls.H2(title).WithStyle("margin: 0 0 1rem 0;"));
-        }
+        // headerActions is accepted for the callers' sake but has never been drawn: both branches of
+        // the former HTML header rendered the title alone.
+        _ = headerActions;
+        headerStack = headerStack.WithView(Controls.H2(title).WithStyle("margin: 0 0 1rem 0;"));
 
-        if (!string.IsNullOrEmpty(description))
-        {
-            headerStack = headerStack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{System.Web.HttpUtility.HtmlEncode(description)}</p>"));
-        }
+        if (DomainViews.Description(description) is { } descriptionLine)
+            headerStack = headerStack.WithView(descriptionLine);
 
         return headerStack;
     }
@@ -160,25 +150,18 @@ public static class EditLayoutArea
     /// </summary>
     public static UiControl Edit(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext _)
     {
-        // Title with right-aligned navigation icons
-        var navigationIcons = $"<a href=\"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}\" title=\"Data Model\" style=\"text-decoration: none; font-size: 1.5em; line-height: 1;\">⧉</a>";
+        // Title with right-aligned navigation glyphs
+        var links = ImmutableList.Create(
+            DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}"));
         if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
-            navigationIcons += $" <a href=\"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 1.5em; line-height: 1;\">🗃️</a>";
+            links = links.Add(DomainViews.NavGlyph("🗃️", host.Localize("ui.viewCatalog"), $"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}"));
 
-        var stack = Controls.Stack.WithWidth("100%");
-
-        // Header with title and navigation
-        var header = Controls.Html($@"
-            <div style=""display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; width: 100%;"">
-                <h1 style=""margin: 0; flex-grow: 1;"">{System.Web.HttpUtility.HtmlEncode(typeDefinition.DisplayName)}</h1>
-                <div style=""flex-shrink: 0;"">{navigationIcons}</div>
-            </div>");
-        stack = stack.WithView(header);
+        var stack = Controls.Stack.WithWidth("100%")
+            .WithView(DomainViews.TitleRow(Controls.H1(typeDefinition.DisplayName).WithStyle("margin: 0;"), links.ToArray()));
 
         // Description if available
-        var description = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type);
-        if (!string.IsNullOrWhiteSpace(description))
-            stack = stack.WithView(Controls.Html($"<p style=\"color: var(--neutral-foreground-hint); margin-bottom: 1rem;\">{description}</p>"));
+        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(typeDefinition.Type)) is { } descriptionLine)
+            stack = stack.WithView(descriptionLine);
 
         // Use Overview with startInEditMode=true for the form
         return stack.WithView((areaHost, ctx) => EditLayout(areaHost, ctx, typeDefinition, id));
