@@ -147,12 +147,19 @@ public sealed class GitHubRepoIdentityResolver(
     /// <summary>
     /// Parses a stored repository url to its <c>owner/repo</c> identity, or null when it cannot be
     /// parsed at all (an empty or malformed configuration value).
+    ///
+    /// <para>🚨 <b>An Azure Repos url has NO GitHub identity and answers null</b> (MeshWeaver#6500).
+    /// Read positionally, <c>https://dev.azure.com/{org}/{project}/_git/{repo}</c> yields
+    /// <c>{org}/{project}</c> — the name of some GitHub repository, so a push webhook from that
+    /// GitHub repository would have imported into the Azure Repos source. Every caller treats null
+    /// as "no GitHub repository here": the webhook, the branch reconcile and the sealed-publication
+    /// reconcile skip the source, and its inbound sync is on demand.</para>
     /// </summary>
     /// <param name="repositoryUrl">The url to parse.</param>
     /// <returns>The identity, or null.</returns>
     public static RepoIdentity? Parse(string? repositoryUrl)
     {
-        if (string.IsNullOrWhiteSpace(repositoryUrl))
+        if (string.IsNullOrWhiteSpace(repositoryUrl) || GitRepositoryProvider.IsAzureRepos(repositoryUrl))
             return null;
         try
         {

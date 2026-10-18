@@ -228,7 +228,8 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView(Section("Pull request"));
         // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
         // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
-        // pins it). Policy azure-repos-push-only (MeshWeaver#5248) is enforced where it cannot be
+        // pins it). Policy azure-repos-two-way (MeshWeaver#6500): pull requests are not offered on an
+        // Azure Repos source, enforced where it cannot be
         // bypassed — PullRequestService refuses every pull-request operation on an Azure Repos source,
         // in the viewer's language — and the live notice below tells an Azure source's viewer so
         // before they click.
@@ -337,8 +338,8 @@ public static class GitHubSyncSettingsTab
 
     /// <summary>
     /// One line naming the hosting service a source syncs with, derived from its repository URL
-    /// (<see cref="GitRepositoryProvider.Classify"/>). An Azure Repos source says it is push-only
-    /// (policy <c>azure-repos-push-only</c>). Nothing when no URL is set yet.
+    /// (<see cref="GitRepositoryProvider.Classify"/>). An Azure Repos source says what it does not
+    /// offer (policy <c>azure-repos-two-way</c>). Nothing when no URL is set yet.
     /// </summary>
     internal static UiControl ProviderLine(LayoutAreaHost host, GitHubSyncConfig? config)
     {
