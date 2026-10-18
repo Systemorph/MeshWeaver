@@ -78,7 +78,12 @@ when it is a **close** neighbour: cosine distance at most
 `PostgreSqlSqlGenerator.SemanticNeighbourMaxDistance` (0.5, i.e. similarity ≥ 0.5; the SQLite
 provider applies the same bar as `SqliteVectorMeshQuery.MinNeighbourSimilarity`). An authored
 `sort:` then orders the filtered set (the merge applies `ParsedQuery.EffectiveOrderBy`). The
-in-memory `QueryEvaluator` has always answered this way; the SQL routes now agree with it.
+in-memory `QueryEvaluator` has always FILTERED this way (every word a substring, AND-ed), and the
+SQL routes now filter too. One difference in reach remains: `QueryEvaluator.ExtractSearchableText`
+walks the node to depth 3, counting the node itself, so it sees the content's TOP-LEVEL string
+values (`{"contact":"Jane Roe"}` matches `roe`) but not a nested one
+(`{"contact":{"name":"Jane Roe"}}` does not), while the Postgres routes read every string value at
+any depth. A word that matches only a deeply nested value is found on Postgres and not in memory.
 
 Until 2026-10-18 the hybrid eligibility read `n.embedding IS NOT NULL OR <lexical match>` — so
 **every embedded row was eligible**, and each arm returned its top-K (50) by distance. Under a
