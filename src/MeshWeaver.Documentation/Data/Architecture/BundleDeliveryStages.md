@@ -159,8 +159,9 @@ the pod was replaced an hour later. Four things combined:
   the fleet's own instances receive, and it reconciles git-synced partitions only.
 
 **The repair is the reconcile's held-NodeType lane** (`HeldNodeTypeBundleRetry`, run by
-`RegistryUpdateReconciler.ReconcileFromFeed` after the module lane). On every pass (boot, a
-module-published broadcast, a safety-net tick) it reads `bake-report`'s live census
+`RegistryUpdateReconciler.ReconcileFromFeed` after the module lane, and by a module-published
+broadcast's drain for the announced package after `ReconcileModule`, which skips a package with no
+compiled module). On every pass (boot, a broadcast, a safety-net tick) it reads `bake-report`'s live census
 (`NodeTypeLiveRecordCensus.AwaitingBundle`, the records with a `deliveryHoldReason`). It asks the
 registry's bundle index about those types' packages, and it calls `PluginBundleClient.Adopt` for
 each package whose advertised bundle this process has not tried yet. The bundle is identified by
@@ -168,7 +169,20 @@ its digest-addressed artifact, or by version and URL. The adoption runs the inst
 per-assembly gates. Bytes that still disagree with the source are declined by name and the hold
 stands. Bytes that match are adopted and the hold lifts, with no new pod and no compile. An
 unchanged index costs no download, and a mesh with nothing held does not read the index at all.
-Pinned by `HeldNodeTypeBundleRetryTest`.
+
+Four properties keep the lane honest:
+
+- It plans from the SAME index snapshot its adoption reads (the client's pass index), so a
+  rebake landing between lanes is never recorded as tried while the older bundle was downloaded.
+- A bundle counts as tried only once it was INSPECTED (its bytes arrived and were judged). A
+  failed or stalled transfer is not recorded, so the next pass asks again.
+- Each adoption is bounded by the module lane's per-package budget, so one stalled package cannot
+  stop the reconciler's single lane.
+- It runs as System, like every other adoption, because the record stamp that lifts a hold is a
+  write.
+
+Pinned by `HeldNodeTypeBundleRetryTest` and
+`RegistryUpdateReconcilerTest.ABroadcastForAModulelessPackage_RetriesItsHeldNodeTypes`.
 
 ## Stage ② — what the guard sees, and what it does not
 

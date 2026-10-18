@@ -213,6 +213,15 @@ public sealed class PluginBundleClient
     /// replayed once subscribed. A fault evicts the slot, so the NEXT package asks again; a
     /// success is answered from the replay for the rest of the pass.
     /// </summary>
+    /// <summary>
+    /// The index snapshot this client's adoptions read (<see cref="SharedIndex"/>) — for a caller
+    /// that PLANS from the index and then calls <see cref="Adopt"/>, so the bundle it plans for is
+    /// the bundle the adoption downloads. Planning from a fresh <see cref="FetchIndex"/> instead
+    /// could see a rebake that the shared snapshot, already read by an earlier lane of the pass,
+    /// does not.
+    /// </summary>
+    internal IObservable<BundleIndex> PassIndex() => SharedIndex();
+
     private IObservable<BundleIndex> SharedIndex() =>
         Observable.Defer(() => _index.GetOrCreate(() => _httpPool.Run(ReadIndex)));
 

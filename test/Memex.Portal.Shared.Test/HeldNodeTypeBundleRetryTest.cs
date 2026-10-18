@@ -124,8 +124,81 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     }
 
     private Task<int> Pass(HeldNodeTypeBundleRetry lane, CancellationToken ct) =>
-        lane.Run(Mesh, new PluginBundleClient(Mesh, RegistryUrl, Token), RegistryUrl, "fleet", [Package], null)
+        Pass(lane, new PluginBundleClient(Mesh, RegistryUrl, Token), ct);
+
+    private Task<int> Pass(HeldNodeTypeBundleRetry lane, PluginBundleClient client, CancellationToken ct) =>
+        lane.Run(Mesh, client, RegistryUrl, "fleet", [Package], null)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>
+    /// The lane adopts the bundle of the index snapshot the PASS reads — not a fresher one. An
+    /// earlier lane of the same pass (the content lane) has already read the client's shared index
+    /// when the rebake lands; planning from a fresh read recorded the NEW bundle as tried while the
+    /// adoption downloaded the OLD one, and the next pass then suppressed the new bundle.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheLane_PlansFromTheIndexItsAdoptionReads_SoARebakeBetweenLanesIsNotLost()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var lane = new HeldNodeTypeBundleRetry();
+        Hold(HeldType);
+
+        // One pass's client: an earlier lane reads its shared index (version 1.2)…
+        var client = new PluginBundleClient(Mesh, RegistryUrl, Token);
+        await client.Adopt("AnEarlierLanesPackage").FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // …and the rebake lands before this lane runs.
+        registry.Version = "1.2.1";
+
+        await Pass(lane, client, ct);
+        registry.DownloadedVersions.Should().Equal(["1.2"], "the pass adopts the bundle of its own index snapshot");
+
+        // The next pass reads the index afresh, sees 1.2.1 — never tried — and adopts it.
+        await Pass(lane, ct);
+        registry.DownloadedVersions.Should().Equal(["1.2", "1.2.1"],
+            "the rebake was not recorded as tried by the pass that never downloaded it");
+    }
+
+    /// <summary>A transfer that fails is not an inspected bundle: the next pass asks again, with an
+    /// unchanged index — unlike a bundle whose bytes arrived and were judged (the control below).</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ATransferThatFailed_IsNotRecordedAsTried_AndTheNextPassAsksAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var lane = new HeldNodeTypeBundleRetry();
+        Hold(HeldType);
+
+        registry.DownloadStatus = HttpStatusCode.ServiceUnavailable;
+        await Pass(lane, ct);
+        var failedAttempts = registry.Downloads.Count;
+        failedAttempts.Should().BeGreaterThan(0);
+
+        // The registry recovers; the index is unchanged.
+        registry.DownloadStatus = HttpStatusCode.OK;
+        await Pass(lane, ct);
+        registry.Downloads.Should().HaveCount(failedAttempts + 1, "a failed transfer must not suppress the bundle");
+
+        // Control: the bytes arrived and were judged — the same unchanged index is not downloaded again.
+        await Pass(lane, ct);
+        registry.Downloads.Should().HaveCount(failedAttempts + 1);
+    }
+
+    /// <summary>An adoption that never answers is bounded: the pass completes, and the stalled
+    /// bundle is not recorded as tried.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnAdoptionThatNeverAnswers_IsBoundedByTheBudget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var lane = new HeldNodeTypeBundleRetry { AdoptBudget = TimeSpan.FromSeconds(2) };
+        Hold(HeldType);
+
+        registry.StallDownloads = true;
+        (await Pass(lane, ct)).Should().Be(0, "the pass ends at the budget rather than waiting for ever");
+
+        registry.StallDownloads = false;
+        var before = registry.Downloads.Count;
+        await Pass(lane, ct);
+        registry.Downloads.Should().HaveCount(before + 1, "a stalled transfer is not an inspected bundle");
+    }
 
     [Fact(Timeout = 120_000)]
     public async Task EveryPass_AsksForAHeldTypesPackage_AndDownloadsOnlyABundleItHasNotTried()
@@ -180,10 +253,14 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     private sealed class FakeIndex : HttpMessageHandler, IHostHandler
     {
         private ImmutableList<string> downloads = ImmutableList<string>.Empty;
+        private ImmutableList<string> downloadedVersions = ImmutableList<string>.Empty;
         private int indexReads;
 
         public string Version { get; set; } = "1.2";
+        public HttpStatusCode DownloadStatus { get; set; } = HttpStatusCode.OK;
+        public bool StallDownloads { get; set; }
         public ImmutableList<string> Downloads => downloads;
+        public ImmutableList<string> DownloadedVersions => downloadedVersions;
         public int IndexReads => Volatile.Read(ref indexReads);
 
         public bool Serves(string host) => string.Equals(host, RegistryHost, StringComparison.OrdinalIgnoreCase);
@@ -214,8 +291,20 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
             }
             if (path.StartsWith($"{PluginBundleClient.RoutePrefix}/", StringComparison.Ordinal))
             {
-                var package = path[(PluginBundleClient.RoutePrefix.Length + 1)..].Split('/')[0];
-                ImmutableInterlocked.Update(ref downloads, d => d.Add(Uri.UnescapeDataString(package)));
+                var segments = path[(PluginBundleClient.RoutePrefix.Length + 1)..].Split('/');
+                ImmutableInterlocked.Update(ref downloads, d => d.Add(Uri.UnescapeDataString(segments[0])));
+                if (StallDownloads)
+                    // A registry that accepted the request and never answers: completes only when
+                    // the caller gives up (the lane's budget cancels the transfer).
+                    return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken)
+                        .ContinueWith(_ => new HttpResponseMessage(HttpStatusCode.GatewayTimeout), TaskScheduler.Default);
+                if (DownloadStatus != HttpStatusCode.OK)
+                    return Task.FromResult(new HttpResponseMessage(DownloadStatus)
+                    {
+                        Content = new StringContent("registry unavailable"),
+                    });
+                if (segments.Length > 1)
+                    ImmutableInterlocked.Update(ref downloadedVersions, d => d.Add(Uri.UnescapeDataString(segments[1])));
                 // Not a bundle: the seeder adopts nothing from it, which is the point — the lane's
                 // contract is WHEN it asks, and the adoption gates are the install's own.
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)

@@ -56,6 +56,15 @@ public sealed class HeldNodeTypeBundleRetry
 
     private readonly ConcurrentDictionary<string, Attempt> attempts = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The bound on ONE package's adoption — the neighbouring module lane's
+    /// (<see cref="RegistryUpdateReconciler.PerPackageAdoptBudget"/>). The packages run as one
+    /// sequential <c>Concat</c> on the reconciler's single lane, so an adoption that never answers
+    /// (a seed waiting on a NodeType stream, an assembly-store write) would otherwise stall every
+    /// later package and every later pass. Settable for a test only.
+    /// </summary>
+    internal TimeSpan AdoptBudget { get; init; } = RegistryUpdateReconciler.PerPackageAdoptBudget;
+
     /// <summary>One adoption this process made for one package from one registry.</summary>
     /// <param name="BundleKey">The advertised bundle it tried (<see cref="BundleKeyOf"/>).</param>
     /// <param name="At">When.</param>
@@ -174,7 +183,10 @@ public sealed class HeldNodeTypeBundleRetry
             if (held.IsEmpty)
                 return Observable.Return(0);
 
-            return bundles.FetchIndex()
+            // The index snapshot the adoption below reads too (PassIndex): planning from a fresh read
+            // could plan bundle B, record B as tried and download the A an earlier lane of this pass
+            // cached — and then suppress B for ReattemptAfter.
+            return bundles.PassIndex()
                 .Take(1)
                 .SelectMany(index =>
                 {
@@ -191,7 +203,7 @@ public sealed class HeldNodeTypeBundleRetry
                         return Observable.Return(0);
                     }
                     return plan
-                        .Select(retry => AdoptOne(bundles, registryUrl, registryName, retry, logger))
+                        .Select(retry => AdoptOne(hub, bundles, registryUrl, registryName, retry, logger))
                         .ToObservable()
                         .Concat()
                         .Sum();
@@ -206,34 +218,86 @@ public sealed class HeldNodeTypeBundleRetry
         });
 
     private IObservable<int> AdoptOne(
-        PluginBundleClient bundles, string registryUrl, string registryName, Retry retry, ILogger? logger)
+        IMessageHub hub, PluginBundleClient bundles, string registryUrl, string registryName, Retry retry,
+        ILogger? logger)
         => Observable.Defer(() =>
         {
-            // Recorded BEFORE the download, so a pass that faults mid-transfer does not make the
-            // next pass download again for the same bytes; the re-attempt bound still applies.
-            attempts[Key(registryUrl, retry.Package)] = new Attempt(retry.BundleKey, DateTimeOffset.UtcNow);
+            var key = Key(registryUrl, retry.Package);
+            var ledger = hub.ServiceProvider.GetService<BundleAdoptionLedger>();
+            var before = LastOutcome(ledger, registryUrl, retry.Package);
             logger?.LogInformation(
                 "[RegistryUpdate] {Name}: {Package} has {Count} NodeType(s) held for a bundle ({Types}) — "
                 + "adopting its advertised bundle {Bundle} again, because {Because}.",
                 registryName, retry.Package, retry.HeldTypes.Length, string.Join(", ", retry.HeldTypes.Take(8)),
                 retry.BundleKey, retry.Because);
-            return bundles.Adopt(retry.Package)
+            // Infrastructure adoption: the reconcile pass carries no caller identity, and the seed's
+            // NodeType record stamps (the write that lifts a hold) must be authorized — System, as
+            // every other adoption the reconciler and the install lane run.
+            return hub.ServiceProvider.GetService<AccessService>().RunAsSystem(() => bundles.Adopt(retry.Package))
                 .Take(1)
                 .DefaultIfEmpty(0)
-                .Do(adopted => logger?.LogInformation(
-                    "[RegistryUpdate] {Name}: {Package}: adopted {Adopted} assembly(ies) from {Bundle} for the "
-                    + "held NodeType(s). A type whose bytes still disagree with its source stays held, and "
-                    + "its own record says why.",
-                    registryName, retry.Package, adopted, retry.BundleKey))
+                .Timeout(AdoptBudget)
+                .Do(adopted =>
+                {
+                    Settle(key, retry, ledger, registryUrl, before, fault: null, registryName, logger);
+                    logger?.LogInformation(
+                        "[RegistryUpdate] {Name}: {Package}: adopted {Adopted} assembly(ies) from {Bundle} for the "
+                        + "held NodeType(s). A type whose bytes still disagree with its source stays held, and "
+                        + "its own record says why.",
+                        registryName, retry.Package, adopted, retry.BundleKey);
+                })
                 .Catch((Exception ex) =>
                 {
+                    Settle(key, retry, ledger, registryUrl, before, ex, registryName, logger);
                     logger?.LogWarning(ex,
                         "[RegistryUpdate] {Name}: adopting {Package}'s bundle {Bundle} for its held NodeType(s) "
-                        + "failed — the holds stand; a later pass asks again.",
-                        registryName, retry.Package, retry.BundleKey);
+                        + "failed — the holds stand; a later pass asks again. Cause: {Cause}",
+                        registryName, retry.Package, retry.BundleKey, ex.Message);
                     return Observable.Return(0);
                 });
         });
+
+    /// <summary>
+    /// Records the attempt — which suppresses the same bundle for <see cref="ReattemptAfter"/> —
+    /// only when the bundle was INSPECTED: its bytes arrived and the install's gates judged them
+    /// (adopted, declined, unreadable). A transfer that did not complete (the adoption's own
+    /// <see cref="BundleAdoptionKind.FetchFailed"/> outcome, which <see cref="PluginBundleClient.Adopt"/>
+    /// reports as a zero count; a timeout; a transport fault; a transient registry status) is not
+    /// recorded, so the next ordinary pass asks again once the registry recovers.
+    /// </summary>
+    private void Settle(
+        string key, Retry retry, BundleAdoptionLedger? ledger, string registryUrl, BundleAdoptionOutcome? before,
+        Exception? fault, string registryName, ILogger? logger)
+    {
+        var after = LastOutcome(ledger, registryUrl, retry.Package);
+        var fetchFailed = after is not null && !ReferenceEquals(after, before)
+                                            && after.Kind == BundleAdoptionKind.FetchFailed;
+        if (fetchFailed || IsTransferFault(fault))
+        {
+            attempts.TryRemove(key, out _);
+            logger?.LogInformation(
+                "[RegistryUpdate] {Name}: {Package}: bundle {Bundle} did not arrive ({Cause}) — not recorded "
+                + "as tried; the next pass asks again.",
+                registryName, retry.Package, retry.BundleKey,
+                fetchFailed ? after!.Reason ?? "fetch failed" : fault!.GetType().Name);
+            return;
+        }
+        attempts[key] = new Attempt(retry.BundleKey, DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>A fault of the TRANSFER rather than of the bytes — the bundle was never judged.</summary>
+    internal static bool IsTransferFault(Exception? fault) => fault switch
+    {
+        null => false,
+        TimeoutException or HttpRequestException or OperationCanceledException => true,
+        RegistryResponseException registry => registry.IsTransientFailure,
+        _ => fault.InnerException is { } inner && IsTransferFault(inner),
+    };
+
+    private static BundleAdoptionOutcome? LastOutcome(BundleAdoptionLedger? ledger, string registryUrl, string package)
+        => ledger?.Outcomes.LastOrDefault(o =>
+            string.Equals(o.PluginId, package, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(o.Registry.TrimEnd('/'), registryUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase));
 
     private static string Key(string registryUrl, string package) => $"{registryUrl.TrimEnd('/')}|{package}";
 }

@@ -582,7 +582,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
                 + "(framework {Framework}) — reconciling that package now.",
                 DisplayName(registry), published.Module ?? "(unnamed)", published.Package,
                 published.Version ?? "(unversioned)", published.FrameworkMvid ?? "(unrecorded)");
+            // The module lane, then the HELD-NODETYPE lane for the same package: ReconcileModule
+            // visits a package only when it declares a compiled module, and the packages whose
+            // NodeTypes wait in a delivery hold are typically NodeType-only — so without this the
+            // publication that carries their bake is acknowledged untried, and recovery waits for the
+            // safety-net pass (or never comes, where that interval is disabled).
             reconcile = OnLane(() => ReconcileModule(registry, published.Package)
+                .LastOrDefaultAsync()
+                .SelectMany(_ => RetryHeldNodeTypes(registry, published.Package))
                 .Do(_ => Mark(registry, entry => entry with
                 {
                     LastReconciledAt = DateTimeOffset.UtcNow,
@@ -1259,6 +1266,31 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // The wave of one: ends the same way every wave ends (#3395) — set, then activation.
             .SelectMany(landed => ProposeMeshModuleSet().Select(_ => (IList<LandedModule?>)[landed]))
             .SelectMany(ActivateLanded);
+    }
+
+    /// <summary>
+    /// The held-NodeType lane (<see cref="HeldNodeTypeBundleRetry"/>) for ONE package — what a
+    /// module-published broadcast runs after <see cref="ReconcileModule"/>. Never faults; emits once.
+    /// </summary>
+    internal IObservable<Unit> RetryHeldNodeTypes(PluginRegistryReference registry, string packageId)
+    {
+        var tokenResolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        if (tokenResolver is null || string.IsNullOrWhiteSpace(packageId))
+            return Observable.Return(Unit.Default);
+        var name = DisplayName(registry);
+        return tokenResolver.ResolveToken(registry)
+            .Take(1)
+            .SelectMany(token => heldBundles.Run(
+                hub, new PluginBundleClient(hub, registry.Url, token), registry.Url, name, [packageId], logger))
+            .Select(_ => Unit.Default)
+            .LastOrDefaultAsync()
+            .Catch((Exception ex) =>
+            {
+                logger.LogWarning(ex,
+                    "[RegistryUpdate] {Name}: the held-NodeType lane for {Package} failed — the holds stand; "
+                    + "a later pass asks again. Cause: {Cause}", name, packageId, ex.Message);
+                return Observable.Return(Unit.Default);
+            });
     }
 
     /// <summary>
