@@ -239,6 +239,50 @@ caller as `NodeMoveRejectionReason.ValidationFailed` — a verdict every retry m
 as `Unknown`, which a caller has to treat as worth retrying. The feedback hand-over retried such a move
 on every activation for exactly that reason (#6952).
 
+## Where the target may lie — and the case-only rename (#6951)
+
+The mesh keys paths **case-insensitively**: the deletion registry, the in-memory store and the file
+system store all compare with `OrdinalIgnoreCase`, while a Postgres row's `path` is case-sensitive
+inside its (lower-cased) partition schema. A target that equals the source ignoring case is therefore
+the SAME key in some stores and a DIFFERENT key in others, and copy-then-delete is wrong for it in both:
+
+- **case-insensitive store** — the copy's create finds the node already there, the relocation resume
+  (#6310) can recognise it as "this source, already relocated", and the delete leg's plan then names
+  the only copy. Measured on the in-memory mesh before the fix: `TestData/vhvgruppe-… →
+  TestData/VHVGruppe-…` answered `success=True` naming the node at the OLD casing, and a move onto
+  itself also answered success — a move that reports success while relocating nothing;
+- **case-sensitive store** — the copy writes a new row, but the source's subtree-deletion scope compares
+  ignoring case and refuses the move's own target writes: *"Cannot write 'VHVGruppe/BirgitSalzwedel':
+  the subtree 'VhvGruppe/BirgitSalzwedel' is currently being deleted"* — the production refusal.
+
+`HandleMoveNodeRequest` now classifies the target before it reads or writes anything
+(`MovePaths.Classify`, on whole segments, ignoring case):
+
+| Relation | Example | Outcome |
+|---|---|---|
+| `Same` | `A/b → A/b` | refused, `ValidationFailed` — nothing to move |
+| `IntoOwnSubtree` | `A/b → A/b/c`, also `A/b → a/B/c` | refused, `ValidationFailed` — the copy would write into what the delete removes |
+| `CaseOnlyRename` | `VhvGruppe/x → VHVGruppe/x` | renamed through a staging sibling (below) |
+| `Distinct` | everything else | the ordinary move |
+
+**A case-only rename is two ordinary relocations**: source → `{target}-recase-{token}` → target. The
+staging sibling sits under the TARGET's parent (so it needs exactly the Create grant the target does)
+and differs from both ends in every store, so each leg writes new keys and removes old ones, and each
+runs the whole move contract above — the delete pre-flight, the subtree-deletion scope of that leg's
+source, satellites, authorship and completeness. Both legs share the one move deadline. If the second
+leg fails, the subtree is moved back to the source and the answer says so (reason: the second leg's
+own); if moving it back fails too, the answer is `Unknown` and names the staging path that holds the
+subtree. A stall after the subtree started to leave the source answers `Unknown` naming all three paths
+(`activity.node.move.caseRenameStalled`). In no outcome is the subtree left at two casings.
+
+On a case-insensitive **file system** (macOS, Windows) the two-step is what makes the new casing reach
+the disk: the first leg removes the old files and their now-empty directories, so the second leg's
+writes create entries with the new names. Only the segments the moved subtree OWNS are re-cased; an
+ancestor segment whose casing differs (`VhvGruppe/x → VHVGruppe/x` where `VhvGruppe` is a node of its
+own) stays as that ancestor's directory is named. Pinned by `MoveRenamesByCaseOnlyTest` (in-memory:
+the rename, the refusals, the classifier) and `MoveRenamesByCaseOnlyOnTheFileSystemTest`, which reads
+the names the volume actually holds and passes on case-sensitive and case-insensitive volumes alike.
+
 ## What this means for callers
 
 - **Moving a node moves its comments, threads, approvals and grants.** A satellite's `MainNode` is
@@ -249,6 +293,8 @@ on every activation for exactly that reason (#6952).
   refusal a DELETE of the source would get — if you may not delete it, you may not move it — and every
   create validator that refuses the copy leg. `ValidationFailed` is a verdict: do not retry it
   unchanged.
+- **Renaming by case is a move.** Send `MoveNodeRequest(old, newCasing)`; a move onto itself or into
+  its own subtree is refused with `ValidationFailed`.
 - **Do not write to a node while it is being moved.** The write is refused (*"Node being deleted"*)
   and nothing is committed; retry once the move has answered.
 - **`CopyNodeRequest.IncludeSatellites` costs an enumeration, not a filter.** It is not free, and it
