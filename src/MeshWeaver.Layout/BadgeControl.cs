@@ -1,7 +1,18 @@
 ﻿namespace MeshWeaver.Layout;
 
 /// <summary>
-/// Represents a badge control with custom    /// le properties.
+/// A small status pill. With <see cref="Href"/> it is a compact NAVIGATING chip — the control a
+/// clickable status chip uses instead of an anchor hand-built in <c>Controls.Html</c> (#6954).
+///
+/// <para>🚨 Every renderer applies <see cref="LinkHrefs"/> to <see cref="Href"/> exactly as it does
+/// for a <see cref="LinkControl"/>: an address whose scheme is not <c>http</c>, <c>https</c>,
+/// <c>mailto</c> or <c>tel</c> draws the badge WITHOUT a link, a mesh path navigates inside the
+/// portal, and an external address carries <c>rel="noopener noreferrer"</c>. The text and the
+/// tooltip are free text the renderer encodes — a caller never escapes them.</para>
+///
+/// <para>Colors bind to theme tokens: pass a CSS custom property such as
+/// <c>var(--accent-fill-rest)</c> or <c>var(--error, #d13438)</c> to <see cref="BackgroundColor"/>
+/// and <see cref="Color"/>, so the chip follows light and dark themes.</para>
 /// </summary>
 /// <remarks>
 /// For more information, visit the 
@@ -111,4 +122,38 @@ public record BadgeControl(object Data)
     /// <param name="width">The width value to set.</param>
     /// <returns>A new <see cref="BadgeControl"/> instance with the specified width.</returns>
     public BadgeControl WithWidth(object width) => This with { Width = width };
+
+    /// <summary>
+    /// Where the badge navigates when clicked — a literal or a data-binding pointer. A mesh path is
+    /// written as an absolute path (<c>/Doc/GUI</c>), never <c>@/…</c>, and navigates in-app. When
+    /// unset the badge is a plain status pill.
+    /// </summary>
+    public object? Href { get; init; }
+
+    /// <summary>
+    /// The hover text, rendered as the element's <c>title</c> — typically the chip's full label when
+    /// <see cref="MaxWidth"/> truncates it. A literal or a binding. User-facing: pass a localized string.
+    /// </summary>
+    public object? Tooltip { get; init; }
+
+    /// <summary>
+    /// The widest the badge may grow, as a CSS length (<c>"160px"</c>, <c>"12em"</c>); text past it is
+    /// cut with an ellipsis. A literal or a binding. Unbounded when unset.
+    /// </summary>
+    public object? MaxWidth { get; init; }
+
+    /// <summary>Makes the badge a navigating chip (<see cref="Href"/>).</summary>
+    /// <param name="href">The address — an absolute mesh path or an http(s) URL — or a binding.</param>
+    /// <returns>A new <see cref="BadgeControl"/> that navigates to <paramref name="href"/>.</returns>
+    public BadgeControl WithHref(object href) => This with { Href = href };
+
+    /// <summary>Sets the hover text (<see cref="Tooltip"/>).</summary>
+    /// <param name="tooltip">The localized text, or a binding.</param>
+    /// <returns>A new <see cref="BadgeControl"/> with the tooltip set.</returns>
+    public BadgeControl WithTooltip(object tooltip) => This with { Tooltip = tooltip };
+
+    /// <summary>Bounds the badge's width; longer text ends in an ellipsis (<see cref="MaxWidth"/>).</summary>
+    /// <param name="maxWidth">A CSS length, or a binding.</param>
+    /// <returns>A new <see cref="BadgeControl"/> with the maximum width set.</returns>
+    public BadgeControl WithMaxWidth(object maxWidth) => This with { MaxWidth = maxWidth };
 }
