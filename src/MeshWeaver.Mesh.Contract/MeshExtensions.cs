@@ -3765,7 +3765,9 @@ public static class MeshExtensions
             // Committed when the root row was removed, Indeterminate while a root delete this process
             // issued has not answered (an unsubscribe does not stop it), an abort only otherwise.
             // Taken first, on every path, so the record never outlives this delete.
-            var verdict = registry?.TakeRootDeleteVerdict(path) ?? RootDeleteVerdict.NotRemoved;
+            // Keyed by THIS delete (its seal id), never by path: a concurrent delete of the same path
+            // must not consume — or be answered by — another delete's storage call.
+            var verdict = registry?.TakeRootDeleteVerdict(lease.SealId) ?? RootDeleteVerdict.NotRemoved;
             var answer = lease.Answer;
             Address target;
             if (answer is null)
@@ -3983,7 +3985,7 @@ public static class MeshExtensions
     /// </summary>
     internal static IObservable<bool> FenceTheConfirmedRow(
         IStorageAdapter storage, MeshNode confirmed, System.Text.Json.JsonSerializerOptions options, ILogger logger,
-        Func<bool> stop, int attempt = 0)
+        Func<bool> stop, RecentlyDeletedRegistry? registry = null, int attempt = 0)
         // 🚨 The WRITABLE row is what the fence moves and what it may find gone. A plain read also
         // serves read-only fallback content (shipped content under a removed override, at version 0),
         // and a compare-and-set expecting that version would INSERT the deleted override again.
@@ -4012,7 +4014,10 @@ public static class MeshExtensions
                             if (stored.CreatedDate != confirmed.CreatedDate)
                                 return Observable.Return(false);
                             var fence = confirmed with { Version = MeshNode.NextVersion(confirmed.Version) };
-                            return storage.WriteIfVersion(fence, stored.Version, options)
+                            // The fence's write — and only it — passes the row guard its seal holds.
+                            return Observable.Using(
+                                    () => registry?.AdmitFenceWrite(fence) ?? System.Reactive.Disposables.Disposable.Empty,
+                                    _ => storage.WriteIfVersion(fence, stored.Version, options).Take(1))
                                 .Take(1)
                                 .DefaultIfEmpty(null)
                                 .SelectMany(applied =>
@@ -4026,7 +4031,7 @@ public static class MeshExtensions
                                         return Observable.Return(false);
                                     }
                                     if (attempt < MaxFenceAttempts)
-                                        return FenceTheConfirmedRow(storage, confirmed, options, logger, stop, attempt + 1);
+                                        return FenceTheConfirmedRow(storage, confirmed, options, logger, stop, registry, attempt + 1);
                                     // The row kept moving: that is a FAULT, not a proof — the guard stays.
                                     return Observable.Throw<bool>(new InvalidOperationException(
                                         $"could not fence '{confirmed.Path}' after {attempt + 1} compare-and-set attempts"));
@@ -4800,7 +4805,8 @@ public static class MeshExtensions
                                                     meshHub, issuingHub, storage, path, collected.ToDelete,
                                                     capturedRequest, executionContext,
                                                     recentlyDeleted, logger, collectedMessages,
-                                                    deletedProgress, drainProgress, absenceProbeBudget)
+                                                    deletedProgress, drainProgress, absenceProbeBudget,
+                                                    sealLease?.SealId)
                                                 .Select(d => (IReadOnlyList<string>?)d))
                                             .TimeoutAtStage(budget, () =>
                                             {
@@ -5580,11 +5586,12 @@ public static class MeshExtensions
         ImmutableList<LogMessage>.Builder collectedMessages,
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
-        TimeSpan absenceProbeBudget)
+        TimeSpan absenceProbeBudget,
+        string? rootDeleteKey = null)
         => RunDeletePass(
             meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
             recentlyDeleted, logger, collectedMessages, deletedProgress, progress,
-            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty);
+            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty, rootDeleteKey);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
         IMessageHub meshHub,
@@ -5601,7 +5608,8 @@ public static class MeshExtensions
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
         int pass,
-        ImmutableList<string> deletedSoFar)
+        ImmutableList<string> deletedSoFar,
+        string? rootDeleteKey = null)
     {
         // 🚨 "Delete wins" — tombstone every path of THIS pass BEFORE the fan-out.
         // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to process its own
@@ -5618,7 +5626,7 @@ public static class MeshExtensions
         return FanOutDeleteSubtree(
                 meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
                 logger, collectedMessages, deletedProgress, progress, absenceProbeBudget,
-                rootAlreadyDeleted: pass > 1)
+                rootAlreadyDeleted: pass > 1, rootDeleteKey)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
@@ -5697,7 +5705,7 @@ public static class MeshExtensions
                         return RunDeletePass(
                             meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc);
+                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc, rootDeleteKey);
                     });
             });
     }
@@ -5745,7 +5753,8 @@ public static class MeshExtensions
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
-        bool rootAlreadyDeleted = false)
+        bool rootAlreadyDeleted = false,
+        string? rootDeleteKey = null)
     {
         // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
         // with one Timeout, and a timeout UNSUBSCRIBES — discarding the deleted-path list
@@ -5841,7 +5850,9 @@ public static class MeshExtensions
                     // this pipeline only reads the replay. The release asks that record whether the row
                     // was removed, not whether this pipeline got as far as noting it.
                     var call = storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions);
-                    return rootDeletes is null ? call : rootDeletes.ObserveRootDelete(path, call);
+                    return rootDeletes is null || rootDeleteKey is null
+                        ? call
+                        : rootDeletes.ObserveRootDelete(rootDeleteKey, call);
                 })
                 .Take(1)
                 .SelectMany(removed => removed
@@ -7006,8 +7017,8 @@ public static class MeshExtensions
             Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = sealRegistry is null
                 ? null
                 : confirmed => stop => fencePool is null
-                    ? FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop)
-                    : fencePool.InvokeObservable(_ => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop));
+                    ? FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop, sealRegistry)
+                    : fencePool.InvokeObservable(_ => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop, sealRegistry));
             CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested, request.Message.SealId, sealRegistry,
                     sealReleaseAddress, fenceFor)
                 .Select(answer => (object)answer)

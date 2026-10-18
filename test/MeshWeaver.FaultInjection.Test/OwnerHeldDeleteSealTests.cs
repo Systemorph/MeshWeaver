@@ -360,6 +360,49 @@ public class OwnerHeldDeleteSealTest(OwnerHeldDeleteSealTest.Cluster cluster)
         Mesh.Stored(path).Should().BeNull("nothing acknowledged survives into a stored row the delete reported removed");
     }
 
+    /// <summary>
+    /// Review round 9 (4306761544): while the teardown's fence is unresolved (here it FAILED), a
+    /// CROSS-HUB patch against the replacement activation must not become durable: the owner's row
+    /// guard stays and only the fence's own write passes it. Before, the guard was dropped when the
+    /// fence began, so a patch flush was admitted and acknowledged — and the paused delete then removed
+    /// the row it was acknowledged on.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ACrossHubPatchDuringAnUnresolvedFence_IsNotAcknowledged()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-fence-patch");
+        var read = StoredVersion(path);
+
+        using var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        using var fenceFault = Mesh.Storage(OwnerSilo).FailConditionalWrites(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the guarded delete passed the owner's verdict and is paused at the deleter's store", ct);
+
+        owner.Dispose();
+        await fenceFault.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the teardown's fence tried its compare-and-set and faulted", ct);
+
+        // A cross-hub write from the deleter's silo: a patch the replacement owner merges and flushes.
+        var writer = Mesh.Silo(DeleterSilo);
+        var patch = writer.GetRequiredService<AccessService>().RunAsSystem(() =>
+                writer.GetRequiredService<IMeshNodeStreamCache>()
+                    .Update(path, n => n with { Name = "patched during the fence" }, Mesh.Hub(DeleterSilo).JsonSerializerOptions))
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnCompleted)
+            .Replay();
+        using var patchConnection = patch.Connect();
+        await patch.Where(n => n.Kind == NotificationKind.OnNext).Should().NotEmit(DeferredWindow,
+            "the row guard still holds: a patch's durable flush is refused, so it is never acknowledged", ct);
+
+        deleteHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "nothing moved the row past the confirmed version");
+        Mesh.Stored(path).Should().BeNull("no patch was made durable behind the delete's back");
+    }
+
     /// <summary>Its own cluster.</summary>
     public class Cluster : FaultInjectionCluster;
 }

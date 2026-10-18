@@ -690,16 +690,17 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         });
 
     /// <summary>
-    /// The store fence starts (a command): the row guard is lifted so the fence itself can write; the
-    /// version guard stays — the path remains sealed for every own write in this process, a
-    /// replacement activation's included — until the fence's completion settles the seal. On teardown
-    /// the dying activation's deferred writes are refused at once (they were never acknowledged).
+    /// The store fence starts (a command). 🚨 BOTH guards stay until the seal settles: the version
+    /// guard (every own write in this process, a replacement activation's included, is deferred) and
+    /// the ROW guard (every other write of the row — a cross-hub patch's durable flush among them — is
+    /// refused at the storage guard). Only the fence's own compare-and-set passes that guard, admitted
+    /// by identity (<see cref="AdmitFenceWrite"/>). On teardown the dying activation's deferred writes
+    /// are refused at once (they were never acknowledged).
     /// </summary>
     private SealStep<bool> BeginFence(string sealId, OwnerSeal seal, bool teardown)
     {
         var attempt = Interlocked.Increment(ref _fenceAttempts);
-        seal.RowGuard?.Dispose();
-        var fencing = seal with { Phase = SealPhase.Fencing, Attempt = attempt, RowGuard = null };
+        var fencing = seal with { Phase = SealPhase.Fencing, Attempt = attempt };
         Publish(_ownerSeals.SetItem(sealId, fencing));
         var effects = ImmutableList<Action>.Empty;
         if (teardown)
@@ -855,6 +856,30 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
            || string.Equals(outcome, DeleteSealOutcome.Indeterminate, StringComparison.Ordinal)
            || string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal);
 
+    // ── The fence's own write, admitted past the row guard ─────────────────────────────────────
+    private ImmutableHashSet<MeshNode> _admittedFenceWrites =
+        ImmutableHashSet<MeshNode>.Empty.WithComparer(ReferenceEqualityComparer.Instance);
+
+    /// <summary>
+    /// Admits exactly <paramref name="fenceNode"/> — this instance, by reference — past the row guard
+    /// an owner seal holds while its store fence runs (#6856). Every other write of the row stays
+    /// refused. Dispose when the fence's compare-and-set has answered.
+    /// </summary>
+    /// <param name="fenceNode">The node instance the fence writes.</param>
+    /// <returns>The admission; disposing it withdraws it.</returns>
+    public IDisposable AdmitFenceWrite(MeshNode fenceNode)
+    {
+        ImmutableInterlocked.Update(ref _admittedFenceWrites, set => set.Add(fenceNode));
+        return System.Reactive.Disposables.Disposable.Create(
+            () => ImmutableInterlocked.Update(ref _admittedFenceWrites, set => set.Remove(fenceNode)));
+    }
+
+    /// <summary>True for the one write instance a running store fence is writing (#6856).</summary>
+    /// <param name="node">The node a write carries.</param>
+    /// <returns><c>true</c> when the storage guard must let it through.</returns>
+    public bool IsAdmittedFenceWrite(MeshNode node)
+        => !Volatile.Read(ref _admittedFenceWrites).IsEmpty && Volatile.Read(ref _admittedFenceWrites).Contains(node);
+
     // ── The deleter's side: what did its root storage delete answer? ───────────────────────────
     //
     // A guarded delete's root storage call is OBSERVED BY THE MESH, not by the delete's pipeline: the
@@ -871,13 +896,14 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// subscribed ONCE, here, and runs to its real termination whatever the caller does; the answer is
     /// recorded for <see cref="TakeRootDeleteVerdict"/> and replayed to the caller.
     /// </summary>
-    /// <param name="path">The root being removed.</param>
+    /// <param name="operationKey">The delete this call belongs to (its seal id) — never the path: two
+    /// deletes of one path must not read, or consume, each other's answers.</param>
     /// <param name="storageCall">The cold compare-and-delete.</param>
     /// <returns>The store's answer, replayed.</returns>
-    public IObservable<bool> ObserveRootDelete(string path, IObservable<bool> storageCall)
+    public IObservable<bool> ObserveRootDelete(string operationKey, IObservable<bool> storageCall)
     {
         var record = new RootDeleteRecord();
-        _rootDeletes.AddOrUpdate(path, _ => ImmutableList.Create(record), (_, list) => list.Add(record));
+        _rootDeletes.AddOrUpdate(operationKey, _ => ImmutableList.Create(record), (_, list) => list.Add(record));
         var answer = new AsyncSubject<bool>();
         storageCall.Take(1).Subscribe(
             removed =>
@@ -887,7 +913,9 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             },
             ex =>
             {
-                record.Answer(RootDeleteVerdict.NotRemoved);
+                // 🚨 An ERROR proves nothing about the row: a provider can remove a copy before
+                // another faults, and an issued operation can outlive the aggregate error. Left
+                // unanswered, so the delete's outcome is Indeterminate and the owner fences first.
                 answer.OnError(ex);
             },
             () =>
@@ -899,18 +927,19 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     }
 
     /// <summary>
-    /// What this process's guarded root deletes of <paramref name="path"/> answered, consumed by the
+    /// What one delete's guarded root storage calls answered, consumed by the
     /// delete's release (#6856): <see cref="RootDeleteVerdict.Removed"/> when any of them removed the
-    /// row, <see cref="RootDeleteVerdict.Unanswered"/> when one has not answered yet (its delete is
+    /// row, <see cref="RootDeleteVerdict.Unanswered"/> when one has not answered yet — or FAILED, which
+    /// proves nothing about the row (its delete is
     /// <see cref="DeleteSealOutcome.Indeterminate"/>), else <see cref="RootDeleteVerdict.NotRemoved"/>
     /// (or none issued). Every record of the path is consumed: one still unanswered keeps running under
     /// the mesh's observation, but nothing of it is retained to misclassify a later delete.
     /// </summary>
-    /// <param name="path">The root.</param>
+    /// <param name="operationKey">The delete (its seal id) whose storage calls are asked.</param>
     /// <returns>The combined verdict.</returns>
-    public RootDeleteVerdict TakeRootDeleteVerdict(string path)
+    public RootDeleteVerdict TakeRootDeleteVerdict(string operationKey)
     {
-        if (!_rootDeletes.TryRemove(path, out var records))
+        if (!_rootDeletes.TryRemove(operationKey, out var records))
             return RootDeleteVerdict.NotRemoved;
         var verdict = RootDeleteVerdict.NotRemoved;
         foreach (var record in records)
@@ -1063,6 +1092,7 @@ public enum RootDeleteVerdict
     /// <summary>The store removed the row.</summary>
     Removed,
 
-    /// <summary>The store did not remove it (refused, absent, or the call failed).</summary>
+    /// <summary>The store answered that it did not remove it (refused, or absent). A FAILED call is
+    /// never this: it stays <see cref="Unanswered"/>.</summary>
     NotRemoved,
 }

@@ -356,7 +356,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
     delete's pipeline. The call is subscribed once by the registry and runs to its real end, and the
     store's answer is recorded there. The release asks that record, not how far the pipeline got:
     a removal is Committed even when the pipeline was cut before it noted it. An unanswered call is
-    Indeterminate, and the record is consumed by the release, so it never misclassifies a later delete.
+    Indeterminate, and so is a FAILED one: an error proves nothing about the row, because one
+    provider can remove a copy before another faults. The record belongs to one delete (it is keyed
+    by that delete's seal id, never by the path) and is consumed by that delete's release, so a
+    concurrent delete of the same path can never read it or misclassify a later delete.
   - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
     Its teardown refuses the deferred writes, fences the row (below) and then unseals the path for the
     next activation. No timer releases a seal: one that fired while the delete was still running would let
@@ -423,7 +426,9 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   before the store. So the teardown first refuses the writes it deferred, then **fences the stored
   row**: a compare-and-set (`WriteIfVersion`) moves the row one version past the confirmed version,
   carrying the confirmed state. The paused delete's compare-and-delete then refuses it, and the delete
-  answers `Conflict`. A replacement activation in the same process defers its own writes until the
+  answers `Conflict`. While the fence runs, or after it failed, the owner's **row guard stays**:
+  the fence's own write is the only one admitted past it (admitted by instance), so a cross-hub
+  patch's durable flush is still refused rather than made durable behind the paused delete. A replacement activation in the same process defers its own writes until the
   fence has landed. If the fence finds the writable row already gone, the delete won: the path is
   tombstoned, and nothing deferred stores it again. The fence moves only the confirmed node's own
   writable row. It never writes over read-only fallback content (version 0, which would recreate a

@@ -119,7 +119,8 @@ public class OwnerDeleteSealRegistryTest
         owner.OnTeardown.Dispose();
 
         fenced.Should().Be(1, "the owner's teardown runs the store fence");
-        registry.IsUnderActiveDeletion(Path, out _).Should().BeFalse("the row guard is lifted so the fence can write");
+        registry.IsUnderActiveDeletion(Path, out _).Should().BeTrue(
+            "the row guard STAYS while the fence runs: only the fence's own write passes it");
         registry.IsVersionGuardedDeletionInFlight(Path).Should().BeTrue(
             "until the fence lands, a replacement here defers its writes");
         fence.OnNext(false);
@@ -452,5 +453,42 @@ public class OwnerDeleteSealRegistryTest
         // Refused: an abort.
         registry.ObserveRootDelete(Path, System.Reactive.Linq.Observable.Return(false)).Subscribe(_ => { }, _ => { });
         registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.NotRemoved);
+    }
+
+    /// <summary>
+    /// Review round 9 (4306761565): a FAILED storage call proves nothing about the row (a provider can
+    /// remove a copy before another faults). Its verdict stays Unanswered — the delete is Indeterminate
+    /// and the owner fences — never NotRemoved, which would send an abort and resume writes.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void AFailedStorageCall_IsIndeterminate_NeverAnAbort()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        registry.ObserveRootDelete("delete-a",
+                System.Reactive.Linq.Observable.Throw<bool>(new InvalidOperationException("one provider faulted")))
+            .Subscribe(_ => { }, _ => { });
+        registry.TakeRootDeleteVerdict("delete-a").Should().Be(RootDeleteVerdict.Unanswered);
+    }
+
+    /// <summary>
+    /// Review round 9 (4306761580): root-delete records belong to ONE delete, keyed by its seal id. A
+    /// concurrent delete of the same path that releases first must not consume — or be answered by —
+    /// another delete's held storage call.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void OverlappingDeletesOfOnePath_NeverConsumeEachOthersVerdict()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        var heldA = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.ObserveRootDelete("delete-a", heldA).Subscribe(_ => { }, _ => { });
+
+        registry.TakeRootDeleteVerdict("delete-b").Should().Be(RootDeleteVerdict.NotRemoved,
+            "delete B issued no root delete of its own");
+        registry.TakeRootDeleteVerdict("delete-a").Should().Be(RootDeleteVerdict.Unanswered,
+            "A's held storage call is still A's — B's release did not consume it");
+        heldA.OnNext(true);
+        heldA.OnCompleted();
     }
 }
