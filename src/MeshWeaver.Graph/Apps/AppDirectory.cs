@@ -42,6 +42,9 @@ public sealed record AppDirectoryEntry(
 
     /// <summary>Where the tile's group sorts among the groups (<see cref="App.GroupOrder"/>); 0 = no preference.</summary>
     public int GroupOrder { get; init; }
+
+    /// <summary>The catalog key of the declared group's display name (<see cref="App.GroupLabelKey"/>); null = as written.</summary>
+    public string? GroupLabelKey { get; init; }
 }
 
 /// <summary>What the person tile shows for the viewer: their display name, their picture (null =
@@ -227,6 +230,9 @@ public sealed class AppDirectory
     /// sit in. One group, last: <see cref="LastGroupOrder"/>.
     /// </summary>
     public const string SettingsGroup = "Settings";
+
+    /// <summary>The catalog key the <see cref="SettingsGroup"/> heading is localized by.</summary>
+    public const string SettingsGroupLabelKey = "common.settings";
 
     /// <summary>
     /// The <see cref="App.GroupOrder"/> that sorts a group after every group with no preference.
@@ -528,7 +534,7 @@ public sealed class AppDirectory
                 settingsPath, LabelKey: "common.settings", BuiltIn: true);
         // The settings tiles sit in ONE group, last (maintainer, 2026-10-18: "all the settings at
         // bottom under Settings"); the Inbox stays top-level, in no group.
-        settings = settings with { GroupDeclared = true, GroupOrder = LastGroupOrder };
+        settings = settings with { GroupDeclared = true, GroupOrder = LastGroupOrder, GroupLabelKey = SettingsGroupLabelKey };
         var list = ImmutableList.Create(
             settings,
             new AppDirectoryEntry(InboxId, "Inbox", UserActivityLayoutAreas.InboxIcon, null, null,
@@ -536,7 +542,7 @@ public sealed class AppDirectory
         return isGlobalAdmin
             ? list.Add(new AppDirectoryEntry(AdminId, "Administration", SettingsIcon, null, SettingsGroup,
                 AdminAppNodeType.Path, LabelKey: "adminApp.title", BuiltIn: true)
-            { GroupDeclared = true, GroupOrder = LastGroupOrder })
+            { GroupDeclared = true, GroupOrder = LastGroupOrder, GroupLabelKey = SettingsGroupLabelKey })
             : list;
     }
 

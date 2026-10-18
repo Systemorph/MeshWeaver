@@ -155,6 +155,7 @@ public sealed class AppDirectoryQueryProvider(IServiceProvider services) : IMesh
                     // null = never grouped → the app's category; "" = deliberately ungrouped, kept.
                     Group = group,
                     GroupOrder = viewerChose ? 0 : entry.GroupOrder,
+                    GroupLabelKey = viewerChose ? null : entry.GroupLabelKey,
                     Order = placed?.Order ?? 0,
                     Source = AppSources.Directory,
                     LabelKey = entry.LabelKey,

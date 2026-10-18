@@ -402,7 +402,8 @@ public class AppDirectoryPureTest
         var entries = AppDirectory.BuiltIns("alice", isGlobalAdmin: true);
         entries.Where(e => e.Id is AppDirectory.SettingsId or AppDirectory.AdminId)
             .Should().OnlyContain(e => e.Category == AppDirectory.SettingsGroup
-                                       && e.GroupDeclared && e.GroupOrder == AppDirectory.LastGroupOrder);
+                                       && e.GroupDeclared && e.GroupOrder == AppDirectory.LastGroupOrder
+                                       && e.GroupLabelKey == "common.settings");
         entries.Single(e => e.Id == AppDirectory.InboxId).Category.Should().BeNull();
         entries.Single(e => e.Id == AppDirectory.InboxId).GroupOrder.Should().Be(0);
     }
@@ -422,11 +423,16 @@ public class AppDirectoryPureTest
         var seededRow = AppDirectoryQueryProvider.Rows("alice", [declared], seeded, Options)[0].ContentAs<App>(Options)!;
         seededRow.Group.Should().Be("", "the seed's copy of an old category yields to the declared group");
         seededRow.GroupOrder.Should().Be(5);
+        var labelled = declared with { GroupLabelKey = "common.settings" };
+        AppDirectoryQueryProvider.Rows("alice", [labelled], seeded, Options)[0].ContentAs<App>(Options)!
+            .GroupLabelKey.Should().Be("common.settings", "the heading is localized by key; Group stays the identity");
 
         var chosen = new LauncherArrangement().Place("AI", "Mine", 1);
         var chosenRow = AppDirectoryQueryProvider.Rows("alice", [declared], chosen, Options)[0].ContentAs<App>(Options)!;
         chosenRow.Group.Should().Be("Mine", "a group the viewer chose always wins");
         chosenRow.GroupOrder.Should().Be(0, "the declared sort preference belongs to the declared group");
+        AppDirectoryQueryProvider.Rows("alice", [labelled], chosen, Options)[0].ContentAs<App>(Options)!
+            .GroupLabelKey.Should().BeNull("a viewer-authored group name is shown as written");
     }
 
     /// <summary>The snapshot fold behind the provider's unified surface applies EVERY delta kind —
