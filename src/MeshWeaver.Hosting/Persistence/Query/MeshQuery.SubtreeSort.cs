@@ -90,8 +90,16 @@ public partial class MeshQuery
     /// deleted one. So the ranking keeps the WHOLE candidate set and every key, folds each delta
     /// into it (reading the key of a changed candidate only — one read per changed row), re-takes
     /// the window, and emits the window as a <see cref="QueryChangeType.Reset"/> whenever its
-    /// membership, its order or one of its rows changed. A Reset replaces the result in every
-    /// consumer, so no row outside the window is ever emitted, and the order survives.</para>
+    /// membership, its order, one of its rows or its completeness changed. No row outside the
+    /// window is ever emitted, and the order survives.</para>
+    ///
+    /// <para>🚨 <b>Rows that leave the window are named.</b> The Reset is preceded by a
+    /// <see cref="QueryChangeType.Removed"/> for every row that dropped out, so no snapshot in
+    /// between ever holds more than the window. The contract says a Reset
+    /// replaces the result, but the synced consumer (<c>SyncedQueryMeshNodes</c>) folds a Reset into
+    /// its cache additively, so without the eviction a <c>limit:2</c> cache held three rows
+    /// (review #4306054491). A consumer that does replace on Reset finds the evicted rows already
+    /// gone, so the Removed is a no-op there.</para>
     /// </summary>
     private IObservable<QueryResultChange<T>> OrderBySubtreeActivity<T>(
         MeshQueryRequest candidatesRequest,
@@ -110,14 +118,17 @@ public partial class MeshQuery
             Limit = MeshQueryRequest.NoLimit,
         };
         var maxCandidates = OperationOptions.SubtreeSortMaxCandidates;
-        // One ranking per SUBSCRIPTION (Defer), and Concat processes one change at a time, so the
-        // ranking's state is only ever touched by one change's continuation. Concat also keeps the
-        // stream's order: a delta arriving while keys are read waits behind the frame before it.
+        // One ranking per SUBSCRIPTION (the outer Defer). 🚨 Apply itself is deferred too: Select
+        // runs eagerly, so an undeferred Apply read and mutated the ranking the moment a change
+        // ARRIVED — a delta landing while the Initial's key reads were pending saw no window yet and
+        // was dropped for good, and a removal could re-rank under a key read still in flight
+        // (review #4306054478). Deferred, each Apply starts only when Concat reaches it, after the
+        // change before it has finished — so the ranking is touched by one change at a time, in order.
         return Observable.Defer(() =>
         {
             var ranking = new SubtreeRanking<T>(candidatesRequest, keysRequest, parsed, maxCandidates, runNodes);
             return run(candidates)
-                .Select(ranking.Apply)
+                .Select(change => Observable.Defer(() => ranking.Apply(change)))
                 .Concat();
         });
     }
@@ -138,6 +149,8 @@ public partial class MeshQuery
         private readonly Dictionary<string, (T Item, double Score, SubtreeKey Key)> candidates =
             new(StringComparer.OrdinalIgnoreCase);
         private IReadOnlyList<T> emitted = [];
+        private bool emittedIncomplete;
+        private IReadOnlyList<string>? emittedSilent;
         private bool initialized;
         // The candidate read's own incompleteness, as of its last full frame.
         private bool candidatesIncomplete;
@@ -196,8 +209,9 @@ public partial class MeshQuery
         }
 
         /// <summary>
-        /// Re-takes the window and emits it when it changed (or when <paramref name="forceEmit"/>):
-        /// an Initial for the first frame, a Reset after that.
+        /// Re-takes the window and emits it when its rows or its completeness changed (or when
+        /// <paramref name="forceEmit"/>): an Initial for the first frame, after that a Removed for
+        /// the rows that left it followed by a Reset.
         /// </summary>
         private IObservable<QueryResultChange<T>> Window(QueryResultChange<T> change, bool forceEmit)
         {
@@ -211,34 +225,57 @@ public partial class MeshQuery
                 ordered = ordered.Take(limit);
             var window = ordered.ToList();
 
+            // 🚨 Never a complete-looking ranking over an incomplete read: a key read that did not
+            // complete (a provider silent or SnapshotIncomplete) may have missed the newest row, so
+            // the order it produced is a floor — the frame says so, as the candidate read's own does.
+            // Computed BEFORE the unchanged check: an off-page key read turning incomplete leaves the
+            // rows as they were and must still be reported (review #4306054499).
+            var incomplete = candidatesIncomplete || candidates.Values.Any(c => c.Key.Incomplete);
+            var silent = candidates.Values
+                .SelectMany(c => c.Key.SilentProviders ?? [])
+                .Concat(candidatesSilent ?? [])
+                .Distinct(StringComparer.Ordinal)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            IReadOnlyList<string>? silentOrNull = silent.Length == 0 ? null : silent;
+
             var unchanged = initialized
                 && window.Count == emitted.Count
                 // Same rows (by identity: an Updated row is a new instance), in the same order.
-                && window.Select(w => w.Item).Zip(emitted, (a, b) => SamePath(a, b) && ReferenceEquals(a, b)).All(same => same);
+                && window.Select(w => w.Item).Zip(emitted, (a, b) => SamePath(a, b) && ReferenceEquals(a, b)).All(same => same)
+                && incomplete == emittedIncomplete
+                && (emittedSilent ?? []).SequenceEqual(silentOrNull ?? [], StringComparer.Ordinal);
             if (unchanged && !forceEmit)
                 return Observable.Empty<QueryResultChange<T>>();
 
             var first = !initialized;
             initialized = true;
+            var evicted = emitted.Where(e => !window.Any(w => SamePath(w.Item, e))).ToList();
             emitted = window.Select(w => w.Item).ToList();
-            // 🚨 Never a complete-looking ranking over an incomplete read: a key read that did not
-            // complete (a provider silent or SnapshotIncomplete) may have missed the newest row, so
-            // the order it produced is a floor — the frame says so, as the candidate read's own does.
-            var keyIncomplete = candidates.Values.Any(c => c.Key.Incomplete);
-            var silent = candidates.Values
-                .SelectMany(c => c.Key.SilentProviders ?? [])
-                .Concat(candidatesSilent ?? [])
-                .Distinct(StringComparer.Ordinal)
-                .ToArray();
-            return Observable.Return(change with
+            emittedIncomplete = incomplete;
+            emittedSilent = silentOrNull;
+            var frame = Observable.Return(change with
             {
                 ChangeType = first ? QueryChangeType.Initial : QueryChangeType.Reset,
                 Items = emitted,
                 Scores = window.Select(w => w.Score).ToList(),
                 Query = parsed,
-                SnapshotIncomplete = candidatesIncomplete || keyIncomplete,
-                SilentProviders = silent.Length == 0 ? null : silent,
+                SnapshotIncomplete = incomplete,
+                SilentProviders = silentOrNull,
             });
+            // Evictions FIRST: a cache that folds the Reset additively would otherwise snapshot the
+            // window plus the rows it pushed out, one frame over the limit.
+            return evicted.Count == 0
+                ? frame
+                : Observable.Return(change with
+                {
+                    ChangeType = QueryChangeType.Removed,
+                    Items = evicted,
+                    Scores = null,
+                    Query = parsed,
+                    SnapshotIncomplete = incomplete,
+                    SilentProviders = silentOrNull,
+                }).Concat(frame);
         }
 
         private static string? PathOf(T item) => item is MeshNode { Path: { Length: > 0 } path } ? path : null;

@@ -320,24 +320,101 @@ public class SubtreeLastModifiedSortTest
         // A new container whose child is the newest row of all enters at the top…
         live.Add(Child("Kickoff", "Epsilon", Day(40)));
         live.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
-        var added = await Frame(1);
+        var evictBeta = await Frame(1);
+        evictBeta.ChangeType.Should().Be(QueryChangeType.Removed, "the row that leaves the window is named first");
+        Ids(evictBeta).Should().Equal(["Beta"]);
+        var added = await Frame(2);
         added.ChangeType.Should().Be(QueryChangeType.Reset, "a re-taken window replaces the result");
         Ids(added).Should().Equal(["Epsilon", "Gamma"], "the Added row is ranked INTO the window; Beta drops off");
 
         // …and deleting it backfills the window from the candidates.
         live.Push(QueryChangeType.Removed, Client("Epsilon", Day(39)));
-        var backfilled = await Frame(2);
+        Ids(await Frame(3)).Should().Equal(["Epsilon"], "the deleted row is evicted by name");
+        var backfilled = await Frame(4);
         Ids(backfilled).Should().Equal(["Gamma", "Beta"], "a delete backfills");
 
         // An Updated row INSIDE the window re-emits it, order intact.
         live.Push(QueryChangeType.Updated, Client("Beta", Day(2)) with { Name = "Beta renamed" });
-        var updated = await Frame(3);
+        var updated = await Frame(5);
         Ids(updated).Should().Equal(["Gamma", "Beta"]);
         updated.Items[1].Name.Should().Be("Beta renamed");
 
         new[] { initial, added, backfilled, updated }.SelectMany(c => c.Items).Select(n => n.Id)
             .Should().NotContain("Alpha", "no frame ever carries a row outside the window — "
                 + "the off-page Updated produced none, so the frame after the Initial is the Added's");
+
+        // Folded the way SyncedQueryMeshNodes folds them — a Reset ADDS, a Removed removes — no
+        // snapshot ever holds more than the window (review #4306054491: it held three under limit:2).
+        var cache = new Dictionary<string, MeshNode>();
+        var sizes = new List<int>();
+        foreach (var frame in frames.Take(6).ToEnumerable())
+        {
+            foreach (var node in frame.Items)
+                if (frame.ChangeType == QueryChangeType.Removed) cache.Remove(node.Path);
+                else cache[node.Path] = node;
+            sizes.Add(cache.Count);
+        }
+        sizes.Should().AllSatisfy(size => size.Should().BeLessThanOrEqualTo(2));
+        cache.Values.Select(n => n.Id).Order(StringComparer.Ordinal).Should().Equal(["Beta", "Gamma"]);
+    }
+
+    /// <summary>
+    /// A delta that arrives while the Initial's key reads are still pending is ranked once they
+    /// finish, never dropped (review #4306054478: <c>Select</c> ran the ranking eagerly, saw no window
+    /// yet and discarded the delta for good).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task ADeltaDuringTheInitialKeyReadsIsRankedNotDropped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var live = new LiveProvider(Fixture);
+        var (release, requested) = live.HoldKeyReadsOf("Gamma");
+        var query = (IMeshQueryCore)new MeshQuery([live], hub: null!);
+        var frames = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
+        using var subscription = query.Query<MeshNode>(
+                new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Limit = 2, UserId = "viewer" }, Options)
+            .Subscribe(frames);
+
+        // Gamma's key read is held, so the Initial cannot be ranked yet — and Epsilon arrives now.
+        // Waiting for the held read to be ASKED FOR proves the candidate stream is subscribed (it
+        // already delivered the Initial being ranked), so the push cannot be lost at the source.
+        await requested.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        live.Add(Child("Kickoff", "Epsilon", Day(40)));
+        live.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
+        release.OnNext(System.Reactive.Unit.Default);
+
+        var ranked = await frames
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Select(c => string.Join(",", c.Items.Select(n => n.Id)))
+            .FirstAsync(ids => ids == "Epsilon,Gamma")
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        ranked.Should().Be("Epsilon,Gamma", "the delta that came in during the key reads is ranked into the window");
+    }
+
+    /// <summary>
+    /// An off-page candidate whose key read turns incomplete leaves the visible rows as they were,
+    /// and the result must still stop claiming to be complete (review #4306054499).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AnOffPageKeyTurningIncompleteIsReported()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var live = new LiveProvider(Fixture);
+        var query = (IMeshQueryCore)new MeshQuery([live], hub: null!);
+        var frames = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
+        using var subscription = query.Query<MeshNode>(
+                new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Limit = 2, UserId = "viewer" }, Options)
+            .Subscribe(frames);
+
+        var initial = await frames.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        initial.SnapshotIncomplete.Should().BeFalse("control: every read answered in full");
+
+        live.IncompleteKeyReadsOf("Alpha");
+        live.Push(QueryChangeType.Updated, Client("Alpha", Day(31)));
+        var next = await frames.Skip(1).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        next.Items.Select(n => n.Id).Should().Equal(["Gamma", "Beta"], "the visible rows did not change");
+        next.SnapshotIncomplete.Should().BeTrue("but the ranking now rests on an incomplete read, and says so");
     }
 
     /// <summary>
@@ -378,7 +455,25 @@ public class SubtreeLastModifiedSortTest
         private readonly QueryEvaluator evaluator = new();
         private readonly QueryParser parser = new();
 
+        private readonly Dictionary<string, (System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> Release, System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit> Requested)> held = new(StringComparer.Ordinal);
+        private readonly HashSet<string> incomplete = new(StringComparer.Ordinal);
+
         public void Add(MeshNode node) { lock (rows) rows.Add(node); }
+
+        /// <summary>
+        /// Key reads under <paramref name="ns"/> wait until <c>Release</c> fires; <c>Requested</c>
+        /// fires when such a read is asked for.
+        /// </summary>
+        public (IObserver<System.Reactive.Unit> Release, IObservable<System.Reactive.Unit> Requested) HoldKeyReadsOf(string ns)
+        {
+            var gate = (Release: new System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit>(1),
+                Requested: new System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit>(1));
+            lock (rows) held[ns] = gate;
+            return gate;
+        }
+
+        /// <summary>Key reads under <paramref name="ns"/> answer <c>SnapshotIncomplete</c> from now on.</summary>
+        public void IncompleteKeyReadsOf(string ns) { lock (rows) incomplete.Add(ns); }
 
         public void Push(QueryChangeType type, MeshNode node)
         {
@@ -406,11 +501,30 @@ public class SubtreeLastModifiedSortTest
                     .StartWith(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = clients, Query = parsed, Timestamp = DateTimeOffset.UtcNow });
             }
             var ns = parsed.Path ?? "";
-            MeshNode[] below;
-            lock (rows) below = [.. rows.Where(r => r.Path.StartsWith(ns + "/", StringComparison.Ordinal))
-                .OrderByDescending(r => r.LastModified).Take(1)];
-            return (IObservable<QueryResultChange<T>>)(object)Observable.Return(
-                new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, Items = below, Query = parsed, Timestamp = DateTimeOffset.UtcNow });
+            IObservable<System.Reactive.Unit>? gate = null;
+            lock (rows)
+                if (held.TryGetValue(ns, out var hold))
+                {
+                    gate = hold.Release;
+                    hold.Requested.OnNext(System.Reactive.Unit.Default);
+                }
+            var read = Observable.Defer(() =>
+            {
+                MeshNode[] below;
+                bool partial;
+                lock (rows)
+                {
+                    below = [.. rows.Where(r => r.Path.StartsWith(ns + "/", StringComparison.Ordinal))
+                        .OrderByDescending(r => r.LastModified).Take(1)];
+                    partial = incomplete.Contains(ns);
+                }
+                return Observable.Return(new QueryResultChange<MeshNode>
+                {
+                    ChangeType = QueryChangeType.Initial, Items = below, Query = parsed,
+                    SnapshotIncomplete = partial, Timestamp = DateTimeOffset.UtcNow,
+                });
+            });
+            return (IObservable<QueryResultChange<T>>)(object)(gate is null ? read : gate.Take(1).SelectMany(_ => read));
         }
 
         public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)

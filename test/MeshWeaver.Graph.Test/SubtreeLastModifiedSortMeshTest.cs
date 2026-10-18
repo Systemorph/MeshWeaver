@@ -3,6 +3,7 @@ using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -54,5 +55,41 @@ public class SubtreeLastModifiedSortMeshTest(ITestOutputHelper output) : Monolit
 
         change.Items.Select(n => n.Id).Should().Equal(["Gamma", "Beta", "Alpha"],
             "Gamma's grandchild (day 25) beats Beta's child (day 20); Alpha's own day-30 stamp is not activity");
+    }
+
+    /// <summary>
+    /// The window holds through <c>hub.GetQuery</c>, the synced cache a hub-side reader binds to
+    /// (review #4306054491). That cache folds a <see cref="QueryChangeType.Reset"/> additively, so a
+    /// container ranked into a <c>limit:2</c> window must evict the row it pushed out — or the cache
+    /// holds three.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheSyncedCacheKeepsOnlyTheWindow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cache = Mesh.GetQuery("subtree-sort-window",
+            $"namespace:{Org} nodeType:Group sort:subtreeLastModified-desc limit:2");
+
+        await cache
+            .Select(nodes => string.Join(",", nodes.Select(n => n.Id).Order(StringComparer.Ordinal)))
+            .FirstAsync(ids => ids == "Beta,Gamma")
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+
+        // Created now, so its own stamp is newer than every fixture row: it enters at the top.
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode("Epsilon", Org) { Name = "Epsilon", NodeType = "Group" })
+            .FirstAsync()
+            .Await(ct);
+
+        // Every snapshot until Epsilon lands, and the one it lands in: none may exceed the window.
+        var snapshots = await cache
+            .Select(nodes => nodes.Select(n => n.Id).Order(StringComparer.Ordinal).ToArray())
+            .TakeUntil(ids => ids.Contains("Epsilon"))
+            .ToList()
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+        snapshots.Should().AllSatisfy(ids => ids.Length.Should().BeLessThanOrEqualTo(2));
+        snapshots[^1].Should().Equal(["Epsilon", "Gamma"], "Beta left the window and the cache dropped it");
     }
 }
