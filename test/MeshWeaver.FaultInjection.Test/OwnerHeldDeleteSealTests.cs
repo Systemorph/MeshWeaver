@@ -460,6 +460,11 @@ public class AnIndeterminateDeleteIsFencedTest(AnIndeterminateDeleteIsFencedTest
         answer.Kind.Should().Be(NotificationKind.OnNext, answer.Exception?.Message ?? "the fence moved the row");
 
         deleteHold.Release(); // the storage delete, still running, now meets the fenced row
+        // The held delete ACTUALLY runs — the mesh, not the timed-out pipeline, keeps it subscribed —
+        // and the store refuses it.
+        (await Mesh.Storage(DeleterSilo).ConditionalDeleteResults(path).Should().Within(TestTimeouts.Convergence)
+                .Emit("the storage delete that outlived its pipeline reached the store", ct))
+            .Should().BeFalse("it met the fenced row, past the version it was confirmed against");
         var stored = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
             .Select(_ => Mesh.Stored(path))
             .Where(n => n?.Name == "written while the delete was undecided")

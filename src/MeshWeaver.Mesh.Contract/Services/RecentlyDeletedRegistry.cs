@@ -855,30 +855,91 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
            || string.Equals(outcome, DeleteSealOutcome.Indeterminate, StringComparison.Ordinal)
            || string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal);
 
-    // ── The deleter's side: was its root storage delete still running? ─────────────────────────
-    private readonly ConcurrentDictionary<string, int> _rootDeletesInFlight = new(StringComparer.OrdinalIgnoreCase);
+    // ── The deleter's side: what did its root storage delete answer? ───────────────────────────
+    //
+    // A guarded delete's root storage call is OBSERVED BY THE MESH, not by the delete's pipeline: the
+    // pipeline's subscription can be cancelled (a commit-stage timeout) while the store keeps working,
+    // so the store's real answer is recorded here, on its actual termination, and the pipeline only
+    // subscribes to a replay. The release then asks this record — never "did my pipeline get as far as
+    // noting the removal" — whether the delete removed the row, did not, or has not answered yet.
+
+    private readonly ConcurrentDictionary<string, ImmutableList<RootDeleteRecord>> _rootDeletes =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Notes that a guarded delete ISSUED its root storage delete for <paramref name="path"/>. Dispose
-    /// the returned handle ONLY when that storage call reported a result — never on unsubscribe, which
-    /// does not stop a storage operation already running.
+    /// Runs a guarded delete's root storage call under the mesh's own observation (#6856): it is
+    /// subscribed ONCE, here, and runs to its real termination whatever the caller does; the answer is
+    /// recorded for <see cref="TakeRootDeleteVerdict"/> and replayed to the caller.
     /// </summary>
     /// <param name="path">The root being removed.</param>
-    /// <returns>The handle that notes the result.</returns>
-    public IDisposable BeginRootDelete(string path)
+    /// <param name="storageCall">The cold compare-and-delete.</param>
+    /// <returns>The store's answer, replayed.</returns>
+    public IObservable<bool> ObserveRootDelete(string path, IObservable<bool> storageCall)
     {
-        _rootDeletesInFlight.AddOrUpdate(path, 1, (_, count) => count + 1);
-        return new CountedScope(_rootDeletesInFlight, path, onDisposed: null);
+        var record = new RootDeleteRecord();
+        _rootDeletes.AddOrUpdate(path, _ => ImmutableList.Create(record), (_, list) => list.Add(record));
+        var answer = new AsyncSubject<bool>();
+        storageCall.Take(1).Subscribe(
+            removed =>
+            {
+                record.Answer(removed ? RootDeleteVerdict.Removed : RootDeleteVerdict.NotRemoved);
+                answer.OnNext(removed);
+            },
+            ex =>
+            {
+                record.Answer(RootDeleteVerdict.NotRemoved);
+                answer.OnError(ex);
+            },
+            () =>
+            {
+                record.Answer(RootDeleteVerdict.NotRemoved, onlyIfUnanswered: true);
+                answer.OnCompleted();
+            });
+        return answer.AsObservable();
     }
 
     /// <summary>
-    /// True while a root storage delete of <paramref name="path"/> was issued and has not reported a
-    /// result — the delete's outcome is then <see cref="DeleteSealOutcome.Indeterminate"/>, never an abort.
+    /// What this process's guarded root deletes of <paramref name="path"/> answered, consumed by the
+    /// delete's release (#6856): <see cref="RootDeleteVerdict.Removed"/> when any of them removed the
+    /// row, <see cref="RootDeleteVerdict.Unanswered"/> when one has not answered yet (its delete is
+    /// <see cref="DeleteSealOutcome.Indeterminate"/>), else <see cref="RootDeleteVerdict.NotRemoved"/>
+    /// (or none issued). Every record of the path is consumed: one still unanswered keeps running under
+    /// the mesh's observation, but nothing of it is retained to misclassify a later delete.
     /// </summary>
     /// <param name="path">The root.</param>
-    /// <returns><c>true</c> when a root delete may still be running.</returns>
-    public bool IsRootDeleteUnsettled(string path)
-        => !_rootDeletesInFlight.IsEmpty && _rootDeletesInFlight.ContainsKey(path);
+    /// <returns>The combined verdict.</returns>
+    public RootDeleteVerdict TakeRootDeleteVerdict(string path)
+    {
+        if (!_rootDeletes.TryRemove(path, out var records))
+            return RootDeleteVerdict.NotRemoved;
+        var verdict = RootDeleteVerdict.NotRemoved;
+        foreach (var record in records)
+        {
+            var answered = record.MarkTaken();
+            if (answered == RootDeleteVerdict.Removed)
+                return RootDeleteVerdict.Removed;
+            if (answered == RootDeleteVerdict.Unanswered)
+                verdict = RootDeleteVerdict.Unanswered;
+        }
+        return verdict;
+    }
+
+    /// <summary>One root storage delete's answer.</summary>
+    private sealed class RootDeleteRecord
+    {
+        private int _verdict = (int)RootDeleteVerdict.Unanswered;
+
+        public void Answer(RootDeleteVerdict verdict, bool onlyIfUnanswered = false)
+        {
+            if (onlyIfUnanswered)
+                Interlocked.CompareExchange(ref _verdict, (int)verdict, (int)RootDeleteVerdict.Unanswered);
+            else
+                Interlocked.Exchange(ref _verdict, (int)verdict);
+        }
+
+        /// <summary>The answer when the release took it.</summary>
+        public RootDeleteVerdict MarkTaken() => (RootDeleteVerdict)Volatile.Read(ref _verdict);
+    }
 
     private sealed record VersionGuardRelease(string Path, string Outcome);
 
@@ -988,4 +1049,20 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         public static readonly EmptyScope Instance = new();
         public void Dispose() { }
     }
+}
+
+/// <summary>
+/// What a guarded delete's root storage call answered (#6856) — in-process only, never persisted or
+/// serialized, and exhaustively handled by <see cref="RecentlyDeletedRegistry"/>'s callers.
+/// </summary>
+public enum RootDeleteVerdict
+{
+    /// <summary>The store has not answered yet (the call may still be running).</summary>
+    Unanswered,
+
+    /// <summary>The store removed the row.</summary>
+    Removed,
+
+    /// <summary>The store did not remove it (refused, absent, or the call failed).</summary>
+    NotRemoved,
 }

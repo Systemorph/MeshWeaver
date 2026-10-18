@@ -351,7 +351,12 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   - **Indeterminate** (the delete gave up while its root storage delete may still be running, for
     example when the commit stage timed out after issuing it): neither a commit nor an abort is known,
     because unsubscribing does not stop a storage call that is already running. The owner runs the
-    store fence below, while it still lives, and its writes wait until the fence has decided.
+    store fence below, while it still lives, and its writes wait until the fence has decided. The
+    deleter can tell these apart because its root storage call is **observed by the mesh**, not by the
+    delete's pipeline. The call is subscribed once by the registry and runs to its real end, and the
+    store's answer is recorded there. The release asks that record, not how far the pipeline got:
+    a removal is Committed even when the pipeline was cut before it noted it. An unanswered call is
+    Indeterminate, and the record is consumed by the release, so it never misclassifies a later delete.
   - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
     Its teardown refuses the deferred writes, fences the row (below) and then unseals the path for the
     next activation. No timer releases a seal: one that fired while the delete was still running would let

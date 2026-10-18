@@ -3761,6 +3761,11 @@ public static class MeshExtensions
             // is the release on every other path.
             if (!lease.Asked || !lease.TryClaimRelease())
                 return Observable.Return(System.Reactive.Unit.Default);
+            // The STORE's answer decides, as the mesh observed it — not how far this pipeline got:
+            // Committed when the root row was removed, Indeterminate while a root delete this process
+            // issued has not answered (an unsubscribe does not stop it), an abort only otherwise.
+            // Taken first, on every path, so the record never outlives this delete.
+            var verdict = registry?.TakeRootDeleteVerdict(path) ?? RootDeleteVerdict.NotRemoved;
             var answer = lease.Answer;
             Address target;
             if (answer is null)
@@ -3773,13 +3778,11 @@ public static class MeshExtensions
                 target = sealedBy;
             else
                 return Observable.Return(System.Reactive.Unit.Default); // the owner took no seal
-            // Committed only on a recorded removal; Indeterminate while a root storage delete this process
-        // issued has not answered (an unsubscribe does not stop it); an abort only when neither holds.
-        var outcome = rootRemoved
-            ? DeleteSealOutcome.Committed
-            : registry?.IsRootDeleteUnsettled(path) == true
-                ? DeleteSealOutcome.Indeterminate
-                : DeleteSealOutcome.Aborted;
+            var outcome = rootRemoved || verdict == RootDeleteVerdict.Removed
+                ? DeleteSealOutcome.Committed
+                : verdict == RootDeleteVerdict.Unanswered
+                    ? DeleteSealOutcome.Indeterminate
+                    : DeleteSealOutcome.Aborted;
             logger.LogDebug("[DeleteNode] owner seal release sent path={Path} seal={SealId} outcome={Outcome} to={Target}",
                 path, lease.SealId, outcome, target);
             return issuingHub
@@ -5832,13 +5835,13 @@ public static class MeshExtensions
         IObservable<string> GuardedRootDelete(string path, long confirmedVersion)
             => Observable.Defer(() =>
                 {
-                    // 🚨 Noted from ISSUE to RESULT — never cleared by an unsubscribe: a timed-out or
-                    // cancelled observer does not stop a storage delete that is already running, so
-                    // until the store has answered, this delete's outcome is Indeterminate, not an
-                    // abort (#6856).
-                    var issued = rootDeletes?.BeginRootDelete(path);
-                    return storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions)
-                        .Do(_ => issued?.Dispose(), _ => issued?.Dispose(), () => issued?.Dispose());
+                    // 🚨 OBSERVED BY THE MESH, through to the store's real answer (#6856): a timed-out or
+                    // cancelled pipeline does not stop a storage delete that is already running, so the
+                    // call is subscribed once by the registry and recorded on its actual termination;
+                    // this pipeline only reads the replay. The release asks that record whether the row
+                    // was removed, not whether this pipeline got as far as noting it.
+                    var call = storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions);
+                    return rootDeletes is null ? call : rootDeletes.ObserveRootDelete(path, call);
                 })
                 .Take(1)
                 .SelectMany(removed => removed

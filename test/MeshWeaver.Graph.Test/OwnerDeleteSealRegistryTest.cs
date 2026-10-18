@@ -420,4 +420,37 @@ public class OwnerDeleteSealRegistryTest
         registry.IsVersionGuardedDeletionInFlight(Path).Should().BeFalse("the fence moved the row; the delete can no longer remove it");
         registry.IsRecentlyDeleted(Path).Should().BeFalse();
     }
+
+    /// <summary>
+    /// Review round 8 (4306680127, 4306680138): the release asks what the STORE answered, as the mesh
+    /// observed it — not how far the delete's pipeline got. The storage call is subscribed by the
+    /// registry and runs to its real termination even after the pipeline unsubscribed.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void TheStoresAnswer_DecidesTheVerdict_EvenAfterThePipelineUnsubscribed()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+
+        // Removed, but the pipeline is cut BEFORE it records progress: still Committed.
+        var removed = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.ObserveRootDelete(Path, removed).Subscribe(_ => { }, _ => { }).Dispose();
+        removed.OnNext(true);
+        removed.OnCompleted();
+        registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.Removed,
+            "the store removed the row; the pipeline never got to record it, and that must not read as an abort");
+
+        // Unanswered when the release asks: Indeterminate; the late answer leaves nothing behind.
+        var running = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.ObserveRootDelete(Path, running).Subscribe(_ => { }, _ => { }).Dispose();
+        registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.Unanswered);
+        running.OnNext(false);
+        running.OnCompleted();
+        registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.NotRemoved,
+            "a late answer is not retained to misclassify a later delete of the same path");
+
+        // Refused: an abort.
+        registry.ObserveRootDelete(Path, System.Reactive.Linq.Observable.Return(false)).Subscribe(_ => { }, _ => { });
+        registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.NotRemoved);
+    }
 }

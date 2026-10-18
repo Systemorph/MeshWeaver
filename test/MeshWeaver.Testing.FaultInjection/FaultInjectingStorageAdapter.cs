@@ -48,6 +48,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _enumerationHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
@@ -276,9 +277,19 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<bool> DeleteIfExists(string path) => HeldDelete([path], () => _inner.DeleteIfExists(path));
 
     /// <inheritdoc />
-    /// <remarks>Held, then decided ATOMICALLY by the store underneath once released.</remarks>
+    /// <remarks>Held, then decided ATOMICALLY by the store underneath once released; each answer the
+    /// store actually gave is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-        => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options));
+        => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options)
+            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
+
+    /// <summary>
+    /// Each answer the store underneath gave to a compare-and-delete of <paramref name="path"/>
+    /// (replayed) — the positive proof that a held delete actually RAN, and what it decided.
+    /// </summary>
+    /// <param name="path">The node path.</param>
+    public IObservable<bool> ConditionalDeleteResults(string path)
+        => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).AsObservable();
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
