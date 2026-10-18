@@ -758,7 +758,9 @@ version resolves to. It is never reclaimed while its writer may still be active,
 younger than `InFlightPublicationGrace` (10 minutes). Once older than that it was abandoned and is
 reclaimed. A refused dll publication does not delete the pdb it published, because a concurrent
 writer of identical bytes shares that name and may be staging its own dll. The orphan is left to the
-grace rule. Only an openable dll counts as a build: an evicted dll that another replica still holds
+grace rule. A publication that reuses an existing pdb refreshes its write time, which restarts the
+grace, and eviction re-reads a pdb-only file's write time right before deleting it. A retry that
+reuses an aged orphan therefore keeps it. Only an openable dll counts as a build: an evicted dll that another replica still holds
 stays listed on the shared volume but cannot be opened, so it takes no slot.
 
 Pinned by `FileSystemAssemblyStoreTest.Twenty_recompiles_of_one_version_leave_a_bounded_directory`

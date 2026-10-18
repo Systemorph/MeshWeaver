@@ -435,6 +435,54 @@ public class FileSystemAssemblyStoreTest : IDisposable
     }
 
     /// <summary>
+    /// Review round 4 on #6969: a same-bytes RETRY reuses the pdb a refused publication left, after
+    /// that orphan has aged past the grace. An overtaking publication evicts while the retry stages
+    /// its dll (triggered from the retry's dll-open hook). The retry's build keeps its symbols.
+    /// </summary>
+    [Fact]
+    public async Task A_retry_reusing_an_aged_orphan_pdb_keeps_it_through_an_overtaking_eviction()
+    {
+        var dll = Encoding.UTF8.GetBytes("retry-bytes");
+        var pdb = Encoding.UTF8.GetBytes("retry-pdb");
+        var refusing = new FileSystemAssemblyStore(
+            root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
+            path => path.Contains(".dll", StringComparison.Ordinal)
+                ? throw new IOException("No space left on device", OperatingSystem.IsWindows() ? unchecked((int)0x80070070) : 28)
+                : AtomicFileWrite.OpenTempForWrite(path));
+        await Assert.ThrowsAsync<VolumeFullException>(async () =>
+            await refusing.PutWithLocation("Store/Plugin", 9, dll, pdb).Timeout(TimeSpan.FromSeconds(10)).Await());
+        var orphan = Directory.GetFiles(Path.Combine(root, "Store_Plugin"), "*.pdb").Single();
+        File.SetLastWriteTimeUtc(orphan,
+            DateTime.UtcNow - FileSystemAssemblyStore.InFlightPublicationGrace - TimeSpan.FromMinutes(1));
+
+        var overtaken = false;
+        string? overtakerPath = null;
+        Exception? overtakerFault = null;
+        var retry = new FileSystemAssemblyStore(
+            root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
+            path =>
+            {
+                if (!overtaken && path.Contains(".dll", StringComparison.Ordinal))
+                {
+                    overtaken = true;
+                    // PutWithLocation is Defer(Return(...)): it runs inline on Subscribe, so the
+                    // overtaker's publication AND eviction complete before this hook returns.
+                    using var _ = store.PutWithLocation("Store/Plugin", 9, Encoding.UTF8.GetBytes("overtaker"), null)
+                        .Subscribe(loc => overtakerPath = loc.LocalPath, ex => overtakerFault = ex);
+                }
+                return AtomicFileWrite.OpenTempForWrite(path);
+            });
+
+        var published = await retry.Put("Store/Plugin", 9, dll, pdb).Should().Emit();
+
+        overtaken.Should().BeTrue("the overtaking publication ran while the retry staged its dll");
+        overtakerFault.Should().BeNull();
+        overtakerPath.Should().NotBeNull("the overtaker published, and so ran its eviction, inside the hook");
+        Path.ChangeExtension(published!, ".pdb").Should().Be(orphan);
+        File.Exists(orphan).Should().BeTrue("the retry reused this pdb, so it is in flight, not abandoned");
+    }
+
+    /// <summary>
     /// Review round 3 on #6969: a LISTED dll is not necessarily usable — an evicted dll another
     /// replica still holds stays listed, delete-pending, and unopenable (a dangling link is the local
     /// stand-in). Two such newer siblings must not take both slots and evict the version's last

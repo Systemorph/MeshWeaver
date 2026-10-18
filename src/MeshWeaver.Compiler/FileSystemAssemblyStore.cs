@@ -347,8 +347,14 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         // staging its own dll, so no writer owns it exclusively. An orphan is left to eviction,
         // which never counts a pdb-only build against the budget and reclaims it only once it is
         // older than InFlightPublicationGrace.
-        if (pdbBytes is { Length: > 0 })
-            AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
+        //
+        // 🚨 A REUSED pdb is claimed again (review round 4): an existing pdb may be an orphan a
+        // refused publication left, already older than the grace. Reusing it without refreshing its
+        // time would let a concurrent eviction read it as abandoned and delete it while this call
+        // stages its dll. The touch restarts the grace for the publication now in flight.
+        if (pdbBytes is { Length: > 0 }
+            && !AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite))
+            TryTouch(pdbPath);
         var published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
         if (published)
             logger.LogInformation(
@@ -540,17 +546,21 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             // Only an OPENABLE dll is a usable build (review round 3): on the shared volume an evicted
             // dll another replica still holds stays LISTED, delete-pending, and every open of it
             // fails — the lookup skips it (NewestOpenable), so it must not take a slot either.
+            // Probed newest-first and lazily, so the remote opens stop once both slots are filled.
             var keptBuilds = builds
-                .Where(build => build.Dll is not null && CanOpen(build.Dll.FullName))
+                .Where(build => build.Dll is not null)
                 .GroupBy(build => build.Key.Version)
                 .SelectMany(version => version
                     .OrderByDescending(build => build.Dll!.LastWriteTimeUtc)
+                    .Where(build => CanOpen(build.Dll!.FullName))
                     .Take(KeepBuildsPerVersion)
                     .Select(build => build.Key))
                 .Concat(builds
                     .Where(build => build.Dll is null && now - build.Newest < InFlightPublicationGrace)
                     .Select(build => build.Key))
                 .ToHashSet();
+
+            var pdbOnly = builds.Where(build => build.Dll is null).Select(build => build.Key).ToHashSet();
 
             var evicted = 0;
             var bytes = 0L;
@@ -561,6 +571,14 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
                 if (string.Equals(file.FullName, keep, StringComparison.Ordinal)
                     || string.Equals(file.FullName, Path.ChangeExtension(keep, ".pdb"), StringComparison.Ordinal))
                     continue;
+                // Revalidated right before the delete: a pdb-only build that a publication has just
+                // reused (and touched) since the snapshot above is in flight again, not abandoned.
+                if (identity.IsPdb && pdbOnly.Contains((identity.Version, identity.Hash)))
+                {
+                    file.Refresh();
+                    if (now - file.LastWriteTimeUtc < InFlightPublicationGrace)
+                        continue;
+                }
                 try
                 {
                     var length = file.Length;
