@@ -117,6 +117,16 @@ public record NodeValidationContext
     /// for the window that is deliberately NOT collapsed.
     /// </summary>
     public PartitionOwnershipMemo PartitionOwnership { get; init; } = new();
+
+    /// <summary>
+    /// For a Read: true when the read is a POINT read — addressed to <see cref="Node"/>'s own path
+    /// (the node hub's own data read) — and false for a row a listing or query is filtering. Only a
+    /// point read may be admitted by a node type's declared point read
+    /// (<see cref="MeshWeaver.Mesh.Security.DeclaredPointRead"/>), so a node admitted that way never
+    /// appears in a listing. Defaults to false: a seam that does not say it serves a point read is
+    /// treated as a listing, which is the closed direction.
+    /// </summary>
+    public bool IsPointRead { get; init; }
 }
 
 /// <summary>

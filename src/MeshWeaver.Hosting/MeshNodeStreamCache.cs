@@ -668,7 +668,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         int Attempt = 0);
 
     /// <summary>Cached effective-permission probe with expiry.</summary>
-    private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil);
+    private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil, bool Undetermined = false);
 
     public MeshNodeStreamCache(
         IMessageHub meshHub,
@@ -2292,9 +2292,45 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             return shared;
 
         return ProbeEffectivePermissions(path, captured)
-            .SelectMany(perms => GateOnRead(perms, shared, path, captured))
+            // This gate serves ONE node at its own path — a point read — so a type's DECLARED point
+            // read may admit it, but only after a DEFINITIVE denial: an undetermined check (a type
+            // rule that faulted or answered nothing) is refused here as everywhere else, never
+            // re-decided. The declaration is never written into the per-(path,user) cache, and an
+            // admitted stream is cut the moment the admission ends (AdmittedThroughDeclaration).
+            .SelectMany(probe => probe.Permissions.HasFlag(Permission.Read) || probe.Undetermined
+                ? GateOnRead(probe.Permissions, shared, path, captured)
+                : AdmittedThroughDeclaration(path, captured, shared))
             .CarryAccessContext(accessService);
     }
+
+    /// <summary>
+    /// The shared node stream for a caller the standard check DEFINITIVELY denied, admitted by the
+    /// node type's declared point read (<see cref="DeclaredPointRead"/>) — and ONLY for as long as
+    /// that admission holds. <c>shared</c> runs under the privileged read identity, so an admission
+    /// decided once would keep delivering every later revision after a revocation, an expiry or a
+    /// removal from the audience; the live verdict is therefore followed for the whole subscription,
+    /// and the stream faults with the read gate's own refusal when it turns false. The FIRST verdict
+    /// is bounded by the permission-establishment budget; a stalled one is a refusal.
+    /// </summary>
+    private IObservable<MeshNode> AdmittedThroughDeclaration(string path, AccessContext captured, IObservable<MeshNode> shared)
+        => Observable.Defer(() =>
+        {
+            var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+                .PermissionEstablishmentBudget;
+            var refusal = new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'");
+            // ONE subscription to the live verdict, no multicast: each verdict switches the caller
+            // between the shared stream (admitted) and the refusal (not admitted), so a verdict that
+            // turns false disposes the shared stream and faults the caller in the same step. Only the
+            // FIRST verdict is bounded — a stalled one is a refusal; after it the verdict may stay
+            // quiet for as long as the admission holds.
+            return DeclaredPointRead.Admits(meshHub, path, captured)
+                .DistinctUntilChanged()
+                .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
+                .Catch((TimeoutException _) => Observable.Return(false))
+                .DefaultIfEmpty(false)
+                .Select(admitted => admitted ? shared : Observable.Throw<MeshNode>(refusal))
+                .Switch();
+        });
 
     private static IObservable<MeshNode> GateOnRead(
         Permission perms, IObservable<MeshNode> shared, string path, AccessContext user)
@@ -2316,16 +2352,17 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// node, so a satellite / cell sub-path with no hub of its own can never wedge
     /// the gate.
     /// </summary>
-    private IObservable<Permission> ProbeEffectivePermissions(string path, AccessContext captured)
+    private IObservable<(Permission Permissions, bool Undetermined)> ProbeEffectivePermissions(string path, AccessContext captured)
     {
         var key = BuildAccessCacheKey(path, captured);
         return Observable.Defer(() =>
         {
-            // TTL cache hit ⇒ short-circuit the evaluation.
+            // TTL cache hit ⇒ short-circuit the evaluation. The entry keeps whether its denial was
+            // UNDETERMINED, so a cached "could not check" is never mistaken for a definitive denial.
             if (_access.TryGetValue(key, out var cached)
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
-                return Observable.Return(cached.Permissions);
+                return Observable.Return((cached.Permissions, cached.Undetermined));
             }
 
             // Miss ⇒ evaluate the user's effective permissions LOCALLY via the
@@ -2365,11 +2402,13 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     // must not answer differently. Asked ONLY on a fold denial, so a granted read
                     // never pays for the node read.
                     .SelectMany(perms => perms.HasFlag(Permission.Read)
-                        ? Observable.Return(perms)
+                        ? Observable.Return((Permissions: perms, Undetermined: false))
                         : ReconsiderReadThroughNodeTypeRule(path, captured)
-                            .Select(granted => granted ? perms | Permission.Read : perms))
-                    .Do(perms => _access[key] =
-                        new AccessEntry(perms, DateTimeOffset.UtcNow + AccessTtl));
+                            .Select(verdict => verdict == true
+                                ? (Permissions: perms | Permission.Read, Undetermined: false)
+                                : (Permissions: perms, Undetermined: verdict is null)))
+                    .Do(probe => _access[key] =
+                        new AccessEntry(probe.Permissions, DateTimeOffset.UtcNow + AccessTtl, probe.Undetermined));
             }
         });
     }
@@ -2383,17 +2422,18 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// Without it a rule's read grant held at two seams and was refused at the third — the one every
     /// <c>GetMeshNodeStream</c> view goes through.
     ///
-    /// <para>Emits <c>true</c> only on a rule GRANT. No node at the path, no rule for its type, a
-    /// rule refusal, a fault and an empty completion all emit <c>false</c>: the fold's denial stands,
-    /// fail-closed.</para>
+    /// <para>Emits <c>true</c> only on a rule GRANT. No node at the path, no rule for its type and a
+    /// rule refusal emit <c>false</c> — a DEFINITIVE denial. A rule that faults or reaches no verdict
+    /// emits <c>null</c> — UNDETERMINED, still refused, and never handed on to a declared point read
+    /// as if it were a denial. Fail-closed either way.</para>
     /// </summary>
-    private IObservable<bool> ReconsiderReadThroughNodeTypeRule(string path, AccessContext captured)
+    private IObservable<bool?> ReconsiderReadThroughNodeTypeRule(string path, AccessContext captured)
         => NodeTypeAccessRuleGate.ReadSubjectNode(meshHub, path)
             .SelectMany(node =>
             {
                 if (node is null
                     || NodeTypeAccessRuleGate.Find(meshHub, node.NodeType, NodeOperation.Read) is not { } rule)
-                    return Observable.Return(false);
+                    return Observable.Return<bool?>(false);
                 var context = new NodeValidationContext
                 {
                     Operation = NodeOperation.Read,
@@ -2401,14 +2441,14 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                     AccessContext = captured
                 };
                 return NodeTypeAccessRuleGate.Evaluate(rule, context, captured.ObjectId, logger)
-                    .Select(outcome => outcome.IsGranted);
+                    .Select(outcome => outcome.IsGranted ? true : outcome.IsUndetermined ? (bool?)null : false);
             })
             .Catch((Exception ex) =>
             {
                 logger.LogDebug(ex,
-                    "MeshNodeStreamCache: could not apply the node-type read rule at {Path} — the fold's denial stands",
+                    "MeshNodeStreamCache: could not apply the node-type read rule at {Path} — the fold's denial stands, UNDETERMINED",
                     path);
-                return Observable.Return(false);
+                return Observable.Return<bool?>(null);
             });
 
     // 🚨 PRIVATE raw write — does NOT deserialize JsonElement Content before the

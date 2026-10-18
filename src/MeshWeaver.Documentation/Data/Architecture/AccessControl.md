@@ -2007,6 +2007,98 @@ sequenceDiagram
 
 ---
 
+# Declared point reads (PointReadDeclaration)
+
+A node type can DECLARE who may read one of its nodes at that node's own path, named by the node
+itself (MeshWeaver#4306). It is the admission a public link needs. The link's audience may open the
+link whose id they hold, and no listing, query or scope walk ever names the link to them. A grant row
+cannot express this: a grant serves a listing exactly as it serves a point read, so an `Anonymous`
+`Viewer` grant on each public link let any logged-out caller list every anonymous link, and a
+link's id is its only secret.
+
+## The declaration
+
+`NodeTypeDefinition.PointRead` (JSON `pointRead`) is a `PointReadDeclaration`. It names the
+namespace it is honoured in, and three content properties of the node:
+
+```json
+"pointRead": { "subjectProperty": "audienceSubject", "namespace": "l", "areas": ["", "Overview"], "revokedProperty": "revokedAt", "expiresProperty": "expiresAt" }
+```
+
+- `namespace` is required. Only a DIRECT child of it is admitted, never a node elsewhere and never a
+  descendant. It must be a namespace only the platform writes (public links: `l`).
+- `areas` lists the layout areas of the node an admitted caller may render (`""` = the hub's default
+  area, the page opened at the node's bare path). Empty admits the node itself and no area.
+- `subjectProperty` holds the one grant subject admitted. `Anonymous` admits every caller, `Public`
+  admits every signed-in user, a group path admits its members (transitively, through the same
+  membership expansion the permission fold uses), and a user id admits that user.
+- `revokedProperty`, when it holds any non-null value, admits nobody.
+- `expiresProperty`, when declared, must hold an instant in the future.
+
+## Who may declare it, and which nodes it admits
+
+- **Only a type the platform owns.** That is a host-declared type node (a configuration node), or a
+  stored type node in a system-owned partition (one-way `_GitSync`, which grants nobody write). A
+  stored node cannot replace a host-declared type's declaration, and a declaration on any other
+  type is ignored.
+- **Only a node the platform issued**, meaning its last write was made by `System`, and only inside
+  the declared namespace. A person therefore cannot open a node to the world by writing a subject
+  into it: their write restamps the author, and they cannot create where the platform alone
+  writes. A create may carry a stored source's stamps (`CreateNodeRequest.AuthorshipFrom`, a
+  relocation) only when the source has the new node's NodeType, so another type's System stamp
+  cannot be borrowed. Opening a node to everyone stays a governed act, exactly like the broad grant
+  it replaces.
+- **Never an API-token caller.** The permission fold clamps a token by its scope's live `api`
+  policy. A declaration is a browser surface and does not reopen that.
+- **Only the instance's own anonymous switch outranks it.** `Access:DenyAnonymous` refuses every
+  logged-out caller whatever a type declares.
+
+## Where it is honoured: point reads only, after the standard check denied
+
+`DeclaredPointRead.Admits` is consulted on a DEFINITIVE denial, and its answer replaces the denial
+only when it admits. A grant and an undetermined check pass through unchanged: a type rule that
+faults is refused, never re-decided by the declaration. It is not a grant row and never enters the
+permission fold.
+
+**It is live, and decided from the owner's current state.** The node is read from its owner's
+live stream as System, not from a stored snapshot the owner may already have moved past. The
+type's declaration is followed live. The admission withdraws at the node's expiry and follows a
+group audience's memberships. Each seam takes the first verdict, within the permission-establishment
+budget; a stalled verdict is undetermined at the delivery gate and a refusal elsewhere. The node
+stream keeps following the verdict and faults an admitted subscription with the read gate's own
+refusal the moment the admission ends (revocation, expiry, a changed audience, a removed
+declaration). Later revisions are therefore never delivered to a caller who lost the read.
+
+| Seam | Point read? | Consults the declaration |
+|---|---|---|
+| The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
+| The `[RequiresPermission]` delivery gate, for a Read on the hub's own path, and ONLY for the allow-listed shapes `DeclaredPointRead.RequestShape` names: a `GetDataRequest`/`SubscribeRequest` for the node itself (`MeshNodeReference`) or for a layout area the declaration lists | yes | yes |
+| Any other message to that hub, including a `CollectionReference`, an entity or pointer reference, or another path: the hub's workspace holds the node's satellites too | no | **no** |
+| The node-stream read gate (`MeshNodeStreamCache`), never cached, and followed live for the whole subscription | yes | yes |
+| `NodeTypeAccessRuleGate.CheckFor` | n/a | **no** |
+| A listing or query row (`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`), where `IsPointRead` stays false | no | **no** |
+| The Postgres permission table (`user_effective_permissions`) | no | **no** |
+
+`IsPointRead` defaults to false. A seam that does not say it serves a point read is treated as a
+listing, which is the closed direction. A page that must follow whether its viewer may still read
+the node it shows uses `DeclaredPointRead.ObservePointRead(hub, path, viewer)`, with the viewer's
+whole context so a virtual visitor or an API token keeps its flags: the standard check, or the
+declaration when that denies. It is never used to filter a listing.
+
+Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
+- a point read admitted while no listing sees the node, and the restored grant row leaking into the
+  listing (negative control);
+- each withdrawing input refused beside a positive control;
+- audience matching;
+- `Access:DenyAnonymous` outranking the declaration;
+- the declared namespace (no descendant, nothing elsewhere), an API token and a virtual visitor;
+- an open node stream cut on revocation, the original live verdict turning false on revocation and
+  at expiry, and a refusal right after the owner acknowledged a revocation;
+- an undetermined type rule not re-decided, and a borrowed System stamp not making a node
+  platform-issued;
+- a collection read or subscription on an admitted node's hub refused (no satellite returned), an
+  undeclared layout area refused, and a declared one admitted.
+
 # Message-level permission enforcement
 
 ## RequiresPermissionAttribute

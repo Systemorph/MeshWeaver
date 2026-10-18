@@ -79,6 +79,12 @@ public sealed class AReinstallLandsEveryAuthoredNodeTypeMemberTest
             {
                 new() { Name = "changed", SourceType = "FileSystem" },
             };
+        if (type == typeof(MeshWeaver.Mesh.Security.PointReadDeclaration))
+            return new MeshWeaver.Mesh.Security.PointReadDeclaration
+            {
+                SubjectProperty = ((MeshWeaver.Mesh.Security.PointReadDeclaration?)current)?.SubjectProperty + "-changed",
+                Namespace = "changed",
+            };
         if (type.IsEnum) return Enum.GetValues(type).Cast<object>().First(v => !v.Equals(current ?? Activator.CreateInstance(type)));
         return null;
     }
