@@ -47,6 +47,20 @@
 #                          receives the identical publication, so one is the answer and querying
 #                          all of them would only add ways to be flaky.
 #
+#   SOURCE_PROVENANCE_DIR  optional. A directory to write, for every source answered SEALED, what
+#                          that LIVE publication says about where its bytes came from:
+#                            <source>.commit       its `source-commit.txt` (the publication commit),
+#                                                  empty when unreadable or `unknown`
+#                            <source>.generation   the generation leaf `_current` resolved to, empty
+#                                                  for a flat publication
+#                            <source>.listing      `present`, `absent` (sealed before per-package
+#                                                  listings existed) or `unreadable`
+#                            <source>.sealed-packages.json   the per-package listing, when present
+#                          (publish-bake-bundles.sh / seal-packages.py write both markers before the
+#                          sentinel). This script's verdict is AVAILABILITY, so a gap here only
+#                          warns; a caller that NEEDS provenance (node-repo-publish-bake.yml stages
+#                          the upstream's source from it) fails RED on the gap itself.
+#
 # AUTH: `az login` must already have happened (the CD jobs use OIDC); data-plane access uses
 # --auth-mode login --backup-intent, i.e. the "Storage File Data Privileged Contributor" role.
 set -uo pipefail
@@ -257,6 +271,58 @@ summary "- 🎯 asking about framework identity \`$IDENTITY\` — from $ORIGIN_T
 # failures with different fixes — wait for/trigger the upstream, versus fix the credential, the
 # share or the network — and folding them into one count reported the second as the first. Both
 # still exit 1: neither is a pass, and this gate never goes advisory (MeshWeaver#3583).
+# 🚨 WHERE a sealed publication's bytes came from, for a caller that has to stage that upstream's
+# SOURCE beside its bytes. Staging the upstream's default-branch HEAD instead paired the sealed bytes
+# of one commit with the node definitions and `minMeshVersion` floors of a later one: on 2026-10-17
+# a Plugins merge raised Store's floor to a platform no sealed set had reached yet, and every
+# satellite bake that STARTED after it refused Store ("needs platform ≥ 3.1.11117, this instance
+# runs 3.1.11102") while the same dispatch nine minutes earlier was green. And the publication
+# commit is not enough on its own: a per-package seal CARRIES a waiting package's earlier build
+# forward (seal-packages.py), so one package's bytes can be older than the publication commit —
+# the per-package listing is what names each package's commit.
+record_provenance() { # <source> <publication-dir>
+  _pv_dir="$SOURCE_PROVENANCE_DIR"
+  mkdir -p "$_pv_dir"
+  _pv_local="$(mktemp)"
+  _pv_sha=""
+  if az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+      --path "$2/source-commit.txt" --dest "$_pv_local" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null; then
+    _pv_sha=$(tr -d '[:space:]' < "$_pv_local")
+  fi
+  case "$_pv_sha" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+      echo "source commit: $1 was sealed from $_pv_sha ($2/source-commit.txt)" ;;
+    *)
+      echo "::warning::$2/source-commit.txt could not be read or records no commit ('${_pv_sha:-<unreadable>}') — which commit '$1' was sealed from is unknown."
+      _pv_sha="" ;;
+  esac
+  printf '%s\n' "$_pv_sha" > "$_pv_dir/$1.commit"
+  _pv_gen=""
+  case "$2" in "$ROOT/$IDENTITY/$1"/*) _pv_gen="${2#"$ROOT/$IDENTITY/$1"/}" ;; esac
+  printf '%s\n' "$_pv_gen" > "$_pv_dir/$1.generation"
+  rm -f "$_pv_dir/$1.sealed-packages.json"
+  _pv_exists=$(az storage file exists --account-name "$ACCOUNT" --share-name "$SHARE" \
+    --path "$2/sealed-packages.json" --auth-mode login --backup-intent --query exists -o tsv \
+    --only-show-errors || echo "unknown")
+  case "$_pv_exists" in
+    false) echo "absent" > "$_pv_dir/$1.listing" ;;
+    true)
+      if az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+          --path "$2/sealed-packages.json" --dest "$_pv_dir/$1.sealed-packages.json" \
+          --auth-mode login --backup-intent --only-show-errors > /dev/null; then
+        echo "present" > "$_pv_dir/$1.listing"
+      else
+        rm -f "$_pv_dir/$1.sealed-packages.json"
+        echo "unreadable" > "$_pv_dir/$1.listing"
+        echo "::warning::$2/sealed-packages.json exists but could not be read — which commit each of '$1''s packages was sealed from is unknown."
+      fi ;;
+    *)
+      echo "unreadable" > "$_pv_dir/$1.listing"
+      echo "::warning::whether $2/sealed-packages.json exists could not be read (exists=$_pv_exists) — which commit each of '$1''s packages was sealed from is unknown." ;;
+  esac
+  rm -f "$_pv_local"
+}
 ABSENT=()       # asked, and the answer was NO
 UNDETERMINED=() # could not ask — a REFUSAL, never a smaller number
 for source in "${SOURCES[@]}"; do
@@ -277,7 +343,8 @@ for source in "${SOURCES[@]}"; do
     --path "$publication/$SENTINEL" --auth-mode login --backup-intent \
     --query exists -o tsv --only-show-errors 2>/dev/null || echo "unknown")
   case "$exists" in
-    true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`";;
+    true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`"
+           [ -z "${SOURCE_PROVENANCE_DIR:-}" ] || record_provenance "$source" "$publication";;
     false)
       if [ -n "$RESOLVE_FAULT" ]; then
         UNDETERMINED+=("$source — $RESOLVE_FAULT, and $publication holds no sealed copy to fall back on, so which publication applies could not be read (MeshWeaver#3461 phase 5: the flat copy is gone once a generation is live). Re-run; a pointer being replaced is one small write")
