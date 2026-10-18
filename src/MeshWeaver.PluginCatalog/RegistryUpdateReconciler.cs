@@ -116,6 +116,10 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
     private readonly ILogger<RegistryUpdateReconciler> logger;
     private readonly CompositeDisposable subscriptions = new();
 
+    /// <summary>The held-NodeType lane's per-package attempts (<see cref="HeldNodeTypeBundleRetry"/>) —
+    /// instance state, one per mesh.</summary>
+    private readonly HeldNodeTypeBundleRetry heldBundles = new();
+
     /// <summary>The boot reconcile's end, replayed to whoever asks after the fact.</summary>
     private readonly AsyncSubject<Unit> bootReconciled = new();
 
@@ -859,6 +863,14 @@ public sealed class RegistryUpdateReconciler : IHostedService, IDisposable
             // for a new framework MVID has unchanged content, and this lane is what heals it after
             // an image roll.
             .SelectMany(_ => ReconcileModules(bundles, name, packages))
+            // The HELD-NODETYPE lane (HeldNodeTypeBundleRetry): a NodeType whose source landed before
+            // its bake is in a delivery hold, and neither lane above re-asks for it — the content
+            // lane's identity is the SOURCE hash, which a rebake does not move, and the module lane
+            // visits module packages only. Here every pass asks the index again for the packages of
+            // held types, and adopts a bundle it has not tried yet. Never faults.
+            .SelectMany(_ => heldBundles
+                .Run(hub, bundles, registry.Url, name, packages.Select(p => p.Id).ToArray(), logger)
+                .Select(_ => Unit.Default))
             // The DELIVERY lane (Plugins#1584): the two lanes above only ever visit packages the
             // registry SERVES, so a package installed here that it does not serve is not "up to
             // date" and not "failed" — it is absent from both loops, and absence said nothing.

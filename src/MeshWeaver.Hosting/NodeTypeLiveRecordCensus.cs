@@ -98,6 +98,19 @@ public sealed record NodeTypeLiveRecordCensus(
     public string StaleDetail { get; init; } = string.Empty;
 
     /// <summary>
+    /// 🚨 The NodeType paths whose record is in a DELIVERY HOLD
+    /// (<see cref="NodeTypeDefinition.DeliveryHoldReason"/> set): their source moved past the build
+    /// they serve and no bundle for the current source has landed here yet. This is the set the
+    /// registry reconcile's held-type lane asks the registry about again on every pass, so a bake
+    /// published after this pod started is adopted when it appears. Before that lane, nothing
+    /// re-asked: a hold lifted only on a source change or a release request, and nothing issued
+    /// one. Measured on an enterprise client's test instance on 2026-10-18: a type stayed held for
+    /// its whole process life after the bake landed at the registry 48 minutes after its source.
+    /// Sorted and ordinal. It carries paths, not titles, and it never reaches <c>/health</c>.
+    /// </summary>
+    public ImmutableArray<string> AwaitingBundle { get; init; } = ImmutableArray<string>.Empty;
+
+    /// <summary>
     /// How many distinct (identity, partition) groups the detail names before the rest are counted —
     /// bounded so a mesh whose every record is foreign cannot turn the health body into a listing.
     /// </summary>
@@ -149,6 +162,7 @@ public sealed record NodeTypeLiveRecordCensus(
         var untyped = 0;
         var foreign = ImmutableList.CreateBuilder<(string Partition, string Identity, bool SinceBoot)>();
         var stale = ImmutableList.CreateBuilder<(string Partition, int? Behind, bool PastBound)>();
+        var awaiting = ImmutableArray.CreateBuilder<string>();
         foreach (var (path, definition) in records)
         {
             total++;
@@ -157,6 +171,8 @@ public sealed record NodeTypeLiveRecordCensus(
                 untyped++;
                 continue;
             }
+            if (!string.IsNullOrWhiteSpace(definition.DeliveryHoldReason) && !string.IsNullOrEmpty(path))
+                awaiting.Add(path);
             // Memex#668 — a build the source moved past that still has coordinates is SERVING —
             // but only if THIS replica may load it. A record keyed to another framework serves
             // nothing here (it is counted as Foreign below), so a pre-boot record from the previous
@@ -223,6 +239,10 @@ public sealed record NodeTypeLiveRecordCensus(
             StalePastBound = stale.Count(s => s.PastBound),
             StaleBound = maxMinorVersionsBehind,
             StaleDetail = staleDetail,
+            AwaitingBundle = awaiting
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToImmutableArray(),
         };
     }
 

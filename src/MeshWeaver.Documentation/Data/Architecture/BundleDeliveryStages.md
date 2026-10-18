@@ -140,6 +140,36 @@ supposed to rescue it arrives for a *different* identity than the next one it wi
 The 10 remaining failures are Reinsurance content-gate failures (7 `render:`, 3 `tests:`, all on
 `Ifrs17/*`) and belong to none of these five issues.
 
+### Stage ④ on a portal: a bake that lands after its source (2026-10-18)
+
+The order "source first, bytes later" is a hold, never a failure. The type keeps serving its last
+build (`BuildProvenance.StaleAdopted`, with the reason in `deliveryHoldReason`) until a bundle for
+the current source arrives. The defect was that, on a registry-fed portal, **nothing ever asked
+again**. Measured on an enterprise client's test instance: a Reinsurance source landed at 06:56Z,
+its bake `plugins/reinsurance:c003e001` was published at 07:43Z, and the type was still held when
+the pod was replaced an hour later. Four things combined:
+
+- The hold lifts only on a source change or on a release request "after the rebake", and no
+  component issued that request.
+- The registry reconcile's content lane compares `ModuleVersion`, a hash over the source. A rebake
+  does not move it, so every pass read the package as up to date.
+- The module lane visits only packages that declare a compiled module.
+- The published root is the snapshot `bundle-fetch` pulled when the pod started.
+  `PublicationSealArrivalService` listens for `Hosting/PlatformBuilds/*` announcements, which only
+  the fleet's own instances receive, and it reconciles git-synced partitions only.
+
+**The repair is the reconcile's held-NodeType lane** (`HeldNodeTypeBundleRetry`, run by
+`RegistryUpdateReconciler.ReconcileFromFeed` after the module lane). On every pass (boot, a
+module-published broadcast, a safety-net tick) it reads `bake-report`'s live census
+(`NodeTypeLiveRecordCensus.AwaitingBundle`, the records with a `deliveryHoldReason`). It asks the
+registry's bundle index about those types' packages, and it calls `PluginBundleClient.Adopt` for
+each package whose advertised bundle this process has not tried yet. The bundle is identified by
+its digest-addressed artifact, or by version and URL. The adoption runs the install's own
+per-assembly gates. Bytes that still disagree with the source are declined by name and the hold
+stands. Bytes that match are adopted and the hold lifts, with no new pod and no compile. An
+unchanged index costs no download, and a mesh with nothing held does not read the index at all.
+Pinned by `HeldNodeTypeBundleRetryTest`.
+
 ## Stage ② — what the guard sees, and what it does not
 
 > **2026-09-13 — defect 1 fixed at the lane.** The `ext-modules` step of `node-repo-publish-bake.yml`
