@@ -170,12 +170,16 @@ per-assembly gates. Bytes that still disagree with the source are declined by na
 stands. Bytes that match are adopted and the hold lifts, with no new pod and no compile. An
 unchanged index costs no download, and a mesh with nothing held does not read the index at all.
 
-Four properties keep the lane honest:
+Five properties keep the lane honest:
 
+- It adopts only for a package this mesh has INSTALLED (its `Plugins/{package}` record). A held
+  NodeType in a partition that merely shares an advertised package's id never makes the lane adopt
+  that package.
 - It plans from the SAME index snapshot its adoption reads (the client's pass index), so a
   rebake landing between lanes is never recorded as tried while the older bundle was downloaded.
 - A bundle counts as tried only once it was INSPECTED (its bytes arrived and were judged). A
-  failed or stalled transfer is not recorded, so the next pass asks again.
+  failed or stalled transfer, a 404 for advertised bytes and a failed store write are not recorded,
+  so the next pass asks again.
 - Each adoption is bounded by the module lane's per-package budget, so one stalled package cannot
   stop the reconciler's single lane.
 - It runs as System, like every other adoption, because the record stamp that lifts a hold is a

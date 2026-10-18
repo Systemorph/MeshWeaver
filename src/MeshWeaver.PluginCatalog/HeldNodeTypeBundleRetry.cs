@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
 using MeshWeaver.Hosting;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -183,6 +184,52 @@ public sealed class HeldNodeTypeBundleRetry
             if (held.IsEmpty)
                 return Observable.Return(0);
 
+            // 🚨 The installed-package boundary: a package is adopted only when THIS mesh holds its
+            // install record (Plugins/{package}), as RegistryShippedBuildSource.ReadPackage requires.
+            // The full-feed caller passes every package the registry SERVES and the broadcast caller
+            // passes the announced id, so without this a local NodeType held in a partition that
+            // happens to share an advertised-but-uninstalled package's id would make this lane adopt
+            // that package's assemblies as System. No storage adapter ⇒ nothing is known installed.
+            var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+            if (storage is null)
+                return Observable.Return(0);
+            var packages = held
+                .Select(p => RegistryShippedBuildSource.PackageOf(p)!)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToImmutableArray();
+            return packages.ToObservable()
+                .SelectMany(package => storage
+                    .Read($"{PackageInstaller.InstalledPartition}/{package}", hub.JsonSerializerOptions)
+                    .Take(1)
+                    .Select(record => (package, installed: record is not null))
+                    .DefaultIfEmpty((package, installed: false)))
+                .Where(x => x.installed)
+                .Select(x => x.package)
+                .ToList()
+                .SelectMany(installed =>
+                {
+                    var installedSet = installed.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                    var installedHeld = held
+                        .Where(p => installedSet.Contains(RegistryShippedBuildSource.PackageOf(p)!))
+                        .ToImmutableArray();
+                    return installedHeld.IsEmpty
+                        ? Observable.Return(0)
+                        : PlanAndAdopt(hub, bundles, registryUrl, registryName, installedHeld, logger);
+                })
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "[RegistryUpdate] {Name}: the install records of the {Count} NodeType(s) held for a "
+                        + "bundle could not be read — the next pass asks again.", registryName, held.Length);
+                    return Observable.Return(0);
+                });
+        });
+
+    private IObservable<int> PlanAndAdopt(
+        IMessageHub hub, PluginBundleClient bundles, string registryUrl, string registryName,
+        ImmutableArray<string> held, ILogger? logger)
+        => Observable.Defer(() =>
+        {
             // The index snapshot the adoption below reads too (PassIndex): planning from a fresh read
             // could plan bundle B, record B as tried and download the A an earlier lane of this pass
             // cached — and then suppress B for ReattemptAfter.
@@ -270,8 +317,11 @@ public sealed class HeldNodeTypeBundleRetry
         Exception? fault, string registryName, ILogger? logger)
     {
         var after = LastOutcome(ledger, registryUrl, retry.Package);
+        // FetchFailed: the transfer did not complete. NotServed: the index advertised the bundle but
+        // the registry answered 404 for its bytes — the index can name a bundle before its bytes are
+        // reachable, and the same reference is served moments later. Neither judged any bytes.
         var fetchFailed = after is not null && !ReferenceEquals(after, before)
-                                            && after.Kind == BundleAdoptionKind.FetchFailed;
+                                            && after.Kind is BundleAdoptionKind.FetchFailed or BundleAdoptionKind.NotServed;
         if (fetchFailed || IsTransferFault(fault))
         {
             attempts.TryRemove(key, out _);
@@ -289,7 +339,11 @@ public sealed class HeldNodeTypeBundleRetry
     internal static bool IsTransferFault(Exception? fault) => fault switch
     {
         null => false,
-        TimeoutException or HttpRequestException or OperationCanceledException => true,
+        // Unreadable bytes WERE judged: a corrupt archive is an inspected bundle, whatever its base type.
+        InvalidDataException => false,
+        // IOException covers a store write that failed before the landing completed (the bytes
+        // were never published here) as well as a transport read.
+        TimeoutException or HttpRequestException or OperationCanceledException or IOException => true,
         RegistryResponseException registry => registry.IsTransientFailure,
         _ => fault.InnerException is { } inner && IsTransferFault(inner),
     };

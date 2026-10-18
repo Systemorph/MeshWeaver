@@ -16,6 +16,7 @@ using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -123,6 +124,64 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
             NodeTypeLiveRecordCensus.Of(records, PrebuiltAssemblySeeder.LiveFrameworkMvid, Now.AddHours(-2), Now));
     }
 
+    /// <summary>The install record the lane requires before it adopts a package (Plugins/{id}).</summary>
+    private Task Install(string packageId, CancellationToken ct)
+    {
+        var record = MeshNode.FromPath($"{PackageInstaller.InstalledPartition}/{packageId}") with
+        {
+            NodeType = PackageInstaller.PackageNodeType,
+            Name = packageId,
+            State = MeshNodeState.Active,
+            Content = new PackageManifest { Id = packageId, Name = packageId, Version = "1.0.0", TargetPartition = packageId },
+        };
+        return Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => NodeFactory.CreateOrUpdateNode(record))
+            .Timeout(TestTimeouts.Convergence)
+            .Await(ct);
+    }
+
+    /// <summary>
+    /// The installed-package boundary: a NodeType held in a partition whose id matches a package the
+    /// registry advertises but this mesh never installed is NOT adopted for — no index read, no
+    /// download. The control installs the package, and the same hold is then adopted for.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AHeldTypeOfAnUninstalledPackage_IsNeverAdoptedFor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var lane = new HeldNodeTypeBundleRetry();
+        Hold(HeldType);
+
+        (await Pass(lane, ct)).Should().Be(0);
+        registry.IndexReads.Should().Be(0, "an uninstalled package is not asked about");
+        registry.Downloads.Should().BeEmpty();
+
+        // Control: installed, the same hold is adopted for.
+        await Install(Package, ct);
+        await Pass(lane, ct);
+        registry.Downloads.Should().Equal([Package]);
+    }
+
+    /// <summary>The index can advertise a bundle before its bytes are reachable: a 404 for them
+    /// judged nothing, so the same reference is asked for again on the next pass.</summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ABundleAnsweredNotFound_IsAskedForAgain_OnTheNextPass()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var lane = new HeldNodeTypeBundleRetry();
+        await Install(Package, ct);
+        Hold(HeldType);
+
+        registry.DownloadStatus = HttpStatusCode.NotFound;
+        await Pass(lane, ct);
+        registry.Downloads.Should().HaveCount(1);
+
+        registry.DownloadStatus = HttpStatusCode.OK;
+        await Pass(lane, ct);
+        registry.Downloads.Should().HaveCount(2, "a 404 for the bytes is not an inspected bundle");
+        registry.DownloadedVersions.Should().Equal(["1.2"]);
+    }
+
     private Task<int> Pass(HeldNodeTypeBundleRetry lane, CancellationToken ct) =>
         Pass(lane, new PluginBundleClient(Mesh, RegistryUrl, Token), ct);
 
@@ -141,6 +200,7 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = TestContext.Current.CancellationToken;
         var lane = new HeldNodeTypeBundleRetry();
+        await Install(Package, ct);
         Hold(HeldType);
 
         // One pass's client: an earlier lane reads its shared index (version 1.2)…
@@ -165,6 +225,7 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = TestContext.Current.CancellationToken;
         var lane = new HeldNodeTypeBundleRetry();
+        await Install(Package, ct);
         Hold(HeldType);
 
         registry.DownloadStatus = HttpStatusCode.ServiceUnavailable;
@@ -189,6 +250,7 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = TestContext.Current.CancellationToken;
         var lane = new HeldNodeTypeBundleRetry { AdoptBudget = TimeSpan.FromSeconds(2) };
+        await Install(Package, ct);
         Hold(HeldType);
 
         registry.StallDownloads = true;
@@ -205,6 +267,7 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
     {
         var ct = TestContext.Current.CancellationToken;
         var lane = new HeldNodeTypeBundleRetry();
+        await Install(Package, ct);
         Hold(HeldType);
 
         await Pass(lane, ct);
@@ -232,6 +295,7 @@ public class HeldNodeTypeBundleRetryTest(ITestOutputHelper output) : MonolithMes
         registry.Downloads.Should().BeEmpty();
 
         // Control: the same lane with a hold reads the index — the zero above is about the census.
+        await Install(Package, ct);
         Hold(HeldType);
         await Pass(lane, ct);
         registry.IndexReads.Should().BeGreaterThan(0);
