@@ -47,6 +47,10 @@ USAGE
 
 ``--local`` is not a skip: the file still has to be present, well-formed and identical. It exists
 so a pull request is judged on the tree it proposes rather than on the branch it will replace.
+A ``--local`` naming a repo the manifest does not register is REFUSED: the gate reads only the
+registered repos, so that file would otherwise be read by nothing while the run printed green.
+To check a repo before it is registered, pass ``--manifest`` a temporary copy that adds it to
+``repos`` and to the ``required-in`` of each block its class carries.
 """
 
 from __future__ import annotations
@@ -409,6 +413,18 @@ def self_test() -> int:
         if not ok:
             bad += 1
 
+    # A --local the register does not name is read by nothing — it must be refused, not ignored.
+    for name, local, expect_failure in [
+        ("--local naming an unregistered repo is refused", {"o/new": Path("AGENTS.md")}, True),
+        ("--local naming a registered repo is accepted", {"o/spoke": Path("AGENTS.md")}, False),
+    ]:
+        fired = bool(unregistered_local(local, ["o/hub", "o/spoke"]))
+        ok = fired == expect_failure
+        want = "fire" if expect_failure else "stay silent"
+        print(f"  [{'ok' if ok else 'WRONG':5}] should {want:11} — {name}")
+        if not ok:
+            bad += 1
+
     # The hub itself must be checkable.
     failures, _ = run({"o/spoke": _HUB}, _MANIFEST)
     ok = bool(failures)
@@ -420,8 +436,13 @@ def self_test() -> int:
         print(f"\n::error::{bad} self-test case(s) behaved wrongly — this gate's verdict on the "
               f"real tree cannot be trusted until they pass.")
         return 1
-    print(f"\nSelf-test: {len(cases) + 2} cases, all correct.")
+    print(f"\nSelf-test: {len(cases) + 4} cases, all correct.")
     return 0
+
+
+def unregistered_local(local: dict[str, Path], repos: list[str]) -> list[str]:
+    """Every ``--local`` repo the manifest does not register — each one would be read by nothing."""
+    return sorted(set(local) - set(repos))
 
 
 # ──────────────────────────────────────── main ───────────────────────────────────────────
@@ -460,6 +481,13 @@ def main() -> int:
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     repos = manifest["repos"]
+
+    unregistered = unregistered_local(local, repos)
+    if unregistered:
+        print(f"::error::--local names {', '.join(unregistered)}, which the manifest does not "
+              f"register, so its file would be read by nothing. Pass --manifest a temporary copy "
+              f"that adds it to `repos` and to the `required-in` of each block its class carries.")
+        return 1
 
     print(f"Shared rule blocks: {len(manifest['blocks'])} across {len(repos)} repos")
     print(f"Reading AGENTS.md from {len(repos)} repos "

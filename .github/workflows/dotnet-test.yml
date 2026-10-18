@@ -3301,7 +3301,7 @@ jobs:
         private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         owner: Systemorph
         repositories: >-
-          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex,CreditReRate,DecisionModels
         permission-contents: read
 
     # PRESENT is not VALID. Prove the capability this gate actually needs — reading each repo —
@@ -3436,7 +3436,7 @@ jobs:
         private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
         owner: Systemorph
         repositories: >-
-          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex
+          MeshWeaver,MeshWeaver.Plugins,MeshWeaver.Education,MeshWeaver.Reinsurance,MeshWeaver.SocialMedia,MeshWeaver.Manufacturing,Memex,CreditReRate,DecisionModels
         permission-contents: read
         permission-pull-requests: read
 
