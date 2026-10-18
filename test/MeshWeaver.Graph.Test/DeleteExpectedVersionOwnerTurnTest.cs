@@ -517,6 +517,35 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     }
 
     /// <summary>
+    /// Review round 10 (4306865426): once a delete COMMITTED (the owner's seal released as committed,
+    /// which tombstones the path) a still-live owner the delete's invalidation has not reached yet must
+    /// not acknowledge a FRESH own write — its save would be dropped as a resurrection, so the
+    /// acknowledgement would be for a write that is never stored. Before, only a deferred write
+    /// re-checked the tombstone.
+    /// </summary>
+    [Fact]
+    public async Task AFreshOwnWriteAfterACommittedRelease_IsRefused_NotAcknowledged()
+    {
+        var node = await Seed("owner-after-commit");
+        var owner = await OwnerOf(node.Path);
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        registry.TakeOwnerDeleteSeal("commit-then-write", node.Path, owner.RegisterForDisposalDetachable)
+            .Should().BeTrue();
+        registry.ReleaseOwnerDeleteSeal("commit-then-write", node.Path, DeleteSealOutcome.Committed)
+            .Should().BeTrue();
+        registry.IsVersionGuardedDeletionInFlight(node.Path).Should().BeFalse("the seal settled");
+
+        var answer = await owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "written after the commit" })
+            .Materialize()
+            .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
+            .Should().Within(TestTimeouts.Convergence).Emit("the write answers", cancellationToken: Ct);
+        answer.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+            "the path was deleted: the owner refuses the write instead of acknowledging one it would drop");
+        answer.Exception.Should().BeOfType<SubtreeDeletionInFlightException>();
+    }
+
+    /// <summary>
     /// MIXED-VERSION ROLL (#6750): an owner on an image that predates the version-guarded check skips
     /// the unknown <see cref="ValidateDeleteRequest.ExpectedVersion"/>, runs its validators and answers
     /// a plain Ok. That is no verdict about the version, so it is Unavailable — never a match. Control:

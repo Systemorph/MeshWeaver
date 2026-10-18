@@ -435,6 +435,7 @@ public class OwnerDeleteSealRegistryTest
 
         // Removed, but the pipeline is cut BEFORE it records progress: still Committed.
         var removed = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.OpenRootDeletes(Path);
         registry.ObserveRootDelete(Path, removed).Subscribe(_ => { }, _ => { }).Dispose();
         removed.OnNext(true);
         removed.OnCompleted();
@@ -443,6 +444,7 @@ public class OwnerDeleteSealRegistryTest
 
         // Unanswered when the release asks: Indeterminate; the late answer leaves nothing behind.
         var running = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.OpenRootDeletes(Path);
         registry.ObserveRootDelete(Path, running).Subscribe(_ => { }, _ => { }).Dispose();
         registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.Unanswered);
         running.OnNext(false);
@@ -451,6 +453,7 @@ public class OwnerDeleteSealRegistryTest
             "a late answer is not retained to misclassify a later delete of the same path");
 
         // Refused: an abort.
+        registry.OpenRootDeletes(Path);
         registry.ObserveRootDelete(Path, System.Reactive.Linq.Observable.Return(false)).Subscribe(_ => { }, _ => { });
         registry.TakeRootDeleteVerdict(Path).Should().Be(RootDeleteVerdict.NotRemoved);
     }
@@ -465,6 +468,7 @@ public class OwnerDeleteSealRegistryTest
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
+        registry.OpenRootDeletes("delete-a");
         registry.ObserveRootDelete("delete-a",
                 System.Reactive.Linq.Observable.Throw<bool>(new InvalidOperationException("one provider faulted")))
             .Subscribe(_ => { }, _ => { });
@@ -482,6 +486,8 @@ public class OwnerDeleteSealRegistryTest
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var registry = new RecentlyDeletedRegistry();
         var heldA = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.OpenRootDeletes("delete-a");
+        registry.OpenRootDeletes("delete-b");
         registry.ObserveRootDelete("delete-a", heldA).Subscribe(_ => { }, _ => { });
 
         registry.TakeRootDeleteVerdict("delete-b").Should().Be(RootDeleteVerdict.NotRemoved,
@@ -490,5 +496,56 @@ public class OwnerDeleteSealRegistryTest
             "A's held storage call is still A's — B's release did not consume it");
         heldA.OnNext(true);
         heldA.OnCompleted();
+    }
+
+    /// <summary>
+    /// Review round 10 (4306865446): a root delete that tries to ISSUE after its delete's release
+    /// decided the outcome is refused before it reaches the store. The per-delete record is opened
+    /// before any work and closed by the release in the same step that reads it.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void ARootDeleteIssuedAfterTheReleaseDecided_NeverReachesTheStore()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        registry.OpenRootDeletes("late");
+        registry.TakeRootDeleteVerdict("late").Should().Be(RootDeleteVerdict.NotRemoved,
+            "nothing was issued yet: the release decides Aborted and closes the record");
+
+        var subscribed = 0;
+        var late = System.Reactive.Linq.Observable.Defer(() =>
+        {
+            subscribed++;
+            return System.Reactive.Linq.Observable.Return(true);
+        });
+        Exception? refused = null;
+        registry.ObserveRootDelete("late", late).Subscribe(_ => { }, ex => refused = ex);
+        subscribed.Should().Be(0, "the storage delete is never issued once the outcome was decided");
+        refused.Should().NotBeNull("the late caller hears why");
+    }
+
+    /// <summary>
+    /// Review round 10 (4306865461): a removal in an earlier drain pass does not settle a LATER root
+    /// delete that is still running. An unanswered call dominates, and the release is Indeterminate —
+    /// even when the pipeline recorded the root as removed.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void AnUnansweredLaterPass_DominatesAnEarlierRemoval()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var registry = new RecentlyDeletedRegistry();
+        registry.OpenRootDeletes("passes");
+        registry.ObserveRootDelete("passes", System.Reactive.Linq.Observable.Return(true)).Subscribe(_ => { }, _ => { });
+        var secondPass = new System.Reactive.Subjects.AsyncSubject<bool>();
+        registry.ObserveRootDelete("passes", secondPass).Subscribe(_ => { }, _ => { });
+
+        var verdict = registry.TakeRootDeleteVerdict("passes");
+        verdict.Should().Be(RootDeleteVerdict.Unanswered, "the second pass's delete is still running");
+        MeshExtensions.SealOutcomeFor(rootRemoved: true, verdict).Should().Be(DeleteSealOutcome.Indeterminate,
+            "a recorded removal must not lift the owner's seal while a later root delete can still remove a recreated node");
+        MeshExtensions.SealOutcomeFor(rootRemoved: true, RootDeleteVerdict.NotRemoved).Should().Be(DeleteSealOutcome.Committed);
+        MeshExtensions.SealOutcomeFor(rootRemoved: false, RootDeleteVerdict.NotRemoved).Should().Be(DeleteSealOutcome.Aborted);
+        secondPass.OnNext(false);
+        secondPass.OnCompleted();
     }
 }

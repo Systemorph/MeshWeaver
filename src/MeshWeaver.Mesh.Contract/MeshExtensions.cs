@@ -3759,7 +3759,7 @@ public static class MeshExtensions
         {
             // Once per delete: the success path releases before its response, the scope's disposal
             // is the release on every other path.
-            if (!lease.Asked || !lease.TryClaimRelease())
+            if (!lease.TryClaimRelease())
                 return Observable.Return(System.Reactive.Unit.Default);
             // The STORE's answer decides, as the mesh observed it — not how far this pipeline got:
             // Committed when the root row was removed, Indeterminate while a root delete this process
@@ -3768,6 +3768,8 @@ public static class MeshExtensions
             // Keyed by THIS delete (its seal id), never by path: a concurrent delete of the same path
             // must not consume — or be answered by — another delete's storage call.
             var verdict = registry?.TakeRootDeleteVerdict(lease.SealId) ?? RootDeleteVerdict.NotRemoved;
+            if (!lease.Asked)
+                return Observable.Return(System.Reactive.Unit.Default); // the owner was never asked: no seal
             var answer = lease.Answer;
             Address target;
             if (answer is null)
@@ -3780,11 +3782,7 @@ public static class MeshExtensions
                 target = sealedBy;
             else
                 return Observable.Return(System.Reactive.Unit.Default); // the owner took no seal
-            var outcome = rootRemoved || verdict == RootDeleteVerdict.Removed
-                ? DeleteSealOutcome.Committed
-                : verdict == RootDeleteVerdict.Unanswered
-                    ? DeleteSealOutcome.Indeterminate
-                    : DeleteSealOutcome.Aborted;
+            var outcome = SealOutcomeFor(rootRemoved, verdict);
             logger.LogDebug("[DeleteNode] owner seal release sent path={Path} seal={SealId} outcome={Outcome} to={Target}",
                 path, lease.SealId, outcome, target);
             return issuingHub
@@ -3805,6 +3803,22 @@ public static class MeshExtensions
                     return Observable.Return(System.Reactive.Unit.Default);
                 });
         });
+
+    /// <summary>
+    /// The outcome a version-guarded delete's release names (#6856). 🚨 A root storage delete still
+    /// running decides first: Indeterminate even when an earlier pass removed the row, because that
+    /// late call can still remove a node created after the release — the owner fences. Then a removal
+    /// (recorded by the pipeline, or answered by the store) is Committed; otherwise Aborted.
+    /// </summary>
+    /// <param name="rootRemoved">The pipeline recorded the root's removal.</param>
+    /// <param name="verdict">What the store answered, per <see cref="RecentlyDeletedRegistry.TakeRootDeleteVerdict"/>.</param>
+    /// <returns>A <see cref="DeleteSealOutcome"/> value.</returns>
+    internal static string SealOutcomeFor(bool rootRemoved, RootDeleteVerdict verdict)
+        => verdict == RootDeleteVerdict.Unanswered
+            ? DeleteSealOutcome.Indeterminate
+            : rootRemoved || verdict == RootDeleteVerdict.Removed
+                ? DeleteSealOutcome.Committed
+                : DeleteSealOutcome.Aborted;
 
     /// <summary>
     /// Waits, inside the delete's open subtree scope, for every write the storage guard ADMITTED at
@@ -4565,6 +4579,10 @@ public static class MeshExtensions
                                 var sealLease = capturedRequest.ExpectedVersion is null || recentlyDeleted is null
                                     ? null
                                     : new DeleteSealLease(Guid.NewGuid().ToString("N"));
+                                // Its root storage calls are recorded per delete from here on, and the
+                                // record closes when the release decides the outcome (#6856).
+                                if (sealLease is not null)
+                                    recentlyDeleted!.OpenRootDeletes(sealLease.SealId);
                                 return Observable.Using(
                                     () =>
                                     {

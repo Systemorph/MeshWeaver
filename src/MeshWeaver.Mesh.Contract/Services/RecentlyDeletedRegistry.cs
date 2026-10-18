@@ -888,22 +888,35 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     // subscribes to a replay. The release then asks this record — never "did my pipeline get as far as
     // noting the removal" — whether the delete removed the row, did not, or has not answered yet.
 
-    private readonly ConcurrentDictionary<string, ImmutableList<RootDeleteRecord>> _rootDeletes =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, RootDeleteBook> _rootDeletes = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Opens the per-delete record of root storage calls for the delete <paramref name="operationKey"/>
+    /// (its seal id), BEFORE the delete can issue any (#6856). Closed by
+    /// <see cref="TakeRootDeleteVerdict"/>: a root delete that tries to issue after that is refused
+    /// without touching the store, so no storage call can start after the delete's outcome was decided.
+    /// </summary>
+    /// <param name="operationKey">The delete's seal id.</param>
+    public void OpenRootDeletes(string operationKey)
+        => _rootDeletes.TryAdd(operationKey, new RootDeleteBook());
 
     /// <summary>
     /// Runs a guarded delete's root storage call under the mesh's own observation (#6856): it is
     /// subscribed ONCE, here, and runs to its real termination whatever the caller does; the answer is
-    /// recorded for <see cref="TakeRootDeleteVerdict"/> and replayed to the caller.
+    /// recorded for <see cref="TakeRootDeleteVerdict"/> and replayed to the caller. 🚨 Registered and
+    /// issued only while the delete's record is OPEN: once its release has decided the outcome, the
+    /// call is refused before it reaches the store.
     /// </summary>
     /// <param name="operationKey">The delete this call belongs to (its seal id) — never the path: two
     /// deletes of one path must not read, or consume, each other's answers.</param>
     /// <param name="storageCall">The cold compare-and-delete.</param>
-    /// <returns>The store's answer, replayed.</returns>
+    /// <returns>The store's answer, replayed — or an error when the delete was already decided.</returns>
     public IObservable<bool> ObserveRootDelete(string operationKey, IObservable<bool> storageCall)
     {
         var record = new RootDeleteRecord();
-        _rootDeletes.AddOrUpdate(operationKey, _ => ImmutableList.Create(record), (_, list) => list.Add(record));
+        if (!_rootDeletes.TryGetValue(operationKey, out var book) || !book.TryAdd(record))
+            return Observable.Throw<bool>(new InvalidOperationException(
+                $"the delete {operationKey} has already decided its outcome; its root storage delete was not issued"));
         var answer = new AsyncSubject<bool>();
         storageCall.Take(1).Subscribe(
             removed =>
@@ -929,8 +942,8 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <summary>
     /// What one delete's guarded root storage calls answered, consumed by the
     /// delete's release (#6856): <see cref="RootDeleteVerdict.Removed"/> when any of them removed the
-    /// row, <see cref="RootDeleteVerdict.Unanswered"/> when one has not answered yet — or FAILED, which
-    /// proves nothing about the row (its delete is
+    /// row and none is still running, <see cref="RootDeleteVerdict.Unanswered"/> when ANY has not answered
+    /// yet — or FAILED, which proves nothing about the row — even after an earlier pass removed it (its delete is
     /// <see cref="DeleteSealOutcome.Indeterminate"/>), else <see cref="RootDeleteVerdict.NotRemoved"/>
     /// (or none issued). Every record of the path is consumed: one still unanswered keeps running under
     /// the mesh's observation, but nothing of it is retained to misclassify a later delete.
@@ -939,18 +952,38 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// <returns>The combined verdict.</returns>
     public RootDeleteVerdict TakeRootDeleteVerdict(string operationKey)
     {
-        if (!_rootDeletes.TryRemove(operationKey, out var records))
+        if (!_rootDeletes.TryRemove(operationKey, out var book))
             return RootDeleteVerdict.NotRemoved;
-        var verdict = RootDeleteVerdict.NotRemoved;
-        foreach (var record in records)
+        // Closing and reading are one step: no root delete can register after this.
+        var records = book.Close();
+        // 🚨 An unanswered call DOMINATES: a removal in an earlier drain pass settles nothing about a
+        // later root delete that is still running — it could still remove a node created after it.
+        if (records.Any(r => r.MarkTaken() == RootDeleteVerdict.Unanswered))
+            return RootDeleteVerdict.Unanswered;
+        return records.Any(r => r.MarkTaken() == RootDeleteVerdict.Removed)
+            ? RootDeleteVerdict.Removed
+            : RootDeleteVerdict.NotRemoved;
+    }
+
+    /// <summary>The root storage calls of one delete; closed (null) once its outcome is decided.</summary>
+    private sealed class RootDeleteBook
+    {
+        private ImmutableList<RootDeleteRecord>? _records = ImmutableList<RootDeleteRecord>.Empty;
+
+        public bool TryAdd(RootDeleteRecord record)
         {
-            var answered = record.MarkTaken();
-            if (answered == RootDeleteVerdict.Removed)
-                return RootDeleteVerdict.Removed;
-            if (answered == RootDeleteVerdict.Unanswered)
-                verdict = RootDeleteVerdict.Unanswered;
+            while (true)
+            {
+                var current = Volatile.Read(ref _records);
+                if (current is null)
+                    return false;
+                if (ReferenceEquals(Interlocked.CompareExchange(ref _records, current.Add(record), current), current))
+                    return true;
+            }
         }
-        return verdict;
+
+        public ImmutableList<RootDeleteRecord> Close()
+            => Interlocked.Exchange(ref _records, null) ?? ImmutableList<RootDeleteRecord>.Empty;
     }
 
     /// <summary>One root storage delete's answer.</summary>

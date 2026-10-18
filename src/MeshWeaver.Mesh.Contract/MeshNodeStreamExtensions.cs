@@ -1880,9 +1880,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     observer.OnError);
                                 return null;
                             }
-                            // A deferred write whose seal lifted without naming the outcome re-checks the
-                            // one fact that decides it: a delete that went through tombstoned the path.
-                            if (deferredRetry && versionGuard?.IsRecentlyDeleted(current.Path) == true)
+                            // 🚨 A path a delete went through is tombstoned, and NO own write may be
+                            // acknowledged on it — a deferred one re-running after its seal lifted, or a
+                            // fresh one on a still-live owner the delete's invalidation has not reached
+                            // yet: the save path drops a tombstoned path's writes ("delete wins"), so an
+                            // acknowledgement here would be one for a write that is never stored (#6856).
+                            if (versionGuard?.IsRecentlyDeleted(current.Path) == true)
                                 throw new SubtreeDeletionInFlightException(current.Path, current.Path);
                             // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
                             // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's

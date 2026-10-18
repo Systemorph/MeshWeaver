@@ -344,7 +344,9 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   to take the seal.
   - **Committed** (the root row is gone): the owner tombstones the path, and every deferred write is
     refused with `SubtreeDeletionInFlightException`. Nothing it deferred was acknowledged, and its
-    pending flush cannot store the node again.
+    pending flush cannot store the node again. A **fresh** own write on that still-live owner is
+    refused too: every own write on a tombstoned path is refused, so the owner never acknowledges a
+    write its save path would then drop.
   - **Aborted** (the delete gave up and its root storage delete was never issued, or answered:
     for example `Conflict` or `HasChildren`): the deferred writes run their commit turn again and are
     applied.
@@ -359,7 +361,12 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
     Indeterminate, and so is a FAILED one: an error proves nothing about the row, because one
     provider can remove a copy before another faults. The record belongs to one delete (it is keyed
     by that delete's seal id, never by the path) and is consumed by that delete's release, so a
-    concurrent delete of the same path can never read it or misclassify a later delete.
+    concurrent delete of the same path can never read it or misclassify a later delete. The record is
+    opened before the delete issues any work and closed by the release in the same step that reads it,
+    so a root delete that tries to start after the outcome was decided is refused before it reaches the
+    store. A call that is still running decides first: the release is Indeterminate even when an
+    earlier drain pass already removed the row, because that call could still remove a node created
+    afterwards.
   - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
     Its teardown refuses the deferred writes, fences the row (below) and then unseals the path for the
     next activation. No timer releases a seal: one that fired while the delete was still running would let
