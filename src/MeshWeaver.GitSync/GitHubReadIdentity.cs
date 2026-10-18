@@ -40,8 +40,9 @@ public enum GitHubReadIdentityKind
 /// <param name="Login">The person's GitHub login, for <see cref="GitHubReadIdentityKind.PersonConnected"/>.</param>
 /// <param name="TokenKey">The configuration key the token is read from, for
 /// <see cref="GitHubReadIdentityKind.SourceToken"/>.</param>
-/// <param name="InstallationOwner">The account whose installation mints the token.</param>
-/// <param name="InstallationId">The configured installation id of the instance's own App, when set.</param>
+/// <param name="InstallationOwner">The account whose installation mints the token — for the
+/// instance's own App, the account of the installation the mint SELECTED (null when pinned by id).</param>
+/// <param name="InstallationId">The id of the instance's own App installation the token was minted for.</param>
 public sealed record GitHubReadIdentity(
     GitHubReadIdentityKind Kind,
     string? Login = null,
@@ -49,15 +50,7 @@ public sealed record GitHubReadIdentity(
     string? InstallationOwner = null,
     long? InstallationId = null)
 {
-    /// <summary>The installation as a reader names it: <c>162001736 (Systemorph)</c>, or whichever half is known.</summary>
-    public string InstallationLabel =>
-        (InstallationId, InstallationOwner) switch
-        {
-            ({ } id, { Length: > 0 } owner) => $"{id} ({owner})",
-            ({ } id, _) => id.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            (null, { Length: > 0 } owner) => $"on '{owner}'",
-            _ => "discovered at mint",
-        };
+    private string Id => InstallationId?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "?";
 
     /// <summary>The activity line naming this identity, keyed for the catalog
     /// (<c>activity.gitsync.identity.*</c>). Pure.</summary>
@@ -75,10 +68,17 @@ public sealed record GitHubReadIdentity(
                 $"GitHub identity: the GitHub App installation on '{InstallationOwner}' the source named.",
                 LogLevel.Information)
             .WithKey("activity.gitsync.identity.sourceInstallation", ("owner", InstallationOwner ?? "")),
+        // Two keyed templates rather than an English fragment passed as an argument: the catalog
+        // translates the template and never a string argument.
+        GitHubReadIdentityKind.AppInstallation when InstallationOwner is { Length: > 0 } account =>
+            new LogMessage(
+                    $"GitHub identity: this instance's GitHub App, installation {Id} ({account}).",
+                    LogLevel.Information)
+                .WithKey("activity.gitsync.identity.app", ("id", Id), ("owner", account)),
         GitHubReadIdentityKind.AppInstallation => new LogMessage(
-                $"GitHub identity: this instance's GitHub App, installation {InstallationLabel}.",
+                $"GitHub identity: this instance's GitHub App, installation {Id}.",
                 LogLevel.Information)
-            .WithKey("activity.gitsync.identity.app", ("installation", InstallationLabel)),
+            .WithKey("activity.gitsync.identity.appId", ("id", Id)),
         _ => new LogMessage(
                 "GitHub identity: none — no connected credential, no declared source credential, no GitHub App.",
                 LogLevel.Warning)

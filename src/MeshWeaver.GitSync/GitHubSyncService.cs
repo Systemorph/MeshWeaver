@@ -939,11 +939,7 @@ public sealed class GitHubSyncService
                             InstallationOwner: declared.InstallationOwner),
                     null, sources, declared);
             return appTokens is { IsConfigured: true }
-                ? new ReadDecision(
-                    new GitHubReadIdentity(GitHubReadIdentityKind.AppInstallation,
-                        InstallationOwner: appTokens.ConfiguredInstallationOwner,
-                        InstallationId: appTokens.ConfiguredInstallationId),
-                    null, null, null)
+                ? new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.AppInstallation), null, null, null)
                 : new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.None), null, null, null);
         });
 
@@ -953,9 +949,22 @@ public sealed class GitHubSyncService
     /// the import, update and branch check take (<see cref="ResolveAuth"/>); the GitSync activities
     /// write it on their log so an operator can read WHO read the repository (an App installation,
     /// not a personal access token).
+    ///
+    /// <para>The instance's App installation is named from the installation its token was MINTED
+    /// for (<see cref="GitHubAppTokenService.GetInstallation"/>, the same cached mint the read uses),
+    /// never from configuration: with no <c>GitHub:App:InstallationId</c> and no installation on the
+    /// configured owner, the mint falls back to the first installation, and naming the configured
+    /// owner would attribute the read to an account that did not perform it.</para>
     /// </summary>
     public IObservable<GitHubReadIdentity> ReadIdentityFor(string userId, string? repositoryUrl) =>
-        DecideRead(userId, repositoryUrl).Select(d => d.Identity);
+        DecideRead(userId, repositoryUrl).SelectMany(d =>
+            d.Identity.Kind == GitHubReadIdentityKind.AppInstallation && appTokens is not null
+                ? appTokens.GetInstallation().Select(installation => d.Identity with
+                {
+                    InstallationId = installation.Id,
+                    InstallationOwner = installation.Account,
+                })
+                : Observable.Return(d.Identity));
 
     /// <summary>
     /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a

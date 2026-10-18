@@ -34,6 +34,10 @@ public sealed class GitHubAppTokenService
     /// <summary>An installation token with its GitHub-reported expiry.</summary>
     public sealed record InstallationToken(string Token, DateTimeOffset ExpiresAt);
 
+    /// <summary>A minted token together with the installation it was minted for — the one the mint
+    /// actually SELECTED, which a discovery that matched no configured owner picks itself.</summary>
+    private sealed record MintedInstallation(InstallationToken Token, GitHubAppInstallation Installation);
+
     private readonly HttpClient http;
     private readonly IoPoolRegistry ioPools;
     private readonly GitHubAppOptions options;
@@ -47,7 +51,7 @@ public sealed class GitHubAppTokenService
     // in another — so a single slot made a second organisation's source unreadable by construction.
     // The shared primitive owns the concurrency: one build per stored entry, a fault evicts
     // exactly the entry that faulted (so a failure never sticks and never drops a replacement).
-    private readonly PromiseCache<string, InstallationToken> cached = new(StringComparer.OrdinalIgnoreCase);
+    private readonly PromiseCache<string, MintedInstallation> cached = new(StringComparer.OrdinalIgnoreCase);
     private readonly Func<DateTimeOffset> now;
 
     /// <summary>Initializes the service.</summary>
@@ -73,16 +77,6 @@ public sealed class GitHubAppTokenService
 
     /// <summary>True when the App identity is configured (client id + private key).</summary>
     public bool IsConfigured => options.IsConfigured;
-
-    /// <summary>The instance's own installation id as configured (<c>GitHub:App:InstallationId</c>),
-    /// or null when it is discovered from <see cref="ConfiguredInstallationOwner"/> at mint. A name for
-    /// a reader (<see cref="GitHubReadIdentity"/>) — never part of a credential.</summary>
-    public long? ConfiguredInstallationId => options.InstallationId;
-
-    /// <summary>The account of the instance's own installation as configured
-    /// (<c>GitHub:App:InstallationOwner</c>), or null.</summary>
-    public string? ConfiguredInstallationOwner =>
-        string.IsNullOrWhiteSpace(options.InstallationOwner) ? null : options.InstallationOwner.Trim();
 
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
@@ -123,12 +117,7 @@ public sealed class GitHubAppTokenService
         // "Bad credentials" until the process restarted (Systemorph/Memex#165).
         return Observable.Defer(() =>
         {
-            var source = cached.GetOrAdd(owner, CreateFetch);
-
-            return source.SelectMany(tok =>
-                tok.ExpiresAt > now().AddMinutes(5)
-                    ? Observable.Return(tok.Token)
-                    : Refresh(owner, source).Select(t => t.Token));
+            return Current(owner).Select(minted => minted.Token.Token);
         })
         // 🚨 EVERY fault out of this method is a GitHubAppTokenMintException — translate all of it
         // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
@@ -138,6 +127,38 @@ public sealed class GitHubAppTokenService
         // "Bad credentials", and a mint that never happened reads as a credential GitHub rejected
         // (#4736). Cancellation is deliberately NOT translated: a cancelled mint is not a failed one.
         .Catch((Exception exception) => Observable.Throw<string>(AsMintFailure(exception)));
+    }
+
+    /// <summary>
+    /// The installation the current token of <paramref name="installationOwner"/> was minted for —
+    /// its id and, where the mint learnt it, its account. Read from the SAME cached mint as
+    /// <see cref="GetInstallationToken(string?)"/> (minting when none is cached), so a reader naming
+    /// the installation names the one the token reads with: when <c>GitHub:App:InstallationId</c> is
+    /// unset and no installation matches <c>GitHub:App:InstallationOwner</c>, the mint falls back to
+    /// the first installation, and this names THAT one rather than the configured owner. Faults
+    /// exactly as <see cref="GetInstallationToken(string?)"/> does.
+    /// </summary>
+    /// <param name="installationOwner">The account the installation lives on, or null/blank for
+    /// the instance's own installation.</param>
+    public IObservable<GitHubAppInstallation> GetInstallation(string? installationOwner = null)
+    {
+        var owner = (installationOwner ?? "").Trim();
+        if (!IsConfigured)
+            return Observable.Throw<GitHubAppInstallation>(new GitHubAppTokenMintException(
+                GitHubAppTokenMintStage.NotConfigured,
+                "The GitHub App is not configured (set GitHub:App:ClientId + GitHub:App:PrivateKey)."));
+        return Observable.Defer(() => Current(owner).Select(minted => minted.Installation))
+            .Catch((Exception exception) => Observable.Throw<GitHubAppInstallation>(AsMintFailure(exception)));
+    }
+
+    /// <summary>The cached mint for <paramref name="owner"/>, refreshed when within five minutes of expiry.</summary>
+    private IObservable<MintedInstallation> Current(string owner)
+    {
+        var source = cached.GetOrAdd(owner, CreateFetch);
+        return source.SelectMany(minted =>
+            minted.Token.ExpiresAt > now().AddMinutes(5)
+                ? Observable.Return(minted)
+                : Refresh(owner, source));
     }
 
     /// <summary>
@@ -159,19 +180,19 @@ public sealed class GitHubAppTokenService
     /// several concurrent refreshers one removes the stale entry and all of them share the single
     /// replacement; a replacement already installed is never dropped.
     /// </summary>
-    private IObservable<InstallationToken> Refresh(string owner, IObservable<InstallationToken> stale)
+    private IObservable<MintedInstallation> Refresh(string owner, IObservable<MintedInstallation> stale)
     {
         cached.Release(owner, stale);
         return cached.GetOrAdd(owner, CreateFetch);
     }
 
-    private IObservable<InstallationToken> CreateFetch(string owner) =>
+    private IObservable<MintedInstallation> CreateFetch(string owner) =>
         Http.Run(ct => FetchInstallationTokenAsync(owner, ct))
-            .Catch((Exception ex) => Observable.Throw<InstallationToken>(AsMintFailure(ex)));
+            .Catch((Exception ex) => Observable.Throw<MintedInstallation>(AsMintFailure(ex)));
 
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
 
-    private async Task<InstallationToken> FetchInstallationTokenAsync(string owner, CancellationToken ct)
+    private async Task<MintedInstallation> FetchInstallationTokenAsync(string owner, CancellationToken ct)
     {
         string jwt;
         try
@@ -191,11 +212,14 @@ public sealed class GitHubAppTokenService
 
         // A NAMED owner is always discovered by that name: GitHub:App:InstallationId pins the
         // instance's OWN installation and says nothing about another account's.
-        var installationId = owner.Length > 0
+        // A pinned id is named by its id alone: nothing was asked of GitHub about its account.
+        var installation = owner.Length > 0
             ? await DiscoverInstallationIdAsync(jwt, owner, required: true, ct).ConfigureAwait(false)
-            : options.InstallationId
-              ?? await DiscoverInstallationIdAsync(jwt, options.InstallationOwner, required: false, ct)
-                  .ConfigureAwait(false);
+            : options.InstallationId is { } pinned
+                ? new GitHubAppInstallation(pinned, null)
+                : await DiscoverInstallationIdAsync(jwt, options.InstallationOwner, required: false, ct)
+                    .ConfigureAwait(false);
+        var installationId = installation.Id;
 
         using var req = new HttpRequestMessage(
             HttpMethod.Post,
@@ -226,17 +250,17 @@ public sealed class GitHubAppTokenService
         logger?.LogInformation(
             "Minted GitHub App installation token (installation {Id}{Owner}, expires {Exp})",
             installationId, owner.Length > 0 ? $" on '{owner}'" : "", expiresAt);
-        return new InstallationToken(token, expiresAt);
+        return new MintedInstallation(new InstallationToken(token, expiresAt), installation);
     }
 
-    private async Task<long> DiscoverInstallationIdAsync(
+    private async Task<GitHubAppInstallation> DiscoverInstallationIdAsync(
         string jwt, string? wantedOwner, bool required, CancellationToken ct)
     {
         // Paged to the end: an App installed on more accounts than one page holds would otherwise
         // report a real installation as missing — and, for a NAMED owner, refuse a repository the
         // App can read. The loop ends on the first short page.
         const int pageSize = 100;
-        long? first = null;
+        GitHubAppInstallation? first = null;
         var total = 0;
         for (var page = 1; ; page++)
         {
@@ -262,12 +286,16 @@ public sealed class GitHubAppTokenService
             {
                 if (!inst.TryGetProperty("id", out var idEl) || !idEl.TryGetInt64(out var id))
                     continue;
-                first ??= id;
+                var accountLogin = inst.TryGetProperty("account", out var account)
+                                   && account.ValueKind == JsonValueKind.Object
+                                   && account.TryGetProperty("login", out var login)
+                                   && login.ValueKind == JsonValueKind.String
+                    ? login.GetString()
+                    : null;
+                first ??= new GitHubAppInstallation(id, accountLogin);
                 if (wantedOwner is { Length: > 0 } owner
-                    && inst.TryGetProperty("account", out var account)
-                    && account.TryGetProperty("login", out var login)
-                    && string.Equals(login.GetString(), owner, StringComparison.OrdinalIgnoreCase))
-                    return id;
+                    && string.Equals(accountLogin, owner, StringComparison.OrdinalIgnoreCase))
+                    return new GitHubAppInstallation(id, accountLogin);
             }
             if (count < pageSize)
                 break;
@@ -300,7 +328,7 @@ public sealed class GitHubAppTokenService
                 "GitHub App has {Count} installations and none matched InstallationOwner '{Owner}' — using the first. " +
                 "Set GitHub:App:InstallationId or GitHub:App:InstallationOwner to pin one.",
                 total, wantedOwner);
-        return first.Value;
+        return first;
     }
 
     // ── JWT (RS256, no external dependency) ──────────────────────────────────
@@ -331,3 +359,9 @@ public sealed class GitHubAppTokenService
 
     private static string Truncate(string s) => s.Length <= 300 ? s : s[..300] + "…";
 }
+
+/// <summary>A GitHub App installation as a mint selected it: its id and, when the mint read it from
+/// GitHub, the account it is installed on (null for an installation pinned by id alone).</summary>
+/// <param name="Id">The installation id.</param>
+/// <param name="Account">The account login, or null when not learnt.</param>
+public sealed record GitHubAppInstallation(long Id, string? Account);
