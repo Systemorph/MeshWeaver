@@ -887,7 +887,12 @@ public sealed class InstanceAutoRegistrationService(
         var catalog = hub.ServiceProvider.GetService<InstancePackageSourceCatalog>();
         if (catalog is null)
             return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], false));
-        return catalog.WhenLoaded
+        // Loaded is not enough: after a fault the catalog keeps its last listing, and WhenLoaded
+        // still answers at once. A pass that read that stale listing would report itself complete
+        // and clear the repair debt although a source added during the outage was never read — so
+        // it waits for the re-opened query's complete listing, inside the same bound, and a
+        // continuing outage reaches the failure path below.
+        return WhenHealthy(catalog.WhenLoaded, catalog.Changes.Select(_ => Unit.Default), () => catalog.Faulted)
             .Select(_ => ((IReadOnlyList<InstancePackageSourceContent>)catalog.Sources, false))
             .Timeout(TimeSpan.FromSeconds(30))
             .Catch((Exception ex) =>
@@ -899,6 +904,16 @@ public sealed class InstanceAutoRegistrationService(
                 return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], true));
             });
     }
+
+    /// <summary>
+    /// Emits once the catalog has loaded AND is not faulted — immediately when both already hold,
+    /// otherwise on the first change after which it is healthy again. Pure over its inputs.
+    /// </summary>
+    /// <param name="whenLoaded">Emits once the first complete listing has arrived.</param>
+    /// <param name="changes">Emits on subscribe and after every snapshot change, the fault flag included.</param>
+    /// <param name="faulted">Whether the catalog's live query is down right now.</param>
+    internal static IObservable<Unit> WhenHealthy(IObservable<Unit> whenLoaded, IObservable<Unit> changes, Func<bool> faulted)
+        => whenLoaded.Take(1).SelectMany(_ => changes.Where(_ => !faulted()).Take(1));
 
     private IObservable<DefaultInstallSummary> InstallDefaultsWith(
         PluginCatalogOptions options, IReadOnlyList<InstancePackageSourceContent> instanceSources)
