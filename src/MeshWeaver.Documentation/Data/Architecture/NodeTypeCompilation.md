@@ -290,6 +290,51 @@ state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned 
 
 Use this to capture a named release with author-written `ReleaseNotes`.
 
+#### 🚨 A release request builds every source edit written BEFORE it
+
+The watcher may consume a request without compiling — "satisfied by the existing current build" —
+when the record reads `Ok` and not `IsDirty`. `IsDirty` compares `CompiledSources` with
+`CurrentSourceVersions`, and `CurrentSourceVersions` is what the sources watcher publishes from the
+type's synced source query. That query trails a source write: the edit commits on the source node's
+own hub and reaches the query a moment later. So "edit, then press Compile" could land the request
+inside that window. The request was then stamped handled against the snapshot from before the edit,
+nothing was dispatched, and the record sat at `Ok` + `IsDirty` with its request spent — the edit was
+never built. Measured on CI as the platform-compatibility ladder's rung 4 (`IsDirty = True`,
+`LastReleaseRequestHandledAt == RequestedReleaseAt`, the previous assembly). The race predates the
+day it was found: the deterministic repro fails on a build a day older as well.
+
+**The decision is now never drawn from a snapshot older than the request**
+(`NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent`). Before deciding, the watcher reads the
+LIVE version of every source the record names from that source's OWNER — one authoritative point
+read each, as System — which are the versions the request was made against. It then waits,
+reactively on the own node stream, until the published snapshot is at least that new, and only
+then runs the unchanged decision: satisfied, absorbed by the compile in flight, or dispatched.
+"At least that new" means every path the snapshot still lists shows the owner's version or newer,
+and a path the owner deleted is gone. A path the snapshot no longer lists has LEFT the source set
+(deleted, retyped away from `Code`, excluded by an edited `Sources`/`Tests` query) and counts as
+converged — it was listed when the request was observed, so its absence is newer, never staler.
+Demanding the owner's version for such a path would wait forever. The wait ends at the hub's first
+instant of teardown (`ShuttingDown`), so no decision reaches a dying hub. Waiting also means a dispatched compile is
+dispatched against a record that names the edit, so its source read cannot settle on the pre-edit
+set (a set older than the record is refused — "A compile NEVER runs against an unestablished source set" below).
+If a source's owner cannot be read, currency is unknown and the request is never treated as
+satisfied — it compiles. The legacy `CreateReleaseRequest` handler (`MeshDataSource.HandleCreateRelease`)
+decides `AlreadyUpToDate` through the same gate, and then waits for the compile state to settle
+AGAIN before deciding, so it never acts on a compile that entered `Pending`/`Compiling` during the
+wait.
+
+What it does NOT cover: a source ADDED in the window. The live read only asks for paths the record
+already names — a point read of an absent path is the storm shape — so discovering a new source is
+still the source query's job.
+
+Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`:
+- Every edit followed immediately by a request is built. This fails on the pre-fix code on every
+  run.
+- A source retyped out of the set right before a request is decided and built without it.
+- The gate's rule is pinned as a pure function: a left path is accepted, while a stale or
+  owner-deleted listed path is refused.
+- An edit with no request after it is not compiled.
+
 ### Re-triggering after a source edit
 
 `RunCompile` records a `CompiledSources` snapshot — `{sourceNodePath → version}`

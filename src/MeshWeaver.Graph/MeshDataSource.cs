@@ -2076,11 +2076,33 @@ public static class MeshDataSourceExtensions
         // hub, and the two activities then squabble over the parent's
         // LatestReleasePath + ReleaseNotes — the explicit release's
         // notes-carrying write gets clobbered last-write-wins).
-        workspace.GetMeshNodeStream()
+        var ownStream = workspace.GetMeshNodeStream();
+        ownStream
             .AwaitCompilationSettled(hub.JsonSerializerOptions)
             .Take(1)
-            .Subscribe(ownNode =>
+            // 🚨 AlreadyUpToDate is decided from IsDirty, i.e. from the PUBLISHED source snapshot,
+            // which trails a source write — so it is decided only once that snapshot shows the
+            // versions the sources' owners hold (or is refused when that cannot be established).
+            // Same rule as the release-request watcher: NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent.
+            .SelectMany(settled => settled.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions) is { } requestedAgainst
+                ? NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent(
+                    hub, ownStream, requestedAgainst, hub.Address.Path,
+                    hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease"))
+                : Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(settled, true)))
+            // …and settled AGAIN, against the node the decision acts on: another release may have
+            // entered Pending/Compiling during the owner reads or the snapshot wait, and deciding
+            // against that in-flight node would hand DispatchPendingFlip a running compile whose
+            // inputs may predate this request. A snapshot that showed the owners' versions keeps
+            // showing them (versions only move forward), so currency survives this second wait.
+            .SelectMany(snapshot => ownStream
+                .AwaitCompilationSettled(hub.JsonSerializerOptions)
+                .Take(1)
+                .Select(settledAgain => snapshot with { Node = settledAgain }))
+            // The whole wait ends at the first instant of teardown — never a decision on a dying hub.
+            .TakeUntil(hub.ShuttingDown)
+            .Subscribe(snapshot =>
             {
+                var ownNode = snapshot.Node;
                 var def = ownNode.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
                 if (def is null)
                 {
@@ -2108,7 +2130,7 @@ public static class MeshDataSourceExtensions
                     def.CompiledFrameworkVersion,
                     NodeTypeCompilationHelpers.FrameworkVersion,
                     StringComparison.Ordinal);
-                if (!force && !def.IsDirty && frameworkCurrent
+                if (!force && snapshot.Established && !def.IsDirty && frameworkCurrent
                     && !string.IsNullOrEmpty(def.LatestReleasePath))
                 {
                     hub.Post(new CreateReleaseResponse(true, AlreadyUpToDate: true),
