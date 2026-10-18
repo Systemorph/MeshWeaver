@@ -914,6 +914,9 @@ public static class MeshExtensions
     /// <inheritdoc cref="CopyStalledKey"/>
     private const string MoveDeleteStalledKey = "activity.node.move.deleteStalled";
 
+    /// <inheritdoc cref="CopyStalledKey"/>
+    private const string MoveCaseRenameStalledKey = "activity.node.move.caseRenameStalled";
+
     /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
     /// Its storage / change-feed leaves are ALREADY <see cref="IObservable{T}"/> (or reach the I/O
@@ -9584,6 +9587,34 @@ public static class MeshExtensions
         var sourcePath = moveRequest.SourcePath;
         var targetPath = moveRequest.TargetPath;
 
+        // 🚨 WHERE THE TARGET LIES, decided before anything is read or written (#6951). The mesh keys
+        // paths case-insensitively (the registry, the in-memory store, the file system), so a target
+        // that equals the source ignoring case is the SAME key there: copy-then-delete created nothing
+        // (the copy "resumed" onto the source itself) and the delete leg then removed the only copy —
+        // a move onto itself, or a case-only rename, reported success and destroyed the subtree. A
+        // target inside the source's subtree was refused only by accident, by the subtree-deletion
+        // scope refusing the copy's own writes. Both are now refused by name; a case-only rename is
+        // a legitimate rename and relocates through a staging sibling (RenameCaseOnly below).
+        var relation = MovePaths.Classify(sourcePath, targetPath);
+        if (relation == MovePathRelation.Same)
+            return RefuseMove($"Cannot move '{sourcePath}' onto itself: the target is the source. Nothing was moved.");
+        if (relation == MovePathRelation.IntoOwnSubtree)
+            return RefuseMove($"Cannot move '{sourcePath}' to '{targetPath}': the target lies inside the subtree being "
+                + "moved, so the copy would write into what the move then deletes. Nothing was moved.");
+        var stagingPath = relation == MovePathRelation.CaseOnlyRename
+            ? MovePaths.CaseRenameStaging(targetPath)
+            : null;
+        // Which leg of a case-only rename is running (1 source → staging, 2 staging → target,
+        // 3 staging → source to restore): what a stalled verdict must say about where the data is.
+        var renameLeg = 0;
+
+        IMessageDelivery RefuseMove(string error)
+        {
+            logger.LogWarning("[MoveNode] {Source} -> {Target} refused: {Error}", sourcePath, targetPath, error);
+            hub.Post(MoveNodeResponse.Fail(error, NodeMoveRejectionReason.ValidationFailed), o => o.ResponseFor(request));
+            return request.Processed();
+        }
+
         // 🚨 PreserveAuthorship — the copy leg of a MOVE re-creates the SAME node at a new path, so
         // its creation and modification stamps travel with it verbatim (issue #3263). This is why
         // the request is posted here rather than through IMeshService.CopyNode: that surface says
@@ -9597,7 +9628,7 @@ public static class MeshExtensions
         // above applies to posting the request directly: IMeshService.CopyNode cannot say it, and a
         // MOVE is the one caller for which "carried less than everything" means the delete leg
         // below destroys the remainder.
-        var copyRequest = new CopyNodeRequest(sourcePath, targetPath)
+        static CopyNodeRequest CopyRequestFor(string from, string to) => new(from, to)
         {
             IncludeDescendants = true,
             IncludeSatellites = true,
@@ -9631,25 +9662,25 @@ public static class MeshExtensions
 
         // 🚨 The source must be DELETABLE — see the remarks. Emits once when it is; errors with a
         // MoveRefusedException naming the path and the reason when it is not.
-        var sourceMayBeDeleted = Observable.Defer(() => storage.FindDeleteBlockingProvider(sourcePath))
+        IObservable<System.Reactive.Unit> SourceMayBeDeleted(string from) => Observable.Defer(() => storage.FindDeleteBlockingProvider(from))
             .Take(1)
             .DefaultIfEmpty(null)
             .Timeout(budget, Observable.Defer(() => Observable.Throw<string?>(new TimeoutException(
-                $"[MoveNode] the storage-provider probe for '{sourcePath}' did not answer within "
+                $"[MoveNode] the storage-provider probe for '{from}' did not answer within "
                 + $"{budget.TotalSeconds:0}s"))))
             .SelectMany(blockingProvider => blockingProvider is not null
                 ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
-                    $"Cannot move '{sourcePath}': it is served by the read-only storage provider "
+                    $"Cannot move '{from}': it is served by the read-only storage provider "
                     + $"'{blockingProvider}', so it cannot be removed from where it is. Nothing was moved.",
                     NodeMoveRejectionReason.ValidationFailed))
-                : storage.ListDescendantPaths(sourcePath)
+                : storage.ListDescendantPaths(from)
                     .Take(1)
                     .Timeout(budget, Observable.Defer(() => Observable.Throw<IReadOnlyCollection<string>>(new TimeoutException(
-                        $"[MoveNode] storage did not enumerate the subtree of '{sourcePath}' within "
+                        $"[MoveNode] storage did not enumerate the subtree of '{from}' within "
                         + $"{budget.TotalSeconds:0}s"))))
                     .SelectMany(descendants => PreValidateDescendantsObs(
                         issuingHub,
-                        sourcePath,
+                        from,
                         descendants
                             .Where(p => !string.IsNullOrEmpty(p))
                             .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase),
@@ -9662,7 +9693,7 @@ public static class MeshExtensions
                         includeRoot: true))
                     .SelectMany(failure => failure is { } f
                         ? Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
-                            $"Cannot move '{sourcePath}': moving it deletes '{f.Path}' from where it is, "
+                            $"Cannot move '{from}': moving it deletes '{f.Path}' from where it is, "
                             + $"and that delete is refused: {f.Error}. Nothing was moved.",
                             f.Reason switch
                             {
@@ -9673,7 +9704,7 @@ public static class MeshExtensions
             // A probe or enumeration that ran out of time DECIDED nothing: refused (fail-closed),
             // but reported as Unavailable — the same vocabulary the delete uses — never as a verdict.
             .Catch((TimeoutException ex) => Observable.Throw<System.Reactive.Unit>(new MoveRefusedException(
-                $"Cannot move '{sourcePath}' now: whether it may be deleted from where it is could not be "
+                $"Cannot move '{from}' now: whether it may be deleted from where it is could not be "
                 + $"established ({ex.Message}). Nothing was moved; the move may be retried.",
                 NodeMoveRejectionReason.Unavailable)));
 
@@ -9697,8 +9728,58 @@ public static class MeshExtensions
         // ROOT unconditionally, so there is no supported host without it — and a move that ran
         // BARE when it did not resolve would reopen exactly this window with nothing to say so.
         // Same resolution, for the same reason, as PartitionRemovalOnRecord above.
-        hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>()
-            .WithinSubtreeDeletion(sourcePath, MoveWithinScope)
+        var registry = hub.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        IObservable<MeshNode> Relocate(string from, string to) =>
+            registry.WithinSubtreeDeletion(from, () => MoveWithinScope(from, to));
+
+        // 🚨 A CASE-ONLY RENAME (#6951) is two ordinary relocations through a staging sibling:
+        // source → staging, then staging → target. Each leg is a move between keys that differ in
+        // EVERY store — case-sensitive (Postgres rows) or not (in-memory, the file system on
+        // macOS/Windows) — so each leg's copy writes a new key, its delete removes the old one, and
+        // each runs the whole move contract: the delete pre-flight, the subtree-deletion scope of
+        // ITS source, satellites, authorship, completeness. Renaming in place is not expressible
+        // through IStorageAdapter, and on a case-insensitive file system it would also need a
+        // directory rename the store does not offer. If the second leg fails, the subtree is moved
+        // back to the source (leg 3) and the answer says so; if that fails too, the answer names the
+        // staging path that now holds it. Nothing is ever left at two casings.
+        IObservable<MeshNode> RenameCaseOnly(string staging) =>
+            Observable.Defer(() =>
+                {
+                    renameLeg = 1;
+                    return Relocate(sourcePath, staging);
+                })
+                .SelectMany(_ =>
+                {
+                    renameLeg = 2;
+                    return Relocate(staging, targetPath)
+                        .Catch((Exception failed) => failed is LifecycleVerdictStalledException
+                            // Out of time: a restore would run past the verdict deadline.
+                            ? Observable.Throw<MeshNode>(failed)
+                            : RestoreAfterFailedRename(staging, failed));
+                })
+                .Do(renamed => logger.LogInformation(
+                    "[MoveNode] {Source} renamed by case to {Target} through staging {Staging}",
+                    sourcePath, renamed.Path, staging));
+
+        IObservable<MeshNode> RestoreAfterFailedRename(string staging, Exception failed)
+        {
+            renameLeg = 3;
+            var why = failed.Message;
+            return Relocate(staging, sourcePath)
+                .Select(_ => (Exception?)null)
+                .Catch((Exception restoreFailed) => Observable.Return<Exception?>(restoreFailed))
+                .SelectMany(restoreFailed => Observable.Throw<MeshNode>(restoreFailed is null
+                    ? new MoveFailedException(
+                        $"Cannot rename '{sourcePath}' to '{targetPath}': {why} The subtree was moved back to "
+                        + $"'{sourcePath}'; nothing was renamed.",
+                        MoveReasonOf(failed))
+                    : new MoveFailedException(
+                        $"Cannot rename '{sourcePath}' to '{targetPath}': {why} Moving it back to '{sourcePath}' "
+                        + $"failed too ({restoreFailed.Message}); the subtree is at the staging path '{staging}'.",
+                        NodeMoveRejectionReason.Unknown)));
+        }
+
+        (stagingPath is null ? Relocate(sourcePath, targetPath) : RenameCaseOnly(stagingPath))
             // Disposing the scope's subscription releases it (Observable.Using), so a stalled move
             // never leaves the source's subtree-deletion scope held behind its verdict.
             .Timeout(moveDeadline, moveProgress.StalledVerdict<MeshNode>())
@@ -9726,6 +9807,34 @@ public static class MeshExtensions
                         logger.LogError("[MoveNode] {Source} -> {Target} failed in its copy leg ({Reason}): {Error}",
                             sourcePath, targetPath, copyLeg.Reason, copyLeg.Message);
                         hub.Post(MoveNodeResponse.Fail(copyLeg.Message, copyLeg.Reason) with { Log = copyLeg.Log },
+                            o => o.ResponseFor(request));
+                        return;
+                    }
+                    if (ex is MoveFailedException moveFailed)
+                    {
+                        logger.LogError("[MoveNode] {Source} -> {Target} failed ({Reason}): {Error}",
+                            sourcePath, targetPath, moveFailed.Reason, moveFailed.Message);
+                        hub.Post(MoveNodeResponse.Fail(moveFailed.Message, moveFailed.Reason), o => o.ResponseFor(request));
+                        return;
+                    }
+                    if (ex is LifecycleVerdictStalledException { } renameStalled
+                        && stagingPath is not null
+                        && (renameLeg > 1 || renameStalled.Stage == MoveStageDeleteSource))
+                    {
+                        // A case-only rename past its first copy: the subtree may already have left
+                        // the source for the staging path, so "nothing was removed" would be false.
+                        logger.LogError(ex, "[MoveNode] case-only rename {Source} -> {Target} through {Staging} reached no "
+                            + "verdict within {Budget}s — stalled in leg {Leg} at stage {Stage}",
+                            sourcePath, targetPath, stagingPath, moveBudget.TotalSeconds, renameLeg, renameStalled.Stage);
+                        var renameText = LocalizableText.Keyed(
+                            $"Renaming '{sourcePath}' to '{targetPath}' reached no verdict within {renameStalled.BudgetSeconds}s "
+                            + $"at stage '{renameStalled.Stage}', after the subtree had started to leave '{sourcePath}' for the "
+                            + $"staging path '{stagingPath}'. Read '{sourcePath}', '{stagingPath}' and '{targetPath}' before retrying.",
+                            MoveCaseRenameStalledKey,
+                            ("source", sourcePath), ("target", targetPath), ("staging", stagingPath),
+                            ("stage", renameStalled.Stage), ("seconds", renameStalled.BudgetSeconds));
+                        hub.Post(MoveNodeResponse.Fail(renameText.English, NodeMoveRejectionReason.Unknown)
+                                with { Log = NodeCreationFailure.Transcript("NodeMove", renameText, sourcePath) },
                             o => o.ResponseFor(request));
                         return;
                     }
@@ -9765,10 +9874,14 @@ public static class MeshExtensions
 
         return request.Processed();
 
-        IObservable<MeshNode> MoveWithinScope() =>
-            sourceMayBeDeleted
+        IObservable<MeshNode> MoveWithinScope(string from, string to) =>
+            Observable.Defer(() =>
+                {
+                    EnterMoveStage(MoveStagePreflight);
+                    return SourceMayBeDeleted(from);
+                })
                 .Do(_ => EnterMoveStage(MoveStageCopy))
-                .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(copyRequest, o =>
+                .SelectMany(_ => hub.NodeOperationIssuingHub().Observe(CopyRequestFor(from, to), o =>
                 {
                     o = o.WithTarget(hub.NodeOperationTarget());
                     return callerContext != null ? o.WithAccessContext(callerContext) : o;
@@ -9779,14 +9892,14 @@ public static class MeshExtensions
                         d.Message.Error ?? "Node copy failed", MoveReasonForCopy(d.Message), d.Message.Log)))
                 .Do(_ => EnterMoveStage(MoveStageDeleteSource))
                 .SelectMany(copied =>
-                    storage.ListDescendantPaths(sourcePath)
+                    storage.ListDescendantPaths(from)
                         .Take(1)
                         .Timeout(TimeSpan.FromSeconds(15))
                         .SelectMany(descendants =>
                         {
                             var paths = descendants
                                 .Where(p => !string.IsNullOrEmpty(p))
-                                .Append(sourcePath)
+                                .Append(from)
                                 .ToImmutableList();
 
                             if (paths.IsEmpty)
@@ -10511,6 +10624,29 @@ public static class MeshExtensions
     {
         public NodeMoveRejectionReason Reason { get; } = reason;
     }
+
+    /// <summary>
+    /// A move that FAILED after it began to change storage — a case-only rename whose second leg
+    /// failed (#6951) — carried with the reason the answer reports and a message saying where the
+    /// subtree now is.
+    /// </summary>
+    private sealed class MoveFailedException(string message, NodeMoveRejectionReason reason)
+        : InvalidOperationException(message)
+    {
+        public NodeMoveRejectionReason Reason { get; } = reason;
+    }
+
+    /// <summary>
+    /// The move reason a failed relocation leg carries: its own when it is one of the move's typed
+    /// failures, <see cref="NodeMoveRejectionReason.Unknown"/> otherwise.
+    /// </summary>
+    private static NodeMoveRejectionReason MoveReasonOf(Exception failed) => failed switch
+    {
+        MoveRefusedException refused => refused.Reason,
+        MoveCopyLegFailedException copyLeg => copyLeg.Reason,
+        MoveFailedException moveFailed => moveFailed.Reason,
+        _ => NodeMoveRejectionReason.Unknown,
+    };
 
     /// <summary>
     /// A move whose COPY LEG answered with a failure — carried with the move reason it maps to, so the
