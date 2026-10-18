@@ -195,7 +195,14 @@ public partial class MeshQuery
                     + $"'{request.EffectiveQueries.FirstOrDefault()}' returned a {stray?.GetType().Name ?? "null"} row. "
                     + "Narrow the query to nodes (a nodeType:, a namespace:) or sort by a field the row carries."));
 
-            var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
+            // 🚨 Only the merged INITIAL is a mesh-wide snapshot. The multi-provider merge combines
+            // the providers' Initials but forwards a provider's later Reset on its own, so a Reset
+            // names ONE provider's rows. Clearing on it dropped every other provider's containers and
+            // evicted them for good — those providers never re-emit an unchanged row (review
+            // #4307032191). A Reset therefore upserts its rows, like an Updated. The cost is the
+            // opposite error, bounded: a row the resetting provider no longer has stays ranked until
+            // its own Removed arrives, rather than every other provider's rows vanishing.
+            var full = change.ChangeType == QueryChangeType.Initial;
             if (!full && !initialized)
             {
                 early.Add(change);   // replayed over the first full frame
@@ -276,7 +283,9 @@ public partial class MeshQuery
                     }
                     else
                         Put(item);
-            return order.Where(rows.ContainsKey).Select(path => rows[path]).ToList();
+            // Distinct: an Added, Removed, Added of one path appends it twice to `order` (review
+            // #4307076427) — counted twice against the bound, keyed twice below it.
+            return order.Distinct(StringComparer.OrdinalIgnoreCase).Where(rows.ContainsKey).Select(path => rows[path]).ToList();
         }
 
         /// <summary>

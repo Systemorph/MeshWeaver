@@ -480,7 +480,8 @@ public class SubtreeLastModifiedSortTest
         var ct = TestContext.Current.CancellationToken;
         var fast = new LiveProvider(Fixture);
         var slow = new SlowEmptyProvider();
-        var query = (IMeshQueryCore)new MeshQuery([fast, slow], hub: null!);
+        var query = (IMeshQueryCore)new MeshQuery([fast, slow], hub: null!,
+            new MeshOperationOptions { SubtreeSortMaxCandidates = 5 });
         var frames = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
         using var subscription = query.Query<MeshNode>(
                 new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Limit = 2, UserId = "viewer" }, Options)
@@ -489,6 +490,10 @@ public class SubtreeLastModifiedSortTest
         // The fast provider has answered (its candidate read is live); the slow one has not.
         await fast.CandidatesSubscribed.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         fast.Add(Child("Kickoff", "Epsilon", Day(40)));
+        // Added, Removed, Added of one path: replayed once, not twice (review #4307076427) — four
+        // fixture containers plus Epsilon fit the bound of 5 exactly; a duplicate would exceed it.
+        fast.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
+        fast.Push(QueryChangeType.Removed, Client("Epsilon", Day(39)));
         fast.Push(QueryChangeType.Added, Client("Epsilon", Day(39)));
         slow.Release.OnNext(System.Reactive.Unit.Default);
 
@@ -499,6 +504,33 @@ public class SubtreeLastModifiedSortTest
             .Timeout(TestTimeouts.Convergence)
             .Await(ct);
         ranked.Should().Be("Epsilon,Gamma", "the early Added is folded over the combined Initial and ranked");
+    }
+
+    /// <summary>
+    /// One provider's Reset names only ITS rows — the merge forwards it uncombined — so it must not
+    /// drop another provider's containers (review #4307032191: the ranking cleared on it and evicted
+    /// the other provider's rows, which that provider never re-emits).
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task OneProvidersResetKeepsTheOthersContainers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = new LiveProvider(Fixture, "first");
+        var second = new LiveProvider([Client("Omega", Day(5)), Child("Launch", "Omega", Day(50))], "second");
+        var query = (IMeshQueryCore)new MeshQuery([first, second], hub: null!);
+        var frames = new System.Reactive.Subjects.ReplaySubject<QueryResultChange<MeshNode>>();
+        using var subscription = query.Query<MeshNode>(
+                new MeshQueryRequest { Query = $"{Roster} sort:subtreeLastModified-desc", Limit = 2, UserId = "viewer" }, Options)
+            .Subscribe(frames);
+
+        var initial = await frames.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        initial.Items.Select(n => n.Id).Should().Equal(["Omega", "Gamma"], "control: the second provider's Omega leads");
+
+        await first.CandidatesSubscribed.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        first.PushReset();
+        var after = await frames.Skip(1).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        after.ChangeType.Should().NotBe(QueryChangeType.Removed, "the first provider's Reset evicts nothing of the second's");
+        after.Items.Select(n => n.Id).Should().Equal(["Omega", "Gamma"], "Omega survives the other provider's Reset");
     }
 
     /// <summary>A second provider whose candidate Initial (empty) waits for <see cref="Release"/>.</summary>
@@ -546,7 +578,7 @@ public class SubtreeLastModifiedSortTest
     /// A live store: the candidate query answers an Initial and then whatever <see cref="Push"/>
     /// sends; every other read (the key reads) is evaluated over the current rows.
     /// </summary>
-    private sealed class LiveProvider(IEnumerable<MeshNode> seed) : IMeshQueryProvider
+    private sealed class LiveProvider(IEnumerable<MeshNode> seed, string name = "live") : IMeshQueryProvider
     {
         private readonly List<MeshNode> rows = [.. seed];
         private readonly System.Reactive.Subjects.Subject<QueryResultChange<MeshNode>> deltas = new();
@@ -588,7 +620,15 @@ public class SubtreeLastModifiedSortTest
             deltas.OnNext(new QueryResultChange<MeshNode> { ChangeType = type, Items = [node], Timestamp = DateTimeOffset.UtcNow });
         }
 
-        public string Name => "live";
+        public string Name => name;
+
+        /// <summary>A provider-scoped Reset: this provider's current Client rows, re-emitted as new instances.</summary>
+        public void PushReset()
+        {
+            MeshNode[] clients;
+            lock (rows) clients = [.. rows.Where(r => r.NodeType == "Client").Select(r => r with { })];
+            deltas.OnNext(new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Reset, Items = clients, Timestamp = DateTimeOffset.UtcNow });
+        }
 
         public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
 
