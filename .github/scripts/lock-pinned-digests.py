@@ -3402,7 +3402,12 @@ def check_retention_record(root: str) -> int:
             purges, parse_error = purge_invocations(step)
             if parse_error:
                 problems.append(f"{yaml_path.name}: {parse_error}: {step.strip()[:120]}")
-            if any("--include-locked" in tokens for tokens in purges):
+            locked_readings = [include_locked_value(tokens) for tokens in purges]
+            for _, why in locked_readings:
+                if why:
+                    problems.append(f"{yaml_path.name}: {why} — `--include-locked` is read as ON "
+                                    f"until it can be read:\n      {step.strip()[:160]}")
+            if any(value for value, _ in locked_readings):
                 problems.append(
                     f"{yaml_path.name} has a purge step passing --include-locked:\n"
                     f"      {step.strip()[:160]}\n"
@@ -3472,33 +3477,45 @@ DRY_RUN_FLAG = "--dry-run"
 DRY_RUN_VALUES = {"true": True, "false": False}
 
 
-def dry_run_value(tokens: list[str]) -> tuple[bool, str]:
-    """The EFFECTIVE `--dry-run` of one invocation, read the way acr-cli's flag parser reads it, plus
-    why it could not be read.
+def bool_flag_value(tokens: list[str], flag: str) -> tuple[bool, str]:
+    """The EFFECTIVE value of the boolean flag `flag` in one invocation, read the way acr-cli's flag
+    parser reads it, plus why it could not be read.
 
-    🚨 PRESENCE IS NOT THE VALUE. `--dry-run` is a boolean flag and the LAST occurrence wins, so
-    `--dry-run --dry-run=false` DELETES while a presence test reports it report-only — and every
-    reader of this flag (the selection model, `--describe-purge-file`, the declaration check and the
-    nightly report) would then call a destructive step safe. So the value is read once, here:
-    `--dry-run` is true, `--dry-run=true|false` is that value, the last one counts. A spelling the
-    parser does not settle the same way acr-cli does — `--dry-run=<anything else>`, or a bare
-    `true`/`false` token right after `--dry-run` (a boolean flag takes no separate value, so that
-    token is a stray argument) — is an ERROR, never a guess. Pure."""
+    🚨 PRESENCE IS NOT THE VALUE, and an EXACT-TOKEN test is not either. Each of acr purge's boolean
+    flags (`--dry-run`, `--include-locked`, `--untagged`) takes `--flag`, `--flag=true` and
+    `--flag=false`, and the LAST occurrence wins. So `--dry-run --dry-run=false` DELETES while a
+    presence test calls it report-only, and `--include-locked=true` deletes every locked manifest
+    while an exact-token test for `--include-locked` reports the lock as honoured. The value is read
+    once, here, for every reader. A spelling acr-cli would not settle the same way —
+    `--flag=<anything else>`, or a bare `true`/`false` token right after `--flag` (a boolean flag
+    takes no separate value, so that token is a stray argument) — is an ERROR, never a guess. Pure."""
     value = False
     for index, token in enumerate(tokens):
-        if token == DRY_RUN_FLAG:
+        if token == flag:
             following = tokens[index + 1] if index + 1 < len(tokens) else None
             if following is not None and following.lower() in DRY_RUN_VALUES:
-                return False, (f"`{DRY_RUN_FLAG} {following}` is not a value: a boolean flag takes "
-                               f"none, so `{following}` is a stray argument. Write "
-                               f"`{DRY_RUN_FLAG}={following.lower()}` or `{DRY_RUN_FLAG}`")
+                return False, (f"`{flag} {following}` is not a value: a boolean flag takes none, so "
+                               f"`{following}` is a stray argument. Write `{flag}={following.lower()}` "
+                               f"or `{flag}`")
             value = True
-        elif token.startswith(DRY_RUN_FLAG + "="):
+        elif token.startswith(flag + "="):
             text = token.split("=", 1)[1].lower()
             if text not in DRY_RUN_VALUES:
-                return False, f"`{token}` is not `true` or `false`, so whether the step deletes was NOT read"
+                return False, f"`{token}` is not `true` or `false`, so what the step does was NOT read"
             value = DRY_RUN_VALUES[text]
     return value, ""
+
+
+def dry_run_value(tokens: list[str]) -> tuple[bool, str]:
+    """The effective `--dry-run` (`bool_flag_value`): last-wins, an unsettled spelling is an error. Pure."""
+    return bool_flag_value(tokens, DRY_RUN_FLAG)
+
+
+def include_locked_value(tokens: list[str]) -> tuple[bool, str]:
+    """The effective `--include-locked`. 🚨 Fail-closed for its readers: an unreadable value counts as
+    TRUE — the flag that deletes locked manifests is never assumed off. Pure."""
+    value, why = bool_flag_value(tokens, "--include-locked")
+    return (True, why) if why else (value, "")
 
 
 @dataclass(frozen=True)
@@ -3549,8 +3566,11 @@ def purge_selection(tokens: list[str], subjects: list[PurgeSubject],
     except ValueError:
         selection.problem = f"`--keep {keep_value}` is unreadable, so nothing was selected"
         return selection
-    include_locked = "--include-locked" in tokens
-    untagged = "--untagged" in tokens
+    include_locked, locked_error = bool_flag_value(tokens, "--include-locked")
+    untagged, untagged_error = bool_flag_value(tokens, "--untagged")
+    if locked_error or untagged_error:
+        selection.problem = locked_error or untagged_error
+        return selection
     patterns: list[tuple[re.Pattern[str], re.Pattern[str]]] = []
     for value in filters:
         repo_part, _, tag_part = value.partition(":")
@@ -4796,7 +4816,9 @@ def describe_purge_file(path: str) -> int:
                 "filters": sorted(value for name, value in (
                     (tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1))
                     if name == "--filter"),
-                "includeLocked": "--include-locked" in tokens,
+                # Fail-closed: an unreadable `--include-locked` is reported as ON.
+                "includeLocked": include_locked_value(tokens)[0],
+                "untagged": bool_flag_value(tokens, "--untagged")[0],
                 "ago": option_value(tokens, "--ago")[1],
                 "keep": option_value(tokens, "--keep")[1],
                 "dryRun": dry_run_value(tokens)[0],
@@ -7786,16 +7808,17 @@ env:
         return subjects, media, registry._children
 
     def _select(invocations: list[list[str]], registry: FakeRegistry,
-                strip_dry_run: bool = True) -> PurgeSelection:
+                deleted_only: bool = False) -> PurgeSelection:
+        """What the invocations SELECT (the window, whatever `--dry-run` says — the tokens are modelled
+        as written, every spelling of the flag alike), or with `deleted_only` what they would DELETE."""
         union = PurgeSelection()
         subjects, media, children = _subjects(registry)
         for tokens in invocations:
-            one = purge_selection([t for t in tokens if not (strip_dry_run and t == "--dry-run")],
-                                  subjects, media, children)
+            one = purge_selection(tokens, subjects, media, children)
             check(not one.problem, f"ARM 40: a recorded invocation could not be modelled: "
                                    f"{one.problem} — {' '.join(tokens)}")
-            union.tags |= one.deleted_tags
-            union.manifests |= one.deleted_manifests
+            union.tags |= one.deleted_tags if deleted_only else one.tags
+            union.manifests |= one.deleted_manifests if deleted_only else one.manifests
         return union
 
     if _recorded:
@@ -7843,7 +7866,14 @@ env:
               "ARM 40b: a recorded purge-old-images invocation carries no `--dry-run`. The window "
               "ships report-first (MeshWeaver#3438); dropping the flag is its own reviewed diff "
               "that also lifts `dryRun` in tasks.json")
-        as_recorded = _select(_recorded, registry, strip_dry_run=False)
+        as_recorded = _select(_recorded, registry, deleted_only=True)
+        # The SELECTION does not depend on how `--dry-run` is spelled (review of #6931): the explicit
+        # `--dry-run=true` selects exactly what the bare flag selects, and deletes nothing either.
+        _explicit = [["--dry-run=true" if t == "--dry-run" else t for t in tokens] for tokens in _recorded]
+        check(_select(_explicit, registry).tags == chosen.tags
+              and _select(_explicit, registry).manifests == chosen.manifests
+              and not _select(_explicit, registry, deleted_only=True).tags,
+              "ARM 40b: `--dry-run=true` selected or deleted differently from `--dry-run`")
         check(not as_recorded.tags and not as_recorded.manifests,
               f"ARM 40b: the record AS COMMITTED would delete {as_recorded} — a dry run that "
               "deletes is not a dry run")
@@ -7893,6 +7923,38 @@ env:
     check(bool(dry_run_value(["acr", "purge", "--dry-run", "false"])[1])
           and bool(dry_run_value(["acr", "purge", "--dry-run=maybe"])[1]),
           "ARM 40e: an unsettled `--dry-run` spelling was accepted instead of RED")
+    check(include_locked_value(["acr", "purge", "--include-locked=true"]) == (True, "")
+          and include_locked_value(["acr", "purge", "--include-locked", "--include-locked=false"]) == (False, "")
+          and include_locked_value(["acr", "purge", "--include-locked=false", "--include-locked"]) == (True, "")
+          and include_locked_value(["acr", "purge", "--include-locked=maybe"])[0] is True,
+          "ARM 40e: `--include-locked` equals forms / repeats were misread, or an unreadable value "
+          "read as OFF — the flag that deletes locked manifests must fail closed")
+    _locked = [PurgeSubject("a", "sha256:" + "66" * 32, "t", 400.0, True)]
+    check(purge_selection(["acr", "purge", "--filter", "a:.*", "--ago", "1d", "--include-locked=true"],
+                          _locked, {}, {}).tags == {("a", "t")},
+          "ARM 40e: the model honoured the lock under `--include-locked=true`, which deletes it")
+    _untagged = [PurgeSubject("a", "sha256:" + "55" * 32, None, 400.0, False)]
+    check(purge_selection(["acr", "purge", "--filter", "a:.*", "--ago", "1d", "--untagged=true"],
+                          _untagged, {}, {}).manifests == {("a", "sha256:" + "55" * 32)},
+          "ARM 40e: `--untagged=true` skipped manifest selection")
+    with tempfile.TemporaryDirectory() as _tmp_lock:
+        _rec = Path(_tmp_lock) / ".github" / "acr-retention"
+        _rec.mkdir(parents=True)
+        (Path(_tmp_lock) / ".github" / "workflows").mkdir(parents=True)
+        (Path(_tmp_lock) / ".github" / "workflows" / "release.yml").write_text(
+            (Path(__file__).resolve().parents[1] / "workflows" / "release.yml").read_text(encoding="utf-8"),
+            encoding="utf-8")
+        for _spelling in ("--include-locked=true", "--include-locked=maybe",
+                          "--include-locked=false --include-locked"):
+            (_rec / "t.yaml").write_text(
+                f"steps:\n  - cmd: acr purge --filter 'a:.*' --ago 30d --untagged {_spelling}\n", encoding="utf-8")
+            (_rec / "tasks.json").write_text(json.dumps({"tasks": [{"name": "t", "file": "t.yaml", "status": "Enabled"}]}),
+                                             encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as _out:
+                _code = check_retention_record(_tmp_lock)
+            check(_code == 1 and "include-locked" in _out.getvalue(),
+                  f"ARM 40e: the record checker accepted `{_spelling}` — locked, referenced manifests "
+                  "would be reported protected while the purge deletes them")
     _deleting = purge_selection(["acr", "purge", "--filter", "a:.*", "--ago", "1d", "--dry-run",
                                  "--dry-run=false"],
                                 [PurgeSubject("a", "sha256:" + "77" * 32, "t", 5.0, False)], {}, {})
