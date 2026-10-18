@@ -41,6 +41,43 @@ public static class GitHubWebhookEndpoints
 
     private const string WebhookPath = "/webhooks/github";
 
+    /// <summary>Which secret authenticated a delivery — open string constants.</summary>
+    internal static class Signer
+    {
+        /// <summary>The deployment's shared webhook secret (<c>GitHub:Webhook:Secret</c>).</summary>
+        public const string Deployment = "deployment";
+
+        /// <summary>The instance's OWN GitHub App's webhook secret (Doc/Architecture/InstanceRepositoryAccess).</summary>
+        public const string InstanceApp = "instance-app";
+    }
+
+    /// <summary>
+    /// The secret that signed <paramref name="body"/>, or null when neither did. The deployment's
+    /// secret is tried first, so a delivery it signs keeps the deployment's full event set even
+    /// when both secrets happen to be equal.
+    /// </summary>
+    internal static string? VerifiedSigner(string? deploymentSecret, string? instanceAppSecret, byte[] body, string signature)
+        => !string.IsNullOrEmpty(deploymentSecret) && GitHubWebhookProcessor.VerifySignature(deploymentSecret, body, signature)
+            ? Signer.Deployment
+            : !string.IsNullOrEmpty(instanceAppSecret) && GitHubWebhookProcessor.VerifySignature(instanceAppSecret, body, signature)
+                ? Signer.InstanceApp
+                : null;
+
+    /// <summary>
+    /// 🚨 Whether a delivery signed by <paramref name="signer"/> may carry <paramref name="eventType"/>.
+    /// The instance's own App subscribes to <c>push</c> only, and its secret is held by the
+    /// instance's administrators — a platform role that grants no data rights. So an
+    /// instance-App-signed delivery reaches the push trigger (which READS the named repository at
+    /// the named commit with this instance's own credentials, so it injects no content) and
+    /// nothing else: <c>issues</c>/<c>issue_comment</c> write the payload's text into Spaces as
+    /// System, and <c>workflow_run</c> records build completions — those stay behind the
+    /// deployment's signer.
+    /// </summary>
+    internal static bool SignerMayDeliver(string signer, string eventType)
+        => signer == Signer.Deployment
+           || string.Equals(eventType, "push", StringComparison.OrdinalIgnoreCase)
+           || string.Equals(eventType, "ping", StringComparison.OrdinalIgnoreCase);
+
     public static IEndpointRouteBuilder MapGitHubWebhook(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(WebhookPath, async (
@@ -133,14 +170,21 @@ public static class GitHubWebhookEndpoints
             }
 
             var signature = http.Request.Headers["X-Hub-Signature-256"].ToString();
-            if (!(!string.IsNullOrEmpty(secret) && GitHubWebhookProcessor.VerifySignature(secret, body, signature))
-                && !(!string.IsNullOrEmpty(appSecret) && GitHubWebhookProcessor.VerifySignature(appSecret, body, signature)))
+            var signer = VerifiedSigner(secret, appSecret, body, signature);
+            if (signer is null)
             {
                 logger.LogWarning("GitHub webhook signature verification failed ({Bytes} bytes).", body.Length);
                 return Results.Unauthorized();
             }
 
             var eventType = http.Request.Headers["X-GitHub-Event"].ToString();
+            if (!SignerMayDeliver(signer, eventType))
+            {
+                logger.LogWarning(
+                    "GitHub webhook event '{Event}' was signed with the instance GitHub App's secret, which "
+                    + "authenticates push deliveries only — refused.", eventType);
+                return Results.StatusCode(StatusCodes.Status403Forbidden);
+            }
             if (string.Equals(eventType, "ping", StringComparison.OrdinalIgnoreCase))
                 return Results.Ok(new { ok = true, pong = true });
 

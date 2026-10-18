@@ -169,7 +169,14 @@ own sources.
 
 **Webhooks.** `/webhooks/github` verifies a delivery against `GitHub:Webhook:Secret` OR the instance
 App's webhook secret — whichever signs it. Either may be absent; with neither, the endpoint answers
-503 as before.
+503 as before. **What a delivery may carry depends on which secret signed it.** The deployment's
+secret keeps every event. The instance App's secret is held by the instance's administrators — a
+platform role with no data rights — and its App subscribes to `push` only, so a delivery it signs
+reaches the push trigger (and `ping`) and nothing else: any other event signed with it is refused
+with 403. The push trigger reads the named repository at the named commit with this instance's own
+credentials, so it carries no content of its own; `issues`, `issue_comment` and `workflow_run`,
+which write the payload into Spaces as System or record build completions, stay behind the
+deployment's signer. Pinned by `GitHubWebhookSignerScopeTest`.
 
 ## Security review
 
