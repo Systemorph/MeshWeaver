@@ -331,6 +331,7 @@ public static class GitHubActivityExtensions
                     }
 
                     return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
+                        NameReadIdentity(ctx, sync, userId, config?.RepositoryUrl).SelectMany(_ =>
                         // No repository, or export-only: the import path refuses it in its own words,
                         // exactly as before — the seal has nothing to decide about a source that
                         // cannot import.
@@ -343,7 +344,7 @@ public static class GitHubActivityExtensions
                                     { Proceed: false } => Held(ctx, plan),
                                     { Redirected: true } => AtSealedCommit(ctx, sync, plan, spacePath, userId, sourceId, force),
                                     _ => AtBranch(),
-                                }));
+                                })));
                 }, onActivityCreated)));
     }
 
@@ -764,6 +765,7 @@ public static class GitHubActivityExtensions
                 // 🚨 The typed commitish is ASKED, not granted (#3845 hole 3): the field accepts a
                 // branch, so without the seal this was a tip import with a text box in front of it.
                 return sync.ReadConfig(spacePath, sourceId).Take(1).SelectMany(config =>
+                    NameReadIdentity(ctx, sync, userId, config?.RepositoryUrl).SelectMany(_ =>
                     config?.RepositoryUrl is not { Length: > 0 } || config.Direction == SyncDirection.ExportOnly
                         ? AsAsked()
                         : PlanRequestedImport(hub, config, commitish)
@@ -772,7 +774,7 @@ public static class GitHubActivityExtensions
                                 { Proceed: false } => Held(ctx, plan),
                                 { Redirected: true } => AtSealedCommit(ctx, sync, plan, spacePath, userId, sourceId, force),
                                 _ => AsAsked(),
-                            }));
+                            })));
             }, onActivityCreated)));
     }
 
@@ -1083,6 +1085,32 @@ public static class GitHubActivityExtensions
             }, onActivityCreated);
     }
 
+    /// <summary>
+    /// Writes WHO reads the repository on the activity — the person's connected credential, a token
+    /// the source declared (by its configuration key), or the GitHub App installation — by name, never
+    /// a token (<see cref="GitHubSyncService.ReadIdentityFor"/>, the same decision the read takes).
+    /// Without it an import said "Imported" and nothing about its credential, so nobody could show
+    /// that a sync ran on the App rather than on a personal access token. A Space with no repository
+    /// or an Azure Repos one (its own identity, <see cref="AzureReposTokenService"/>) writes nothing;
+    /// a reading that faults says so at Warning and never stops the sync.
+    /// </summary>
+    internal static IObservable<Unit> NameReadIdentity(
+        ActivityContext ctx, GitHubSyncService sync, string userId, string? repositoryUrl)
+    {
+        if (repositoryUrl is not { Length: > 0 } || GitRepositoryProvider.IsAzureRepos(repositoryUrl))
+            return Observable.Return(Unit.Default);
+        return sync.ReadIdentityFor(userId, repositoryUrl).Take(1)
+            .Do(identity => ctx.Log(identity.ToLogMessage()))
+            .Select(_ => Unit.Default)
+            .DefaultIfEmpty(Unit.Default)
+            .Catch((Exception _) =>
+            {
+                ctx.Log(new LogMessage("GitHub identity: could not be read.", LogLevel.Warning)
+                    .WithKey("activity.gitsync.identity.unreadable"));
+                return Observable.Return(Unit.Default);
+            });
+    }
+
     /// <summary>Ask GitHub (live) for the configured branch's HEAD + whether the Space is up to date.
     /// <paramref name="sourceId"/> selects the sync source (null = the primary). Informational: any
     /// signed-in caller who can Read the Space may check; the activity executes as System.</summary>
@@ -1099,7 +1127,9 @@ public static class GitHubActivityExtensions
                 {
                     ctx.Log(new LogMessage("Asking GitHub for the branch state…", LogLevel.Information)
                         .WithKey("activity.gitsync.check.asking"));
-                    return sync.AskBranchState(spacePath, userId, sourceId).Select(st =>
+                    return sync.ReadConfig(spacePath, sourceId).Take(1)
+                        .SelectMany(config => NameReadIdentity(ctx, sync, userId, config?.RepositoryUrl))
+                        .SelectMany(_ => sync.AskBranchState(spacePath, userId, sourceId)).Select(st =>
                     {
                         var sha = st.HeadCommitSha[..Math.Min(8, st.HeadCommitSha.Length)];
                         ctx.Log(new LogMessage(

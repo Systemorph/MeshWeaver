@@ -898,16 +898,73 @@ public sealed class GitHubSyncService
     /// missing credential as a missing repository.</para>
     /// </summary>
     private IObservable<ResolvedGitHubAuth> ResolveAuth(string userId, string? repositoryUrl) =>
-        credentials.Get(userId).Take(1).SelectMany(cred =>
-            cred?.AccessToken is { Length: > 0 } token
-                ? Observable.Return(new ResolvedGitHubAuth(token, cred))
-                : hub.ServiceProvider.GetService<GitSourceCredentials>()?.TokenFor(repositoryUrl) is { } declared
-                    ? declared.Select(t => new ResolvedGitHubAuth(t, null))
-                : appTokens is { IsConfigured: true }
-                    ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
-                    : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
-                        "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
-                        "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
+        DecideRead(userId, repositoryUrl).SelectMany(read => read.Identity.Kind switch
+        {
+            GitHubReadIdentityKind.PersonConnected =>
+                Observable.Return(new ResolvedGitHubAuth(read.Credential!.AccessToken!, read.Credential)),
+            GitHubReadIdentityKind.SourceToken or GitHubReadIdentityKind.SourceInstallation =>
+                read.Sources!.Token(read.Declared!).Select(t => new ResolvedGitHubAuth(t, null)),
+            GitHubReadIdentityKind.AppInstallation =>
+                appTokens!.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null)),
+            _ => Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
+                "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
+                "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")),
+        });
+
+    /// <summary>The decision <see cref="ResolveAuth"/> mints from, with what it needs to mint.</summary>
+    private sealed record ReadDecision(
+        GitHubReadIdentity Identity, GitHubCredential? Credential,
+        GitSourceCredentials? Sources, GitSourceCredential? Declared);
+
+    /// <summary>
+    /// The ONE decision of which identity reads <paramref name="repositoryUrl"/> for
+    /// <paramref name="userId"/>: the person's connected credential, else the source's declared
+    /// credential, else the instance's GitHub App, else none. <see cref="ResolveAuth"/> mints from
+    /// it and <see cref="ReadIdentityFor"/> names it, so the two can never disagree.
+    /// </summary>
+    private IObservable<ReadDecision> DecideRead(string userId, string? repositoryUrl) =>
+        credentials.Get(userId).Take(1).Select(cred =>
+        {
+            if (cred?.AccessToken is { Length: > 0 })
+                return new ReadDecision(
+                    new GitHubReadIdentity(GitHubReadIdentityKind.PersonConnected, Login: cred.GitHubLogin),
+                    cred, null, null);
+            var sources = hub.ServiceProvider.GetService<GitSourceCredentials>();
+            if (sources?.For(repositoryUrl) is { } declared)
+                return new ReadDecision(
+                    declared.TokenKey is not null
+                        ? new GitHubReadIdentity(GitHubReadIdentityKind.SourceToken,
+                            TokenKey: GitSourceCredentials.ConfigurationKey(declared.TokenKey))
+                        : new GitHubReadIdentity(GitHubReadIdentityKind.SourceInstallation,
+                            InstallationOwner: declared.InstallationOwner),
+                    null, sources, declared);
+            return appTokens is { IsConfigured: true }
+                ? new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.AppInstallation), null, null, null)
+                : new ReadDecision(new GitHubReadIdentity(GitHubReadIdentityKind.None), null, null, null);
+        });
+
+    /// <summary>
+    /// Which identity a GitHub READ of <paramref name="repositoryUrl"/> by <paramref name="userId"/>
+    /// authenticates as — by name, never a token, and without minting anything. The same decision
+    /// the import, update and branch check take (<see cref="ResolveAuth"/>); the GitSync activities
+    /// write it on their log so an operator can read WHO read the repository (an App installation,
+    /// not a personal access token).
+    ///
+    /// <para>The instance's App installation is named from the installation its token was MINTED
+    /// for (<see cref="GitHubAppTokenService.GetInstallation"/>, the same cached mint the read uses),
+    /// never from configuration: with no <c>GitHub:App:InstallationId</c> and no installation on the
+    /// configured owner, the mint falls back to the first installation, and naming the configured
+    /// owner would attribute the read to an account that did not perform it.</para>
+    /// </summary>
+    public IObservable<GitHubReadIdentity> ReadIdentityFor(string userId, string? repositoryUrl) =>
+        DecideRead(userId, repositoryUrl).SelectMany(d =>
+            d.Identity.Kind == GitHubReadIdentityKind.AppInstallation && appTokens is not null
+                ? appTokens.GetInstallation().Select(installation => d.Identity with
+                {
+                    InstallationId = installation.Id,
+                    InstallationOwner = installation.Account,
+                })
+                : Observable.Return(d.Identity));
 
     /// <summary>
     /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a
