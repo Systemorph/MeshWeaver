@@ -4,12 +4,12 @@ namespace MeshWeaver.GitSync;
 /// The Azure DevOps identity an instance pushes to Azure Repos with, bound from the
 /// <c>AzureDevOps</c> configuration section (MeshWeaver#5248).
 ///
-/// <para>🚨 <b>DECLARED, not derived, and not a secret</b> (policy <c>azure-repos-push-only</c>,
+/// <para>🚨 <b>DECLARED, not derived, and not a secret</b> (policy <c>azure-repos-two-way</c>,
 /// <c>declared-not-derived</c>). Both values are identifiers of an app registration in the
 /// <b>client's</b> Entra tenant, declared per client tenant in that instance's deployment record
 /// (<c>AzureDevOps:TenantId</c>, <c>AzureDevOps:ClientId</c>). The credential itself is the
 /// instance's workload identity, federated to that app registration — so nothing secret is stored
-/// anywhere: no PAT, no client secret. Left unset, an Azure Repos export is refused by name.</para>
+/// anywhere: no PAT, no client secret. Left unset, every Azure Repos read and push is refused by name.</para>
 /// </summary>
 public sealed record AzureDevOpsOptions
 {

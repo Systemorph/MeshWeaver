@@ -205,6 +205,11 @@ public sealed class IssueService
             if (config?.RepositoryUrl is not { Length: > 0 } repoUrl)
                 return Observable.Throw<T>(new InvalidOperationException(
                     "No repository URL is set for this Space. Set one in the GitHub Sync settings, then try again."));
+            // Policy azure-repos-two-way (MeshWeaver#6500): an Azure Repos repository has no issues —
+            // refused by name BEFORE a GitHub credential is asked for, so an Azure-only user is told
+            // what is not offered rather than to connect a GitHub account.
+            if (AzureReposSyncPolicy.Refuse(repoUrl, AzureReposSyncPolicy.Unsupported.Issues) is { } refusal)
+                return Observable.Throw<T>(refusal.ToException());
             return credentials.Get(userId).Take(1).SelectMany(cred =>
             {
                 if (cred?.AccessToken is not { Length: > 0 } token)
