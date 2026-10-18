@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-manifest-apply. Not a YAML parser: the "parse" answers the JSON
+# fixture that sits beside the manifest (<file>.json), so what is tested is the validation, the digest
+# binding and the contract lines — and that `check` never sends a real apply.
+#
+#   HOSTING_MA_STATE  directory: kubectl.log (every argv)
+#   kubectl create --dry-run=client -f <file> -o json  → <file>.json
+#   kubectl apply --dry-run=server -f <file>           → one "… unchanged (server dry run)" line
+#   kubectl apply -f <file>                            → one "… configured" line
+#   kubectl -n <ns> get secret <name> …                → "<name>\t$MW_LIVE_TOKEN_SA" when MW_LIVE_TOKEN_SA is set,
+#                                                        nothing (absent) otherwise; MW_LIVE_TOKEN_FORBIDDEN → refused
+set -uo pipefail
+state="${HOSTING_MA_STATE:?the kubectl stub needs HOSTING_MA_STATE}"
+printf 'kubectl %s\n' "$*" >> "$state/kubectl.log"
+file=""; prev=""
+for a in "$@"; do [ "$prev" = "-f" ] && file="$a"; prev="$a"; done
+case "$*" in
+  "create --dry-run=client -f "*) cat "${file}.json" ;;
+  "apply --dry-run=server -f "*)  echo "serviceaccount/example unchanged (server dry run)" ;;
+  "apply -f "*)                   echo "serviceaccount/example configured" ;;
+  "-n "*" get secret "*)
+    [ -z "${MW_LIVE_TOKEN_FORBIDDEN:-}" ] || { echo 'Error from server (Forbidden): secrets "t" is forbidden' >&2; exit 1; }
+    [ -z "${MW_LIVE_TOKEN_SA+x}" ] || printf '%s\t%s' "$4" "$MW_LIVE_TOKEN_SA" ;;
+  *) echo "kubectl stub: unexpected invocation: $*" >&2; exit 1 ;;
+esac
