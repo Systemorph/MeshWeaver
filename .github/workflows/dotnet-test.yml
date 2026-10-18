@@ -2428,6 +2428,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
+    # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
+    # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
+    # were baked from, PER PACKAGE — never the upstream's HEAD, never the publication commit for a
+    # carried package — and every unknown is RED. The self-test runs it against a local repository.
+    - name: "Upstream source is staged at its sealed per-package commits (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: bash .github/scripts/stage-sealed-upstream.sh --self-test
+
     # 🚨 The other half of the same property since MeshWeaver#4113: WHERE a gate shard's platform
     # comes from. When the runner node mounts the CI platform volume the shard runs the tester as a
     # process off that share, and a set that is absent, half-written or paired with another portal

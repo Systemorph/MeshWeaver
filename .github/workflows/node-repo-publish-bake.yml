@@ -304,9 +304,10 @@ on:
         default: ''
       stage-source:
         description: >-
-          The bake-source segment stage-repo publishes under (e.g. `plugins`). The staged checkout
-          is taken at the commit that source's SEALED publication was baked from, so it must be
-          one of upstream-sources. Empty = derived from stage-repo's name
+          The bake-source segment stage-repo publishes under (e.g. `plugins`). Each staged module
+          is checked out at the commit that source's SEALED publication baked ITS bytes from (the
+          per-package listing, else the publication commit), so it must be one of
+          upstream-sources. Empty = derived from stage-repo's name
           (Systemorph/MeshWeaver.Plugins → `plugins`).
         required: false
         type: string
@@ -1303,9 +1304,10 @@ jobs:
           ORIGIN="the portal image '$PORTAL_REF' (the ref this run RESOLVED, whose /app the identity was read from), chosen by this run's trigger ($TRIGGER)"
           GATE_LOG="$RUNNER_TEMP/upstream-gate.log"
           # shellcheck disable=SC2086
-          # SOURCE_COMMITS_OUT: which commit each sealed upstream was baked from — the stage step
-          # below checks the upstream's SOURCE out at exactly that commit.
-          if SOURCE_COMMITS_OUT="$RUNNER_TEMP/upstream-source-commits.txt" \
+          # SOURCE_PROVENANCE_DIR: where each sealed upstream's bytes came from (publication commit,
+          # generation, per-package listing) — the stage step below checks the upstream's SOURCE
+          # out at exactly those commits, and the re-check before the bake proves it did not move.
+          if SOURCE_PROVENANCE_DIR="$RUNNER_TEMP/upstream-provenance" \
              mw-platform-gate/.github/scripts/check-release-availability.sh \
                --identity "${{ steps.identity.outputs.identity }}" \
                --identity-origin "$ORIGIN" $UPSTREAMS 2>&1 | tee "$GATE_LOG"; then
@@ -1437,24 +1439,27 @@ jobs:
           owner: ${{ steps.stage-repo-parts.outputs.owner }}
           repositories: ${{ steps.stage-repo-parts.outputs.name }}
           permission-contents: read
-      # 🚨 The staged SOURCE must be the commit the composed upstream PUBLICATION was baked from —
-      # never the stage repo's default-branch HEAD. The bake composes the upstream's SEALED bytes
+      # 🚨 The staged SOURCE must be what the composed upstream PUBLICATION's bytes were baked from
+      # — never the stage repo's default-branch HEAD. The bake composes the upstream's SEALED bytes
       # (for the identity resolved above) and installs the staged node definitions beside them;
       # HEAD is a third thing, chosen by when this job happened to START. Measured 2026-10-17: a
       # Plugins merge raised Store's `minMeshVersion` to 3.1.11117 while the newest sealed set was
       # 3.1.11102, and every satellite bake that started after it went RED on
       # `PackagePlatformFloorException: Package 'Store' was not installed` — then on every package
-      # that requires Store/Plugin — while the identical dispatch that started before it was green
-      # (Manufacturing, Crm, SocialMedia, Reinsurance). The commit is read off the publication's own
-      # `source-commit.txt` by the availability gate, so it is the publication this run was cleared
-      # against. No fall-back to HEAD: an unknown commit is RED, naming what is missing.
-      - name: Resolve the stage repo's commit — the one the upstream publication was baked from
-        id: stage-ref
+      # that requires Store/Plugin — while the same dispatch that started before it was green
+      # (Manufacturing, Crm, SocialMedia, Reinsurance). Each module is staged at ITS OWN sealed
+      # commit (the publication's per-package listing — a carried package can be older than the
+      # publication commit), read by the availability gate off the very publication it cleared.
+      # No fall-back to HEAD: an unknown commit is RED. stage-sealed-upstream.sh carries the rules.
+      - name: Stage cross-repo modules at the commits their sealed publication was baked from
+        id: stage
         if: inputs.stage-modules != ''
         env:
           STAGE_REPO: ${{ inputs.stage-repo }}
           STAGE_SOURCE: ${{ inputs.stage-source }}
+          STAGE_MODULES: ${{ inputs.stage-modules }}
           UPSTREAMS: ${{ inputs.upstream-sources }}
+          STAGE_TOKEN: ${{ steps.stage-token.outputs.token }}
         run: |
           set -euo pipefail
           src="$STAGE_SOURCE"
@@ -1463,28 +1468,16 @@ jobs:
             src="${STAGE_REPO##*/}"; src="${src#MeshWeaver.}"
             src=$(printf '%s' "$src" | tr '[:upper:]' '[:lower:]')
           fi
+          # upstream-sources is whitespace-separated and may be a YAML block (one per line), so
+          # newlines are separators exactly like spaces — the availability gate reads it that way.
           declared=""
-          read -r -a upstream_list <<< "$UPSTREAMS"
+          read -r -a upstream_list <<< "$(printf '%s' "$UPSTREAMS" | tr '\n' ' ')"
           for u in "${upstream_list[@]}"; do [ "$u" = "$src" ] && declared=1; done
-          case "$declared" in
-            1) ;;
-            *) echo "::error::stage-repo '$STAGE_REPO' stages SOURCE from upstream '$src', which is not in upstream-sources ('${UPSTREAMS}'). Its source can only be staged at the commit of a sealed publication this run was cleared against — declare it in upstream-sources, or set stage-source to the bake-source segment ${STAGE_REPO} publishes under."
-               exit 1 ;;
-          esac
-          COMMITS="$RUNNER_TEMP/upstream-source-commits.txt"
-          sha=$(grep -m1 "^$src=" "$COMMITS" 2>/dev/null | cut -d= -f2- || true)
-          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the sealed '$src' publication this run was cleared against names no source commit ('${sha:-<none>}' in $COMMITS) — refusing to stage ${STAGE_REPO}'s default branch instead: its node definitions and package floors need not match the sealed bytes this bake composes."; exit 1; }
-          echo "ref=$sha" >> "$GITHUB_OUTPUT"
-          echo "staging ${STAGE_REPO} at $sha — the commit the sealed '$src' publication was baked from"
-      - name: Stage cross-repo modules
-        if: inputs.stage-modules != ''
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ inputs.stage-repo }}
-          ref: ${{ steps.stage-ref.outputs.ref }}
-          token: ${{ steps.stage-token.outputs.token }}
-          path: cross-repo-stage
-          sparse-checkout: ${{ inputs.stage-modules }}
+          [ -n "$declared" ] || { echo "::error::stage-repo '$STAGE_REPO' stages SOURCE from upstream '$src', which is not in upstream-sources ('${UPSTREAMS}'). Its source can only be staged at the commits of a sealed publication this run was cleared against — declare it in upstream-sources, or set stage-source to the bake-source segment ${STAGE_REPO} publishes under."; exit 1; }
+          echo "source=$src" >> "$GITHUB_OUTPUT"
+          mw-platform-gate/.github/scripts/stage-sealed-upstream.sh --repo "$STAGE_REPO" --source "$src" \
+            --modules "$STAGE_MODULES" --provenance "$RUNNER_TEMP/upstream-provenance" \
+            --dest "$GITHUB_WORKSPACE/cross-repo-stage"
       - name: Set up Node for the pre-bake hook
         if: inputs.node-version != ''
         uses: actions/setup-node@v7
@@ -1861,6 +1854,35 @@ jobs:
           # the staged set is empty BECAUSE every composed module was an upstream's (own = 0).
           echo "SEAL_MODULES_OWN=$SEALED_OWN" >> "$GITHUB_ENV"
           echo "EXT_MODULES_UPSTREAM=$UPSTREAM_COMPOSED" >> "$GITHUB_ENV"
+      # 🚨 ONE publication for the staged definitions AND the composed module bytes. The stage step
+      # read the publication the availability gate cleared; `ext-modules` composed module bytes in
+      # a separate read (the registry's current module set). If the upstream republished in
+      # between, the bake would pair one publication's definitions with another's bytes — the very
+      # mismatch staging at the sealed commit exists to prevent. The live pointer only ever moves
+      # FORWARD, so an unchanged publication read AFTER the composition proves the composition read
+      # the same one. A moved publication is RED, naming both: re-run, and both reads land on the new one.
+      - name: "The upstream publication did not move under the staging and the module composition"
+        if: inputs.stage-modules != ''
+        env:
+          BAKE_PUBLISH_TARGETS: ${{ inputs.bake-publish-targets }}
+          SRC: ${{ steps.stage.outputs.source }}
+          IDENTITY: ${{ steps.identity.outputs.identity }}
+        run: |
+          set -euo pipefail
+          BEFORE="$RUNNER_TEMP/upstream-provenance"
+          AFTER="$RUNNER_TEMP/upstream-provenance-after"
+          rm -rf "$AFTER"
+          SOURCE_PROVENANCE_DIR="$AFTER" mw-platform-gate/.github/scripts/check-release-availability.sh \
+            --identity "$IDENTITY" --identity-origin "the re-check after module composition" "$SRC"
+          for f in commit generation listing sealed-packages.json; do
+            if [ -e "$BEFORE/$SRC.$f" ] || [ -e "$AFTER/$SRC.$f" ]; then
+              cmp -s "$BEFORE/$SRC.$f" "$AFTER/$SRC.$f" || {
+                echo "::error::the sealed '$SRC' publication MOVED while this run staged its source and composed its module bytes ($f: '$(head -c 200 "$BEFORE/$SRC.$f")' → '$(head -c 200 "$AFTER/$SRC.$f")'). The bake would pair one publication's definitions with another's bytes. Not a fault of this repo: re-run, and both reads land on the publication that now applies."
+                exit 1
+              }
+            fi
+          done
+          echo "the sealed '$SRC' publication is unchanged across staging and module composition (commit $(cat "$AFTER/$SRC.commit"), generation $(cat "$AFTER/$SRC.generation"))"
       - name: Bake (compiler --output), then gate a mesh against it (--seed)
         # scope=none means the decision above VERIFIED that this exact content is already sealed
         # for this framework identity at every target — a positive finding, logged with both

@@ -443,12 +443,22 @@ does not change when the artifact grows.
 
 #### 🚨 While staging stays, the staged source is the SEALED commit — never the upstream's HEAD
 
-The staged node definitions and the composed upstream bytes must come from **one commit**. The
-publish-bake lane therefore checks `stage-repo` out at the commit the upstream's sealed
-publication was baked from — the `source-commit.txt` the availability gate reads off the very
-publication it cleared — and goes RED when that commit is unknown or when the staged source is not
-one of `upstream-sources` (override the derived segment with `stage-source`). It never falls back
-to the default branch.
+The staged node definitions and the composed upstream bytes must come from **one publication**,
+and each staged package from the commit **its own** bytes were baked from. The publish-bake lane
+therefore:
+
+- has the availability gate record the cleared publication's provenance — its
+  `source-commit.txt`, its generation, and its per-package `sealed-packages.json`;
+- stages every module with `stage-sealed-upstream.sh` at that package's `sourceCommit` from the
+  listing (a per-package seal carries a waiting package's older build forward, so the publication
+  commit can be newer than one package's bytes), at the publication commit for a bundle-less
+  package or a publication that predates listings, and RED for an unreadable listing or a listed
+  package with no commit;
+- re-reads the publication after composing module bytes and goes RED if it moved, since the module
+  composition is a separate read and a republish in between would pair one publication's
+  definitions with another's bytes;
+- refuses a staged source that is not one of `upstream-sources` (override the derived segment
+  with `stage-source`). It never falls back to the default branch.
 
 Staging HEAD made the verdict a function of *when the job started*. Measured on 2026-10-17: a
 Plugins merge stamped Store's `minMeshVersion` to `3.1.11117` while the newest sealed platform set
