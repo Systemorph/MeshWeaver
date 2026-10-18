@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Reflection;
@@ -150,12 +151,10 @@ public static class EditLayoutArea
     public static UiControl Edit(LayoutAreaHost host, ITypeDefinition typeDefinition, object id, RenderingContext _)
     {
         // Title with right-aligned navigation glyphs
-        var links = new List<LinkControl>
-        {
-            DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}"),
-        };
+        var links = ImmutableList.Create(
+            DomainViews.NavGlyph("⧉", host.Localize("ui.dataModel"), $"/{host.Hub.Address}/DataModel/{typeDefinition.Type.Name}"));
         if (!string.IsNullOrWhiteSpace(typeDefinition.CollectionName))
-            links.Add(DomainViews.NavGlyph("🗃️", host.Localize("ui.viewCatalog"), $"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}"));
+            links = links.Add(DomainViews.NavGlyph("🗃️", host.Localize("ui.viewCatalog"), $"/{host.Hub.Address}/Catalog/{typeDefinition.CollectionName}"));
 
         var stack = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(typeDefinition.DisplayName).WithStyle("margin: 0;"), links.ToArray()));

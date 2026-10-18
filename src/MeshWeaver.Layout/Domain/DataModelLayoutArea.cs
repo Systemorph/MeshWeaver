@@ -1,4 +1,5 @@
-﻿using System.ComponentModel;
+﻿using System.Collections.Immutable;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Reflection;
 using System.Text;
@@ -266,12 +267,12 @@ public static class DataModelLayoutArea
         var type = typeDef.Type;
 
         // Title with right-aligned navigation glyphs
-        var links = new List<LinkControl>
-            { DomainViews.NavGlyph("⧉", LocalizationCatalog.Get("ui.dataModelOverview", locale), linkBase) };
+        var links = ImmutableList.Create(
+            DomainViews.NavGlyph("⧉", LocalizationCatalog.Get("ui.dataModelOverview", locale), linkBase));
         if (type.BaseType is { } bt && bt != typeof(object) && allDomainTypes.Any(td => td.Type == bt))
-            links.Add(DomainViews.NavGlyph("🔝", LocalizationCatalog.Get("ui.baseTypeOf", locale, bt.Name), $"{linkBase}/{bt.Name}"));
+            links = links.Add(DomainViews.NavGlyph("🔝", LocalizationCatalog.Get("ui.baseTypeOf", locale, bt.Name), $"{linkBase}/{bt.Name}"));
         if (catalogHref?.Invoke(typeDef) is { } catalogLink)
-            links.Add(DomainViews.NavGlyph("🗃️", LocalizationCatalog.Get("ui.viewCatalog", locale), catalogLink));
+            links = links.Add(DomainViews.NavGlyph("🗃️", LocalizationCatalog.Get("ui.viewCatalog", locale), catalogLink));
 
         var details = Controls.Stack.WithWidth("100%")
             .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()));
