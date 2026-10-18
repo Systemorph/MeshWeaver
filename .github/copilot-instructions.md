@@ -79,6 +79,18 @@ These are the other rules the project treats as absolute. Report violations with
 - **Casting an `object` payload** — `node.Content as T` / `payload is T`. Polymorphic
   deserialization degrades an unresolvable `$type` to a raw `JsonElement`, so the cast yields a
   silent null. Use `.As<T>(options, logger)` / `.ContentAs<T>(options)`.
+- **Hand-woven HTML or a hand-rolled UI instead of the controls framework.** Flag every
+  `Controls.Html(...)` / `HtmlControl` fed markup built in code (`$"<div …>"`, `StringBuilder`,
+  a `Render*Html` helper), every inline-style layout system (`WithStyle("display:flex;…")` or
+  `display:grid` composing a page), and every hand-assembled list, table, card or roster where
+  the platform has a control: `Controls.Stack` / `LayoutGrid` / `Title` / `Markdown` for layout,
+  `Controls.DataGrid` + `PropertyColumnControl<T>` for rows, `Controls.MeshSearch` (search box,
+  view options, sort options, grouping, `ItemArea`) for a set of nodes, `MeshNodeThumbnailControl`
+  / `MeshNodeCardControl` for a node, the `Edit` macro for a form. Ask for the replacement by
+  name. If the platform has no control for it, the fix is a platform control, never a workaround
+  in a node. This is the review half of the shared rule `never-hand-roll-ui` in every repo's
+  `AGENTS.md`; the controls are documented under `Doc/GUI` (`get Doc/GUI/ContainerControl`,
+  `Doc/GUI/MeshSearch`, `Doc/GUI/NodeCards`, `Doc/GUI/DataGrid`, `Doc/GUI/DataBinding`).
 - **A bespoke `XxxRequest`/`XxxResponse` pair to mutate state.** The only mutation API is
   `GetMeshNodeStream(path).Update(...)`; a state machine uses a `RequestedX` field the owning hub
   watches.
