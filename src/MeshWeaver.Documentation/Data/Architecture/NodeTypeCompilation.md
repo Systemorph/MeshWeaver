@@ -750,7 +750,16 @@ kept version, ranked by write time. A build is a `(version, content hash)` pair,
 together. The just-written build is never a candidate. The safety argument is the one that already
 covers an older version: the record names the newest publication by identity, an activation that
 loaded an older sibling keeps its mapping, and a reader that still asks for it gets a recoverable
-miss. Pinned by `FileSystemAssemblyStoreTest.Twenty_recompiles_of_one_version_leave_a_bounded_directory`
+miss.
+
+A publication writes its pdb before its dll, so eviction can meet a build that exists only as its
+pdb. Such a build never counts against the build budget, so it can never displace the last dll a
+version resolves to. It is never reclaimed while its writer may still be active, which is anything
+younger than `InFlightPublicationGrace` (10 minutes). Once older than that it was abandoned and is
+reclaimed. A refused dll publication removes the pdb the same call published, so a full volume
+leaves no orphan behind.
+
+Pinned by `FileSystemAssemblyStoreTest.Twenty_recompiles_of_one_version_leave_a_bounded_directory`
 and `The_sibling_budget_is_per_version`, and by `VolumeFullIsANamedRefusalTest`, which has a
 negative control: a non-space IO fault is not renamed.
 

@@ -41,6 +41,13 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     public const int KeepBuildsPerVersion = 2;
 
     /// <summary>
+    /// How long a build that exists only as its pdb is treated as a publication in flight and never
+    /// reclaimed. A writer publishes its dll immediately after its pdb, so this is far past any
+    /// real interval; a pdb-only build older than this was abandoned (#6940 review).
+    /// </summary>
+    public static readonly TimeSpan InFlightPublicationGrace = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Initializes a new instance of the filesystem-backed assembly store rooted at the
     /// given directory (created if it does not exist).
     /// </summary>
@@ -335,9 +342,22 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         // it as TERMINAL: no Release node, no version pointer, the previous build left in place.
         // Swallowing it here and returning the path would re-create the very incident: a name in
         // the discovery namespace whose bytes are not there.
-        if (pdbBytes is { Length: > 0 })
-            AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
-        var published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
+        var pdbPublishedHere = pdbBytes is { Length: > 0 }
+                               && AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
+        bool published;
+        try
+        {
+            published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
+        }
+        catch (IOException) when (pdbPublishedHere && !File.Exists(dllPath))
+        {
+            // 🚨 The publication is refused, so the symbols this call published for it are an
+            // ORPHAN (review on #6969): no dll will ever pair with them, and left behind they look
+            // like an in-flight build. Removed here, by the writer that created them; the refusal
+            // itself propagates unchanged.
+            TryDeleteOrphan(pdbPath);
+            throw;
+        }
         if (published)
             logger.LogInformation(
                 "Cached assembly at {DllPath} ({Bytes} bytes)", dllPath, assemblyBytes.Length);
@@ -506,20 +526,35 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             // the newest publication by identity, an activation that already loaded the older one
             // keeps its mapping, and a reader that still asks for it gets a recoverable MISS.
             //
-            // 🚨 A build is identified from EITHER file, never from the dll alone (review on #6969).
+            // 🚨 Complete builds and in-flight publications are SEPARATE (review on #6969).
             // PutWithLocationCore publishes the pdb BEFORE the dll, so another writer's eviction can
-            // run in between and see a pdb with no dll yet. Ranking only dlls left that in-flight
-            // build out of the kept set and deleted its pdb — the writer then finished "successfully"
-            // without the symbols it supplied. Counted from either file, the in-flight build is the
-            // newest one of its version and is kept.
-            var keptBuilds = mine
+            // see a build that exists only as its pdb. Such a build:
+            //   • never counts against the KeepBuildsPerVersion budget — only a build with a dll is
+            //     usable, and a pdb-only one must never displace the last dll a version resolves to;
+            //   • is never reclaimed while its writer may still be active (younger than
+            //     InFlightPublicationGrace) — otherwise the writer finishes "successfully" without
+            //     the symbols it supplied;
+            //   • is reclaimed once older than the grace: a writer publishes its dll immediately
+            //     after its pdb, so a pdb that old was abandoned (a refused dll publication removes
+            //     its own pdb; a killed process does not).
+            var builds = mine
                 .Where(x => keptVersions.Contains(x.Identity.Version))
                 .GroupBy(x => (x.Identity.Version, x.Identity.Hash))
-                .Select(build => (build.Key, Newest: build.Max(x => x.File.LastWriteTimeUtc)))
+                .Select(build => (
+                    build.Key,
+                    Dll: build.FirstOrDefault(x => !x.Identity.IsPdb).File,
+                    Newest: build.Max(x => x.File.LastWriteTimeUtc)))
+                .ToList();
+            var now = DateTime.UtcNow;
+            var keptBuilds = builds
+                .Where(build => build.Dll is not null)
                 .GroupBy(build => build.Key.Version)
                 .SelectMany(version => version
-                    .OrderByDescending(build => build.Newest)
+                    .OrderByDescending(build => build.Dll!.LastWriteTimeUtc)
                     .Take(KeepBuildsPerVersion)
+                    .Select(build => build.Key))
+                .Concat(builds
+                    .Where(build => build.Dll is null && now - build.Newest < InFlightPublicationGrace)
                     .Select(build => build.Key))
                 .ToHashSet();
 
@@ -564,6 +599,20 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
             logger.LogDebug(ex,
                 "Assembly cache: could not evict superseded versions under {Dir} — the write itself "
                 + "succeeded and the next one plans eviction again", dir);
+        }
+    }
+
+    private void TryDeleteOrphan(string pdbPath)
+    {
+        try
+        {
+            File.Delete(pdbPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Housekeeping behind a refusal that is already propagating; a pdb left here is
+            // reclaimed by eviction once it is older than InFlightPublicationGrace.
+            logger.LogDebug(ex, "Assembly cache: could not remove orphaned symbols {Path}", pdbPath);
         }
     }
 
