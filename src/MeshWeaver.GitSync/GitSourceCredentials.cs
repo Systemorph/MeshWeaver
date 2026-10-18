@@ -179,11 +179,25 @@ public sealed class GitSourceCredentials
     /// <summary>Whether ANY configured source names the repository — with or without a credential.
     /// A repository the deployment configures keeps the deployment's identity: an instance-local
     /// source for the same repository never switches it to the instance App.</summary>
-    private bool IsConfiguredRepository(string? repositoryUrl) =>
-        configuration is not null
-        && NormalizeRepository(repositoryUrl) is { Length: > 0 } wanted
-        && configuration.GetSection(SourcesSection).GetChildren().Any(source =>
-            string.Equals(NormalizeRepository(source["RepoPath"]), wanted, StringComparison.OrdinalIgnoreCase));
+    /// <remarks>Mirrors <c>PackageSources.FromConfiguration</c>: the <c>Sources</c> list when any of its
+    /// entries names a repository, else the legacy single source (<c>PluginCatalog:SourceRepoPath</c>).
+    /// Missing the legacy one made a local duplicate of it switch the read to the instance App,
+    /// although the configured source wins the duplicate.</remarks>
+    private bool IsConfiguredRepository(string? repositoryUrl)
+    {
+        if (configuration is null || NormalizeRepository(repositoryUrl) is not { Length: > 0 } wanted)
+            return false;
+        var listed = configuration.GetSection(SourcesSection).GetChildren()
+            .Select(source => source["RepoPath"])
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToList();
+        var configured = listed.Count > 0 ? listed : [configuration[LegacySourceRepoPathKey]];
+        return configured.Any(path =>
+            string.Equals(NormalizeRepository(path), wanted, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>The legacy single configured source's repository (read when the <c>Sources</c> list names none).</summary>
+    public const string LegacySourceRepoPathKey = "PluginCatalog:SourceRepoPath";
 
     /// <summary>The instance App for an instance-local source while it is connected, else null.</summary>
     private GitSourceCredential? InstanceFor(string? repositoryUrl)

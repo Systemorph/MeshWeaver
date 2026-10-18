@@ -381,6 +381,36 @@ public class InstanceRepositoryAccessUnitTest
             await credentials.TokenOrDefault(Local, () => service.GetInstallationToken()).FirstAsync().Timeout(Budget).Await());
     }
 
+    /// <summary>The LEGACY single configured source (<c>PluginCatalog:SourceRepoPath</c>, read when the
+    /// Sources list names no repository) also keeps the deployment's identity when added locally —
+    /// FromConfiguration lists it, so FromInstance drops the local duplicate in its favour.</summary>
+    [Fact]
+    public async Task TheLegacyConfiguredSource_KeepsTheDeploymentsIdentity_EvenWhenAlsoAddedLocally()
+    {
+        using var deploymentKey = RSA.Create(2048);
+        using var instanceKey = RSA.Create(2048);
+        var service = new GitHubAppTokenService(
+            new IoPoolRegistry(),
+            Options.Create(new GitHubAppOptions { ClientId = "Iv23liPlatform", PrivateKey = deploymentKey.ExportRSAPrivateKeyPem() }),
+            () => new GitHubAppOptions { ClientId = "Iv23liInstance", PrivateKey = instanceKey.ExportRSAPrivateKeyPem() },
+            httpClient: new HttpClient(new AppHandler()), clock: () => Now);
+        var local = new InstancePackageSourceContent { Repo = Local };
+        var credentials = new GitSourceCredentials(Config(new()
+            {
+                [GitSourceCredentials.LegacySourceRepoPathKey] = Local,
+                // A list entry without a repository does not make the list the configured set.
+                ["PluginCatalog:Sources:0:Name"] = "Unnamed",
+            }), service, repo => IsLocal(repo) ? local : null);
+
+        Assert.Null(credentials.For(Local));
+        Assert.StartsWith("ghs_Iv23liPlatform_",
+            await credentials.TokenOrDefault(Local, () => service.GetInstallationToken()).FirstAsync().Timeout(Budget).Await());
+
+        // Control: with no configured source naming it, the local source reads with the instance App.
+        var unconfigured = new GitSourceCredentials(Config(new()), service, repo => IsLocal(repo) ? local : null);
+        Assert.NotNull(unconfigured.For(Local));
+    }
+
     [Fact]
     public async Task ANamedInstallation_OnAColdReplica_WaitsForTheInstanceApp_InsteadOfRefusing()
     {
