@@ -82,9 +82,10 @@ namespace MeshWeaver.Graph.Security;
 /// <c>JudgeForeignDiscriminator</c>; Systemorph/MeshWeaver.Plugins#3042). An Update whose content
 /// is byte-identical to what is stored ⇒ Valid: re-asserting a row already on disk is not a new
 /// write of bad content, and refusing it would make an existing broken node impossible to move.
-/// The same holds for the RELOCATION create — the copy leg of a move
-/// (<see cref="CreateNodeRequest.AuthorshipFrom"/>): content equal, as JSON, to what storage holds
-/// at the source is the source being carried, not new content, and is admitted
+/// The same holds for the RELOCATION create — the copy leg of a move: content equal, as JSON, to
+/// the stored source the create handler read and verified (<see cref="NodeValidationContext.RelocatedFrom"/>
+/// — move entitlement, same NodeType; never the caller-settable <see cref="CreateNodeRequest.AuthorshipFrom"/>)
+/// is the source being carried, not new content, and is admitted
 /// (Systemorph/MeshWeaver#6951 — legacy feedback records stored before this guard existed could
 /// otherwise never be handed over to the Inbox).</para>
 /// </summary>
@@ -122,63 +123,36 @@ public sealed class ContentSchemaValidator : INodeValidator
         // 🚨 A RELOCATION carries what is ON DISK; it does not write new content (#6951/#6617). The
         // copy leg of a move re-creates the stored source at its new path through a CREATE, so the
         // "re-asserting bytes already on disk" exemption the Update half has always had (see the class
-        // doc: refusing it "would make an existing broken node impossible to move") never reached it —
-        // a record stored before this guard existed, in a shape it now refuses, could be repaired in
-        // place but never relocated, and every attempt to hand it over failed the same way, forever.
-        // The relocated content is admitted exactly when it is the SOURCE's stored content, compared
-        // as JSON; anything else the relocation carries is judged like any other create.
-        if (RelocationSource(context) is not { } source || AsObjectElement(context.Node.Content) is not { } proposed)
+        // doc: refusing it "would make an existing broken node impossible to move") never reached it.
+        // The relocated content is admitted exactly when it equals, as JSON, the content of the source
+        // the CREATE HANDLER read from storage and verified (NodeValidationContext.RelocatedFrom: the
+        // move entitlement held, the same NodeType) — never on the message's AuthorshipFrom claim,
+        // which any caller can set (review on #6971). Anything else is judged like any other create.
+        if (RelocatedContent(context) is not { } source)
             return Observable.Return(Logged(context, verdict));
-        return StoredContentOf(source)
-            .Select(stored =>
-            {
-                if (stored is { } onDisk && JsonElement.DeepEquals(onDisk, proposed))
-                {
-                    _logger.LogInformation(
-                        "ContentSchemaGuard: admitted the relocation of '{Source}' to '{Path}' (NodeType '{NodeType}') — "
-                        + "its content is the source's stored content, which this guard would refuse as a new write "
-                        + "({Summary}); a relocation preserves what is on disk and does not write new content.",
-                        source, context.Node.Path, context.Node.NodeType, verdict.Summary);
-                    return NodeValidationResult.Valid();
-                }
-                return Logged(context, verdict);
-            });
+        _logger.LogInformation(
+            "ContentSchemaGuard: admitted the relocation of '{Source}' to '{Path}' (NodeType '{NodeType}') — "
+            + "its content is the source's stored content, which this guard would refuse as a new write "
+            + "({Summary}); a relocation preserves what is on disk and does not write new content.",
+            source, context.Node.Path, context.Node.NodeType, verdict.Summary);
+        return Observable.Return(NodeValidationResult.Valid());
     }
 
     /// <summary>
-    /// The stored source a CREATE relocates — <see cref="CreateNodeRequest.AuthorshipFrom"/>, which the
-    /// copy leg of a move sets and nothing else does — or null for any other write.
+    /// The path of the verified stored source when this is a CREATE relocating it unchanged: a
+    /// <see cref="NodeValidationContext.RelocatedFrom"/> at another path, of the same NodeType, whose
+    /// raw content equals the new node's as JSON. Null for anything else. Pure.
     /// </summary>
-    private static string? RelocationSource(NodeValidationContext context)
-        => context.Operation == NodeOperation.Create
-           && context.Request is CreateNodeRequest { AuthorshipFrom: { } from }
-           && !string.IsNullOrWhiteSpace(from)
-           && !string.Equals(from.Trim(), context.Node.Path, StringComparison.OrdinalIgnoreCase)
-            ? from.Trim()
-            : null;
-
-    /// <summary>
-    /// The raw content storage holds at <paramref name="path"/> — read from STORAGE, never from the
-    /// message, exactly as the create handler reads a relocation's authorship. Null when there is no
-    /// store, no node, or content that is not raw JSON (typed content already binds and is never
-    /// refused by this guard). A read that fails decides nothing, so it is null and the refusal stands.
-    /// </summary>
-    private IObservable<JsonElement?> StoredContentOf(string path)
+    private static string? RelocatedContent(NodeValidationContext context)
     {
-        var storage = _hub.ServiceProvider.GetService<IStorageAdapter>();
-        if (storage is null)
-            return Observable.Return<JsonElement?>(null);
-        return Observable.Defer(() => storage.Read(path, _hub.JsonSerializerOptions))
-            .Take(1)
-            .Select(stored => AsObjectElement(stored?.Content))
-            .DefaultIfEmpty(null)
-            .Catch((Exception ex) =>
-            {
-                _logger.LogWarning(ex,
-                    "ContentSchemaGuard: could not read the stored source '{Source}' of a relocation — "
-                    + "the relocated content is judged as a new write.", path);
-                return Observable.Return<JsonElement?>(null);
-            });
+        if (context.Operation != NodeOperation.Create
+            || context.RelocatedFrom is not { } source
+            || string.Equals(source.Path, context.Node.Path, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(source.NodeType, context.Node.NodeType, StringComparison.OrdinalIgnoreCase)
+            || AsObjectElement(source.Content) is not { } stored
+            || AsObjectElement(context.Node.Content) is not { } proposed)
+            return null;
+        return JsonElement.DeepEquals(stored, proposed) ? source.Path : null;
     }
 
     /// <summary>The judgement and the one-line reason a refusal is logged with.</summary>

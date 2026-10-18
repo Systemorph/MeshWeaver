@@ -98,31 +98,67 @@ public class MoveRelocatesLegacyContentTest(ITestOutputHelper output) : Monolith
     }
 
     /// <summary>
-    /// The exemption is the SOURCE's content and nothing else: a relocation create carrying a dead
-    /// letter that differs from what storage holds at the source is new content and is refused, and
-    /// the same create without a relocation source is refused too. The positive case is asked of the
-    /// same guard instance, so a guard that admitted every relocation fails here.
+    /// The exemption is the VERIFIED source's content and nothing else: the create handler's
+    /// <see cref="NodeValidationContext.RelocatedFrom"/>, never the message's
+    /// <see cref="CreateNodeRequest.AuthorshipFrom"/> claim. A relocation carrying content that differs
+    /// from the source is new content; a source of another NodeType proves nothing about this one; and
+    /// a request that merely NAMES a source (no verified source) is an ordinary create. The positive
+    /// case is asked of the same guard, so a guard that admitted every relocation fails here.
     /// </summary>
     [Fact(Timeout = 120_000)]
-    public async Task ARelocationIsAdmittedOnlyForTheSourcesStoredContent()
+    public async Task ARelocationIsAdmittedOnlyForTheVerifiedSourcesStoredContent()
     {
         var ct = TestContext.Current.CancellationToken;
         await ActivateTheNodeType(ct);
-        var source = NewPath("legacy");
+        var source = Legacy(NewPath("legacy"), LegacyJson);
         var target = NewPath("inbox");
-        await StoreBypassingTheGuard(source, LegacyJson, ct);
         var guard = new ContentSchemaValidator(Mesh, NullLogger<ContentSchemaValidator>.Instance);
 
-        var carried = await Judge(guard, target, LegacyJson, source, ct);
-        carried.IsValid.Should().BeTrue("the relocated content IS the source's stored content");
+        (await Judge(guard, target, LegacyJson, source, ct)).IsValid
+            .Should().BeTrue("the relocated content IS the verified source's stored content");
 
         var altered = await Judge(guard, target,
             """{"$type":"Feedback","title":"Legacy report","message":"something else"}""", source, ct);
         altered.IsValid.Should().BeFalse("content the source does not hold is a new write of a refused shape");
         altered.ErrorMessage.Should().Contain("'Feedback'");
 
-        var plain = await Judge(guard, target, LegacyJson, relocatedFrom: null, ct);
-        plain.IsValid.Should().BeFalse("without a relocation source the same content is an ordinary create");
+        (await Judge(guard, target, LegacyJson, source with { NodeType = "FreeForm" }, ct)).IsValid
+            .Should().BeFalse("a source of another NodeType proves nothing about content of this one");
+
+        var claimOnly = Legacy(target, LegacyJson);
+        (await guard.Validate(new NodeValidationContext
+                {
+                    Operation = NodeOperation.Create,
+                    Node = claimOnly,
+                    Request = new CreateNodeRequest(claimOnly) { AuthorshipFrom = source.Path },
+                })
+                .Take(1).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))
+            .IsValid.Should().BeFalse("AuthorshipFrom is a caller's claim; without a verified source nothing is exempted");
+    }
+
+    /// <summary>
+    /// The attack the review on #6971 named, end to end: store the refused shape under a PERMISSIVE
+    /// NodeType (one that declares no content type, so nothing judges it), then create a typed node
+    /// naming that record as its relocation source. The create handler verifies the source and finds
+    /// another NodeType, so no relocation is granted and the guard refuses the content.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ACreateNamingASourceOfAnotherNodeType_IsNotExempted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await ActivateTheNodeType(ct);
+        var decoy = NewPath("decoy");
+        await Storage.Write(Legacy(decoy, LegacyJson) with { NodeType = "FreeForm" }, Mesh.JsonSerializerOptions)
+            .Take(1).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var target = Legacy(NewPath("smuggled"), LegacyJson);
+
+        var reply = await ObserveNodeOperation(new CreateNodeRequest(target) { AuthorshipFrom = decoy })
+            .Select(d => d.Message)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        reply.Success.Should().BeFalse("naming a record of another type as the 'source' must not bypass content validation");
+        reply.Error.Should().Contain("'Feedback'");
+        (await StoredAt(target.Path, ct)).Should().BeNull();
     }
 
     /// <summary>
@@ -152,14 +188,15 @@ public class MoveRelocatesLegacyContentTest(ITestOutputHelper output) : Monolith
     }
 
     private Task<NodeValidationResult> Judge(
-        ContentSchemaValidator guard, string path, string contentJson, string? relocatedFrom, CancellationToken ct)
+        ContentSchemaValidator guard, string path, string contentJson, MeshNode? relocatedFrom, CancellationToken ct)
     {
         var node = Legacy(path, contentJson);
         return guard.Validate(new NodeValidationContext
             {
                 Operation = NodeOperation.Create,
                 Node = node,
-                Request = new CreateNodeRequest(node) { AuthorshipFrom = relocatedFrom },
+                Request = new CreateNodeRequest(node) { AuthorshipFrom = relocatedFrom?.Path },
+                RelocatedFrom = relocatedFrom,
             })
             .Take(1)
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
