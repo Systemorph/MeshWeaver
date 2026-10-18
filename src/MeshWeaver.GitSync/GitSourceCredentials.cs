@@ -17,7 +17,20 @@ namespace MeshWeaver.GitSync;
 /// <param name="InstallationOwner">The account whose GitHub App installation mints the token
 /// (<c>Sources:N:InstallationOwner</c>), or null.</param>
 public sealed record GitSourceCredential(
-    string SourceName, string RepositoryUrl, string? TokenKey, string? InstallationOwner);
+    string SourceName, string RepositoryUrl, string? TokenKey, string? InstallationOwner)
+{
+    /// <summary>
+    /// True when the repository is read with the instance's OWN GitHub App
+    /// (<see cref="GitHubAppTokenService.GetInstanceAppInstallationToken"/>) — an instance-local
+    /// package source while that App is connected, or a configured source declaring
+    /// <c>Identity = instance</c> (<see cref="GitSourceCredentials.InstanceIdentity"/>).
+    /// </summary>
+    public bool InstanceApp { get; init; }
+
+    /// <summary>A stated <c>Identity</c> this reader does not know (anything but
+    /// <see cref="GitSourceCredentials.InstanceIdentity"/>) — refused by name, never ignored.</summary>
+    public string? UnknownIdentity { get; init; }
+}
 
 /// <summary>
 /// A git source DECLARED a credential and that credential could not be produced — the declared
@@ -76,9 +89,15 @@ public sealed class GitSourceCredentials
     /// <summary>The configuration list the declarations are read from.</summary>
     public const string SourcesSection = "PluginCatalog:Sources";
 
+    /// <summary>The value of <c>PluginCatalog:Sources:N:Identity</c> that reads the repository with
+    /// the instance's OWN GitHub App (<c>Doc/Architecture/InstanceRepositoryAccess</c>).</summary>
+    public const string InstanceIdentity = "instance";
+
     private readonly IConfiguration? configuration;
     private readonly GitHubAppTokenService? appTokens;
     private readonly ILogger? logger;
+    private readonly Func<string?, InstancePackageSourceContent?>? instanceSource;
+    private readonly Func<IObservable<System.Reactive.Unit>>? instanceReady;
 
     /// <summary>Initializes the reader.</summary>
     /// <param name="configuration">The instance configuration carrying <see cref="SourcesSection"/>;
@@ -89,10 +108,30 @@ public sealed class GitSourceCredentials
         IConfiguration? configuration,
         GitHubAppTokenService? appTokens = null,
         ILogger<GitSourceCredentials>? logger = null)
+        : this(configuration, appTokens, instanceSource: null, logger)
+    {
+    }
+
+    /// <summary>Initializes the reader with the instance's own package sources beside the configured ones.</summary>
+    /// <param name="configuration">The instance configuration carrying <see cref="SourcesSection"/>.</param>
+    /// <param name="appTokens">The GitHub App identities (the deployment's, and the instance's own).</param>
+    /// <param name="instanceSource">Finds the instance-local source for a repository
+    /// (<see cref="InstancePackageSourceCatalog.For"/>); null when the host keeps none.</param>
+    /// <param name="logger">Optional logger.</param>
+    /// <param name="instanceReady">Emits once the instance's sources and App have been read; null
+    /// treats them as read.</param>
+    public GitSourceCredentials(
+        IConfiguration? configuration,
+        GitHubAppTokenService? appTokens,
+        Func<string?, InstancePackageSourceContent?>? instanceSource,
+        ILogger<GitSourceCredentials>? logger = null,
+        Func<IObservable<System.Reactive.Unit>>? instanceReady = null)
     {
         this.configuration = configuration;
         this.appTokens = appTokens;
+        this.instanceSource = instanceSource;
         this.logger = logger;
+        this.instanceReady = instanceReady;
     }
 
     /// <summary>
@@ -101,7 +140,12 @@ public sealed class GitSourceCredentials
     /// uses its default identity exactly as before. Read from configuration on every call, so the
     /// answer follows a reloaded configuration. The first source naming the repository decides.
     /// </summary>
-    public GitSourceCredential? For(string? repositoryUrl)
+    public GitSourceCredential? For(string? repositoryUrl) =>
+        ConfiguredFor(repositoryUrl) ?? InstanceFor(repositoryUrl);
+
+    /// <summary>The credential a CONFIGURED source declares for the repository, or null. Synchronous:
+    /// configuration is always read.</summary>
+    private GitSourceCredential? ConfiguredFor(string? repositoryUrl)
     {
         if (configuration is null || NormalizeRepository(repositoryUrl) is not { Length: > 0 } wanted)
             return null;
@@ -115,11 +159,48 @@ public sealed class GitSourceCredentials
             // the empty key and refused by name in Token.
             var tokenKey = source["TokenKey"] is { } stated ? stated.Trim() : null;
             var owner = Blank(source["InstallationOwner"]);
-            if (tokenKey is null && owner is null)
+            // An Identity that is stated is a declaration: `instance` asks for the instance's own App,
+            // and anything else is kept VERBATIM and refused by name in Token — a misspelling must
+            // never silently fall back to the deployment's App or to anonymous access.
+            var identity = Blank(source["Identity"]);
+            var instance = string.Equals(identity, InstanceIdentity, StringComparison.OrdinalIgnoreCase);
+            if (tokenKey is null && owner is null && identity is null)
                 return null;
             return new GitSourceCredential(
-                Blank(source["Name"]) ?? source["RepoPath"]!.Trim(), source["RepoPath"]!.Trim(), tokenKey, owner);
+                Blank(source["Name"]) ?? source["RepoPath"]!.Trim(), source["RepoPath"]!.Trim(), tokenKey, owner)
+            {
+                InstanceApp = instance,
+                UnknownIdentity = identity is not null && !instance ? identity : null,
+            };
         }
+        return null;
+    }
+
+    /// <summary>Whether ANY configured source names the repository — with or without a credential.
+    /// A repository the deployment configures keeps the deployment's identity: an instance-local
+    /// source for the same repository never switches it to the instance App.</summary>
+    private bool IsConfiguredRepository(string? repositoryUrl) =>
+        configuration is not null
+        && NormalizeRepository(repositoryUrl) is { Length: > 0 } wanted
+        && configuration.GetSection(SourcesSection).GetChildren().Any(source =>
+            string.Equals(NormalizeRepository(source["RepoPath"]), wanted, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>The instance App for an instance-local source while it is connected, else null.</summary>
+    private GitSourceCredential? InstanceFor(string? repositoryUrl)
+    {
+        if (IsConfiguredRepository(repositoryUrl))
+            return null;
+        // 🚨 The instance's OWN sources, AFTER the configured ones: a repository the deployment
+        // record declares is read as the record says (policy declared-not-derived). An instance
+        // source is read with the instance's own App while it is connected — also on an instance
+        // that has the deployment's App, because the instance App is what its administrator
+        // installed on that repository. Without a connected instance App it declares nothing, and
+        // the caller's default identity applies exactly as for any undeclared repository.
+        if (instanceSource?.Invoke(repositoryUrl) is { } local && appTokens is { HasInstanceApp: true })
+            return new GitSourceCredential(InstancePackageSources.NameOf(local), local.Repo, null, null)
+            {
+                InstanceApp = true,
+            };
         return null;
     }
 
@@ -130,6 +211,32 @@ public sealed class GitSourceCredentials
     /// </summary>
     public IObservable<string>? TokenFor(string? repositoryUrl) =>
         For(repositoryUrl) is { } declared ? Token(declared) : null;
+
+    /// <summary>
+    /// The WHOLE per-repository choice, reactive: the credential a configured source declares; else —
+    /// once the instance's own sources and App have been READ (never from a cold replica's empty
+    /// catalogs) — the instance App for an instance-local source; else <paramref name="fallback"/>
+    /// (the caller's default identity). Cold; decided on each subscription. What every reader of a
+    /// repository uses, so a declaration is never skipped because a catalog had not loaded yet.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="fallback">The caller's default identity when nothing is declared for it.</param>
+    public IObservable<string> TokenOrDefault(string? repositoryUrl, Func<IObservable<string>> fallback) =>
+        Observable.Defer(() => ConfiguredFor(repositoryUrl) is { } configured
+            ? Token(configured)
+            : IsConfiguredRepository(repositoryUrl)
+                ? fallback()
+            : (instanceReady?.Invoke() ?? Observable.Return(System.Reactive.Unit.Default))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "[GitSourceCredentials] the instance's own sources could not be read within 30 s; "
+                        + "{Repository} is read with the default identity.", repositoryUrl);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                })
+                .SelectMany(_ => For(repositoryUrl) is { } declared ? Token(declared) : fallback()));
 
     /// <summary>
     /// The token for a declared credential. Faults with <see cref="GitSourceCredentialException"/>
@@ -146,6 +253,25 @@ public sealed class GitSourceCredentials
             return Refuse(GitSyncRefusal.Of(
                 "gitsync.source.tokenKeyBlank",
                 ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
+
+        if (declared.UnknownIdentity is { } unknown)
+            return Refuse(GitSyncRefusal.Of(
+                "gitsync.source.unknownIdentity",
+                ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("identity", unknown)));
+
+        if (declared.InstanceApp && (declared.TokenKey is not null || declared.InstallationOwner is { Length: > 0 }))
+            return Refuse(GitSyncRefusal.Of(
+                "gitsync.source.instanceAndOther",
+                ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
+
+        if (declared.InstanceApp)
+            // Decided once the instance App's stores have listed — never on a cold replica's empty read.
+            return (appTokens?.WhenInstanceAppReady ?? Observable.Return(System.Reactive.Unit.Default))
+                .SelectMany(_ => appTokens is { HasInstanceApp: true }
+                    ? appTokens.GetInstanceAppInstallationToken()
+                    : Refuse(GitSyncRefusal.Of(
+                        "gitsync.source.instanceAppNotConnected",
+                        ("source", declared.SourceName), ("url", declared.RepositoryUrl))));
 
         if (declared.TokenKey is { Length: > 0 } && declared.InstallationOwner is { Length: > 0 })
             return Refuse(GitSyncRefusal.Of(
@@ -166,11 +292,14 @@ public sealed class GitSourceCredentials
         }
 
         var owner = declared.InstallationOwner!;
-        return appTokens is { IsConfigured: true }
-            ? appTokens.GetInstallationToken(owner)
-            : Refuse(GitSyncRefusal.Of(
-                "gitsync.source.appNotConfigured",
-                ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("owner", owner)));
+        // Decided once the App identity can be (a cold replica's persisted instance App is not
+        // "absent"); a token-key credential above stays immediate.
+        return (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default))
+            .SelectMany(_ => appTokens is { IsConfigured: true }
+                ? appTokens.GetInstallationToken(owner)
+                : Refuse(GitSyncRefusal.Of(
+                    "gitsync.source.appNotConfigured",
+                    ("source", declared.SourceName), ("url", declared.RepositoryUrl), ("owner", owner))));
     });
 
     private IObservable<string> Refuse(GitSyncRefusal refusal)

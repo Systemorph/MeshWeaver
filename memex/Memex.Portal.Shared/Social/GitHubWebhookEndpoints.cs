@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Memex.Portal.Shared.Social;
@@ -50,10 +51,36 @@ public static class GitHubWebhookEndpoints
         {
             var logger = loggers.CreateLogger("GitHubWebhook");
 
+            // Two secrets may sign a delivery: the deployment's shared webhook secret, and the
+            // instance's OWN GitHub App's (Doc/Architecture/InstanceRepositoryAccess), which GitHub
+            // generated when the App was created and signs the App's push deliveries with. Either may
+            // be absent; with neither there is nothing to verify against.
             var secret = config["GitHub:Webhook:Secret"];
-            if (string.IsNullOrEmpty(secret))
+            // The App's secret is read from catalogs that load lazily: on a cold replica their first
+            // read is empty, so wait for their first full listing — bounded, and with the request's
+            // cancellation — or the first delivery after a start is refused although the secret is stored.
+            var meshServices = http.RequestServices.GetService<MeshWeaver.Hosting.AspNetCore.Portal.PortalApplication>()?
+                .Hub.ServiceProvider;
+            if (meshServices is not null)
+                await InstanceGitHubApp.WhenReadable(meshServices)
+                    .Timeout(TimeSpan.FromSeconds(10))
+                    .Catch((Exception ex) =>
+                    {
+                        logger.LogWarning(ex,
+                            "GitHub webhook: the instance's GitHub App could not be read in time; verifying "
+                            + "against the deployment's secret only.");
+                        return Observable.Return(System.Reactive.Unit.Default);
+                    })
+                    .FirstAsync()
+                    .ObserveCompletion(
+                        ex => logger.LogWarning(ex, "GitHub webhook: waiting for the App's stores faulted"),
+                        http.RequestAborted);
+            var appSecret = meshServices is null ? null : InstanceGitHubApp.WebhookSecret(meshServices);
+            if (string.IsNullOrEmpty(secret) && string.IsNullOrEmpty(appSecret))
             {
-                logger.LogWarning("GitHub webhook received but no secret is configured (GitHub:Webhook:Secret).");
+                logger.LogWarning(
+                    "GitHub webhook received but no secret is configured (GitHub:Webhook:Secret) and no "
+                    + "instance GitHub App is connected.");
                 return Results.StatusCode(503);
             }
 
@@ -106,7 +133,8 @@ public static class GitHubWebhookEndpoints
             }
 
             var signature = http.Request.Headers["X-Hub-Signature-256"].ToString();
-            if (!GitHubWebhookProcessor.VerifySignature(secret, body, signature))
+            if (!(!string.IsNullOrEmpty(secret) && GitHubWebhookProcessor.VerifySignature(secret, body, signature))
+                && !(!string.IsNullOrEmpty(appSecret) && GitHubWebhookProcessor.VerifySignature(appSecret, body, signature)))
             {
                 logger.LogWarning("GitHub webhook signature verification failed ({Bytes} bytes).", body.Length);
                 return Results.Unauthorized();
