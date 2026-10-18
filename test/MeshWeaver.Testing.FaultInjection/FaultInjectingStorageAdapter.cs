@@ -45,6 +45,9 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly IStorageAdapter _inner;
     private readonly ConcurrentDictionary<string, FaultSwitch> _writeHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _hidden = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _deleteHolds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _enumerationHolds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
@@ -86,6 +89,48 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _writeHolds.GetOrAdd(key, k => new FaultSwitch($"{Name}: hold writes of {k}",
             s => _writeHolds.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every delete of <paramref name="path"/> that reaches this adapter (<c>Delete</c>,
+    /// <c>DeleteIfExists</c>, <c>DeleteIfVersionAtMost</c>, a <c>DeleteMany</c> naming it) waits until the
+    /// returned switch is released, and is then decided by the store underneath — atomically, as it
+    /// would have been. It pauses a delete AFTER every check it made (the owner's verdict included) and
+    /// before its commit lands (MeshWeaver#6856). Each held delete is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose deletes to hold.</param>
+    public FaultSwitch HoldDeletes(string path)
+    {
+        var key = Norm(path);
+        return _deleteHolds.GetOrAdd(key, k => new FaultSwitch($"{Name}: hold deletes of {k}",
+            s => _deleteHolds.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every compare-and-set (<c>WriteIfVersion</c>) of <paramref name="path"/> FAULTS
+    /// until the returned switch is released — a store that cannot be reached for the conditional write
+    /// (MeshWeaver#6856, the owner-teardown store fence). Each faulted call is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose conditional writes fault.</param>
+    public FaultSwitch FailConditionalWrites(string path)
+    {
+        var key = Norm(path);
+        return _conditionalWriteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail conditional writes of {k}",
+            s => _conditionalWriteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every subtree enumeration of <paramref name="path"/> (<c>ListChildPaths</c> /
+    /// <c>ListDescendantPaths</c>) waits until the returned switch is released. A delete plans its
+    /// paths with one, AFTER the owner's version verdict, so this pauses a delete between that verdict
+    /// and its has-children decision. Each held enumeration is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose enumerations to hold.</param>
+    public FaultSwitch HoldEnumerations(string path)
+    {
+        var key = Norm(path);
+        return _enumerationHolds.GetOrAdd(key, k => new FaultSwitch($"{Name}: hold enumerations of {k}",
+            s => _enumerationHolds.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -213,20 +258,31 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-        => HeldWrite(node, () => _inner.WriteIfVersion(node, expectedVersion, options));
+        => Observable.Defer(() =>
+        {
+            if (_conditionalWriteFaults.TryGetValue(Norm(node.Path), out var fault) && fault.IsClosed)
+            {
+                fault.NoteArrival($"WriteIfVersion {node.Path} v{node.Version}");
+                return Observable.Throw<bool?>(new InvalidOperationException(
+                    $"{Name}: injected fault — the conditional write of {node.Path} could not reach the store"));
+            }
+            return HeldWrite(node, () => _inner.WriteIfVersion(node, expectedVersion, options));
+        });
 
     /// <inheritdoc />
-    public IObservable<string> Delete(string path) => _inner.Delete(path);
+    public IObservable<string> Delete(string path) => HeldDelete([path], () => _inner.Delete(path));
 
     /// <inheritdoc />
-    public IObservable<bool> DeleteIfExists(string path) => _inner.DeleteIfExists(path);
+    public IObservable<bool> DeleteIfExists(string path) => HeldDelete([path], () => _inner.DeleteIfExists(path));
 
     /// <inheritdoc />
+    /// <remarks>Held, then decided ATOMICALLY by the store underneath once released.</remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-        => _inner.DeleteIfVersionAtMost(path, maxVersion, options);
+        => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options));
 
     /// <inheritdoc />
-    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths) => _inner.DeleteMany(paths);
+    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
+        => HeldDelete(paths, () => _inner.DeleteMany(paths));
 
     /// <inheritdoc />
     public IObservable<string?> FindDeleteBlockingProvider(string path) => _inner.FindDeleteBlockingProvider(path);
@@ -236,7 +292,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => Observable.Defer(() =>
         {
             NoteEnumeration(parentPath, nameof(ListChildPaths));
-            return _inner.ListChildPaths(parentPath).Select(listing => (
+            return HeldEnumeration(parentPath, nameof(ListChildPaths), _inner.ListChildPaths(parentPath)).Select(listing => (
                 (IEnumerable<string>)listing.NodePaths.Where(p => Visible(p, $"ListChildPaths {parentPath}")).ToList(),
                 (IEnumerable<string>)listing.DirectoryPaths.Where(p => Visible(p, $"ListChildPaths {parentPath}")).ToList()));
         });
@@ -246,7 +302,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => Observable.Defer(() =>
         {
             NoteEnumeration(rootPath, nameof(ListDescendantPaths));
-            return _inner.ListDescendantPaths(rootPath)
+            return HeldEnumeration(rootPath, nameof(ListDescendantPaths), _inner.ListDescendantPaths(rootPath))
                 .Select(set => (IReadOnlyCollection<string>)set.Where(p => Visible(p, $"ListDescendantPaths {rootPath}")).ToList());
         });
 
@@ -330,6 +386,22 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
             HeldWriteSubject(Norm(node.Path)).OnNext(node);
             return hold.Gate(Observable.Defer(write), $"Write {node.Path} v{node.Version}");
         });
+
+    /// <remarks>Every closed hold on any of <paramref name="paths"/> holds the delete: after one is
+    /// released the check runs again, so a batch waits until the last of its holds is released.</remarks>
+    private IObservable<T> HeldDelete<T>(IReadOnlyCollection<string> paths, Func<IObservable<T>> delete)
+        => Observable.Defer(() =>
+        {
+            foreach (var path in paths)
+                if (_deleteHolds.TryGetValue(Norm(path), out var hold) && hold.IsClosed)
+                    return hold.Gate(HeldDelete(paths, delete), $"Delete {Norm(path)}");
+            return delete();
+        });
+
+    private IObservable<T> HeldEnumeration<T>(string? path, string call, IObservable<T> enumeration)
+        => _enumerationHolds.TryGetValue(Norm(path), out var hold) && hold.IsClosed
+            ? hold.Gate(enumeration, $"{call} {Norm(path)}")
+            : enumeration;
 
     private FaultSwitch? HiddenBy(string? path) => HiddenRoot(path)?.Fault;
 

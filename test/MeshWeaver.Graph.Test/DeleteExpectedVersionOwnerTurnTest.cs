@@ -381,43 +381,50 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     }
 
     /// <summary>
-    /// THE SEAL: while a guarded delete of the path is in flight, the owner refuses an own write in
-    /// its commit turn instead of acknowledging it. Without the seal the write would be acknowledged
-    /// and then removed by the delete the comparison already let through.
+    /// THE SEAL: while a guarded delete of the path is in flight, the owner DEFERS an own write in its
+    /// commit turn instead of acknowledging it (#6856) — acknowledged, the write would be removed by the
+    /// delete the comparison already let through. Lifting the seal without a delete (the scope ends,
+    /// nothing was tombstoned) re-runs the turn, and the same write is then applied.
     /// </summary>
     [Fact]
-    public async Task AnOwnWrite_IsRefused_WhileAGuardedDeleteOfThePathIsInFlight()
+    public async Task AnOwnWrite_IsDeferred_WhileAGuardedDeleteOfThePathIsInFlight_AndAppliedWhenTheSealLifts()
     {
         var node = await Seed("owner-turn-seal");
         var owner = await OwnerOf(node.Path);
         var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
 
+        IConnectableObservable<System.Reactive.Notification<MeshNode>> write;
+        IDisposable connection;
         using (registry.BeginVersionGuardedDeletion(node.Path))
         {
-            var refused = await owner.GetWorkspace().GetMeshNodeStream()
+            write = owner.GetWorkspace().GetMeshNodeStream()
                 .Update(n => n with { Name = "after the comparison" })
                 .Materialize()
                 .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
-                .Should().Within(TestTimeouts.Convergence).Emit("the write answers", cancellationToken: Ct);
-            refused.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
-                "a write the guarded delete would remove is refused, never acknowledged");
-            refused.Exception.Should().BeOfType<SubtreeDeletionInFlightException>();
+                .Replay();
+            connection = write.Connect();
+            await write.Should().NotEmit(TimeSpan.FromSeconds(1),
+                "a write the guarded delete would remove is neither acknowledged nor refused while the seal holds",
+                Ct);
         }
 
-        // Control: the seal is lifted with its scope and the same write is acknowledged.
-        await owner.GetWorkspace().GetMeshNodeStream()
-            .Update(n => n with { Name = "after the delete gave up" })
-            .Should().Within(TestTimeouts.Convergence).Emit("no seal, no refusal", cancellationToken: Ct);
+        using (connection)
+        {
+            var answer = await write.Should().Within(TestTimeouts.Convergence)
+                .Emit("the seal lifted with nothing deleted, so the deferred write runs", Ct);
+            answer.Kind.Should().Be(System.Reactive.NotificationKind.OnNext, answer.Exception?.Message ?? "the seal lifted");
+            answer.Value!.Name.Should().Be("after the comparison");
+        }
     }
 
     /// <summary>
-    /// THE SEAL'S WIRING (#6750): a REAL guarded <see cref="DeleteNodeRequest"/>, paused at the store
-    /// after the owner's verdict, keeps the owner's own writes refused until it completes. Removing
-    /// the <c>BeginVersionGuardedDeletion</c> half of the delete handler's scope turns this red: the
-    /// write is then acknowledged by the owner and removed by the delete that already passed its check.
+    /// THE SEAL'S WIRING (#6750, #6856): a REAL guarded <see cref="DeleteNodeRequest"/>, paused at the
+    /// store after the owner's verdict, keeps the owner's own writes deferred until it completes, and its
+    /// commit then refuses them. Without the seal the write is acknowledged by the owner and removed by
+    /// the delete that already passed its check.
     /// </summary>
     [Fact]
-    public async Task AGuardedDelete_RefusesTheOwnersOwnWrites_FromItsVerdictUntilItCompletes()
+    public async Task AGuardedDelete_DefersTheOwnersOwnWrites_FromItsVerdict_AndRefusesThemOnCommit()
     {
         var node = await Seed("owner-turn-wired-seal");
         var owner = await OwnerOf(node.Path);
@@ -425,28 +432,88 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         _storage.HoldDeletesOf(node.Path);
         var delete = ObserveNodeOperation(new DeleteNodeRequest(node.Path) { ExpectedVersion = read }).Replay(1);
         using var connection = delete.Connect();
+        var write = owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "written after the verdict" })
+            .Materialize()
+            .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
+            .Replay();
+        IDisposable writeConnection;
         try
         {
             await _storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
                 .Emit("the guarded delete passed the owner's verdict and reached the store", cancellationToken: Ct);
 
-            var refused = await owner.GetWorkspace().GetMeshNodeStream()
-                .Update(n => n with { Name = "written after the verdict" })
-                .Materialize()
-                .Where(n => n.Kind != System.Reactive.NotificationKind.OnCompleted)
-                .Should().Within(TestTimeouts.Convergence).Emit("the write answers", cancellationToken: Ct);
-            Output.WriteLine($"[own write] {refused.Kind} {refused.Exception?.GetType().Name}: {refused.Exception?.Message}");
-            refused.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
-                "the guarded delete in flight has already decided; a write it would remove is refused");
-            refused.Exception.Should().BeOfType<SubtreeDeletionInFlightException>();
+            writeConnection = write.Connect();
+            await write.Should().NotEmit(TimeSpan.FromSeconds(1),
+                "the guarded delete in flight has already decided; a write it would remove is deferred", Ct);
         }
         finally
         {
             _storage.ReleaseDelete();
         }
 
-        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", Ct)).Message;
-        response.Success.Should().BeTrue(response.Error ?? "the deleter named the version the owner holds");
+        using (writeConnection)
+        {
+            var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", Ct)).Message;
+            response.Success.Should().BeTrue(response.Error ?? "the deleter named the version the owner holds");
+
+            var refused = await write.Should().Within(TestTimeouts.Convergence)
+                .Emit("the deferred write is answered once the delete commits", Ct);
+            Output.WriteLine($"[own write] {refused.Kind} {refused.Exception?.GetType().Name}: {refused.Exception?.Message}");
+            refused.Kind.Should().Be(System.Reactive.NotificationKind.OnError,
+                "the node is deleted: the deferred write is refused, never acknowledged");
+            // In one process the delete also disposes the owner it removed, so the refusal is either
+            // the seal's (SubtreeDeletionInFlightException) or the dying stream's own
+            // (ObjectDisposedException), whichever reaches the write first. Both say "not written".
+            (refused.Exception is SubtreeDeletionInFlightException or ObjectDisposedException).Should().BeTrue(
+                $"the write is refused, not failed for another reason ({refused.Exception?.GetType().Name})");
+            (await _storage.Exists(node.Path).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: Ct))
+                .Should().BeFalse("nothing deferred by the seal stored the node again");
+        }
+    }
+
+    /// <summary>
+    /// #6856 review: an own write ACKNOWLEDGED just before the owner took a delete seal reaches the
+    /// persistence sampler while the path is sealed, and the owner's row guard refuses that save. When
+    /// the delete then ABORTS and nothing else changes the node, the refused save must be re-dispatched
+    /// — before, it stayed pending until the next change or the dispose flush, so an acknowledged state
+    /// was not durable for as long as the node stayed quiet.
+    /// </summary>
+    [Fact]
+    public async Task AnAcknowledgedSaveRefusedWhileSealed_IsStored_WhenTheDeleteAborts()
+    {
+        var node = await Seed("owner-seal-resume");
+        var owner = await OwnerOf(node.Path);
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+        var stored = (await Stored(node.Path))!.Version;
+
+        // Sealed IN the acknowledgement's own emission — synchronously, before the test continuation
+        // or the sampler's next tick can run — so the sampled save of this write meets the row guard.
+        var sealedOnAck = false;
+        var acked = await owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "acknowledged before the seal" })
+            .Do(_ => sealedOnAck = registry.TakeOwnerDeleteSeal(
+                "resume-seal", node.Path, owner.RegisterForDisposalDetachable))
+            .Should().Within(TestTimeouts.Convergence).Emit("an own write is acknowledged from memory", Ct);
+        sealedOnAck.Should().BeTrue();
+        try
+        {
+            await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+                .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+                .Where(n => n?.Version >= acked.Version)
+                .Should().NotEmit(TimeSpan.FromSeconds(1), "the sealed row refuses the sampled save", Ct);
+        }
+        finally
+        {
+            registry.ReleaseOwnerDeleteSeal("resume-seal", node.Path, DeleteSealOutcome.Aborted);
+        }
+
+        var persisted = await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Name == "acknowledged before the seal")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the abort re-dispatches the refused save, with no further change to the node", Ct);
+        persisted!.Version.Should().BeGreaterThan(stored);
     }
 
     /// <summary>
