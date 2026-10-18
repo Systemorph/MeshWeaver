@@ -277,6 +277,32 @@ public class SettingsUseStandardControlsTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
+    /// The home-page editor (the user node's <c>Edit</c> area): its heading is an H4 label and its
+    /// "saved automatically" line a <see cref="Controls.Hint"/>, around the platform's Markdown editor.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheHomeEditor_IsComposedOfStandardControls()
+    {
+        TestUsers.DevLogin(Mesh, new AccessContext
+            { ObjectId = Person, Name = "Standard Controls Person", Email = $"{Person}@meshweaver.io" });
+        var frame = await GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(new Address(Person),
+                new LayoutAreaReference(MeshNodeLayoutAreas.EditArea))
+            .Select(change => change.Value)
+            .Should().Within(Budget)
+            .Match(f => Areas(f).Any(a => TypeOf(a.Control) == nameof(MarkdownEditorControl))
+                    && Areas(f).Any(a => TypeOf(a.Control) == nameof(LabelControl)
+                        && a.Control.TryGetProperty("data", out var d) && d.GetString() == "Edit your home page"),
+                "the home editor renders its header and editor", TestContext.Current.CancellationToken);
+
+        NonStandard(frame).Should().BeEmpty("the home editor holds no hand-built markup");
+        Areas(frame).Should().Contain(a => TypeOf(a.Control) == nameof(LabelControl)
+                && a.Control.TryGetProperty("data", out var d) && d.GetString() == "Changes are saved automatically"
+                && a.Control.TryGetProperty("color", out var c) && c.GetString() == Controls.HintColor,
+            "the autosave note is a hint label");
+    }
+
+    /// <summary>
     /// The API tokens and Connected instances forms are platform cards (<see cref="CardSkin"/>), not
     /// inline-styled boxes.
     /// </summary>

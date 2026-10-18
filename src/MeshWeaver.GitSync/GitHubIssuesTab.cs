@@ -96,24 +96,23 @@ public static class GitHubIssuesTab
         var spacePath = SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Html("<p><em>GitHub Issues are available inside a Space.</em></p>"));
+            return stack.WithView(GitSyncViews.Hint("GitHub Issues are available inside a Space."));
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.githubIssuesPrs")).WithStyle("margin:0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">" +
+        stack = stack.WithView(GitSyncViews.Note(
             "Browse and act on the configured repository's issues and pull requests. Set the repository " +
-            "and connect GitHub in the <strong>GitHub Sync</strong> tab first.</p>"));
+            "and connect GitHub in the **GitHub Sync** tab first."));
 
         // ── Issues ─────────────────────────────────────────────────────────────
-        stack = stack.WithView(Section("Issues"));
+        stack = stack.WithView(GitSyncViews.Section("Issues"));
         stack = stack.WithView(Controls.Button(host.Localize("ui.syncIssues"))
             .WithAppearance(Appearance.Accent)
             .WithClickAction(c =>
             {
-                c.Host.UpdateData(ResultId, Pending("Syncing issues from GitHub…"));
+                c.Host.UpdateData(ResultId, ActionNotice.Info("Syncing issues from GitHub…"));
                 c.Host.Hub.SyncIssuesFromGitHub(spacePath, userId,
                         onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
-                    .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
+                    .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 return Task.CompletedTask;
             }));
 
@@ -129,7 +128,7 @@ public static class GitHubIssuesTab
             .Subscribe(
                 rows => host.UpdateData(IssuesGridId, rows),
                 // Surface a faulted synced query instead of a silently-frozen grid.
-                ex => host.UpdateData(ResultId, Err($"Issue list stopped updating: {ex.Message}"))));
+                ex => host.UpdateData(ResultId, ActionNotice.Error($"Issue list stopped updating: {ex.Message}"))));
         stack = stack.WithView(new DataGridControl(new JsonPointerReference(LayoutAreaReference.GetDataPointer(IssuesGridId)))
             .WithColumn(new PropertyColumnControl<int> { Property = nameof(GitHubIssueRow.Number).ToCamelCase() }.WithTitle("#"))
             .WithColumn(new PropertyColumnControl<string> { Property = nameof(GitHubIssueRow.Title).ToCamelCase() }.WithTitle("Title"))
@@ -142,14 +141,14 @@ public static class GitHubIssuesTab
             .Resizable());
 
         // ── Pull requests ────────────────────────────────────────────────────
-        stack = stack.WithView(Section("Pull requests"));
+        stack = stack.WithView(GitSyncViews.Section("Pull requests"));
         stack = stack.WithView(Controls.Button(host.Localize("ui.refreshPrs"))
             .WithAppearance(Appearance.Outline)
             .WithClickAction(c =>
             {
                 PushPrs(prs, spacePath, userId, viewerZoneId,
                     rows => c.Host.UpdateData(PrGridId, rows),
-                    err => c.Host.UpdateData(ResultId, Err(err)));
+                    err => c.Host.UpdateData(ResultId, ActionNotice.Error(err)));
                 return Task.CompletedTask;
             }));
 
@@ -175,11 +174,7 @@ public static class GitHubIssuesTab
             .Resizable());
 
         // ── Result area ─────────────────────────────────────────────────────
-        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ResultId)
-            .Select(html => string.IsNullOrEmpty(html)
-                ? (UiControl?)Controls.Stack.WithWidth("100%")
-                : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
-            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+        stack = stack.WithView((h, _) => h.NoticeView(ResultId));
 
         return stack;
     }
@@ -210,12 +205,12 @@ public static class GitHubIssuesTab
                     var title = Str(d, "title");
                     if (string.IsNullOrWhiteSpace(title))
                     {
-                        c.Host.UpdateData(ResultId, Err("Enter a title for the new issue."));
+                        c.Host.UpdateData(ResultId, ActionNotice.Error("Enter a title for the new issue."));
                         return;
                     }
                     issues.CreateIssue(spacePath, title, Str(d, "body"), null, userId).Subscribe(
-                        n => c.Host.UpdateData(ResultId, Ok($"Issue created — {n.Name}.")),
-                        ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
+                        n => c.Host.UpdateData(ResultId, ActionNotice.Success($"Issue created — {n.Name}.")),
+                        ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -244,13 +239,13 @@ public static class GitHubIssuesTab
                 {
                     if (!int.TryParse(Str(d, "prNumber"), out var number) || number <= 0)
                     {
-                        c.Host.UpdateData(ResultId, Err("Enter the pull request number to merge."));
+                        c.Host.UpdateData(ResultId, ActionNotice.Error("Enter the pull request number to merge."));
                         return;
                     }
-                    c.Host.UpdateData(ResultId, Pending($"Merging pull request #{number} ({method})…"));
+                    c.Host.UpdateData(ResultId, ActionNotice.Info($"Merging pull request #{number} ({method})…"));
                     c.Host.Hub.MergePullRequestOnGitHub(spacePath, number, method, userId,
                             onActivityCreated: p => c.Host.UpdateData(ActivityPathId, p))
-                        .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, Err(ex.Message)));
+                        .Subscribe(_ => { }, ex => c.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 }).Select(_ => System.Reactive.Unit.Default);
             });
 
@@ -289,20 +284,6 @@ public static class GitHubIssuesTab
 
     // ── Small view helpers ─────────────────────────────────────────────────────
 
-    private static UiControl Section(string title) =>
-        Controls.H3(title).WithStyle("margin:16px 0 8px 0;border-top:1px solid var(--neutral-stroke-divider-rest);padding-top:12px;");
-
     private static string Str(Dictionary<string, object?>? d, string key) =>
         d is not null && d.TryGetValue(key, out var v) && v is not null ? v.ToString() ?? "" : "";
-
-    private static string Ok(string m) =>
-        $"<p style=\"color:#22c55e;font-size:0.85rem;margin:8px 0;\">✓ {Esc(m)}</p>";
-
-    private static string Err(string m) =>
-        $"<p style=\"color:#ef4444;font-size:0.85rem;margin:8px 0;\">✗ {Esc(m)}</p>";
-
-    private static string Pending(string m) =>
-        $"<p style=\"color:var(--neutral-foreground-hint);font-size:0.85rem;margin:8px 0;\">… {Esc(m)}</p>";
-
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
 }
