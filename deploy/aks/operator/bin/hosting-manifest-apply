@@ -1,0 +1,169 @@
+#!/usr/bin/env bash
+# hosting-manifest-apply (check | apply) --manifest <path under deploy/aks/manifests> [--sha256 <hex>]
+#
+# The ONE way a committed cluster manifest — a Namespace, a ServiceAccount, its token, the RBAC that
+# binds it, an admission policy — reaches the cluster: the `ApplyClusterManifest` InstanceAction on the
+# control instance, which the config repository's aks-ops lane runs (Systemorph/Memex aks-ops.yml). The
+# dry run (`check`) is a read and runs unattended; the apply runs only on the lane's MUTATE leg, with a
+# mesh approval that binds the file's sha256. Never from a laptop, never from an operator Job: this
+# script refuses to run anywhere the manifests directory of a MeshWeaver checkout is not beside it, and
+# the operator image carries none.
+#
+#   check  — prints the file's digest (`::hosting:: manifest_digest=sha256:<hex>`, the value the real
+#            request must carry), validates it (below), and asks the API server what an apply WOULD do
+#            (`kubectl apply --dry-run=server`: one `<kind>/<name> created|configured|unchanged` line per
+#            object, never a value). With --sha256, refuses a file that is not those bytes.
+#   apply  — REQUIRES --sha256 and refuses a mismatch, validates, then `kubectl apply` and reports
+#            `::hosting:: manifest_applied=<path>@sha256:<hex>`.
+#
+# 🚨 WHAT THE VALIDATION REFUSES, before anything is sent to the API server. It is a backstop under the
+# approval, not a substitute for reading the file:
+#   * a kind outside Namespace, ServiceAccount, Secret, Role, RoleBinding, ClusterRole, ClusterRoleBinding,
+#     ValidatingAdmissionPolicy, ValidatingAdmissionPolicyBinding;
+#   * a Secret that is not an EMPTY `kubernetes.io/service-account-token` (a credential never lives in a
+#     committed manifest; the token controller fills that one in-cluster);
+#   * a rule with `*` in its verbs, resources or apiGroups, or the verbs escalate / bind / impersonate,
+#     or an aggregated ClusterRole;
+#   * a binding to cluster-admin, admin, edit or any system: role, or to a subject that is not a
+#     ServiceAccount;
+#   * a `<placeholder>` left in the file (a manifest the README says to "edit first" is not applyable
+#     verbatim, and the governed apply applies verbatim or not at all).
+#
+# The path is relative to deploy/aks/manifests and must stay inside it (no `..`, no symlink out).
+# shellcheck source=_common.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-manifest-apply"
+
+mode="${1:-}"
+[ $# -gt 0 ] && shift
+case "$mode" in
+  check|apply) ;;
+  *) hosting::die "the first argument is check or apply, not '${mode}'" ;;
+esac
+manifest="" sha=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --manifest) manifest="${2:-}"; shift 2 ;;
+    --sha256)   sha="${2:-}";      shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+hosting::need_flag manifest "$manifest"
+[[ "$manifest" =~ ^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*\.yaml$ ]] \
+  || hosting::die "--manifest '${manifest}' is not a path under deploy/aks/manifests (lowercase segments, ending .yaml, no '..')"
+sha="${sha#sha256:}"
+[ -z "$sha" ] || [[ "$sha" =~ ^[0-9a-f]{64}$ ]] \
+  || hosting::die "--sha256 must be 64 lowercase hex characters (optionally prefixed sha256:)"
+[ "$mode" = check ] || [ -n "$sha" ] \
+  || hosting::die "apply needs --sha256: the approval binds the file's bytes, and an apply that names none would apply whatever the checkout holds"
+
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed here"
+command -v kubectl >/dev/null 2>&1 || hosting::die "kubectl is not installed here"
+
+root="${HOSTING_MANIFESTS_ROOT:-$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/../../manifests}"
+[ -d "$root" ] \
+  || hosting::die "no manifests directory at ${root}: this command runs from a MeshWeaver checkout (the aks-ops lane checks out deploy/aks/manifests beside the scripts), never in the operator image"
+root_real="$(readlink -f "$root")"
+file="${root_real}/${manifest}"
+[ -f "$file" ] || hosting::die "no manifest at deploy/aks/manifests/${manifest} in this checkout"
+[ ! -L "$file" ] || hosting::die "deploy/aks/manifests/${manifest} is a symlink — refused; the apply reads committed files only"
+file_real="$(readlink -f "$file")"
+case "$file_real" in
+  "${root_real}"/*) ;;
+  *) hosting::die "deploy/aks/manifests/${manifest} resolves outside deploy/aks/manifests" ;;
+esac
+
+if command -v sha256sum >/dev/null 2>&1; then
+  digest="$(sha256sum "$file_real" | cut -d' ' -f1)"
+else
+  digest="$(shasum -a 256 "$file_real" | cut -d' ' -f1)"
+fi
+[[ "$digest" =~ ^[0-9a-f]{64}$ ]] || hosting::die "could not hash deploy/aks/manifests/${manifest}"
+hosting::log "manifest  deploy/aks/manifests/${manifest} (sha256:${digest})"
+hosting::say manifest_digest "sha256:${digest}"
+if [ -n "$sha" ] && [ "$sha" != "$digest" ]; then
+  hosting::die "deploy/aks/manifests/${manifest} at this checkout is sha256:${digest}, and the request names sha256:${sha} — these are not the bytes that were approved. Nothing was applied. Re-run the dry run, read the file at the commit it names, and request the apply with that digest."
+fi
+
+# A placeholder outside a comment: the file is not applyable verbatim.
+if placeholders="$(grep -nE '<[A-Za-z][A-Za-z0-9_-]*>' "$file_real" | grep -vE '^[0-9]+:[[:space:]]*#')" && [ -n "$placeholders" ]; then
+  hosting::die "deploy/aks/manifests/${manifest} still carries a placeholder (line $(printf '%s' "$placeholders" | head -1 | cut -d: -f1)) — the governed apply applies a committed file verbatim; commit the value, or keep the file out of this lane"
+fi
+
+work="$(mktemp -d)" || hosting::die "could not create a working directory"
+trap 'hosting::on_exit; rm -rf "$work"' EXIT
+
+# The objects, as kubectl's own parser reads THE FILE — `create --dry-run=client`, never `apply`: an
+# apply dry run merges in the LIVE object, so a token Secret the controller has filled would read back
+# with its data. Nothing is persisted; the server is asked only for discovery.
+kubectl create --dry-run=client -f "$file_real" -o json > "$work/parsed.json" 2>"$work/err" \
+  || hosting::die "kubectl could not parse deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+jq -s '{kind: "List", items: [.[] | if .kind == "List" then .items[] else . end]}' "$work/parsed.json" > "$work/objects.json" 2>"$work/err" \
+  || hosting::die "could not read the parsed objects of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+[ "$(jq -r '.items | length' "$work/objects.json")" -gt 0 ] \
+  || hosting::die "deploy/aks/manifests/${manifest} holds no object"
+
+problems="$(jq -r '
+  (if .kind == "List" then .items else [.] end) as $objs
+  | ["Namespace","ServiceAccount","Secret","Role","RoleBinding","ClusterRole","ClusterRoleBinding",
+     "ValidatingAdmissionPolicy","ValidatingAdmissionPolicyBinding"] as $kinds
+  | ["cluster-admin","admin","edit"] as $roles
+  | ["escalate","bind","impersonate"] as $verbs
+  | $objs[]
+  | (.kind // "?") as $k | ((.metadata.namespace // "") as $ns | (if $ns == "" then "" else $ns + "/" end)) as $nsp
+  | ($k + " " + $nsp + (.metadata.name // "<unnamed>")) as $id
+  | (
+      (if ($kinds | index($k)) == null then "\($id): kind \($k) is not one this lane applies" else empty end),
+      (if (.metadata.name // "") == "" then "\($id): no metadata.name" else empty end),
+      (if $k == "Secret" and (.type // "") != "kubernetes.io/service-account-token"
+         then "\($id): a Secret here may only be an empty kubernetes.io/service-account-token" else empty end),
+      (if $k == "Secret" and ((.data // {}) != {} or (.stringData // {}) != {})
+         then "\($id): carries data — a credential never lives in a committed manifest" else empty end),
+      (if $k == "ClusterRole" and has("aggregationRule") then "\($id): an aggregated ClusterRole is refused" else empty end),
+      (if ($k == "Role" or $k == "ClusterRole") then
+         (.rules // [])[] as $r
+         | (if ((($r.verbs // []) + ($r.resources // []) + ($r.apiGroups // [])) | index("*")) != null
+              then "\($id): a rule with * in its verbs, resources or apiGroups" else empty end),
+           ((($r.verbs // [])[]) as $v | if ($verbs | index($v)) != null then "\($id): verb \($v) is refused" else empty end)
+       else empty end),
+      (if ($k == "RoleBinding" or $k == "ClusterRoleBinding") then
+         ((.roleRef.name // "") as $n
+          | if ($roles | index($n)) != null or ($n | startswith("system:")) then "\($id): binds \($n)" else empty end),
+         ((.subjects // [])[] | select(.kind != "ServiceAccount") | "\($id): subject \(.kind) \(.name) is not a ServiceAccount")
+       else empty end)
+    )
+' "$work/objects.json" 2>"$work/err")" \
+  || hosting::die "could not read the parsed objects of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+if [ -n "$problems" ]; then
+  printf '%s\n' "$problems" | while IFS= read -r p; do hosting::log "refused   ${p}"; done
+  hosting::die "deploy/aks/manifests/${manifest} holds $(printf '%s\n' "$problems" | wc -l | tr -d ' ') object(s) this lane does not apply (listed above). Nothing was sent to the API server."
+fi
+count="$(jq -r 'if .kind == "List" then (.items | length) else 1 end' "$work/objects.json")"
+jq -r '(if .kind == "List" then .items else [.] end)[] | "object    \(.kind) \(if (.metadata.namespace // "") == "" then "" else .metadata.namespace + "/" end)\(.metadata.name)"' \
+  "$work/objects.json" | while IFS= read -r line; do hosting::log "$line"; done
+hosting::say manifest_objects "$count"
+
+if [ "$mode" = check ]; then
+  hosting::step "Ask the API server what applying deploy/aks/manifests/${manifest} would change"
+  # The server's own answer (admission, RBAC escalation checks, schema) — persisted nowhere. Each line
+  # names an object and created/configured/unchanged; no field value is printed.
+  if ! kubectl apply --dry-run=server -f "$file_real" > "$work/out" 2>"$work/err"; then
+    hosting::die "the API server refused a dry run of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+  fi
+  while IFS= read -r line; do hosting::log "would     ${line% (server dry run)}"; done < "$work/out"
+  hosting::say manifest_check "sha256:${digest}"
+  exit 0
+fi
+
+if hosting::dry; then
+  hosting::log "(dry run) would apply ${count} object(s) from deploy/aks/manifests/${manifest} (sha256:${digest})"
+  exit 0
+fi
+hosting::step "Apply deploy/aks/manifests/${manifest}"
+if ! kubectl apply -f "$file_real" > "$work/out" 2>"$work/err"; then
+  while IFS= read -r line; do hosting::log "applied   ${line}"; done < "$work/out"
+  hosting::die "kubectl apply of deploy/aks/manifests/${manifest} failed: $(head -1 "$work/err"). The objects listed above as applied are on the cluster; the rest are not. Fix the cause and re-request the action — apply is idempotent."
+fi
+while IFS= read -r line; do hosting::log "applied   ${line}"; done < "$work/out"
+hosting::say manifest_applied "${manifest}@sha256:${digest}"
