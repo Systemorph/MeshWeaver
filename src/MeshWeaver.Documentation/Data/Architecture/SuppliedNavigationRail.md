@@ -28,11 +28,31 @@ index of the Space, with the page being read marked and only the groups on the r
   (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the
   page's own. The cost grows with the page's depth, never with the size of the Space. A folder off
   the path is listed and not opened; the reader drills in by opening it.
-- **A level shows at most 50 entries** (`LevelCap`), cut in the order the level is RENDERED
-  (declared `Order`, then name, internal `_` entries left out), so an ordered page is never pushed
-  behind the cut. Each level reads light rows (no content) up to a hard bound of 500. A level that
-  holds more ends with a **Load more** entry (the viewer's `common.loadMore`). It reloads the same
-  page with `?more={level}:{n}`, raising that one level by 50, up to the bound.
+- **A level shows 10 entries at first** (`LevelCap`), and **reads only those plus one**. Every
+  read of a level is a query bounded to `Cap + 1` rows and ordered **by the store** in the key the
+  level renders by (`DefaultNodeNavigation.LevelQueries`), so a large folder never loads whole. A
+  level that holds more ends with two entries: **Load more** (`common.loadMore`) reloads the page
+  with `?more={level}:{n}`, raising that one level by 10, up to 100; **Show all** (`common.showAll`)
+  opens the level's direct children in the mesh search
+  (`/search?ns={level}&hq=namespace:{level} is:main sort:…`).
+- **Each loaded level can be sorted** — a dropdown on its group heading (the top level's sits beside
+  the search box): **Order, then recent** (the default: declared `Order` first, unordered last, then
+  the most recently modified), **Recently modified**, **Recently viewed** (the viewer's own access
+  log, then the newest of the rest) and **Name A–Z**. The choice travels in the URL as
+  `?sort={level}:{order|modified|viewed|name}`, so a sorted index is a link; re-sorting a level resets
+  its Load more. Every leg excludes internal `_` entries in the query (`-id:_*`), so they cannot
+  use up the window. A two-key order is read as bounded legs whose union holds the first `Cap + 1`
+  rows of the combined order: the ordered rows (`sort:order-asc`), the newest
+  (`sort:lastModified-desc`) and a **tie leg** — the rows sharing the Order value the first leg was
+  cut at, newest first (`order:{n}`), because that leg is clipped by Order alone. For Recently
+  viewed the `source:accessed` leg (sorted on the access time it projects into `lastModified`)
+  ranks, and the newest leg lists what the viewer never opened. Name A–Z clips and renders by
+  `lower(name)`, unnamed entries last. This relies on nulls sorting last in both directions on
+  every backend (QuerySyntax, `sort:`). The sort values are open string constants (`IndexSort`);
+  an unknown one in a URL is logged and the level keeps the default order. The dropdown is offered only where a level is loaded — a
+  folder off the reader's path is a link. The control is `NavGroupSkin.SortOptions` /
+  `NavMenuSkin.SortOptions` (`NavSortOption`: label, href, current); the Blazor views that render
+  it ship in MeshWeaver.Plugins.
 - **A search box sits above the tree** (`NavMenuSkin.SearchNamespace`), scoped to the page's Space
   (its first path segment), also when a module supplied the index. Submitting it opens the mesh
   search (`/search?ns={space}&q=…`). The Blazor nav menu that renders the box ships in
