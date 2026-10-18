@@ -64,6 +64,12 @@ public record NodeNavigation(string Title, IReadOnlyList<NodeNavigationEntry> En
     /// Null renders a plain text heading.
     /// </summary>
     public string? Icon { get; init; }
+
+    /// <summary>
+    /// The sort choices offered for the TOP level of the index (the entries directly under the
+    /// heading), each a link that reloads the page sorted that way. Empty offers no choice.
+    /// </summary>
+    public IReadOnlyList<MeshWeaver.Layout.NavSortOption> SortOptions { get; init; } = [];
 }
 
 /// <summary>
@@ -83,4 +89,16 @@ public record NodeNavigationEntry(string Label, string Path, bool IsCurrent = fa
     /// a long index stays scannable (a course groups its lessons by module).
     /// </summary>
     public IReadOnlyList<NodeNavigationEntry> Children { get; init; } = [];
+
+    /// <summary>
+    /// Where the entry navigates when that is not the node at <see cref="Path"/> — a "Load more" or
+    /// "Show all" line, which opens a URL rather than a node. Null links <c>/{Path}</c>.
+    /// </summary>
+    public string? Href { get; init; }
+
+    /// <summary>
+    /// The sort choices offered for this entry's <see cref="Children"/>, each a link that reloads the
+    /// page sorted that way. Rendered on the entry's group heading; empty offers no choice.
+    /// </summary>
+    public IReadOnlyList<MeshWeaver.Layout.NavSortOption> SortOptions { get; init; } = [];
 }
