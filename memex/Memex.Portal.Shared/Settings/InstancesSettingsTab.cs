@@ -1,6 +1,7 @@
 using System.Reactive.Linq;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
@@ -55,7 +56,7 @@ public static class InstancesSettingsTab
         var userId = context?.ObjectId ?? "";
 
         stack = stack
-            .WithView(Controls.Title(host.Localize("settings.instances"), 2))
+            .WithView(Controls.H2(host.Localize("settings.instances")))
             .WithView(Controls.Markdown(host.Localize("instances.intro")));
 
         host.UpdateData(FormDataId, new Dictionary<string, object?>
@@ -84,7 +85,9 @@ public static class InstancesSettingsTab
     {
         var form = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
-            .WithStyle("gap: 12px; align-items: flex-end; flex-wrap: wrap;");
+            .WithHorizontalGap(12)
+            .WithVerticalAlignment(VerticalAlignment.Bottom)
+            .WithWrap(true);
 
         var dataContext = LayoutAreaReference.GetDataPointer(FormDataId);
 
@@ -119,12 +122,13 @@ public static class InstancesSettingsTab
                     return Task.CompletedTask;
                 }));
 
-        return Controls.Stack
-            .WithView(Controls.Title(host.Localize("instances.registerHeading"), 3))
-            .WithView(Controls.Markdown(host.Localize("instances.registerHint")))
-            .WithView(form)
-            .WithStyle("padding: 16px; background: var(--neutral-layer-2); border-radius: 8px; "
-                       + "gap: 12px; margin-bottom: 24px;");
+        // A settings section: the platform's card, not an inline-styled box.
+        return SettingsLayoutArea.Section(host.Localize("instances.registerHeading"),
+            Controls.Stack
+                .WithWidth("100%")
+                .WithVerticalGap(12)
+                .WithView(Controls.Markdown(host.Localize("instances.registerHint")))
+                .WithView(form));
     }
 
     private static void Register(
@@ -163,7 +167,7 @@ public static class InstancesSettingsTab
     /// </summary>
     private static UiControl InstanceList(LayoutAreaHost host, string userId)
         => Controls.Stack
-            .WithView(Controls.Title(host.Localize("instances.yourInstances"), 3))
+            .WithView(Controls.H3(host.Localize("instances.yourInstances")))
             .WithView(InstanceRows(host, userId)
                 .BindGrid(ListDataId, host.Localize("instances.none"),
                     message => host.Localize("instances.error.listFailed", message))
