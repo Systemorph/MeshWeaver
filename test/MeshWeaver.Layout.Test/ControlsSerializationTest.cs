@@ -87,9 +87,10 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
 
         var roundTripped = JsonSerializer.Deserialize<UiControl>(serialized, host.JsonSerializerOptions)
             .Should().BeOfType<BadgeControl>().Subject;
-        roundTripped.Href?.ToString().Should().Be("/Crm/Journey/abc");
-        roundTripped.Tooltip?.ToString().Should().Be("Qualified — awaiting the second review");
-        roundTripped.MaxWidth?.ToString().Should().Be("160px");
+        // Not `?.`: a short-circuit would skip the assertion on exactly the null it must catch.
+        (roundTripped.Href?.ToString()).Should().Be("/Crm/Journey/abc");
+        (roundTripped.Tooltip?.ToString()).Should().Be("Qualified — awaiting the second review");
+        (roundTripped.MaxWidth?.ToString()).Should().Be("160px");
 
         badge.WithHref("/Crm/Journey/other").Should().NotBe(badge,
             "a chip that points somewhere else is a different control, so the diff must reach the client");
