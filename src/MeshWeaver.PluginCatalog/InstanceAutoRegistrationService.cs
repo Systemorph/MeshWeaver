@@ -867,7 +867,13 @@ public sealed class InstanceAutoRegistrationService(
     /// saturate it.</para>
     /// </summary>
     private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options) =>
-        InstanceSourcesRead().SelectMany(instance => InstallDefaultsWith(options, instance));
+        InstanceSourcesRead().SelectMany(read => InstallDefaultsWith(options, read.Sources)
+            // An unread instance store is a source that did not ANSWER: the pass still installs the
+            // deployment's packages, but it is not complete, so the repair lane (LeftUndone /
+            // RetryFailedDefaults) knows work remains once the store answers.
+            .Select(summary => read.Failed
+                ? summary with { ListingIncomplete = true, SourceUnreachable = true }
+                : summary));
 
     /// <summary>
     /// The instance's OWN package sources (<c>Admin/PackageSource-*</c>,
@@ -876,13 +882,13 @@ public sealed class InstanceAutoRegistrationService(
     /// bound is said at Error and the pass proceeds with the deployment's own sources: the instance's
     /// additions are then installed by the next pass, and the deployment's never wait on them.
     /// </summary>
-    private IObservable<IReadOnlyList<InstancePackageSourceContent>> InstanceSourcesRead()
+    private IObservable<(IReadOnlyList<InstancePackageSourceContent> Sources, bool Failed)> InstanceSourcesRead()
     {
         var catalog = hub.ServiceProvider.GetService<InstancePackageSourceCatalog>();
         if (catalog is null)
-            return Observable.Return<IReadOnlyList<InstancePackageSourceContent>>([]);
+            return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], false));
         return catalog.WhenLoaded
-            .Select(_ => catalog.Sources)
+            .Select(_ => ((IReadOnlyList<InstancePackageSourceContent>)catalog.Sources, false))
             .Timeout(TimeSpan.FromSeconds(30))
             .Catch((Exception ex) =>
             {
@@ -890,7 +896,7 @@ public sealed class InstanceAutoRegistrationService(
                     "[DefaultInstall] the instance's own package sources (Admin/PackageSource-*) could not "
                     + "be read; this pass installs from the deployment's sources only, and what the "
                     + "instance's administrators chose to install by default waits for the next pass.");
-                return Observable.Return<IReadOnlyList<InstancePackageSourceContent>>([]);
+                return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], true));
             });
     }
 
@@ -2122,7 +2128,20 @@ public sealed class InstanceAutoRegistrationService(
     private static InstallCandidate? RepairCandidate(IReadOnlyList<InstallCandidate> listings, string? recordedSource) =>
         string.IsNullOrWhiteSpace(recordedSource)
             ? listings.FirstOrDefault()
-            : listings.FirstOrDefault(c => ProvenanceIsTrusted(c) && SameSource(c.Package.Source, recordedSource));
+            : listings.FirstOrDefault(c => RepairProvenanceIsTrusted(c, recordedSource));
+
+    /// <summary>
+    /// Whether a listing may re-assert an install recorded under <paramref name="recordedSource"/>.
+    /// REPAIR is not AUTHORIZATION: a package installed from an instance-local source is repaired from
+    /// that source — the one configured under the recorded name, never a manifest that merely authors
+    /// it — while the deployment configuration's authority (<see cref="ProvenanceIsTrusted"/>) stays
+    /// closed to it. Listings are in source order and instance-local sources come last, so a
+    /// deployment source of the same name always wins. Pure.
+    /// </summary>
+    private static bool RepairProvenanceIsTrusted(InstallCandidate candidate, string recordedSource) =>
+        candidate.Source.InstanceLocal
+            ? SameSource(candidate.Source.Name, recordedSource) && SameSource(candidate.Package.Source, recordedSource)
+            : ProvenanceIsTrusted(candidate) && SameSource(candidate.Package.Source, recordedSource);
 
     private static bool SameSource(string? a, string? b) =>
         !string.IsNullOrWhiteSpace(a) && string.Equals(a.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);

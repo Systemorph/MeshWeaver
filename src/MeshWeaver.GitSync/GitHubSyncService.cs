@@ -891,16 +891,22 @@ public sealed class GitHubSyncService
         credentials.Get(userId).Take(1).SelectMany(cred =>
             cred?.AccessToken is { Length: > 0 } token
                 ? Observable.Return(new ResolvedGitHubAuth(token, cred))
-                : hub.ServiceProvider.GetService<GitSourceCredentials>()?.TokenFor(repositoryUrl) is { } declared
-                    ? declared.Select(t => new ResolvedGitHubAuth(t, null))
-                // The App fallback is decided once the identity can be — a cold replica's own
-                // instance App is not "absent" (Doc/Architecture/InstanceRepositoryAccess).
-                : (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default)).SelectMany(_ =>
+                // The per-repository choice is reactive (declared, else the instance App for an
+                // instance-local source once its catalogs have listed, else the default below), so a
+                // cold replica never skips a declaration (Doc/Architecture/InstanceRepositoryAccess).
+                : hub.ServiceProvider.GetService<GitSourceCredentials>() is { } sourceCredentials && repositoryUrl is not null
+                    ? sourceCredentials.TokenOrDefault(repositoryUrl, () => DefaultAppToken().Select(a => a.Token))
+                        .Select(t => new ResolvedGitHubAuth(t, null))
+                    : DefaultAppToken());
+
+    /// <summary>The instance's App installation token, decided once the identity can be.</summary>
+    private IObservable<ResolvedGitHubAuth> DefaultAppToken() =>
+                (appTokens?.WhenReady ?? Observable.Return(System.Reactive.Unit.Default)).SelectMany(_ =>
                     appTokens is { IsConfigured: true }
                         ? appTokens.GetInstallationToken().Select(t => new ResolvedGitHubAuth(t, null))
                         : Observable.Throw<ResolvedGitHubAuth>(new InvalidOperationException(
                             "Connect your GitHub account first (GitHub Sync settings → Connect), or configure the " +
-                            "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey)."))));
+                            "GitHub App identity (GitHub:App:ClientId + GitHub:App:PrivateKey).")));
 
     /// <summary>
     /// The loaded package modules (<see cref="ILoadedPackageModules"/>), or an empty reading on a

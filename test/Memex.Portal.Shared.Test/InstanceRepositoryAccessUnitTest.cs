@@ -323,6 +323,42 @@ public class InstanceRepositoryAccessUnitTest
     }
 
     [Fact]
+    public async Task OnAColdReplica_AnInstanceSourceWaitsForItsCatalogs_EvenWithADeploymentApp()
+    {
+        using var deploymentKey = RSA.Create(2048);
+        using var instanceKey = RSA.Create(2048);
+        var handler = new AppHandler();
+        // Nothing has been read yet: no instance App, no instance source — until the stores list.
+        var read = new System.Reactive.Subjects.ReplaySubject<System.Reactive.Unit>(1);
+        var loaded = false;
+        var service = new GitHubAppTokenService(
+            new IoPoolRegistry(),
+            Options.Create(new GitHubAppOptions { ClientId = "Iv23liPlatform", PrivateKey = deploymentKey.ExportRSAPrivateKeyPem() }),
+            () => loaded ? new GitHubAppOptions { ClientId = "Iv23liInstance", PrivateKey = instanceKey.ExportRSAPrivateKeyPem() } : null,
+            () => read,
+            httpClient: new HttpClient(handler), clock: () => Now);
+        var local = new InstancePackageSourceContent { Repo = Local };
+        var credentials = new GitSourceCredentials(Config(new()), service,
+            repo => loaded && IsLocal(repo) ? local : null, instanceReady: () => read);
+
+        // Subscribed while cold: the choice waits instead of falling back to the deployment App.
+        var pending = credentials.TokenOrDefault(Local, () => service.GetInstallationToken())
+            .FirstAsync().Timeout(Budget).Await();
+        var explicitInstance = service.GetInstanceAppInstallationToken().FirstAsync().Timeout(Budget).Await();
+        Assert.False(pending.IsCompleted);
+        Assert.False(explicitInstance.IsCompleted);
+
+        loaded = true;
+        read.OnNext(System.Reactive.Unit.Default);
+        Assert.StartsWith("ghs_Iv23liInstance_", await pending);
+        Assert.StartsWith("ghs_Iv23liInstance_", await explicitInstance);
+        // A repository nobody declares still gets the caller's default — here the deployment App.
+        Assert.StartsWith("ghs_Iv23liPlatform_",
+            await credentials.TokenOrDefault("https://github.com/acme/other", () => service.GetInstallationToken())
+                .FirstAsync().Timeout(Budget).Await());
+    }
+
+    [Fact]
     public async Task AMisspelledIdentity_IsRefusedByName_NeverAFallback()
     {
         var service = new GitHubAppTokenService(

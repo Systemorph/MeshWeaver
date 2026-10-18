@@ -280,13 +280,22 @@ public static class InstanceGitHubApp
     public static string? WebhookSecret(InstanceSecretCatalog? secrets, InstanceGitHubAppContent? app) =>
         Options(secrets, app) is null ? null : Value(secrets!, WebhookSecretKey);
 
-    /// <summary>The hub half: both catalogs off <paramref name="services"/>.</summary>
+    /// <summary>
+    /// The hub half: both catalogs off <paramref name="services"/>. 🚨 Fails CLOSED unless the App's
+    /// metadata catalog is LOADED and HEALTHY — the revocation lives there, so a metadata feed that has
+    /// not read the store, or is down, cannot vouch that a bundle was not revoked meanwhile.
+    /// </summary>
     public static GitHubAppOptions? Options(IServiceProvider services) =>
-        Options(services.GetService<InstanceSecretCatalog>(), services.GetService<InstanceGitHubAppCatalog>()?.Current);
+        services.GetService<InstanceGitHubAppCatalog>() is { IsLoaded: true, Faulted: false } apps
+            ? Options(services.GetService<InstanceSecretCatalog>(), apps.Current)
+            : null;
 
-    /// <summary>The hub half of <see cref="WebhookSecret(InstanceSecretCatalog?, InstanceGitHubAppContent?)"/>.</summary>
+    /// <summary>The hub half of <see cref="WebhookSecret(InstanceSecretCatalog?, InstanceGitHubAppContent?)"/>,
+    /// failing closed exactly as <see cref="Options(IServiceProvider)"/> does.</summary>
     public static string? WebhookSecret(IServiceProvider services) =>
-        WebhookSecret(services.GetService<InstanceSecretCatalog>(), services.GetService<InstanceGitHubAppCatalog>()?.Current);
+        services.GetService<InstanceGitHubAppCatalog>() is { IsLoaded: true, Faulted: false } apps
+            ? WebhookSecret(services.GetService<InstanceSecretCatalog>(), apps.Current)
+            : null;
 
     /// <summary>
     /// Emits once both catalogs the identity is read from have LISTED the store — so a cold replica

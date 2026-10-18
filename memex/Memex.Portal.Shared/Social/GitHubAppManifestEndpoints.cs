@@ -89,8 +89,7 @@ public static class GitHubAppManifestEndpoints
             var back = "/";
             if (http.Request.Cookies.TryGetValue(InstanceGitHubApp.StateCookieName, out var cookie) && !string.IsNullOrEmpty(cookie))
             {
-                http.Response.Cookies.Delete(InstanceGitHubApp.StateCookieName,
-                    new CookieOptions { Path = InstanceGitHubApp.CallbackPath, Secure = true, HttpOnly = true });
+                var malformed = false;
                 try
                 {
                     var parts = Encoding.UTF8.GetString(WebEncoders.Base64UrlDecode(cookie)).Split('|', 2);
@@ -99,8 +98,14 @@ public static class GitHubAppManifestEndpoints
                 }
                 catch (FormatException)
                 {
-                    // A malformed cookie is no state at all: CheckState refuses it by name below.
+                    // A malformed cookie is no state at all: Complete refuses it by name below.
+                    malformed = true;
                 }
+                // Only THIS callback's cookie is cleared: the cookie belongs to the newest flow this
+                // browser started, and a stale or forged callback for another flow must not take it away.
+                if (malformed || string.Equals(cookieState, state, StringComparison.Ordinal))
+                    http.Response.Cookies.Delete(InstanceGitHubApp.StateCookieName,
+                        new CookieOptions { Path = InstanceGitHubApp.CallbackPath, Secure = true, HttpOnly = true });
             }
             var hub = Hub(http);
             var locale = Locale(hub);

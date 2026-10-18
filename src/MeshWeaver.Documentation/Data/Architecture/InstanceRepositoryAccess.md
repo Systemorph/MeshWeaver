@@ -224,8 +224,10 @@ portal-entered secret has.
 **Multi-replica consistency.** Nothing lives in a pod: a flow is a node, the secrets are nodes, and
 every replica's catalogs follow them live. A replica decides "this instance has no App" only after
 both catalogs have LISTED the store (`InstanceGitHubApp.WhenReadable`, `GitHubAppTokenService.WhenReady`),
-so a cold replica neither mints anonymously nor refuses a webhook its App signed; a catalog whose
-query is down fails closed. Writing a source or the metadata decides existence from a fresh listing,
+so a cold replica neither mints anonymously nor refuses a webhook its App signed. The per-repository
+credential choice is reactive (`GitSourceCredentials.TokenOrDefault`): a repository is never read
+with the default identity because the instance's sources had not been read yet. Both catalogs fail
+closed while their query is down — the App's metadata too, because the revocation lives there. Writing a source or the metadata decides existence from a fresh listing,
 never a lagging snapshot. The start can run on one replica and
 the callback on another. Each replica mints and caches its own installation tokens (keyed by client
 id and installation owner, so a different App never reuses another's token).

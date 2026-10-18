@@ -189,12 +189,14 @@ public sealed class GitHubRepoIdentityResolver(
                 // repository in another organisation is invisible to the latter. A declared
                 // credential that cannot be produced faults, and Lookup reports it as the unknown
                 // it is — never an anonymous read in its place.
-                : SourceCredentials?.TokenFor(repositoryUrl) is { } declared
-                    ? declared
-                // Decided once the identity can be (a cold replica's instance App is not "absent").
-                : appTokens is not null
-                    ? appTokens.GetInstallationTokenOrAnonymous()
-                    : Observable.Return(string.Empty));
+                // Reactive per repository: a cold replica never skips a declaration.
+                : SourceCredentials is { } sourceCredentials
+                    ? sourceCredentials.TokenOrDefault(repositoryUrl, DefaultToken)
+                    : DefaultToken());
+
+        IObservable<string> DefaultToken() => appTokens is not null
+            ? appTokens.GetInstallationTokenOrAnonymous()
+            : Observable.Return(string.Empty);
     }
 
     /// <summary>

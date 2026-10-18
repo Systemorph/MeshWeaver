@@ -1,3 +1,4 @@
+using System.Reactive.Linq;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
@@ -74,7 +75,9 @@ public static class GitHubSyncConfiguration
             sp.GetService<IConfiguration>(),
             sp.GetService<GitHubAppTokenService>(),
             repo => sp.GetService<InstancePackageSourceCatalog>()?.For(repo),
-            sp.GetService<ILogger<GitSourceCredentials>>()));
+            sp.GetService<ILogger<GitSourceCredentials>>(),
+            () => (sp.GetService<InstancePackageSourceCatalog>()?.WhenLoaded ?? Observable.Return(System.Reactive.Unit.Default))
+                .Zip(InstanceGitHubApp.WhenReadable(sp), (_, _) => System.Reactive.Unit.Default)));
         // Azure Repos (MeshWeaver#5248, policy azure-repos-push-only): the client tenant's app
         // registration is DECLARED in the instance's deployment record as AzureDevOps:TenantId /
         // AzureDevOps:ClientId (identifiers, not secrets); the instance's workload identity is

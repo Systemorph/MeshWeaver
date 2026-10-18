@@ -36,6 +36,9 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
     private readonly BehaviorSubject<bool> loaded = new(false);
     private readonly object gate = new();
     private IDisposable? subscription;
+    // Down from a fault until the re-opened query lists the store completely again. Readers that
+    // must fail closed (the App's revocation) ask this.
+    private volatile bool faulted;
 
     /// <summary>Creates the catalog over <paramref name="nodeType"/> in the <c>Admin</c> partition.</summary>
     /// <param name="hub">The mesh hub.</param>
@@ -86,6 +89,30 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
         }
     }
 
+    /// <summary>
+    /// True while the live query is DOWN — from a fault until the re-opened query delivers a complete
+    /// listing. The snapshot cannot see a change in that window, so a reader that must not trust a
+    /// stale record (a revocation) fails closed.
+    /// </summary>
+    public bool Faulted
+    {
+        get
+        {
+            EnsureSubscribed();
+            return faulted;
+        }
+    }
+
+    /// <summary>Whether a complete listing has arrived at least once.</summary>
+    public bool IsLoaded
+    {
+        get
+        {
+            EnsureSubscribed();
+            return loaded.Value;
+        }
+    }
+
     /// <summary>Starts the query now rather than at the first read. Idempotent.</summary>
     public void Start() => EnsureSubscribed();
 
@@ -112,7 +139,9 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                     .SelectMany(RejectIncompleteListing),
                 OnChange,
                 logger,
-                $"[{name}] catalog query");
+                $"[{name}] catalog query",
+                onTransientFault: () => faulted = true,
+                onPoisonedContent: _ => faulted = true);
         }
     }
 
@@ -159,6 +188,9 @@ public abstract class InstanceAdminRecordCatalog<TContent> : IDisposable where T
                         current = current.Remove(path);
                 break;
         }
+        // A complete listing is the re-opened feed reading again: the fail-closed window ends here.
+        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            faulted = false;
         state.OnNext(current);
         if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
             loaded.OnNext(true);

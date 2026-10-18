@@ -451,7 +451,7 @@ public static class PackageSources
                            services.GetService<IConfiguration>(),
                            services.GetService<GitHubAppTokenService>());
         var fallback = AppInstallationTokenProvider(hub);
-        return () => declared.TokenFor(repositoryUrl) ?? fallback();
+        return () => declared.TokenOrDefault(repositoryUrl, fallback);
     }
 
     /// <summary>

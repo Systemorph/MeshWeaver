@@ -122,7 +122,18 @@ public sealed class GitHubAppTokenService
     /// rather than holding its caller forever (logged). Ask <see cref="IsConfigured"/> after it.
     /// </summary>
     public IObservable<System.Reactive.Unit> WhenReady =>
-        Observable.Defer(() => options.IsConfigured || instanceAppReady is null
+        Observable.Defer(() => options.IsConfigured
+            ? Observable.Return(System.Reactive.Unit.Default)
+            : WhenInstanceAppReady);
+
+    /// <summary>
+    /// Emits once the INSTANCE App's stores have listed — whatever the deployment configures. What a
+    /// caller that asks for the instance App explicitly (an instance-local source, a configured
+    /// <c>Identity = instance</c>) waits on before asking <see cref="HasInstanceApp"/>. Bounded: an
+    /// unreadable store answers "not connected" rather than holding its caller forever (logged).
+    /// </summary>
+    public IObservable<System.Reactive.Unit> WhenInstanceAppReady =>
+        Observable.Defer(() => instanceAppReady is null
             ? Observable.Return(System.Reactive.Unit.Default)
             : instanceAppReady().Take(1)
                 .Timeout(TimeSpan.FromSeconds(30))
@@ -172,7 +183,7 @@ public sealed class GitHubAppTokenService
     /// <param name="installationOwner">The account the installation lives on, or null/blank for
     /// the instance's own installation.</param>
     public IObservable<string> GetInstallationToken(string? installationOwner) =>
-        Mint(Effective, installationOwner, GitSyncRefusal.Of("gitsync.app.notConfigured"));
+        Mint(Effective, () => WhenReady, installationOwner, GitSyncRefusal.Of("gitsync.app.notConfigured"));
 
     /// <summary>
     /// An installation token of the instance's OWN App (<see cref="InstanceGitHubApp"/>), whatever the
@@ -184,10 +195,12 @@ public sealed class GitHubAppTokenService
     /// <param name="installationOwner">The account the installation lives on, or null/blank for the
     /// App's only installation (a private App installs only on its owning account).</param>
     public IObservable<string> GetInstanceAppInstallationToken(string? installationOwner = null) =>
-        Mint(() => InstanceOptions() ?? new GitHubAppOptions(), installationOwner,
+        Mint(() => InstanceOptions() ?? new GitHubAppOptions(), () => WhenInstanceAppReady, installationOwner,
             GitSyncRefusal.Of("gitsync.instanceApp.notConnected"));
 
-    private IObservable<string> Mint(Func<GitHubAppOptions> identity, string? installationOwner, GitSyncRefusal notConfigured)
+    private IObservable<string> Mint(
+        Func<GitHubAppOptions> identity, Func<IObservable<System.Reactive.Unit>> ready, string? installationOwner,
+        GitSyncRefusal notConfigured)
     {
         var owner = (installationOwner ?? "").Trim();
 
@@ -198,7 +211,7 @@ public sealed class GitHubAppTokenService
         // stale capture, never matched the current promise again, and handed the expired token
         // back on every pass — two token lifetimes after boot, every private source read as
         // "Bad credentials" until the process restarted (Systemorph/Memex#165).
-        return WhenReady.SelectMany(_ => Observable.Defer(() =>
+        return ready().SelectMany(_ => Observable.Defer(() =>
         {
             // The identity is resolved at SUBSCRIPTION, like the promise — and only once it can be
             // decided (WhenReady): a held observable follows a connect, a rotation or a disconnect of

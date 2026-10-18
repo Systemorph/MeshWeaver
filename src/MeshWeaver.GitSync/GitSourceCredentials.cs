@@ -97,6 +97,7 @@ public sealed class GitSourceCredentials
     private readonly GitHubAppTokenService? appTokens;
     private readonly ILogger? logger;
     private readonly Func<string?, InstancePackageSourceContent?>? instanceSource;
+    private readonly Func<IObservable<System.Reactive.Unit>>? instanceReady;
 
     /// <summary>Initializes the reader.</summary>
     /// <param name="configuration">The instance configuration carrying <see cref="SourcesSection"/>;
@@ -117,16 +118,20 @@ public sealed class GitSourceCredentials
     /// <param name="instanceSource">Finds the instance-local source for a repository
     /// (<see cref="InstancePackageSourceCatalog.For"/>); null when the host keeps none.</param>
     /// <param name="logger">Optional logger.</param>
+    /// <param name="instanceReady">Emits once the instance's sources and App have been read; null
+    /// treats them as read.</param>
     public GitSourceCredentials(
         IConfiguration? configuration,
         GitHubAppTokenService? appTokens,
         Func<string?, InstancePackageSourceContent?>? instanceSource,
-        ILogger<GitSourceCredentials>? logger = null)
+        ILogger<GitSourceCredentials>? logger = null,
+        Func<IObservable<System.Reactive.Unit>>? instanceReady = null)
     {
         this.configuration = configuration;
         this.appTokens = appTokens;
         this.instanceSource = instanceSource;
         this.logger = logger;
+        this.instanceReady = instanceReady;
     }
 
     /// <summary>
@@ -135,7 +140,12 @@ public sealed class GitSourceCredentials
     /// uses its default identity exactly as before. Read from configuration on every call, so the
     /// answer follows a reloaded configuration. The first source naming the repository decides.
     /// </summary>
-    public GitSourceCredential? For(string? repositoryUrl)
+    public GitSourceCredential? For(string? repositoryUrl) =>
+        ConfiguredFor(repositoryUrl) ?? InstanceFor(repositoryUrl);
+
+    /// <summary>The credential a CONFIGURED source declares for the repository, or null. Synchronous:
+    /// configuration is always read.</summary>
+    private GitSourceCredential? ConfiguredFor(string? repositoryUrl)
     {
         if (configuration is null || NormalizeRepository(repositoryUrl) is not { Length: > 0 } wanted)
             return null;
@@ -163,6 +173,12 @@ public sealed class GitSourceCredentials
                 UnknownIdentity = identity is not null && !instance ? identity : null,
             };
         }
+        return null;
+    }
+
+    /// <summary>The instance App for an instance-local source while it is connected, else null.</summary>
+    private GitSourceCredential? InstanceFor(string? repositoryUrl)
+    {
         // 🚨 The instance's OWN sources, AFTER the configured ones: a repository the deployment
         // record declares is read as the record says (policy declared-not-derived). An instance
         // source is read with the instance's own App while it is connected — also on an instance
@@ -184,6 +200,30 @@ public sealed class GitSourceCredentials
     /// </summary>
     public IObservable<string>? TokenFor(string? repositoryUrl) =>
         For(repositoryUrl) is { } declared ? Token(declared) : null;
+
+    /// <summary>
+    /// The WHOLE per-repository choice, reactive: the credential a configured source declares; else —
+    /// once the instance's own sources and App have been READ (never from a cold replica's empty
+    /// catalogs) — the instance App for an instance-local source; else <paramref name="fallback"/>
+    /// (the caller's default identity). Cold; decided on each subscription. What every reader of a
+    /// repository uses, so a declaration is never skipped because a catalog had not loaded yet.
+    /// </summary>
+    /// <param name="repositoryUrl">The repository.</param>
+    /// <param name="fallback">The caller's default identity when nothing is declared for it.</param>
+    public IObservable<string> TokenOrDefault(string? repositoryUrl, Func<IObservable<string>> fallback) =>
+        Observable.Defer(() => ConfiguredFor(repositoryUrl) is { } configured
+            ? Token(configured)
+            : (instanceReady?.Invoke() ?? Observable.Return(System.Reactive.Unit.Default))
+                .Take(1)
+                .Timeout(TimeSpan.FromSeconds(30))
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex,
+                        "[GitSourceCredentials] the instance's own sources could not be read within 30 s; "
+                        + "{Repository} is read with the default identity.", repositoryUrl);
+                    return Observable.Return(System.Reactive.Unit.Default);
+                })
+                .SelectMany(_ => For(repositoryUrl) is { } declared ? Token(declared) : fallback()));
 
     /// <summary>
     /// The token for a declared credential. Faults with <see cref="GitSourceCredentialException"/>
@@ -212,11 +252,13 @@ public sealed class GitSourceCredentials
                 ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
 
         if (declared.InstanceApp)
-            return appTokens is { HasInstanceApp: true }
-                ? appTokens.GetInstanceAppInstallationToken()
-                : Refuse(GitSyncRefusal.Of(
-                    "gitsync.source.instanceAppNotConnected",
-                    ("source", declared.SourceName), ("url", declared.RepositoryUrl)));
+            // Decided once the instance App's stores have listed — never on a cold replica's empty read.
+            return (appTokens?.WhenInstanceAppReady ?? Observable.Return(System.Reactive.Unit.Default))
+                .SelectMany(_ => appTokens is { HasInstanceApp: true }
+                    ? appTokens.GetInstanceAppInstallationToken()
+                    : Refuse(GitSyncRefusal.Of(
+                        "gitsync.source.instanceAppNotConnected",
+                        ("source", declared.SourceName), ("url", declared.RepositoryUrl))));
 
         if (declared.TokenKey is { Length: > 0 } && declared.InstallationOwner is { Length: > 0 })
             return Refuse(GitSyncRefusal.Of(
