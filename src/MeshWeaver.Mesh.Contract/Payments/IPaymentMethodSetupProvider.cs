@@ -94,6 +94,37 @@ public interface IPaymentMethodSetupProvider
     IObservable<PaymentMethodSetupFact> CancelSetup(string setupId) => RetrieveSetup(setupId);
 
     /// <summary>
+    /// Whether this provider can hand an open, client-rendered setup's one-time secret to its buyer's
+    /// page (<see cref="RevealClientSecret"/>). Defaults to <c>false</c>: an embedded form is then
+    /// not offered, and a hosted setup is the only handoff.
+    /// </summary>
+    bool RevealsClientSecret => false;
+
+    /// <summary>
+    /// The one-time client secret of an open, client-rendered setup — for the embedded form
+    /// (<c>PaymentSetupFormControl</c>) running in the BUYER'S own session. Cold; emits once.
+    ///
+    /// <para>🚨 <b>The provider answers only the setup's own buyer.</b> It reads the setup server-side
+    /// and refuses unless its stamped buyer (<see cref="PaymentMetadata.Buyer"/>) is
+    /// <paramref name="buyer"/>, and unless the setup can still be completed. The caller passes the
+    /// signed-in identity of the session the form renders in — never a value from the page. The
+    /// answer (<see cref="PaymentSetupClientSecret"/>) is never written to a node, an activity, a log
+    /// line, a URL, a cache or browser storage; it goes to that one browser and into the provider's
+    /// own script.</para>
+    ///
+    /// <para>The default refuses with a <see cref="NotSupportedException"/> — a contract violation by
+    /// a caller that did not ask <see cref="RevealsClientSecret"/> first, and therefore not
+    /// localized.</para>
+    /// </summary>
+    /// <param name="setupId">The provider's setup reference.</param>
+    /// <param name="buyer">The signed-in identity of the session the form renders in.</param>
+    /// <returns>A cold observable emitting the secret once.</returns>
+    IObservable<PaymentSetupClientSecret> RevealClientSecret(string setupId, string buyer) =>
+        Observable.Throw<PaymentSetupClientSecret>(new NotSupportedException(
+            $"Contract violation: {DisplayName} does not hand out setup client secrets "
+            + $"({nameof(RevealsClientSecret)} is false) — check it before calling {nameof(RevealClientSecret)}."));
+
+    /// <summary>
     /// Whether this provider can remove a saved method (<see cref="RemovePaymentMethod"/>). Defaults
     /// to <c>false</c>; a caller offers "Remove" only when this is true.
     /// </summary>
