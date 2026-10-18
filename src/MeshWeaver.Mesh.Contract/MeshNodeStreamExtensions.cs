@@ -1864,6 +1864,10 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                             if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
                             {
                                 var sealedPath = current.Path;
+                                // A seal whose owner was torn down and whose store fence FAILED is still holding
+                                // this path: this write needs the answer, so the fence runs again — driven by the
+                                // write, never by a timer.
+                                versionGuard.RetryFailedFence(sealedPath);
                                 deferral.Disposable = versionGuard.VersionGuardLifted(sealedPath).Subscribe(
                                     outcome =>
                                     {

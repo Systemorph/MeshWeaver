@@ -487,12 +487,15 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
         var stored = (await Stored(node.Path))!.Version;
 
+        // Sealed IN the acknowledgement's own emission — synchronously, before the test continuation
+        // or the sampler's next tick can run — so the sampled save of this write meets the row guard.
+        var sealedOnAck = false;
         var acked = await owner.GetWorkspace().GetMeshNodeStream()
             .Update(n => n with { Name = "acknowledged before the seal" })
+            .Do(_ => sealedOnAck = registry.TakeOwnerDeleteSeal(
+                "resume-seal", node.Path, owner.RegisterForDisposalDetachable))
             .Should().Within(TestTimeouts.Convergence).Emit("an own write is acknowledged from memory", Ct);
-        // Sealed at once — well inside the sampler's 200 ms window, so the save meets the row guard.
-        registry.TakeOwnerDeleteSeal("resume-seal", node.Path, owner.RegisterForDisposalDetachable)
-            .Should().BeTrue();
+        sealedOnAck.Should().BeTrue();
         try
         {
             await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)

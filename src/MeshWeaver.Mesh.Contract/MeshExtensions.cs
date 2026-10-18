@@ -3875,7 +3875,7 @@ public static class MeshExtensions
     private static IObservable<ValidateDeleteResponse> CompareLiveVersionInOwnerTurn(
         IMessageHub hub, string path, long expected, TimeSpan bound,
         string? sealId = null, RecentlyDeletedRegistry? sealRegistry = null, Address? sealReleaseAddress = null,
-        Func<MeshNode, Func<IObservable<bool>>>? fenceFor = null)
+        Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = null)
     {
         var workspace = hub.GetWorkspace();
         var primary = workspace.DataContext.GetDataSourceForType(typeof(MeshNode))?.GetStreamForPartition(null);
@@ -3971,46 +3971,63 @@ public static class MeshExtensions
     /// otherwise. A row already past the confirmed version needs no fence; a lost compare-and-set reads
     /// again, because whatever moved the row decides what is left to do.
     /// </summary>
-    private static IObservable<bool> FenceTheConfirmedRow(
+    internal static IObservable<bool> FenceTheConfirmedRow(
         IStorageAdapter storage, MeshNode confirmed, System.Text.Json.JsonSerializerOptions options, ILogger logger,
-        int attempt = 0)
-        => Observable.Defer(() => storage.Read(confirmed.Path, options))
-            .Take(1)
-            .DefaultIfEmpty(null)
-            .SelectMany(stored =>
-            {
-                if (stored is null)
-                    return Observable.Return(true);
-                if (stored.Version > confirmed.Version)
-                    return Observable.Return(false);
-                var fence = confirmed with { Version = MeshNode.NextVersion(confirmed.Version) };
-                return storage.WriteIfVersion(fence, stored.Version, options)
-                    .Take(1)
-                    .DefaultIfEmpty(null)
-                    .SelectMany(applied =>
-                    {
-                        if (applied == true)
+        Func<bool> stop, int attempt = 0)
+        // 🚨 The WRITABLE row is what the fence moves and what it may find gone. A plain read also
+        // serves read-only fallback content (shipped content under a removed override, at version 0),
+        // and a compare-and-set expecting that version would INSERT the deleted override again.
+        => Observable.Defer(() => stop()
+                ? Observable.Return(false)
+                : storage.ExistsInWritableStorage(confirmed.Path).Take(1))
+            .SelectMany(exists => stop()
+                ? Observable.Return(false)
+                : !exists
+                    ? Observable.Return(true)
+                    : storage.Read(confirmed.Path, options).Take(1).DefaultIfEmpty(null)
+                        .SelectMany(stored =>
                         {
-                            logger.LogInformation(
-                                "[DeleteNode] owner torn down holding a delete seal: fenced '{Path}' at version "
-                                + "{Fence} (confirmed {Confirmed}) — a delete still on its way is refused",
-                                confirmed.Path, fence.Version, confirmed.Version);
-                            return Observable.Return(false);
-                        }
-                        if (attempt < MaxFenceAttempts)
-                            return FenceTheConfirmedRow(storage, confirmed, options, logger, attempt + 1);
-                        logger.LogWarning(
-                            "[DeleteNode] could not fence '{Path}' after {Attempts} compare-and-set attempts "
-                            + "(the row kept moving) — a delete still on its way is refused only if the row "
-                            + "is newer than version {Confirmed}", confirmed.Path, attempt + 1, confirmed.Version);
-                        return Observable.Return(false);
-                    });
-            })
+                            if (stop())
+                                return Observable.Return(false); // the delete's own verdict arrived
+                            if (stored is null)
+                                return Observable.Return(true);
+                            // Already past the confirmed version: the paused delete is refused anyway.
+                            // A version-0 row is no versioned writable row (fallback content): never
+                            // fence it — expecting 0 is the insert-if-absent form.
+                            if (stored.Version > confirmed.Version || stored.Version <= 0)
+                                return Observable.Return(false);
+                            // 🚨 Another INCARNATION — the node was deleted and created again (a new
+                            // CreatedDate). Its version can be at or below the confirmed one, and the
+                            // fence would overwrite the new node with the old confirmed state. Leave it.
+                            if (stored.CreatedDate != confirmed.CreatedDate)
+                                return Observable.Return(false);
+                            var fence = confirmed with { Version = MeshNode.NextVersion(confirmed.Version) };
+                            return storage.WriteIfVersion(fence, stored.Version, options)
+                                .Take(1)
+                                .DefaultIfEmpty(null)
+                                .SelectMany(applied =>
+                                {
+                                    if (applied == true)
+                                    {
+                                        logger.LogInformation(
+                                            "[DeleteNode] owner torn down holding a delete seal: fenced '{Path}' at "
+                                            + "version {Fence} (confirmed {Confirmed}) — a delete still on its way is refused",
+                                            confirmed.Path, fence.Version, confirmed.Version);
+                                        return Observable.Return(false);
+                                    }
+                                    if (attempt < MaxFenceAttempts)
+                                        return FenceTheConfirmedRow(storage, confirmed, options, logger, stop, attempt + 1);
+                                    // The row kept moving: that is a FAULT, not a proof — the guard stays.
+                                    return Observable.Throw<bool>(new InvalidOperationException(
+                                        $"could not fence '{confirmed.Path}' after {attempt + 1} compare-and-set attempts"));
+                                });
+                        }))
             .Catch((Exception ex) =>
             {
                 logger.LogWarning(ex,
-                    "[DeleteNode] the store fence for '{Path}' failed — a delete still on its way is refused only "
-                    + "if the row is newer than version {Confirmed}", confirmed.Path, confirmed.Version);
+                    "[DeleteNode] the store fence for '{Path}' failed — the owner keeps the path sealed until the "
+                    + "delete's commit or abort arrives, or the next deferred write runs the fence again",
+                    confirmed.Path);
                 return Observable.Throw<bool>(ex);
             });
 
@@ -6864,7 +6881,15 @@ public static class MeshExtensions
         }
         if (registry?.ReleaseOwnerDeleteSeal(release.SealId, release.Path, release.Outcome) == true)
         {
-            Answer(true);
+            // A seal whose owner was torn down may still be fencing: answer once it settled, so the
+            // delete's success never reaches its caller while the fence could still write the row.
+            registry.OwnerSealSettled(release.SealId).Take(1).Subscribe(
+                _ => Answer(true),
+                ex =>
+                {
+                    logger.LogWarning(ex, "[DeleteNode] seal {SealId} for '{Path}' did not settle", release.SealId, release.Path);
+                    Answer(true);
+                });
             return request.Processed();
         }
         // No seal held. On the node's OWN hub an abort may have overtaken the version check (the
@@ -6950,9 +6975,9 @@ public static class MeshExtensions
             // The store fence the seal runs if this activation is torn down while it holds it — the
             // store and options resolved now, while this hub is alive.
             var jsonOptions = hub.JsonSerializerOptions;
-            Func<MeshNode, Func<IObservable<bool>>>? fenceFor = sealRegistry is null
+            Func<MeshNode, Func<Func<bool>, IObservable<bool>>>? fenceFor = sealRegistry is null
                 ? null
-                : confirmed => () => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger);
+                : confirmed => stop => FenceTheConfirmedRow(persistence, confirmed, jsonOptions, logger, stop);
             CompareLiveVersionInOwnerTurn(hub, path, expectedVersion, nested, request.Message.SealId, sealRegistry,
                     sealReleaseAddress, fenceFor)
                 .Select(answer => (object)answer)

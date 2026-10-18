@@ -314,6 +314,52 @@ public class OwnerHeldDeleteSealTest(OwnerHeldDeleteSealTest.Cluster cluster)
         stored.Should().NotBeNull("the acknowledged write of the replacement survives");
     }
 
+    /// <summary>
+    /// The store fence FAULTS (#6856 review): the owner is recycled while its deleter is paused, and the
+    /// fence's compare-and-set cannot reach the store. A failed fence proves nothing, so the owner's
+    /// process keeps the path sealed: a replacement's own write is deferred, not acknowledged — the
+    /// paused delete could still remove the row it would land on. The delete then commits, its commit
+    /// message settles the seal, and the deferred write is refused. Before, a fence fault lifted the
+    /// guard at once, and the replacement acknowledged a write the delete removed.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AFenceThatFaults_KeepsThePathSealed_UntilTheDeletesCommitSettlesIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-fence-fault");
+        var read = StoredVersion(path);
+
+        using var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        using var fenceFault = Mesh.Storage(OwnerSilo).FailConditionalWrites(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the guarded delete passed the owner's verdict and is paused at the deleter's store", ct);
+
+        owner.Dispose();
+        await fenceFault.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the teardown's fence tried its compare-and-set and faulted", ct);
+
+        var services = Mesh.Silo(OwnerSilo);
+        await services.GetRequiredService<AccessService>().RunAsSystem(() => Mesh.Hub(OwnerSilo).NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+            .Should().Within(TestTimeouts.Convergence).Emit("a replacement activation answers", ct);
+        var replacement = Mesh.Hub(OwnerSilo).GetHostedHub(new Address(path), HostedHubCreation.Never);
+        replacement.Should().NotBeNull();
+        var write = OwnWrite(replacement!, "written while the fence had failed");
+        using var writeConnection = write.Connect();
+        await write.Should().NotEmit(DeferredWindow,
+            "the failed fence keeps the path sealed: a write the paused delete could remove is not acknowledged", ct);
+
+        deleteHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "nothing moved the row past the confirmed version");
+        var answer = await write.Should().Within(TestTimeouts.Convergence)
+            .Emit("the delete's commit settles the seal and answers the deferred write", ct);
+        answer.Kind.Should().Be(NotificationKind.OnError, "the node is deleted; the deferred write was never acknowledged");
+        Mesh.Stored(path).Should().BeNull("nothing acknowledged survives into a stored row the delete reported removed");
+    }
+
     /// <summary>Its own cluster.</summary>
     public class Cluster : FaultInjectionCluster;
 }

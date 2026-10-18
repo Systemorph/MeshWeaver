@@ -1412,24 +1412,39 @@ public static class MeshDataSourceExtensions
             // mesh singleton's subject, and must not pin an abandoned hub.
             static IDisposable InstallSealResume(
                 RecentlyDeletedRegistry registry, OwnNodeCache nodeCache, PendingOwnSave pending,
-                WeakReference<IMessageHub> weakHub, string path)
+                WeakReference<IMessageHub> weakHub, string path, ILogger? logger)
                 => registry.VersionGuardReleases(path)
                     .Where(outcome => !string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal)
                         && !string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
-                    .Subscribe(_ =>
-                    {
-                        if (nodeCache.IsDeleted
-                            || registry.IsVersionGuardedDeletionInFlight(path)
-                            || registry.IsUnderActiveDeletion(path, out string? _)
-                            || registry.IsRecentlyDeleted(path)
-                            || !weakHub.TryGetTarget(out IMessageHub? saveHub)
-                            || saveHub.RunLevel > MessageHubRunLevel.Started
-                            || pending.TakeUnsaved() is not { } unsaved)
-                            return;
-                        var posted = saveHub.Post(new SaveMeshNodeRequest(unsaved));
-                        if (posted is { WasAcceptedForDelivery: true })
-                            pending.MarkRequested(unsaved);
-                    });
+                    // LONG-LIVED (every lift for the hub's life): a fault is handled INSIDE onNext, so
+                    // one failed re-dispatch never stops the next one — and it is logged, not swallowed.
+                    .Subscribe(
+                        _ =>
+                        {
+                            try
+                            {
+                                if (nodeCache.IsDeleted
+                                    || registry.IsVersionGuardedDeletionInFlight(path)
+                                    || registry.IsUnderActiveDeletion(path, out string? _)
+                                    || registry.IsRecentlyDeleted(path)
+                                    || !weakHub.TryGetTarget(out IMessageHub? saveHub)
+                                    || saveHub.RunLevel > MessageHubRunLevel.Started
+                                    || pending.TakeUnsaved() is not { } unsaved)
+                                    return;
+                                var posted = saveHub.Post(new SaveMeshNodeRequest(unsaved));
+                                if (posted is { WasAcceptedForDelivery: true })
+                                    pending.MarkRequested(unsaved);
+                            }
+                            catch (Exception ex)
+                            {
+                                logger?.LogWarning(ex,
+                                    "[SaveMeshNode] could not re-dispatch the save of {Path} that its delete seal "
+                                    + "refused; it stays pending for the next save or the dispose flush", path);
+                            }
+                        },
+                        ex => logger?.LogWarning(ex,
+                            "[SaveMeshNode] the seal-release feed for {Path} faulted; a save its delete seal refused "
+                            + "is re-attempted only by the next save or the dispose flush", path));
 
             // 🚨 The sampler is ONLY for persistence-backed hubs. A hub whose own MeshNode is
             // served from a static source (WithMeshNodes' WithInitialData branch: AddMeshNodes
@@ -1458,7 +1473,8 @@ public static class MeshDataSourceExtensions
                 // acknowledged state not durable for as long as the node stays quiet.
                 if (hub.ServiceProvider.GetService<RecentlyDeletedRegistry>() is { } sealRegistry)
                     hub.RegisterForDisposal(InstallSealResume(
-                        sealRegistry, cache, pending, new WeakReference<IMessageHub>(hub), hub.Address.Path));
+                        sealRegistry, cache, pending, new WeakReference<IMessageHub>(hub), hub.Address.Path,
+                        hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.SaveMeshNodeHandler")));
                 // 🚨 Final flush — the update-path twin of MeshNodeTypeSource's
                 // FlushPendingWrites dispose action (which covers creates/deletes). A write
                 // that commits and ACKS during the Quiescing window sits in the 200 ms Sample

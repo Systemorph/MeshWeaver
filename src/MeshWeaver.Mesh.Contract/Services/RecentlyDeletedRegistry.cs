@@ -512,14 +512,16 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// returns a handle that detaches it — the hub's <c>RegisterForDisposalDetachable</c>.</param>
     /// <param name="fenceOnTeardown">The STORE FENCE run when the owning activation is torn down while
     /// it still holds the seal (#6856): a compare-and-set that moves the stored row past the confirmed
-    /// version, so the delete that may still be on its way is refused at its compare-and-delete. It
-    /// emits <c>true</c> when it found the row already gone (the delete won), which tombstones the path.
+    /// version, so the delete that may still be on its way is refused at its compare-and-delete. It is
+    /// handed a predicate that turns true once the delete's own commit or abort has arrived — the fence
+    /// then stops before its next write. It emits <c>true</c> when it found the writable row already
+    /// gone (the delete won), which tombstones the path.
     /// Until it terminates, this process keeps the version guard, so a replacement activation here
     /// defers its own writes rather than acknowledging one the delete could still remove.</param>
     /// <returns><c>true</c> when the seal is held for <paramref name="sealId"/>; <c>false</c> when the
     /// delete was already aborted.</returns>
     public bool TakeOwnerDeleteSeal(string sealId, string path, Func<IDisposable, IDisposable> bindToOwnerLifetime,
-        Func<IObservable<bool>>? fenceOnTeardown = null)
+        Func<Func<bool>, IObservable<bool>>? fenceOnTeardown = null)
     {
         if (string.IsNullOrEmpty(sealId) || string.IsNullOrEmpty(path))
             return false;
@@ -528,7 +530,9 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             if (_ownerSeals.TryGetValue(sealId, out var existing))
             {
                 if (!existing.IsAbortMark)
-                    return true; // the same delete asked twice: one seal
+                    // The same delete asked twice: one seal — unless the activation that took it was
+                    // torn down and is fencing. A re-ask then gets no seal: the fence answers the delete.
+                    return !existing.IsFencing;
                 // The abort arrived first. Consume its mark; the delete is over.
                 if (_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, existing)))
                 {
@@ -589,14 +593,20 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             {
                 if (seal.IsAbortMark || !string.Equals(seal.Path, path, StringComparison.OrdinalIgnoreCase))
                     return false;
-                if (!_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal)))
-                    continue;
+                if (seal.IsFencing)
+                    return ReleaseFencingSeal(sealId, seal, outcome);
                 if (string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal)
-                    && seal.Fence is { } fence)
+                    && seal.Fence is not null)
                 {
-                    ReleaseThroughFence(seal, fence);
+                    // The entry STAYS while the fence runs: the delete's own commit or abort must still
+                    // find it, and a re-ask must not take a fresh seal.
+                    if (!seal.TryBeginFencing())
+                        continue;
+                    ReleaseThroughFence(sealId, seal);
                     return true;
                 }
+                if (!_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal)))
+                    continue;
                 if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal))
                     MarkDeleted(seal.Path);
                 // Detach from the owner's lifetime; a teardown release is already running inside it.
@@ -625,43 +635,97 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
     /// before the store, and a replacement activation must not acknowledge a write that delete could
     /// still remove. So: the dying activation's deferred writes are refused at once; the row guard is
     /// lifted so the fence itself can write; the fence moves the stored row past the confirmed
-    /// version, which makes the paused delete's compare-and-delete refuse; and only when the fence has
-    /// terminated is the version guard lifted, which lets a replacement here run its deferred writes.
-    /// A fence that found the row gone tombstones the path first — the delete won, and nothing deferred
-    /// may store the node again.
+    /// version, which makes the paused delete's compare-and-delete refuse. The version guard — and
+    /// the seal's entry — stay until the path is SAFE: the fence moved the row, or found it gone (the
+    /// path is then tombstoned), or the delete's own commit or abort arrived.
+    /// <para>🚨 A fence that FAULTS proves nothing about the row, so it settles nothing: the guard
+    /// stays, the entry stays reachable by the delete's commit or abort, and the fence runs again the
+    /// next time an own write on this path is deferred by it (<see cref="RetryFailedFence"/>) — a
+    /// retry driven by a write that needs the answer, never by a timer.</para>
     /// </summary>
-    private void ReleaseThroughFence(OwnerDeleteSeal seal, Func<IObservable<bool>> fence)
+    private void ReleaseThroughFence(string sealId, OwnerDeleteSeal seal)
     {
         _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, DeleteSealOutcome.OwnerTeardown));
         seal.RowGuard!.Dispose();
-        var lifted = 0;
-        void Lift(bool rowGone)
-        {
-            if (Interlocked.Exchange(ref lifted, 1) != 0)
-                return;
-            if (rowGone)
-                MarkDeleted(seal.Path);
-            seal.VersionGuard!.Dispose();
-            _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, DeleteSealOutcome.Lifted));
-        }
+        RunFence(sealId, seal);
+    }
+
+    private void RunFence(string sealId, OwnerDeleteSeal seal)
+    {
         IObservable<bool> run;
         try
         {
-            run = fence();
+            run = seal.Fence!(() => seal.Terminal is not null);
         }
         catch (Exception)
         {
-            // A fence that cannot even be composed (the owner's scope is already gone) must not keep
-            // the guard: holding it would block this path's writes for good.
-            Lift(rowGone: false);
+            seal.MarkFenceFailed();
             return;
         }
         run.Take(1).DefaultIfEmpty(false).Subscribe(
-            Lift,
-            // The fence reports its own failure (it logs before it faults); the guard is lifted either
-            // way — holding it would block this path's writes for good.
-            _ => Lift(rowGone: false));
+            rowGone => Settle(sealId, seal, rowGone),
+            // Failed: the row was not proven safe. Keep the guard; a terminal message or the next
+            // deferred write settles it.
+            _ =>
+            {
+                seal.MarkFenceFailed();
+                if (seal.Terminal is not null)
+                    Settle(sealId, seal, rowGone: false);
+            });
     }
+
+    /// <summary>The delete's commit or abort for a seal whose owner was torn down and is fencing.</summary>
+    private bool ReleaseFencingSeal(string sealId, OwnerDeleteSeal seal, string outcome)
+    {
+        if (string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
+            return false;
+        if (!seal.TrySetTerminal(outcome))
+            return true;
+        // Committed: the node is gone. Tombstoned NOW, so nothing deferred or pending stores it again
+        // while the fence finishes (the fence itself stops before its next write).
+        if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal))
+            MarkDeleted(seal.Path);
+        if (seal.FenceFailed)
+            Settle(sealId, seal, rowGone: false);
+        return true;
+    }
+
+    private void Settle(string sealId, OwnerDeleteSeal seal, bool rowGone)
+    {
+        if (!seal.TrySettle())
+            return;
+        _ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal));
+        if (rowGone)
+            MarkDeleted(seal.Path);
+        seal.VersionGuard!.Dispose();
+        _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, seal.Terminal ?? DeleteSealOutcome.Lifted));
+        seal.Settled.OnNext(System.Reactive.Unit.Default);
+        seal.Settled.OnCompleted();
+    }
+
+    /// <summary>
+    /// Runs the store fence again for every seal on <paramref name="path"/> whose fence FAILED (#6856).
+    /// Called when an own write is deferred by such a seal: that write needs the answer.
+    /// </summary>
+    /// <param name="path">The sealed path.</param>
+    public void RetryFailedFence(string path)
+    {
+        foreach (var (sealId, seal) in _ownerSeals)
+            if (string.Equals(seal.Path, path, StringComparison.OrdinalIgnoreCase) && seal.TryRetryFence())
+                RunFence(sealId, seal);
+    }
+
+    /// <summary>
+    /// Emits once when the owner's seal <paramref name="sealId"/> has settled — at once when no such
+    /// seal is held here. A commit for a seal whose owner is fencing answers only after this, so the
+    /// delete's success never reaches its caller while the fence could still write.
+    /// </summary>
+    /// <param name="sealId">The delete's seal id.</param>
+    /// <returns>One unit when the seal is settled.</returns>
+    public IObservable<System.Reactive.Unit> OwnerSealSettled(string sealId)
+        => _ownerSeals.TryGetValue(sealId, out var seal) && seal.IsFencing
+            ? seal.Settled.AsObservable()
+            : Observable.Return(System.Reactive.Unit.Default);
 
     /// <summary>
     /// Emits once, the next time a version-guard seal on <paramref name="path"/> is lifted, with the
@@ -704,8 +768,12 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
 
     private sealed class OwnerDeleteSeal
     {
+        // 0 held, 1 fencing, 2 fence failed, 3 settled.
+        private int _phase;
+        private string? _terminal;
+
         private OwnerDeleteSeal(string path, IDisposable? versionGuard, IDisposable? rowGuard,
-            Func<IObservable<bool>>? fence)
+            Func<Func<bool>, IObservable<bool>>? fence)
         {
             Path = path;
             VersionGuard = versionGuard;
@@ -714,7 +782,7 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         }
 
         public static OwnerDeleteSeal Held(string path, IDisposable versionGuard, IDisposable rowGuard,
-            Func<IObservable<bool>>? fence)
+            Func<Func<bool>, IObservable<bool>>? fence)
             => new(path, versionGuard, rowGuard, fence);
 
         /// <summary>The delete was aborted before the owner compared: no guards, only the refusal.</summary>
@@ -723,9 +791,21 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         public string Path { get; }
         public IDisposable? VersionGuard { get; }
         public IDisposable? RowGuard { get; }
-        public Func<IObservable<bool>>? Fence { get; }
+        public Func<Func<bool>, IObservable<bool>>? Fence { get; }
         public bool IsAbortMark => VersionGuard is null;
         public System.Reactive.Disposables.SingleAssignmentDisposable Teardown { get; } = new();
+        public AsyncSubject<System.Reactive.Unit> Settled { get; } = new();
+
+        /// <summary>The delete's own commit or abort, once it arrived during the fence.</summary>
+        public string? Terminal => Volatile.Read(ref _terminal);
+
+        public bool IsFencing => Volatile.Read(ref _phase) is 1 or 2;
+        public bool FenceFailed => Volatile.Read(ref _phase) == 2;
+        public bool TryBeginFencing() => Interlocked.CompareExchange(ref _phase, 1, 0) == 0;
+        public void MarkFenceFailed() => Interlocked.CompareExchange(ref _phase, 2, 1);
+        public bool TryRetryFence() => Interlocked.CompareExchange(ref _phase, 1, 2) == 2;
+        public bool TrySettle() => Interlocked.Exchange(ref _phase, 3) != 3;
+        public bool TrySetTerminal(string outcome) => Interlocked.CompareExchange(ref _terminal, outcome, null) is null;
     }
 
     /// <summary>

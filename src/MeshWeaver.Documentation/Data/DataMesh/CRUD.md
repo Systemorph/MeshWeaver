@@ -402,8 +402,14 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   row**: a compare-and-set (`WriteIfVersion`) moves the row one version past the confirmed version,
   carrying the confirmed state. The paused delete's compare-and-delete then refuses it, and the delete
   answers `Conflict`. A replacement activation in the same process defers its own writes until the
-  fence has landed. If the fence finds the row already gone, the delete won: the path is tombstoned,
-  and nothing deferred stores it again. A deleter that died leaves exactly this case, so no timer is
+  fence has landed. If the fence finds the writable row already gone, the delete won: the path is
+  tombstoned, and nothing deferred stores it again. The fence moves only the confirmed node's own
+  writable row. It never writes over read-only fallback content (version 0, which would recreate a
+  removed override), never over a node that was deleted and created again (a different
+  `CreatedDate`), and it stops once the delete's own commit or abort has arrived. A commit that
+  arrives during the fence is answered only after the fence has terminated. **A fence that fails
+  settles nothing**: the path stays sealed until the delete's commit or abort arrives, and the next
+  own write the seal defers runs the fence again. A deleter that died leaves exactly this case, so no timer is
   needed. One window remains: a replacement activation on **another** silo is not deferred. It can
   acknowledge a write in the moment between the teardown and the fence landing, and that write is
   removed only if the paused delete also reaches the store in that same moment. The window is the

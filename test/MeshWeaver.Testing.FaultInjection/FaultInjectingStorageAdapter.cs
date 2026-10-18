@@ -47,6 +47,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _hidden = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _enumerationHolds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
@@ -103,6 +104,19 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _deleteHolds.GetOrAdd(key, k => new FaultSwitch($"{Name}: hold deletes of {k}",
             s => _deleteHolds.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every compare-and-set (<c>WriteIfVersion</c>) of <paramref name="path"/> FAULTS
+    /// until the returned switch is released — a store that cannot be reached for the conditional write
+    /// (MeshWeaver#6856, the owner-teardown store fence). Each faulted call is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose conditional writes fault.</param>
+    public FaultSwitch FailConditionalWrites(string path)
+    {
+        var key = Norm(path);
+        return _conditionalWriteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail conditional writes of {k}",
+            s => _conditionalWriteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -244,7 +258,16 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-        => HeldWrite(node, () => _inner.WriteIfVersion(node, expectedVersion, options));
+        => Observable.Defer(() =>
+        {
+            if (_conditionalWriteFaults.TryGetValue(Norm(node.Path), out var fault) && fault.IsClosed)
+            {
+                fault.NoteArrival($"WriteIfVersion {node.Path} v{node.Version}");
+                return Observable.Throw<bool?>(new InvalidOperationException(
+                    $"{Name}: injected fault — the conditional write of {node.Path} could not reach the store"));
+            }
+            return HeldWrite(node, () => _inner.WriteIfVersion(node, expectedVersion, options));
+        });
 
     /// <inheritdoc />
     public IObservable<string> Delete(string path) => HeldDelete([path], () => _inner.Delete(path));
