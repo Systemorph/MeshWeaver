@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -29,7 +30,10 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).AddMeshNodes(new MeshNode(ApprovalType)
+        => base.ConfigureMesh(builder).AddMeshNodes(
+            // The approval RECORD's type, as the Approvals package registers it: the ledger reads its nodes.
+            new MeshNode("Approval", "Approvals") { HubConfiguration = config => config.WithContentType<Approval>() },
+            new MeshNode(ApprovalType)
         {
             HubConfiguration = config => config.WithHandler<DecideApprovalRequest>((hub, request) =>
             {
@@ -157,6 +161,172 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
         InboxLayoutArea.DecideBatch(page).Should().Equal(page.Take(StepUpPaths.MaxTargets), "the first ones, in page order");
         InboxLayoutArea.DecideBatch(page[..3]).Should().Equal(page[..3], "a small selection is decided whole");
         StepUpPaths.MaxTargets.Should().BeLessThan(InboxQueries.LegLimit, "otherwise the cap would never bite and this test proves nothing");
+    }
+
+    private const string LedgerType = InboxQueries.ApprovalNodeType;
+
+    /// <summary>
+    /// The approvals ledger legs resolved for <paramref name="owner"/>: refused only when they are not
+    /// core's own viewer-keyed shape, and brought by the Approvals source in the bands after Needs you.
+    /// </summary>
+    [Fact]
+    public void TheLedgerLegs_AreViewerKeyed_BoundedByTheWindow_AndAfterWaitingOnMe()
+    {
+        var now = new DateTimeOffset(2026, 10, 18, 12, 0, 0, TimeSpan.Zero);
+        var sections = InboxQueries.Resolve(InboxQueries.BuiltIn, "alice", now);
+        var ledger = sections.Where(l => InboxQueries.LedgerKindOf(l.Query) is not null).ToArray();
+
+        ledger.Should().HaveCount(3);
+        ledger.Should().OnlyContain(l => l.Source == InboxQueries.ApprovalsSource && l.ShownByDefault);
+        ledger.Count(l => InboxQueries.LedgerKindOf(l.Query) == ApprovalLedgerKind.Requested).Should().Be(1);
+        ledger.Where(l => InboxQueries.LedgerKindOf(l.Query) == ApprovalLedgerKind.Decided)
+            .Should().OnlyContain(l => l.Query.Contains("content.approvalDate:>=2026-10-04 "), "14 days before the clock");
+        // As the page orders them: what waits on the viewer first, then what they are waiting for, then what was decided.
+        InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Where(s => s.Source == InboxQueries.ApprovalsSource)
+            .Select(s => s.Band).Should().Equal(
+                InboxBand.NeedsYou, InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent, InboxBand.Recent);
+    }
+
+    /// <summary>
+    /// Only core's exact ledger shapes may read across partitions: a contributed leg keyed to someone
+    /// else, unkeyed, or for another type is refused, as is any unanchored leg.
+    /// </summary>
+    [Theory]
+    [InlineData("nodeType:Approvals/Approval content.requester:bob partitions:all")]
+    [InlineData("nodeType:Approvals/Approval partitions:all")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice content.approver:alice partitions:all")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice namespace:bob partitions:all")]
+    [InlineData("nodeType:Approvals/Approval content.requester:alice")]
+    public void AContributedCrossPartitionLeg_IsRefused(string query)
+    {
+        var leg = new InboxQueryLeg { Source = "Mine", Query = query.Replace("alice", InboxQueries.ViewerToken) };
+        InboxQueries.Resolve([leg], "alice").Should().BeEmpty();
+        InboxQueries.Refused([leg], "alice").Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// "Requested by me" holds only the viewer's still-pending requests, wherever the document lives:
+    /// not a decided one, and not another person's.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task RequestedByMe_ListsOnlyTheViewersPendingRequests()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedLedger(ct, "ledger-req");
+        var now = DateTimeOffset.UtcNow;
+        await Approve("ledger-req-doc-a", "r1", "ledger-req-alice", "ledger-req-bob", ApprovalStatus.Pending, null, ct);
+        await Approve("ledger-req-doc-b", "r2", "ledger-req-alice", "ledger-req-carol", ApprovalStatus.Pending, null, ct);
+        await Approve("ledger-req-doc-a", "r3", "ledger-req-alice", "ledger-req-bob", ApprovalStatus.Approved, now.AddDays(-1), ct);
+        await Approve("ledger-req-doc-b", "r4", "ledger-req-bob", "ledger-req-alice", ApprovalStatus.Pending, null, ct);
+
+        var kind = ApprovalLedgerKind.Requested;
+        (await LedgerIds("ledger-req-alice", kind, ids => ids.Length >= 2, ct)).Should().Equal(["r1", "r2"]);
+        (await LedgerIds("ledger-req-bob", kind, ids => ids.Length >= 1, ct)).Should().Equal(["r4"],
+            "the other person's request is theirs, not the approver's to see here");
+        (await LedgerIds("ledger-req-carol", kind, ids => true, ct)).Should().BeEmpty("carol requested nothing");
+    }
+
+    /// <summary>
+    /// "Decided" shows the approvals the viewer asked OR was asked, decided inside the window, with the
+    /// outcome and the approver; an older decision and a stranger's are not listed.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task Decided_ShowsOutcomeAndApprover_WithinTheWindow_ForRequesterAndApprover()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedLedger(ct, "ledger-dec");
+        var now = DateTimeOffset.UtcNow;
+        await Approve("ledger-dec-doc-a", "d1", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-2), ct);
+        await Approve("ledger-dec-doc-b", "d2", "ledger-dec-carol", "ledger-dec-alice", ApprovalStatus.Rejected, now.AddDays(-3), ct);
+        await Approve("ledger-dec-doc-a", "old", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-30), ct);
+        await Approve("ledger-dec-doc-b", "other", "ledger-dec-carol", "ledger-dec-bob", ApprovalStatus.Approved, now.AddDays(-1), ct);
+        await Approve("ledger-dec-doc-b", "waiting", "ledger-dec-alice", "ledger-dec-bob", ApprovalStatus.Pending, null, ct);
+
+        (await LedgerIds("ledger-dec-alice", ApprovalLedgerKind.Decided, ids => ids.Length >= 2, ct)).Should().Equal(["d1", "d2"]);
+
+        var rows = await LedgerRows("ledger-dec-alice", ApprovalLedgerKind.Decided, "UTC", ct);
+        rows.Single(r => r.Path.EndsWith("/d1")).From.Should().Be("Approved by ledger-dec-bob");
+        rows.Single(r => r.Path.EndsWith("/d2")).From.Should().Be("Rejected by ledger-dec-alice");
+        rows.Should().OnlyContain(r => r.Band == "Recent");
+    }
+
+    /// <summary>The decided time is shown in the VIEWER's zone, not the container's UTC.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheDecidedTime_IsShownInTheViewersZone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedLedger(ct, "ledger-tz");
+        var decided = DateTimeOffset.UtcNow.AddDays(-1).Date.AddHours(23).AddMinutes(30);
+        var at = new DateTimeOffset(decided, TimeSpan.Zero);
+        await Approve("ledger-tz-doc-a", "z1", "ledger-tz-alice", "ledger-tz-bob", ApprovalStatus.Approved, at, ct);
+
+        var utc = (await LedgerRows("ledger-tz-alice", ApprovalLedgerKind.Decided, "UTC", ct)).Single().When;
+        var auckland = (await LedgerRows("ledger-tz-alice", ApprovalLedgerKind.Decided, "Pacific/Auckland", ct)).Single().When;
+        var la = (await LedgerRows("ledger-tz-alice", ApprovalLedgerKind.Decided, "America/Los_Angeles", ct)).Single().When;
+
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+        utc.Should().Be(DisplayTimeExtensions.ToDisplayTime(at, "UTC").ToString("g", culture));
+        auckland.Should().Be(DisplayTimeExtensions.ToDisplayTime(at, "Pacific/Auckland").ToString("g", culture))
+            .And.NotBe(utc, "Auckland is 12-13 hours ahead of UTC and crosses the date");
+        la.Should().Be(DisplayTimeExtensions.ToDisplayTime(at, "America/Los_Angeles").ToString("g", culture)).And.NotBe(utc);
+    }
+
+    /// <summary>A pending request says who it waits on.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task APendingRequest_SaysWhoItWaitsOn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedLedger(ct, "ledger-who");
+        await Approve("ledger-who-doc-a", "w1", "ledger-who-alice", "ledger-who-bob", ApprovalStatus.Pending, null, ct);
+        var rows = await LedgerRows("ledger-who-alice", ApprovalLedgerKind.Requested, "UTC", ct);
+        rows.Single().From.Should().Be("Requested from ledger-who-bob");
+        rows.Single().Band.Should().Be("Running");
+    }
+
+    private async Task SeedLedger(CancellationToken ct, string prefix)
+    {
+        foreach (var user in new[] { "alice", "bob", "carol" })
+            await CreateUserAsync($"{prefix}-{user}", ct);
+        foreach (var doc in new[] { "doc-a", "doc-b" })
+            await CreateAsync(new MeshNode($"{prefix}-{doc}") { NodeType = ApprovalType, Name = doc }, ct);
+    }
+
+    private Task Approve(string doc, string id, string requester, string approver, ApprovalStatus status, DateTimeOffset? at, CancellationToken ct)
+        => CreateAsync(new MeshNode(id, $"{doc}/_Approval")
+        {
+            NodeType = LedgerType, Name = $"Approval: {id}", MainNode = doc, State = MeshNodeState.Active,
+            Content = new Approval
+            {
+                Id = id, PrimaryNodePath = doc, Requester = requester, Approver = approver, Purpose = id,
+                Status = status, ApprovalDate = at, CreatedAt = (at ?? DateTimeOffset.UtcNow).AddHours(-1),
+            },
+        }, ct);
+
+    private ImmutableArray<InboxSection> LedgerSections(string owner, ApprovalLedgerKind kind)
+        => [.. InboxLayoutArea.Sections(InboxQueries.BuiltIn, owner).Where(s => s.Ledger == kind)];
+
+    private async Task<string[]> LedgerIds(string owner, ApprovalLedgerKind kind, Func<string[], bool> until, CancellationToken ct)
+        => await LedgerSections(owner, kind)
+            .Select(section => InboxLayoutArea.Nodes(Mesh, section, string.Empty, owner))
+            .CombineLatest()
+            .Select(legs => legs.SelectMany(nodes => nodes.Select(n => n.Id)).Distinct().OrderBy(id => id, StringComparer.Ordinal).ToArray())
+            .Where(until)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    private async Task<InboxRow[]> LedgerRows(string owner, ApprovalLedgerKind kind, string zone, CancellationToken ct)
+    {
+        var sections = LedgerSections(owner, kind);
+        var texts = InboxApprovalLedger.Texts.Of("Requested from {0}", "Approved by {0}", "Rejected by {0}");
+        await LedgerIds(owner, kind, ids => ids.Length > 0, ct);
+        return await sections
+            .Select(section => InboxLayoutArea.Nodes(Mesh, section, string.Empty, owner)
+                .Select(nodes => nodes.Select(node => InboxApprovalLedger.Decorate(
+                    InboxRows.Of(node, section, zone, null, section.Band, 0, "Approvals", System.Globalization.CultureInfo.InvariantCulture, Mesh.JsonSerializerOptions),
+                    node, section.Ledger, texts, Mesh.JsonSerializerOptions)).ToArray()))
+            .CombineLatest()
+            .Select(legs => legs.SelectMany(rows => rows).GroupBy(r => r.Path).Select(g => g.First()).ToArray())
+            .Where(rows => rows.Length > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
     private static string[] Legs(string owner, string source)

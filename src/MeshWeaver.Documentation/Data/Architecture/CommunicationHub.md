@@ -327,7 +327,7 @@ strings, anchored the same way. The bands differ only in what their legs select:
 |---|---|---|
 | **Needs you** | open obligations addressed to the viewer | `☐` |
 | **Running** | marked activities still going (`ActivityStatus.Running`) **and threads executing**; a marked activity that FAILED is in *Needs you* | `⏳` |
-| **Last 24 hours** | *(designed; core feeds no leg into it today)* | `✅` |
+| **Last 24 hours** | *(core feeds it the approvals decided in the last 14 days — see the ledger under Approvals)* | `✅` |
 
 🚨 **As built (policy `inbox-activities-need-someone`):** core's own Activities source lists only
 the runs MARKED for the inbox (`ActivityLog.ShowInInbox`, set by the code that starts a run a person
@@ -461,6 +461,22 @@ governed-activity signature — so the Approvals leg reads the viewer's own `_No
 and the notification feed no longer carries them. 🚨 `NotificationType.ApprovalRequired` is the enum
 DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
 (`InboxQueries.StampedNotificationTypes`, pinned against the enum by a test).
+
+**The Approvals source also carries a ledger: requested by me, and recently decided.** Three groups
+share the one Approvals switch and category, in band order. *Needs you* is the notifications above.
+*Running* lists the approvals the viewer REQUESTED that still wait for their approver, each saying
+"Requested from X". *Recent* lists the approvals decided in the last 14 days (`InboxQueries.DecidedWindow`)
+where the viewer was the requester OR the approver, each saying "Approved by X" / "Rejected by X" and
+timed by the decision, in the viewer's zone (`InboxRows.Of`, via `AccessService.ToDisplayTime`). These
+rows are the approval RECORDS themselves (`Approval`, the `_Approval` satellites beside their documents),
+opened at the approval's own page. 🚨 They are the one place a built-in leg is **not partition-anchored**:
+a record lives beside its document, in any partition, and only the approver ever gets a copy in their
+own — so the requester has nothing of their own to anchor on. Each ledger leg is instead keyed to the
+viewer (`content.requester:{viewer}` / `content.approver:{viewer}`), bounded, projected and DECLARED
+mesh-wide (`partitions:all`), and runs as the viewer, so access still narrows it.
+`InboxQueries.IsLedgerQuery` admits exactly those shapes; a contributed leg that is not anchored stays
+refused. Pending is the enum default and omitted from stored JSON, so *requested* negates the two
+stamped decisions rather than matching `Pending`.
 
 **Approve / Reject act on every ticked approval request.** The inbox sends the node the request
 points at (its `TargetNodePath`) a `DecideApprovalRequest` **as the approver** — the decision is
@@ -870,6 +886,13 @@ twice.
 - **Which approval types answer `DecideApprovalRequest`.** The contract and the inbox side ship in
   core; each approval type handles it in its own package (document approvals and instance actions
   first). A type that does not answer leaves its requests listed and reports "no answer".
+- **Who decided.** The `Approval` record names the approver it was asked of, not the person who
+  actually decided; the ledger therefore says "Approved by {approver}". A decision made by someone
+  else with the right to (a sole-maintainer override) reads as the named approver until the record
+  carries its decider.
+- **The ledger reads across partitions.** Its cost on a large instance is measured nowhere yet: the
+  query is node-type- and viewer-keyed and capped at 100 rows a leg, but it is mesh-wide by
+  declaration and re-evaluates on changes to approval records.
 - **"Done" is judged on the writer's mirror, not on the owner's verdict.** A handler counts an item
   as put away when its update lambda changed the content it was handed and the written result is in
   the asked-for state. If the same item was put away in ANOTHER session a moment earlier and this

@@ -6,6 +6,16 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Graph;
 
+/// <summary>The two groups of the approvals ledger.</summary>
+internal enum ApprovalLedgerKind
+{
+    /// <summary>Asked by the viewer and still pending.</summary>
+    Requested,
+
+    /// <summary>Decided within the window; the viewer asked or was asked.</summary>
+    Decided,
+}
+
 /// <summary>
 /// Resolves the inbox's legs for one viewer — the read side of "everyone brings their own food".
 ///
@@ -120,7 +130,7 @@ public static class InboxQueries
     /// <paramref name="viewer"/>'s: its first term is a <c>namespace:</c> or <c>path:</c> whose first
     /// segment is the viewer, literally — no wildcard, no alternation — it is the query's ONLY
     /// <c>namespace:</c>/<c>path:</c> term, and the path the PARSER resolves (and any path list) lies
-    /// in the viewer's partition with no <c>partitions:all</c>. A leg that fails is never run (<see cref="Resolve"/> drops it): an
+    /// in the viewer's partition with no <c>partitions:all</c>. A leg that fails is never run (<see cref="Resolve(System.Collections.Generic.IEnumerable{InboxQueryLeg}, string)"/> drops it): an
     /// unanchored query is a fan-out over every partition schema, on every render of every inbox.
     /// </summary>
     /// <param name="resolvedQuery">The leg's query with the viewer substituted.</param>
@@ -163,7 +173,7 @@ public static class InboxQueries
     }
 
     /// <summary>
-    /// The enabled legs <see cref="Resolve"/> refuses to run because they are not anchored on
+    /// The enabled legs <see cref="Resolve(System.Collections.Generic.IEnumerable{InboxQueryLeg}, string)"/> refuses to run because they are not anchored on
     /// <paramref name="viewer"/>'s partition — their query, or the query that finds their connection
     /// (<see cref="InboxQueryLeg.ConnectedWhen"/>) — for the page to LOG, so a provider's mistake is
     /// loud rather than a silently missing source.
@@ -171,7 +181,7 @@ public static class InboxQueries
     /// <param name="legs">The contributed legs.</param>
     /// <param name="viewer">The viewer's partition.</param>
     public static ImmutableArray<InboxQueryLeg> Refused(IEnumerable<InboxQueryLeg> legs, string viewer)
-        => [.. Substituted(legs, viewer).Where(leg => !Runnable(leg, viewer))];
+        => [.. Prepared(legs, viewer, DateTimeOffset.UtcNow).Where(p => !p.Runnable).Select(p => p.Leg)];
 
     /// <summary>
     /// Whether <paramref name="leg"/> reads only <paramref name="viewer"/>'s partition: its query, and
@@ -181,15 +191,29 @@ public static class InboxQueries
         => IsAnchored(leg.Query, viewer)
            && (string.IsNullOrWhiteSpace(leg.ConnectedWhen) || IsAnchored(leg.ConnectedWhen, viewer));
 
-    private static IEnumerable<InboxQueryLeg> Substituted(IEnumerable<InboxQueryLeg> legs, string viewer)
+    /// <summary>
+    /// The enabled legs with the viewer (and the decided-approvals window, relative to
+    /// <paramref name="now"/>) substituted, each with whether it may run. A ledger leg
+    /// (<see cref="IsLedgerTemplate"/>) is viewer-KEYED instead of partition-anchored, and only core's
+    /// own exact shapes qualify (<see cref="IsLedgerQuery"/>).
+    /// </summary>
+    private static IEnumerable<(InboxQueryLeg Leg, bool Runnable)> Prepared(IEnumerable<InboxQueryLeg> legs, string viewer, DateTimeOffset now)
         => legs.Where(leg => leg.Enabled && !string.IsNullOrWhiteSpace(leg.Query))
-            .Select(leg => leg with
+            .Select(leg =>
             {
-                Query = leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal),
-                ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen)
-                    ? null
-                    : leg.ConnectedWhen.Replace(ViewerToken, viewer, StringComparison.Ordinal),
+                var resolved = leg with
+                {
+                    Query = Substitute(leg.Query, viewer, now),
+                    ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen) ? null : Substitute(leg.ConnectedWhen, viewer, now),
+                };
+                return (resolved, IsLedgerTemplate(leg.Query)
+                    ? IsLedgerQuery(resolved.Query, viewer) && resolved.ConnectedWhen is null
+                    : Runnable(resolved, viewer));
             });
+
+    private static string Substitute(string template, string viewer, DateTimeOffset now)
+        => template.Replace(ViewerToken, viewer, StringComparison.Ordinal)
+            .Replace(DecidedSinceToken, now.UtcDateTime.Subtract(DecidedWindow).ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
 
     /// <summary>
     /// The terminal <c>ActivityStatus</c> values, as query terms. 🚨 <c>Running</c> is the enum
@@ -221,6 +245,11 @@ public static class InboxQueries
         // Approval requests — their own source, shown by default (the notification feed is not).
         Approvals(unread: true),
         Approvals(unread: false),
+        // The approvals the viewer REQUESTED that still wait for their approver, and the ones recently
+        // DECIDED (the viewer asked or was asked). Same source, so the Approvals switch and category carry them.
+        ApprovalLedger(InboxBand.Running, order: 7, ApprovalLedgerKind.Requested, RequestedByViewer),
+        ApprovalLedger(InboxBand.Recent, order: 8, ApprovalLedgerKind.Decided, RequestedByViewer),
+        ApprovalLedger(InboxBand.Recent, order: 9, ApprovalLedgerKind.Decided, ApproverIsViewer),
         // The viewer's own stored mail, inbound and not archived. Both defaults (Inbound, New) are
         // omitted from stored JSON, so the legs negate the stamped values they exclude: unread is
         // "not Read", read is "Read".
@@ -302,6 +331,71 @@ public static class InboxQueries
                 + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
 
+    /// <summary>The token a stored ledger leg carries where the start of the decided window belongs.</summary>
+    internal const string DecidedSinceToken = "{decidedSince}";
+
+    /// <summary>How far back a decided approval stays listed.</summary>
+    internal static readonly TimeSpan DecidedWindow = TimeSpan.FromDays(14);
+
+    private const string RequestedByViewer = "requester";
+    private const string ApproverIsViewer = "approver";
+
+    /// <summary>
+    /// A ledger leg: the approval RECORDS the viewer is party to. 🚨 Unlike every other leg it is not
+    /// partition-anchored — an approval is a satellite beside the document it approves, in ANY
+    /// partition, and only the approver gets a copy in their own (the "approval required"
+    /// notification). It is instead KEYED to the viewer (<c>content.requester:{viewer}</c> /
+    /// <c>content.approver:{viewer}</c>), bounded, projected and DECLARED mesh-wide
+    /// (<c>partitions:all</c>); the read runs as the viewer, so access still narrows it.
+    /// <see cref="IsLedgerQuery"/> admits exactly these shapes, and nothing a provider contributes.
+    /// </summary>
+    private static InboxQueryLeg ApprovalLedger(string band, int order, ApprovalLedgerKind kind, string party) => new()
+    {
+        Source = ApprovalsSource,
+        SourceLabelKey = "inbox.source.Approvals",
+        SourceIcon = ApprovalsIcon,
+        Band = band,
+        Order = order,
+        // Pending ones by when they were asked; decided ones by when they were decided.
+        TimeField = kind == ApprovalLedgerKind.Requested ? "createdAt" : "approvalDate",
+        // 🚨 Pending is the enum DEFAULT and omitted from stored JSON: pending negates the stamped decisions.
+        Query = $"nodeType:{ApprovalNodeType} content.{party}:{ViewerToken} "
+                + (kind == ApprovalLedgerKind.Requested
+                    ? $"-content.status:{nameof(ApprovalStatus.Approved)} -content.status:{nameof(ApprovalStatus.Rejected)} sort:LastModified-desc "
+                    : $"content.status:{nameof(ApprovalStatus.Approved)}|{nameof(ApprovalStatus.Rejected)} content.approvalDate:>={DecidedSinceToken} sort:LastModified-desc ")
+                + $"{TimedRowProjection} {ParsedQuery.CrossPartitionQualifier}",
+    };
+
+    /// <summary>The node type of an approval record (the Approvals package's satellite type).</summary>
+    internal const string ApprovalNodeType = "Approvals/Approval";
+
+    private static bool IsLedgerTemplate(string template)
+        => template.StartsWith($"nodeType:{ApprovalNodeType} ", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Whether a RESOLVED query is one of core's ledger shapes for <paramref name="viewer"/>: the
+    /// approval node type, keyed to the viewer by exactly one of requester/approver, mesh-wide by
+    /// declaration, and anchored by nothing else.
+    /// </summary>
+    internal static bool IsLedgerQuery(string resolvedQuery, string viewer)
+    {
+        var parsed = new QueryParser().Parse(resolvedQuery);
+        var terms = resolvedQuery.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var keyed = terms.Count(t => t == $"content.{RequestedByViewer}:{viewer}" || t == $"content.{ApproverIsViewer}:{viewer}");
+        return parsed.CrossPartition
+               && keyed == 1
+               && terms.Length > 0 && terms[0] == $"nodeType:{ApprovalNodeType}"
+               && !terms.Any(t => t.StartsWith("namespace:", StringComparison.OrdinalIgnoreCase)
+                                  || t.StartsWith("path:", StringComparison.OrdinalIgnoreCase)
+                                  || t.StartsWith("scope:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>What kind of ledger leg a RESOLVED query is, or null when it is none.</summary>
+    internal static ApprovalLedgerKind? LedgerKindOf(string resolvedQuery)
+        => !resolvedQuery.StartsWith($"nodeType:{ApprovalNodeType} ", StringComparison.Ordinal) ? null
+            : resolvedQuery.Contains("content.approvalDate:", StringComparison.Ordinal) ? ApprovalLedgerKind.Decided
+            : ApprovalLedgerKind.Requested;
+
     /// <summary>The source id of the approval requests.</summary>
     public const string ApprovalsSource = "Approvals";
 
@@ -368,6 +462,18 @@ public static class InboxQueries
     /// so it fails loudly here rather than producing a query that "works".
     /// </exception>
     public static ImmutableArray<InboxQueryLeg> Resolve(IEnumerable<InboxQueryLeg> legs, string viewer)
+        => Resolve(legs, viewer, now: null);
+
+    /// <summary>
+    /// <see cref="Resolve(IEnumerable{InboxQueryLeg}, string)"/> with the clock the decided-approvals
+    /// window (<see cref="DecidedWindow"/>) is measured from; the current time when null. A separate
+    /// overload — never an added optional parameter, which would replace the released signature that
+    /// compiled modules bind.
+    /// </summary>
+    /// <param name="legs">The contributed legs.</param>
+    /// <param name="viewer">The viewer's partition.</param>
+    /// <param name="now">The instant the window ends at, or null for now.</param>
+    public static ImmutableArray<InboxQueryLeg> Resolve(IEnumerable<InboxQueryLeg> legs, string viewer, DateTimeOffset? now)
     {
         ArgumentNullException.ThrowIfNull(legs);
         if (string.IsNullOrWhiteSpace(viewer))
@@ -377,9 +483,11 @@ public static class InboxQueries
 
         return
         [
-            // 🚨 A leg that does not read exactly the viewer's own partition is never run.
-            .. Substituted(legs, viewer)
-                .Where(leg => Runnable(leg, viewer))
+            // 🚨 A leg that does not read exactly the viewer's own partition is never run — bar the
+            // approvals ledger legs core itself brings, which are keyed to the viewer instead.
+            .. Prepared(legs, viewer, now ?? DateTimeOffset.UtcNow)
+                .Where(p => p.Runnable)
+                .Select(p => p.Leg)
                 .OrderBy(leg => leg.Band, StringComparer.Ordinal)
                 .ThenBy(leg => leg.Order)
                 .ThenBy(leg => leg.Source, StringComparer.Ordinal)
