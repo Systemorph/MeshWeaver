@@ -5,6 +5,7 @@ using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
+using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
@@ -84,9 +85,9 @@ public static class WorkingTreeTab
         var spacePath = SpaceRootPath(node?.Path ?? "");
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Html(Hint("Code workspace is available inside a Space.")));
+            return stack.WithView(GitSyncViews.Hint("Code workspace is available inside a Space."));
         if (string.IsNullOrEmpty(userId))
-            return stack.WithView(Controls.Html(Hint("Sign in to use the code workspace.")));
+            return stack.WithView(GitSyncViews.Hint("Sign in to use the code workspace."));
 
         // Seed the selection/refresh state once so the sub-views below have a stream to bind to.
         host.UpdateData(RefreshId, "0");
@@ -98,21 +99,17 @@ public static class WorkingTreeTab
         host.UpdateData(EditorContentId, "");
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.codeWorkspace")).WithStyle("margin:0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(Hint(
+        stack = stack.WithView(GitSyncViews.Hint(
             "Check out this Space's connected GitHub repository as a working tree, edit a file, and " +
-            "commit + push as yourself. The same checkout is what the AI assistants operate on.")));
+            "commit + push as yourself. The same checkout is what the AI assistants operate on."));
 
         // Everything depends on the Space's connected repo (RepositoryUrl + Branch) from the GitHub-Sync config.
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
             .Select(cfg => (UiControl?)BuildWorkspace(workingTrees, userId, cfg))
-            .StartWith((UiControl?)Controls.Html(Hint("Loading repository settings…"))));
+            .StartWith((UiControl?)GitSyncViews.Hint("Loading repository settings…")));
 
         // Result/status line.
-        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ResultId)
-            .Select(html => (UiControl?)(string.IsNullOrEmpty(html)
-                ? Controls.Stack.WithWidth("100%")
-                : Controls.Stack.WithWidth("100%").WithView(Controls.Html(html))))
-            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+        stack = stack.WithView((h, _) => h.NoticeView(ResultId));
 
         return stack;
     }
@@ -121,7 +118,7 @@ public static class WorkingTreeTab
     {
         var repoFullName = RepoFullName(cfg?.RepositoryUrl);
         if (repoFullName is null)
-            return Controls.Html(Hint("Connect a GitHub repository in the GitHub Sync tab first."));
+            return GitSyncViews.Hint("Connect a GitHub repository in the GitHub Sync tab first.");
 
         var repoSlug = RepoSlug(repoFullName);
         var branch = string.IsNullOrWhiteSpace(cfg!.Branch) ? "main" : cfg.Branch;
@@ -134,24 +131,24 @@ public static class WorkingTreeTab
             .WithIconStart(FluentIcons.ArrowDownload())
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, Pending($"Checking out {repoFullName}…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info($"Checking out {repoFullName}…"));
                 wt.Checkout(userId, repoFullName, branch).Subscribe(
                     tree =>
                     {
-                        ctx.Host.UpdateData(ResultId, Ok($"Checked out {repoFullName} on {tree.Branch}."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Success($"Checked out {repoFullName} on {tree.Branch}."));
                         ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                     },
-                    ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                    ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 return Task.CompletedTask;
             }));
 
         // Live status (branch + pending changes), re-queried on each refresh.
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(RefreshId)
             .SelectMany(_ => wt.Status(userId, repoSlug)
-                .Select(s => (UiControl?)Controls.Html(StatusHtml(s)))
-                .Catch<UiControl?, Exception>(_ => Observable.Return((UiControl?)Controls.Html(
-                    Hint("Not checked out yet — use the button above.")))))
-            .StartWith((UiControl?)Controls.Html(Hint("…"))));
+                .Select(s => (UiControl?)StatusView(s))
+                .Catch<UiControl?, Exception>(_ => Observable.Return((UiControl?)GitSyncViews.Hint(
+                    "Not checked out yet — use the button above."))))
+            .StartWith(GitSyncViews.Hint("…")));
 
         // File filter.
         stack = stack.WithView(new TextFieldControl(new JsonPointerReference(""))
@@ -165,14 +162,14 @@ public static class WorkingTreeTab
                 .Catch<IReadOnlyList<string>, Exception>(_ => Observable.Return((IReadOnlyList<string>)Array.Empty<string>())))
             .CombineLatest(h.Stream.GetDataStream<string>(FilterId).StartWith(""), (files, filter) => (files, filter))
             .Select(x => (UiControl?)BuildFileList(wt, userId, repoSlug, x.files, x.filter))
-            .StartWith((UiControl?)Controls.Html(Hint("Loading files…"))));
+            .StartWith((UiControl?)GitSyncViews.Hint("Loading files…")));
 
         // Editor pane for the selected file (re-renders when a different file is opened).
         stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(SelectedFileId)
             .Select(path => (UiControl?)(string.IsNullOrEmpty(path)
-                ? Controls.Html(Hint("Select a file to edit."))
+                ? GitSyncViews.Hint("Select a file to edit.")
                 : BuildEditorPane(wt, userId, repoSlug, branch, path)))
-            .StartWith((UiControl?)Controls.Html(Hint("Select a file to edit."))));
+            .StartWith((UiControl?)GitSyncViews.Hint("Select a file to edit.")));
 
         return stack;
     }
@@ -190,9 +187,9 @@ public static class WorkingTreeTab
 
         if (matched.Count == 0)
         {
-            return list.WithView(Controls.Html(Hint(files.Count == 0
+            return list.WithView(GitSyncViews.Hint(files.Count == 0
                 ? "No files (check out the repository first)."
-                : "No files match the filter.")));
+                : "No files match the filter."));
         }
 
         foreach (var file in matched.Take(cap))
@@ -211,13 +208,13 @@ public static class WorkingTreeTab
                             ctx.Host.UpdateData(EditorContentId, content);
                             ctx.Host.UpdateData(SelectedFileId, path);
                         },
-                        ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                        ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                     return Task.CompletedTask;
                 }));
         }
 
         if (matched.Count > cap)
-            list = list.WithView(Controls.Html(Hint($"… {matched.Count - cap} more — refine the filter.")));
+            list = list.WithView(GitSyncViews.Hint($"… {matched.Count - cap} more — refine the filter."));
 
         return list;
     }
@@ -226,8 +223,7 @@ public static class WorkingTreeTab
         GitWorkingTreeService wt, string userId, string repoSlug, string branch, string path, string? locale = null)
     {
         var stack = Controls.Stack.WithWidth("100%").WithStyle("gap:8px;");
-        stack = stack.WithView(Controls.Html(
-            $"<div style=\"font-family:monospace;font-size:0.85rem;font-weight:600;\">{Esc(path)}</div>"));
+        stack = stack.WithView(Controls.Subject(path));
 
         // Monaco editor bound to the editor-content data id (same pattern as CodeLayoutAreas.Edit).
         var editor = new CodeEditorControl()
@@ -249,18 +245,18 @@ public static class WorkingTreeTab
             {
                 return ctx.Host.Stream.GetDataStream<string>(EditorContentId).Take(1).Do(content =>
                 {
-                    ctx.Host.UpdateData(ResultId, Pending($"Committing {path}…"));
+                    ctx.Host.UpdateData(ResultId, ActionNotice.Info($"Committing {path}…"));
                     wt.WriteFile(userId, repoSlug, path, content ?? "")
                         .SelectMany(_ => wt.CommitAndPush(userId, repoSlug, $"Edit {path} (via portal)", branch))
                         .Subscribe(
                             r =>
                             {
                                 ctx.Host.UpdateData(ResultId, r.Ok
-                                    ? Ok($"Committed & pushed {path}.")
-                                    : Err(r.Message));
+                                    ? ActionNotice.Success($"Committed & pushed {path}.")
+                                    : ActionNotice.Error(r.Message));
                                 ctx.Host.UpdateData(RefreshId, Guid.NewGuid().ToString("N"));
                             },
-                            ex => ctx.Host.UpdateData(ResultId, Err(ex.Message)));
+                            ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(ex.Message)));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
 
@@ -269,16 +265,21 @@ public static class WorkingTreeTab
 
     // ── small helpers ─────────────────────────────────────────────────────────
 
-    private static string StatusHtml(WorkingTreeStatus s)
+    /// <summary>The working tree's branch and, when it is dirty, its first pending changes as a grid.</summary>
+    internal static UiControl StatusView(WorkingTreeStatus s)
     {
         if (s.IsClean)
-            return $"<div style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">On <strong>{Esc(s.Branch)}</strong> — clean.</div>";
-        var changes = string.Join("", s.Changes.Take(20).Select(c =>
-            $"<div style=\"font-family:monospace;font-size:0.8rem;\">{Esc(c.Status)} {Esc(c.Path)}</div>"));
-        return $"<div style=\"padding:6px 10px;background:var(--neutral-layer-2);border-radius:6px;\">" +
-               $"<div style=\"font-size:0.85rem;margin-bottom:4px;\">On <strong>{Esc(s.Branch)}</strong> — {s.Changes.Count} pending change(s):</div>" +
-               $"{changes}</div>";
+            return GitSyncViews.Hint($"On {s.Branch} — clean.");
+        return Controls.Stack.WithWidth("100%").WithVerticalGap(4)
+            .WithView(Controls.Body($"On {s.Branch} — {s.Changes.Count} pending change(s):"))
+            .WithView(Controls.DataGrid(s.Changes.Take(20)
+                    .Select(c => new PendingChangeRow(c.Status, c.Path)).ToArray())
+                .WithColumn(new PropertyColumnControl<string> { Property = "status" }.WithTitle("Status"))
+                .WithColumn(new PropertyColumnControl<string> { Property = "path" }.WithTitle("Path")));
     }
+
+    /// <summary>One pending change in <see cref="StatusView"/>'s grid.</summary>
+    public sealed record PendingChangeRow(string Status, string Path);
 
     /// <summary>Monaco language id from a file extension.</summary>
     internal static string LanguageFor(string path)
@@ -320,13 +321,4 @@ public static class WorkingTreeTab
         return slash >= 0 ? repoFullName[(slash + 1)..] : repoFullName;
     }
 
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
-    private static string Hint(string m) =>
-        $"<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:4px 0;\">{Esc(m)}</p>";
-    private static string Ok(string m) =>
-        $"<p style=\"padding:8px 12px;color:#4ade80;background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
-    private static string Err(string m) =>
-        $"<p style=\"padding:8px 12px;color:#f87171;background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
-    private static string Pending(string m) =>
-        $"<p style=\"padding:8px 12px;color:var(--neutral-foreground-hint);background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
 }

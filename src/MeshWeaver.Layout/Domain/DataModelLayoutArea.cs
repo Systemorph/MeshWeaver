@@ -235,6 +235,8 @@ public static class DataModelLayoutArea
     /// <see cref="BuildMermaidDiagram"/>).</param>
     /// <param name="catalogHref">Optional per-type catalog link factory; null suppresses
     /// the catalog navigation icon.</param>
+    /// <returns>A stack: the title row (the type name as an H1, the ⧉ / 🔝 / 🗃️ navigation links),
+    /// the type's summary as a hint, and <see cref="TypeDetailsMarkdown"/> as Markdown.</returns>
     public static UiControl RenderTypeDetails(
         ITypeDefinition typeDef,
         IReadOnlyCollection<ITypeDefinition> allDomainTypes,
@@ -242,25 +244,39 @@ public static class DataModelLayoutArea
         Func<ITypeDefinition, string?>? catalogHref = null)
     {
         var type = typeDef.Type;
+
+        // Title with right-aligned navigation glyphs
+        var links = new List<LinkControl> { DomainViews.NavGlyph("⧉", "Data Model Overview", linkBase) };
+        if (type.BaseType is { } bt && bt != typeof(object) && allDomainTypes.Any(td => td.Type == bt))
+            links.Add(DomainViews.NavGlyph("🔝", $"Base: {bt.Name}", $"{linkBase}/{bt.Name}"));
+        if (catalogHref?.Invoke(typeDef) is { } catalogLink)
+            links.Add(DomainViews.NavGlyph("🗃️", "View Catalog", catalogLink));
+
+        var details = Controls.Stack.WithWidth("100%")
+            .WithView(DomainViews.TitleRow(Controls.H1(type.Name).WithStyle("margin: 0;"), links.ToArray()));
+        if (DomainViews.Description(MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type)) is { } descriptionLine)
+            details = details.WithView(descriptionLine);
+        return details.WithView(new MarkdownControl(TypeDetailsMarkdown(typeDef, allDomainTypes, linkBase)));
+    }
+
+    /// <summary>
+    /// The body of <see cref="RenderTypeDetails(ITypeDefinition, IReadOnlyCollection{ITypeDefinition}, string, Func{ITypeDefinition, string})"/> as Markdown: the property table (inherited first,
+    /// each domain-typed property linked under <paramref name="linkBase"/>) and the derived types. Pure.
+    /// </summary>
+    /// <param name="typeDef">The type to detail.</param>
+    /// <param name="allDomainTypes">The domain-type lookup for property links and derived types.</param>
+    /// <param name="linkBase">Href prefix for type links.</param>
+    /// <returns>The Markdown text.</returns>
+    public static string TypeDetailsMarkdown(
+        ITypeDefinition typeDef,
+        IReadOnlyCollection<ITypeDefinition> allDomainTypes,
+        string linkBase)
+    {
+        var type = typeDef.Type;
         var allByType = allDomainTypes
             .DistinctBy(td => td.Type)
             .ToDictionary(td => td.Type, td => td);
         var sb = new StringBuilder();
-
-        var typeSummary = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
-
-        // Title with right-aligned navigation icons
-        var navigationIcons = $"<a href=\"{linkBase}\" title=\"Data Model Overview\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">⧉</a>";
-        if (type.BaseType is { } bt && bt != typeof(object) && allByType.ContainsKey(bt))
-            navigationIcons += $" <a href=\"{linkBase}/{bt.Name}\" title=\"Base: {bt.Name}\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🔝</a>";
-        if (catalogHref?.Invoke(typeDef) is { } catalogLink)
-            navigationIcons += $" <a href=\"{catalogLink}\" title=\"View Catalog\" style=\"text-decoration: none; font-size: 2em; line-height: 1;\">🗃️</a>";
-
-        var titleWithNav = $"<div style=\"display: flex !important; justify-content: space-between !important; align-items: center !important; margin-bottom: 1rem; width: 100%;\"><h1 style=\"margin: 0; flex-grow: 1;\">{type.Name}</h1><div style=\"flex-shrink: 0;\">{navigationIcons}</div></div>";
-        sb.AppendLine(titleWithNav);
-        if (!string.IsNullOrWhiteSpace(typeSummary))
-            sb.AppendLine($"{typeSummary}");
-        sb.AppendLine();
 
         // Properties section as a single table: inherited first, then declared
         var props = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
@@ -309,7 +325,7 @@ public static class DataModelLayoutArea
             sb.AppendLine();
         }
 
-        return new MarkdownControl(sb.ToString());
+        return sb.ToString();
     }
 
     private static UiControl RenderTypeDetails(this LayoutAreaHost host, string typeName)

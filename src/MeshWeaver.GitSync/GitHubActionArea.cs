@@ -63,12 +63,12 @@ public static class GitHubActionArea
 
         if (string.IsNullOrEmpty(spacePath))
             return Observable.Return<UiControl?>(Message(
-                "Not in a Space", "GitHub actions run on a Space; this node has no containing Space.", backHref));
+                "Not in a Space", GitSyncViews.Hint("GitHub actions run on a Space; this node has no containing Space."), backHref));
         if (string.IsNullOrEmpty(op))
-            return Observable.Return<UiControl?>(Message("Nothing to do", "No operation specified.", backHref));
+            return Observable.Return<UiControl?>(Message("Nothing to do", GitSyncViews.Hint("No operation specified."), backHref));
         if (string.IsNullOrEmpty(userId))
             return Observable.Return<UiControl?>(Message(
-                "Sign-in required", "Could not resolve your identity for the GitHub operation.", backHref));
+                "Sign-in required", GitSyncViews.Hint("Could not resolve your identity for the GitHub operation."), backHref));
 
         // The op extension calls onActivityCreated(activityPath) the moment the
         // Activity node is created. Capture it in a ReplaySubject so we can render
@@ -90,7 +90,7 @@ public static class GitHubActionArea
         };
         if (action is null)   // unknown op — don't claim an activity started
             return Observable.Return<UiControl?>(Message(
-                "Unknown operation", $"Unrecognized GitHub operation <code>{System.Net.WebUtility.HtmlEncode(op)}</code>.", backHref));
+                "Unknown operation", GitSyncViews.Note($"Unrecognized GitHub operation `{op}`."), backHref));
 
         // Fire the work. The activity node it creates streams its own live progress. A failure
         // BEFORE the activity node exists (authorization denied, sign-in required, a wedged
@@ -109,7 +109,7 @@ public static class GitHubActionArea
             .StartWith((UiControl?)BuildStarting(title!, backHref))
             .Catch((Exception ex) => Observable.Return<UiControl?>(Message(
                 "GitHub operation failed",
-                System.Net.WebUtility.HtmlEncode(GitSyncRefusalException.Localize(ex, host.ViewerLocale())),
+                ActionNotice.Error(GitSyncRefusalException.Localize(ex, host.ViewerLocale())).ToControl(),
                 backHref)));
     }
 
@@ -143,13 +143,12 @@ public static class GitHubActionArea
             .WithView(Controls.H2(title).WithStyle("margin: 0;"));
 
     // Early-return guard message (Not in a Space / Nothing to do / Sign-in required /
-    // Unknown operation). The body may contain a pre-rendered <code> snippet, so it
-    // stays a Controls.Html paragraph; the header is the shared control-based row.
-    private static UiControl Message(string title, string bodyHtml, string backHref)
+    // Unknown operation / a failure before the activity existed): the shared header row over
+    // the body control the caller composed — a hint, a Markdown note or an error banner.
+    private static UiControl Message(string title, UiControl body, string backHref)
         => Controls.Stack
             .WithWidth("100%")
             .WithStyle("padding: 24px; gap: 16px;")
             .WithView(BuildHeader(title, backHref))
-            .WithView(Controls.Html(
-                $"<p style=\"color: var(--neutral-foreground-hint);\">{bodyHtml}</p>"));
+            .WithView(body);
 }

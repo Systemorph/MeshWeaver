@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Reactive.Threading.Tasks;
@@ -208,6 +209,72 @@ public class DomainLayoutServiceTest(ITestOutputHelper output) : HubTestBase(out
             "the author needs to know WHICH type they named");
         text.Should().NotContain("not mapped to any source",
             "the framework's own workspace diagnostic must never reach a viewer");
+    }
+
+    /// <summary>Every area of a frame: its id and its control.</summary>
+    private static IEnumerable<(string Id, JsonElement Control)> Areas(JsonElement frame)
+        => frame.TryGetProperty("areas", out var areas) && areas.ValueKind == JsonValueKind.Object
+            ? areas.EnumerateObject().Where(a => a.Value.ValueKind == JsonValueKind.Object)
+                .Select(a => (a.Name, a.Value))
+            : [];
+
+    private static string? Prop(JsonElement control, string name)
+        => control.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
+    private static bool Is(JsonElement control, string type) => Prop(control, "$type") == type;
+
+    /// <summary>The navigation glyph link <paramref name="glyph"/> in a frame, or null.</summary>
+    private static JsonElement? NavLink(JsonElement frame, string glyph)
+        => Areas(frame).Where(a => Is(a.Control, nameof(LinkControl)) && Prop(a.Control, "text") == glyph)
+            .Select(a => (JsonElement?)a.Control).FirstOrDefault();
+
+    private IObservable<JsonElement> Frames(LayoutAreaReference reference)
+        => GetClient().GetWorkspace()
+            .GetRemoteStream<JsonElement, LayoutAreaReference>(CreateHostAddress(), reference)
+            .Select(change => change.Value);
+
+    /// <summary>
+    /// The Catalog's header is the platform's controls (maintainer, 2026-10-18: hand-built HTML
+    /// replaced fleet-wide): the type's name as a heading LABEL, the ⧉ Data Model link as a
+    /// <see cref="LinkControl"/> with its hover text — no <see cref="HtmlControl"/> anywhere in the frame.
+    /// </summary>
+    [HubFact]
+    public async Task TestCatalog_HeaderIsStandardControls()
+    {
+        var frame = await Frames(DomainLayoutAreas.GetCatalogReference(nameof(DataRecord)))
+            .Should().Within(10.Seconds())
+            .Match(f => NavLink(f, "⧉") is not null && Areas(f).Any(a => Is(a.Control, nameof(DataGridControl))),
+                "the Catalog renders its header and grid");
+
+        var link = NavLink(frame, "⧉")!.Value;
+        Prop(link, "tooltip").Should().Be("Data Model");
+        Prop(link, "href").Should().EndWith($"/DataModel/{nameof(DataRecord)}");
+        Areas(frame).Should().Contain(a => Is(a.Control, nameof(LabelControl)) && !string.IsNullOrEmpty(Prop(a.Control, "data")),
+            "the type's name is a heading label");
+        Areas(frame).Should().NotContain(a => Is(a.Control, nameof(HtmlControl)), "the Catalog holds no hand-built markup");
+    }
+
+    /// <summary>
+    /// The Data Model page of one type: an H1 label with the type name, the ⧉ overview link, and the
+    /// property table as Markdown — the navigation lives in controls, not in markup inside the Markdown.
+    /// </summary>
+    [HubFact]
+    public async Task TestDataModelTypePage_HeaderIsStandardControls()
+    {
+        var frame = await Frames(new LayoutAreaReference(nameof(DataModelLayoutArea.DataModel)) { Id = nameof(DataRecord) })
+            .Should().Within(10.Seconds())
+            .Match(f => NavLink(f, "⧉") is not null
+                    && Areas(f).Any(a => Is(a.Control, nameof(MarkdownControl))
+                        && (Prop(a.Control, "markdown") ?? "").Contains("## Properties")),
+                "the type page renders its header and property table");
+
+        Prop(NavLink(frame, "⧉")!.Value, "tooltip").Should().Be("Data Model Overview");
+        Areas(frame).Should().Contain(a => Is(a.Control, nameof(LabelControl)) && Prop(a.Control, "data") == nameof(DataRecord),
+            "the type name is a heading label");
+        Areas(frame).Should().NotContain(a => Is(a.Control, nameof(HtmlControl)), "the type page holds no hand-built markup");
+        Areas(frame).Where(a => Is(a.Control, nameof(MarkdownControl)))
+            .Should().NotContain(a => (Prop(a.Control, "markdown") ?? "").Contains("<a "),
+                "no navigation markup is left inside the Markdown body");
     }
 
     /// <summary>

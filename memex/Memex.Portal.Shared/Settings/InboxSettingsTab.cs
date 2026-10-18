@@ -35,17 +35,12 @@ public static class InboxSettingsTab
     internal static UiControl BuildInboxContent(LayoutAreaHost host, StackControl stack)
     {
         stack = stack.WithView(Controls.H2(host.Localize("settings.inbox")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size: 0.85rem; color: var(--neutral-foreground-hint); margin-bottom: 16px;\">" +
-            "Email received from people who are <strong>not</strong> Memex users. (Mail from a known " +
-            "user is handled by an agent thread, not shown here.)</p>"));
+        stack = stack.WithView(Controls.Markdown(
+            "Email received from people who are **not** Memex users. (Mail from a known " +
+            "user is handled by an agent thread, not shown here.)"));
 
         stack = stack.WithView((h, _) =>
-            h.Stream.GetDataStream<string>(ResultDataId)
-                .Select(html => string.IsNullOrEmpty(html)
-                    ? (UiControl?)Controls.Stack.WithWidth("100%")
-                    : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
-                .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+            h.NoticeView(ResultDataId));
 
         // The inbox — a TEMPLATE (Doc/GUI/DataBinding → "Templates first, data later"): the grid is
         // declared at once and fed by the synced Admin/Inbox query; each row carries its own Archive
@@ -106,20 +101,20 @@ public static class InboxSettingsTab
         {
             if (row is null)
             {
-                ctx.Host.UpdateData(ResultDataId, Error(host.Localize("inbox.notInInbox")));
+                ctx.Host.UpdateData(ResultDataId, ActionNotice.Error(host.Localize("inbox.notInInbox")));
                 return;
             }
             if (row.IsArchived)
             {
-                ctx.Host.UpdateData(ResultDataId, Pending(Esc(host.Localize("inbox.alreadyArchived"))));
+                ctx.Host.UpdateData(ResultDataId, ActionNotice.Info(host.Localize("inbox.alreadyArchived")));
                 return;
             }
             if (accessService is null)
             {
-                ctx.Host.UpdateData(ResultDataId, Error("No access service is registered; the mail cannot be archived."));
+                ctx.Host.UpdateData(ResultDataId, ActionNotice.Error("No access service is registered; the mail cannot be archived."));
                 return;
             }
-            ctx.Host.UpdateData(ResultDataId, Pending($"Archiving mail from {Esc(row.FromAddress)}…"));
+            ctx.Host.UpdateData(ResultDataId, ActionNotice.Info($"Archiving mail from {row.FromAddress}…"));
             // The node itself, read once for the write (it exists: the inbox query just listed it).
             ctx.Host.Hub.GetWorkspace().GetMeshNodeStream(row.Path).Take(1)
                 .SelectMany(node => EmailOf(node, ctx.Hub.JsonSerializerOptions) is { } email
@@ -128,9 +123,9 @@ public static class InboxSettingsTab
                         _ => meshService.UpdateNode(node with { Content = email with { Status = EmailStatus.Archived } }))
                     : Observable.Throw<MeshNode>(new InvalidOperationException($"{row.Path} holds no email.")))
                 .Subscribe(
-                    _ => ctx.Host.UpdateData(ResultDataId, Success($"Archived mail from {Esc(row.FromAddress)}.")),
-                    ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
-        }, ex => ctx.Host.UpdateData(ResultDataId, Error(ex.Message)));
+                    _ => ctx.Host.UpdateData(ResultDataId, ActionNotice.Success($"Archived mail from {row.FromAddress}.")),
+                    ex => ctx.Host.UpdateData(ResultDataId, ActionNotice.Error(ex.Message)));
+        }, ex => ctx.Host.UpdateData(ResultDataId, ActionNotice.Error(ex.Message)));
 
     /// <summary>
     /// The row of the inbox query, as it is NOW, whose path is <paramref name="path"/> — or null when
@@ -199,12 +194,4 @@ public static class InboxSettingsTab
         try { return JsonSerializer.Deserialize<MeshWeaver.Mesh.Email>(je.GetRawText(), options); }
         catch { return null; }
     }
-
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
-    private static string Success(string m) =>
-        $"<p style=\"padding:8px 12px; color:#4ade80; background:var(--neutral-layer-2); border-radius:6px;\">{m}</p>";
-    private static string Error(string m) =>
-        $"<p style=\"padding:8px 12px; color:#f87171; background:var(--neutral-layer-2); border-radius:6px;\">{Esc(m)}</p>";
-    private static string Pending(string m) =>
-        $"<p style=\"padding:8px 12px; color:var(--neutral-foreground-hint); background:var(--neutral-layer-2); border-radius:6px;\">{m}</p>";
 }

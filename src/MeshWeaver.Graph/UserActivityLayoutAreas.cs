@@ -360,8 +360,7 @@ public static class UserActivityLayoutAreas
             .WithAppearance(Appearance.Stealth)
             .WithNavigateToHref($"/{userPath}"));
 
-        headerRow = headerRow.WithView(Controls.Html(
-            "<span style=\"flex: 1; font-size: 1.25rem; font-weight: 600;\">Edit your home page</span>"));
+        headerRow = headerRow.WithView(Controls.H4("Edit your home page").WithStyle("flex: 1; margin: 0;"));
 
         // "Reset to default" — the in-editor twin of the Reset menu item, shown only when the owner has
         // overridden the home. Clears User.Body → the welcome template returns.
@@ -370,8 +369,7 @@ public static class UserActivityLayoutAreas
                 .WithAppearance(Appearance.Stealth)
                 .WithClickAction(ClearBodyAction(userPath)));
 
-        headerRow = headerRow.WithView(Controls.Html(
-            "<span style=\"color: var(--neutral-foreground-hint); font-size: 0.85rem;\">Changes are saved automatically</span>"));
+        headerRow = headerRow.WithView(Controls.Hint("Changes are saved automatically"));
 
         container = container.WithView(headerRow);
 

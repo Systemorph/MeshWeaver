@@ -1994,20 +1994,6 @@ public static class MeshNodeLayoutAreas
         return date.AddDays(-diff).Date;
     }
 
-    private static string GetStatusBadge(string? status)
-    {
-        var (color, bg) = status?.ToLowerInvariant() switch
-        {
-            "scheduled" => ("#0078d4", "#e6f2ff"),
-            "published" => ("#107c10", "#e6f7e6"),
-            "draft" => ("#797979", "#f0f0f0"),
-            "archived" => ("#a80000", "#ffe6e6"),
-            _ => ("#797979", "#f0f0f0")
-        };
-
-        return $"<span style=\"padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; background: {bg}; color: {color};\">{status ?? "Draft"}</span>";
-    }
-
     private static string GetPlatforms(MeshNode node)
     {
         if (node.Content is System.Text.Json.JsonElement json && json.TryGetProperty("platforms", out var platformsProp))

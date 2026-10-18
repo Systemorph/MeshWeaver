@@ -185,6 +185,19 @@ public static class Controls
     /// <param name="data">The content or data-binding expression.</param>
     /// <returns>A new <see cref="LabelControl"/> with Subject typography.</returns>
     public static LabelControl Subject(object data) => Label(data).WithTypo(Typography.Subject);
+
+    /// <summary>The theme's muted foreground — the colour of a <see cref="Hint"/>.</summary>
+    public const string HintColor = "var(--neutral-foreground-hint)";
+
+    /// <summary>
+    /// Creates a muted body label — the explanatory line under a heading, an empty state
+    /// ("No sources yet."), a loading placeholder. Body typography in the theme's
+    /// <see cref="HintColor"/>, so it follows light and dark mode; use it instead of a
+    /// <c>&lt;p style="color: var(--neutral-foreground-hint)"&gt;</c> in <see cref="Html"/>.
+    /// </summary>
+    /// <param name="data">The text or data-binding expression. User-facing: pass a localized string.</param>
+    /// <returns>A new <see cref="LabelControl"/> with Body typography and the hint colour.</returns>
+    public static LabelControl Hint(object data) => Body(data).WithColor(HintColor);
     /// <summary>Creates a label styled as a section header.</summary>
     /// <param name="data">The content or data-binding expression.</param>
     /// <returns>A new <see cref="LabelControl"/> with Header typography.</returns>

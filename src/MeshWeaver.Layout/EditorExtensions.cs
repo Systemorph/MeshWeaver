@@ -1707,7 +1707,7 @@ public static class EditorExtensions
         bool isEditable)
     {
         if (!data.TryGetProperty(propName, out var arr) || arr.ValueKind != JsonValueKind.Array)
-            return Controls.Html("<span style=\"color: var(--neutral-foreground-hint);\">None</span>");
+            return Controls.Hint("None");
 
         var chipStack = Controls.Stack
             .WithOrientation(Orientation.Horizontal)
@@ -1720,20 +1720,18 @@ public static class EditorExtensions
             var isDenied = item.TryGetProperty("denied", out var d) && d.GetBoolean();
             var capturedIndex = index;
 
-            var chipStyle = "display: inline-flex; align-items: center; gap: 4px; padding: 2px 10px; " +
-                            "border-radius: 14px; background: var(--neutral-fill-secondary-rest); font-size: 0.85rem;";
+            // A collection item is a neutral badge; a denied one is struck through.
+            var chip = Controls.Badge(label).WithAppearance("Neutral");
             if (isDenied)
-                chipStyle += " text-decoration: line-through; opacity: 0.6;";
+                chip = chip.WithStyle("text-decoration: line-through; opacity: 0.6;");
 
             if (isEditable)
             {
-                // Chip with label + x button using HTML for the dismiss icon
-                var chipHtml = $"<span style=\"{chipStyle}\">" +
-                               $"{System.Web.HttpUtility.HtmlEncode(label)}</span>";
+                // The badge + an × button that removes the item.
                 var chipRow = Controls.Stack
                     .WithOrientation(Orientation.Horizontal)
                     .WithStyle("display: inline-flex; align-items: center; gap: 0;")
-                    .WithView(Controls.Html(chipHtml))
+                    .WithView(chip)
                     .WithView(Controls.Button("×")
                         .WithAppearance(Appearance.Stealth)
                         .WithStyle("min-width: 18px; padding: 0 2px; height: 20px; font-size: 14px; line-height: 1;")
@@ -1743,15 +1741,14 @@ public static class EditorExtensions
             }
             else
             {
-                chipStack = chipStack.WithView(Controls.Html(
-                    $"<span style=\"{chipStyle}\">{System.Web.HttpUtility.HtmlEncode(label)}</span>"));
+                chipStack = chipStack.WithView(chip);
             }
 
             index++;
         }
 
         if (index == 0)
-            return Controls.Html("<span style=\"color: var(--neutral-foreground-hint);\">None</span>");
+            return Controls.Hint("None");
 
         return chipStack;
     }
