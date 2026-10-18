@@ -49,6 +49,14 @@ version: v1.1.0
 # restores the 7-day quota window. `lock-pinned-digests.py --check-retention-record` then reds,
 # on every pull request, which is how that mistake is caught.
 #
+# 🚨 DRY-RUN FIRST (MeshWeaver#3438). Both steps carry `--dry-run`, and tasks.json declares it under
+# `dryRun`. Re-enabling this task therefore produces a nightly LOG of exactly what the 30-day window
+# would delete, and deletes nothing. Read that log back (a `RegistryRetention` dry run on the control
+# instance) before a reviewed diff drops the flag AND lifts `dryRun` in the same change —
+# `lock-pinned-digests.py --check-retention-record` reds on either half alone, and its self-test
+# (ARM 40) drives this file through a model of acr-cli's selection to prove the window picks only
+# unreferenced artifacts older than 30 days, never a locked or referenced one.
+#
 # PROTECTION IS THE MANIFEST LOCK, not this policy. Live pinned digests carry
 # `--delete-enabled false`; `acr purge` skips locked manifests by default and neither step passes
 # `--include-locked`. Locking a digest is what makes a pin survive; this file only decides what is
@@ -61,9 +69,9 @@ version: v1.1.0
 # Doc: Doc/Architecture/PinnedImageRetention. Incidents: Memex#122, MeshWeaver#3438 (Education,
 # Manufacturing and SocialMedia CI down simultaneously 2026-09-05T15:29Z on a purged tester digest).
 steps:
-  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 30d --untagged
+  - cmd: acr purge --filter 'mw-plugin-test:.*' --filter 'memex-migration:.*' --filter 'memex-portal-ai:.*' --filter 'memex-portal-next:.*' --filter 'memex-bake:.*' --ago 30d --untagged --dry-run
     disableWorkingDirectoryOverride: true
     timeout: 3600
-  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged
+  - cmd: acr purge --filter 'memex-portal:.*' --ago 30d --untagged --dry-run
     disableWorkingDirectoryOverride: true
     timeout: 3600
