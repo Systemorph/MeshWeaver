@@ -116,21 +116,24 @@ public class InboxAppTest(ITestOutputHelper output) : MonolithMeshTestBase(outpu
         var sections = InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice");
 
         sections.Should().NotBeEmpty();
-        sections.Should().OnlyContain(s => s.Query.Contains("namespace:alice/"), "every leg is anchored on the owner");
+        sections.Where(s => s.Ledger is null).Should().OnlyContain(s => s.Query.Contains("namespace:alice/"), "every leg is anchored on the owner");
+        sections.Where(s => s.Ledger is not null).Should().OnlyContain(s => InboxQueries.IsLedgerQuery(s.Query, "alice"),
+            "bar the approvals ledger, which is keyed to the owner instead");
         sections.Select(s => s.Query).Should().OnlyHaveUniqueItems("a row listed twice on one page is noise");
         var ranks = sections.Select(s => Rank(s.Band)).ToList();
         ranks.Should().Equal(ranks.OrderBy(r => r).ToList(), "bands read Needs you → Running → Recent");
     }
 
     /// <summary>
-    /// Core's own legs feed two bands: what needs you, and what is still going. A run that FINISHED
-    /// WELL is not listed at all (policy <c>inbox-activities-need-someone</c>) — its page keeps it.
+    /// Core's own legs feed three bands: what needs you, what is still going, and the approvals decided
+    /// lately. An activity that FINISHED WELL is not listed at all (policy
+    /// <c>inbox-activities-need-someone</c>) — its page keeps it.
     /// </summary>
     [Fact]
     public void ThePage_ShowsWhatNeedsYou_AndWhatIsStillGoing()
     {
         InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice").Select(s => s.Band).Distinct()
-            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running);
+            .Should().Equal(InboxBand.NeedsYou, InboxBand.Running, InboxBand.Recent);
         InboxQueries.BuiltIn.Where(l => l.Source == "Activities").Should()
             .OnlyContain(l => l.Query.Contains("content.showInInbox:true"), "only runs marked for the inbox — background runs are never listed");
     }

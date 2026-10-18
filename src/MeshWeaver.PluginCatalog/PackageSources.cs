@@ -72,6 +72,13 @@ public sealed record ConfiguredPackageSource(IPackageSource Source, string GitRe
     /// Cost when nothing changed: none — the install short-circuits on the content hash.
     /// </summary>
     public bool LocalCheckout { get; init; }
+
+    /// <summary>
+    /// True for a source the instance's own administrators added on the instance
+    /// (<see cref="PackageSources.FromInstance"/>). Such a source selects packages but never carries
+    /// the deployment configuration's authority, whatever its name (Doc/Architecture/InstanceRepositoryAccess).
+    /// </summary>
+    public bool InstanceLocal { get; init; }
 }
 
 /// <summary>
@@ -330,6 +337,46 @@ public static class PackageSources
     }
 
     /// <summary>
+    /// The package sources this instance's global administrators added ON THE INSTANCE
+    /// (<c>Admin/PackageSource-*</c>, <see cref="InstancePackageSourceCatalog"/>) as configured
+    /// sources, minus any repository <paramref name="configured"/> already names — the record's
+    /// declaration wins (policy <c>declared-not-derived</c>). Each is a node-native repository read
+    /// over <see cref="FromRepo"/>, so its token is resolved per repository exactly as a configured
+    /// source's is (<see cref="GitSourceCredentials"/>: the instance's own App while it is connected).
+    /// Empty on a mesh that keeps no instance sources.
+    ///
+    /// <para>🚨 Deliberately NOT folded into <see cref="FromConfiguration"/>: that list is also what a
+    /// REGISTRY serves over <c>/api/plugins</c>, and an instance-local source is never published to
+    /// anybody (Doc/Architecture/InstanceRepositoryAccess). Readers that INSTALL on this instance ask
+    /// for both.</para>
+    /// </summary>
+    /// <param name="hub">Hub supplying the catalog and the git client.</param>
+    /// <param name="configured">The configured sources, whose repositories take precedence.</param>
+    /// <param name="logger">Optional logger.</param>
+    public static IReadOnlyList<ConfiguredPackageSource> FromInstance(
+        IMessageHub hub, IReadOnlyList<ConfiguredPackageSource> configured, ILogger? logger = null)
+    {
+        var catalog = hub.ServiceProvider.GetService<InstancePackageSourceCatalog>();
+        if (catalog is null)
+            return [];
+        var known = configured
+            .Select(c => GitSourceCredentials.NormalizeRepository(c.RepoPath))
+            .Where(r => r is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return [.. catalog.Sources
+            .Where(s => known.Add(GitSourceCredentials.NormalizeRepository(s.Repo) ?? ""))
+            .Select(s => FromRepo(hub, s.Repo, "", logger, IsNodeRepoFormat(format: null)) is { } source
+                ? new ConfiguredPackageSource(source, InstancePackageSources.RefOf(s), InstancePackageSources.NameOf(s))
+                {
+                    RepoPath = s.Repo,
+                    InstanceLocal = true,
+                }
+                : null)
+            .Where(s => s is not null)
+            .Select(s => s!)];
+    }
+
+    /// <summary>
     /// A fetch delegate that snapshots a local directory as if it were a repo checkout — the
     /// filesystem counterpart of <c>IGitHubRepoClient.Fetch</c>. Blocking file IO, so it runs on
     /// the FileSystem <see cref="IIoPool"/>: never inline on the caller's (hub) thread.
@@ -404,7 +451,7 @@ public static class PackageSources
                            services.GetService<IConfiguration>(),
                            services.GetService<GitHubAppTokenService>());
         var fallback = AppInstallationTokenProvider(hub);
-        return () => declared.TokenFor(repositoryUrl) ?? fallback();
+        return () => declared.TokenOrDefault(repositoryUrl, fallback);
     }
 
     /// <summary>
@@ -416,9 +463,13 @@ public static class PackageSources
     private static Func<IObservable<string>> AppInstallationTokenProvider(IMessageHub hub)
     {
         var appTokens = hub.ServiceProvider.GetService<GitHubAppTokenService>();
-        return appTokens is { IsConfigured: true }
-            ? appTokens.GetInstallationToken
-            : () => Observable.Return(string.Empty);
+        // The configured/anonymous choice is made PER CALL, not when the source is built: the
+        // instance's own App can be connected (or its secrets finish loading) after a long-lived
+        // source was constructed, and a delegate captured as anonymous would read anonymously for
+        // the rest of its life (Doc/Architecture/InstanceRepositoryAccess).
+        return () => appTokens is null
+            ? Observable.Return(string.Empty)
+            : appTokens.GetInstallationTokenOrAnonymous();
     }
 
     /// <summary>

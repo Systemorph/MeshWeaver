@@ -472,6 +472,11 @@ public static class InboxLayoutArea
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
         var culture = ViewerCulture(host.ViewerLocale());
+        // Per row only the person differs: the sentences are resolved ONCE here, with "{0}" kept for them.
+        var ledgerTexts = InboxApprovalLedger.Texts.Of(
+            host.Localize("inbox.approvals.requestedFrom", "{0}"),
+            host.Localize("inbox.approvals.approvedBy", "{0}"),
+            host.Localize("inbox.approvals.rejectedBy", "{0}"));
         var allLabel = host.Localize("inbox.category.all");
         var allTags = host.Localize("inbox.tag.all");
         var importantLabel = host.Localize("inbox.tag.important");
@@ -499,10 +504,12 @@ public static class InboxLayoutArea
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
             Nodes(hub, section, term, owner)
                 .Select(nodes => (nodes
-                    .Select(node => InboxRows.Of(node, section, zone,
-                        BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
-                        bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
-                        hub.JsonSerializerOptions))
+                    .Select(node => InboxApprovalLedger.Decorate(
+                        InboxRows.Of(node, section, zone,
+                            BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
+                            bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
+                            hub.JsonSerializerOptions),
+                        node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {
@@ -729,6 +736,10 @@ public static class InboxLayoutArea
     {
         if (item.As<InboxRow>(options) is not { Path: { Length: > 0 } path } row || owner.Length == 0)
             return null;
+        // An approval of the ledger lives beside its document, in ANY partition: the owner's reading view
+        // would refuse it ("not in your inbox"), so it opens at its own page, under the normal access check.
+        if (string.Equals(row.NodeType, InboxQueries.ApprovalNodeType, StringComparison.Ordinal) && !InboxQueries.InPartition(path, owner))
+            return ("/" + path.TrimStart('/'), false);
         return InboxReadingView.IsHttps(row.Link) && !readable(path)
             ? (row.Link, true)
             : (InboxReadingView.Url(owner, path), false);
@@ -970,6 +981,7 @@ public static class InboxLayoutArea
                     Category = string.IsNullOrWhiteSpace(leg.Category) ? leg.Source : leg.Category,
                     CategoryLabelKey = string.IsNullOrWhiteSpace(leg.CategoryLabelKey) ? leg.SourceLabelKey : leg.CategoryLabelKey,
                     ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen) ? null : leg.ConnectedWhen,
+                    Ledger = InboxQueries.LedgerKindOf(leg.Query),
                 })
         ];
 

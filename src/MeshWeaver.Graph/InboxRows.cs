@@ -37,6 +37,9 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
     /// <summary>The catalog key of the category's display name, when the provider gave one.</summary>
     public string? CategoryLabelKey { get; init; }
 
+    /// <summary>Which approvals-ledger group the leg is, or null for any other leg.</summary>
+    internal ApprovalLedgerKind? Ledger { get; init; }
+
     /// <summary>The resolved query that finds the source's connection (<see cref="InboxQueryLeg.ConnectedWhen"/>), or null.</summary>
     public string? ConnectedWhen { get; init; }
 }
