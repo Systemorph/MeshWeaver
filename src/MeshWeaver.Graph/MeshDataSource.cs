@@ -1963,6 +1963,17 @@ public static class MeshDataSourceExtensions
                     hub, ownStream, requestedAgainst, hub.Address.Path,
                     hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.HandleCreateRelease"))
                 : Observable.Return(new NodeTypeCompilationHelpers.SourceSnapshotCurrency(settled, true)))
+            // …and settled AGAIN, against the node the decision acts on: another release may have
+            // entered Pending/Compiling during the owner reads or the snapshot wait, and deciding
+            // against that in-flight node would hand DispatchPendingFlip a running compile whose
+            // inputs may predate this request. A snapshot that showed the owners' versions keeps
+            // showing them (versions only move forward), so currency survives this second wait.
+            .SelectMany(snapshot => ownStream
+                .AwaitCompilationSettled(hub.JsonSerializerOptions)
+                .Take(1)
+                .Select(settledAgain => snapshot with { Node = settledAgain }))
+            // The whole wait ends at the first instant of teardown — never a decision on a dying hub.
+            .TakeUntil(hub.ShuttingDown)
             .Subscribe(snapshot =>
             {
                 var ownNode = snapshot.Node;

@@ -307,22 +307,33 @@ day it was found: the deterministic repro fails on a build a day older as well.
 (`NodeTypeCompilationHelpers.AwaitSourceSnapshotCurrent`). Before deciding, the watcher reads the
 LIVE version of every source the record names from that source's OWNER — one authoritative point
 read each, as System — which are the versions the request was made against. It then waits,
-reactively on the own node stream, until the published snapshot shows them (a path the owner no
-longer holds must be gone from it too), and only then runs the unchanged decision: satisfied,
-absorbed by the compile in flight, or dispatched. Waiting also means a dispatched compile is
+reactively on the own node stream, until the published snapshot is at least that new, and only
+then runs the unchanged decision: satisfied, absorbed by the compile in flight, or dispatched.
+"At least that new" means every path the snapshot still lists shows the owner's version or newer,
+and a path the owner deleted is gone. A path the snapshot no longer lists has LEFT the source set
+(deleted, retyped away from `Code`, excluded by an edited `Sources`/`Tests` query) and counts as
+converged — it was listed when the request was observed, so its absence is newer, never staler.
+Demanding the owner's version for such a path would wait forever. The wait ends at the hub's first
+instant of teardown (`ShuttingDown`), so no decision reaches a dying hub. Waiting also means a dispatched compile is
 dispatched against a record that names the edit, so its source read cannot settle on the pre-edit
 set (a set older than the record is refused — "A compile NEVER runs against an unestablished source set" below).
 If a source's owner cannot be read, currency is unknown and the request is never treated as
 satisfied — it compiles. The legacy `CreateReleaseRequest` handler (`MeshDataSource.HandleCreateRelease`)
-decides `AlreadyUpToDate` through the same gate.
+decides `AlreadyUpToDate` through the same gate, and then waits for the compile state to settle
+AGAIN before deciding, so it never acts on a compile that entered `Pending`/`Compiling` during the
+wait.
 
 What it does NOT cover: a source ADDED in the window. The live read only asks for paths the record
 already names — a point read of an absent path is the storm shape — so discovering a new source is
 still the source query's job.
 
-Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`: every edit followed immediately by a
-request is built (fails on the pre-fix code on every run), and an edit with no request after it is
-not compiled.
+Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`:
+- Every edit followed immediately by a request is built. This fails on the pre-fix code on every
+  run.
+- A source retyped out of the set right before a request is decided and built without it.
+- The gate's rule is pinned as a pure function: a left path is accepted, while a stale or
+  owner-deleted listed path is refused.
+- An edit with no request after it is not compiled.
 
 ### Re-triggering after a source edit
 

@@ -2958,8 +2958,16 @@ internal static class NodeTypeCompilationHelpers
     /// <param name="requestedAgainst">The definition as the request was observed.</param>
     /// <param name="hubPath">The NodeType path, for logs.</param>
     /// <param name="logger">Logger.</param>
-    /// <returns>One emission: the own node to decide against.</returns>
+    /// <returns>One emission — the own node to decide against — or none when the hub shuts down first.</returns>
     public static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrent(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger)
+        // Teardown ends the read and the wait at its first instant, so neither caller's decision
+        // can reach a dying hub nor keep a cross-hub read pending through Quiescing.
+        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger)
+            .TakeUntil(hub.ShuttingDown);
+
+    private static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentCore(
         IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
         string hubPath, ILogger? logger)
     {
@@ -3006,8 +3014,9 @@ internal static class NodeTypeCompilationHelpers
             });
     }
 
-    /// <summary>Whether <paramref name="snapshot"/> shows every live version (present at that
-    /// version or newer; an owner-absent path absent).</summary>
+    /// <summary>Whether <paramref name="snapshot"/> is at least as new as the owners' live versions:
+    /// every path it still lists shows the owner's version or newer (an owner-deleted path must be
+    /// gone), and a path it no longer lists has left the source set — newer, never staler.</summary>
     internal static bool SnapshotShows(
         IReadOnlyDictionary<string, long>? snapshot, IReadOnlyDictionary<string, long?> live)
         => FirstBehind(snapshot, live) is null;
@@ -3019,7 +3028,17 @@ internal static class NodeTypeCompilationHelpers
         {
             long published = 0;
             var has = snapshot is not null && snapshot.TryGetValue(path, out published);
-            if (version is null ? has : !has || published < version.Value)
+            // A path the snapshot no longer lists has LEFT the source set, and that is newer than
+            // the request, never staler: every path read here was listed by the snapshot the request
+            // was observed with. The source query owns MEMBERSHIP — a source retyped away from Code,
+            // excluded by an edited Sources/Tests query or deleted leaves it while its owner may
+            // still hold a newer node — so an absent path is the converged answer, and waiting for
+            // it to reappear at the owner's version would wait forever.
+            if (!has)
+                continue;
+            // Still listed: it must show at least the owner's version, and an owner-deleted source
+            // must leave the snapshot first.
+            if (version is null || published < version.Value)
                 return path;
         }
         return null;
