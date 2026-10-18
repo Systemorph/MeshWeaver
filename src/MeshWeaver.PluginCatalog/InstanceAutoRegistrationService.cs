@@ -866,12 +866,106 @@ public sealed class InstanceAutoRegistrationService(
     /// nodes and may compile node types; a parallel fan-out on a cold starting pod is how you
     /// saturate it.</para>
     /// </summary>
-    private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options)
+    private IObservable<DefaultInstallSummary> InstallDefaults(PluginCatalogOptions options) =>
+        InstanceSourcesRead().SelectMany(read => InstallDefaultsWith(options, read.Sources)
+            // An unread instance store is a source that did not ANSWER: the pass still installs the
+            // deployment's packages, but it is not complete, so the repair lane (LeftUndone /
+            // RetryFailedDefaults) knows work remains once the store answers.
+            .Select(summary => read.Failed
+                ? summary with { ListingIncomplete = true, SourceUnreachable = true }
+                : summary));
+
+    /// <summary>
+    /// The instance's OWN package sources (<c>Admin/PackageSource-*</c>,
+    /// Doc/Architecture/InstanceRepositoryAccess) once their catalog has read the store — so a boot
+    /// pass never mistakes "not read yet" for "none". A catalog that does not answer within its
+    /// bound is said at Error and the pass proceeds with the deployment's own sources: the instance's
+    /// additions are then installed by the next pass, and the deployment's never wait on them.
+    /// </summary>
+    private IObservable<(IReadOnlyList<InstancePackageSourceContent> Sources, bool Failed)> InstanceSourcesRead()
     {
-        var wanted = options.InstallByDefault
+        var catalog = hub.ServiceProvider.GetService<InstancePackageSourceCatalog>();
+        if (catalog is null)
+            return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], false));
+        // Loaded is not enough: after a fault the catalog keeps its last listing, and WhenLoaded
+        // still answers at once. A pass that read that stale listing would report itself complete
+        // and clear the repair debt although a source added during the outage was never read — so
+        // it waits for the re-opened query's complete listing, inside the same bound, and a
+        // continuing outage reaches the failure path below.
+        return WhenHealthy(catalog.WhenLoaded, catalog.Changes.Select(_ => Unit.Default), () => catalog.Faulted)
+            .Select(_ => ((IReadOnlyList<InstancePackageSourceContent>)catalog.Sources, false))
+            .Timeout(TimeSpan.FromSeconds(30))
+            .Catch((Exception ex) =>
+            {
+                logger.LogError(ex,
+                    "[DefaultInstall] the instance's own package sources (Admin/PackageSource-*) could not "
+                    + "be read; this pass installs from the deployment's sources only, and what the "
+                    + "instance's administrators chose to install by default waits for the next pass.");
+                return Observable.Return<(IReadOnlyList<InstancePackageSourceContent>, bool)>(([], true));
+            });
+    }
+
+    /// <summary>
+    /// Emits once the catalog has loaded AND is not faulted — immediately when both already hold,
+    /// otherwise on the first change after which it is healthy again. Pure over its inputs.
+    /// </summary>
+    /// <param name="whenLoaded">Emits once the first complete listing has arrived.</param>
+    /// <param name="changes">Emits on subscribe and after every snapshot change, the fault flag included.</param>
+    /// <param name="faulted">Whether the catalog's live query is down right now.</param>
+    internal static IObservable<Unit> WhenHealthy(IObservable<Unit> whenLoaded, IObservable<Unit> changes, Func<bool> faulted)
+        => whenLoaded.Take(1).SelectMany(_ => changes.Where(_ => !faulted()).Take(1));
+
+    /// <summary>
+    /// Each instance source whose repository a configured source also names, renamed to that
+    /// configured source's name — the one the listing carries, because the configured source wins
+    /// the duplicate. Every other source is returned unchanged. Pure.
+    /// </summary>
+    /// <param name="instanceSources">The instance's own sources.</param>
+    /// <param name="configured">The deployment's configured sources: name and repository.</param>
+    internal static IReadOnlyList<InstancePackageSourceContent> UnderWinningNames(
+        IReadOnlyList<InstancePackageSourceContent> instanceSources,
+        IReadOnlyList<(string Name, string RepoPath)> configured)
+    {
+        var byRepo = configured
+            .Select(c => (Repo: GitSourceCredentials.NormalizeRepository(c.RepoPath), c.Name))
+            .Where(c => c.Repo is not null && !string.IsNullOrWhiteSpace(c.Name))
+            .GroupBy(c => c.Repo!, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
+        return [.. instanceSources.Select(s =>
+            GitSourceCredentials.NormalizeRepository(s.Repo) is { } repo && byRepo.TryGetValue(repo, out var name)
+                ? s with { Name = name }
+                : s)];
+    }
+
+    private IObservable<DefaultInstallSummary> InstallDefaultsWith(
+        PluginCatalogOptions options, IReadOnlyList<InstancePackageSourceContent> instanceSources)
+    {
+        // The instance's own install-by-default choices (Admin/PackageSource-*.installByDefault) join
+        // the deployment's patterns as exact Source/Package entries FOR SELECTION ONLY. They never
+        // change what the RECORD's set means — the baseline decision below reads the record alone —
+        // and they carry no deployment-configuration authority: that authority, and the dependency
+        // closure it admits, is derived from the record's own entries (`authorizing`) alone, so a
+        // locally chosen package can never pull a commercial requirement in as deployment-config.
+        var authorizing = options.InstallByDefault
             .Select(PluginGrantEntry.TryParse)
             .Where(e => e is not null)
             .Select(e => e!)
+            .ToList();
+        // A local source naming a repository the deployment's configuration already names is
+        // dropped from the source list (PackageSources.FromInstance — the record's source wins), so
+        // its selections are spelled under the WINNING source's name; otherwise "reporting/Reporting"
+        // could never match the listing under "Acme" and the package would never be installed. This
+        // renames only — the entries still join `wanted`, never `authorizing`.
+        var configured = hub.ServiceProvider.GetService<IConfiguration>() is { } configuration
+            ? PackageSources.FromConfiguration(hub, configuration, logger)
+                .Select(c => (c.Name, c.RepoPath))
+                .ToList()
+            : [];
+        var wanted = authorizing
+            .Concat(InstancePackageSources.InstallEntries(UnderWinningNames(instanceSources, configured))
+                .Select(PluginGrantEntry.TryParse)
+                .Where(e => e is not null)
+                .Select(e => e!))
             .ToList();
         var malformed = options.InstallByDefault
             .Where(p => !string.IsNullOrWhiteSpace(p) && PluginGrantEntry.TryParse(p) is null)
@@ -912,7 +1006,7 @@ public sealed class InstanceAutoRegistrationService(
                 })
             : Observable.Return(FeatureComposition.Empty);
 
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed));
+        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed, authorizing));
     }
 
     /// <summary>
@@ -961,7 +1055,8 @@ public sealed class InstanceAutoRegistrationService(
         PluginCatalogOptions options,
         IReadOnlyList<PluginGrantEntry> wanted,
         bool baseline,
-        FeatureComposition composition)
+        FeatureComposition composition,
+        IReadOnlyList<PluginGrantEntry>? authorizing = null)
     {
         var included = Parse(composition.Included);
         var excluded = Parse(composition.Excluded);
@@ -1012,7 +1107,7 @@ public sealed class InstanceAutoRegistrationService(
                         "Default-install ledger holds {Count} package(s) already seeded; they are "
                         + "not re-installed even if absent (an operator removed them).", seeded.Count);
 
-                return Candidates(sources, baseline, wanted, included, excluded)
+                return Candidates(sources, baseline, wanted, included, excluded, authorizing)
                     // Drop anything the seed has already delivered once. Done AFTER listing because
                     // the decision is per PACKAGE, and only the listing knows which packages a
                     // pattern covers.
@@ -1327,9 +1422,15 @@ public sealed class InstanceAutoRegistrationService(
             .Select((s, i) => new ConfiguredPackageSource(s, "HEAD", $"registered-{i}"))
             .ToList();
 
-        var configured = services.GetService<IConfiguration>() is { } config
+        var fromConfig = services.GetService<IConfiguration>() is { } config
             ? PackageSources.FromConfiguration(hub, config, logger)
             : [];
+        IReadOnlyList<ConfiguredPackageSource> configured = fromConfig;
+        // The sources the instance's administrators added ON the instance
+        // (Doc/Architecture/InstanceRepositoryAccess) come LAST — after the registries too — so they
+        // can never shadow a package the deployment's own sources list (the first listing of an id
+        // wins); a repository the record names stays the record's.
+        var instanceLocal = PackageSources.FromInstance(hub, fromConfig, logger);
 
         var tokenResolver = services.GetService<RegistryTokenResolver>();
         var registries = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries);
@@ -1371,6 +1472,7 @@ public sealed class InstanceAutoRegistrationService(
         return remote.Select(remoteSources => (IReadOnlyList<ConfiguredPackageSource>)registered
             .Concat(configured)
             .Concat(remoteSources)
+            .Concat(instanceLocal)
             .ToList());
     }
 
@@ -1479,7 +1581,8 @@ public sealed class InstanceAutoRegistrationService(
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted,
         IReadOnlyList<FlagPattern> included,
-        IReadOnlyList<FlagPattern> excluded) =>
+        IReadOnlyList<FlagPattern> excluded,
+        IReadOnlyList<PluginGrantEntry>? authorizing = null) =>
         Observable.Defer(() =>
         {
             var sourceNames = sources.Select(s => s.Name).ToList();
@@ -1530,8 +1633,15 @@ public sealed class InstanceAutoRegistrationService(
                 bool IsWanted(InstallCandidate c) =>
                     wanted.Any(w => w.Matches(c.Package.Source ?? "", c.Package.Id));
                 // Named EXACTLY by an operator entry (Source/Package), not merely covered by Source/*.
-                bool IsNamed(InstallCandidate c) =>
+                // The entries that carry the deployment configuration's AUTHORITY: the record's own
+                // (PluginCatalog:InstallByDefault). Selection reads `wanted`, which may also hold the
+                // instance's own choices; authority never does. Null keeps today's single list.
+                var named = authorizing ?? wanted;
+                bool IsSelectedExactly(InstallCandidate c) =>
                     wanted.Any(w => w.PackageId != PluginGrantEntry.AllPackages
+                                    && w.Matches(c.Package.Source ?? "", c.Package.Id));
+                bool IsNamed(InstallCandidate c) =>
+                    named.Any(w => w.PackageId != PluginGrantEntry.AllPackages
                                     && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
                     .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
@@ -1572,8 +1682,8 @@ public sealed class InstanceAutoRegistrationService(
                 // Only a candidate whose source is PROVEN may carry the configuration's authority
                 // (ProvenanceIsTrusted): a manifest a direct repository lists can AUTHOR any
                 // `source`, and must not borrow another configured source's Source/Package naming.
-                var named = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
-                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, named);
+                var namedPackages = selected.Where(c => IsNamed(c) && ProvenanceIsTrusted(c)).Select(c => c.Package).ToImmutableList();
+                var namedRequirements = ConfigAuthorizedRequirements(trustedPackages, namedPackages);
                 // Admitted keyed by SOURCE and id (the catalog stamps every listed manifest's
                 // source), so the gate never authorizes the same id listed by another source.
                 var bySourceId = trustedPackages.ToImmutableDictionary(p => p.Id, p => p.Source ?? "", StringComparer.Ordinal);
@@ -1583,13 +1693,13 @@ public sealed class InstanceAutoRegistrationService(
                         kv => DeploymentConfigAuthority.RequirementKey(bySourceId[kv.Key], kv.Key),
                         kv => kv.Value,
                         StringComparer.Ordinal));
-                var configAuthorized = named.Select(p => p.Id)
+                var configAuthorized = namedPackages.Select(p => p.Id)
                     .Concat(namedRequirements.Keys)
                     .ToImmutableHashSet(StringComparer.Ordinal);
                 string? ConfigAuthority(InstallCandidate c) =>
                     !ProvenanceIsTrusted(c) ? null
                     : IsNamed(c)
-                        ? $"named in PluginCatalog:InstallByDefault as '{wanted.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
+                        ? $"named in PluginCatalog:InstallByDefault as '{named.First(w => w.PackageId != PluginGrantEntry.AllPackages && w.Matches(c.Package.Source ?? "", c.Package.Id))}'"
                         : namedRequirements.TryGetValue(c.Package.Id, out var root)
                             ? $"required by '{root}', which PluginCatalog:InstallByDefault names"
                             : null;
@@ -1655,8 +1765,10 @@ public sealed class InstanceAutoRegistrationService(
                         // Selected ONLY because a whole-source pattern (`Source/*`) covers it — no
                         // entry names it, no flag declares it, it is not the platform baseline.
                         // Read by the governed-provision hold in InstallSelection.
+                        // Exact-versus-wildcard reads EVERY exact selection (the record's and the
+                        // instance's own); only the configuration AUTHORITY is the record's alone.
                         WildcardOnly = IsWanted(c)
-                                       && !IsNamed(c)
+                                       && !IsSelectedExactly(c)
                                        && !IsIncluded(c)
                                        && !(baseline && c.Package.PreInstalled),
                         // Why the deployment configuration authorizes it — named exactly, or
@@ -2041,8 +2153,13 @@ public sealed class InstanceAutoRegistrationService(
     /// Selection itself is unchanged; only the authority is withheld. Pure.
     /// </summary>
     private static bool ProvenanceIsTrusted(InstallCandidate candidate) =>
-        candidate.Source.Source is RegistryPackageSource
-        || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase);
+        // 🚨 An instance-local source (Doc/Architecture/InstanceRepositoryAccess) is NEVER trusted to
+        // carry the deployment configuration's authority, whatever it is named: its administrator
+        // chose the name, so a local repository called like a configured source must not inherit
+        // that source's Source/Package entries — or the commercial requirements they admit.
+        !candidate.Source.InstanceLocal
+        && (candidate.Source.Source is RegistryPackageSource
+            || string.Equals(candidate.Package.Source, candidate.Source.Name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Whether two source names are the same non-empty source (case-insensitive, like
     /// <see cref="PluginGrantEntry.Matches"/>). Pure.</summary>
@@ -2058,7 +2175,20 @@ public sealed class InstanceAutoRegistrationService(
     private static InstallCandidate? RepairCandidate(IReadOnlyList<InstallCandidate> listings, string? recordedSource) =>
         string.IsNullOrWhiteSpace(recordedSource)
             ? listings.FirstOrDefault()
-            : listings.FirstOrDefault(c => ProvenanceIsTrusted(c) && SameSource(c.Package.Source, recordedSource));
+            : listings.FirstOrDefault(c => RepairProvenanceIsTrusted(c, recordedSource));
+
+    /// <summary>
+    /// Whether a listing may re-assert an install recorded under <paramref name="recordedSource"/>.
+    /// REPAIR is not AUTHORIZATION: a package installed from an instance-local source is repaired from
+    /// that source — the one configured under the recorded name, never a manifest that merely authors
+    /// it — while the deployment configuration's authority (<see cref="ProvenanceIsTrusted"/>) stays
+    /// closed to it. Listings are in source order and instance-local sources come last, so a
+    /// deployment source of the same name always wins. Pure.
+    /// </summary>
+    private static bool RepairProvenanceIsTrusted(InstallCandidate candidate, string recordedSource) =>
+        candidate.Source.InstanceLocal
+            ? SameSource(candidate.Source.Name, recordedSource) && SameSource(candidate.Package.Source, recordedSource)
+            : ProvenanceIsTrusted(candidate) && SameSource(candidate.Package.Source, recordedSource);
 
     private static bool SameSource(string? a, string? b) =>
         !string.IsNullOrWhiteSpace(a) && string.Equals(a.Trim(), b?.Trim(), StringComparison.OrdinalIgnoreCase);
