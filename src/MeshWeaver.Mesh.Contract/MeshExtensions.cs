@@ -9960,11 +9960,7 @@ public static class MeshExtensions
                         return;
                     }
                     var msg = ex.Message ?? "Unknown error";
-                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? NodeCopyRejectionReason.TargetAlreadyExists
-                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                            ? NodeCopyRejectionReason.SourceNotFound
-                            : NodeCopyRejectionReason.Unknown;
+                    var reason = CopyReasonForFailure(ex, msg);
                     logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
                     hub.Post(CopyNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
                 });
@@ -10099,6 +10095,29 @@ public static class MeshExtensions
     private const string MoveStagePreflight = "delete-preflight";
     private const string MoveStageCopy = "copy";
     private const string MoveStageDeleteSource = "delete-source";
+
+    /// <summary>
+    /// The copy reason a failed copy maps to. A per-node create carries its OWN typed verdict
+    /// (<see cref="NodeCreationFailure.RejectionReasonKey"/>, stamped by
+    /// <see cref="NodeCreationFailure.ToException(CreateNodeResponse,string)"/>), and that verdict wins:
+    /// reading the wording alone filed a create a validator REFUSED as <see cref="NodeCopyRejectionReason.Unknown"/>,
+    /// so a move's caller could not tell a deterministic refusal — which every retry meets again — from a
+    /// failure worth retrying (#6952: the feedback hand-over retried one refused relocation on every
+    /// activation). The wording is the fallback for a failure that carries no typed verdict.
+    /// </summary>
+    private static NodeCopyRejectionReason CopyReasonForFailure(Exception ex, string message) =>
+        ex.Data[NodeCreationFailure.RejectionReasonKey] switch
+        {
+            NodeCreationRejectionReason.ValidationFailed
+                or NodeCreationRejectionReason.InvalidNodeType
+                or NodeCreationRejectionReason.InvalidPath => NodeCopyRejectionReason.ValidationFailed,
+            NodeCreationRejectionReason.NodeAlreadyExists => NodeCopyRejectionReason.TargetAlreadyExists,
+            _ => message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+                ? NodeCopyRejectionReason.TargetAlreadyExists
+                : message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+                    ? NodeCopyRejectionReason.SourceNotFound
+                    : NodeCopyRejectionReason.Unknown,
+        };
 
     /// <summary>
     /// The move reason a failed copy leg maps to. <see cref="NodeCopyRejectionReason.Unknown"/> is an

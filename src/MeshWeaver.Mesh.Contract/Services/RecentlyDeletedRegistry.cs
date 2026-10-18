@@ -54,7 +54,7 @@ namespace MeshWeaver.Mesh.Services;
 /// <c>ErrorType.ShuttingDown</c>. See <see cref="IAddressTombstones"/> for why that distinction is
 /// load-bearing.</para>
 /// </summary>
-public sealed class RecentlyDeletedRegistry : IAddressTombstones
+public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletionScopes
 {
     // Long enough to cover the full delete → (deactivate) → re-activate → debounced-flush window
     // under CI load (the resurrecting save fires ~200 ms after the delete; the guard must outlive

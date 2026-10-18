@@ -1852,6 +1852,13 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                         // observation of state that is already durable).
                         if (versionGuard?.IsVersionGuardedDeletionInFlight(current.Path) == true)
                             throw new SubtreeDeletionInFlightException(current.Path, current.Path);
+                        // 🚨 …and the same holds for a delete or MOVE of a subtree containing this
+                        // node (#6953). The storage guard refuses its flush, so committing it here
+                        // would acknowledge a state that is not durable: lost if the operation
+                        // completes, stored later behind the writer's back if it does not.
+                        if (versionGuard is not null
+                            && versionGuard.IsUnderActiveDeletion(current.Path, out var deletionRoot))
+                            throw new SubtreeDeletionInFlightException(current.Path, deletionRoot);
                         // 🚨 THE AUDIT STAMP applies to an OWN write exactly as to a cross-hub one
                         // (Plugins#2229, defect D). Without it an own-stream write — a thread hub's
                         // claim, rollback and commit, a NodeType's compile bookkeeping — minted a
