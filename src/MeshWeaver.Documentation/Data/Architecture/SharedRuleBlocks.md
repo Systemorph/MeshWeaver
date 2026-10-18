@@ -101,8 +101,8 @@ not own — still says it must carry the block, and a listed repo with no marker
 
 ## The baseline every repo carries
 
-Maintainer, 2026-10-17: every Systemorph repository's `AGENTS.md` carries the fleet's best-practice
-rules **from one maintained source, machine-checked**. The source is the hub copy of each block in
+Every Systemorph repository's `AGENTS.md` carries the fleet's best-practice rules **from one
+maintained source, machine-checked** (policy [`shared-rule-baseline`](../PolicyNotProse)). The source is the hub copy of each block in
 core's `AGENTS.md`; the check is this gate. Which blocks a repository must carry depends on what it
 contains, not on who owns it:
 
