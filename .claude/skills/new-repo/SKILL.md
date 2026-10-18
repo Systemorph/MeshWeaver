@@ -124,6 +124,12 @@ mesh; only the deployment repo has one.
 
 ## 2. AGENTS.md — take SocialMedia's, and know what you are taking
 
+🚨 **The shared rule blocks are the baseline every repo carries** — copy them from core's `AGENTS.md`
+for the new repo's class, verify against a temporary copy of the register that adds the repo to `repos` and to each block's
+`required-in` — `check-shared-rules.py --manifest <temporary copy> --local <repo>=<path-to-AGENTS.md>` (a
+`--local` naming an unregistered repo is refused — the gate reads only registered repos), then
+register the repo once that PR merges: [SharedRuleBlocks → "The baseline every repo carries"](../../../src/MeshWeaver.Documentation/Data/Architecture/SharedRuleBlocks.md).
+
 **Donor: `MeshWeaver.SocialMedia/AGENTS.md`.** A fleet-wide compaction is in flight — one
 `docs/agents-md-factor-out` PR per repo (Education #224, Reinsurance #104, SocialMedia #95,
 Manufacturing #26, Memex #142; Plugins uncommitted) moving each file's evidence into on-demand
