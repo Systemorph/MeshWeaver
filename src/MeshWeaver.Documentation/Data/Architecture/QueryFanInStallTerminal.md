@@ -614,10 +614,18 @@ the hits the Initial will carry, with the live path's semantics:
   announcement wins;
 - a `Removed` takes the path out, whichever provider held it.
 
+Two refinements came out of review:
+
+- A removed path stays MARKED until the Initial is out. A provider whose Initial arrives later may
+  have read before the removal, and its copy must not resurrect the row. An `Added` or `Updated`
+  clears the mark, so a re-created row is kept.
+- A delta without `Scores` keeps the rank of the copy it replaces. The storage provider's live
+  frames carry none, and a re-read row must not drop below a weaker match under `Limit`.
+
 After the Initial, nothing changes. `PreInitialLiveDeltaFoldTest` (`test/MeshWeaver.Hosting.Test`)
-pins all three delta kinds plus the post-Initial control. Its providers are `ReplaySubject`s, so the
+pins all three delta kinds, both refinements and the post-Initial control. Its providers are `ReplaySubject`s, so the
 merge replays the early provider's Initial and delta before the late provider's Initial: exactly the
-race's ordering, with no clock in it. Before the fix three of its four tests are red.
+race's ordering, with no clock in it. Without the fold, the three delta-kind tests and the overlapping-Initial test are red. Against the fold without the two refinements, the overlapping-Initial test and the rank test are red.
 
 **Not established.** The CI run left no trace of which provider answered first. The 108 s failure is
 attributed to this window from the mechanism and the test's shape (an immediate delete, racing the

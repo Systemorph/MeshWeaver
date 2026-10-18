@@ -987,6 +987,11 @@ public partial class MeshQuery : IMeshQueryCore
             // overlapping providers both saw the change).
             var liveItems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+            // Paths a provider REMOVED before the merged Initial was out (FoldIntoPendingInitial).
+            // A provider whose Initial arrives later may have read before that removal; its copy is
+            // stale and must not bring the row back. An Added/Updated of the path clears the mark.
+            var removedBeforeInitial = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             // The partitions each provider's Initial said it READ FROM (QueryResultChange.Partitions),
             // unioned onto the merged Initial. Null throughout when no provider reported — the
             // merged change then says "unknown", which is the honest answer, never "all".
@@ -1054,7 +1059,8 @@ public partial class MeshQuery : IMeshQueryCore
                                     if (item is MeshNode node)
                                     {
                                         if (!string.IsNullOrEmpty(node.Path)
-                                            && !initialPaths.Add(node.Path))
+                                            && (removedBeforeInitial.Contains(node.Path)
+                                                || !initialPaths.Add(node.Path)))
                                             continue;
                                         providerHits[idx].Add((item, score));
                                     }
@@ -1098,7 +1104,7 @@ public partial class MeshQuery : IMeshQueryCore
                                 // forwarded AHEAD of the Initial that every fold treats as a reset.
                                 if (initialCount != initialTarget)
                                 {
-                                    FoldIntoPendingInitial(change, idx, providerHits, initialPaths, initialIdentities);
+                                    FoldIntoPendingInitial(change, idx, providerHits, initialPaths, initialIdentities, removedBeforeInitial);
                                     return;
                                 }
                                 if (TryFilterDuplicateLiveChange(change, liveItems, out var filtered))
@@ -1614,32 +1620,54 @@ public partial class MeshQuery : IMeshQueryCore
     /// newer one (the newest announcement wins, as <see cref="TryFilterDuplicateLiveChange{T}"/>
     /// forwards every re-announcement); a <c>Removed</c> takes the path out whichever provider held
     /// it (a live <c>Removed</c> from any provider removes the path from the live set).</para>
+    ///
+    /// <para>🚨 Two refinements (review of #6973). A removed path is MARKED until the Initial is out
+    /// (<paramref name="removedBeforeInitial"/>): a provider whose Initial arrives later may have read
+    /// before the removal, and its copy must not bring the deleted row back; an <c>Added</c> /
+    /// <c>Updated</c> of the path clears the mark, so a re-created row is kept. And a delta without
+    /// <c>Scores</c> keeps the rank of the copy it replaces: the storage provider's live frames carry
+    /// none, and an update must not demote a ranked hit below Skip/Limit.</para>
     /// </summary>
     private static void FoldIntoPendingInitial<T>(
         QueryResultChange<T> change,
         int providerIndex,
         List<(T Item, double Score)>[] providerHits,
         HashSet<string> initialPaths,
-        HashSet<T> initialIdentities)
+        HashSet<T> initialIdentities,
+        HashSet<string> removedBeforeInitial)
     {
         var scores = change.Scores;
         for (var j = 0; j < change.Items.Count; j++)
         {
             var item = change.Items[j];
-            var score = scores is not null && j < scores.Count ? scores[j] : 0.0;
+            double? announced = scores is not null && j < scores.Count ? scores[j] : null;
             if (item is MeshNode { Path: { Length: > 0 } path })
             {
+                // The rank the held copy was given. A live delta usually carries no Scores (the
+                // storage provider's ProcessBatch emits none), and an Updated must not demote a
+                // ranked hit to 0 — it is the same row, re-read.
+                double? heldScore = null;
                 foreach (var hits in providerHits)
-                    hits.RemoveAll(hit => hit.Item is MeshNode held
+                {
+                    var at = hits.FindIndex(hit => hit.Item is MeshNode held
                         && string.Equals(held.Path, path, StringComparison.OrdinalIgnoreCase));
+                    if (at < 0)
+                        continue;
+                    heldScore ??= hits[at].Score;
+                    hits.RemoveAt(at);
+                }
                 initialPaths.Remove(path);
                 if (change.ChangeType is QueryChangeType.Added or QueryChangeType.Updated)
                 {
+                    removedBeforeInitial.Remove(path);
                     initialPaths.Add(path);
-                    providerHits[providerIndex].Add((item, score));
+                    providerHits[providerIndex].Add((item, announced ?? heldScore ?? 0.0));
                 }
+                else if (change.ChangeType == QueryChangeType.Removed)
+                    removedBeforeInitial.Add(path);
                 continue;
             }
+            var score = announced ?? 0.0;
             switch (change.ChangeType)
             {
                 case QueryChangeType.Added or QueryChangeType.Updated:

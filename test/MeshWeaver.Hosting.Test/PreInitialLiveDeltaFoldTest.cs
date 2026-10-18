@@ -133,6 +133,63 @@ public class PreInitialLiveDeltaFoldTest
         first.Items.Single(n => n.Id == "d3").Name.Should().Be("v2", "the newest version the provider announced");
     }
 
+    /// <summary>A provider whose Initial arrives AFTER the removal may have read before it: its copy
+    /// is stale and must not resurrect the deleted row (review of #6973).</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task ARemovalBeforeTheMergedInitial_IsNotUndoneByALaterOverlappingInitial()
+    {
+        var delivery = Node("d5");
+        var early = new ReplayProvider("early",
+            Replay(Frame(QueryChangeType.Initial, delivery), Frame(QueryChangeType.Removed, delivery)));
+        var late = new ReplayProvider("late", Replay(Frame(QueryChangeType.Initial, delivery)));
+
+        var first = await FirstFrame(TestContext.Current.CancellationToken, early, late);
+
+        first.ChangeType.Should().Be(QueryChangeType.Initial);
+        first.Items.Select(n => n.Path).Should().NotContain(delivery.Path,
+            "the late provider's copy predates the removal the early provider already announced");
+    }
+
+    /// <summary>…while a row RE-CREATED before the Initial is kept: the mark is cleared by the Added.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task ARowRecreatedBeforeTheMergedInitial_IsInTheInitial()
+    {
+        var delivery = Node("d6");
+        var early = new ReplayProvider("early",
+            Replay(Frame(QueryChangeType.Initial, delivery), Frame(QueryChangeType.Removed, delivery),
+                Frame(QueryChangeType.Added, delivery)));
+        var late = new ReplayProvider("late", Replay(Frame(QueryChangeType.Initial, delivery)));
+
+        var first = await FirstFrame(TestContext.Current.CancellationToken, early, late);
+
+        first.Items.Select(n => n.Path).Should().Contain(delivery.Path);
+    }
+
+    /// <summary>An unscored Updated keeps the rank of the copy it replaces (review of #6973): the
+    /// storage provider's live frames carry no Scores, and a re-read row must not fall below a weaker
+    /// match under Limit.</summary>
+    [Fact(Timeout = 30_000)]
+    public async Task AnUnscoredUpdateBeforeTheMergedInitial_KeepsItsRank()
+    {
+        var strong = Node("z-strong", "v1");
+        var weak = Node("a-weak");
+        var ranked = Frame(QueryChangeType.Initial, strong, weak) with { Scores = [10.0, 1.0] };
+        var early = new ReplayProvider("early",
+            Replay(ranked, Frame(QueryChangeType.Updated, Node("z-strong", "v2"))));
+        var late = new ReplayProvider("late", Replay(Frame(QueryChangeType.Initial)));
+
+        var first = await ((IMeshQueryCore)new MeshQuery([early, late], hub: null!))
+            // Free text: a ranked query, where the merge orders by score (a filter-only query is
+            // ordered by DefaultFilterOrdering instead and would not read the score at all).
+            .Query<MeshNode>(new MeshQueryRequest { Query = "delivery", Limit = 1 }, Options)
+            .FirstAsync()
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Await(TestContext.Current.CancellationToken);
+
+        first.Items.Select(n => n.Id).Should().Equal(["z-strong"], "the updated row keeps its rank of 10 — path order alone would put a-weak first");
+        first.Items.Single().Name.Should().Be("v2");
+    }
+
     /// <summary>The fold keeps the live contract after the Initial: a row the Initial carries is
     /// live, so a later removal of it still flows.</summary>
     [Fact(Timeout = 30_000)]
