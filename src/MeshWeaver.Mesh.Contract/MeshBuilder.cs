@@ -1347,6 +1347,10 @@ public partial record MeshBuilder
             // dying hub: "the node was DELETED" is an authoritative NotFound, everything else
             // stays the transient ShuttingDown. See IAddressTombstones for why (#1029).
             .AddSingleton<IAddressTombstones>(sp => sp.GetRequiredService<Services.RecentlyDeletedRegistry>())
+            // The same scopes the storage write guard enforces, asked by an owner in its COMMIT turn
+            // so a write under a deletion or move in flight is refused before it is acknowledged
+            // (#6953). See IActiveDeletionScopes.
+            .AddSingleton<IActiveDeletionScopes>(sp => sp.GetRequiredService<Services.RecentlyDeletedRegistry>())
             // Mesh-ROOT durable-version high-water for the post-commit flush, registered at the
             // root for the SAME reason as the tombstone registry above: the flush is a mesh-level
             // singleton while its reader — the per-node persistence sampler's save handler — runs

@@ -2624,6 +2624,9 @@ public static class DataExtensions
         var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
         var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PatchAck");
+        // The deletion (and move) scopes the storage guard enforces — asked in the merge turn so a
+        // patch under one is refused before it commits (#6953). Resolved here for the same reason.
+        var deletionScopes = hub.ServiceProvider.GetService<MeshWeaver.Mesh.IActiveDeletionScopes>();
         // The writes on this store that are waiting for it to load, in arrival order (#6594).
         // Resolved on the handler's turn for the same reason as the two services above.
         var coldLane = hub.ServiceProvider.GetRequiredService<ColdStoreWriteLanes>().For(primary);
@@ -2941,6 +2944,29 @@ public static class DataExtensions
                         .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
                         as System.Text.Json.Nodes.JsonObject
                         ?? new System.Text.Json.Nodes.JsonObject();
+                    // 🚨 A DELETE OR MOVE OF THIS NODE'S SUBTREE IS IN FLIGHT (#6953) — refuse the
+                    // patch IN THIS TURN, before it commits. Its durable flush would be refused by
+                    // the storage guard anyway, but only AFTER the merge had committed here: the
+                    // writer heard "not applied" while this owner went on serving the change, and
+                    // its next save stored it once the scope closed (a move that failed) — or lost it
+                    // to the tombstone (a move that succeeded). Refused here, nothing is committed
+                    // and nothing is left pending; the writer may retry once the operation is over.
+                    var patchedPath = (currentNode[jsonOpts.PropertyNamingPolicy?.ConvertName("Path") ?? "Path"]
+                            ?? currentNode["Path"] ?? currentNode["path"]) is System.Text.Json.Nodes.JsonValue pathValue
+                        && pathValue.TryGetValue<string>(out var livePath)
+                            ? livePath
+                            : hub.Address.Path;
+                    if (deletionScopes is not null
+                        && deletionScopes.IsUnderActiveDeletion(patchedPath, out var deletionRoot))
+                    {
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.NotFound, hubPath,
+                            // The same words ClassifyPatchException gives the flush's refusal of it.
+                            "Node being deleted: "
+                            + new MeshWeaver.Mesh.SubtreeDeletionInFlightException(patchedPath, deletionRoot).Message
+                            + " The patch was NOT applied."));
+                        return null;
+                    }
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");

@@ -1880,6 +1880,21 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
                                     observer.OnError);
                                 return null;
                             }
+                            // 🚨 A DELETE OR MOVE of a subtree containing this node is in flight
+                            // (#6953) — the storage guard refuses this write's flush, so committing it
+                            // now would acknowledge a state that is not durable: lost if the operation
+                            // completes, stored later behind the writer's back if it does not. DEFERRED
+                            // exactly like the seal above, never refused: the turn returns no change and
+                            // re-runs once the scope lifts — then the tombstone check below refuses it
+                            // if the node went away, and it applies if the operation aborted.
+                            if (versionGuard is not null
+                                && versionGuard.IsUnderActiveDeletion(current.Path, out string? _))
+                            {
+                                deferral.Disposable = versionGuard.ActiveDeletionLifted(current.Path).Subscribe(
+                                    _ => Commit(deferredRetry: true),
+                                    observer.OnError);
+                                return null;
+                            }
                             // 🚨 A path a delete went through is tombstoned, and NO own write may be
                             // acknowledged on it — a deferred one re-running after its seal lifted, or a
                             // fresh one on a still-live owner the delete's invalidation has not reached

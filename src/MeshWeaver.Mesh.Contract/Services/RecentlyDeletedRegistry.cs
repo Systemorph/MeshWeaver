@@ -55,7 +55,7 @@ namespace MeshWeaver.Mesh.Services;
 /// <c>ErrorType.ShuttingDown</c>. See <see cref="IAddressTombstones"/> for why that distinction is
 /// load-bearing.</para>
 /// </summary>
-public sealed class RecentlyDeletedRegistry : IAddressTombstones
+public sealed class RecentlyDeletedRegistry : IAddressTombstones, IActiveDeletionScopes
 {
     // Long enough to cover the full delete → (deactivate) → re-activate → debounced-flush window
     // under CI load (the resurrecting save fires ~200 ms after the delete; the guard must outlive
@@ -1084,6 +1084,23 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
             }
         }
     }
+
+    /// <summary>
+    /// Emits once, and completes, when <paramref name="path"/> is no longer at or under a deletion (or
+    /// move) in flight — at once when it is not now. An owner DEFERS an own write to such a path until
+    /// then (#6953), exactly as it defers one behind a version-guarded delete's seal
+    /// (<see cref="VersionGuardLifted"/>): it re-runs the write, which the tombstone then refuses if the
+    /// node went away and applies if the operation aborted. Driven by the same scope-end announcement
+    /// <see cref="DeletionGuardsLifted"/> reads. Cold.
+    /// </summary>
+    /// <param name="path">The node path an own write waits to commit to.</param>
+    /// <returns>One <see cref="System.Reactive.Unit"/> once no deletion scope covers the path.</returns>
+    public IObservable<System.Reactive.Unit> ActiveDeletionLifted(string path)
+        => Observable.Defer(() => _deletionScopeEnded
+            .Select(_ => System.Reactive.Unit.Default)
+            .Merge(Observable.Return(System.Reactive.Unit.Default))
+            .Where(_ => !IsUnderActiveDeletion(path, out string? _))
+            .Take(1));
 
     private void EndSubtreeDeletion(string rootPath, bool rowOnly)
     {

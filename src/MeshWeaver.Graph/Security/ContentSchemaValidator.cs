@@ -81,7 +81,13 @@ namespace MeshWeaver.Graph.Security;
 /// runtime-compiled NodeType and this guard therefore refuses (see
 /// <c>JudgeForeignDiscriminator</c>; Systemorph/MeshWeaver.Plugins#3042). An Update whose content
 /// is byte-identical to what is stored ⇒ Valid: re-asserting a row already on disk is not a new
-/// write of bad content, and refusing it would make an existing broken node impossible to move.</para>
+/// write of bad content, and refusing it would make an existing broken node impossible to move.
+/// The same holds for the RELOCATION create — the copy leg of a move: content equal, as JSON, to
+/// the stored source the create handler read and verified (<see cref="NodeValidationContext.RelocatedFrom"/>
+/// — move entitlement, same NodeType; never the caller-settable <see cref="CreateNodeRequest.AuthorshipFrom"/>)
+/// is the source being carried, not new content, and is admitted
+/// (Systemorph/MeshWeaver#6951 — legacy feedback records stored before this guard existed could
+/// otherwise never be handed over to the Inbox).</para>
 /// </summary>
 public sealed class ContentSchemaValidator : INodeValidator
 {
@@ -110,9 +116,49 @@ public sealed class ContentSchemaValidator : INodeValidator
     /// <param name="context">The validation context describing the node and operation.</param>
     /// <returns>An observable that emits the validation result for the operation.</returns>
     public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
-        => Observable.Return(Judge(context));
+    {
+        var verdict = Judge(context);
+        if (verdict.Result.IsValid)
+            return Observable.Return(verdict.Result);
+        // 🚨 A RELOCATION carries what is ON DISK; it does not write new content (#6951/#6617). The
+        // copy leg of a move re-creates the stored source at its new path through a CREATE, so the
+        // "re-asserting bytes already on disk" exemption the Update half has always had (see the class
+        // doc: refusing it "would make an existing broken node impossible to move") never reached it.
+        // The relocated content is admitted exactly when it equals, as JSON, the content of the source
+        // the CREATE HANDLER read from storage and verified (NodeValidationContext.RelocatedFrom: the
+        // move entitlement held, the same NodeType) — never on the message's AuthorshipFrom claim,
+        // which any caller can set (review on #6971). Anything else is judged like any other create.
+        if (RelocatedContent(context) is not { } source)
+            return Observable.Return(Logged(context, verdict));
+        _logger.LogInformation(
+            "ContentSchemaGuard: admitted the relocation of '{Source}' to '{Path}' (NodeType '{NodeType}') — "
+            + "its content is the source's stored content, which this guard would refuse as a new write "
+            + "({Summary}); a relocation preserves what is on disk and does not write new content.",
+            source, context.Node.Path, context.Node.NodeType, verdict.Summary);
+        return Observable.Return(NodeValidationResult.Valid());
+    }
 
-    private NodeValidationResult Judge(NodeValidationContext context)
+    /// <summary>
+    /// The path of the verified stored source when this is a CREATE relocating it unchanged: a
+    /// <see cref="NodeValidationContext.RelocatedFrom"/> at another path, of the same NodeType, whose
+    /// raw content equals the new node's as JSON. Null for anything else. Pure.
+    /// </summary>
+    private static string? RelocatedContent(NodeValidationContext context)
+    {
+        if (context.Operation != NodeOperation.Create
+            || context.RelocatedFrom is not { } source
+            || string.Equals(source.Path, context.Node.Path, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(source.NodeType, context.Node.NodeType, StringComparison.OrdinalIgnoreCase)
+            || AsObjectElement(source.Content) is not { } stored
+            || AsObjectElement(context.Node.Content) is not { } proposed)
+            return null;
+        return JsonElement.DeepEquals(stored, proposed) ? source.Path : null;
+    }
+
+    /// <summary>The judgement and the one-line reason a refusal is logged with.</summary>
+    private sealed record Verdict(NodeValidationResult Result, string? Summary = null);
+
+    private Verdict Judge(NodeValidationContext context)
     {
         var node = context.Node;
 
@@ -121,22 +167,22 @@ public sealed class ContentSchemaValidator : INodeValidator
         // is judged exactly like a JsonElement — otherwise a direct Create/Update carrying
         // `{"$type":"Feedback"}` as a JsonObject would skip every rule here (review on #6231).
         if (AsObjectElement(node.Content) is not { } content)
-            return NodeValidationResult.Valid();
+            return Ok;
 
         if (string.IsNullOrEmpty(node.NodeType))
-            return NodeValidationResult.Valid();
+            return Ok;
 
         // The NodeType→content-type map, not this hub's $type registry: see the class doc.
         var contentTypes = _hub.ServiceProvider.GetService<IMeshContentTypeRegistry>();
         if (contentTypes is null || !contentTypes.TryResolveByNodeType(node.NodeType!, out var declared))
-            return NodeValidationResult.Valid();
+            return Ok;
 
         if (!ContentDiscriminator.Admits(content, declared))
             return JudgeForeignDiscriminator(context, content, declared, contentTypes);
 
         // Re-asserting bytes already on disk is not a new write of bad content.
         if (context.Operation == NodeOperation.Update && IsUnchanged(context.ExistingNode, content))
-            return NodeValidationResult.Valid();
+            return Ok;
 
         var options = _hub.JsonSerializerOptions;
         try
@@ -185,23 +231,23 @@ public sealed class ContentSchemaValidator : INodeValidator
                 "ContentSchemaGuard: no contract for content type {ContentType} of NodeType "
                 + "{NodeType} on this hub — {Path} not judged.",
                 declared.Name, node.NodeType, node.Path);
-            return NodeValidationResult.Valid();
+            return Ok;
         }
 
         // It bound (or failed as a whole, above) — but UnmappedMemberHandling.Skip means "bound"
         // can mean "carried nothing", and a type with a `required` member never gets that far.
         if (HasExtensionDataBuffer(declared, options))
-            return NodeValidationResult.Valid();
+            return Ok;
         var names = DeclaredMemberNames(declared, options);
         if (names is null)
-            return NodeValidationResult.Valid();
+            return Ok;
         var authored = content.EnumerateObject()
             .Select(p => p.Name)
             .Where(n => !IsDiscriminator(n))
             .ToImmutableList();
         var unknown = authored.Where(n => !names.Contains(n)).ToImmutableList();
         if (unknown.Count == 0 || unknown.Count != authored.Count)
-            return NodeValidationResult.Valid();
+            return Ok;
 
         return Refuse(
             context,
@@ -231,20 +277,20 @@ public sealed class ContentSchemaValidator : INodeValidator
     /// Update that keeps the discriminator the stored node already carries is preserving what is on
     /// disk, not writing new garbage, and stays Valid so such a node can still be repaired.</para>
     /// </summary>
-    private NodeValidationResult JudgeForeignDiscriminator(
+    private Verdict JudgeForeignDiscriminator(
         NodeValidationContext context, JsonElement content, Type declared, IMeshContentTypeRegistry contentTypes)
     {
         if (!content.TryGetProperty("$type", out var typeProp) || typeProp.ValueKind != JsonValueKind.String
             || typeProp.GetString() is not { Length: > 0 } discriminator)
-            return NodeValidationResult.Valid();
+            return Ok;
 
         if (context.Operation == NodeOperation.Update
             && ExistingDiscriminator(context.ExistingNode) is { } existing
             && string.Equals(existing, discriminator, StringComparison.Ordinal))
-            return NodeValidationResult.Valid();
+            return Ok;
 
         if (DiscriminatorResolves(discriminator, declared, contentTypes))
-            return NodeValidationResult.Valid();
+            return Ok;
 
         var node = context.Node;
         var names = DeclaredMemberNames(declared, _hub.JsonSerializerOptions);
@@ -309,16 +355,25 @@ public sealed class ContentSchemaValidator : INodeValidator
         _ => null,
     };
 
-    /// <summary>Logs the refusal (with the reason a reader of the portal log needs) and returns it.</summary>
-    private NodeValidationResult Refuse(NodeValidationContext context, string message, string summary)
+    private static readonly Verdict Ok = new(NodeValidationResult.Valid());
+
+    /// <summary>The refusal, not yet logged: <see cref="Validate"/> logs it once it is final.</summary>
+    private static Verdict Refuse(NodeValidationContext context, string message, string summary)
+        => new(NodeValidationResult.Invalid(message), summary);
+
+    /// <summary>Logs a final refusal (with the reason a reader of the portal log needs) and returns it.</summary>
+    private NodeValidationResult Logged(NodeValidationContext context, Verdict verdict)
     {
+        if (verdict.Result.IsValid)
+            return verdict.Result;
+        var summary = verdict.Summary;
         _logger.LogWarning(
             "ContentSchemaGuard: blocked {Operation} of '{Path}' (NodeType '{NodeType}') — {Summary}. "
             + "Content that cannot bind to its declared type is stored verbatim and then reads as "
             + "absent on every consumer: the page renders empty over a full document and nothing "
             + "errors. Systemorph/MeshWeaver#4601.",
             context.Operation, context.Node.Path, context.Node.NodeType, summary);
-        return NodeValidationResult.Invalid(message);
+        return verdict.Result;
     }
 
     /// <summary>
