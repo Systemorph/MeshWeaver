@@ -2007,6 +2007,67 @@ sequenceDiagram
 
 ---
 
+# Declared point reads (PointReadDeclaration)
+
+A node type can DECLARE who may read one of its nodes at that node's own path, named by the node
+itself (MeshWeaver#4306). It is the admission a public link needs. The link's audience may open the
+link whose id they hold, and no listing, query or scope walk ever names the link to them. A grant row
+cannot express this: a grant serves a listing exactly as it serves a point read, so an `Anonymous`
+`Viewer` grant on each public link let any logged-out caller list every anonymous link, and a
+link's id is its only secret.
+
+## The declaration
+
+`NodeTypeDefinition.PointRead` (JSON `pointRead`) is a `PointReadDeclaration` that names three
+content properties of the node:
+
+```json
+"pointRead": { "subjectProperty": "audienceSubject", "revokedProperty": "revokedAt", "expiresProperty": "expiresAt" }
+```
+
+- `subjectProperty` holds the one grant subject admitted. `Anonymous` admits every caller, `Public`
+  admits every signed-in user, a group path admits its members (transitively, through the same
+  membership expansion the permission fold uses), and a user id admits that user.
+- `revokedProperty`, when it holds any non-null value, admits nobody.
+- `expiresProperty`, when declared, must hold an instant in the future.
+
+## Who may declare it, and which nodes it admits
+
+- **Only a type the platform owns.** That is a host-declared type node (a configuration node), or a
+  stored type node in a system-owned partition (one-way `_GitSync`, which grants nobody write). A
+  stored node cannot replace a host-declared type's declaration, and a declaration on any other
+  type is ignored.
+- **Only a node the platform issued**, meaning its last write was made by `System`. A person
+  therefore cannot open a node to the world by writing a subject into it. Opening a node to
+  everyone stays a governed act, exactly like the broad grant it replaces.
+- **Only the instance's own anonymous switch outranks it.** `Access:DenyAnonymous` refuses every
+  logged-out caller whatever a type declares.
+
+## Where it is honoured: point reads only, after the standard check denied
+
+`DeclaredPointRead.Admits` is consulted on a DENIAL, and its answer replaces the denial only when it
+admits. A grant and an undetermined check pass through unchanged. It is not a grant row and never
+enters the permission fold.
+
+| Seam | Point read? | Consults the declaration |
+|---|---|---|
+| The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
+| The `[RequiresPermission]` delivery gate, for a Read on the hub's own path (`NodeTypeAccessRuleGate.ReconsiderPointRead`) | yes | yes |
+| The node-stream read gate (`MeshNodeStreamCache`), on every probe and never cached, so a revocation is seen on the next read | yes | yes |
+| `NodeTypeAccessRuleGate.CheckFor` for Read | yes | yes |
+| A listing or query row (`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`), where `IsPointRead` stays false | no | **no** |
+| The Postgres permission table (`user_effective_permissions`) | no | **no** |
+
+`IsPointRead` defaults to false. A seam that does not say it serves a point read is treated as a
+listing, which is the closed direction. A page that must follow whether its viewer may still read
+the node it shows uses `DeclaredPointRead.ObservePointRead(hub, path, userId)`: the standard check,
+or the declaration when that denies. It is never used to filter a listing.
+
+Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover a point read admitted
+while no listing sees the node, the restored grant row leaking into the listing (negative
+control), each withdrawing input refused beside a positive control, audience matching, and
+`Access:DenyAnonymous` outranking the declaration.
+
 # Message-level permission enforcement
 
 ## RequiresPermissionAttribute

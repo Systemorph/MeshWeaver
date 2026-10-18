@@ -2292,6 +2292,16 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
             return shared;
 
         return ProbeEffectivePermissions(path, captured)
+            // This gate serves ONE node at its own path — a point read — so a type's DECLARED point
+            // read may admit it after the standard check (and the type's own rule) denied. Decided
+            // on every probe, never written into the per-(path,user) cache: the declaration reads
+            // the node's own revocation and expiry, which a cached grant would outlive by AccessTtl.
+            .SelectMany(perms => perms.HasFlag(Permission.Read)
+                ? Observable.Return(perms)
+                : DeclaredPointRead.Admits(meshHub, path, captured)
+                    .TakeDecisionOutsideGate()
+                    .DefaultIfEmpty(false)
+                    .Select(admitted => admitted ? perms | Permission.Read : perms))
             .SelectMany(perms => GateOnRead(perms, shared, path, captured))
             .CarryAccessContext(accessService);
     }

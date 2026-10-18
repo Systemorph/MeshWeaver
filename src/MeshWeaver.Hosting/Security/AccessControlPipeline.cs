@@ -181,8 +181,13 @@ public static class AccessControlPipeline
                         userId, check.Permission, logger);
                 }
 
+                var callerContext = delivery.AccessContext
+                                    ?? accessService?.Context
+                                    ?? accessService?.CircuitContext;
                 if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, operation.Value) is not { } rule)
-                    return Observable.Return(PermissionCheckOutcome.Denied);
+                    return operation == NodeOperation.Read
+                        ? NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, PermissionCheckOutcome.Denied)
+                        : Observable.Return(PermissionCheckOutcome.Denied);
 
                 var context = new NodeValidationContext
                 {
@@ -202,7 +207,12 @@ public static class AccessControlPipeline
                     "AccessControlPipeline: {Permission} on {Path} was denied by the standard check — "
                     + "re-deciding through the {NodeType} access rule, which governs this node type",
                     check.Permission, check.Path, node.NodeType);
-                return NodeTypeAccessRuleGate.Evaluate(rule, context, userId, logger);
+                var verdict = NodeTypeAccessRuleGate.Evaluate(rule, context, userId, logger);
+                // A Read on the hub's OWN path is a point read: a type's declared point read may
+                // still admit it when the type's rule refused (DeclaredPointRead).
+                return operation == NodeOperation.Read
+                    ? verdict.SelectMany(outcome => NodeTypeAccessRuleGate.ReconsiderPointRead(hub, hubPath, callerContext, outcome))
+                    : verdict;
             })
             .Catch((Exception ex) =>
             {

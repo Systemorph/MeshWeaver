@@ -240,7 +240,27 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             .Select(result => (NodeValidationResult?)result)
             .DefaultIfEmpty()
             .Select(result => result
-                ?? UnestablishedCheck(context, userId, pathToCheck, cause: null));
+                ?? UnestablishedCheck(context, userId, pathToCheck, cause: null))
+            .SelectMany(result => ReconsiderPointRead(context, userId, result));
+    }
+
+    /// <summary>
+    /// A POINT read (<see cref="NodeValidationContext.IsPointRead"/>) the chain DENIED is re-decided
+    /// through the node type's declared point read (<see cref="DeclaredPointRead"/>), which may admit
+    /// it. Every other result — a grant, an unavailable check, a write, and every read a listing is
+    /// filtering — is returned unchanged, so a node admitted this way never appears in a listing.
+    /// </summary>
+    private IObservable<NodeValidationResult> ReconsiderPointRead(
+        NodeValidationContext context, string? userId, NodeValidationResult result)
+    {
+        if (result.IsValid || !context.IsPointRead || context.Operation != NodeOperation.Read
+            || result.Reason != NodeRejectionReason.Unauthorized)
+            return Observable.Return(result);
+        var caller = context.AccessContext ?? new AccessContext { ObjectId = userId ?? WellKnownUsers.Anonymous };
+        return DeclaredPointRead.Admits(_hub, context.Node.Path, caller)
+            .TakeDecisionOutsideGate()
+            .DefaultIfEmpty(false)
+            .Select(admitted => admitted ? NodeValidationResult.Valid() : result);
     }
 
     /// <summary>

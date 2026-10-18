@@ -194,7 +194,12 @@ public static class NodeTypeAccessRuleGate
                     Operation = operation,
                     Node = node,
                     AccessContext = caller,
+                    IsPointRead = operation == NodeOperation.Read,
                 }, userId, logger))
+            // A Read checked on ONE path is a point read: the type's declared point read may admit it.
+            .SelectMany(outcome => operation == NodeOperation.Read
+                ? ReconsiderPointRead(hub, path, caller, outcome)
+                : Observable.Return(outcome))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex,
@@ -204,6 +209,31 @@ public static class NodeTypeAccessRuleGate
                     $"the node at '{path}' could not be read to apply its node-type access rule "
                     + $"({ex.GetType().Name})"));
             });
+    }
+
+    /// <summary>
+    /// The verdict of a POINT read of <paramref name="path"/>: <paramref name="outcome"/> unless it is
+    /// a definitive DENIAL and the node's type DECLARES a point read that admits
+    /// <paramref name="caller"/> (<see cref="DeclaredPointRead"/>) — then granted. A grant and an
+    /// undetermined outcome pass through unchanged ("we could not check" is never laundered into a
+    /// declaration question). Only seams that serve one node at its own path call this; a listing
+    /// never does.
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="path">The exact path being read.</param>
+    /// <param name="caller">The caller's context.</param>
+    /// <param name="outcome">The standard check's (and the type rule's) verdict.</param>
+    public static IObservable<PermissionCheckOutcome> ReconsiderPointRead(
+        IMessageHub hub, string path, AccessContext? caller, PermissionCheckOutcome outcome)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(outcome);
+        if (outcome.IsGranted || outcome.IsUndetermined)
+            return Observable.Return(outcome);
+        return DeclaredPointRead.Admits(hub, path, caller)
+            .TakeDecisionOutsideGate()
+            .DefaultIfEmpty(false)
+            .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome);
     }
 
     /// <summary>
