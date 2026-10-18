@@ -149,6 +149,17 @@ public static class AtomicFileWrite
             TryDelete(tempPath);
             return false;
         }
+        // 🚨 An out-of-space refusal is NAMED (#6940): the runtime's own exception names only the
+        // staging file, which reads like a defect in the caller. The capacity is read here, at the
+        // refusal, because that is the reading an operator needs and the only moment it is true —
+        // and BEFORE the staging file is removed, whose blocks would otherwise be counted as free.
+        catch (IOException ex) when (ex is not ShortWriteException and not VolumeFullException
+                                     && VolumeFullException.IsOutOfSpace(ex))
+        {
+            var capacity = VolumeCapacity.Of(filePath);
+            TryDelete(tempPath);
+            throw new VolumeFullException(filePath, bytes.Length, capacity, ex);
+        }
         catch
         {
             TryDelete(tempPath);
