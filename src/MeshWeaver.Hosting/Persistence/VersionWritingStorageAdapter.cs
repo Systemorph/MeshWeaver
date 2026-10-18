@@ -205,12 +205,20 @@ internal class VersionWritingStorageAdapter(
     /// purged only when the row was actually removed: a refused compare-and-delete left the node — and
     /// so its history — in place (#6856).</remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => ConditionalDelete(path, () => inner.DeleteIfVersionAtMost(path, maxVersion, options));
+
+    /// <inheritdoc />
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => ConditionalDelete(path, () => inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options));
+
+    private IObservable<bool> ConditionalDelete(string path, Func<IObservable<bool>> delete)
     {
         Invalidate(path);
         if (versionQuery is null)
-            return inner.DeleteIfVersionAtMost(path, maxVersion, options);
+            return delete();
         return PathsWithoutHistory([path])
-            .SelectMany(purge => inner.DeleteIfVersionAtMost(path, maxVersion, options)
+            .SelectMany(purge => delete()
                 .SelectMany(removed => removed
                     ? PurgeAll(purge).Select(_ => removed)
                     : Observable.Return(removed)));

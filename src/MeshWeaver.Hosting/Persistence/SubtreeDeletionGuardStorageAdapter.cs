@@ -255,6 +255,11 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
         => inner.DeleteIfVersionAtMost(path, maxVersion, options);
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options);
+
+    /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
         => inner.DeleteMany(paths);
 
