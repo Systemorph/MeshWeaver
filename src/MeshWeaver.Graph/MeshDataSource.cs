@@ -984,6 +984,26 @@ public static class MeshDataSourceExtensions
     }
 
     /// <summary>
+    /// Dispatches one own save (#6856): the save is RESERVED (marked requested) BEFORE it is posted,
+    /// and the reservation is rolled back when the post is not accepted. Marked after the post, a
+    /// refusal that came back before the mark found nothing to unmark — the failure was then taken for
+    /// "superseded", the late mark recorded a failed save as dispatched, and a quiet node's
+    /// acknowledged state was never posted again.
+    /// </summary>
+    /// <param name="pending">The own-save tracker.</param>
+    /// <param name="node">The state to save.</param>
+    /// <param name="post">Posts the save; <c>true</c> when the hub accepted it.</param>
+    /// <returns><c>true</c> when the save was accepted.</returns>
+    internal static bool DispatchOwnSave(PendingOwnSave pending, MeshNode node, Func<MeshNode, bool> post)
+    {
+        pending.MarkRequested(node);
+        var accepted = post(node);
+        if (!accepted)
+            pending.MarkWriteFailed(node);
+        return accepted;
+    }
+
+    /// <summary>
     /// A save refused by a delete seal's row guard (#6856). It becomes pending again — and when the
     /// seal has ALREADY lifted (its abort nudge and sample tick ran before this refusal arrived, and
     /// found the save still marked requested), the sampler is nudged now, so a quiet node's
@@ -1463,17 +1483,15 @@ public static class MeshDataSourceExtensions
                         // this gate chain runs in the same synchronous fan-out as the flush (and, having
                         // subscribed at hub init, runs BEFORE it), so nothing the flush stamps can be
                         // visible at this point. The handler reads the mark after the flush settled (#1249).
-                        var posted = saveHub.Post(new SaveMeshNodeRequest(node));
                         // Only a delivery the hub ACCEPTED counts as dispatched — Post returns
                         // Failed("Hub is shutting down") from the hoisted teardown guard when the
                         // RunLevel flipped between our check above and the post. An accepted
                         // delivery is FIFO-ordered ahead of the phase-advance ShutdownRequests,
                         // so its handler runs and the storage write lands on the IO pool.
                         // 🚨 WasAcceptedForDelivery, not `!= Failed` (MeshWeaver#1174): a post the
-                        // intake DROPPED comes back Ignored, and marking the save as requested then
-                        // records a write that was never enqueued.
-                        if (posted is { WasAcceptedForDelivery: true })
-                            pending.MarkRequested(node);
+                        // intake DROPPED comes back Ignored, and the reservation is rolled back.
+                        DispatchOwnSave(pending, node,
+                            n => saveHub.Post(new SaveMeshNodeRequest(n)) is { WasAcceptedForDelivery: true });
                     });
                 return sub;
             }

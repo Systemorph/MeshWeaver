@@ -176,4 +176,61 @@ public class SealResumeNeverPostsAnOlderSnapshotTest
         h.Tick();
         h.Posted.Should().HaveCount(1, "the defect: the pending save is never posted again");
     }
+
+    /// <summary>
+    /// Review thread 4307777135: the seal's refusal arrives BEFORE the sampler's dispatch bookkeeping
+    /// finished — synchronously inside the post. The save is reserved before it is posted, so the
+    /// refusal finds it marked and makes it pending again; the seal's lift then posts it.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void ARefusalInsideThePost_LeavesTheSavePending_AndTheLiftPostsIt()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "acknowledged before the seal");
+        pending.Track(v);
+
+        // The refusal lands inside the post, while the seal still holds.
+        MeshDataSourceExtensions.DispatchOwnSave(pending, v, posted =>
+        {
+            MeshDataSourceExtensions.OnSealRefusedSave(pending, posted, sealStillHolds: () => true)
+                .Should().BeTrue("the save was reserved before it was posted, so the refusal unmarks it");
+            return true;
+        }).Should().BeTrue();
+
+        pending.TakeUnsaved().Should().BeSameAs(v,
+            "the refused save is pending again: the seal's lift will find and post it");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL — 320d423bd's dispatch order: post first, mark requested after. A refusal inside
+    /// the post finds nothing to unmark, and the late mark records the failed save as dispatched.
+    /// </summary>
+    [Fact(Timeout = 5000)]
+    public void NegativeControl_MarkingAfterThePost_LosesARefusalThatCameBack()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "acknowledged before the seal");
+        pending.Track(v);
+
+        // post …
+        MeshDataSourceExtensions.OnSealRefusedSave(pending, v, sealStillHolds: () => true)
+            .Should().BeFalse("nothing was marked yet, so the failure reads as superseded");
+        // … then the late mark.
+        pending.MarkRequested(v);
+
+        pending.TakeUnsaved().Should().BeNull("the defect: a refused save is recorded as dispatched and never posted again");
+    }
+
+    [Fact(Timeout = 5000)]
+    public void AnUnacceptedPost_RollsTheReservationBack()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var pending = new MeshDataSourceExtensions.PendingOwnSave();
+        var v = Node(2, "never accepted");
+        pending.Track(v);
+        MeshDataSourceExtensions.DispatchOwnSave(pending, v, _ => false).Should().BeFalse();
+        pending.TakeUnsaved().Should().BeSameAs(v, "a post the hub did not accept is not a dispatched save");
+    }
 }

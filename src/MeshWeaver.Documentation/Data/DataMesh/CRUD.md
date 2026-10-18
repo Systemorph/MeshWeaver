@@ -460,7 +460,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   own write and be posted over it. If the row guard's refusal arrives only after the seal has
   already lifted, which means the lift's tick found the save still marked as requested, the refusal
   itself nudges the sampler. A refusal that arrives while the seal still holds nudges nothing, so
-  there is no retry against a guarded row. Either ordering schedules the save exactly once.
+  there is no retry against a guarded row. Either ordering schedules the save exactly once. The
+  sampler marks a save as dispatched **before** it posts it, and rolls that mark back if the post is
+  not accepted. A refusal that comes back inside the post therefore always finds the save to mark
+  pending again.
 - **An early abort leaves state only for a sender who may delete the node.** The owner checks the
   sender's `Delete` permission explicitly before it records an abort mark, because the message itself
   carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
