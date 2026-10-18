@@ -517,6 +517,46 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     }
 
     /// <summary>
+    /// Review round 11 (4306961101): the save a delete seal refused is re-dispatched THROUGH the
+    /// persistence sampler, never beside it, so own saves keep one poster and one order — an older
+    /// refused snapshot can never be written after a newer own write. Here a newer write follows the
+    /// abort at once; the store reaches the newer state and never falls back to the refused one.
+    /// </summary>
+    [Fact]
+    public async Task AResumedSave_NeverLandsAfterANewerOwnWrite()
+    {
+        var node = await Seed("owner-seal-resume-order");
+        var owner = await OwnerOf(node.Path);
+        var registry = Mesh.ServiceProvider.GetRequiredService<RecentlyDeletedRegistry>();
+
+        var sealedOnAck = false;
+        await owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "refused while sealed" })
+            .Do(_ => sealedOnAck = registry.TakeOwnerDeleteSeal(
+                "resume-order", node.Path, owner.RegisterForDisposalDetachable))
+            .Should().Within(TestTimeouts.Convergence).Emit("an own write is acknowledged from memory", Ct);
+        sealedOnAck.Should().BeTrue();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Name == "refused while sealed")
+            .Should().NotEmit(TimeSpan.FromMilliseconds(600), "the sealed row refuses the sampled save", Ct);
+
+        registry.ReleaseOwnerDeleteSeal("resume-order", node.Path, DeleteSealOutcome.Aborted).Should().BeTrue();
+        await owner.GetWorkspace().GetMeshNodeStream()
+            .Update(n => n with { Name = "newer, written right after the abort" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the newer write is acknowledged", Ct);
+
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Name == "newer, written right after the abort")
+            .Should().Within(TestTimeouts.Convergence).Emit("the newer state is stored", Ct);
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .SelectMany(_ => _storage.Read(node.Path, Mesh.JsonSerializerOptions).Take(1))
+            .Where(n => n?.Name != "newer, written right after the abort")
+            .Should().NotEmit(TimeSpan.FromSeconds(1), "the refused older snapshot never lands after the newer save", Ct);
+    }
+
+    /// <summary>
     /// Review round 10 (4306865426): once a delete COMMITTED (the owner's seal released as committed,
     /// which tombstones the path) a still-live owner the delete's invalidation has not reached yet must
     /// not acknowledge a FRESH own write — its save would be dropped as a resurrection, so the

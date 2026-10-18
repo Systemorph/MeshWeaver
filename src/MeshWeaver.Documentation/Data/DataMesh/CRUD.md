@@ -459,6 +459,11 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   sender's `Delete` permission explicitly before it records an abort mark, because the message itself
   carries no permission attribute. And `ReleaseDeleteSeal` is `[InfrastructureOnly]`: a remote
   participant cannot send it at all.
+- **Not covered yet: a late root delete against a recreated node.** A root storage delete that is still
+  running when another hub recreates the node at a low version (for example 1) can remove the recreated
+  node, because `DeleteIfVersionAtMost(V)` compares versions, not the node's incarnation. The owner
+  fences and refuses its own writes, but it cannot block a create made elsewhere. Closing this needs an
+  incarnation-aware compare-and-delete in `IStorageAdapter`; it is a follow-up on #6856.
 - **Not covered yet.** Only the in-memory and Postgres stores implement `DeleteIfVersionAtMost`
   (and the fence's `WriteIfVersion`)
   atomically (Postgres in MeshWeaver.Plugins, as one conditional `DELETE` whose row count is the
