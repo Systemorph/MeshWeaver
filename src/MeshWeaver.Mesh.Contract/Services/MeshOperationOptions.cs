@@ -178,6 +178,31 @@ public sealed record MeshOperationOptions
     private readonly int recordSatelliteBatchSize = 100;
 
     /// <summary>
+    /// The most candidates a <c>sort:subtreeLastModified</c> query may order (<see cref="SubtreeSort"/>).
+    /// Defaults to 500. Must be at least 1.
+    ///
+    /// <para><b>Why a stop.</b> The key is read once PER CANDIDATE — one <c>limit:1</c> descendants
+    /// read each — and the candidates are the query's whole match set, because no backend can clip
+    /// by an order it cannot compute. That is cheap for what the selector is for (a client roster, a
+    /// project list: tens of rows) and ruinous for what it is not
+    /// (<c>nodeType:Document partitions:all sort:subtreeLastModified-desc limit:20</c> would issue
+    /// one read per document in the mesh to keep twenty). Past this many candidates the query
+    /// FAILS with an error naming the bound and the remedy, rather than paying that silently or
+    /// ordering a subset and presenting it as the whole.</para>
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">The value is below 1.</exception>
+    public int SubtreeSortMaxCandidates
+    {
+        get => subtreeSortMaxCandidates;
+        init => subtreeSortMaxCandidates = value >= 1
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value,
+                "SubtreeSortMaxCandidates must be at least 1.");
+    }
+
+    private readonly int subtreeSortMaxCandidates = 500;
+
+    /// <summary>
     /// <b>Rung 2 — work that runs INSIDE another operation's bounded stage.</b> Two shapes on the
     /// delete path: ONE LEG of the pre-flight <c>ValidateDeleteRequest</c> fan-out, as the caller
     /// bounds it, and a cascade leg re-entering <c>HandleDeleteNodeRequest</c> from within the

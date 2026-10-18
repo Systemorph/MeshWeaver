@@ -144,6 +144,41 @@ embed syntax in [Layout Areas](../LayoutAreas).
 
 ---
 
+## Listing containers by last activity
+
+A roster of containers — clients, projects, cases — usually wants the one worked on most recently
+first, and a container's own `lastModified` does not say that: the work lands on its descendants,
+while the container itself is re-stamped by the platform. Put
+[`sort:subtreeLastModified-desc`](/Doc/DataMesh/QuerySyntax) in the **hidden query** — the order
+is the newest change anywhere below each hit, read under the viewer's own access, so a viewer's
+order never reflects rows they cannot read:
+
+```csharp
+new MeshSearchControl()
+    .WithHiddenQuery("nodeType:Crm/Counterparty scope:subtree partitions:all sort:subtreeLastModified-desc")
+    .WithRenderMode(MeshSearchRenderMode.Flat);
+```
+
+The same string works as a `MeshSearchSortOption` query, so "Last activity" can sit in the view's
+*Sort by* dropdown beside "Alphabetical":
+
+```csharp
+.WithSortOptions(
+    new MeshSearchSortOption("Last activity", "nodeType:Crm/Counterparty scope:subtree partitions:all sort:subtreeLastModified-desc"),
+    new MeshSearchSortOption("Alphabetical", "nodeType:Crm/Counterparty scope:subtree partitions:all sort:name"))
+```
+
+🚨 **Do not use `WithSortBy("subtreeLastModified")`.** `WithSortBy` (the control's `Sorting`) is a
+CLIENT-side re-sort by a property of each rendered node, and the subtree key is not a property of
+the node — every row would key equal. With no `Sorting` set, the view keeps the order the query
+returned whenever the query carries a `sort:`, which is what this needs. The key is computed by
+the query engine and costs one read per hit, so it is for container lists: a query matching more
+than `MeshOperationOptions.SubtreeSortMaxCandidates` hits (500) fails with an error rather than
+paying one read per row of the mesh. Full contract: [Query Syntax](/Doc/DataMesh/QuerySyntax) →
+*Sorting containers by last activity*.
+
+---
+
 ## Under the hood
 
 The area is built on the `MeshSearchControl` — a hidden query (always applied) plus a visible query

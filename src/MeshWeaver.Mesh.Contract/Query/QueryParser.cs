@@ -66,6 +66,62 @@ public partial class QueryParser
     }
 
     /// <summary>
+    /// <paramref name="query"/> with every <c>{field}:…</c> term removed — found by THIS parser's own
+    /// tokenizer, so a quoted value (<c>sort:"x-desc"</c>), a negated term and a value containing
+    /// parentheses are cut exactly as they parse, and every other byte (whitespace inside a quoted
+    /// literal included) is kept verbatim. One whitespace run next to each removed term goes with it.
+    /// </summary>
+    /// <param name="query">The query string.</param>
+    /// <param name="field">The qualifier to remove (case-insensitive), e.g. <c>sort</c>.</param>
+    /// <returns>The query without that qualifier.</returns>
+    public string RemoveQualifier(string query, string field)
+    {
+        if (string.IsNullOrEmpty(query))
+            return query;
+        var spans = new List<(int Start, int End, Token Token)>();
+        Tokenize(query, spans);
+        var sb = new System.Text.StringBuilder(query.Length);
+        var copied = 0;
+        foreach (var (start, end, token) in spans)
+        {
+            if (token.Type != TokenType.Comparison
+                || !string.Equals(token.Value, field, StringComparison.OrdinalIgnoreCase))
+                continue;
+            // The term plus the whitespace run BEFORE it (or after it, for a leading term).
+            var cutStart = start;
+            while (cutStart > copied && char.IsWhiteSpace(query[cutStart - 1]))
+                cutStart--;
+            var cutEnd = end;
+            if (cutStart == start || cutStart == 0)
+                while (cutEnd < query.Length && char.IsWhiteSpace(query[cutEnd]))
+                    cutEnd++;
+            sb.Append(query, copied, cutStart - copied);
+            copied = cutEnd;
+        }
+        sb.Append(query, copied, query.Length - copied);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// <paramref name="value"/> as a LITERAL query value: quoted, so a space, <c>|</c>, <c>*</c> or
+    /// <c>(</c> inside it is data, never syntax (#6634). Double quotes unless the value contains one,
+    /// then single quotes.
+    /// </summary>
+    /// <param name="value">The literal value, e.g. a node path.</param>
+    /// <returns>The quoted value.</returns>
+    /// <exception cref="ArgumentException">The value contains both quote characters — the query
+    /// language has no escape, so it cannot be written as one literal.</exception>
+    public static string QuoteLiteral(string value)
+    {
+        if (!value.Contains('"'))
+            return $"\"{value}\"";
+        if (!value.Contains('\''))
+            return $"'{value}'";
+        throw new ArgumentException(
+            $"'{value}' contains both quote characters and cannot be written as a query literal.", nameof(value));
+    }
+
+    /// <summary>
     /// Recognizes a whole-query explicit path list <c>[a, b, c]</c> and returns its ordered,
     /// trimmed, non-blank entries. Returns <c>false</c> (and null) when the query is not a
     /// bracket list or contains no entries.
@@ -91,7 +147,15 @@ public partial class QueryParser
     /// <summary>
     /// Tokenizes the input query into a list of tokens.
     /// </summary>
-    private List<Token> Tokenize(string input)
+    private List<Token> Tokenize(string input) => Tokenize(input, spans: null);
+
+    /// <summary>
+    /// <see cref="Tokenize(string)"/>, also recording each TERM's source span
+    /// (<c>[Start, End)</c> in <paramref name="input"/>) when <paramref name="spans"/> is given — what
+    /// <see cref="RemoveQualifier"/> cuts by, so a qualifier is removed exactly where the parser
+    /// read it and every other byte stays as written.
+    /// </summary>
+    private List<Token> Tokenize(string input, List<(int Start, int End, Token Token)>? spans)
     {
         var tokens = new List<Token>();
         var i = 0;
@@ -147,10 +211,12 @@ public partial class QueryParser
             }
 
             // Try to parse a term (field:value or bare text)
+            var termStart = i;
             var term = TryParseTerm(input, ref i);
             if (term != null)
             {
                 tokens.Add(term);
+                spans?.Add((termStart, i, term));
             }
             else
             {
