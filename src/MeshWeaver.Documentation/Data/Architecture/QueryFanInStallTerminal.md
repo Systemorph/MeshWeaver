@@ -589,6 +589,40 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
   runs, and it cannot see satellite rows either. Retiring it needs a live native answer on Snowflake
   first.
 
+## A delta that arrives before the merged Initial belongs to it (2026-10-18)
+
+The gate waits for EVERY provider's Initial, so one provider can answer early, see a write land and
+emit its live delta while another provider has not answered yet. The merge ran that delta through
+the LIVE dedup, whose set of live paths is filled only when the merged Initial is emitted:
+
+- a `Removed` found its path "never live" and was dropped. The merged Initial then carried the row
+  out of the early provider's held hits, so the result set kept a node that no longer existed. No
+  later write to that path ever comes for a deleted node, so it stayed for the life of the query;
+- an `Added` or `Updated` was forwarded AHEAD of the Initial. Every consumer folds the Initial as a
+  reset, so that delta was erased.
+
+Measured as a webhook inbox listing that kept reporting a delivery its drain had already deleted:
+`RegistryUpdateReconcilerTest.ABroadcastFromAnUnknownRegistry_IsDroppedWithoutARequest`, red for
+108 s on run 39153661189. The unknown-registry drain deletes its delivery at once, while the test's own
+listing was still being opened. The monolith fans that listing out to three providers
+(`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`, `AppDirectoryQueryProvider`).
+
+The fix: before the merged Initial is out, `MeshQuery.FoldIntoPendingInitial` applies the delta to
+the hits the Initial will carry, with the live path's semantics:
+
+- an `Added` or `Updated` replaces whichever provider's copy of the path is held, so the newest
+  announcement wins;
+- a `Removed` takes the path out, whichever provider held it.
+
+After the Initial, nothing changes. `PreInitialLiveDeltaFoldTest` (`test/MeshWeaver.Hosting.Test`)
+pins all three delta kinds plus the post-Initial control. Its providers are `ReplaySubject`s, so the
+merge replays the early provider's Initial and delta before the late provider's Initial: exactly the
+race's ordering, with no clock in it. Before the fix three of its four tests are red.
+
+**Not established.** The CI run left no trace of which provider answered first. The 108 s failure is
+attributed to this window from the mechanism and the test's shape (an immediate delete, racing the
+open of a fresh listing), not from a recorded interleaving.
+
 ## See also
 
 - [Access Control](../AccessControl) → "The fold can produce NO answer, and that is a third outcome",

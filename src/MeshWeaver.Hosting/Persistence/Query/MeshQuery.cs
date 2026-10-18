@@ -1091,6 +1091,16 @@ public partial class MeshQuery : IMeshQueryCore
                             lock (gate)
                             {
                                 if (terminated) return;
+                                // 🚨 Before the merged Initial is out, a delta belongs TO it — see
+                                // FoldIntoPendingInitial. Through the live dedup it was lost: a
+                                // Removed found its path "never live" and was dropped (the Initial
+                                // then carried the deleted row for good), and an Added/Updated was
+                                // forwarded AHEAD of the Initial that every fold treats as a reset.
+                                if (initialCount != initialTarget)
+                                {
+                                    FoldIntoPendingInitial(change, idx, providerHits, initialPaths, initialIdentities);
+                                    return;
+                                }
                                 if (TryFilterDuplicateLiveChange(change, liveItems, out var filtered))
                                     observer.OnNext(filtered);
                             }
@@ -1581,6 +1591,68 @@ public partial class MeshQuery : IMeshQueryCore
                     union.Add(partition);
         }
         return union;
+    }
+
+    /// <summary>
+    /// Applies a live delta that arrived BEFORE the merged Initial to the hits that Initial will
+    /// carry. Must be called under the merge's gate.
+    ///
+    /// <para>🚨 <b>Why the delta cannot take the live path.</b> The merged Initial waits for every
+    /// provider; an early provider can see a write land and announce it while a later one has not
+    /// answered. The live dedup's set of live paths is filled only when the merged Initial is
+    /// emitted, so a <c>Removed</c> arriving in that window found its path "never live" and was
+    /// dropped — and the Initial then carried the deleted row out of the early provider's held
+    /// hits, a node that no longer exists, reported until some later write to the same path, which
+    /// for a deleted node never comes. An <c>Added</c> / <c>Updated</c> was forwarded AHEAD of the
+    /// Initial, which every consumer folds as a reset, so it was erased the same way. Measured as
+    /// a webhook inbox listing that kept reporting a delivery its drain had already deleted
+    /// (<c>RegistryUpdateReconcilerTest.ABroadcastFromAnUnknownRegistry_IsDroppedWithoutARequest</c>;
+    /// pinned by <c>PreInitialLiveDeltaFoldTest</c>).</para>
+    ///
+    /// <para>The semantics are the live path's, applied to the pending snapshot: an
+    /// <c>Added</c>/<c>Updated</c> replaces whichever provider's held copy of that path with the
+    /// newer one (the newest announcement wins, as <see cref="TryFilterDuplicateLiveChange{T}"/>
+    /// forwards every re-announcement); a <c>Removed</c> takes the path out whichever provider held
+    /// it (a live <c>Removed</c> from any provider removes the path from the live set).</para>
+    /// </summary>
+    private static void FoldIntoPendingInitial<T>(
+        QueryResultChange<T> change,
+        int providerIndex,
+        List<(T Item, double Score)>[] providerHits,
+        HashSet<string> initialPaths,
+        HashSet<T> initialIdentities)
+    {
+        var scores = change.Scores;
+        for (var j = 0; j < change.Items.Count; j++)
+        {
+            var item = change.Items[j];
+            var score = scores is not null && j < scores.Count ? scores[j] : 0.0;
+            if (item is MeshNode { Path: { Length: > 0 } path })
+            {
+                foreach (var hits in providerHits)
+                    hits.RemoveAll(hit => hit.Item is MeshNode held
+                        && string.Equals(held.Path, path, StringComparison.OrdinalIgnoreCase));
+                initialPaths.Remove(path);
+                if (change.ChangeType is QueryChangeType.Added or QueryChangeType.Updated)
+                {
+                    initialPaths.Add(path);
+                    providerHits[providerIndex].Add((item, score));
+                }
+                continue;
+            }
+            switch (change.ChangeType)
+            {
+                case QueryChangeType.Added or QueryChangeType.Updated:
+                    if (initialIdentities.Add(item))
+                        providerHits[providerIndex].Add((item, score));
+                    break;
+                case QueryChangeType.Removed:
+                    if (initialIdentities.Remove(item))
+                        foreach (var hits in providerHits)
+                            hits.RemoveAll(hit => EqualityComparer<T>.Default.Equals(hit.Item, item));
+                    break;
+            }
+        }
     }
 
     /// <summary>
