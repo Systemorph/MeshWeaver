@@ -116,13 +116,12 @@ public static class GitHubSyncSettingsTab
         var spacePath = SpaceRootPath(currentPath);
 
         if (string.IsNullOrEmpty(spacePath))
-            return stack.WithView(Controls.Html("<p><em>GitHub Sync is available inside a Space.</em></p>"));
+            return stack.WithView(GitSyncViews.Hint("GitHub Sync is available inside a Space."));
 
         stack = stack.WithView(Controls.H2(host.Localize("ui.githubSync")).WithStyle("margin: 0 0 8px 0;"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin-bottom:16px;\">" +
+        stack = stack.WithView(GitSyncViews.Hint(
             "Export this Space to a GitHub repository, and re-import it at any commit. Your GitHub " +
-            "connection is personal — commits are authored as you.</p>"));
+            "connection is personal — commits are authored as you."));
 
         // Surface the OAuth connect outcome. The callback redirects back here with
         // ?connect=github-ok | github-error&reason=... (the query rides on host.Reference.Id);
@@ -132,18 +131,16 @@ public static class GitHubSyncSettingsTab
             stack = stack.WithView(connectBanner);
 
         // ── 1. Your GitHub account ────────────────────────────────────────────
-        stack = stack.WithView(Section("Your GitHub account"));
+        stack = stack.WithView(GitSyncViews.Section("Your GitHub account"));
         if (string.IsNullOrEmpty(userId))
-            stack = stack.WithView(Controls.Html(
-                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Sign in to connect a GitHub account.</p>"));
+            stack = stack.WithView(GitSyncViews.Hint("Sign in to connect a GitHub account."));
         else
             // Live-bind to the user's credential stream so the state flips to "Connected" the instant
             // the OAuth callback's saved credential syncs in. (A one-shot read grabbed the synced
             // query's empty pre-sync snapshot and showed "Not connected" right after connecting.)
             stack = stack.WithView((h, _) => creds.GetStream(userId)
                 .Select(c => (UiControl?)RenderConnect(creds, userId, currentPath, c, oauth.IsConfigured, locale: host.ViewerLocale()))
-                .StartWith((UiControl?)Controls.Html(
-                    "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Checking GitHub connection…</p>")));
+                .StartWith(GitSyncViews.Hint("Checking GitHub connection…")));
 
         // ── 2. Repository ─────────────────────────────────────────────────────
         // The GitHub settings ARE a mesh node ({space}/_GitSync, GitHubSyncConfig). Edit it through
@@ -151,7 +148,7 @@ public static class GitHubSyncSettingsTab
         // (IMeshNodeStreamCache) and writes edits back via stream.Update — NO /data replica, NO save
         // subscription, NO Save button. Ensure the node exists first (create-on-absent), then just
         // DECLARE the editor bound to its path; all value resolution + persistence happen GUI-side.
-        stack = stack.WithView(Section("Repository"));
+        stack = stack.WithView(GitSyncViews.Section("Repository"));
         // Robust create-on-absent: gate the editor's render on EnsureConfigNode so a Space that was
         // NEVER configured gets its {space}/_GitSync node auto-created (via the safe GetQuery+CreateNode
         // path) BEFORE the editor binds to it — the editor then binds to an existing node instead of
@@ -159,10 +156,9 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView((h, _) => sync.EnsureConfigNode(spacePath)
             .Select(_ => (UiControl?)MeshNodeContentEditorControl.ForType(
                 GitHubSyncService.ConfigPath(spacePath), typeof(GitHubSyncConfig)))
-            .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)Controls.Html(
-                Err($"Couldn't initialize GitHub settings: {ex.Message}"))))
-            .StartWith((UiControl?)Controls.Html(
-                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Loading repository settings…</p>")));
+            .Catch<UiControl?, Exception>(ex => Observable.Return((UiControl?)ActionNotice.Error(
+                $"Couldn't initialize GitHub settings: {ex.Message}").ToControl()))
+            .StartWith(GitSyncViews.Hint("Loading repository settings…")));
 
         // Which hosting service the URL names (MeshWeaver#5248) — derived from the URL, live, so the
         // line follows an edit of the Repository URL above.
@@ -176,7 +172,7 @@ public static class GitHubSyncSettingsTab
         // we stash the path so the progress panel below binds to it (live Messages/Status + Cancel).
         // The button row is direction-aware: an import-only source offers no commit, an
         // export-only source no checkout (the service enforces the same rule server-side).
-        stack = stack.WithView(Section("Sync"));
+        stack = stack.WithView(GitSyncViews.Section("Sync"));
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
             .Select(cfg => (UiControl?)BuildSyncButtons(spacePath, userId, sourceId: null,
                 cfg?.Direction ?? SyncDirection.Bidirectional))
@@ -191,8 +187,8 @@ public static class GitHubSyncSettingsTab
 
         // Last-synced status (live — re-renders after each sync via the authoritative cache stream).
         stack = stack.WithView((h, _) => sync.WatchConfig(spacePath)
-            .Select(cfg => (UiControl?)Controls.Html(LastSyncedHtml(cfg, h.ViewerLocale())))
-            .StartWith((UiControl?)Controls.Html("<p style=\"color:var(--neutral-foreground-hint);\">…</p>")));
+            .Select(cfg => (UiControl?)GitSyncViews.Hint(LastSyncedText(cfg, h.ViewerLocale())))
+            .StartWith(GitSyncViews.Hint("…")));
 
         // Editable commit + re-import. Prefill from the Space's saved config once it arrives (same
         // synced-query empty-first-emission caveat as the repo form).
@@ -213,11 +209,10 @@ public static class GitHubSyncSettingsTab
         // with MORE repositories: each additional source is its own config node
         // ({space}/_GitSync/{sourceId}) with its own repo, branch and direction, edited through
         // the same standard node-content editor (bound directly to the node stream).
-        stack = stack.WithView(Section("Additional sync sources"));
-        stack = stack.WithView(Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+        stack = stack.WithView(GitSyncViews.Section("Additional sync sources"));
+        stack = stack.WithView(GitSyncViews.Hint(
             "Sync this Space with more repositories — each source has its own repository, branch and " +
-            "sync direction (bidirectional, export-only or import-only).</p>"));
+            "sync direction (bidirectional, export-only or import-only)."));
         stack = stack.WithView((h, _) => sync.WatchConfigNodes(spacePath)
             .Select(nodes => (UiControl?)BuildAdditionalSources(h, sync, spacePath, userId, nodes))
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
@@ -225,7 +220,7 @@ public static class GitHubSyncSettingsTab
         stack = stack.WithView(BuildAddSourceForm(sync, spacePath, locale: host.ViewerLocale()));
 
         // ── 5. Pull request (AI-drafted → user edits the bound node → submit) ──
-        stack = stack.WithView(Section("Pull request"));
+        stack = stack.WithView(GitSyncViews.Section("Pull request"));
         // The draft row stays a STATIC part of the tab, exactly as it rendered before Azure Repos
         // existed: the GitHub path's render shape is unchanged (MeshWeaver.Plugins' settings-tab suite
         // pins it). Policy azure-repos-two-way (MeshWeaver#6500): pull requests are not offered on an
@@ -249,11 +244,7 @@ public static class GitHubSyncSettingsTab
             .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
 
         // ── Result area ───────────────────────────────────────────────────────
-        stack = stack.WithView((h, _) => h.Stream.GetDataStream<string>(ResultId)
-            .Select(html => string.IsNullOrEmpty(html)
-                ? (UiControl?)Controls.Stack.WithWidth("100%")
-                : (UiControl?)Controls.Stack.WithWidth("100%").WithView(Controls.Html(html)))
-            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
+        stack = stack.WithView((h, _) => h.NoticeView(ResultId));
 
         return stack;
     }
@@ -262,10 +253,9 @@ public static class GitHubSyncSettingsTab
     /// direct children of the tab's stack — the shape it has always had.</summary>
     private static IEnumerable<UiControl> BuildDraftPullRequest(LayoutAreaHost host, PullRequestService prService, string spacePath)
     {
-        yield return Controls.Html(
-            "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);margin:0 0 8px 0;\">" +
+        yield return GitSyncViews.Hint(
             "Draft a pull request with AI, edit the title and body, then submit it to GitHub. " +
-            "The draft is a mesh node bound directly to the editor below — your edits save as you type.</p>");
+            "The draft is a mesh node bound directly to the editor below — your edits save as you type.");
 
         // "Draft pull request" — AI drafts title+body and creates a draft PR node, then we point
         // the editor at that node by stashing its path in the PrPathId data id.
@@ -273,14 +263,14 @@ public static class GitHubSyncSettingsTab
             .WithAppearance(Appearance.Accent)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, Pending("Asking the agent to draft a pull request…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info("Asking the agent to draft a pull request…"));
                 prService.CreateDraft(spacePath, headBranch: null, baseBranch: "main").Subscribe(
                     prNode =>
                     {
                         ctx.Host.UpdateData(PrPathId, prNode.Path);
-                        ctx.Host.UpdateData(ResultId, Ok("Draft created — edit the title and body below, then Submit."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Success("Draft created — edit the title and body below, then Submit."));
                     },
-                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                    ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             });
     }
@@ -292,10 +282,12 @@ public static class GitHubSyncSettingsTab
     {
         if (cred is { AccessToken.Length: > 0 } || cred is { GitHubLogin.Length: > 0 })
         {
-            var who = string.IsNullOrEmpty(cred!.GitHubLogin) ? "" : $" as <strong>{Esc(cred.GitHubLogin!)}</strong>";
+            var who = string.IsNullOrEmpty(cred!.GitHubLogin) ? "" : $" as {cred.GitHubLogin}";
             var body = Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:16px;align-items:center;");
-            body = body.WithView(Controls.Html(
-                $"<div style=\"flex:1;font-size:0.9rem;\"><span style=\"color:#22c55e;\">✓</span> Connected{who}</div>"));
+            body = body.WithView(Controls.Badge($"Connected{who}")
+                .WithBackgroundColor("var(--success, #107c10)")
+                .WithColor("var(--foreground-on-accent-rest, white)"));
+            body = body.WithView(Controls.Spacer);
             body = body.WithView(Controls.Button(LocalizationCatalog.Get("ui.disconnect", locale))
                 .WithAppearance(Appearance.Outline)
                 .WithClickAction(ctx =>
@@ -304,17 +296,16 @@ public static class GitHubSyncSettingsTab
                     // credential re-emits null and the body flips to "Not connected" on its own.
                     creds.Delete(userId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                        ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             return body;
         }
 
         if (!isConfigured)
-            return Controls.Html(
-                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">" +
-                "GitHub OAuth is not configured on this server (set <code>GitHub:OAuth:ClientId</code> + " +
-                "<code>ClientSecret</code>).</p>");
+            return GitSyncViews.Note(
+                "GitHub OAuth is not configured on this server (set `GitHub:OAuth:ClientId` + " +
+                "`ClientSecret`).");
 
         // The OAuth flow is a browser redirect to the server endpoint /connect/github, which posts
         // back to /connect/github/callback, stores the token, and returns here. This MUST be a full
@@ -324,14 +315,9 @@ public static class GitHubSyncSettingsTab
         // intent as NavigateTo(forceLoad:true) used by the login button).
         var returnPath = $"/{returnNodePath}/Settings/{TabId}";
         var connectUrl = $"/connect/github?returnPath={Uri.EscapeDataString(returnPath)}";
-        return Controls.Html(
-            "<div style=\"font-size:0.85rem;display:flex;align-items:center;gap:8px;\">" +
-            "<span style=\"display:inline-block;width:8px;height:8px;border-radius:50%;" +
-            "background:var(--neutral-stroke-strong-rest);flex:0 0 auto;\"></span>" +
-            "<span>Not connected. " +
-            $"<a href=\"{Esc(connectUrl)}\" target=\"_top\" rel=\"noopener\" " +
-            "style=\"color:var(--accent-fill-rest);font-weight:600;\">Connect GitHub →</a>" +
-            " (one-time browser approval; authorize for the org whose repos you'll sync).</span></div>");
+        return Controls.MessageBar(
+                "Not connected (one-time browser approval; authorize for the org whose repos you'll sync).")
+            .WithAction(Controls.Link("Connect GitHub →", connectUrl).WithTarget("_top"));
     }
 
     // ── Provider (MeshWeaver#5248) ──
@@ -400,8 +386,7 @@ public static class GitHubSyncSettingsTab
             var config = node.ContentAs<GitHubSyncConfig>(host.Hub.JsonSerializerOptions);
             var source = Controls.Stack.WithWidth("100%")
                 .WithStyle("padding:12px;background:var(--neutral-layer-2);border-radius:8px;gap:8px;");
-            source = source.WithView(Controls.Html(
-                $"<div style=\"font-weight:600;\">{Esc(node.Name ?? sourceId)}</div>"));
+            source = source.WithView(Controls.Subject(node.Name ?? sourceId));
             source = source.WithView(
                 MeshNodeContentEditorControl.ForType(node.Path, typeof(GitHubSyncConfig)));
             source = source.WithView(ProviderLine(host, config));
@@ -415,14 +400,13 @@ public static class GitHubSyncSettingsTab
                     // and the removed source disappears on its own.
                     sync.RemoveSyncSource(spacePath, sourceId).Subscribe(
                         _ => { },
-                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                        ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                     return Task.CompletedTask;
                 }));
             stack = stack.WithView(source);
         }
         if (!any)
-            stack = stack.WithView(Controls.Html(
-                "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">No additional sync sources.</p>"));
+            stack = stack.WithView(GitSyncViews.Hint("No additional sync sources."));
         return stack;
     }
 
@@ -444,13 +428,13 @@ public static class GitHubSyncSettingsTab
                     var name = Str(d, "name");
                     if (string.IsNullOrEmpty(name))
                     {
-                        ctx.Host.UpdateData(ResultId, Err("Enter a name for the new sync source."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Error("Enter a name for the new sync source."));
                         return;
                     }
                     sync.AddSyncSource(spacePath, name).Subscribe(
                         node => ctx.Host.UpdateData(ResultId,
-                            Ok($"Sync source '{name}' added — configure its repository and direction above.")),
-                        ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                            ActionNotice.Success($"Sync source '{name}' added — configure its repository and direction above.")),
+                        ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -476,13 +460,13 @@ public static class GitHubSyncSettingsTab
                     var commit = Str(d, "commit");
                     if (string.IsNullOrEmpty(commit))
                     {
-                        ctx.Host.UpdateData(ResultId, Err("Enter a commit SHA or branch to re-import."));
+                        ctx.Host.UpdateData(ResultId, ActionNotice.Error("Enter a commit SHA or branch to re-import."));
                         return;
                     }
                     // Runs as an activity (progress + cancel via the panel above).
                     ctx.Host.Hub.ReimportFromGitHub(spacePath, commit, userId,
                             onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                        .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 }).Select(_ => System.Reactive.Unit.Default);
             }));
         return row;
@@ -543,7 +527,7 @@ public static class GitHubSyncSettingsTab
                 // Runs as an activity (progress + cancel shown in the Sync section's activity panel).
                 ctx.Host.Hub.OpenPullRequestOnGitHub(spacePath, prPath, userId,
                         onActivityCreated: path => ctx.Host.UpdateData(ActivityPathId, path))
-                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                    .Subscribe(_ => { }, ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         // Status is GitHub-owned: we ASK GitHub live, never store/replicate it.
@@ -551,10 +535,10 @@ public static class GitHubSyncSettingsTab
             .WithAppearance(Appearance.Outline)
             .WithClickAction(ctx =>
             {
-                ctx.Host.UpdateData(ResultId, Pending("Asking GitHub for the pull-request status…"));
+                ctx.Host.UpdateData(ResultId, ActionNotice.Info("Asking GitHub for the pull-request status…"));
                 prService.AskStatus(spacePath, prPath, userId).Subscribe(
-                    info => ctx.Host.UpdateData(ResultId, Ok($"GitHub reports this pull request is {info.Status}.")),
-                    ex => ctx.Host.UpdateData(ResultId, Err(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
+                    info => ctx.Host.UpdateData(ResultId, ActionNotice.Success($"GitHub reports this pull request is {info.Status}.")),
+                    ex => ctx.Host.UpdateData(ResultId, ActionNotice.Error(GitSyncRefusalException.Localize(ex, ctx.Host.ViewerLocale()))));
                 return Task.CompletedTask;
             }));
         stack = stack.WithView(actions);
@@ -562,20 +546,20 @@ public static class GitHubSyncSettingsTab
         // Link row, bound to the PR node's immutable handle (number + url). The status is NOT shown
         // from a stored field — use "Check status on GitHub" to read it live.
         stack = stack.WithView((h, _) => prService.WatchPullRequest(prPath)
-            .Select(pr => (UiControl?)Controls.Html(PullRequestLinkHtml(pr)))
-            .StartWith((UiControl?)Controls.Html("")));
+            .Select(pr => (UiControl?)PullRequestLink(pr))
+            .StartWith((UiControl?)Controls.Stack.WithWidth("100%")));
         return stack;
     }
 
-    private static string PullRequestLinkHtml(GitHubPullRequest? pr)
+    private static UiControl PullRequestLink(GitHubPullRequest? pr)
     {
-        if (pr is null) return "";
+        if (pr is null) return Controls.Stack.WithWidth("100%");
         if (pr.Number is { } n && pr.Url is { Length: > 0 } url)
-            return "<p style=\"font-size:0.85rem;\">Pull request " +
-                   $"<a href=\"{Esc(url)}\" target=\"_top\" rel=\"noopener\" " +
-                   $"style=\"color:var(--accent-fill-rest);font-weight:600;\">#{n} ↗</a> opened on GitHub — " +
-                   "use <em>Check status on GitHub</em> for its current state.</p>";
-        return "<p style=\"font-size:0.85rem;color:var(--neutral-foreground-hint);\">Draft — not yet opened on GitHub.</p>";
+            return Controls.Stack.WithOrientation(Orientation.Horizontal).WithStyle("gap:6px;align-items:baseline;flex-wrap:wrap;")
+                .WithView(Controls.Body("Pull request"))
+                .WithView(Controls.Link($"#{n} ↗", url).WithOpenInNewTab())
+                .WithView(Controls.Body("opened on GitHub — use “Check status on GitHub” for its current state."));
+        return GitSyncViews.Hint("Draft — not yet opened on GitHub.");
     }
 
     // ── small helpers ─────────────────────────────────────────────────────────
@@ -595,27 +579,25 @@ public static class GitHubSyncSettingsTab
     /// recency field carries no <c>LastSyncAttemptAt</c>, so it renders the commit alone rather than
     /// inventing a date for it.</para>
     /// </summary>
-    private static string LastSyncedHtml(GitHubSyncConfig? cfg, string? locale)
+    internal static string LastSyncedText(GitHubSyncConfig? cfg, string? locale)
     {
-        const string Style = "font-size:0.85rem;color:var(--neutral-foreground-hint);";
         if (cfg is null || (cfg.LastSyncCommitSha is not { Length: > 0 } && cfg.LastSyncAttemptAt is null))
-            return $"<p style=\"{Style}\">{Esc(LocalizationCatalog.Get("ui.gitSync.neverSynced", locale))}</p>";
+            return LocalizationCatalog.Get("ui.gitSync.neverSynced", locale);
 
         var parts = new[]
         {
             cfg.LastSyncAttemptAt is { } at
-                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.lastRun", locale,
-                    new Dictionary<string, object> { ["when"] = at.UtcDateTime }))
+                ? LocalizationCatalog.GetNamed("ui.gitSync.lastRun", locale,
+                    new Dictionary<string, object> { ["when"] = at.UtcDateTime })
                 : null,
             cfg.LastSyncOutcome is { Length: > 0 } outcome
                 // An unrecognised outcome falls back to the WIRE literal rather than to a blank, so
                 // a new one reads as itself until it is translated.
-                ? Esc(LocalizationCatalog.GetNamed(
-                    "ui.gitSync.outcome." + outcome, locale, args: null, fallback: outcome))
+                ? LocalizationCatalog.GetNamed(
+                    "ui.gitSync.outcome." + outcome, locale, args: null, fallback: outcome)
                 : null,
             cfg.LastSyncCommitSha is { Length: > 0 } sha
-                ? Esc(LocalizationCatalog.Get("ui.gitSync.atCommit", locale))
-                  + $" <span style=\"font-family:monospace;\">{Esc(sha)}</span>"
+                ? LocalizationCatalog.Get("ui.gitSync.atCommit", locale) + " " + sha
                 : null,
             // 🚨 #3945 — a SETTLED source stops attempting, so without this line its recency stamp
             // simply freezes and the reader has no way to tell "the webhook stopped arriving" from
@@ -624,7 +606,7 @@ public static class GitHubSyncSettingsTab
             // triggers' own predicate, so a source whose settings were edited since that verdict
             // (and will therefore be re-attempted) is not labelled settled.
             GitHubSyncService.HasFinalVerdictAt(cfg, cfg.LastAttemptedCommitSha)
-                ? Esc(LocalizationCatalog.Get("ui.gitSync.settled", locale))
+                ? LocalizationCatalog.Get("ui.gitSync.settled", locale)
                 : null,
             // 🚨 #3845 hole 4 — the NodeTypes whose sources are HELD for their bundle. Rendered
             // beside the commit, because the two belong together: the Space is at that commit
@@ -632,54 +614,51 @@ public static class GitHubSyncSettingsTab
             // partition is whole. Named, not counted alone: "which type is behind" is the question
             // an operator actually has.
             cfg.BundleHeldNodeTypes is { IsEmpty: false } bundleHeld
-                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.bundleHeld", locale,
+                ? LocalizationCatalog.GetNamed("ui.gitSync.bundleHeld", locale,
                     new Dictionary<string, object>
                     {
                         ["count"] = bundleHeld.Count,
                         ["paths"] = string.Join(", ", bundleHeld.Select(h => h.Path)),
-                    }))
+                    })
                 : null,
             // Policy module-sync-per-manifest-hash — per MODULE: which modules were declined (a
             // declared platform floor above the running one), and which were unchanged by their
             // manifest hash. A declined module never held its siblings, so it is named, not the Space.
             cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Declined && !m.FloorUnverified).ToList()
                 is { Count: > 0 } declinedModules
-                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesDeclined", locale,
+                ? LocalizationCatalog.GetNamed("ui.gitSync.modulesDeclined", locale,
                     new Dictionary<string, object>
                     {
                         ["count"] = declinedModules.Count,
                         ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
                         ["modules"] = string.Join(", ", declinedModules.Select(m => $"{m.Module} (≥ {m.Floor})")),
-                    }))
+                    })
                 : null,
             // A module held because its floor is not stamped for these sources declares NO newer
             // platform, so it is never listed as "≥ floor" — it waits for the stamp or the roll.
             cfg.ModuleOutcomes?.Where(m => m.FloorUnverified).ToList()
                 is { Count: > 0 } unverifiedFloorModules
-                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesFloorUnverified", locale,
+                ? LocalizationCatalog.GetNamed("ui.gitSync.modulesFloorUnverified", locale,
                     new Dictionary<string, object>
                     {
                         ["count"] = unverifiedFloorModules.Count,
                         ["running"] = PrebuiltAdoptionPolicy.RunningPlatformVersion ?? "?",
                         ["available"] = unverifiedFloorModules[0].AvailablePlatform ?? "?",
                         ["modules"] = string.Join(", ", unverifiedFloorModules.Select(m => m.Module)),
-                    }))
+                    })
                 : null,
             cfg.ModuleOutcomes?.Where(m => m.Outcome == ModuleSyncOutcomeKind.Unchanged).ToList()
                 is { Count: > 0 } unchangedModules
-                ? Esc(LocalizationCatalog.GetNamed("ui.gitSync.modulesUnchanged", locale,
+                ? LocalizationCatalog.GetNamed("ui.gitSync.modulesUnchanged", locale,
                     new Dictionary<string, object>
                     {
                         ["count"] = unchangedModules.Count,
                         ["modules"] = string.Join(", ", unchangedModules.Select(m => m.Module)),
-                    }))
+                    })
                 : null,
         };
-        return $"<p style=\"{Style}\">{string.Join(" — ", parts.Where(x => x is not null))}</p>";
+        return string.Join(" — ", parts.Where(x => x is not null));
     }
-
-    private static UiControl Section(string title) =>
-        Controls.Html($"<h3 style=\"margin:20px 0 8px 0;font-size:1rem;\">{Esc(title)}</h3>");
 
     private static string? Str(Dictionary<string, object?> d, string key)
     {
@@ -696,20 +675,13 @@ public static class GitHubSyncSettingsTab
         var query = System.Web.HttpUtility.ParseQueryString(referenceId[(referenceId.IndexOf('?') + 1)..]);
         return query["connect"] switch
         {
-            "github-ok" => Controls.Html(Ok("GitHub connected.")),
-            "github-error" => Controls.Html(Err("GitHub connect failed" +
-                (string.IsNullOrEmpty(query["reason"]) ? "." : $": {query["reason"]}"))),
+            "github-ok" => ActionNotice.Success("GitHub connected.").ToControl(),
+            "github-error" => ActionNotice.Error("GitHub connect failed" +
+                (string.IsNullOrEmpty(query["reason"]) ? "." : $": {query["reason"]}")).ToControl(),
             _ => null,
         };
     }
 
     private static string Short(string sha) => string.IsNullOrEmpty(sha) ? "" : sha[..Math.Min(8, sha.Length)];
-    private static string Esc(string s) => System.Web.HttpUtility.HtmlEncode(s);
 
-    private static string Ok(string m) =>
-        $"<p style=\"padding:8px 12px;color:#4ade80;background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
-    private static string Err(string m) =>
-        $"<p style=\"padding:8px 12px;color:#f87171;background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
-    private static string Pending(string m) =>
-        $"<p style=\"padding:8px 12px;color:var(--neutral-foreground-hint);background:var(--neutral-layer-2);border-radius:6px;\">{Esc(m)}</p>";
 }

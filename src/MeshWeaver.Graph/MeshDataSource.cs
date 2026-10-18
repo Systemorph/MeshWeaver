@@ -804,7 +804,10 @@ public static class MeshDataSourceExtensions
             {
                 Operation = NodeOperation.Read,
                 Node = node,
-                AccessContext = validatorAccessCtx
+                AccessContext = validatorAccessCtx,
+                // The node hub reading its OWN node for one caller — a point read, which a type's
+                // declared point read may admit (DeclaredPointRead). A listing never sets this.
+                IsPointRead = true,
             };
 
             // Sync-delivery shape (Doc/Architecture/AsynchronousCalls.md): the

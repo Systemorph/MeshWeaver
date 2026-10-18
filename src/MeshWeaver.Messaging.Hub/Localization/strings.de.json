@@ -56,6 +56,12 @@
   "common.showMore": "Mehr anzeigen",
   "common.showLess": "Weniger anzeigen",
   "common.loadMore": "Mehr laden",
+  "common.showAll": "Alle anzeigen",
+  "nav.sort": "Sortieren",
+  "nav.sort.order": "Reihenfolge, dann neueste",
+  "nav.sort.modified": "Zuletzt geändert",
+  "nav.sort.viewed": "Zuletzt angesehen",
+  "nav.sort.name": "Name A–Z",
   "common.selectPlaceholder": "Auswählen…",
   "common.typeToSearch": "Zum Suchen tippen…",
   "common.noResults": "Keine Ergebnisse",
@@ -2473,5 +2479,14 @@
   "comments.reply": "Antworten",
   "comments.repliesCollapsed": "Antworten ({0}), eingeklappt",
   "comments.repliesExpanded": "Antworten ({0}), ausgeklappt",
-  "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen"
+  "agent.edit.addConfiguration": "Agent-Konfiguration hinzufügen",
+  "ui.none": "Keine",
+  "ui.dataModelOverview": "Datenmodell-Übersicht",
+  "ui.viewCatalog": "Katalog anzeigen",
+  "ui.baseTypeOf": "Basis: {0}",
+  "ui.editHomePage": "Startseite bearbeiten",
+  "gitSync.changes.status": "Status",
+  "gitSync.changes.path": "Pfad",
+  "gitSync.tree.clean": "Auf {0} — keine Änderungen.",
+  "gitSync.tree.pending": "Auf {0} — {1} ausstehende Änderung(en):"
 }
