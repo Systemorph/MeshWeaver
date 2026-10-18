@@ -193,7 +193,19 @@ is held, `SubtreeDeletionGuardStorageAdapter` refuses every in-process write at 
 so a caller acting on the answer — writing under the old path again — is never refused by it.
 
 One consequence worth knowing: an edit to a node of the source while it is being moved is refused
-rather than silently lost with the delete leg. What the scope does not cover is the same thing the recursive delete's scope does not cover: a writer in
+rather than silently lost with the delete leg — and it is refused **when the owner commits it**, not
+only when the owner stores it. A per-node hub commits a write to its in-memory node first and stores it
+afterwards, so a guard at the store alone refused the FLUSH of a write that had already committed: the
+writer heard "not applied", the owner went on serving the change, and its next save stored it once the
+scope closed (measured, Systemorph/MeshWeaver#6953: two writes to a feedback record under its hand-over
+move, refused at `SaveMeshNodeHandler` and stored after the move failed). Both commit turns now ask the
+scope before anything is committed. The owner's own write (`UpdateOwn`) is DEFERRED exactly as it is
+behind a version-guarded delete's seal (#6856): the turn commits nothing and re-runs when the scope
+lifts (`RecentlyDeletedRegistry.ActiveDeletionLifted`), and the tombstone check then refuses it if the
+node went away, or applies it if the operation aborted. A cross-hub patch (`ApplyMeshNodePatchInTurn`,
+through `IActiveDeletionScopes`) is refused with *"Node being deleted"* — its acknowledgement is bounded,
+so deferring it past a long move would answer the writer before the write — and the writer retries. Pinned by
+`AWriteUnderADeletionInFlightIsRefusedAtCommitTest`. What the scope does not cover is the same thing the recursive delete's scope does not cover: a writer in
 ANOTHER process. The delete answers that with its storage-verified drain; the move has no drain, so a
 cross-process write landing in the window is still carried and removed without a validator having been
 asked. Pinned by `MoveHoldsTheSubtreeDeletionScopeTest`, which writes under the source from inside the
@@ -212,6 +224,21 @@ permission check, reachable from every ingress that forwards deliveries) forward
 `DeleteAndPublish`) is checked by `MeshNodeDeletionDataValidator`, which runs the same chain beside
 `RlsDataValidator`.
 
+## A relocation carries what is on disk
+
+The copy leg re-creates the source through `CreateNodeRequest`, so every create validator judges it —
+including the content-schema guard, which refuses shapes it would not accept as NEW content. A record
+stored before such a guard existed is not new content; it is what storage holds. The guard therefore
+admits a relocation create (`AuthorshipFrom` naming the source) whose content equals the source's
+stored content — see [Content Is Validated Against Its Declared Shape On Write](../ContentSchemaOnWrite),
+rule 5. Without it, a legacy record could be repaired in place but never moved (#6951).
+
+**A refused copy leg says WHY it was refused.** A per-node create carries its own typed verdict; the
+copy now reads it instead of the error's wording, so a create a validator refused reaches the move's
+caller as `NodeMoveRejectionReason.ValidationFailed` — a verdict every retry meets again — and no longer
+as `Unknown`, which a caller has to treat as worth retrying. The feedback hand-over retried such a move
+on every activation for exactly that reason (#6952).
+
 ## What this means for callers
 
 - **Moving a node moves its comments, threads, approvals and grants.** A satellite's `MainNode` is
@@ -219,7 +246,11 @@ permission check, reachable from every ingress that forwards deliveries) forward
   and its grants keep projecting at the right prefix.
 - **A move can now be refused.** Handle `MoveNodeResponse.Success == false` with
   `NodeMoveRejectionReason.ValidationFailed`; the message names the paths. That includes every
-  refusal a DELETE of the source would get — if you may not delete it, you may not move it.
+  refusal a DELETE of the source would get — if you may not delete it, you may not move it — and every
+  create validator that refuses the copy leg. `ValidationFailed` is a verdict: do not retry it
+  unchanged.
+- **Do not write to a node while it is being moved.** The write is refused (*"Node being deleted"*)
+  and nothing is committed; retry once the move has answered.
 - **`CopyNodeRequest.IncludeSatellites` costs an enumeration, not a filter.** It is not free, and it
   is not a flag over a set the query already returned.
 

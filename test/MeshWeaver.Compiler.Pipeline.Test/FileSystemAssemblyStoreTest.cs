@@ -1,6 +1,9 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Reactive.Linq;
 using System.Text;
+using MeshWeaver.Messaging;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh.Persistence;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -291,6 +294,231 @@ public class FileSystemAssemblyStoreTest : IDisposable
 
         (await store.TryGetAssemblyPath("Store/Plugin", 50 - store.KeepVersionsPerType).Should().Emit())
             .Should().BeNull("the first version outside the window is gone — a miss recompiles");
+    }
+
+    /// <summary>
+    /// #6940 — the SIBLING axis. Emit is not deterministic, so every recompile that does not move the
+    /// node version (a forced release, each replica compiling the same version, a retry) publishes a
+    /// NEW content-hashed build of that version. The version budget kept every one of them: twenty
+    /// recompiles of one version left forty files that no record named. Pre-fix this test sees 40.
+    /// </summary>
+    [Fact]
+    public async Task Twenty_recompiles_of_one_version_leave_a_bounded_directory()
+    {
+        string? newest = null;
+        for (var build = 1; build <= 20; build++)
+            newest = await store.Put(
+                "Hosting/InstanceRequest", version: 7,
+                Encoding.UTF8.GetBytes($"build-{build}"),
+                Encoding.UTF8.GetBytes($"pdb-{build}")).Should().Emit();
+
+        var files = Directory.GetFiles(Path.Combine(root, "Hosting_InstanceRequest"));
+        files.Length.Should().BeLessThanOrEqualTo(
+            2 * FileSystemAssemblyStore.KeepBuildsPerVersion,
+            "a dll+pdb pair per kept BUILD — twenty same-version recompiles wrote forty files");
+
+        File.Exists(newest!).Should().BeTrue("the build just published is never a candidate");
+        (await store.TryGetAssemblyPath("Hosting/InstanceRequest", version: 7).Should().Emit())
+            .Should().Be(newest, "the version still resolves to its newest publication");
+    }
+
+    /// <summary>
+    /// Review on #6969: a publication writes its pdb BEFORE its dll, so another writer's eviction can
+    /// run while a build exists only as its pdb. That in-flight build is the newest of its version and
+    /// must be kept — ranking dlls alone deleted its symbols out from under the first writer.
+    /// The interleave is pinned deterministically: writer A's pdb is on disk, its dll is not, and
+    /// writer B publishes into the same type.
+    /// </summary>
+    [Fact]
+    public async Task An_in_flight_builds_pdb_survives_another_writers_eviction()
+    {
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("older"), Encoding.UTF8.GetBytes("older-pdb"))
+            .Should().Emit();
+        var inFlightPdb = Path.Combine(root, "Store_Plugin",
+            $"v9-{FileSystemAssemblyStore.FrameworkTag}-aaaaaaaaaaaa.pdb");
+        File.WriteAllBytes(inFlightPdb, Encoding.UTF8.GetBytes("writer-A-pdb"));
+
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("writer-B"), Encoding.UTF8.GetBytes("writer-B-pdb"))
+            .Should().Emit();
+
+        File.Exists(inFlightPdb).Should().BeTrue(
+            "writer A's build is in flight — its dll is the next thing it publishes");
+    }
+
+    private string PdbOnly(string type, long version, string hash, DateTime? writtenUtc = null)
+    {
+        var path = Path.Combine(root, type, $"v{version}-{FileSystemAssemblyStore.FrameworkTag}-{hash}.pdb");
+        File.WriteAllBytes(path, Encoding.UTF8.GetBytes(hash));
+        if (writtenUtc is { } at)
+            File.SetLastWriteTimeUtc(path, at);
+        return path;
+    }
+
+    /// <summary>
+    /// Review round 2 on #6969: TWO overtakers. Writer A's pdb is on disk and its dll is not; B and
+    /// C then publish the same version. A's in-flight build is never reclaimed by either eviction.
+    /// </summary>
+    [Fact]
+    public async Task An_in_flight_pdb_survives_two_overtaking_writers()
+    {
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("older"), Encoding.UTF8.GetBytes("older-pdb"))
+            .Should().Emit();
+        var writerA = PdbOnly("Store_Plugin", 9, "aaaaaaaaaaaa");
+
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("writer-B"), Encoding.UTF8.GetBytes("b-pdb")).Should().Emit();
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("writer-C"), Encoding.UTF8.GetBytes("c-pdb")).Should().Emit();
+
+        File.Exists(writerA).Should().BeTrue("A is still publishing — its dll is the next thing it writes");
+    }
+
+    /// <summary>
+    /// Review round 2 on #6969: pdb-only builds never count against the build budget. Two v9
+    /// publications that left only their pdbs must not displace v9's last complete build when v10
+    /// is written — v9 is inside the version window and must still resolve.
+    /// </summary>
+    [Fact]
+    public async Task Pdb_only_builds_never_displace_a_versions_last_complete_build()
+    {
+        var v9 = await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9"), Encoding.UTF8.GetBytes("v9-pdb"))
+            .Should().Emit();
+        File.SetLastWriteTimeUtc(v9!, DateTime.UtcNow.AddMinutes(-5));
+        PdbOnly("Store_Plugin", 9, "bbbbbbbbbbbb");
+        PdbOnly("Store_Plugin", 9, "cccccccccccc");
+
+        await store.Put("Store/Plugin", 10, Encoding.UTF8.GetBytes("v10"), Encoding.UTF8.GetBytes("v10-pdb")).Should().Emit();
+
+        File.Exists(v9).Should().BeTrue("v9's only complete build is kept whatever pdb-only builds sit beside it");
+        (await store.TryGetAssemblyPath("Store/Plugin", 9).Should().Emit()).Should().Be(v9);
+    }
+
+    /// <summary>An abandoned pdb-only build — older than the in-flight grace — is reclaimed.</summary>
+    [Fact]
+    public async Task An_abandoned_pdb_only_build_is_reclaimed()
+    {
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9"), null).Should().Emit();
+        var abandoned = PdbOnly("Store_Plugin", 9, "dddddddddddd",
+            DateTime.UtcNow - FileSystemAssemblyStore.InFlightPublicationGrace - TimeSpan.FromMinutes(1));
+
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9-again"), null).Should().Emit();
+
+        File.Exists(abandoned).Should().BeFalse("a writer publishes its dll right after its pdb; this one never will");
+    }
+
+    /// <summary>
+    /// Review round 3 on #6969: no writer owns a pdb exclusively — a concurrent writer of IDENTICAL
+    /// bytes shares its name. Writer A's dll publication is refused after its pdb landed; writer B,
+    /// publishing the same bytes, then completes. B's build keeps its symbols: A's refusal deletes
+    /// nothing, and the pdb A left is the one B pairs with.
+    /// </summary>
+    [Fact]
+    public async Task A_refused_dll_publication_never_deletes_symbols_a_same_bytes_publisher_shares()
+    {
+        var writerA = new FileSystemAssemblyStore(
+            root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
+            path => path.Contains(".dll", StringComparison.Ordinal)
+                ? throw new IOException("No space left on device", OperatingSystem.IsWindows() ? unchecked((int)0x80070070) : 28)
+                : AtomicFileWrite.OpenTempForWrite(path));
+        var dll = Encoding.UTF8.GetBytes("same-bytes");
+        var pdb = Encoding.UTF8.GetBytes("same-pdb");
+
+        // Writer B has already passed its pdb step (A's pdb was there, so B published nothing) and
+        // is staging its dll when A's dll publication is refused. B then completes its dll — the
+        // rest of its Put. The pdb both of them supplied must still be there.
+        await Assert.ThrowsAsync<VolumeFullException>(async () =>
+            await writerA.PutWithLocation("Store/Plugin", 9, dll, pdb).Timeout(TimeSpan.FromSeconds(10)).Await());
+        var sharedPdb = Directory.GetFiles(Path.Combine(root, "Store_Plugin"), "*.pdb").Single();
+        var bDll = Path.ChangeExtension(sharedPdb, ".dll");
+        AtomicFileWrite.PublishBytesWith(bDll, dll, AtomicFileWrite.OpenTempForWrite).Should().BeTrue();
+
+        File.Exists(sharedPdb).Should().BeTrue("writer B's build carries the symbols it supplied");
+        (await store.TryGetAssemblyPath("Store/Plugin", 9).Should().Emit()).Should().Be(bDll);
+    }
+
+    /// <summary>
+    /// Review round 4 on #6969: a same-bytes RETRY reuses the pdb a refused publication left, after
+    /// that orphan has aged past the grace. An overtaking publication evicts while the retry stages
+    /// its dll (triggered from the retry's dll-open hook). The retry's build keeps its symbols.
+    /// </summary>
+    [Fact]
+    public async Task A_retry_reusing_an_aged_orphan_pdb_keeps_it_through_an_overtaking_eviction()
+    {
+        var dll = Encoding.UTF8.GetBytes("retry-bytes");
+        var pdb = Encoding.UTF8.GetBytes("retry-pdb");
+        var refusing = new FileSystemAssemblyStore(
+            root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
+            path => path.Contains(".dll", StringComparison.Ordinal)
+                ? throw new IOException("No space left on device", OperatingSystem.IsWindows() ? unchecked((int)0x80070070) : 28)
+                : AtomicFileWrite.OpenTempForWrite(path));
+        await Assert.ThrowsAsync<VolumeFullException>(async () =>
+            await refusing.PutWithLocation("Store/Plugin", 9, dll, pdb).Timeout(TimeSpan.FromSeconds(10)).Await());
+        var orphan = Directory.GetFiles(Path.Combine(root, "Store_Plugin"), "*.pdb").Single();
+        File.SetLastWriteTimeUtc(orphan,
+            DateTime.UtcNow - FileSystemAssemblyStore.InFlightPublicationGrace - TimeSpan.FromMinutes(1));
+
+        var overtaken = false;
+        string? overtakerPath = null;
+        Exception? overtakerFault = null;
+        var retry = new FileSystemAssemblyStore(
+            root, NullLogger<FileSystemAssemblyStore>.Instance, FileSystemAssemblyStore.DefaultKeepVersionsPerType,
+            path =>
+            {
+                if (!overtaken && path.Contains(".dll", StringComparison.Ordinal))
+                {
+                    overtaken = true;
+                    // PutWithLocation is Defer(Return(...)): it runs inline on Subscribe, so the
+                    // overtaker's publication AND eviction complete before this hook returns.
+                    using var _ = store.PutWithLocation("Store/Plugin", 9, Encoding.UTF8.GetBytes("overtaker"), null)
+                        .Subscribe(loc => overtakerPath = loc.LocalPath, ex => overtakerFault = ex);
+                }
+                return AtomicFileWrite.OpenTempForWrite(path);
+            });
+
+        var published = await retry.Put("Store/Plugin", 9, dll, pdb).Should().Emit();
+
+        overtaken.Should().BeTrue("the overtaking publication ran while the retry staged its dll");
+        overtakerFault.Should().BeNull();
+        overtakerPath.Should().NotBeNull("the overtaker published, and so ran its eviction, inside the hook");
+        Path.ChangeExtension(published!, ".pdb").Should().Be(orphan);
+        File.Exists(orphan).Should().BeTrue("the retry reused this pdb, so it is in flight, not abandoned");
+    }
+
+    /// <summary>
+    /// Review round 3 on #6969: a LISTED dll is not necessarily usable — an evicted dll another
+    /// replica still holds stays listed, delete-pending, and unopenable (a dangling link is the local
+    /// stand-in). Two such newer siblings must not take both slots and evict the version's last
+    /// openable build.
+    /// </summary>
+    [Fact]
+    public async Task Unopenable_siblings_never_displace_a_versions_last_openable_build()
+    {
+        var v9 = await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("v9"), null).Should().Emit();
+        File.SetLastWriteTimeUtc(v9!, DateTime.UtcNow.AddMinutes(-5));
+        foreach (var hash in new[] { "eeeeeeeeeeee", "ffffffffffff" })
+            File.CreateSymbolicLink(
+                Path.Combine(root, "Store_Plugin", $"v9-{FileSystemAssemblyStore.FrameworkTag}-{hash}.dll"),
+                Path.Combine(root, "evicted-" + Guid.NewGuid().ToString("N")));
+
+        await store.Put("Store/Plugin", 10, Encoding.UTF8.GetBytes("v10"), null).Should().Emit();
+
+        File.Exists(v9).Should().BeTrue("v9's only openable build is kept whatever unopenable names sit beside it");
+        (await store.TryGetAssemblyPath("Store/Plugin", 9).Should().Emit()).Should().Be(v9);
+    }
+
+    /// <summary>The sibling budget never reaches across versions: each kept version keeps its own
+    /// newest build, so a mixed-replica window over the last versions still resolves.</summary>
+    [Fact]
+    public async Task The_sibling_budget_is_per_version()
+    {
+        for (var version = 1; version <= store.KeepVersionsPerType; version++)
+            for (var build = 1; build <= 4; build++)
+                await store.Put("Store/Plugin", version, Encoding.UTF8.GetBytes($"v{version}-b{build}"), null)
+                    .Should().Emit();
+
+        for (var version = 1; version <= store.KeepVersionsPerType; version++)
+            (await store.TryGetAssemblyPath("Store/Plugin", version).Should().Emit())
+                .Should().NotBeNull($"v{version} is inside the version window and keeps its newest build");
+        Directory.GetFiles(Path.Combine(root, "Store_Plugin")).Length.Should().Be(
+            store.KeepVersionsPerType * FileSystemAssemblyStore.KeepBuildsPerVersion);
     }
 
     /// <summary>

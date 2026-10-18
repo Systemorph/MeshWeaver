@@ -157,6 +157,16 @@ Each of these answers Valid, and each is a decision rather than an omission:
 4. **An Update whose content is byte-identical to what is stored.** Re-asserting a row already on
    disk is not a new write of bad content, and refusing it would make an existing broken node
    impossible to move or repair.
+5. **A relocation create carrying the source's stored content.** The copy leg of a move re-creates
+   the source at its new path through a CREATE that names the stored source
+   (`CreateNodeRequest.AuthorshipFrom`). When the content it carries is the source's stored content —
+   compared as JSON against a STORAGE read of the source, never against the message — it is the
+   source being carried, not new content, and is admitted. Rule 4 never reached this create, so a
+   record stored before this guard existed could be repaired in place but never relocated: measured
+   (Systemorph/MeshWeaver#6951) as feedback records in the pre-hardening `"$type":"Feedback"` shape
+   whose hand-over move into the Inbox was refused on every activation — hundreds of times. Content
+   a relocation carries that differs from the stored source is judged like any other create. Pinned
+   by `MoveRelocatesLegacyContentTest`.
 
 ## The blind spot this does NOT close
 

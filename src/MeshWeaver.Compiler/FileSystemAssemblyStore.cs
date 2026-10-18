@@ -32,6 +32,22 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     public const int DefaultKeepVersionsPerType = 3;
 
     /// <summary>
+    /// How many BUILDS of one kept version survive eviction: the newest publication of that version
+    /// and one behind it (#6940). Emit is not deterministic — every compile mints a fresh MVID, so a
+    /// recompile that does not move the node version (a forced release, each replica compiling the
+    /// same version, a retry) publishes a NEW content-hashed sibling. The version budget alone never
+    /// bounded those: every sibling of a kept version was kept, for ever.
+    /// </summary>
+    public const int KeepBuildsPerVersion = 2;
+
+    /// <summary>
+    /// How long a build that exists only as its pdb is treated as a publication in flight and never
+    /// reclaimed. A writer publishes its dll immediately after its pdb, so this is far past any
+    /// real interval; a pdb-only build older than this was abandoned (#6940 review).
+    /// </summary>
+    public static readonly TimeSpan InFlightPublicationGrace = TimeSpan.FromMinutes(10);
+
+    /// <summary>
     /// Initializes a new instance of the filesystem-backed assembly store rooted at the
     /// given directory (created if it does not exist).
     /// </summary>
@@ -326,8 +342,19 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
         // it as TERMINAL: no Release node, no version pointer, the previous build left in place.
         // Swallowing it here and returning the path would re-create the very incident: a name in
         // the discovery namespace whose bytes are not there.
-        if (pdbBytes is { Length: > 0 })
-            AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite);
+        // 🚨 A refused dll publication does NOT remove the pdb published before it (review round 3
+        // on #6969): a concurrent writer of IDENTICAL bytes shares that pdb name and may already be
+        // staging its own dll, so no writer owns it exclusively. An orphan is left to eviction,
+        // which never counts a pdb-only build against the budget and reclaims it only once it is
+        // older than InFlightPublicationGrace.
+        //
+        // 🚨 A REUSED pdb is claimed again (review round 4): an existing pdb may be an orphan a
+        // refused publication left, already older than the grace. Reusing it without refreshing its
+        // time would let a concurrent eviction read it as abandoned and delete it while this call
+        // stages its dll. The touch restarts the grace for the publication now in flight.
+        if (pdbBytes is { Length: > 0 }
+            && !AtomicFileWrite.PublishBytesWith(pdbPath, pdbBytes, openForWrite))
+            TryTouch(pdbPath);
         var published = AtomicFileWrite.PublishBytesWith(dllPath, assemblyBytes, openForWrite);
         if (published)
             logger.LogInformation(
@@ -428,8 +455,9 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
     }
 
     /// <summary>
-    /// 🚨 <b>Keep the newest <see cref="KeepVersionsPerType"/> VERSIONS of this type, in this
-    /// process's own framework generation. Delete the rest. Nothing else.</b>
+    /// 🚨 <b>Keep the newest <see cref="KeepVersionsPerType"/> VERSIONS of this type, and of each
+    /// of those the newest <see cref="KeepBuildsPerVersion"/> BUILDS, in this process's own
+    /// framework generation. Delete the rest. Nothing else.</b>
     ///
     /// <para><b>Why the version axis, and why it needed its own collector.</b> The cache accumulates
     /// on TWO independent axes and they need two different arguments. Across framework generations a
@@ -488,15 +516,69 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
                 .Take(keepVersionsPerType)
                 .ToHashSet();
 
+            // 🚨 The SIBLING axis (#6940). Within a kept version, keep only the newest
+            // KeepBuildsPerVersion BUILDS — a build is a (version, content hash) pair, its dll and
+            // pdb together — ranked by the newest write time of either file. The dll's time is what
+            // the version-only lookup answers by and what a rollback's TryTouch moves. An older
+            // sibling is superseded on exactly the argument an older version is: the record names
+            // the newest publication by identity, an activation that already loaded the older one
+            // keeps its mapping, and a reader that still asks for it gets a recoverable MISS.
+            //
+            // 🚨 Complete builds and in-flight publications are SEPARATE (review on #6969).
+            // PutWithLocationCore publishes the pdb BEFORE the dll, so another writer's eviction can
+            // see a build that exists only as its pdb. Such a build:
+            //   • never counts against the KeepBuildsPerVersion budget — only a build with a dll is
+            //     usable, and a pdb-only one must never displace the last dll a version resolves to;
+            //   • is never reclaimed while its writer may still be active (younger than
+            //     InFlightPublicationGrace) — otherwise the writer finishes "successfully" without
+            //     the symbols it supplied;
+            //   • is reclaimed once older than the grace: a writer publishes its dll immediately
+            //     after its pdb, so a pdb that old was abandoned (a refused or killed publication).
+            var builds = mine
+                .Where(x => keptVersions.Contains(x.Identity.Version))
+                .GroupBy(x => (x.Identity.Version, x.Identity.Hash))
+                .Select(build => (
+                    build.Key,
+                    Dll: build.FirstOrDefault(x => !x.Identity.IsPdb).File,
+                    Newest: build.Max(x => x.File.LastWriteTimeUtc)))
+                .ToList();
+            var now = DateTime.UtcNow;
+            // Only an OPENABLE dll is a usable build (review round 3): on the shared volume an evicted
+            // dll another replica still holds stays LISTED, delete-pending, and every open of it
+            // fails — the lookup skips it (NewestOpenable), so it must not take a slot either.
+            // Probed newest-first and lazily, so the remote opens stop once both slots are filled.
+            var keptBuilds = builds
+                .Where(build => build.Dll is not null)
+                .GroupBy(build => build.Key.Version)
+                .SelectMany(version => version
+                    .OrderByDescending(build => build.Dll!.LastWriteTimeUtc)
+                    .Where(build => CanOpen(build.Dll!.FullName))
+                    .Take(KeepBuildsPerVersion)
+                    .Select(build => build.Key))
+                .Concat(builds
+                    .Where(build => build.Dll is null && now - build.Newest < InFlightPublicationGrace)
+                    .Select(build => build.Key))
+                .ToHashSet();
+
+            var pdbOnly = builds.Where(build => build.Dll is null).Select(build => build.Key).ToHashSet();
+
             var evicted = 0;
             var bytes = 0L;
             foreach (var (file, identity) in mine)
             {
-                if (keptVersions.Contains(identity.Version))
+                if (keptBuilds.Contains((identity.Version, identity.Hash)))
                     continue;
                 if (string.Equals(file.FullName, keep, StringComparison.Ordinal)
                     || string.Equals(file.FullName, Path.ChangeExtension(keep, ".pdb"), StringComparison.Ordinal))
                     continue;
+                // Revalidated right before the delete: a pdb-only build that a publication has just
+                // reused (and touched) since the snapshot above is in flight again, not abandoned.
+                if (identity.IsPdb && pdbOnly.Contains((identity.Version, identity.Hash)))
+                {
+                    file.Refresh();
+                    if (now - file.LastWriteTimeUtc < InFlightPublicationGrace)
+                        continue;
+                }
                 try
                 {
                     var length = file.Length;

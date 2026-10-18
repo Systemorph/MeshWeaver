@@ -569,9 +569,19 @@ that is NOT an `IScopedQueryStorageAdapter`, whose `ListChildPaths` and `Read` r
 |---|---|---|
 | Admin/Thread, `DeferToNativeProvider` on: storage requests | 0 | the full walk; no Initial within 5 s |
 | Admin/Thread, defer off: peak outstanding on the pool | ≤ 8 | 2,001 (about 2×N) |
-| a second scoped query's Initial while the walk runs | under 2 s | 14.4 s |
+| walk requests granted ahead of any one request of a second scoped query, counted at the pool's gate | 2 (bound: 8) | 958 (14.4 s) |
 
 The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**The third row is a queue position read at the gate, not a stopwatch.** It used to read "the
+second query's Initial arrives in under 2 s", and that measured the runner rather than the walk: every
+leaf of the rig is a 20 ms timer plus thread-pool hops, so on a loaded CI host the same fair walk read
+5.1 s and failed (core `main`, run 39147246595, shard 2, 2026-10-18). Stretching each leaf to 400 ms
+reads 2.4 s on the clock for an unchanged walk. The test now stamps each of the second query's
+requests when it ARRIVES at the pool's gate (the pool's prologue hook, on the request's own flow) and
+counts the walk requests granted before it is granted. No hop before the gate, between the second
+query's stages or after its Initial falls inside that window, so the reading does not move with the
+host's load. With a FIFO gate and a walk of at most 8 outstanding, it cannot exceed 8.
 
 **Not established.**
 
@@ -588,6 +598,48 @@ The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
 - The pedestrian's `source:activity` walk on the partitioned backends is now bounded but still
   runs, and it cannot see satellite rows either. Retiring it needs a live native answer on Snowflake
   first.
+
+## A delta that arrives before the merged Initial belongs to it (2026-10-18)
+
+The gate waits for EVERY provider's Initial, so one provider can answer early, see a write land and
+emit its live delta while another provider has not answered yet. The merge ran that delta through
+the LIVE dedup, whose set of live paths is filled only when the merged Initial is emitted:
+
+- a `Removed` found its path "never live" and was dropped. The merged Initial then carried the row
+  out of the early provider's held hits, so the result set kept a node that no longer existed. No
+  later write to that path ever comes for a deleted node, so it stayed for the life of the query;
+- an `Added` or `Updated` was forwarded AHEAD of the Initial. Every consumer folds the Initial as a
+  reset, so that delta was erased.
+
+Measured as a webhook inbox listing that kept reporting a delivery its drain had already deleted:
+`RegistryUpdateReconcilerTest.ABroadcastFromAnUnknownRegistry_IsDroppedWithoutARequest`, red for
+108 s on run 39153661189. The unknown-registry drain deletes its delivery at once, while the test's own
+listing was still being opened. The monolith fans that listing out to three providers
+(`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`, `AppDirectoryQueryProvider`).
+
+The fix: before the merged Initial is out, `MeshQuery.FoldIntoPendingInitial` applies the delta to
+the hits the Initial will carry, with the live path's semantics:
+
+- an `Added` or `Updated` replaces whichever provider's copy of the path is held, so the newest
+  announcement wins;
+- a `Removed` takes the path out, whichever provider held it.
+
+Two refinements came out of review:
+
+- A removed path stays MARKED until the Initial is out. A provider whose Initial arrives later may
+  have read before the removal, and its copy must not resurrect the row. An `Added` or `Updated`
+  clears the mark, so a re-created row is kept.
+- A delta without `Scores` keeps the rank of the copy it replaces. The storage provider's live
+  frames carry none, and a re-read row must not drop below a weaker match under `Limit`.
+
+After the Initial, nothing changes. `PreInitialLiveDeltaFoldTest` (`test/MeshWeaver.Hosting.Test`)
+pins all three delta kinds, both refinements and the post-Initial control. Its providers are `ReplaySubject`s, so the
+merge replays the early provider's Initial and delta before the late provider's Initial: exactly the
+race's ordering, with no clock in it. Without the fold, the three delta-kind tests and the overlapping-Initial test are red. Against the fold without the two refinements, the overlapping-Initial test and the rank test are red.
+
+**Not established.** The CI run left no trace of which provider answered first. The 108 s failure is
+attributed to this window from the mechanism and the test's shape (an immediate delete, racing the
+open of a fresh listing), not from a recorded interleaving.
 
 ## See also
 
