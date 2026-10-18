@@ -39,6 +39,15 @@ public record NodeTypeDefinition
     public string? Emoji { get; init; }
 
     /// <summary>
+    /// The type's DECLARED point read (<see cref="MeshWeaver.Mesh.Security.PointReadDeclaration"/>):
+    /// who may read ONE node of this type at its own path, named by the node itself — never a
+    /// listing, never another path. Honoured only on a type the platform owns and only for a node
+    /// the platform issued; see <see cref="MeshWeaver.Mesh.Security.DeclaredPointRead"/>. Null (the
+    /// default) declares nothing.
+    /// </summary>
+    public MeshWeaver.Mesh.Security.PointReadDeclaration? PointRead { get; init; }
+
+    /// <summary>
     /// Description of this node type.
     /// </summary>
     public string? Description { get; init; }

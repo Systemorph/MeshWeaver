@@ -8,6 +8,7 @@
 #   HOSTING_KVE_PASSWORD_OBJECT  the one object whose `show --query value` answers HOSTING_KVE_PASSWORD
 #   HOSTING_KVE_PASSWORD         a sentinel the test greps for (default: an obviously fake one)
 #   HOSTING_KVE_SET_FAIL=1       every `keyvault secret set` refuses
+#   HOSTING_KVE_VERSIONS         what `keyvault secret list-versions --query length(@)` answers (default 1)
 #
 # Not a mock of az: nothing here asserts az's own behaviour. What is under test is which objects
 # the script reads, which it writes, with what content, and what it never prints.
@@ -46,6 +47,10 @@ case "${1:-} ${2:-} ${3:-}" in
     while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
     if [ -n "${HOSTING_KVE_HALF_FIXTURE:-}" ] && [ -f "$HOSTING_KVE_HALF_FIXTURE" ]; then cp "$HOSTING_KVE_HALF_FIXTURE" "$file"; exit 0; fi
     echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
+  "keyvault secret list-versions")
+    # how many versions the object holds right after a create — HOSTING_KVE_VERSIONS (default 1);
+    # 2 models another job having created the same object concurrently
+    printf '%s\n' "${HOSTING_KVE_VERSIONS:-1}"; exit 0 ;;
   "keyvault secret set")
     [ "${HOSTING_KVE_SET_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) The user, group or application does not have secrets set permission" >&2; exit 1; }
     name="" file="" value=""

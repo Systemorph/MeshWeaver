@@ -207,6 +207,9 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 ? Observable.Return(ownerResult)
                 : CheckPermission(context, userId, requiredPermission, pathToCheck))
             .TakeDecisionOutsideGate()
+            // A DENIED point read is re-decided through the type's declared point read INSIDE the
+            // deadline below, so a stalled admission is bounded and classified like the check itself.
+            .SelectMany(result => ReconsiderPointRead(context, userId, result))
             // 🚨 THE TERMINAL. Placed here rather than inside CheckPermission so it covers EVERY
             // branch: CheckCustomRule's INodeTypeAccessRule implementations reach the same
             // permission fold, and the denial path's ownerless-partition probe is a mesh read too.
@@ -241,6 +244,26 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             .DefaultIfEmpty()
             .Select(result => result
                 ?? UnestablishedCheck(context, userId, pathToCheck, cause: null));
+    }
+
+    /// <summary>
+    /// A POINT read (<see cref="NodeValidationContext.IsPointRead"/>) the chain DENIED is re-decided
+    /// through the node type's declared point read (<see cref="DeclaredPointRead"/>), which may admit
+    /// it. Every other result — a grant, an unavailable check, a write, and every read a listing is
+    /// filtering — is returned unchanged, so a node admitted this way never appears in a listing.
+    /// </summary>
+    private IObservable<NodeValidationResult> ReconsiderPointRead(
+        NodeValidationContext context, string? userId, NodeValidationResult result)
+    {
+        // The declaration decides about the caller's CONTEXT, flags and all — never a context
+        // rebuilt from an id, which would drop IsVirtual / IsApiToken. No context, no declaration.
+        if (result.IsValid || !context.IsPointRead || context.Operation != NodeOperation.Read
+            || result.Reason != NodeRejectionReason.Unauthorized || context.AccessContext is not { } caller)
+            return Observable.Return(result);
+        return DeclaredPointRead.Admits(_hub, context.Node.Path, caller)
+            .TakeDecisionOutsideGate()
+            .DefaultIfEmpty(false)
+            .Select(admitted => admitted ? NodeValidationResult.Valid() : result);
     }
 
     /// <summary>

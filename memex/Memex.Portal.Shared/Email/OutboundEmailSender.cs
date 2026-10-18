@@ -123,38 +123,70 @@ public sealed class OutboundEmailSender(
 
             // Live query: any outbound mail. Emits the current set on change; the pre-screen keeps
             // the queue to plausible candidates, the queue's own re-read gate decides the send.
-            subscriptions.Add(query
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(WatchQuery), jsonOptions)
-                .Select(change => change.Items)
-                .Subscribe(
-                    items =>
+            // A STANDING watch — see SubscribeOutboundWatch for why it re-opens after a fault.
+            subscriptions.Add(SubscribeOutboundWatch(
+                hub,
+                () => query
+                    .Query<MeshNode>(MeshQueryRequest.FromQuery(WatchQuery), jsonOptions)
+                    .Select(change => change.Items),
+                items =>
+                {
+                    foreach (var node in items)
                     {
-                        foreach (var node in items)
+                        var email = EmailOf(node, jsonOptions);
+                        if (email is null
+                            || email.Direction != EmailDirection.Outbound
+                            || email.Status != EmailStatus.New)
+                            continue;
+                        if (string.IsNullOrEmpty(email.To))
                         {
-                            var email = EmailOf(node, jsonOptions);
-                            if (email is null
-                                || email.Direction != EmailDirection.Outbound
-                                || email.Status != EmailStatus.New)
-                                continue;
-                            if (string.IsNullOrEmpty(email.To))
-                            {
-                                logger?.LogWarning(
-                                    "OutboundEmailSender: outbound {Path} has no recipient — marking Failed",
-                                    node.Path);
-                                SetStatus(node, email, EmailStatus.Failed, meshService, accessService)
-                                    .Subscribe(_ => { }, _ => { });
-                                continue;
-                            }
-                            sendQueue.Enqueue(node, email);
+                            logger?.LogWarning(
+                                "OutboundEmailSender: outbound {Path} has no recipient — marking Failed",
+                                node.Path);
+                            SetStatus(node, email, EmailStatus.Failed, meshService, accessService)
+                                .Subscribe(_ => { }, _ => { });
+                            continue;
                         }
-                    },
-                    ex => logger?.LogWarning(ex, "OutboundEmailSender: query failed")));
+                        sendQueue.Enqueue(node, email);
+                    }
+                },
+                logger));
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "OutboundEmailSender: failed to start watching outbound mail");
         }
     }
+
+    /// <summary>
+    /// The outbound-mail watch: <paramref name="open"/> (the live query) handed to the hub watcher,
+    /// every listing to <paramref name="onItems"/>.
+    ///
+    /// <para>🚨 <b>A STANDING watch, so a fault must not end it.</b> It is the one subscription that
+    /// sends this process's outbound mail, held for the process's life. It used to be a bare
+    /// <c>.Subscribe</c> whose error arm only logged, so ONE fault of the query — a stalled provider
+    /// (<c>QueryProviderStalledException</c>), a dropped database connection — stopped all outbound
+    /// mail until the process restarted, with one Warning line as the only trace. The hub watcher
+    /// re-opens it on a paced cadence and ends it with the hub. A re-open's first listing re-offers
+    /// every still-New mail; that is safe because <see cref="OutboundSendQueue"/> re-reads each mail's
+    /// authoritative state before claiming it, the same gate that absorbs the change feed's
+    /// duplicate emissions.</para>
+    /// </summary>
+    /// <param name="hub">The hub the watch belongs to; its teardown ends the watch.</param>
+    /// <param name="open">Opens the live query, FRESH on every call.</param>
+    /// <param name="onItems">Handles one listing.</param>
+    /// <param name="logger">Records each re-open.</param>
+    /// <param name="scheduleReopen">Test seam for how a re-open is scheduled; null in production.</param>
+    /// <returns>The watch; disposing it ends it.</returns>
+    internal static IDisposable SubscribeOutboundWatch(
+        IMessageHub hub,
+        Func<IObservable<IReadOnlyList<MeshNode>>> open,
+        Action<IReadOnlyList<MeshNode>> onItems,
+        ILogger? logger,
+        Func<Action, IDisposable>? scheduleReopen = null) =>
+        ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub, open, onItems, logger, "OutboundEmailSender outbound-mail watch",
+            scheduleReEstablish: scheduleReopen);
 
     /// <summary>
     /// The subject an outbound mail is sent with: a reply marker is added only when the subject

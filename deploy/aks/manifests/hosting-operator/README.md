@@ -7,7 +7,8 @@ Applied on the **control instance's** cluster only. Three principals, deliberate
 | `memex-portal-sa` (the portal, unchanged) | `get`/`patch` its own Deployment — what the self-updater needs | anything in this directory |
 | `hosting-jobrunner` (mounted into the portal as a token) | create/get/delete Jobs and read pod logs **in `memex-ops` only** | touch a namespace, a database, or any cloud resource |
 | `hosting-operator` (the Job's own SA) | namespaces, Helm releases, ingresses cluster-wide, and — via Workload Identity — the Azure control plane | exist outside the seconds a run takes |
-| `hosting-secret-writer` (a SECRET action's Job, `secret-writer.yaml`) | via Workload Identity, as `secret-writer`: list, set, delete, recover and purge Key Vault secrets, never read one; in-cluster, read which object version each pod mounted and restart a Deployment | read a vault value, create or delete anything in the cluster ([Secrets: Write-Only Entry](../../../../src/MeshWeaver.Documentation/Data/Architecture/SecretsWriteOnlyEntry.md)) |
+| `hosting-secret-writer` (a SECRET action's Job, in its own namespace `memex-secrets`, `secret-writer.yaml`) | via Workload Identity, as `secret-writer`: list, set, delete, recover and purge Key Vault secrets, never read one; in-cluster, read which object version each pod mounted and restart the portal Deployment (a ValidatingAdmissionPolicy holds the patch to the restart annotation) | read a vault value, create or delete anything in the cluster, change a pod template ([Secrets: Write-Only Entry](../../../../src/MeshWeaver.Documentation/Data/Architecture/SecretsWriteOnlyEntry.md)) |
+| `hosting-secret-jobrunner` (mounted into the CONTROL portal as `hosting-jobrunner-token`, `secret-writer.yaml`) | create/get/list/watch/delete Jobs and read pod logs **in `memex-secrets` only** | start a Job anywhere else, run as `hosting-operator`, read a Secret |
 
 The portal never holds the powerful credential. It holds a token whose entire power is *"start an
 operator job and read what it said"*, which is what makes a prompt injection into an in-pod AI CLI
@@ -78,6 +79,19 @@ renders only when non-blank. The executor is trimmed and case-folded, exactly as
 derivation does it. Any other executor than `Job` or `Actions` fails the render, since the portal
 reads every other value as `Job`. `check-chart-invariants.sh` asserts both halves: invariant 18, the
 Actions and blank-maintainer fixtures, and the misspelled-executor refusal.
+
+## `secret-writer.yaml` — applied by the governed lane, verbatim
+
+Unlike the `kubectl apply` list above (the original bootstrap), this file carries no placeholder and is
+applied exactly as committed, by the `ApplyClusterManifest` InstanceAction on the control instance:
+Systemorph/Memex `aks-ops.yml` runs `deploy/aks/operator/bin/hosting-manifest-apply` from a checkout of
+this repository. Its dry run (`check`) is a read: it prints the file's sha256 and the API server's own
+server-side dry-run answer, one `created|configured|unchanged` line per object, no value. The apply runs
+only on the lane's mutate leg, with a mesh approval that binds that sha256, and refuses other bytes. The
+script refuses a kind outside Namespace, ServiceAccount, an empty service-account-token Secret, RBAC and
+ValidatingAdmissionPolicy objects, a wildcard rule, the escalate/bind/impersonate verbs, a binding to
+cluster-admin/admin/edit/system:* or to anything but a ServiceAccount, and a leftover `<placeholder>`.
+That is a backstop under the approval, not a substitute for reading the file.
 
 ## The image is published on every push to `main`
 

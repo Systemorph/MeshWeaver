@@ -3820,6 +3820,7 @@ jobs:
             fi
           }
           evidence=false
+          red=()  # --suite LABEL=TRX per red suite, NAMED after the loop (name-failing-tests.py)
           mapfile -t modules < <(bk list --ok --where need_test=true)
           for MODULE in "${modules[@]}"; do
             PROJECT="$(bk get --module "$MODULE" project)"
@@ -3848,7 +3849,10 @@ jobs:
             if [ "$rc" -eq 0 ]; then
               bk set --module "$MODULE" tested=true
             else
-              bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              # Log-only: name-failing-tests.py below annotates this suite BY NAME within the step's ten
+              # `::error` slots; a generic one per red suite here would spend them first.
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")
               # Keep the failing suite's evidence — only what a diagnosis needs, only for this module.
               tests="$(dirname "$PROJECT").Test"
               out="$RUNNER_TEMP/test-evidence/$MODULE"; mkdir -p "$out"
@@ -3867,6 +3871,15 @@ jobs:
               evidence=true
             fi
           done
+          # 🚨 NAME every failing test on GitHub — the suite's FQN + first assertion line, as a few
+          # bounded multiline annotations within the step's 10, plus a FAILED log line and the job
+          # summary per test. Without it a red leg said only "the module's own suite failed" and the
+          # name had to be dug out of the raw log (MeshWeaver.Plugins#3828). A REPORTER: it always
+          # exits 0 and the per-module verdicts above stand; a reporter that cannot run is said.
+          if [ "${#red[@]}" -gt 0 ]; then
+            python3 build-logic/.github/scripts/name-failing-tests.py "${red[@]}" --summary "$GITHUB_STEP_SUMMARY" \
+              || echo "::warning::name-failing-tests.py could not name the failing tests (exit $?) — read each suite's output above"
+          fi
           echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
       - name: Ledger — Tested
         if: inputs.ledger == 'required' && steps.tests.outcome == 'success'
@@ -4732,6 +4745,7 @@ jobs:
             fi
           }
           evidence=false
+          red=()  # --suite LABEL=TRX per red suite, NAMED after the loop (name-failing-tests.py)
           mapfile -t modules < <(bk list --ok)
           for MODULE in "${modules[@]}"; do
             PROJECT="$(bk get --module "$MODULE" project)"
@@ -4760,7 +4774,10 @@ jobs:
             if [ "$rc" -eq 0 ]; then
               bk set --module "$MODULE" tested=true
             else
-              bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              # Log-only: name-failing-tests.py below annotates this suite BY NAME within the step's ten
+              # `::error` slots; a generic one per red suite here would spend them first.
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's own suite failed (exit $rc; its evidence is under test-evidence/$MODULE)"
+              red+=(--suite "$MODULE=$RUNNER_TEMP/trx/$MODULE/ledger.trx")
               out="$RUNNER_TEMP/test-evidence/$MODULE"; mkdir -p "$out"
               find "$tests" -path '*/test-logs/*.log' -print0 2>/dev/null | while IFS= read -r -d '' f; do
                 cp "$f" "$out/" || true
@@ -4776,6 +4793,15 @@ jobs:
               evidence=true
             fi
           done
+          # 🚨 NAME every failing test on GitHub — the suite's FQN + first assertion line, as a few
+          # bounded multiline annotations within the step's 10, plus a FAILED log line and the job
+          # summary per test. Without it a red leg said only "the module's own suite failed" and the
+          # name had to be dug out of the raw log (MeshWeaver.Plugins#3828). A REPORTER: it always
+          # exits 0 and the per-module verdicts above stand; a reporter that cannot run is said.
+          if [ "${#red[@]}" -gt 0 ]; then
+            python3 build-logic/.github/scripts/name-failing-tests.py "${red[@]}" --summary "$GITHUB_STEP_SUMMARY" \
+              || echo "::warning::name-failing-tests.py could not name the failing tests (exit $?) — read each suite's output above"
+          fi
           echo "evidence=$evidence" >> "$GITHUB_OUTPUT"
       - name: Ledger — Tested
         if: inputs.ledger == 'required' && steps.tests.outcome == 'success'

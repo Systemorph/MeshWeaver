@@ -529,6 +529,37 @@ public class PaymentMethodSetupContractTest
             "a caller must not read 'billing is off' from a provider that never scheduled anything");
     }
 
+    /// <summary>
+    /// 🚨 A provider that does not hand out client secrets says so, and refuses loudly if asked anyway —
+    /// an existing provider gains no way to leak one by this contract growing.
+    /// </summary>
+    [Fact]
+    public void AProviderThatDoesNotRevealClientSecrets_SaysSo_AndRefusesLoudlyIfAskedAnyway()
+    {
+        IPaymentMethodSetupProvider provider = new SetupOnlyProvider();
+        provider.RevealsClientSecret.Should().BeFalse();
+
+        Exception? error = null;
+        var emitted = false;
+        using (provider.RevealClientSecret("seti_1", "alice").Subscribe(_ => emitted = true, e => error = e)) { }
+
+        emitted.Should().BeFalse();
+        error.Should().BeOfType<NotSupportedException>();
+        error!.Message.Should().Contain("Sample");
+    }
+
+    /// <summary>🚨 A revealed client secret never reaches a serialized form or a log line.</summary>
+    [Fact]
+    public void ARevealedClientSecret_IsNeverSerialized_NorPrinted()
+    {
+        var revealed = new PaymentSetupClientSecret { SetupId = "seti_1", Secret = "seti_1_secret_abc", ClientPublicKey = "pk_test_1" };
+        var json = JsonSerializer.Serialize(revealed, Json);
+        json.Should().NotContain("seti_1_secret_abc");
+        json.Should().Contain("pk_test_1", "the publishable key is public by nature");
+        revealed.ToString().Should().NotContain("seti_1_secret_abc");
+        revealed.ToString().Should().Contain("(redacted)");
+    }
+
     [Fact]
     public void AProviderThatDoesNotRemoveMethods_SaysSo_AndRefusesLoudlyIfAskedAnyway()
     {

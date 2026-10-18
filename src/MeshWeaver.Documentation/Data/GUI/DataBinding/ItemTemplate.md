@@ -130,6 +130,8 @@ An `ItemTemplateControl` with no `Orientation` renders its items **top to bottom
 
 A common composition is a label/value list — each item a `LayoutGrid` with a `Controls.Subject` label (`xs: 12, sm: 4`) beside a `Controls.Body` value (`xs: 12, sm: 8`), so the pairs read as two columns and stack on a narrow screen. Leave the list's orientation undeclared, or declare it `Vertical`.
 
+For a **card grid**, declare `.WithMinTileWidth("300px")`: each rendered item becomes a tile of at least that width, as many as fit share a row, and the rest wrap ([tile flow](/Doc/GUI/LayoutGrid)). Put the mode on the list itself. A grid container *around* the list sees the whole list as one child and stacks every card in a single column.
+
 > 🚨 **Renderers older than the vertical default lay an undeclared list out as ONE unwrapped row.** The Blazor view bound an absent orientation to `default(Orientation)`, which is `Horizontal`, so every item was squeezed side by side. In a label/value list each `LayoutGrid` (width 100%) then shrank until its label was drawn over its value. A view that must render correctly on such a portal declares `Vertical` explicitly.
 
 # Data Flow

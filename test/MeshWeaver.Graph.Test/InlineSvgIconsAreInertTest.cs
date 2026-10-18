@@ -56,8 +56,9 @@ public class InlineSvgIconsAreInertTest
             "the icon itself still renders — inside the image, where none of its active content runs");
     }
 
-    private static string Html(UiControl control) =>
-        Assert.IsType<HtmlControl>(control).Data?.ToString() ?? "";
+    /// <summary>What the page receives for a surface that hands the icon to an
+    /// <see cref="ImageControl"/> — see <see cref="RenderedImage"/>.</summary>
+    private static string Drawn(UiControl surface, string because) => RenderedImage.SvgMarkup(surface, because);
 
     [Fact]
     public void TheDetector_SeesActiveMarkup()
@@ -79,40 +80,46 @@ public class InlineSvgIconsAreInertTest
 
     [Fact]
     public void TheOverviewTitleIcon_IsInert()
-        => ShouldBeInert(OverviewLayoutArea.RenderNodeIconHtml(Hostile), "the overview title row");
+        => ShouldBeInert(
+            Drawn(OverviewLayoutArea.TitleIcon(OverviewLayoutArea.TitleIconSource(Hostile)!, "Space/Page"), "the overview title row"),
+            "the overview title row");
 
     [Fact]
     public void TheNodePageIconTile_IsInert()
         => ShouldBeInert(
-            Html(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, Hostile, Hostile, false)),
+            Drawn(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, Hostile, Hostile, false), "the node page's icon tile"),
             "the node page's icon tile");
 
     [Fact]
     public void TheContentSelfReferenceIcon_IsInert()
-        => ShouldBeInert(
-            MeshNodeLayoutAreas.RenderNodeIconHtml(new MeshNode("Page", "Space") { Icon = Hostile }),
+    {
+        var view = MeshNodeLayoutAreas.ProjectSelfReference(new MeshNode("Page", "Space") { Icon = Hostile }, "");
+        ShouldBeInert(
+            Drawn(MeshNodeLayoutAreas.SelfReferenceTemplate(view.Icon, view.Text, "Space/Page"), "a self-reference"),
             "a node referencing itself in its content");
+    }
 
     [Fact]
     public void TheCreateFormPreview_IsInert()
-        => ShouldBeInert(Html(CreateLayoutArea.BuildIconPreview(Hostile)), "the create-form preview");
+        => ShouldBeInert(Drawn(CreateLayoutArea.BuildIconPreview(Hostile), "the create-form preview"), "the create-form preview");
 
     [Fact]
     public void TheIconPickerTile_IsInert()
-        => ShouldBeInert(Html(NodeIconPickerDialog.BuildPreviewTile(Hostile, Hostile)), "the icon picker tile");
+        => ShouldBeInert(Drawn(NodeIconPickerDialog.BuildPreviewTile(Hostile, Hostile), "the icon picker tile"), "the icon picker tile");
 
     /// <summary>The URL form of the same field: a quote in a <c>data:</c>/URL icon must not close
-    /// <c>src="…"</c> and open an attribute of its own.</summary>
+    /// <c>src="…"</c> and open an attribute of its own. Every surface now hands the URL to an
+    /// <see cref="ImageControl"/> as a VALUE — there is no markup on the hub for it to break out of —
+    /// and the renderer draws it only when <see cref="ImageSources.SafeUrl"/> accepts it.</summary>
     [Fact]
     public void AnImageUrlIcon_CannotBreakOutOfItsAttribute()
     {
         const string url = "data:image/png;base64,AAAA\" onerror=\"window.__mw=4";
 
-        var tile = Html(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, url, url, false));
-        var picker = Html(NodeIconPickerDialog.BuildPreviewTile(url, url));
-
-        HasHandler(tile).Should().BeFalse("the node page tile encodes the icon URL");
-        HasHandler(picker).Should().BeFalse("the picker tile encodes the icon URL");
+        RenderedImage.TheImage(MeshNodeLayoutAreas.BuildClickableIcon(null!, null, url, url, false), "the node page tile")
+            .Source.Should().Be(url, "the tile carries the icon as a value");
+        RenderedImage.TheImage(NodeIconPickerDialog.BuildPreviewTile(url, url), "the picker tile")
+            .Source.Should().Be(url, "the picker carries the icon as a value");
     }
 
     /// <summary>An image-loaded svg is parsed as XML and renders nothing without the SVG namespace,

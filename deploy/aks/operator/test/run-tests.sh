@@ -474,6 +474,71 @@ case "$_kve_out" in *"::hosting:: kv_db_connection=would-create"*) ok "…and re
 rm -rf "$_kve_state"
 unset _kve_out _kve_rc _kve_log _kve_state _kve_written
 
+echo
+echo "── hosting-kv-ensure --generate: the announcement key is created once, never shown, never regenerated ──"
+# Doc/Architecture/SelfUpdateAnnouncementKey — a record declaring announcementKeySecret is mounted on
+# BOTH ends (the instance's Hosting__ControlInbox__Secret, the control instance's
+# Hosting__PlatformWebhookSecret__<id>). A mapped-but-absent object fails the WHOLE CSI mount, so the
+# Provision (and every Roll/Reconcile before it deploys such a render) creates it when absent.
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "kv-ensure --generate creates an ABSENT announcement key" || bad "kv-ensure --generate creates an absent key" "exited ${_kve_rc}: ${_kve_out}"
+_kve_key="$(cat "$_kve_state/set.acme-Hosting-AnnouncementKey" 2>/dev/null || true)"
+[ "$(printf '%s' "$_kve_key" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" = "32" ] && ok "…256 random bits, base64 (kv-set --generate's shape)" || bad "the key is 32 random bytes, base64" "wrote ${#_kve_key} chars"
+case "$_kve_log" in *"secret set --vault-name Systemorph --name acme-Hosting-AnnouncementKey --file "*"mw-source=generate"*) ok "…reaches az through --file, tagged mw-source=generate" ;; *) bad "the key reaches az through --file, tagged" "az saw: ${_kve_log}" ;; esac
+case "$_kve_log" in *"mw-fp=sha256:"*) ok "…with its fingerprint tag, so both ends compare from metadata" ;; *) bad "the key carries an mw-fp tag" "az saw: ${_kve_log}" ;; esac
+if [ -n "$_kve_key" ]; then
+  case "$_kve_out$_kve_log" in *"$_kve_key"*) bad "the generated key is never printed or put on an argv" "it was" ;; *) ok "the generated key is never printed or put on an argv" ;; esac
+fi
+case "$_kve_out" in *"::hosting:: kv_generated=acme-Hosting-AnnouncementKey:created"*) ok "…and the run reports kv_generated=<object>:created" ;; *) bad "reports kv_generated created" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_KVE_EXISTING="acme-Ai-KeyProtection-MasterKey acme-Hosting-AnnouncementKey" \
+  -- --vault Systemorph --prefix acme- --namespace acme --skip-registry-key --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "an EXISTING announcement key is accepted" || bad "existing key is accepted" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and NEVER regenerated (both ends read it)" "az saw: ${_kve_log}" ;; *) ok "…and NEVER regenerated (both ends read it)" ;; esac
+case "$_kve_out" in *"::hosting:: kv_generated=acme-Hosting-AnnouncementKey:kept"*) ok "…reported as kept" ;; *) bad "reported kept" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_KVE_LIST_FAIL=1 \
+  -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -ne 0 ] && ok "a REFUSED listing is a refusal, never 'absent' (no overwrite on a blind read)" || bad "refused listing refuses" "exited 0: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and nothing is written" "az saw: ${_kve_log}" ;; *) ok "…and nothing is written" ;; esac
+rm -rf "$_kve_state"
+
+kve HOSTING_DRY_RUN=true \
+  -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "a dry-run --generate-only succeeds" || bad "dry-run generate-only" "exited ${_kve_rc}: ${_kve_out}"
+case "$_kve_log" in *"secret set"*) bad "…and writes nothing" "az saw: ${_kve_log}" ;; *) ok "…and writes nothing" ;; esac
+case "$_kve_out" in *"kv_generated=acme-Hosting-AnnouncementKey:would-create"*) ok "…reporting would-create" ;; *) bad "dry run reports would-create" "said: ${_kve_out}" ;; esac
+rm -rf "$_kve_state"
+
+# --generate-only: what a Roll/Reconcile runs before deploying a render that mounts such a key —
+# the key and NOTHING else (no master key minted, no registry key required, no database touched).
+kve -- --vault Systemorph --namespace control --generate-only --generate acme-Hosting-AnnouncementKey --generate fabrikam-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && ok "--generate-only creates every named key" || bad "generate-only creates the keys" "exited ${_kve_rc}: ${_kve_out}"
+[ -f "$_kve_state/set.acme-Hosting-AnnouncementKey" ] && [ -f "$_kve_state/set.fabrikam-Hosting-AnnouncementKey" ] && ok "…both objects written" || bad "both keys written" "state: $(ls "$_kve_state")"
+case "$_kve_log" in *"MasterKey"*|*"RegistryToken"*) bad "…and touches nothing else (no master key, no registry key)" "az saw: ${_kve_log}" ;; *) ok "…and touches nothing else (no master key, no registry key)" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "--generate-only refuses to run with nothing to generate" "names nothing to generate" \
+  hosting-kv-ensure --vault V --namespace n --generate-only
+refuses_hard "--generate-only refuses the provisioning flags" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --prefix acme- --generate k
+refuses_hard "--generate refuses an object name with a metacharacter" "is not a plain name" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate 'k;id'
+kve HOSTING_KVE_VERSIONS=2 -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+[ "$_kve_rc" -eq 0 ] && case "$_kve_out" in *"kv_generated_raced=acme-Hosting-AnnouncementKey"*) true ;; *) false ;; esac \
+  && ok "a concurrent create (two versions right after the write) is SAID, never hidden" || bad "a raced create is reported" "rc=${_kve_rc}: ${_kve_out}"
+rm -rf "$_kve_state"
+kve -- --vault Systemorph --namespace acme --generate-only --generate acme-Hosting-AnnouncementKey
+case "$_kve_out" in *"raced"*) bad "a lone create reports no race" "said: ${_kve_out}" ;; *) ok "a lone create reports no race" ;; esac
+rm -rf "$_kve_state"
+refuses_hard "--generate-only refuses the database flags too" "cannot be combined" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate k --db-host pg.test
+refuses_hard "a trailing --generate with no object refuses (never a parser hang)" "needs an object name" \
+  hosting-kv-ensure --vault V --namespace n --generate-only --generate
+unset _kve_out _kve_rc _kve_log _kve_state _kve_key
+
 # 🚨 Memex#648 — the helm VALUES HALF. A record declaring vaultValuesKeys deploys only with
 # helm-values-<release> in the vault, and on an external database with AdoNet clustering the chart
 # refuses to render without it; nothing composed it, so the control instance's was built by hand.
@@ -708,6 +773,114 @@ case "$_rr_out" in *"::hosting:: registry_registration=dry-run"*) ok "…and rep
 rr_done
 rm -rf "$_rr_pre"
 unset _rr_out _rr_rc _rr_reglog _rr_azlog _rr_reg _rr_kv _rr_pre
+
+echo "── coupons: the register step registers on the coupon's plan, and says so before it runs ──"
+# Doc/Architecture/PluginRegistry → "Coupons". A coupon is a plan-bearing, expiring, usage-limited
+# registration key minted for ONE deployment into a vault object (hosting-registry-coupon); the record
+# names it (operator.environment.REGISTRY_BOOTSTRAP_SECRET) and the Provision presents it. The plan is
+# the coupon's `mw-plan` TAG — read as metadata, never the value.
+_cp_reg="$(mktemp -d)"; _cp_kv="$(mktemp -d)"; printf normal > "$_cp_reg/mode"; : > "$_cp_reg/keys"; : > "$_cp_reg/log"
+_cp_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_DRY_RUN=true HOSTING_REG_STATE="$_cp_reg" HOSTING_RRAZ_STATE="$_cp_kv" \
+  HOSTING_RRAZ_VALUES="fabrikam-PluginCatalog-Coupon=mwr_coupon-NEVER-PRINTED" HOSTING_RRAZ_TAGS="fabrikam-PluginCatalog-Coupon=dedicated" \
+  hosting-registry-register "${RR_ARGS[@]}" --bootstrap-secret fabrikam-PluginCatalog-Coupon 2>&1)"; _cp_rc=$?
+[ "$_cp_rc" -eq 0 ] && ok "a dry-run registration with a coupon succeeds" || bad "coupon dry run" "exited ${_cp_rc}: ${_cp_out}"
+case "$_cp_out" in *"presenting the coupon in fabrikam-PluginCatalog-Coupon: the instance registers on plan dedicated"*) ok "…and STATES the plan the coupon carries before anything runs" ;; *) bad "dry run states the coupon's plan" "said: ${_cp_out}" ;; esac
+case "$_cp_out" in *"::hosting:: registry_plan=dedicated"*) ok "…as the fact registry_plan=dedicated" ;; *) bad "registry_plan fact" "said: ${_cp_out}" ;; esac
+case "$_cp_out" in *NEVER-PRINTED*|*mwr_*) bad "…without reading or printing the coupon" "said: ${_cp_out}" ;; *) ok "…without reading or printing the coupon" ;; esac
+case "$(cat "$_cp_kv/az.log")" in *"--query value"*) bad "…the dry run reads no secret value" "az saw: $(cat "$_cp_kv/az.log")" ;; *) ok "…the dry run reads no secret value (the plan is a tag)" ;; esac
+rm -rf "$_cp_reg" "$_cp_kv"
+
+rr normal "" HOSTING_DRY_RUN=true -- "${RR_ARGS[@]}"
+case "$_rr_out" in *"names no coupon"*"::hosting:: registry_plan=free"*) ok "a dry run WITHOUT a coupon says it registers on free, and why" ;; *) bad "no-coupon dry run says free" "said: ${_rr_out}" ;; esac
+rr_done
+
+_cp_reg="$(mktemp -d)"; _cp_kv="$(mktemp -d)"; printf closed > "$_cp_reg/mode"; : > "$_cp_reg/keys"; : > "$_cp_reg/log"
+printf 'mwr_coupon-NEVER-PRINTED' > "$_cp_reg/bootstrap"; printf dedicated > "$_cp_reg/bootstrap_plan"
+_cp_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_cp_reg" HOSTING_RRAZ_STATE="$_cp_kv" \
+  HOSTING_RRAZ_VALUES="fabrikam-PluginCatalog-Coupon=mwr_coupon-NEVER-PRINTED" HOSTING_RRAZ_TAGS="fabrikam-PluginCatalog-Coupon=dedicated" \
+  hosting-registry-register "${RR_ARGS[@]}" --bootstrap-secret fabrikam-PluginCatalog-Coupon 2>&1)"; _cp_rc=$?
+[ "$_cp_rc" -eq 0 ] && ok "a coupon registers the instance" || bad "coupon registers" "exited ${_cp_rc}: ${_cp_out}"
+case "$_cp_out" in *"::hosting:: registry_plan=dedicated"*) ok "…on the coupon's plan from the beginning (registry_plan=dedicated)" ;; *) bad "registered on the coupon's plan" "said: ${_cp_out}" ;; esac
+case "$_cp_out" in *registry_plan_mismatch*) bad "…with no plan mismatch" "said: ${_cp_out}" ;; *) ok "…with no plan mismatch" ;; esac
+rm -rf "$_cp_reg" "$_cp_kv"
+
+# The registry's answer is what licenses: a coupon tagged one plan that registers on another is SAID.
+_cp_reg="$(mktemp -d)"; _cp_kv="$(mktemp -d)"; printf closed > "$_cp_reg/mode"; : > "$_cp_reg/keys"; : > "$_cp_reg/log"
+printf 'mwr_coupon-NEVER-PRINTED' > "$_cp_reg/bootstrap"; printf pro > "$_cp_reg/bootstrap_plan"
+_cp_out="$(env PATH="$RR_CURL:$RR_AZ:$PATH" HOSTING_REG_STATE="$_cp_reg" HOSTING_RRAZ_STATE="$_cp_kv" \
+  HOSTING_RRAZ_VALUES="fabrikam-PluginCatalog-Coupon=mwr_coupon-NEVER-PRINTED" HOSTING_RRAZ_TAGS="fabrikam-PluginCatalog-Coupon=dedicated" \
+  hosting-registry-register "${RR_ARGS[@]}" --bootstrap-secret fabrikam-PluginCatalog-Coupon 2>&1)"; _cp_rc=$?
+[ "$_cp_rc" -eq 0 ] && ok "a plan mismatch after registration does not strand the issued key" || bad "mismatch keeps the key" "exited ${_cp_rc}: ${_cp_out}"
+case "$_cp_out" in *"::hosting:: registry_plan_mismatch=dedicated->pro"*) ok "…and is reported as registry_plan_mismatch" ;; *) bad "mismatch fact" "said: ${_cp_out}" ;; esac
+rm -rf "$_cp_reg" "$_cp_kv"
+unset _cp_out _cp_rc _cp_reg _cp_kv
+
+echo "── hosting-registry-coupon: a coupon minted into the vault, never shown, refused for an unknown plan ──"
+RC_CURL="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/registry-coupon" && pwd)"
+rc() {  # rc <mode> <vault values> [env…] -- <args…>
+  local mode="$1" values="$2"; shift 2
+  local envs=()
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  _rc_reg="$(mktemp -d)"; _rc_kv="$(mktemp -d)"
+  printf '%s' "$mode" > "$_rc_reg/mode"; printf 'mint-credential-NEVER-PRINTED' > "$_rc_reg/secret"; printf 'free pro dedicated' > "$_rc_reg/ladder"; : > "$_rc_reg/log"
+  _rc_out="$(env "${envs[@]}" PATH="$RC_CURL:$RR_AZ:$PATH" HOSTING_COUPON_STATE="$_rc_reg" HOSTING_RRAZ_STATE="$_rc_kv" HOSTING_RRAZ_VALUES="$values" \
+    hosting-registry-coupon "$@" 2>&1)"; _rc_rc=$?
+  _rc_reglog="$(cat "$_rc_reg/log" 2>/dev/null || true)"; _rc_azlog="$(cat "$_rc_kv/az.log" 2>/dev/null || true)"
+}
+rc_done() { rm -rf "$_rc_reg" "$_rc_kv"; }
+RC_CRED="registry-Coupon-MintSecret=mint-credential-NEVER-PRINTED"
+RC_ARGS=(--registry-url https://registry.test --vault Systemorph --object fabrikam-PluginCatalog-Coupon --tier dedicated --description "fabrikam ramp-up" --mint-secret registry-Coupon-MintSecret)
+
+rc normal "$RC_CRED" -- "${RC_ARGS[@]}"
+[ "$_rc_rc" -eq 0 ] && ok "coupon: an ABSENT object is minted at the registry" || bad "coupon minted" "exited ${_rc_rc}: ${_rc_out}"
+case "$_rc_reglog" in *"MINT tier=dedicated uses=1 days=30 cred=ok url=https://registry.test/api/instances/coupons"*) ok "…single-use and expiring by default (1 use, 30 days), with the mint credential" ;; *) bad "mint request" "registry saw: ${_rc_reglog}" ;; esac
+[ "$(cat "$_rc_kv/set.fabrikam-PluginCatalog-Coupon" 2>/dev/null)" = "mwr_fake-coupon-NEVER-PRINTED-dedicated" ] && ok "…the coupon is stored under the object, byte-for-byte" || bad "coupon stored" "vault got: $(cat "$_rc_kv/set.fabrikam-PluginCatalog-Coupon" 2>/dev/null)"
+[ "$(cat "$_rc_kv/tag.fabrikam-PluginCatalog-Coupon" 2>/dev/null)" = "dedicated" ] && ok "…tagged mw-plan=dedicated (what the register step's dry run reads)" || bad "plan tag" "az saw: ${_rc_azlog}"
+case "$_rc_azlog" in *"--file "*"mw-source=coupon"*) ok "…through --file, tagged mw-source=coupon" ;; *) bad "stored through --file" "az saw: ${_rc_azlog}" ;; esac
+case "${_rc_out}${_rc_azlog}" in *NEVER-PRINTED*|*mwr_*) bad "coupon: neither the coupon nor the mint credential is printed or put on an argv" "seen: ${_rc_out} ${_rc_azlog}" ;; *) ok "coupon: neither the coupon nor the mint credential is printed or put on an argv" ;; esac
+case "$_rc_out" in *"::hosting:: registry_coupon=minted"*"::hosting:: registry_coupon_plan=dedicated"*) ok "…reported as minted, with its plan" ;; *) bad "minted facts" "said: ${_rc_out}" ;; esac
+rc_done
+
+rc normal "$RC_CRED fabrikam-PluginCatalog-Coupon=mwr_held-NEVER-PRINTED" HOSTING_RRAZ_TAGS="fabrikam-PluginCatalog-Coupon=dedicated" -- "${RC_ARGS[@]}"
+[ "$_rc_rc" -eq 0 ] && ok "coupon: a PRESENT object is kept" || bad "present coupon kept" "exited ${_rc_rc}: ${_rc_out}"
+case "$_rc_reglog" in *MINT*) bad "…and NEVER re-minted (a second live coupon nobody holds)" "registry saw: ${_rc_reglog}" ;; *) ok "…and NEVER re-minted (a second live coupon nobody holds)" ;; esac
+case "$_rc_out" in *"::hosting:: registry_coupon=kept"*"registry_coupon_plan=dedicated"*) ok "…reported as kept, with the plan it carries" ;; *) bad "kept facts" "said: ${_rc_out}" ;; esac
+rc_done
+
+rc normal "$RC_CRED" -- "${RC_ARGS[@]/dedicated/platinum}"
+[ "$_rc_rc" -ne 0 ] && ok "coupon: a plan the registry's ladder does not know is REFUSED" || bad "unknown plan refused" "exited 0: ${_rc_out}"
+case "$_rc_out" in *"not on this registry's tier ladder"*"Nothing was minted"*) ok "…naming the ladder" ;; *) bad "unknown plan message" "said: ${_rc_out}" ;; esac
+[ ! -f "$_rc_kv/set.fabrikam-PluginCatalog-Coupon" ] && ok "…and nothing is written" || bad "unknown plan writes nothing" "it wrote"
+rc_done
+
+rc normal "registry-Coupon-MintSecret=wrong-credential" -- "${RC_ARGS[@]}"
+[ "$_rc_rc" -ne 0 ] && ok "coupon: a mint credential the registry rejects is a refusal" || bad "wrong credential refused" "exited 0"
+case "$_rc_out" in *"is not the registry's PluginCatalog:Coupons:MintSecret"*) ok "…naming the registry's key" ;; *) bad "wrong credential message" "said: ${_rc_out}" ;; esac
+rc_done
+
+rc absent "$RC_CRED" -- "${RC_ARGS[@]}"
+[ "$_rc_rc" -ne 0 ] && ok "coupon: a registry without a mint (404) refuses" || bad "404 refused" "exited 0"
+case "$_rc_out" in *"configures no PluginCatalog:Coupons:MintSecret"*"Registration keys"*) ok "…naming the config key and the hand path" ;; *) bad "404 message" "said: ${_rc_out}" ;; esac
+rc_done
+
+rc normal "$RC_CRED" HOSTING_RRAZ_LIST_FAIL=1 -- "${RC_ARGS[@]}"
+[ "$_rc_rc" -ne 0 ] && ok "coupon: a REFUSED vault listing is a refusal, never 'absent'" || bad "list refused" "exited 0"
+case "$_rc_reglog" in *MINT*) bad "…and nothing is minted" "registry saw: ${_rc_reglog}" ;; *) ok "…and nothing is minted" ;; esac
+rc_done
+
+rc normal "$RC_CRED" HOSTING_DRY_RUN=true -- "${RC_ARGS[@]}" --max-usages 2 --expires-days 14
+[ "$_rc_rc" -eq 0 ] && ok "a dry-run coupon succeeds" || bad "coupon dry run" "exited ${_rc_rc}: ${_rc_out}"
+case "$_rc_reglog$_rc_azlog" in *MINT*|*"--query value"*|*"secret set"*) bad "…reads no credential, mints nothing, writes nothing" "saw: ${_rc_reglog} ${_rc_azlog}" ;; *) ok "…reads no credential, mints nothing, writes nothing" ;; esac
+case "$_rc_out" in *"plan 'dedicated' (2 use(s), expires in 14 day(s))"*"::hosting:: registry_coupon=dry-run"*) ok "…and states what it would mint" ;; *) bad "coupon dry-run text" "said: ${_rc_out}" ;; esac
+rc_done
+
+refuses_hard "coupon refuses a tier that is not a plan id" "is not a plan id" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier 'Pro;id' --description d --mint-secret m
+refuses_hard "coupon refuses an expiry beyond 90 days" "must be 1–90" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d --mint-secret m --expires-days 365
+refuses_hard "coupon refuses more than 10 uses" "must be 1–10" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d --mint-secret m --max-usages 11
+refuses_hard "coupon refuses a description with a metacharacter" "must be plain words" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description 'x$(id)' --mint-secret m
+refuses_hard "coupon needs --mint-secret" "missing required flag --mint-secret" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d
+refuses_hard "coupon: a flag given LAST with no value refuses, never spins" "missing required flag --mint-secret" hosting-registry-coupon --registry-url https://r.test --vault V --object o --tier pro --description d --mint-secret
+unset _rc_out _rc_rc _rc_reglog _rc_azlog _rc_reg _rc_kv
 
 echo "── hosting-kv-copy: a fleet-shared object materialised under the prefix, never shown ──"
 # MeshWeaver.Plugins#1723 — a credential several instances hold (the fleet GitHub App's PEM) has to
@@ -1706,6 +1879,14 @@ ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hostin
   || bad "a late key is waited for" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
 case "$_ks_out" in *"waiting   1 declared key(s)"*"build-portal-keyvault:Hosting__ControlInbox__Secret"*"::hosting:: kv_synced_waited=1"*) ok "…naming the key it waited for" ;;
   *) bad "the waited key is named" "said: ${_ks_out}" ;; esac
+
+# 2026-10-17 (pg3, control): the rotation added the key but managedFields still named the Secret's FIRST
+# write, older than every pod — the step waited, saw the key, called every pod current and restarted
+# nothing. A waited key is dated by when the step SAW it, so the pods that predate that restart.
+ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_LATE_KEYS="Hosting__ControlInbox__Secret" HOSTING_KS_LATE_AFTER=3 \
+   HOSTING_KS_WRITTEN=2026-09-20T08:00:00Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" -- "${KS_ARGS[@]}"
+[ "$_ks_rc" -eq 0 ] && [ "$_ks_restarted" = yes ] && ok "a waited key restarts the pods that predate it, though managedFields still name an older write" \
+  || bad "a waited key restarts despite a stale managedFields time" "rc=${_ks_rc} restarted=${_ks_restarted}: ${_ks_out}"
 
 # A key that never arrives is a FAILED step — and the pods are NOT restarted onto the same gap.
 ks HOSTING_KS_KEYS="Hosting__PlatformWebhookSecret" HOSTING_KS_WRITTEN=2026-09-26T19:33:10Z HOSTING_KS_POD_STARTS="2026-09-26T19:31:36Z" \
@@ -2714,6 +2895,83 @@ refuses_hard "kv-set rejects unknown flags"               "unknown argument"    
 unset _kvs_out _kvs_rc _kvs_log _kvs_state KVS_JSON KVS_SECRET
 
 echo
+echo "── hosting-manifest-apply: a committed cluster manifest, verbatim, bound to its digest ──"
+# The ApplyClusterManifest action's one command (the config repo's aks-ops lane runs it). What is
+# tested: the path and digest refusals, the validation that refuses a widening the approval might
+# miss, and that `check` never sends a real apply. Parsing is kubectl's — the stub answers a fixture.
+MA_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/manifest-apply" && pwd)"
+_ma_root="$(mktemp -d)"; mkdir -p "$_ma_root/demo"
+ma_fixture() {  # ma_fixture <name> <yaml text> <parsed json>
+  printf '%s\n' "$2" > "$_ma_root/demo/$1.yaml"; printf '%s\n' "$3" > "$_ma_root/demo/$1.yaml.json"
+}
+ma_sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$_ma_root/demo/$1.yaml" | cut -d' ' -f1; else shasum -a 256 "$_ma_root/demo/$1.yaml" | cut -d' ' -f1; fi; }
+ma() {  # ma <args…>; sets $_ma_out $_ma_rc $_ma_log
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply "$@" 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_fixture good 'kind: ServiceAccount # fixture' \
+  '{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"example","namespace":"memex-secrets"}}
+{"apiVersion":"v1","kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"t","namespace":"control","annotations":{"kubernetes.io/service-account.name":"example"}}}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"r","namespace":"memex-secrets"},"rules":[{"apiGroups":["batch"],"resources":["jobs"],"verbs":["get","create"]}]}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"r","namespace":"memex-secrets"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"ServiceAccount","name":"example","namespace":"control"}]}'
+_ma_good="$(ma_sha good)"
+ma check --manifest demo/good.yaml
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"::hosting:: manifest_digest=sha256:${_ma_good}"*"::hosting:: manifest_objects=4"*"::hosting:: manifest_check=sha256:${_ma_good}"*) true ;; *) false ;; esac \
+  && ok "check prints the digest, the objects and the server's dry-run answer" || bad "check" "rc ${_ma_rc}: ${_ma_out}"
+case "$_ma_log" in *"apply --dry-run=server"*) ;; *) bad "check asks the server for a DRY RUN" "kubectl saw: ${_ma_log}" ;; esac
+if printf '%s\n' "$_ma_log" | grep -q '^kubectl apply -f'; then bad "check never sends a real apply" "kubectl saw: ${_ma_log}"; else ok "check never sends a real apply"; fi
+ma apply --manifest demo/good.yaml --sha256 "sha256:${_ma_good}"
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"::hosting:: manifest_applied=demo/good.yaml@sha256:${_ma_good}"*) true ;; *) false ;; esac \
+  && ok "apply with the approved digest applies and reports what it applied" || bad "apply" "rc ${_ma_rc}: ${_ma_out}"
+ma apply --manifest demo/good.yaml
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"apply needs --sha256"*) true ;; *) false ;; esac \
+  && ok "apply without a digest is refused before kubectl is asked anything" || bad "apply without digest" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+ma apply --manifest demo/good.yaml --sha256 "$(printf '0%.0s' $(seq 1 64))"
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"not the bytes that were approved"*) true ;; *) false ;; esac \
+  && ok "apply with another digest is refused, nothing sent" || bad "digest mismatch" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+refuses_hard "a path out of deploy/aks/manifests is refused" "is not a path under deploy/aks/manifests" hosting-manifest-apply check --manifest ../etc/x.yaml
+refuses_hard "the mode is check or apply" "check or apply" hosting-manifest-apply delete --manifest demo/good.yaml
+ln -s "$_ma_root/demo/good.yaml" "$_ma_root/demo/link.yaml"
+ma check --manifest demo/link.yaml
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is a symlink"*) true ;; *) false ;; esac && ok "a symlinked manifest is refused" || bad "symlink" "${_ma_out}"
+ma_fixture placeholder 'metadata: {annotations: {azure.workload.identity/client-id: "<clientId>"}}' '{"kind":"ServiceAccount","metadata":{"name":"x"}}'
+ma check --manifest demo/placeholder.yaml
+[ "$_ma_rc" -ne 0 ] && [ -z "$_ma_log" ] && case "$_ma_out" in *"still carries a placeholder"*) true ;; *) false ;; esac \
+  && ok "a placeholder left in the file is refused before kubectl" || bad "placeholder" "${_ma_out}"
+ma_tok() {  # ma_tok <env…>: check demo/good.yaml (its token Secret binds ServiceAccount "example") with a live Secret
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(env "$@" PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply check --manifest demo/good.yaml 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_tok MW_LIVE_TOKEN_SA=hosting-jobrunner
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"already holds a token for ServiceAccount 'hosting-jobrunner'"*) true ;; *) false ;; esac \
+  && ! printf '%s\n' "$_ma_log" | grep -q 'apply' \
+  && ok "a token Secret already filled for ANOTHER account is refused — an apply would keep the old token" || bad "foreign token" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_SA=example
+[ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"exists, bound to example"*) true ;; *) false ;; esac \
+  && ok "…one already bound to the same account is fine" || bad "same token" "rc ${_ma_rc}; ${_ma_out}"
+ma_tok MW_LIVE_TOKEN_FORBIDDEN=1
+[ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is UNKNOWN"*) true ;; *) false ;; esac \
+  && ok "…and a refused read is UNKNOWN, never 'absent'" || bad "token read refused" "rc ${_ma_rc}; ${_ma_out}"
+ma_refuses() {  # ma_refuses <what> <phrase> <parsed json>
+  ma_fixture bad "kind: x" "$3"
+  ma check --manifest demo/bad.yaml
+  if [ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"$2"*) true ;; *) false ;; esac \
+     && ! printf '%s\n' "$_ma_log" | grep -q '^kubectl apply'; then ok "$1"; else bad "$1" "rc ${_ma_rc}; kubectl: ${_ma_log}; ${_ma_out}"; fi
+}
+ma_refuses "a kind outside the lane's set is refused (a Deployment)" "kind Deployment is not one this lane applies" '{"kind":"Deployment","metadata":{"name":"d","namespace":"n"}}'
+ma_refuses "a Secret carrying data is refused" "carries data" '{"kind":"Secret","type":"kubernetes.io/service-account-token","metadata":{"name":"s"},"data":{"k":"dg=="}}'
+ma_refuses "an Opaque Secret is refused" "may only be an empty kubernetes.io/service-account-token" '{"kind":"Secret","type":"Opaque","metadata":{"name":"s"}}'
+ma_refuses "a wildcard rule is refused" "with * in its verbs" '{"kind":"ClusterRole","metadata":{"name":"c"},"rules":[{"apiGroups":[""],"resources":["*"],"verbs":["get"]}]}'
+ma_refuses "the escalate verb is refused" "verb escalate is refused" '{"kind":"Role","metadata":{"name":"c","namespace":"n"},"rules":[{"apiGroups":["rbac.authorization.k8s.io"],"resources":["roles"],"verbs":["escalate"]}]}'
+ma_refuses "an aggregated ClusterRole is refused" "aggregated ClusterRole" '{"kind":"ClusterRole","metadata":{"name":"c"},"aggregationRule":{"clusterRoleSelectors":[]}}'
+ma_refuses "a binding to cluster-admin is refused" "binds cluster-admin" '{"kind":"ClusterRoleBinding","metadata":{"name":"b"},"roleRef":{"kind":"ClusterRole","name":"cluster-admin"},"subjects":[{"kind":"ServiceAccount","name":"x","namespace":"y"}]}'
+ma_refuses "a binding to a system: role is refused" "binds system:" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"ClusterRole","name":"system:auth-delegator"},"subjects":[{"kind":"ServiceAccount","name":"x","namespace":"y"}]}'
+ma_refuses "a binding to a person or group is refused" "subject Group devs is not a ServiceAccount" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"Group","name":"devs"}]}'
+rm -rf "$_ma_root"
+unset _ma_out _ma_rc _ma_log _ma_root _ma_good
+
 echo "── hosting-kv-status / hosting-kv-state: status and lifecycle from METADATA, never a value ──"
 # The write-only secret GUI's read side (policy secrets-write-only-entry): existence, enabled,
 # dates, soft-delete and the write-time tags — from `list` alone. The stub is the WRITER identity:

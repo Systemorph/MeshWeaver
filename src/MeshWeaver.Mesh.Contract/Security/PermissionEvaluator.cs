@@ -1105,6 +1105,22 @@ internal static class PermissionEvaluator
     private static IObservable<IEnumerable<MeshNode>> ObserveAllMembershipNodes(IMeshNodeStreamCache cache, JsonSerializerOptions options)
         => SecurityQuery(cache, MembershipQueryId, options, SecurityQueries.Memberships);
 
+    /// <summary>
+    /// The groups <paramref name="userId"/> belongs to, transitively — the SAME membership query and
+    /// the SAME expansion the fold matches group grants with, so a declared point read
+    /// (<see cref="DeclaredPointRead"/>) admits a group's members exactly when a grant to that group
+    /// would. Live: re-emits when a membership changes. Never includes <paramref name="userId"/>.
+    /// </summary>
+    /// <param name="hub">The hub asking; its stream cache and serializer options are resolved once, here.</param>
+    /// <param name="userId">The caller.</param>
+    internal static IObservable<ImmutableHashSet<string>> ObserveUserGroups(IMessageHub hub, string userId)
+    {
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var options = hub.JsonSerializerOptions;
+        return ObserveAllMembershipNodes(cache, options)
+            .Select(memberships => ResolveUserGroups(userId, memberships, options));
+    }
+
     #endregion
 
     #region Helpers

@@ -108,15 +108,55 @@ public class NodePageAreasAreTemplatesTest(ITestOutputHelper output) : MonolithM
     }
 
     [Fact]
-    public void TheSelfReferenceIcon_EncodesTheNodesIconUrl()
+    public void TheSelfReferenceIcon_CarriesTheNodesIconAndNameAsValues()
     {
-        var markup = MeshNodeLayoutAreas.RenderNodeIconHtml(
-            new MeshNode("Page", "Space") { Icon = "/x.png\" onerror=\"alert(1)", Name = "<b>n</b>" });
+        const string hostileUrl = "/x.png\" onerror=\"alert(1)";
+        var view = MeshNodeLayoutAreas.ProjectSelfReference(
+            new MeshNode("Page", "Space") { Icon = hostileUrl, Name = "<b>n</b>" }, "not found");
+        var surface = MeshNodeLayoutAreas.SelfReferenceTemplate(
+            new JsonPointerReference("icon"), new JsonPointerReference("text"), "Space/Page");
 
-        markup.Should().NotContain("\" onerror=",
-            "the icon URL is editable node content — a quote in it must not break out of src=\"…\"");
-        markup.Should().Contain("&quot; onerror=");
-        markup.Should().NotContain("<b>n</b>", "the name is encoded as well");
+        view.Icon.Should().Be(hostileUrl, "the icon URL is editable node content — carried as a VALUE, never spliced into markup");
+        view.Text.Should().Be("<b>n</b>", "the name is text the Label renders encoded");
+        EveryViewIsStatic(surface);
+        Descendants(surface).OfType<HtmlControl>().Should().BeEmpty("the self-reference is platform controls, never markup");
+        Descendants(surface).OfType<ImageControl>().Should().ContainSingle()
+            .Which.Source.Should().BeOfType<JsonPointerReference>("the icon is bound, not baked in on the hub");
+        Descendants(surface).OfType<LabelControl>().Should().ContainSingle()
+            .Which.Data.Should().BeOfType<JsonPointerReference>("the name is bound, not baked in on the hub");
+        MeshNodeLayoutAreas.ProjectSelfReference(null, "not found").Text.Should().Be("not found");
+    }
+
+    /// <summary>
+    /// The node page header is composed of PLATFORM CONTROLS: an <see cref="ImageControl"/> tile, an
+    /// <c>H1</c> title and the provenance line as <c>Label</c>s and a <c>Link</c> — every value a
+    /// pointer, no <see cref="HtmlControl"/> anywhere. Built from pointers exactly as
+    /// <c>BuildHeaderTemplate</c> builds it, so no mesh is needed to read its shape.
+    /// </summary>
+    [Fact]
+    public void TheNodePageHeader_IsPlatformControls_WithEveryValueAPointer()
+    {
+        static JsonPointerReference P(string pointer) => new(pointer);
+        var meta = new MeshNodeLayoutAreas.MetaSlots(
+            P("meta/typeStyle"), P("meta/typeLabel"), P("meta/typeText"), P("meta/typeHref"),
+            P("meta/createdStyle"), P("meta/createdLabel"), P("meta/createdText"),
+            P("meta/changedStyle"), P("meta/changedLabel"), P("meta/changedText"));
+        var header = MeshNodeLayoutAreas.HeaderTemplate(
+            P("style"), P("title"), P("icon"), P("iconSize"), P("iconFit"), P("tileStyle"), meta,
+            Controls.Stack, null, Controls.Stack);
+
+        EveryViewIsStatic(header);
+        var tree = Descendants(header).ToList();
+        tree.OfType<HtmlControl>().Should().BeEmpty("the header carries no hand-built markup");
+        tree.OfType<ImageControl>().Should().ContainSingle()
+            .Which.Source.Should().Be(P("icon"), "the tile is an ImageControl bound to the icon");
+        tree.OfType<LabelControl>().Should().Contain(l => l.Data is JsonPointerReference { Pointer: "title" },
+            "the title is an H1 label bound to the title");
+        tree.OfType<LinkControl>().Should().ContainSingle(l => l.Text is JsonPointerReference { Pointer: "meta/typeText" },
+            "the node type links to its configuration through a Link control");
+        tree.OfType<LabelControl>().Select(l => (l.Data as JsonPointerReference)?.Pointer).Should().Contain(
+            ["meta/typeLabel", "meta/createdLabel", "meta/createdText", "meta/changedLabel", "meta/changedText"],
+            "every provenance segment is a bound Label");
     }
 
     [Fact]

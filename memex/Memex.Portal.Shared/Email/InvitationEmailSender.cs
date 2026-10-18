@@ -99,7 +99,10 @@ public sealed class InvitationEmailSender(
             // match (same reason OnboardingMiddleware/InvitationService filter status in code).
             // IMeshQueryCore = the no-access-control core path (infra read).
             logger?.LogInformation("InvitationEmailSender: watching invitations (baseUrl={BaseUrl})", baseUrl ?? "(none)");
-            subscriptions.Add(query
+            // A STANDING watch — see SubscribeInvitationWatch for why it re-opens after a fault.
+            subscriptions.Add(SubscribeInvitationWatch(
+                hub,
+                () => query
                 // PATH-scoped to Admin/Invitation. Routing is by the path's FIRST SEGMENT
                 // (PostgreSqlPartitionedMeshQuery.FirstSegment → schema), so `path:Admin/…`
                 // routes to the admin schema. A `namespace:Admin`-only query has NO path, so it
@@ -111,20 +114,47 @@ public sealed class InvitationEmailSender(
                 // MeshQuery's System stamp) — no access-control filtering. See AccessControl.md.
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
                     $"path:{InvitationNodeType.Namespace} scope:children nodeType:{InvitationNodeType.NodeType}"), jsonOptions)
-                .Select(change => change.Items)
-                .Subscribe(
-                    items =>
-                    {
-                        foreach (var node in items)
-                            Send(node, meshService, accessService, emailSender, workspace, jsonOptions, baseUrl);
-                    },
-                    ex => logger?.LogWarning(ex, "InvitationEmailSender: query failed")));
+                .Select(change => change.Items),
+                items =>
+                {
+                    foreach (var node in items)
+                        Send(node, meshService, accessService, emailSender, workspace, jsonOptions, baseUrl);
+                },
+                logger));
         }
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "InvitationEmailSender: failed to start watching invitations");
         }
     }
+
+    /// <summary>
+    /// The invitation watch: <paramref name="open"/> (the live query) handed to the hub watcher,
+    /// every listing to <paramref name="onItems"/>.
+    ///
+    /// <para>🚨 <b>A STANDING watch, so a fault must not end it.</b> It used to be a bare
+    /// <c>.Subscribe</c> whose error arm only logged, so ONE fault of the query — a stalled provider
+    /// (<c>QueryProviderStalledException</c>), a dropped database connection — stopped every
+    /// invitation e-mail until the process restarted, with one Warning line as the only trace. The
+    /// hub watcher re-opens it on a paced cadence and ends it with the hub. A re-open's first
+    /// listing re-offers every un-emailed invitation; that is safe because the in-process claim
+    /// (<see cref="claiming"/>) and the durable <c>EmailSentAt</c> stamp both still decide the send.</para>
+    /// </summary>
+    /// <param name="hub">The hub the watch belongs to; its teardown ends the watch.</param>
+    /// <param name="open">Opens the live query, FRESH on every call.</param>
+    /// <param name="onItems">Handles one listing.</param>
+    /// <param name="logger">Records each re-open.</param>
+    /// <param name="scheduleReopen">Test seam for how a re-open is scheduled; null in production.</param>
+    /// <returns>The watch; disposing it ends it.</returns>
+    internal static IDisposable SubscribeInvitationWatch(
+        IMessageHub hub,
+        Func<IObservable<IReadOnlyList<MeshNode>>> open,
+        Action<IReadOnlyList<MeshNode>> onItems,
+        ILogger? logger,
+        Func<Action, IDisposable>? scheduleReopen = null) =>
+        ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub, open, onItems, logger, "InvitationEmailSender invitation watch",
+            scheduleReEstablish: scheduleReopen);
 
     private void Send(
         MeshNode node, IMeshService meshService, AccessService accessService,

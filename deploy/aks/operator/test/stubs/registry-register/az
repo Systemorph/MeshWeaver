@@ -21,6 +21,16 @@ lookup() {  # lookup <name> → prints the value, returns 1 when absent
 case "${1:-} ${2:-} ${3:-}" in
   "keyvault secret list")
     [ "${HOSTING_RRAZ_LIST_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets list permission" >&2; exit 1; }
+    # A TAG read (`--query "[?name=='<n>'].tags.\"mw-plan\" | [0]"`) answers from HOSTING_RRAZ_TAGS
+    # (space-separated <name>=<plan> pairs), or from a tag this run wrote; else nothing.
+    case "$*" in *mw-plan*)
+      want="$(printf '%s' "$*" | sed -n "s/.*name=='\([^']*\)'.*/\1/p")"
+      for pair in ${HOSTING_RRAZ_TAGS:-}; do
+        if [ "${pair%%=*}" = "$want" ]; then printf '%s\n' "${pair#*=}"; exit 0; fi
+      done
+      [ -f "$state/tag.$want" ] && { cat "$state/tag.$want"; exit 0; }
+      printf 'None\n'; exit 0 ;;
+    esac
     for pair in ${HOSTING_RRAZ_VALUES:-}; do printf '%s\n' "${pair%%=*}"; done
     for f in "$state"/set.*; do [ -e "$f" ] && printf '%s\n' "${f##*/set.}"; done
     exit 0 ;;
@@ -34,11 +44,13 @@ case "${1:-} ${2:-} ${3:-}" in
     echo "ERROR: (SecretNotFound) A secret with (name/id) ${name} was not found in this key vault." >&2; exit 3 ;;
   "keyvault secret set")
     [ "${HOSTING_RRAZ_SET_FAIL:-0}" = "1" ] && { echo "ERROR: (Forbidden) secrets set permission" >&2; exit 1; }
-    name="" file=""
-    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; *) shift ;; esac; done
+    name="" file="" plan_tag=""
+    while [ $# -gt 0 ]; do case "$1" in --name) name="${2:-}"; shift 2 ;; --file) file="${2:-}"; shift 2 ;; mw-plan=*) plan_tag="${1#mw-plan=}"; shift ;; *) shift ;; esac; done
     [ -n "$file" ] || { echo "az stub: hosting-registry-register must write through --file, never --value" >&2; exit 1; }
     [ -f "$file" ] || { echo "az stub: --file ${file} does not exist" >&2; exit 1; }
-    cp "$file" "$state/set.$name"; exit 0 ;;
+    cp "$file" "$state/set.$name"
+    [ -z "$plan_tag" ] || printf '%s\n' "$plan_tag" > "$state/tag.$name"
+    exit 0 ;;
 esac
 echo "az stub: unexpected invocation: $*" >&2
 exit 1

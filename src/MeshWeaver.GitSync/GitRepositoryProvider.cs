@@ -14,12 +14,13 @@ namespace MeshWeaver.GitSync;
 /// </summary>
 public static class GitRepositoryProvider
 {
-    /// <summary>A <c>github.com</c> repository: the full two-way sync, webhooks and pull requests.</summary>
+    /// <summary>A <c>github.com</c> repository: the full two-way sync, webhooks, pull requests and issues.</summary>
     public const string GitHub = "GitHub";
 
     /// <summary>An Azure Repos repository (<c>dev.azure.com</c> or the legacy
-    /// <c>{org}.visualstudio.com</c>): PUSH-ONLY in this version (policy
-    /// <c>azure-repos-push-only</c>) — see <see cref="AzureReposPushPolicy"/>.</summary>
+    /// <c>{org}.visualstudio.com</c>): the same import, export and two-way sync as GitHub, over the
+    /// Azure DevOps REST API (<see cref="AzureReposRepoClient"/>, policy <c>azure-repos-two-way</c>);
+    /// pull requests and issues are not offered — see <see cref="AzureReposSyncPolicy"/>.</summary>
     public const string AzureRepos = "AzureRepos";
 
     /// <summary>Any other git remote (a GitHub Enterprise host, a local or file remote in tests):

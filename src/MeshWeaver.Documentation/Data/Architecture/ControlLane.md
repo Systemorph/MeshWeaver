@@ -239,6 +239,8 @@ exist on the target, or the event is refused.
 |---|---|---|---|
 | `github` / `pull_request`, `check_suite`, … | `Hosting/Babysitter` | the PR steward's heal/observe half (`Hosting/PrBabysitter`) | the repository and pull-request numbers — a TRIGGER; it re-reads GitHub |
 | `control` / `feedback-issue-status` | `Feedback/Inbox` | `FeedbackIssueStatus` (`Feedback/Feedback`) | the control instance's STATEMENT of one handed-over feedback's GitHub issue and its state |
+| `control` / `instance-request-status` | `Admin/InstanceRequests/FromControl` | `InstanceRequestStatusFromControl` (`MeshWeaver.Hosting.Instance`) | the control instance's STATEMENT of the state of one run a customer instance requested |
+| `control` / `approval-notice` | `Approvals/Workspace` | `ApprovalsFromControl` (`Approvals` package) | the control instance's STATEMENT that an action ABOUT this deployment waits for an approval there (or no longer does) |
 
 🚨 **The second is a deliberate, narrow exception to the trigger-only rule.** A portal holds no GitHub
 credential, so it cannot re-read the issue a feedback it handed over became; the control instance,
@@ -257,6 +259,48 @@ which filed it and follows its state, states it instead (MeshWeaver.Plugins `Hos
   record must claim a lane key, the control instance must hold it, and the portal must list
   `Feedback/Inbox` under `ControlLane:EventTargets`. A portal no deployment record of the control
   instance names gets nothing.
+
+🚨 **The third row is the second exception, and it has the same shape.** A customer instance has no
+account on the control instance, so it cannot read the run it requested
+(MeshWeaver.Plugins `Hosting/Guide` → *A customer instance requests and approves its own actions*).
+The owner decided that the instance shows what it requested (policy `customer-instance-requests`).
+What keeps it narrow:
+
+- **The statement is signed twice** with the requesting deployment's own key, and carries its own
+  discriminator (`"kind": "instance-request-status"`).
+- **It is sent only to the deployment that requested the run.** It names that deployment, so any
+  other instance refuses it, whether at the lane or at the inner signature.
+- **One node, four fields.** The node must be an `InstanceActionRequest` this instance handed over
+  (`Sent`), a request and not an approval, of the same kind. Only `controlState`, `controlDetail`,
+  `controlStateAt` and `controlAction` move, and never backwards.
+- **Only where the lane is enabled and the target declared**
+  (`ControlLane__EventTargets__<n>: Admin/InstanceRequests/FromControl`).
+
+🚨 **The fourth row is the third exception.** An approval about an instance reaches that instance's
+own administrators, and the control instance knows an instance through its deployment record and
+nothing more. Both decisions are recorded with their attribution in MeshWeaver.Plugins
+`Approvals/AcrossInstances` → "The boundary rule". Control cannot see who those administrators are, so
+it states the request and the instance decides who sees it. What keeps it narrow:
+
+- **The statement is signed twice** with the destination deployment's own key, and carries its own
+  discriminator (`"kind": "approval-notice"`).
+- **It names no recipient** and travels only to the deployment the action is about. For an action about
+  the control instance itself, it goes to the deployment declared under
+  `Hosting:ApprovalNotice:OperatorsDeployment`.
+- **One node type, one namespace.** The consumer writes one `Approvals/Elsewhere` copy in
+  `Admin/_ApprovalsElsewhere`, which only the instance's global administrators read. It then raises
+  their `approvals` notices, which point at the copy. Its link must be the https address of exactly the
+  stated `Ops/Actions/<id>` on the stated source host. It moves forward only.
+- **It decides nothing by itself.** A decision travels back only as its own signed message (below).
+
+**The way back: an instance's decision.** For the kinds the instance's record declares
+(`extraPortalConfig.Hosting__InstanceApprovals__Kinds`), one of the instance's global administrators may
+decide such an action. The instance posts an `instance-approval-decision` into the control inbox, signed
+with its own lane key exactly like a report. Control verifies it with that deployment's own key and never
+the fleet secret, inside the 15-minute window. It admits the decision against the record, binds it to the
+round, request identity and plan digest the administrator was shown, and writes it onto the action as
+System. The gate accepts it only as that router's write (MeshWeaver.Plugins `InstanceApprovalDecisions`,
+`ActionsExecutor.InstanceDecidedGate`). Estate, secret, database and content kinds can never be declared.
 
 No other forwarded event may be acted on by its word. A new exception is a design decision of its
 own, recorded here with what bounds it.

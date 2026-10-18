@@ -71,9 +71,26 @@ public record RegistrationKey
     /// <summary>When the key last performed a registration.</summary>
     public DateTimeOffset? LastUsedAt { get; init; }
 
-    /// <summary>Whether the key is currently usable at <paramref name="now"/>.</summary>
+    /// <summary>
+    /// How many registrations this key may perform in all, or null for no limit (every key minted
+    /// before this field existed, and the open-registration key). A key with a limit is a
+    /// <b>coupon</b>: minted for ONE client deployment's plan (<see cref="Tier"/>), usually
+    /// <c>1</c> and expiring, so it registers that deployment on its plan from the beginning and
+    /// is spent afterwards (Doc/Architecture/PluginRegistry → "Coupons").
+    ///
+    /// <para>Checked against <see cref="UsageCount"/>, which a successful registration stamps — so
+    /// a coupon with <c>MaxUsages = 1</c> registers one instance and then fails validation exactly
+    /// as an expired or revoked key does (401, the instance it created untouched).</para>
+    /// </summary>
+    public int? MaxUsages { get; init; }
+
+    /// <summary>Whether a usage limit is set and has been reached.</summary>
+    public bool IsUsedUp => MaxUsages is { } max && UsageCount >= max;
+
+    /// <summary>Whether the key is currently usable at <paramref name="now"/>: not revoked, not
+    /// expired, and — for a coupon — not used up.</summary>
     public bool IsUsable(DateTimeOffset now) =>
-        !IsRevoked && (ExpiresAt is null || now < ExpiresAt);
+        !IsRevoked && (ExpiresAt is null || now < ExpiresAt) && !IsUsedUp;
 }
 
 /// <summary>

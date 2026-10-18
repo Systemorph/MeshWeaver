@@ -94,7 +94,7 @@
     "tasks": [
       "purge-old-images"
     ],
-    "what": "purge-old-images.yaml step 1 records `--ago 30d` with no `--keep`; the live (disabled) task still carries `--ago 7d --keep 10`.",
+    "what": "purge-old-images.yaml records `--ago 30d` with no `--keep`, and both steps carry `--dry-run` (see `dryRun`); the live (disabled) task still carries `--ago 7d --keep 10` and deletes for real when enabled.",
     "why": "#3842's decided rule — at least 30 days by age, no build-count quota — was landed in the bundle store (#3843) and the assembly cache (#3846) and explicitly NOT in the registry. The record is what `acr-retention-tasks.sh apply` pushes, so stating the decided window here is what makes re-enabling the task install a window somebody chose. Nothing was applied: this is a record change, not a registry change.",
     "clearedBy": "the next `acr-retention-tasks.sh apply` — after which `verify` finds no drift on these tasks and reds on THIS declaration being stale, which is how it expires rather than rotting.",
     "issue": "MeshWeaver#3438"
@@ -106,5 +106,15 @@
     "reason": "Roland ordered the purge paused while artifact protection is incomplete: the fleet's tag references, the platform manifests under every locked index, and one production instance's running index were all unprotected (MeshWeaver#3438).",
     "issue": "Memex#219",
     "reEnableWhen": "lock-pinned-digests is green on a fleet whose tag references and index closures are locked — MeshWeaver#4081. Re-enabling before that restores the exposure the pause exists to hold off."
+  },
+  "dryRun": {
+    "inForce": true,
+    "tasks": [
+      "purge-old-images"
+    ],
+    "what": "Every `acr purge` step of the listed tasks carries `--dry-run`: the task, once enabled, logs what the decided 30-day window would delete and deletes nothing.",
+    "why": "The window is decided (#3842); what it would select on the live registry is not yet observed. A dry run on the real registry is the only reading of that which does not cost an artifact.",
+    "liftWhen": "At least one nightly run of the enabled task has been read back, and nothing its dry-run output lists is a tag or manifest the fleet references. Then ONE reviewed diff drops `--dry-run` from the steps, deletes this block, and re-declares `recordAheadOfRegistry` until the next approved RegistryRetention apply.",
+    "issue": "MeshWeaver#3438"
   }
 }

@@ -2428,6 +2428,14 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
+    # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
+    # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
+    # were baked from, PER PACKAGE — never the upstream's HEAD, never the publication commit for a
+    # carried package — and every unknown is RED. The self-test runs it against a local repository.
+    - name: "Upstream source is staged at its sealed per-package commits (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: bash .github/scripts/stage-sealed-upstream.sh --self-test
+
     # 🚨 The other half of the same property since MeshWeaver#4113: WHERE a gate shard's platform
     # comes from. When the runner node mounts the CI platform volume the shard runs the tester as a
     # process off that share, and a set that is absent, half-written or paired with another portal
@@ -2478,6 +2486,14 @@ jobs:
     - name: "The host-crash recorder writes a dead host into its trx, directory and all (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/record-host-crash.py --self-test
+
+    # The namer the module lane's `Module bundle` / `Module tests` legs call on a red suite: every
+    # failing test's name + first assertion line, in the log, the summary and at most the step's
+    # ten `::error` annotations, every red suite represented (MeshWeaver.Plugins#3828). Offline
+    # cases: a red suite, no .trx, an unreadable one, a dead host's row, a budget already spent.
+    - name: "A red module suite names its failing tests within the step's ten annotations (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/name-failing-tests.py --self-test
 
     # The writer of an image's closure as mesh data (#4066, policy `image-closure-as-mesh-data`):
     # main-cd runs it over the publish directories the reference-set assertion just accepted. Both

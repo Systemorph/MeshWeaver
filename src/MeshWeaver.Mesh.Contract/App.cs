@@ -61,6 +61,28 @@ public record App
     public bool CustomGroup { get; init; }
 
     /// <summary>
+    /// Where this tile's GROUP sorts among the launcher's groups: lower first, <c>0</c> (the default)
+    /// = no preference, so the group sits by the position of its first tile as before. A group sorts
+    /// by the greatest value among its tiles. DATA, not code: a package declares
+    /// <c>launcherGroupOrder</c> on its root, and the platform's own Settings and Administration
+    /// tiles carry the directory's <c>LastGroupOrder</c> so the
+    /// <c>Settings</c> group lands at the bottom (Architecture/AppsHome). Wire name <c>groupOrder</c>. Not a per-viewer value: the directory
+    /// derives it from the app root, and a viewer's own regrouping (<see cref="CustomGroup"/>) drops it.
+    /// </summary>
+    [Browsable(false)]
+    public int GroupOrder { get; init; }
+
+    /// <summary>
+    /// The localization catalog key of the DECLARED group's display name (<c>common.settings</c> for
+    /// the platform's Settings group), so the launcher heading reads in the viewer's language while
+    /// <see cref="Group"/> stays the stable identity the arrangement is keyed by. Null = the group name
+    /// is shown as written, which is right for a name a viewer typed. Dropped (like
+    /// <see cref="GroupOrder"/>) once the viewer regroups the tile. Wire name <c>groupLabelKey</c>.
+    /// </summary>
+    [Browsable(false)]
+    public string? GroupLabelKey { get; init; }
+
+    /// <summary>
     /// Optional navigation override — where the icon opens. Empty resolves to the
     /// <see cref="Plugin"/> node itself.
     /// </summary>
