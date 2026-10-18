@@ -74,6 +74,16 @@ public sealed class GitHubAppTokenService
     /// <summary>True when the App identity is configured (client id + private key).</summary>
     public bool IsConfigured => options.IsConfigured;
 
+    /// <summary>The instance's own installation id as configured (<c>GitHub:App:InstallationId</c>),
+    /// or null when it is discovered from <see cref="ConfiguredInstallationOwner"/> at mint. A name for
+    /// a reader (<see cref="GitHubReadIdentity"/>) — never part of a credential.</summary>
+    public long? ConfiguredInstallationId => options.InstallationId;
+
+    /// <summary>The account of the instance's own installation as configured
+    /// (<c>GitHub:App:InstallationOwner</c>), or null.</summary>
+    public string? ConfiguredInstallationOwner =>
+        string.IsNullOrWhiteSpace(options.InstallationOwner) ? null : options.InstallationOwner.Trim();
+
     private IIoPool Http => ioPools.Get(IoPoolNames.Http);
 
     /// <summary>
