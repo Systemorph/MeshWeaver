@@ -59,15 +59,30 @@ public class PedestrianWalkHeadOfLineTest
         private int outstanding;
         private int peak;
         private int completed;
+        private int walkCompleted;
+        private int otherRequests;
         private readonly ISubject<int> completedTicks = Subject.Synchronize(new BehaviorSubject<int>(0));
 
         public int Requests => Volatile.Read(ref requests);
         public int PeakOutstanding => Volatile.Read(ref peak);
         public IObservable<int> Completed => completedTicks;
 
-        private IObservable<T> Pooled<T>(Func<T> answer)
+        /// <summary>Terminated requests for anything OUTSIDE <c>Other</c> — the Admin walk's.</summary>
+        public int WalkCompleted => Volatile.Read(ref walkCompleted);
+
+        /// <summary>Requests issued for <c>Other</c> (its listing and its reads) — the second query's.</summary>
+        public int OtherRequests => Volatile.Read(ref otherRequests);
+
+        private static bool IsOther(string? path)
+            => path is not null && (path.Equals("Other", StringComparison.OrdinalIgnoreCase)
+                || path.StartsWith("Other/", StringComparison.OrdinalIgnoreCase));
+
+        private IObservable<T> Pooled<T>(string? path, Func<T> answer)
             => Observable.Defer(() =>
             {
+                var other = IsOther(path);
+                if (other)
+                    Interlocked.Increment(ref otherRequests);
                 Interlocked.Increment(ref requests);
                 var now = Interlocked.Increment(ref outstanding);
                 int seen;
@@ -81,13 +96,15 @@ public class PedestrianWalkHeadOfLineTest
                     .Finally(() =>
                     {
                         Interlocked.Decrement(ref outstanding);
+                        if (!other)
+                            Interlocked.Increment(ref walkCompleted);
                         completedTicks.OnNext(Interlocked.Increment(ref completed));
                     });
             });
 
         public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
             ListChildPaths(string? parentPath)
-            => Pooled<(IEnumerable<string>, IEnumerable<string>)>(() => (
+            => Pooled<(IEnumerable<string>, IEnumerable<string>)>(parentPath, () => (
                 nodes.Values
                     .Where(n => string.Equals(n.Namespace, parentPath ?? "", StringComparison.OrdinalIgnoreCase))
                     .Select(n => n.Path)
@@ -95,7 +112,7 @@ public class PedestrianWalkHeadOfLineTest
                 Enumerable.Empty<string>()));
 
         public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => Pooled(() => nodes.TryGetValue(path, out var node) ? node : null);
+            => Pooled(path, () => nodes.TryGetValue(path, out var node) ? node : null);
 
         public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
             => Observable.Throw<MeshNode?>(new NotSupportedException("read-only rig"));
@@ -219,13 +236,26 @@ public class PedestrianWalkHeadOfLineTest
 
     /// <summary>
     /// The consequence that matters: while the Admin walk runs, ANOTHER scoped query on the same pool
-    /// gets its Initial promptly, because it queues behind at most the walk's bound, not behind the
-    /// walk's whole remainder. Negative control (unfixed provider): ~1,000 reads are queued ahead of it —
-    /// measured 14.4 s.
+    /// queues behind at most the walk's bound — never behind the walk's whole remainder.
+    ///
+    /// <para>🚨 <b>Measured in queue positions, not in wall-clock time.</b> The witness is how many of
+    /// the WALK's storage requests terminated between the second query's subscribe and its Initial:
+    /// the requests it actually waited through. It used to be a stopwatch held against 2 s, and that
+    /// measured the runner, not the walk: every leaf here is a 20 ms timer plus thread-pool hops, so on
+    /// a loaded CI host the same fair walk reads seconds (core main run 39147246595, shard 2: 5.1 s,
+    /// red). Stretching each leaf to 400 ms shows it deterministically — 12 walk requests in the
+    /// window, exactly as at 20 ms, and 2.4 s on the clock. The count does not move with the clock.</para>
+    ///
+    /// <para>The bound: each of the second query's requests queues behind at most the walk's
+    /// outstanding bound (8 — see <see cref="TheWalk_NeverHoldsMoreThanItsBoundOnTheSharedPool"/>),
+    /// and the pool is FIFO, so the walk can finish at most 8 requests per request of the second
+    /// query, plus one bound's worth while its Initial is assembled. Measured: 12, over 4 requests of
+    /// the second query. Negative control (unbounded walk): 1,984 walk requests in the window, 14.4 s.</para>
     /// </summary>
     [Fact(Timeout = 60_000)]
     public async Task AnotherQuery_GetsItsInitialPromptly_WhileTheWalkRuns()
     {
+        const int WalkBound = 8;
         var ct = TestContext.Current.CancellationToken;
         using var pool = SmallSlowPool();
         var store = new PooledSlowStore(pool, Seed());
@@ -237,6 +267,7 @@ public class PedestrianWalkHeadOfLineTest
             await store.Completed.Where(c => c >= 60).FirstAsync()
                 .Timeout(TestTimeouts.Convergence).Await(ct);
 
+            var walkBefore = store.WalkCompleted;
             var clock = Stopwatch.StartNew();
             var other = await core
                 .Query<MeshNode>(AsSystem("namespace:Other scope:children"), Options)
@@ -244,12 +275,16 @@ public class PedestrianWalkHeadOfLineTest
                 .Timeout(TestTimeouts.Convergence)
                 .Await(ct);
             clock.Stop();
+            var waitedThrough = store.WalkCompleted - walkBefore;
+            var otherRequests = store.OtherRequests;
 
             other.Items.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal)
                 .Should().Equal(["Other/O0", "Other/O1", "Other/O2"], "the second query's answer is complete");
-            clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2),
-                "a scoped query sharing the pool must queue behind at most the walk's bound, never behind "
-                + "the whole remaining walk (production: path:Hosting/PlatformBuilds missing the 15 s bound)");
+            otherRequests.Should().BeGreaterThan(0, "the second query read the store — else the count below proves nothing");
+            waitedThrough.Should().BeLessThanOrEqualTo((otherRequests + 1) * WalkBound,
+                $"a scoped query sharing the pool must queue behind at most the walk's bound, never behind "
+                + $"the whole remaining walk (production: path:Hosting/PlatformBuilds missing the 15 s bound); "
+                + $"{otherRequests} request(s) of the second query, {clock.ElapsedMilliseconds} ms on the clock");
         }
     }
 }

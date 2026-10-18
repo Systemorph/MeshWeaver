@@ -569,9 +569,18 @@ that is NOT an `IScopedQueryStorageAdapter`, whose `ListChildPaths` and `Read` r
 |---|---|---|
 | Admin/Thread, `DeferToNativeProvider` on: storage requests | 0 | the full walk; no Initial within 5 s |
 | Admin/Thread, defer off: peak outstanding on the pool | ≤ 8 | 2,001 (about 2×N) |
-| a second scoped query's Initial while the walk runs | under 2 s | 14.4 s |
+| walk requests a second scoped query waits through before its Initial | 12 (bound: 8 per request of the second query, plus 8) | 1,980 (14.4 s) |
 
 The 15 s budget is unchanged (policy `query-fanin-stall-terminal`).
+
+**The third row is a count of queue positions, not a stopwatch.** It used to read "the second query's
+Initial arrives in under 2 s", and that measured the runner rather than the walk: every leaf of the
+rig is a 20 ms timer plus thread-pool hops, so on a loaded CI host the same fair walk read 5.1 s and
+failed (core `main`, run 39147246595, shard 2, 2026-10-18). Stretching each leaf to 400 ms shows it
+deterministically: the second query still waits through exactly 12 of the walk's requests, and the
+clock reads 2.4 s. The count is the property the bound promises — with a FIFO pool, each request of
+the second query is queued behind at most the walk's outstanding bound — and it does not move with
+the host's speed. The negative control still separates by two orders of magnitude.
 
 **Not established.**
 
