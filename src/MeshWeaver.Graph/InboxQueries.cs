@@ -382,7 +382,7 @@ public static class InboxQueries
     internal static bool IsLedgerQuery(string resolvedQuery, string viewer)
     {
         var normalized = System.Text.RegularExpressions.Regex.Replace(
-            resolvedQuery, @"content\.approvalDate:>=\S+", $"content.approvalDate:>={DecidedSinceToken}");
+            resolvedQuery, @"content\.approvalDate:>=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z(?=\s|$)", $"content.approvalDate:>={DecidedSinceToken}");
         return BuiltIn.Where(leg => IsLedgerTemplate(leg.Query))
             .Any(leg => string.Equals(normalized, leg.Query.Replace(ViewerToken, viewer, StringComparison.Ordinal), StringComparison.Ordinal));
     }

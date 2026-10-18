@@ -220,6 +220,9 @@ public class InboxApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase
             InboxQueries.IsLedgerQuery(leg.Query, "alice").Should().BeTrue();
             InboxQueries.IsLedgerQuery(leg.Query, "bob").Should().BeFalse("keyed to alice");
             InboxQueries.IsLedgerQuery(leg.Query + " OR content.requester:bob", "alice").Should().BeFalse();
+            // Nothing may ride inside the cutoff: only the emitted timestamp format replaces the token.
+            InboxQueries.IsLedgerQuery(leg.Query.Replace("0000000Z ", "0000000Z\"OR(content.requester:\"bob\") "), "alice").Should().BeFalse();
+            InboxQueries.IsLedgerQuery(leg.Query.Replace("2026-10-04T12:00:00.0000000Z", "2026-10-04T12:00:00.0000000Z\"OR(content.requester:\"bob\")"), "alice").Should().BeFalse();
         }
         // Just before the cutoff is out, the cutoff itself and anything after is in (stored instants compare as text).
         var cutoff = "2026-10-04T12:00:00.0000000Z";
