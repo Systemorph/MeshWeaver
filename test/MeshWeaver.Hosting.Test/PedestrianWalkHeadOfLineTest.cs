@@ -61,6 +61,16 @@ public class PedestrianWalkHeadOfLineTest
         private int completed;
         private int walkCompleted;
         private int otherRequests;
+        // Gate-order witness (see OnLeafAtGate): walk leaves GRANTED so far, the second query's
+        // leaves granted so far, and the most walk grants any one of them waited through at the gate.
+        private int walkGranted;
+        private int otherGranted;
+        private int maxWalkGrantsAheadOfOther = -1;
+        // Instance AsyncLocals, never static: set on the subscriber's thread before the leaf is
+        // handed to the pool, they flow with the ExecutionContext into the pool's prologue and on
+        // into the leaf, so the prologue hook knows WHICH leaf is arriving at the gate.
+        private readonly AsyncLocal<bool> leafIsOther = new();
+        private readonly AsyncLocal<int?> walkGrantedAtArrival = new();
         private readonly ISubject<int> completedTicks = Subject.Synchronize(new BehaviorSubject<int>(0));
 
         public int Requests => Volatile.Read(ref requests);
@@ -73,6 +83,22 @@ public class PedestrianWalkHeadOfLineTest
         /// <summary>Requests issued for <c>Other</c> (its listing and its reads) — the second query's.</summary>
         public int OtherRequests => Volatile.Read(ref otherRequests);
 
+        /// <summary>The second query's leaves that were granted a slot (and measured).</summary>
+        public int OtherGranted => Volatile.Read(ref otherGranted);
+
+        /// <summary>The most walk leaves granted between one of the second query's leaves
+        /// arriving at the pool's gate and that leaf being granted: its queue position.</summary>
+        public int MaxWalkGrantsAheadOfOther => Volatile.Read(ref maxWalkGrantsAheadOfOther);
+
+        /// <summary>Wired to the pool's prologue hook, which runs on the leaf's own flow immediately
+        /// before it waits at the gate: the arrival of one of the second query's leaves is stamped
+        /// with the walk's grant count at that instant.</summary>
+        public void OnLeafAtGate()
+        {
+            if (leafIsOther.Value)
+                walkGrantedAtArrival.Value = Volatile.Read(ref walkGranted);
+        }
+
         private static bool IsOther(string? path)
             => path is not null && (path.Equals("Other", StringComparison.OrdinalIgnoreCase)
                 || path.StartsWith("Other/", StringComparison.OrdinalIgnoreCase));
@@ -84,12 +110,24 @@ public class PedestrianWalkHeadOfLineTest
                 if (other)
                     Interlocked.Increment(ref otherRequests);
                 Interlocked.Increment(ref requests);
+                leafIsOther.Value = other;
                 var now = Interlocked.Increment(ref outstanding);
                 int seen;
                 while (now > (seen = Volatile.Read(ref peak))
                        && Interlocked.CompareExchange(ref peak, now, seen) != seen) { }
                 return pool.Invoke(async ct =>
                     {
+                        // Granted: the gate let this leaf run.
+                        if (!other)
+                            Interlocked.Increment(ref walkGranted);
+                        else if (walkGrantedAtArrival.Value is int arrival)
+                        {
+                            var ahead = Volatile.Read(ref walkGranted) - arrival;
+                            int seenAhead;
+                            while (ahead > (seenAhead = Volatile.Read(ref maxWalkGrantsAheadOfOther))
+                                   && Interlocked.CompareExchange(ref maxWalkGrantsAheadOfOther, ahead, seenAhead) != seenAhead) { }
+                            Interlocked.Increment(ref otherGranted);
+                        }
                         await Task.Delay(latency ?? Latency, ct).ConfigureAwait(false);
                         return answer();
                     })
@@ -238,19 +276,22 @@ public class PedestrianWalkHeadOfLineTest
     /// The consequence that matters: while the Admin walk runs, ANOTHER scoped query on the same pool
     /// queues behind at most the walk's bound — never behind the walk's whole remainder.
     ///
-    /// <para>🚨 <b>Measured in queue positions, not in wall-clock time.</b> The witness is how many of
-    /// the WALK's storage requests terminated between the second query's subscribe and its Initial:
-    /// the requests it actually waited through. It used to be a stopwatch held against 2 s, and that
-    /// measured the runner, not the walk: every leaf here is a 20 ms timer plus thread-pool hops, so on
-    /// a loaded CI host the same fair walk reads seconds (core main run 39147246595, shard 2: 5.1 s,
-    /// red). Stretching each leaf to 400 ms shows it deterministically — 12 walk requests in the
-    /// window, exactly as at 20 ms, and 2.4 s on the clock. The count does not move with the clock.</para>
+    /// <para>🚨 <b>Measured as queue positions AT THE GATE, not in wall-clock time.</b> For each of the
+    /// second query's storage requests the store counts the walk requests the pool GRANTED between that
+    /// request arriving at the gate (the pool's prologue hook, on the request's own flow) and that
+    /// request being granted — its position in the FIFO queue, and nothing else. No thread-pool hop
+    /// before the request reaches the pool, between the second query's stages, or after its Initial
+    /// is delivered is inside that window, so the reading does not move with the host's load.</para>
     ///
-    /// <para>The bound: each of the second query's requests queues behind at most the walk's
-    /// outstanding bound (8 — see <see cref="TheWalk_NeverHoldsMoreThanItsBoundOnTheSharedPool"/>),
-    /// and the pool is FIFO, so the walk can finish at most 8 requests per request of the second
-    /// query, plus one bound's worth while its Initial is assembled. Measured: 12, over 4 requests of
-    /// the second query. Negative control (unbounded walk): 1,984 walk requests in the window, 14.4 s.</para>
+    /// <para>It used to be a stopwatch held against 2 s, which measured the runner: every leaf is a
+    /// 20 ms timer plus thread-pool hops, and on a loaded CI host the same fair walk read 5.1 s (core
+    /// main run 39147246595, shard 2). Stretching each leaf to 400 ms reads 2.4 s on the clock for a
+    /// walk whose queue positions are unchanged.</para>
+    ///
+    /// <para>The bound: the walk keeps at most 8 requests outstanding (queued or running — see
+    /// <see cref="TheWalk_NeverHoldsMoreThanItsBoundOnTheSharedPool"/>) and the gate is FIFO, so no
+    /// request of the second query is granted after more than 8 walk grants. Negative control
+    /// (unbounded walk): about a thousand walk requests are already queued when it arrives.</para>
     /// </summary>
     [Fact(Timeout = 60_000)]
     public async Task AnotherQuery_GetsItsInitialPromptly_WhileTheWalkRuns()
@@ -259,6 +300,7 @@ public class PedestrianWalkHeadOfLineTest
         var ct = TestContext.Current.CancellationToken;
         using var pool = SmallSlowPool();
         var store = new PooledSlowStore(pool, Seed());
+        pool.OnLeafPrologueStarting = store.OnLeafAtGate;
         var core = Core(store, deferToNative: false);
 
         using (core.Query<MeshNode>(AsSystem(AdminThreads), Options).Subscribe(_ => { }, _ => { }))
@@ -267,7 +309,6 @@ public class PedestrianWalkHeadOfLineTest
             await store.Completed.Where(c => c >= 60).FirstAsync()
                 .Timeout(TestTimeouts.Convergence).Await(ct);
 
-            var walkBefore = store.WalkCompleted;
             var clock = Stopwatch.StartNew();
             var other = await core
                 .Query<MeshNode>(AsSystem("namespace:Other scope:children"), Options)
@@ -275,16 +316,16 @@ public class PedestrianWalkHeadOfLineTest
                 .Timeout(TestTimeouts.Convergence)
                 .Await(ct);
             clock.Stop();
-            var waitedThrough = store.WalkCompleted - walkBefore;
-            var otherRequests = store.OtherRequests;
 
             other.Items.Select(n => n.Path).OrderBy(p => p, StringComparer.Ordinal)
                 .Should().Equal(["Other/O0", "Other/O1", "Other/O2"], "the second query's answer is complete");
-            otherRequests.Should().BeGreaterThan(0, "the second query read the store — else the count below proves nothing");
-            waitedThrough.Should().BeLessThanOrEqualTo((otherRequests + 1) * WalkBound,
+            store.OtherGranted.Should().BeGreaterThan(0,
+                "the second query's requests reached the gate and were measured — else the position below proves nothing");
+            store.OtherGranted.Should().Be(store.OtherRequests, "every request of the second query was measured at the gate");
+            store.MaxWalkGrantsAheadOfOther.Should().BeLessThanOrEqualTo(WalkBound,
                 $"a scoped query sharing the pool must queue behind at most the walk's bound, never behind "
                 + $"the whole remaining walk (production: path:Hosting/PlatformBuilds missing the 15 s bound); "
-                + $"{otherRequests} request(s) of the second query, {clock.ElapsedMilliseconds} ms on the clock");
+                + $"{store.OtherRequests} request(s) of the second query, {clock.ElapsedMilliseconds} ms on the clock");
         }
     }
 }
