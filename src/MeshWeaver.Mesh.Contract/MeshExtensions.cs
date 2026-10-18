@@ -10106,18 +10106,16 @@ public static class MeshExtensions
     /// activation). The wording is the fallback for a failure that carries no typed verdict.
     /// </summary>
     private static NodeCopyRejectionReason CopyReasonForFailure(Exception ex, string message) =>
-        ex.Data[NodeCreationFailure.RejectionReasonKey] switch
-        {
-            NodeCreationRejectionReason.ValidationFailed
-                or NodeCreationRejectionReason.InvalidNodeType
-                or NodeCreationRejectionReason.InvalidPath => NodeCopyRejectionReason.ValidationFailed,
-            NodeCreationRejectionReason.NodeAlreadyExists => NodeCopyRejectionReason.TargetAlreadyExists,
-            _ => message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                ? NodeCopyRejectionReason.TargetAlreadyExists
-                : message.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                    ? NodeCopyRejectionReason.SourceNotFound
-                    : NodeCopyRejectionReason.Unknown,
-        };
+        IsNodeAlreadyExists(ex) ? NodeCopyRejectionReason.TargetAlreadyExists
+        : ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.ValidationFailed
+            or NodeCreationRejectionReason.InvalidNodeType
+            or NodeCreationRejectionReason.InvalidPath
+            ? NodeCopyRejectionReason.ValidationFailed
+        : message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+            ? NodeCopyRejectionReason.TargetAlreadyExists
+        : message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            ? NodeCopyRejectionReason.SourceNotFound
+            : NodeCopyRejectionReason.Unknown;
 
     /// <summary>
     /// The move reason a failed copy leg maps to. <see cref="NodeCopyRejectionReason.Unknown"/> is an
