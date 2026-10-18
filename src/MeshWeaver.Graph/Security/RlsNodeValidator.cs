@@ -207,6 +207,9 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
                 ? Observable.Return(ownerResult)
                 : CheckPermission(context, userId, requiredPermission, pathToCheck))
             .TakeDecisionOutsideGate()
+            // A DENIED point read is re-decided through the type's declared point read INSIDE the
+            // deadline below, so a stalled admission is bounded and classified like the check itself.
+            .SelectMany(result => ReconsiderPointRead(context, userId, result))
             // 🚨 THE TERMINAL. Placed here rather than inside CheckPermission so it covers EVERY
             // branch: CheckCustomRule's INodeTypeAccessRule implementations reach the same
             // permission fold, and the denial path's ownerless-partition probe is a mesh read too.
@@ -240,8 +243,7 @@ public class RlsNodeValidator : INodeValidator, IOwnerEnforcedNodeValidator, ISy
             .Select(result => (NodeValidationResult?)result)
             .DefaultIfEmpty()
             .Select(result => result
-                ?? UnestablishedCheck(context, userId, pathToCheck, cause: null))
-            .SelectMany(result => ReconsiderPointRead(context, userId, result));
+                ?? UnestablishedCheck(context, userId, pathToCheck, cause: null));
     }
 
     /// <summary>

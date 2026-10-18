@@ -230,10 +230,17 @@ public static class NodeTypeAccessRuleGate
         ArgumentNullException.ThrowIfNull(outcome);
         if (outcome.IsGranted || outcome.IsUndetermined)
             return Observable.Return(outcome);
+        // Bounded by the same budget the RLS validator holds a permission check to: a stalled
+        // admission answers Undetermined — fail closed, and never a denial nobody established.
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
         return DeclaredPointRead.Admits(hub, path, caller)
             .TakeDecisionOutsideGate()
             .DefaultIfEmpty(false)
-            .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome);
+            .Select(admitted => admitted ? PermissionCheckOutcome.FromVerdict(true) : outcome)
+            .Timeout(budget)
+            .Catch((TimeoutException _) => Observable.Return(PermissionCheckOutcome.Undetermined(
+                $"the declared point read of '{path}' reached no verdict within {budget.TotalSeconds:0.#}s")));
     }
 
     /// <summary>

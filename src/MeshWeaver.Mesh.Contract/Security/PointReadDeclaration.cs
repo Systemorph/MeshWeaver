@@ -21,7 +21,9 @@ namespace MeshWeaver.Mesh.Security;
 /// it — that remains a broad grant, which only a governed activity may write.</para>
 ///
 /// <para>Declared on the type's <c>NodeTypeDefinition</c> as <c>pointRead</c>; the property names
-/// below are the node content's JSON property names.</para>
+/// below are the node content's JSON property names. It never admits an API-token caller: the
+/// permission fold clamps a token by its scope's live <c>api</c> policy, which a browser surface
+/// must not reopen.</para>
 /// </summary>
 public sealed record PointReadDeclaration
 {
@@ -32,6 +34,15 @@ public sealed record PointReadDeclaration
     /// transitively), or a user id. A node whose property is absent or blank admits nobody.
     /// </summary>
     public string SubjectProperty { get; init; } = "";
+
+    /// <summary>
+    /// The namespace whose DIRECT children the point read is honoured for (e.g. <c>l</c> for public
+    /// links). Required — a declaration without one admits nobody. It must be a namespace only the
+    /// platform writes, so that a node there carrying the System stamp was issued there by the
+    /// platform: a person who could create in it could otherwise carry a System-authored source's
+    /// stamps onto a node of their own (see <c>CreateNodeRequest.AuthorshipFrom</c>).
+    /// </summary>
+    public string? Namespace { get; init; }
 
     /// <summary>
     /// The content property that, when it holds any non-null value, revokes the point read

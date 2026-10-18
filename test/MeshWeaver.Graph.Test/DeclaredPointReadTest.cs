@@ -38,9 +38,12 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
     private static readonly AccessContext Carol = new() { ObjectId = "carol", Name = "carol" };
     private static readonly AccessContext Dave = new() { ObjectId = "dave", Name = "dave" };
 
+    private const string FaultyType = "Kiosk/Faulty";
+
     private static readonly PointReadDeclaration Declaration = new()
     {
         SubjectProperty = "subject",
+        Namespace = Partition,
         RevokedProperty = "revokedAt",
         ExpiresProperty = "expiresAt",
     };
@@ -50,14 +53,27 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         .AddMeshNodes(
             TypeNode(DeclaredType, Declaration),
             TypeNode(UndeclaredType, declaration: null),
+            TypeNode(FaultyType, Declaration),
             // carol is a member of the group an audience may name; dave is not.
             new MeshNode("carol_Membership", Group)
             {
                 NodeType = "GroupMembership",
                 Content = new GroupMembership { Member = Carol.ObjectId, Groups = [new MembershipEntry { Group = Group }] },
             },
-            // alice may write in the partition — but a node SHE writes is not platform-issued.
-            AssignmentNodeFactory.UserRole("alice", "Editor", Partition));
+            // alice may write — and move — in the partition (Admin: the move entitlement a carried
+            // authorship requires), but a node SHE writes is not platform-issued.
+            AssignmentNodeFactory.UserRole("alice", "Admin", Partition))
+        // A type whose OWN Read rule faults: its check is UNDETERMINED, which no declaration may
+        // re-decide as if it were a denial.
+        .ConfigureServices(services => services.AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType)));
+
+    private sealed class FaultingReadRule(string nodeType) : INodeTypeAccessRule
+    {
+        public string NodeType => nodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
+            => Observable.Throw<bool>(new InvalidOperationException("the type's read rule cannot answer"));
+    }
 
     /// <summary>
     /// 🚨 The declaration admits a POINT read of the node and nothing a LISTING sees: the RLS
@@ -160,6 +176,122 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.False((await Rls(Visitor, group, true, ct)).IsValid, "nor is a logged-out visitor");
     }
 
+    /// <summary>
+    /// 🚨 Review of #6935: the declaration is honoured only for a DIRECT child of the namespace the
+    /// type declares — never a node elsewhere, never a descendant — and never for an API-token
+    /// caller (the fold's live <c>api</c> clamp is not reopened) or a VIRTUAL visitor treated as
+    /// signed in.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ThePointRead_StaysInsideItsNamespace_AndKeepsTheCallersFlags()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var inside = await Issue("inside", WellKnownUsers.Anonymous, ct);
+        Assert.True((await Rls(Visitor, inside, true, ct)).IsValid, "POSITIVE CONTROL: a direct child of the declared namespace");
+
+        await SeedTopLevel(new MeshNode("u") { NodeType = "Markdown", Name = "u" });
+        var elsewhere = await Issue("elsewhere", WellKnownUsers.Anonymous, ct, ns: "u");
+        Assert.False((await Rls(Visitor, elsewhere, true, ct)).IsValid, "a node outside the declared namespace admits nobody");
+        await AsSystem(new MeshNode("sub", Partition) { NodeType = "Markdown", Name = "sub" }, ct);
+        var deeper = await Issue("deeper", WellKnownUsers.Anonymous, ct, ns: $"{Partition}/sub");
+        Assert.False((await Rls(Visitor, deeper, true, ct)).IsValid, "a DESCENDANT of the declared namespace admits nobody");
+
+        var token = new AccessContext { ObjectId = Dave.ObjectId, Name = Dave.Name, IsApiToken = true };
+        Assert.True((await Rls(Dave, inside, true, ct)).IsValid, "POSITIVE CONTROL: dave's browser is in an Anonymous audience");
+        Assert.False((await Rls(token, inside, true, ct)).IsValid, "dave's API TOKEN is not admitted by a declaration");
+
+        var guest = new AccessContext { ObjectId = "guest-7f3a", Name = "Guest", IsVirtual = true };
+        var signedIn = await Issue("signedin-only", WellKnownUsers.Public, ct);
+        Assert.False((await Rls(guest, signedIn, true, ct)).IsValid, "a VIRTUAL visitor is not signed in, whatever id it carries");
+        Assert.False(await DeclaredPointRead.ObservePointRead(Mesh, signedIn, guest).Take(1).Should().Emit(cancellationToken: ct),
+            "…nor through the page's live verdict");
+        Assert.True(await DeclaredPointRead.ObservePointRead(Mesh, signedIn, Dave).Take(1).Should().Emit(cancellationToken: ct),
+            "POSITIVE CONTROL: a signed-in user is admitted through the page's live verdict");
+    }
+
+    /// <summary>
+    /// 🚨 Review of #6935: the admission is LIVE. An OPEN node stream admitted by the declaration is
+    /// cut when the node is revoked (later content is never delivered), the page's live verdict on
+    /// its ORIGINAL subscription turns false on revocation and at expiry, and a point read right after
+    /// the owner acknowledged the revocation — with no wait for persistence — is refused.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task TheAdmission_IsLive_AndEndsOnAnOpenSubscription()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("live", WellKnownUsers.Anonymous, ct);
+
+        var stream = Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAs(Visitor, () => Mesh.GetMeshNodeStream(link))
+            .Materialize()
+            .Replay(1);
+        using var openStream = stream.Connect();
+        await stream.Should().Within(TimeSpan.FromSeconds(20))
+            .Match(n => n.HasValue && n.Value?.Path == link, "the open stream serves the node before the revocation", cancellationToken: ct);
+        var verdict = DeclaredPointRead.ObservePointRead(Mesh, link, Visitor).Replay(1);
+        using var openVerdict = verdict.Connect();
+        await verdict.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the live verdict admits before the revocation", cancellationToken: ct);
+
+        await AsSystemUpdate(link, content => content["revokedAt"] = DateTimeOffset.UtcNow.ToString("O"), ct);
+        // No wait for persistence: the decision reads the OWNER's current node.
+        Assert.False((await Rls(Visitor, link, true, ct)).IsValid, "a point read right after the acknowledged revocation is refused");
+
+        var cut = await stream.Should().Within(TimeSpan.FromSeconds(20))
+            .Match(n => n.Kind != System.Reactive.NotificationKind.OnNext || n.Value?.Path != link || IsRevoked(n.Value),
+                "the open stream is cut once the admission ends", cancellationToken: ct);
+        if (cut.Kind == System.Reactive.NotificationKind.OnNext)
+            cut = await stream.Should().Within(TimeSpan.FromSeconds(20))
+                .Match(n => n.Kind == System.Reactive.NotificationKind.OnError, "…and faults with the read gate's refusal", cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, cut.Kind);
+        Assert.IsType<UnauthorizedAccessException>(cut.Exception);
+        await verdict.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the ORIGINAL live verdict turns false on revocation", cancellationToken: ct);
+
+        var expiring = await Issue("expiring", WellKnownUsers.Anonymous, ct, expiresAt: DateTimeOffset.UtcNow.AddSeconds(3));
+        var expiry = DeclaredPointRead.ObservePointRead(Mesh, expiring, Visitor).Replay(1);
+        using var openExpiry = expiry.Connect();
+        await expiry.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "admitted before the expiry", cancellationToken: ct);
+        await expiry.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the live verdict turns false AT the expiry, with nothing else emitting", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #6935: two ways to borrow the standard check's place, both refused. A type whose
+    /// own Read rule cannot answer (UNDETERMINED) is not re-decided by its declaration; and a person
+    /// who carries a System-authored source's stamps onto a node of the declared type
+    /// (<c>AuthorshipFrom</c> naming a source of ANOTHER type) is recorded as its author, so the node
+    /// is not platform-issued.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task NeitherAnUndeterminedRuleNorBorrowedAuthorship_OpensThePointRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+
+        var faulty = await Issue("faulty", WellKnownUsers.Anonymous, ct, nodeType: FaultyType);
+        Assert.False((await Rls(Visitor, faulty, true, ct, FaultyType)).IsValid, "an undetermined type rule is not re-decided at the RLS validator");
+        var refused = await StreamAs(Visitor, faulty).Materialize().Take(1).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.Equal(System.Reactive.NotificationKind.OnError, refused.Kind);
+
+        await AsSystem(new MeshNode("src", Partition) { NodeType = "Markdown", Name = "src" }, ct);
+        var alice = new AccessContext { ObjectId = "alice", Name = "alice" };
+        // PRECONDITION, or the case below is vacuous: alice holds the move entitlement on the source.
+        Assert.True(await Mesh.CheckPermission(Partition, alice.ObjectId, Permission.Delete).Take(1).Should().Emit(cancellationToken: ct),
+            "alice holds Delete on the source's namespace — the entitlement that lets a create carry its authorship");
+        var forged = Node("forged", WellKnownUsers.Anonymous, DeclaredType, revoked: false, DateTimeOffset.UtcNow.AddDays(1));
+        var response = await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAs(alice, () => ObserveNodeOperation(new CreateNodeRequest(forged) { AuthorshipFrom = $"{Partition}/src" },
+                o => o.WithAccessContext(alice)))
+            .Select(d => d.Message)
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+        Assert.True(response.Success, $"alice may create in the partition — {response.Error}");
+        Assert.Equal("alice", response.Node?.LastModifiedBy);
+        Assert.False((await Rls(Visitor, forged.Path, true, ct)).IsValid, "a borrowed System stamp does not make a node platform-issued");
+    }
+
+    private static bool IsRevoked(MeshNode? node)
+        => node?.Content is JsonObject content && content["revokedAt"] is not null;
+
     // ───────────────────────────── fixtures ─────────────────────────────
 
     private static MeshNode TypeNode(string path, PointReadDeclaration? declaration)
@@ -174,8 +306,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         };
     }
 
-    private static MeshNode Node(string id, string subject, string nodeType, bool revoked, DateTimeOffset expiresAt)
-        => new(id, Partition)
+    private static MeshNode Node(string id, string subject, string nodeType, bool revoked, DateTimeOffset expiresAt, string ns = Partition)
+        => new(id, ns)
         {
             NodeType = nodeType,
             Name = id,
@@ -190,9 +322,9 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
     private Task SeedPartition(CancellationToken ct) => SeedTopLevel(new MeshNode(Partition) { NodeType = "Markdown", Name = "t" });
 
     private async Task<string> Issue(string id, string subject, CancellationToken ct,
-        bool revoked = false, DateTimeOffset? expiresAt = null, string nodeType = DeclaredType)
+        bool revoked = false, DateTimeOffset? expiresAt = null, string nodeType = DeclaredType, string ns = Partition)
     {
-        var node = Node(id, subject, nodeType, revoked, expiresAt ?? DateTimeOffset.UtcNow.AddDays(1));
+        var node = Node(id, subject, nodeType, revoked, expiresAt ?? DateTimeOffset.UtcNow.AddDays(1), ns);
         var created = await AsSystem(node, ct);
         Assert.Equal(WellKnownUsers.System, created.LastModifiedBy);
         return created.Path;
@@ -215,6 +347,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
                 [DeclaredPointRead.DeclarationProperty] = new JsonObject
                 {
                     ["subjectProperty"] = "subject",
+                    ["namespace"] = Partition,
                     ["revokedProperty"] = "revokedAt",
                     ["expiresProperty"] = "expiresAt",
                 },
@@ -239,17 +372,17 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
     // ───────────────────────────── the seams ─────────────────────────────
 
     /// <summary>The RLS decision for <paramref name="caller"/>: a point read of the node, or the same node as a listing row.</summary>
-    private Task<NodeValidationResult> Rls(AccessContext caller, string path, bool pointRead, CancellationToken ct)
-        => RlsDecision(caller, path, pointRead).Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
+    private Task<NodeValidationResult> Rls(AccessContext caller, string path, bool pointRead, CancellationToken ct, string nodeType = DeclaredType)
+        => RlsDecision(caller, path, pointRead, nodeType).Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
 
-    private IObservable<NodeValidationResult> RlsDecision(AccessContext caller, string path, bool pointRead)
+    private IObservable<NodeValidationResult> RlsDecision(AccessContext caller, string path, bool pointRead, string nodeType = DeclaredType)
     {
         var slash = path.LastIndexOf('/');
         var validator = Mesh.ServiceProvider.GetServices<INodeValidator>().OfType<RlsNodeValidator>().Single();
         return validator.Validate(new NodeValidationContext
             {
                 Operation = NodeOperation.Read,
-                Node = new MeshNode(path[(slash + 1)..], path[..slash]) { NodeType = DeclaredType },
+                Node = new MeshNode(path[(slash + 1)..], path[..slash]) { NodeType = nodeType },
                 AccessContext = caller,
                 IsPointRead = pointRead,
             })
@@ -295,7 +428,7 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
         .AddMeshNodes(new MeshNode("Ticket", "Kiosk")
         {
             NodeType = "NodeType",
-            Content = new NodeTypeDefinition { PointRead = new PointReadDeclaration { SubjectProperty = "subject" } },
+            Content = new NodeTypeDefinition { PointRead = new PointReadDeclaration { SubjectProperty = "subject", Namespace = "t" } },
             HubConfiguration = config => config,
         })
         .ConfigureServices(services => services.AddSingleton<IConfiguration>(

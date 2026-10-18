@@ -7014,7 +7014,23 @@ public static class MeshExtensions
             .SelectMany(outcome =>
             {
                 if (outcome.IsGranted)
-                    return ReadNodeAuthoritative(hub, persistence, from);
+                    return ReadNodeAuthoritative(hub, persistence, from)
+                        // 🚨 A relocation re-creates the SAME node, so its type never changes. Carrying a
+                        // source's stamps onto a node of ANOTHER type would let a requester borrow a
+                        // System-authored source's authorship for content of their own — and a node's
+                        // System stamp is what a declared point read trusts as platform issuance
+                        // (DeclaredPointRead, MeshWeaver#4306). Same type, or the requester is recorded.
+                        .Select(source =>
+                        {
+                            if (source is null
+                                || string.Equals(source.NodeType, request.Node.NodeType, StringComparison.OrdinalIgnoreCase))
+                                return source;
+                            logger.LogWarning(
+                                "[CreateNode] {Path}: not carrying authorship from {From} — its type {SourceType} is not "
+                                + "the new node's {NodeType}; recording the requester",
+                                request.Node.Path, from, source.NodeType, request.Node.NodeType);
+                            return null;
+                        });
                 logger.LogWarning(
                     "[CreateNode] {Path}: not carrying authorship from {From} — {Requester} lacks the move entitlement "
                     + "(Delete on its namespace{Undetermined}); recording the requester",
