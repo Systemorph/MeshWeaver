@@ -85,10 +85,10 @@ public class PreInitialLiveDeltaFoldTest
         => ((IMeshQueryCore)new MeshQuery(providers, hub: null!))
             .Query<MeshNode>(new MeshQueryRequest { Query = "path:Inbox/_Inbox scope:children", Limit = 50 }, Options)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TestTimeouts.Quick)
             .Await(ct);
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ARemovalBeforeTheMergedInitial_IsNotInTheInitial()
     {
         var delivery = Node("d1");
@@ -104,7 +104,7 @@ public class PreInitialLiveDeltaFoldTest
             + "the Initial reports a deleted node, and nothing will ever remove it again");
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AnAdditionBeforeTheMergedInitial_IsInTheInitial()
     {
         var added = Node("d2");
@@ -120,7 +120,7 @@ public class PreInitialLiveDeltaFoldTest
         first.Items.Select(n => n.Path).Should().Contain(added.Path);
     }
 
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AnUpdateBeforeTheMergedInitial_IsTheVersionInTheInitial()
     {
         var early = new ReplayProvider("early",
@@ -135,7 +135,7 @@ public class PreInitialLiveDeltaFoldTest
 
     /// <summary>A provider whose Initial arrives AFTER the removal may have read before it: its copy
     /// is stale and must not resurrect the deleted row (review of #6973).</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ARemovalBeforeTheMergedInitial_IsNotUndoneByALaterOverlappingInitial()
     {
         var delivery = Node("d5");
@@ -151,7 +151,7 @@ public class PreInitialLiveDeltaFoldTest
     }
 
     /// <summary>…while a row RE-CREATED before the Initial is kept: the mark is cleared by the Added.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ARowRecreatedBeforeTheMergedInitial_IsInTheInitial()
     {
         var delivery = Node("d6");
@@ -168,7 +168,7 @@ public class PreInitialLiveDeltaFoldTest
     /// <summary>An unscored Updated keeps the rank of the copy it replaces (review of #6973): the
     /// storage provider's live frames carry no Scores, and a re-read row must not fall below a weaker
     /// match under Limit.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task AnUnscoredUpdateBeforeTheMergedInitial_KeepsItsRank()
     {
         var strong = Node("z-strong", "v1");
@@ -183,7 +183,7 @@ public class PreInitialLiveDeltaFoldTest
             // ordered by DefaultFilterOrdering instead and would not read the score at all).
             .Query<MeshNode>(new MeshQueryRequest { Query = "delivery", Limit = 1 }, Options)
             .FirstAsync()
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
         first.Items.Select(n => n.Id).Should().Equal(["z-strong"], "the updated row keeps its rank of 10 — path order alone would put a-weak first");
@@ -192,7 +192,7 @@ public class PreInitialLiveDeltaFoldTest
 
     /// <summary>The fold keeps the live contract after the Initial: a row the Initial carries is
     /// live, so a later removal of it still flows.</summary>
-    [Fact(Timeout = 30_000)]
+    [Fact]
     public async Task ARemovalAfterTheMergedInitial_StillFlows()
     {
         var delivery = Node("d4");
@@ -206,7 +206,7 @@ public class PreInitialLiveDeltaFoldTest
             .Query<MeshNode>(new MeshQueryRequest { Query = "path:Inbox/_Inbox scope:children", Limit = 50 }, Options)
             .Take(2)
             .ToList()
-            .Timeout(TimeSpan.FromSeconds(10))
+            .Timeout(TestTimeouts.Quick)
             .Await(TestContext.Current.CancellationToken);
 
         frames[0].ChangeType.Should().Be(QueryChangeType.Initial);
