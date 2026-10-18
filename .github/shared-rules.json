@@ -17,18 +17,35 @@
     "spokes land their copies; (3) core widens `required-in` to every repo. SharedRuleBlocks.md",
     "says why; never-hand-roll-ui (2026-09-15) is the worked example.",
     "",
-    "🚨 WHY `repos` HAS SEVEN ENTRIES AND NOT EIGHT — Systemorph/MeshWeaver.Crm carries an AGENTS.md",
-    "and is deliberately absent, so this gate never reads it and no block can require it. The",
-    "rationale is stated once here rather than per block, because it is a property of the REGISTER:",
-    "this gate FAILS CLOSED on a repo it cannot read (an unreadable AGENTS.md is a red naming the",
-    "HTTP status), so admitting a repo has a hard prerequisite — the read-only fleet-reader App must",
-    "be installed on it — and a second one, that the repo must already carry EVERY block already",
-    "registered, since `required-in` widening is per block and a repo listed in `repos` with no",
-    "markers is red for each block that names it. Installing that App is an organisation-level act",
-    "and not something a change set here can perform. So adding Crm is its own rollout, gated on that",
-    "installation, and NOT an omission to be tidied up: a reader who 'fixes' it by adding the line",
-    "reddens the gate on an unreadable repo. Crm already carries the text of several blocks anyway,",
-    "so the registration itself would be small once the App is installed."
+    "🚨 THE BASELINE (policy `shared-rule-baseline`: every repo's AGENTS.md carries the fleet's best-practice",
+    "rules from ONE maintained source, machine-checked). Two classes, decided by what a repo CONTAINS:",
+    "  • PROCESS blocks — rest-not-graphql, conserve-work-products, file-it-and-move-on,",
+    "    merge-latest-before-push — are required in EVERY registered repo: they govern how an agent",
+    "    works with GitHub and with its own findings, which is the same in every repository.",
+    "  • PLATFORM blocks — dispose-to-serve-new-state, never-hand-roll-ui, declared-not-derived — are",
+    "    required where code or content runs on a MeshWeaver 3 mesh (core, Plugins, the node repos,",
+    "    Memex). A repo with no mesh code (tooling, an archive, a standalone portal on an older major)",
+    "    is exempt: their text names 3.x hubs, controls and catalogues, and would be false guidance there.",
+    "worktree-per-change-set stays `hub: peers`, scoped to the three repos that agree on its text.",
+    "Doc/Architecture/SharedRuleBlocks → 'The baseline every repo carries' has the per-repo reasoning.",
+    "",
+    "🚧 BASELINE ROLLOUT IN FLIGHT (2026-10-17). Still to widen once their spoke PRs merge: file-it-and-move-on",
+    "and merge-latest-before-push to Reinsurance (#265), SocialMedia (#249), Manufacturing (#134); and to",
+    "register MeshWeaver.Crm (#174, every baseline block) and Product-Promotion (#139, the process blocks;",
+    "blocked while Actions is disabled there). Those four node-repo PRs are AGENTS.md-only and wait on the",
+    "fleet-wide node-repo gate failure ('bake consumption … DECLINED'), not on their diff.",
+    "",
+    "ADMITTING A REPO: the gate FAILS CLOSED on a repo it cannot read, so (a) the read-only",
+    "fleet-reader App (`meshweaver-reader`) must reach it — measured 2026-10-17: installed org-wide,",
+    "repository_selection: all — and the repo must be added to the `repositories:` list of every",
+    "fleet-reader mint that reads this register (dotnet-test.yml · shared-rules and cross-repo-pair,",
+    "shared-rules.yml); (b) it must already carry every block whose `required-in` will name it, so the",
+    "spoke lands its copies FIRST and the register widens after they merge.",
+    "",
+    "🚨 CLIENT-PRIVATE repositories are NOT listed here, by design. This repository is PUBLIC: listing",
+    "one would publish the client's repository name, and a drift's word diff would print in a public",
+    "CI log. They carry the baseline blocks byte-identical all the same, and are checked from a",
+    "private checkout with `--manifest` + `--local`; never add one to this file."
   ],
   "marker-syntax": {
     "block": "<!-- shared-rule:begin <id> -->  …  <!-- shared-rule:end <id> -->",
@@ -60,7 +77,9 @@
     "Systemorph/MeshWeaver.Reinsurance",
     "Systemorph/MeshWeaver.SocialMedia",
     "Systemorph/MeshWeaver.Manufacturing",
-    "Systemorph/Memex"
+    "Systemorph/Memex",
+    "Systemorph/CreditReRate",
+    "Systemorph/DecisionModels"
   ],
   "hubs-note": [
     "There are TWO hubs, and which one is authoritative depends on the KIND of rule. This is not",
@@ -98,7 +117,9 @@
         "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex"
+        "Systemorph/Memex",
+        "Systemorph/CreditReRate",
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -137,7 +158,9 @@
         "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
-        "Systemorph/Memex"
+        "Systemorph/Memex",
+        "Systemorph/CreditReRate",
+        "Systemorph/DecisionModels"
       ],
       "slots": [
         "doc-home",
@@ -190,6 +213,7 @@
         "Systemorph/MeshWeaver",
         "Systemorph/MeshWeaver.Plugins",
         "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
         "Systemorph/MeshWeaver.SocialMedia",
         "Systemorph/MeshWeaver.Manufacturing",
         "Systemorph/Memex"
@@ -223,11 +247,8 @@
         "SocialMedia#205, Manufacturing#101, Memex#409; step 3 this entry's widening. Crm#127",
         "carries the same text, unregistered — see the paragraph above.",
         "",
-        "Systemorph/MeshWeaver.Crm is deliberately NOT here. It is absent from `repos` above, so this",
-        "gate never reads it, and adding it is a separate change: it would require the read-only",
-        "fleet-reader App to be installed there AND Crm to carry every block already registered, and",
-        "an unreadable repo is a RED here by design. Crm carries this block's text anyway, so a later",
-        "registration is a one-line change rather than a rollout.",
+        "Systemorph/MeshWeaver.Crm is still absent: it joins the register when Crm#174 (every",
+        "baseline block, this one refreshed to the current hub text) has merged.",
         "",
         "TEXT CHANGE LANDED (2026-10-03/04, the update contract: after a DisposeRequest the next",
         "activation binds the NEWEST build, the old one keeps serving until then). Step 1 is this",
@@ -237,7 +258,9 @@
         "main carries the text. The seventh, Reinsurance, is added in the change that follows",
         "Reinsurance#247's merge — #247 is AGENTS.md-only and green except its node-repo gate, which",
         "is cancelled at the 45-minute cap on every Reinsurance run since 2026-10-03 19:47Z (filed to",
-        "triage as rbuergi/Feedback/20261004-reinsurance-gate-shard-cap)."
+        "triage as rbuergi/Feedback/20261004-reinsurance-gate-shard-cap).",
+        "",
+        "Reinsurance#247 merged; Reinsurance is in required-in again (2026-10-17)."
       ]
     },
     {
@@ -282,7 +305,12 @@
       "id": "file-it-and-move-on",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver"
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/Memex",
+        "Systemorph/CreditReRate",
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -307,7 +335,7 @@
         "The full rule lives in Doc/Architecture/IncidentalFindings; this block is the imperative half,",
         "per the AGENTS.md doctrine that the file carries rules and the evidence lives in the docs.",
         "",
-        "🚧 TEXT CHANGE IN FLIGHT — required-in is NARROWED to the hub on purpose. The block named the",
+        "TEXT CHANGE (landed 2026-10-17 with the baseline widening). The block named the",
         "node TYPE (`Feedback/Feedback`) and never the NAMESPACE, so agents created at `Feedback/<id>`,",
         "`Feedback/_Submissions/<id>` or `Feedback/Inbox/<id>`, met the by-design `Create permission",
         "required`, and dropped the finding (measured in agent transcripts 2026-09-20..25, the last one",
@@ -316,14 +344,23 @@
         "still carry the old text, and the spokes' PRs are red while the hub does — so it lands in the",
         "same three steps as adding one: (1) this change: new hub text, required-in narrowed to the hub;",
         "(2) the six spokes copy the hub's text; (3) required-in widened back to all seven. The window",
-        "between (1) and (3) is the one moment this block is compared nowhere; close it the same day."
+        "between (1) and (3) is the one moment this block is compared nowhere; close it the same day.",
+        "",
+        "Step 2 of that text change was still owed on 2026-10-17 — all six spokes carried the old",
+        "text — and lands with the baseline rollout (Plugins#3831, Education#398, Memex#769 merged;",
+        "Reinsurance#265, SocialMedia#249, Manufacturing#134 open); required-in names the merged ones."
       ]
     },
     {
       "id": "merge-latest-before-push",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver"
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/Memex",
+        "Systemorph/CreditReRate",
+        "Systemorph/DecisionModels"
       ],
       "slots": [],
       "why": [
@@ -346,14 +383,28 @@
         "merged onto the CURRENT base tip (Doc/Architecture/FreshMergeUnderTest), so no spoke copy is owed",
         "and the six step-2 drafts (Plugins#2757, Memex#644, Education#384, Reinsurance#246, SocialMedia#234,",
         "Manufacturing#125) were closed with a pointer. The hub copy stays for the one case CI cannot see: a",
-        "DIRTY pull request gets no run at all, and merging main before a push is how its author resolves it."
+        "DIRTY pull request gets no run at all, and merging main before a push is how its author resolves it.",
+        "",
+        "ADOPTED AS BASELINE (policy `shared-rule-baseline`: every repo carries the fleet's best-practice rules).",
+        "The supersession above stands for CI — but the hub kept the block for the DIRTY pull request CI",
+        "cannot see, and that case exists in every repository, several of which had copied the block",
+        "unregistered. The block now ENDS at 'ONE merge-and-push per round.': the sentence after it in",
+        "core ('CI covers the other half … suites-test-fresh-merge') is true only where a repo runs",
+        "core's lanes and links core's own Documentation tree, so it stays outside, the same move",
+        "conserve-work-products makes with its role-specific tail."
       ]
     },
     {
       "id": "declared-not-derived",
       "hub": "Systemorph/MeshWeaver",
       "required-in": [
-        "Systemorph/MeshWeaver"
+        "Systemorph/MeshWeaver",
+        "Systemorph/MeshWeaver.Plugins",
+        "Systemorph/MeshWeaver.Education",
+        "Systemorph/MeshWeaver.Reinsurance",
+        "Systemorph/MeshWeaver.SocialMedia",
+        "Systemorph/MeshWeaver.Manufacturing",
+        "Systemorph/Memex"
       ],
       "slots": [],
       "why": [
@@ -375,7 +426,9 @@
         "everywhere and Memex's 'Documentation links resolve' gate has nothing to resolve.",
         "",
         "Landing in the three change sets this register's header describes: step 1 (this entry) names",
-        "the hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven."
+        "the hub only; step 2 lands the six spoke copies; step 3 widens required-in to all seven.",
+        "",
+        "Step 3 landed with the baseline widening (2026-10-17): every spoke already carried the text."
       ]
     },
     {
