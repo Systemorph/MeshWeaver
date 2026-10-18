@@ -2760,7 +2760,17 @@ internal static class NodeTypeCompilationHelpers
                         hubPath, triggerAt,
                         node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.RequestedReleaseForce,
                         node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)?.LastReleaseRequestHandledAt);
-                    workspace.GetMeshNodeStream().Update(curr =>
+                    // 🚨 Decide only against a source snapshot at least as new as THIS REQUEST.
+                    // CurrentSourceVersions is published from a synced query that trails a source
+                    // write, so "edit, then Compile" could be judged "satisfied" against the
+                    // pre-edit snapshot and stamped handled with nothing dispatched — the edit was
+                    // then never built (PlatformCompatibilityLadderTest rung 4). The versions the
+                    // request is made against are read from each source's OWNER, and the decision
+                    // below waits until the published snapshot shows them. See
+                    // AwaitSourceSnapshotCurrent.
+                    var requestedAgainst = node.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions)!;
+                    AwaitSourceSnapshotCurrent(hub, ownStream, requestedAgainst, hubPath, logger)
+                    .SelectMany(snapshot => workspace.GetMeshNodeStream().Update(curr =>
                     {
                         if (curr.Content is not NodeTypeDefinition def) return curr;
                         // 🚨 #1834 — fulfil a pending adoption stamp BEFORE the satisfied-branch
@@ -2822,7 +2832,7 @@ internal static class NodeTypeCompilationHelpers
                             // absorbing against an unknown input set would be a guess.
                             var requestedToken = BuildInputsToken(
                                 GuardsOf(hub).ModulesHash, def.CurrentSourceVersions);
-                            if (IsSatisfiedByInFlightCompile(def, requestedToken))
+                            if (snapshot.Established && IsSatisfiedByInFlightCompile(def, requestedToken))
                             {
                                 logger?.LogInformation(
                                     "[ReleaseRequestWatcher] {HubPath}: release request absorbed — a "
@@ -2853,6 +2863,9 @@ internal static class NodeTypeCompilationHelpers
                         // RequestedReleaseForce stays the user's escape hatch: an explicit force
                         // always compiles.
                         if (!def.RequestedReleaseForce
+                            // A snapshot whose currency could not be established never satisfies
+                            // a request — compiling is the safe direction (AwaitSourceSnapshotCurrent).
+                            && snapshot.Established
                             && def.CompilationStatus is CompilationStatus.Ok
                             && !def.IsDirty
                             && HasUsableBuild(curr, def, GuardsOf(hub)))
@@ -2897,13 +2910,138 @@ internal static class NodeTypeCompilationHelpers
                                         : triggerAt
                             }
                         };
-                    }).Subscribe(
+                    })).Subscribe(
                         _ => { },
                         ex => logger?.LogWarning(ex,
                             "[ReleaseRequestWatcher] {HubPath}: failed to dispatch release", hubPath));
                 },
             logger,
             "ReleaseRequestWatcher");
+    }
+
+    /// <summary>
+    /// The outcome of <see cref="AwaitSourceSnapshotCurrent"/>: the NodeType's own node once its
+    /// published source snapshot is at least as new as the versions the sources' owners hold, and
+    /// whether that could be ESTABLISHED at all.
+    /// </summary>
+    /// <param name="Node">The own node to decide against.</param>
+    /// <param name="Established">False when a source's owner could not be read: the snapshot's
+    /// currency is then unknown, and no "already satisfied" / "already up to date" verdict may be
+    /// drawn from it — the caller compiles instead.</param>
+    public sealed record SourceSnapshotCurrency(MeshNode Node, bool Established);
+
+    /// <summary>
+    /// 🚨 <b>A release decision is never drawn from a source snapshot older than the request.</b>
+    ///
+    /// <para><see cref="NodeTypeDefinition.CurrentSourceVersions"/> is published by
+    /// <see cref="InstallSourcesWatcher"/> from the type's SYNCED source query, which trails a
+    /// source write: the edit commits on the source node's own hub and reaches the query through the
+    /// change feed a moment later. A release request written inside that window ("edit, then
+    /// Compile") read <c>IsDirty == false</c>, was stamped handled as "satisfied by the existing
+    /// current build", and dispatched nothing — the edit was never built.</para>
+    ///
+    /// <para>This reads the LIVE version of every source the record names from that source's OWNER
+    /// (one authoritative point read each, as System — the same identity the source-set read uses,
+    /// for the same self-call reason), i.e. the versions the request was made against, and emits the
+    /// own node the first time its published snapshot shows all of them (a path the owner no longer
+    /// holds must be gone from it too). Reactive: the own stream IS the wait, no timer. A source
+    /// whose owner cannot be read makes the result <see cref="SourceSnapshotCurrency.Established"/>
+    /// = false, emitted at once.</para>
+    ///
+    /// <para>Paths are taken from <see cref="NodeTypeDefinition.CurrentSourceVersions"/> only — a
+    /// path the mesh has published, never a guess (a point read of an absent path is the storm
+    /// shape). A source ADDED in the window is therefore not covered here; its discovery is the
+    /// source query's job.</para>
+    /// </summary>
+    /// <param name="hub">The NodeType's own hub.</param>
+    /// <param name="ownStream">The own node stream.</param>
+    /// <param name="requestedAgainst">The definition as the request was observed.</param>
+    /// <param name="hubPath">The NodeType path, for logs.</param>
+    /// <param name="logger">Logger.</param>
+    /// <returns>One emission — the own node to decide against — or none when the hub shuts down first.</returns>
+    public static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrent(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger)
+        // Teardown ends the read and the wait at its first instant, so neither caller's decision
+        // can reach a dying hub nor keep a cross-hub read pending through Quiescing.
+        => AwaitSourceSnapshotCurrentCore(hub, ownStream, requestedAgainst, hubPath, logger)
+            .TakeUntil(hub.ShuttingDown);
+
+    private static IObservable<SourceSnapshotCurrency> AwaitSourceSnapshotCurrentCore(
+        IMessageHub hub, IObservable<MeshNode?> ownStream, NodeTypeDefinition requestedAgainst,
+        string hubPath, ILogger? logger)
+    {
+        var paths = requestedAgainst.CurrentSourceVersions?.Keys
+            .OrderBy(p => p, StringComparer.Ordinal).ToArray() ?? [];
+        // ContentAs, never a type test on Content: the definition can arrive as a JsonObject /
+        // JsonElement, which a type test reads as absent (ObjectAsExtensions).
+        NodeTypeDefinition? DefinitionOf(MeshNode? n) => n.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions);
+        var current = ownStream.Where(n => DefinitionOf(n) is not null).Take(1)
+            .Select(n => new SourceSnapshotCurrency(n!, true));
+        if (paths.Length == 0)
+            return current;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(() => paths
+                .Select(path => hub.GetMeshNodeOutcome(path, onTimeout: ReadTimeoutBehavior.EmitNull)
+                    .Take(1)
+                    .Select(outcome => (Path: path, Outcome: outcome)))
+                .Merge()
+                .ToList())
+            .SelectMany(reads =>
+            {
+                var unreadable = reads.FirstOrDefault(r => r.Outcome.Status == NodeReadStatus.Unavailable);
+                if (unreadable.Path is not null)
+                {
+                    logger?.LogWarning(
+                        "[ReleaseRequestWatcher] {HubPath}: the owner of source {Source} could not be read, so "
+                        + "whether the source snapshot is current is unknown — deciding as NOT up to date",
+                        hubPath, unreadable.Path);
+                    return current.Select(c => c with { Established = false });
+                }
+                var live = System.Collections.Immutable.ImmutableDictionary.ToImmutableDictionary(
+                    reads,
+                    r => r.Path,
+                    r => r.Outcome.Node is { } n ? NodeTypeDefinition.SourceVersionOf(n) : (long?)null);
+                if (!SnapshotShows(requestedAgainst.CurrentSourceVersions, live))
+                    logger?.LogInformation(
+                        "[ReleaseRequestWatcher] {HubPath}: the source snapshot is behind the request ({Source}) "
+                        + "— deciding once it shows the versions the sources' owners hold",
+                        hubPath, FirstBehind(requestedAgainst.CurrentSourceVersions, live));
+                return ownStream
+                    .Where(n => DefinitionOf(n) is { } d && SnapshotShows(d.CurrentSourceVersions, live))
+                    .Take(1)
+                    .Select(n => new SourceSnapshotCurrency(n!, true));
+            });
+    }
+
+    /// <summary>Whether <paramref name="snapshot"/> is at least as new as the owners' live versions:
+    /// every path it still lists shows the owner's version or newer (an owner-deleted path must be
+    /// gone), and a path it no longer lists has left the source set — newer, never staler.</summary>
+    internal static bool SnapshotShows(
+        IReadOnlyDictionary<string, long>? snapshot, IReadOnlyDictionary<string, long?> live)
+        => FirstBehind(snapshot, live) is null;
+
+    private static string? FirstBehind(
+        IReadOnlyDictionary<string, long>? snapshot, IReadOnlyDictionary<string, long?> live)
+    {
+        foreach (var (path, version) in live.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            long published = 0;
+            var has = snapshot is not null && snapshot.TryGetValue(path, out published);
+            // A path the snapshot no longer lists has LEFT the source set, and that is newer than
+            // the request, never staler: every path read here was listed by the snapshot the request
+            // was observed with. The source query owns MEMBERSHIP — a source retyped away from Code,
+            // excluded by an edited Sources/Tests query or deleted leaves it while its owner may
+            // still hold a newer node — so an absent path is the converged answer, and waiting for
+            // it to reappear at the owner's version would wait forever.
+            if (!has)
+                continue;
+            // Still listed: it must show at least the owner's version, and an owner-deleted source
+            // must leave the snapshot first.
+            if (version is null || published < version.Value)
+                return path;
+        }
+        return null;
     }
 
     /// <summary>
