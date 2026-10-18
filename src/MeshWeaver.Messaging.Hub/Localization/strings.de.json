@@ -2130,6 +2130,7 @@
   "settings.groupCommercial": "Kommerzielles",
   "settings.groupFleet": "Flotte",
   "settings.aiUsageCost": "KI-Nutzung & Kosten",
+  "settings.instanceModels": "Modelle dieser Instanz",
   "settings.signInProviders": "Anmeldeanbieter",
   "settings.fleet": "Flotte",
   "settings.connectedInstances": "Verbundene Instanzen",
