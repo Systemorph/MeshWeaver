@@ -13,9 +13,11 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.PluginCatalog;
 using Microsoft.Extensions.DependencyInjection;
@@ -129,6 +131,77 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
     }
 
+    /// <summary>
+    /// A broadcast for a package WITHOUT a compiled module still retries that package's NodeTypes
+    /// held for a bundle (<see cref="HeldNodeTypeBundleRetry"/>): the module lane skips such a
+    /// package, and the publication carrying their bake must not be acknowledged untried. The first
+    /// broadcast, with nothing held, is the control: it attempts no adoption.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ABroadcastForAModulelessPackage_RetriesItsHeldNodeTypes()
+    {
+        await SeedInstallRecord(PackageB, null, TestContext.Current.CancellationToken);
+        await LedgerEntries()
+            .Where(entries => entries.Any(e => e.Url == RegistryUrl && e.LastReconciledVia == RegistryReconcileEntry.ViaBoot))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        Assert.Empty(registry.BundleDownloads);
+
+        // Control: nothing is held — the broadcast is drained and asks for no bundle.
+        await DeliverPublished(PackageB);
+        await InboxDeliveries()
+            .Where(deliveries => deliveries.Count == 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        var adoptions = Mesh.ServiceProvider.GetRequiredService<BundleAdoptionLedger>();
+        Assert.DoesNotContain(adoptions.Outcomes, o => o.PluginId == PackageB);
+
+        // A NodeType of B now waits in a delivery hold; the next publication of B asks for its
+        // bundle. The witness is the adoption ledger: this fake's index is baked for another
+        // framework, so the attempt ends as a named FrameworkDeclined rather than a download —
+        // what is pinned is that the attempt is MADE on the broadcast.
+        HoldNodeType($"{PackageB}/Submission");
+        await DeliverPublished(PackageB);
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => adoptions.Outcomes)
+            .Where(outcomes => outcomes.Any(o => o.PluginId == PackageB))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        await InboxDeliveries()
+            .Where(deliveries => deliveries.Count == 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+    }
+
+    private async Task DeliverPublished(string packageId)
+    {
+        var delivered = await WebhookInbox.Deliver(
+                Mesh, [new WebhookInbox.WebhookTarget(ModulePublished.InboxTarget)],
+                ModulePublished.InboxTarget, "application/json", [],
+                new ModulePublished
+                {
+                    Registry = RegistryUrl,
+                    Package = packageId,
+                    Version = "1.0.0",
+                    FrameworkMvid = ServedFramework,
+                    PublishedAt = DateTimeOffset.UtcNow,
+                }.Serialize())
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await();
+        Assert.Equal(WebhookInbox.DeliveryStatus.Accepted, delivered.Status);
+    }
+
+    private void HoldNodeType(string typePath)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var held = new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            CompilationStatus = CompilationStatus.Ok,
+            CompiledFrameworkVersion = PrebuiltAssemblySeeder.LiveFrameworkMvid,
+            BuildProvenance = BuildProvenance.StaleAdopted,
+            DeliveryHoldReason = "Serving the last build this mesh holds; the current source is waiting for a bundle.",
+        };
+        Mesh.ServiceProvider.GetRequiredService<NodeTypeBakeReportRegistry>().RecordLiveRecords(
+            NodeTypeLiveRecordCensus.Of([(typePath, (NodeTypeDefinition?)held)],
+                PrebuiltAssemblySeeder.LiveFrameworkMvid, now.AddHours(-1), now));
+    }
+
     [Fact(Timeout = 240_000)]
     public async Task ABroadcastFromAnUnknownRegistry_IsDroppedWithoutARequest()
     {
@@ -180,7 +253,7 @@ public class RegistryUpdateReconcilerTest(ITestOutputHelper output) : MonolithMe
 
     // ── harness ───────────────────────────────────────────────────────────────
 
-    private async Task SeedInstallRecord(string packageId, string module, CancellationToken cancellationToken)
+    private async Task SeedInstallRecord(string packageId, string? module, CancellationToken cancellationToken)
     {
         var manifest = new PackageManifest
         {

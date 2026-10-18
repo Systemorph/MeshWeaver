@@ -32,12 +32,18 @@ public class InboxLegsAreAnchoredTest
         var resolved = InboxQueries.Resolve(InboxQueries.BuiltIn, Viewer);
 
         Assert.NotEmpty(resolved);
-        foreach (var leg in resolved)
+        // The ONE exception is core's own approvals ledger: records live beside their document in any
+        // partition, so those legs are keyed to the viewer and declared mesh-wide instead — and
+        // IsLedgerQuery admits exactly those shapes (a contributed lookalike is refused, see
+        // InboxApprovalsTest.AContributedCrossPartitionLeg_IsRefused).
+        foreach (var leg in resolved.Where(l => InboxQueries.LedgerKindOf(l.Query) is null))
         {
             Assert.True(Anchored.IsMatch(leg.Query),
                 $"leg '{leg.Source}/{leg.Band}' is not anchored to one partition: {leg.Query}");
             Assert.StartsWith($"namespace:{Viewer}/", leg.Query, StringComparison.Ordinal);
         }
+        foreach (var leg in resolved.Where(l => InboxQueries.LedgerKindOf(l.Query) is not null))
+            Assert.True(InboxQueries.IsLedgerQuery(leg.Query, Viewer), $"ledger leg '{leg.Band}' is not keyed to the viewer: {leg.Query}");
     }
 
     /// <summary>

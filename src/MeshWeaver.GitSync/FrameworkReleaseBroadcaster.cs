@@ -78,7 +78,9 @@ public sealed class FrameworkReleaseBroadcaster
     }
 
     /// <summary>True when the App identity is usable — without it the broadcaster is inert.</summary>
-    public bool IsConfigured => tokens.IsConfigured;
+    // The DEPLOYMENT's App only: the instance's own App reads its administrator's repositories and
+    // is never the identity a platform release is broadcast with.
+    public bool IsConfigured => tokens.IsDeploymentConfigured;
 
     private IIoPool HttpPool => ioPools.Get(IoPoolNames.Http);
 

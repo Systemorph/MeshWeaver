@@ -158,6 +158,10 @@ public static class GitHubConnectEndpoints
                     http.RequestAborted);
         }).RequireAuthorization();
 
+        // The instance-owned GitHub App's manifest flow rides the same registration, so every
+        // portal that offers GitHub connect also offers it (Doc/Architecture/InstanceRepositoryAccess).
+        endpoints.MapGitHubAppManifest();
+
         return endpoints;
     }
 
