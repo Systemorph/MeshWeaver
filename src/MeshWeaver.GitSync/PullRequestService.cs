@@ -85,17 +85,25 @@ public sealed class PullRequestService
     /// <paramref name="baseRef"/> (a branch name or commit SHA), authenticated as
     /// <paramref name="userId"/>. Emits the created branch + the SHA it points at.
     /// </summary>
+    /// <remarks>An Azure Repos source creates the branch too (MeshWeaver#6500): it is a ref
+    /// operation, not a pull request, and authenticates with the instance's DECLARED Azure DevOps
+    /// identity (<see cref="AzureReposTokenService"/>) — never a GitHub credential.</remarks>
     public IObservable<GitHubBranchResult> CreateBranch(
         string spacePath, string newBranch, string baseRef, string userId)
     {
-        return WithRepoAndToken(spacePath, userId, (repoUrl, _, token) =>
-            repoClient.CreateBranch(new GitHubCreateBranchRequest
-            {
-                RepositoryUrl = repoUrl,
-                NewBranch = newBranch,
-                BaseRef = string.IsNullOrWhiteSpace(baseRef) ? "main" : baseRef,
-                AccessToken = token,
-            }));
+        GitHubCreateBranchRequest Request(string repoUrl, string token) => new()
+        {
+            RepositoryUrl = repoUrl,
+            NewBranch = newBranch,
+            BaseRef = string.IsNullOrWhiteSpace(baseRef) ? "main" : baseRef,
+            AccessToken = token,
+        };
+        return sync.ReadConfig(spacePath).Take(1).SelectMany(config =>
+            GitRepositoryProvider.IsAzureRepos(config?.RepositoryUrl)
+                ? (hub.ServiceProvider.GetService<AzureReposTokenService>() is { } azure
+                    ? azure.GetToken().SelectMany(token => repoClient.CreateBranch(Request(config!.RepositoryUrl!, token)))
+                    : Observable.Throw<GitHubBranchResult>(GitSyncRefusal.Of("gitsync.azure.notRegistered").ToException()))
+                : WithRepoAndToken(spacePath, userId, (repoUrl, _, token) => repoClient.CreateBranch(Request(repoUrl, token))));
     }
 
     /// <summary>

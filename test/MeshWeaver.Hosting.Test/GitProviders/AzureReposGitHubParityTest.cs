@@ -77,6 +77,13 @@ public class AzureReposGitHubParityTest(ITestOutputHelper output) : MonolithMesh
             });
 
     private GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
+    private PullRequestService PullRequests => Mesh.ServiceProvider.GetRequiredService<PullRequestService>();
+    private IssueService Issues => Mesh.ServiceProvider.GetRequiredService<IssueService>();
+
+    /// <summary>The production Azure Repos client over the HTTP fake, outside the sync.</summary>
+    private AzureReposRepoClient Client()
+        => new(Mesh.ServiceProvider.GetRequiredService<IoPoolRegistry>(), new HttpClient(azure));
+
     private GitHubCredentialService Credentials => Mesh.ServiceProvider.GetRequiredService<GitHubCredentialService>();
     private static string UserId => TestUsers.Admin.ObjectId!;
 
@@ -340,12 +347,107 @@ public class AzureReposGitHubParityTest(ITestOutputHelper output) : MonolithMesh
             "a refused export writes nothing");
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task AnAzureFetch_ReadsAMissingSubdirectoryAsEmpty_ButNeverAnUnavailableRepository()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, url, remote) = await ArmedSpace(AzureRepos, "Fetch", ct);
+        var head = remote.CommitTo("main", InMemoryGitRemote.WithFile("a/x.txt", "x"), "seed");
+        var client = Client();
+
+        var missing = await client.Fetch(url, "main", "not-there", EntraToken).Timeout(TestTimeouts.Convergence).Await(ct);
+        missing.CommitSha.Should().Be(head.Sha);
+        missing.Files.Should().BeEmpty("a folder the commit does not have IS an empty listing — the importer's own rules judge it");
+
+        // The repository goes away (or the identity loses Read) between the ref lookup and the listing:
+        // that is a FAILURE, scoped or not — an empty, complete snapshot would let a full import prune.
+        azure.ItemsSeeNoRepository = true;
+        try
+        {
+            foreach (var subdirectory in new[] { "a", null })
+            {
+                var error = await Error(client.Fetch(url, "main", subdirectory, EntraToken), ct);
+                GitSyncRefusalException.TryGet(error, out var refusal).Should().BeTrue(error.ToString());
+                refusal.Key.Should().Be("gitsync.azure.failed.listItems");
+                error.Message.Should().Contain("TF401019", "Azure DevOps' own diagnostic travels verbatim");
+            }
+        }
+        finally
+        {
+            azure.ItemsSeeNoRepository = false;
+        }
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AnUnavailableAzureRepository_FailsTheImport_AndPrunesNothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (space, url, remote) = await ArmedSpace(AzureRepos, "Unavailable", ct);
+        await CreateMarkdown($"{space}/Welcome", "# Welcome\n\nv1.", ct);
+        await SaveConfig(space, url, ct: ct);
+        var pushed = await Sync.SyncToGitHub(space, UserId).Timeout(TestTimeouts.Convergence).Await(ct);
+        await Sync.ReimportAtCommit(space, "main", UserId).Timeout(TestTimeouts.Convergence).Await(ct);
+        await ConfigWhen(space, c => c.LastSyncCommitSha == pushed.CommitSha, ct);
+        remote.CommitTo("main", InMemoryGitRemote.WithFile("Docs.json", MarkdownFile("Docs", "new")), "add Docs");
+
+        azure.ItemsSeeNoRepository = true;
+        try
+        {
+            await Error(Sync.ReimportAtCommit(space, "main", UserId, force: true), ct);
+        }
+        finally
+        {
+            azure.ItemsSeeNoRepository = false;
+        }
+        (await Body($"{space}/Welcome", ct)).Should().Contain("v1.", "an unread repository deletes nothing");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task AnAnnotatedTag_ResolvesToItsCommit_NotToTheTagObject()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (_, url, remote) = await ArmedSpace(AzureRepos, "Tag", ct);
+        var tagged = remote.CommitTo("main", InMemoryGitRemote.WithFile("a.txt", "a"), "release");
+        remote.CommitTo("main", InMemoryGitRemote.WithFile("b.txt", "b"), "after the release");
+        var repo = url[(url.LastIndexOf('/') + 1)..];
+        azure.AddAnnotatedTag("parity", "Content", repo, "v1.0", tagged.Sha);
+        var client = Client();
+
+        (await client.GetHeadSha(url, "v1.0", EntraToken).Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Be(tagged.Sha);
+        var snapshot = await client.Fetch(url, "v1.0", null, EntraToken).Timeout(TestTimeouts.Convergence).Await(ct);
+        snapshot.CommitSha.Should().Be(tagged.Sha);
+        snapshot.Files.Select(f => f.Path).Should().Equal("a.txt");
+    }
+
+    [Fact(Timeout = 180_000)]
+    public async Task OnAzureRepos_ABranchIsCreatedWithTheDeclaredIdentity_AndIssuesAreRefusedBeforeAnyGitHubCredential()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // No GitHub account connected: nothing on this path may ask for one.
+        var (space, url, remote) = await ArmedSpace(AzureRepos, "Branch", ct, connectGitHub: false);
+        var head = remote.CommitTo("main", InMemoryGitRemote.WithFile("a.txt", "a"), "seed");
+        await SaveConfig(space, url, ct: ct);
+
+        var branch = await PullRequests.CreateBranch(space, "feature/x", "main", UserId)
+            .Timeout(TestTimeouts.Convergence).Await(ct);
+        branch.CommitSha.Should().Be(head.Sha);
+        remote.Head("feature/x").Should().Be(head.Sha);
+
+        var issues = await Error(Issues.SyncIssues(space, UserId), ct);
+        GitSyncRefusalException.TryGet(issues, out var refusal).Should().BeTrue(issues.ToString());
+        refusal.Key.Should().Be("gitsync.azure.unsupported.issues");
+        var pr = await Error(PullRequests.CreateDraft(space, null, "main"), ct);
+        GitSyncRefusalException.TryGet(pr, out var prRefusal).Should().BeTrue(pr.ToString());
+        prRefusal.Key.Should().Be("gitsync.azure.unsupported.pullRequest");
+    }
+
     // ══════════════════════════════════════════════════════════════════════════
     //  Plumbing
     // ══════════════════════════════════════════════════════════════════════════
 
     private async Task<(string Space, string Url, InMemoryGitRemote Remote)> ArmedSpace(
-        string provider, string label, CancellationToken ct)
+        string provider, string label, CancellationToken ct, bool connectGitHub = true)
     {
         var id = label + Guid.NewGuid().ToString("N")[..8];
         await NodeFactory.CreateNode(new MeshNode(id)
@@ -355,8 +457,9 @@ public class AzureReposGitHubParityTest(ITestOutputHelper output) : MonolithMesh
             State = MeshNodeState.Active,
             Content = new Space(),
         }).Timeout(TestTimeouts.Convergence).Await(ct);
-        await Credentials.Save(UserId, new GitHubToken(GitHubToken, null, "bearer", "repo", null), "octocat")
-            .Timeout(TestTimeouts.Convergence).Await(ct);
+        if (connectGitHub)
+            await Credentials.Save(UserId, new GitHubToken(GitHubToken, null, "bearer", "repo", null), "octocat")
+                .Timeout(TestTimeouts.Convergence).Await(ct);
         var repo = id.ToLowerInvariant();
         return provider == AzureRepos
             ? (id, $"https://dev.azure.com/parity/Content/_git/{repo}", azure.Repository("parity", "Content", repo))

@@ -174,6 +174,27 @@ public class AzureReposSyncPolicyTest
             "the negative control: a GitHub URL keeps its identity");
     }
 
+    [Fact]
+    public void TheRetiredPushOnlyPolicy_IsAForwarder_ThatAnswersTheCurrentRule()
+    {
+        // Public surface a module compiled against an earlier platform may bind: kept, obsolete, and
+        // answering azure-repos-two-way — every push-only refusal is gone, pull requests still refused.
+#pragma warning disable CS0618
+        AzureReposPushPolicy.RefuseExport(new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.Bidirectional })
+            .Should().BeNull();
+        foreach (var op in new[] { AzureReposPushPolicy.InboundOperation.Import, AzureReposPushPolicy.InboundOperation.Reimport,
+                     AzureReposPushPolicy.InboundOperation.CheckBranch, AzureReposPushPolicy.InboundOperation.BranchHead })
+            AzureReposPushPolicy.RefuseInbound(AzureUrl, op).Should().BeNull(op);
+        AzureReposPushPolicy.RefuseInbound(AzureUrl, AzureReposPushPolicy.InboundOperation.PullRequest)!.Key
+            .Should().Be("gitsync.azure.unsupported.pullRequest");
+        AzureReposPushPolicy.RefuseInbound(GitHubUrl, AzureReposPushPolicy.InboundOperation.PullRequest).Should().BeNull();
+        AzureReposPushPolicy.ExportGuard(new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.ImportOnly })!.Key
+            .Should().Be("activity.gitsync.importOnlyNoExport");
+        AzureReposPushPolicy.ReimportGuard(new GitHubSyncConfig { RepositoryUrl = AzureUrl, Direction = SyncDirection.ExportOnly })!.Key
+            .Should().Be("activity.gitsync.exportOnlyNoImport");
+#pragma warning restore CS0618
+    }
+
     // ── The provider seam ────────────────────────────────────────────────────
 
     [Fact]
@@ -304,6 +325,19 @@ public class AzureReposSyncPolicyTest
     [InlineData("gitsync.azure.unsupported.issues")]
     [InlineData("gitsync.azure.repositoryNotFound")]
     [InlineData("gitsync.azure.nothingToExport")]
+    [InlineData("gitsync.azure.branchMissing")]
+    [InlineData("gitsync.azure.branchCreateRefused")]
+    [InlineData("gitsync.azure.pushNamedNoCommit")]
+    [InlineData("gitsync.azure.unresolved")]
+    [InlineData("gitsync.azure.invalidSubdirectory")]
+    [InlineData("gitsync.azure.failed.readRepository")]
+    [InlineData("gitsync.azure.failed.readRefs")]
+    [InlineData("gitsync.azure.failed.readCommit")]
+    [InlineData("gitsync.azure.failed.listItems")]
+    [InlineData("gitsync.azure.failed.readBlob")]
+    [InlineData("gitsync.azure.failed.readDiff")]
+    [InlineData("gitsync.azure.failed.createBranch")]
+    [InlineData("gitsync.azure.failed.push")]
     [InlineData("gitsync.azure.identityNotDeclared")]
     [InlineData("gitsync.azure.noWorkloadIdentity")]
     [InlineData("gitsync.azure.notRegistered")]

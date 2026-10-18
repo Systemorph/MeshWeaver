@@ -42,6 +42,24 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
     /// <summary>Every request served, as <c>METHOD /relative?query</c> below the repository root.</summary>
     public ImmutableList<string> Requests => requests;
 
+    private ImmutableDictionary<string, (string TagObject, string Commit)> annotatedTags =
+        ImmutableDictionary<string, (string TagObject, string Commit)>.Empty;
+
+    /// <summary>
+    /// When set, <c>items</c> answers 404 "repository not found" although refs and commits still
+    /// resolve — the repository deleted, or the identity's Read revoked, between two calls of one
+    /// fetch. The case that must FAIL a fetch rather than read as an empty snapshot.
+    /// </summary>
+    public bool ItemsSeeNoRepository { get; set; }
+
+    /// <summary>Adds an ANNOTATED tag: its ref names a tag object, and only <c>peelTags=true</c>
+    /// reveals the commit (<c>peeledObjectId</c>), as on Azure DevOps.</summary>
+    public void AddAnnotatedTag(string organization, string project, string repository, string tag, string commit)
+    {
+        var tagObject = InMemoryGitRemote.BlobId(Encoding.UTF8.GetBytes("tag " + tag + " " + commit));
+        ImmutableInterlocked.Update(ref annotatedTags, t => t.SetItem(Key(organization, project, repository) + "|" + tag, (tagObject, commit)));
+    }
+
     /// <summary>Registers (or returns) the repository <c>{org}/{project}/{repo}</c>.</summary>
     public InMemoryGitRemote Repository(string organization, string project, string repository)
         => ImmutableInterlocked.GetOrAdd(ref repositories, Key(organization, project, repository), _ => new InMemoryGitRemote());
@@ -72,7 +90,8 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
             return Error(HttpStatusCode.NotFound, "not a git repositories route");
         var rest = string.Join('/', segments.Skip(6));
         ImmutableInterlocked.Update(ref requests, r => r.Add($"{request.Method} /{rest}{uri.Query}"));
-        if (!repositories.TryGetValue(Key(segments[0], segments[1], segments[5]), out var repo))
+        var repoKey = Key(segments[0], segments[1], segments[5]);
+        if (!repositories.TryGetValue(repoKey, out var repo))
             return Error(HttpStatusCode.NotFound,
                 $"TF401019: The Git repository with name or identifier {segments[5]} does not exist or you do not have permissions for the operation you are attempting.");
 
@@ -84,9 +103,11 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
                 ["name"] = segments[5],
                 ["defaultBranch"] = repo.DefaultBranch is { } d ? "refs/heads/" + d : null,
             }),
-            ("GET", "refs") => Refs(repo, query["filter"] ?? ""),
+            ("GET", "refs") => Refs(repoKey, repo, query["filter"] ?? "", query["peelTags"] == "true"),
             ("POST", "refs") => CreateRefs(repo, body!),
-            ("GET", "items") => Items(repo, query),
+            ("GET", "items") => ItemsSeeNoRepository
+                ? Error(HttpStatusCode.NotFound, $"TF401019: The Git repository with name or identifier {segments[5]} does not exist.")
+                : Items(repo, query),
             ("POST", "pushes") => Push(repo, body!),
             ("GET", "diffs/commits") => Diff(repo, query),
             ("GET", var r) when r.StartsWith("commits/", StringComparison.Ordinal) =>
@@ -98,15 +119,25 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
         };
     }
 
-    private static HttpResponseMessage Refs(InMemoryGitRemote repo, string filter)
-        => Json(new JsonObject
-        {
-            ["value"] = new JsonArray(repo.Branches
-                .Where(b => ("heads/" + b.Key).StartsWith(filter, StringComparison.Ordinal))
-                .OrderBy(b => b.Key, StringComparer.Ordinal)
-                .Select(b => (JsonNode)new JsonObject { ["name"] = "refs/heads/" + b.Key, ["objectId"] = b.Value })
-                .ToArray()),
-        });
+    private HttpResponseMessage Refs(string repoKey, InMemoryGitRemote repo, string filter, bool peel)
+    {
+        var branches = repo.Branches
+            .Where(b => ("heads/" + b.Key).StartsWith(filter, StringComparison.Ordinal))
+            .OrderBy(b => b.Key, StringComparer.Ordinal)
+            .Select(b => (JsonNode)new JsonObject { ["name"] = "refs/heads/" + b.Key, ["objectId"] = b.Value });
+        var tags = annotatedTags
+            .Where(t => t.Key.StartsWith(repoKey + "|", StringComparison.Ordinal))
+            .Select(t => (Name: t.Key[(repoKey.Length + 1)..], t.Value))
+            .Where(t => ("tags/" + t.Name).StartsWith(filter, StringComparison.Ordinal))
+            .Select(t =>
+            {
+                var entry = new JsonObject { ["name"] = "refs/tags/" + t.Name, ["objectId"] = t.Value.TagObject };
+                if (peel)
+                    entry["peeledObjectId"] = t.Value.Commit;
+                return (JsonNode)entry;
+            });
+        return Json(new JsonObject { ["value"] = new JsonArray(branches.Concat(tags).ToArray()) });
+    }
 
     private static HttpResponseMessage CreateRefs(InMemoryGitRemote repo, string body)
     {
@@ -133,12 +164,14 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
         if (query["recursionLevel"] != "Full" || query["versionDescriptor.versionType"] != "commit")
             return Error(HttpStatusCode.BadRequest, "this fake serves recursionLevel=Full at a commit");
         if (repo.FindCommit(query["versionDescriptor.version"] ?? "") is not { } commit)
-            return Error(HttpStatusCode.NotFound, "TF401175: The version descriptor could not be resolved.");
+            return Error(HttpStatusCode.NotFound, "TF401175: The version descriptor could not be resolved.",
+                "GitUnresolvableToCommitException");
         var scope = (query["scopePath"] ?? "/").Trim('/');
         var prefix = scope.Length == 0 ? "" : scope + "/";
         var blobs = commit.Tree.Where(kv => kv.Key.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
         if (scope.Length > 0 && blobs.Length == 0)
-            return Error(HttpStatusCode.NotFound, $"TF401174: The item '/{scope}' could not be found in the repository.");
+            return Error(HttpStatusCode.NotFound, $"TF401174: The item '/{scope}' could not be found in the repository.",
+                "GitItemNotFoundException");
         var folders = blobs
             .SelectMany(kv => Parents(kv.Key))
             .Where(f => f.Length >= scope.Length)
@@ -223,7 +256,8 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
     {
         if (repo.FindCommit(query["baseVersion"] ?? "") is not { } from
             || repo.FindCommit(query["targetVersion"] ?? "") is not { } to)
-            return Error(HttpStatusCode.NotFound, "TF401175: The version descriptor could not be resolved.");
+            return Error(HttpStatusCode.NotFound, "TF401175: The version descriptor could not be resolved.",
+                "GitUnresolvableToCommitException");
         var changes = new JsonArray();
         foreach (var path in from.Tree.Keys.Union(to.Tree.Keys, StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal))
         {
@@ -255,6 +289,6 @@ public sealed class FakeAzureDevOpsServer : HttpMessageHandler
     private static HttpResponseMessage Json(JsonNode body, HttpStatusCode status = HttpStatusCode.OK)
         => new(status) { Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json") };
 
-    private static HttpResponseMessage Error(HttpStatusCode status, string message)
-        => Json(new JsonObject { ["message"] = message, ["typeKey"] = "GitRepositoryNotFoundException" }, status);
+    private static HttpResponseMessage Error(HttpStatusCode status, string message, string typeKey = "GitRepositoryNotFoundException")
+        => Json(new JsonObject { ["message"] = message, ["typeKey"] = typeKey }, status);
 }

@@ -102,8 +102,10 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
                         if (head is not null)
                             return Observable.Return((Base: (string?)head, RefExists: true));
                         if (!request.CreateBranchIfMissing)
-                            return Observable.Throw<(string? Base, bool RefExists)>(new InvalidOperationException(
-                                $"Branch '{branch}' does not exist and branch auto-create is disabled."));
+                            return Observable.Throw<(string? Base, bool RefExists)>(GitSyncRefusal.Legacy(
+                                "gitsync.azure.branchMissing",
+                                $"Branch '{branch}' does not exist and branch auto-create is disabled.",
+                                ("branch", branch)).ToException());
                         // A missing branch is based on the DEFAULT branch's head — never an orphan
                         // (the policy the GitHub path pins in NewBranchBaseTest). An EMPTY repository
                         // has no default head: the first push creates the branch from nothing.
@@ -470,7 +472,7 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
         => Send(HttpMethod.Get, Url(repo, ""), token, body: null)
             .Select(response => response.Status == HttpStatusCode.NotFound
                 ? throw GitSyncRefusal.Of("gitsync.azure.repositoryNotFound", ("url", repositoryUrl)).ToException()
-                : Ensure(response, "read the repository"))
+                : Ensure(response, Operation.ReadRepository))
             .Select(json => new RepositoryInfo(json["defaultBranch"]?.GetValue<string>() is { } full
                 ? StripHeads(full)
                 : null));
@@ -479,13 +481,23 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
     private IObservable<string?> BranchHead(AzureReposRepository repo, string branch, string token)
         => Ref(repo, "heads/" + branch, token);
 
+    /// <summary>
+    /// The commit <c>refs/{name}</c> points at, or null when it does not exist. Asked with
+    /// <c>peelTags=true</c>: an ANNOTATED tag's <c>objectId</c> names the tag object, not a commit,
+    /// so its <c>peeledObjectId</c> (the commit) wins whenever it is set; a branch or lightweight tag
+    /// carries none and keeps its <c>objectId</c>.
+    /// </summary>
     private IObservable<string?> Ref(AzureReposRepository repo, string name, string token)
-        => Send(HttpMethod.Get, Url(repo, "/refs", ("filter", name)), token, body: null)
-            .Select(response => Ensure(response, "read refs"))
+        => Send(HttpMethod.Get, Url(repo, "/refs", ("filter", name), ("peelTags", "true")), token, body: null)
+            .Select(response => Ensure(response, Operation.ReadRefs))
             .Select(json => (json["value"]?.AsArray() ?? [])
                 // filter is a PREFIX match (heads/main also lists heads/main-old) — take the exact ref.
                 .FirstOrDefault(r => string.Equals(r?["name"]?.GetValue<string>(), "refs/" + name, StringComparison.Ordinal))
-                ?["objectId"]?.GetValue<string>());
+                is { } match
+                    ? match["peeledObjectId"]?.GetValue<string>() is { Length: > 0 } peeled && peeled != ZeroObjectId
+                        ? peeled
+                        : match["objectId"]?.GetValue<string>()
+                    : null);
 
     /// <summary>
     /// The full commit id a commitish names: a branch, else a tag, else a commit id (full or
@@ -503,25 +515,33 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
             : Observable.Return<string?>(null);
         // A full commit id names exactly one commit: one call, no ref lookups.
         if (looksLikeSha && name.Length == 40)
-            return commit.Select(sha => sha ?? throw new InvalidOperationException(
-                $"'{name}' is not a commit of {repositoryUrl}."));
+            return commit.Select(sha => sha ?? throw Unresolved(name, repositoryUrl));
         return BranchHead(repo, name, token)
             .SelectMany(head => head is not null
                 ? Observable.Return<string?>(head)
                 : Ref(repo, "tags/" + name, token))
             .SelectMany(tag => tag is not null ? Observable.Return<string?>(tag) : commit)
-            .Select(sha => sha ?? throw new InvalidOperationException(
-                $"'{name}' is not a branch, tag or commit of {repositoryUrl}."));
+            .Select(sha => sha ?? throw Unresolved(name, repositoryUrl));
     }
+
+    private static Exception Unresolved(string name, string repositoryUrl)
+        => GitSyncRefusal.Of("gitsync.azure.unresolved", ("ref", name), ("url", repositoryUrl)).ToException();
 
     private IObservable<string?> CommitId(AzureReposRepository repo, string id, string token)
         => Send(HttpMethod.Get, Url(repo, "/commits/" + Uri.EscapeDataString(id)), token, body: null)
             .Select(response => response.Status is HttpStatusCode.NotFound or HttpStatusCode.BadRequest
                 ? null
-                : Ensure(response, "read a commit")["commitId"]?.GetValue<string>());
+                : Ensure(response, Operation.ReadCommit)["commitId"]?.GetValue<string>());
 
-    /// <summary>Every blob under <paramref name="prefix"/> at <paramref name="commit"/>; empty when the
-    /// path does not exist there.</summary>
+    /// <summary>
+    /// Every blob under <paramref name="prefix"/> at <paramref name="commit"/>.
+    ///
+    /// <para>🚨 <b>An empty listing is answered for ONE 404 only</b>: the SUBDIRECTORY is missing
+    /// (Azure DevOps' <c>GitItemNotFoundException</c>) at a commit that still resolves. Every other
+    /// 404 — the repository gone or unreadable, the commit unresolvable, a 404 for the repository
+    /// root — FAILS, because an empty, complete snapshot is what a full import mirrors the Space to:
+    /// read as "no files", an unavailable repository would prune every synced node.</para>
+    /// </summary>
     private IObservable<IReadOnlyList<AzureReposItem>> ListBlobs(
         AzureReposRepository repo, string commit, string prefix, string token)
         => Send(HttpMethod.Get, Url(repo, "/items",
@@ -529,17 +549,32 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
                 ("recursionLevel", "Full"),
                 ("versionDescriptor.version", commit),
                 ("versionDescriptor.versionType", "commit")), token, body: null)
-            .Select(response => response.Status == HttpStatusCode.NotFound
-                ? (IReadOnlyList<AzureReposItem>)[]
-                : (IReadOnlyList<AzureReposItem>)(Ensure(response, "list items")["value"]?.AsArray() ?? [])
-                    .Where(i => i?["isFolder"]?.GetValue<bool>() != true
-                                && !string.Equals(i?["gitObjectType"]?.GetValue<string>(), "tree", StringComparison.OrdinalIgnoreCase))
-                    .Select(i => new AzureReposItem(
-                        (i!["path"]?.GetValue<string>() ?? "").TrimStart('/'),
-                        i["objectId"]?.GetValue<string>() ?? ""))
-                    .Where(i => i.RepoPath.Length > 0
-                                && (prefix.Length == 0 || i.RepoPath.StartsWith(prefix, StringComparison.Ordinal)))
-                    .ToImmutableList());
+            .SelectMany(response =>
+            {
+                if (response.Status != HttpStatusCode.NotFound)
+                    return Observable.Return(Blobs(Ensure(response, Operation.ListItems), prefix));
+                if (prefix.Length == 0 || ErrorType(response.Body) != ItemNotFound)
+                    return Observable.Throw<IReadOnlyList<AzureReposItem>>(
+                        Failure(response.Status, response.Body, Operation.ListItems));
+                // The folder is missing — but only a commit that still resolves makes that an answer.
+                return CommitId(repo, commit, token).Select(found => found is not null
+                    ? (IReadOnlyList<AzureReposItem>)[]
+                    : throw Failure(response.Status, response.Body, Operation.ListItems));
+            });
+
+    /// <summary>Azure DevOps' error type for a path that does not exist at a version.</summary>
+    internal const string ItemNotFound = "GitItemNotFoundException";
+
+    private static IReadOnlyList<AzureReposItem> Blobs(JsonNode json, string prefix)
+        => (json["value"]?.AsArray() ?? [])
+            .Where(i => i?["isFolder"]?.GetValue<bool>() != true
+                        && !string.Equals(i?["gitObjectType"]?.GetValue<string>(), "tree", StringComparison.OrdinalIgnoreCase))
+            .Select(i => new AzureReposItem(
+                (i!["path"]?.GetValue<string>() ?? "").TrimStart('/'),
+                i["objectId"]?.GetValue<string>() ?? ""))
+            .Where(i => i.RepoPath.Length > 0
+                        && (prefix.Length == 0 || i.RepoPath.StartsWith(prefix, StringComparison.Ordinal)))
+            .ToImmutableList();
 
     private IObservable<byte[]> ReadBlob(AzureReposRepository repo, string objectId, string token)
         => SendBytes(Url(repo, "/blobs/" + Uri.EscapeDataString(objectId), ("$format", "octetstream")), token);
@@ -549,7 +584,7 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
                 ("baseVersion", baseSha), ("baseVersionType", "commit"),
                 ("targetVersion", headSha), ("targetVersionType", "commit"),
                 ("$top", "10000")), token, body: null)
-            .Select(response => Ensure(response, "read a diff"));
+            .Select(response => Ensure(response, Operation.ReadDiff));
 
     /// <summary>Creates <c>refs/heads/{branch}</c> at <paramref name="sha"/>; emits the sha.</summary>
     private IObservable<string> CreateRef(AzureReposRepository repo, string branch, string sha, string token)
@@ -561,11 +596,11 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
             }))
             .Select(response =>
             {
-                var json = Ensure(response, "create a branch");
+                var json = Ensure(response, Operation.CreateBranch);
                 var update = (json["value"]?.AsArray() ?? []).FirstOrDefault();
                 if (update?["success"]?.GetValue<bool>() == false)
-                    throw new InvalidOperationException(
-                        $"Azure Repos refused to create branch '{branch}': {update["updateStatus"]?.GetValue<string>()}.");
+                    throw GitSyncRefusal.Of("gitsync.azure.branchCreateRefused",
+                        ("branch", branch), ("status", update["updateStatus"]?.GetValue<string>() ?? "")).ToException();
                 return sha;
             });
 
@@ -574,10 +609,10 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
         IReadOnlyList<MirrorChange> changes, GitHubPushRequest request)
         => Send(HttpMethod.Post, Url(repo, "/pushes"), request.AccessToken,
                 PushBody(branch, oldObjectId, changes, request.CommitMessage, request.AuthorName, request.AuthorEmail))
-            .Select(response => Ensure(response, "push"))
+            .Select(response => Ensure(response, Operation.Push))
             .Select(json => json["commits"]?.AsArray().FirstOrDefault()?["commitId"]?.GetValue<string>()
-                            ?? throw new InvalidOperationException(
-                                $"Azure Repos accepted the push to {request.RepositoryUrl} but named no commit."))
+                            ?? throw GitSyncRefusal.Of("gitsync.azure.pushNamedNoCommit",
+                                ("url", request.RepositoryUrl)).ToException())
             .Do(sha => logger?.LogInformation(
                 "Pushed {Changes} change(s) to {Repo}@{Branch} as {Sha}.",
                 changes.Count, request.RepositoryUrl, branch, sha));
@@ -614,7 +649,7 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
         if (!response.IsSuccessStatusCode)
         {
             var detail = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            throw Failure(response.StatusCode, detail, "read a blob");
+            throw Failure(response.StatusCode, detail, Operation.ReadBlob);
         }
         return await response.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
     }
@@ -625,25 +660,59 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
     }
 
-    private static JsonNode Ensure(ApiResponse response, string what)
+    private static JsonNode Ensure(ApiResponse response, string operation)
         => (int)response.Status is >= 200 and < 300
             ? JsonNode.Parse(response.Body.Length == 0 ? "{}" : response.Body) ?? new JsonObject()
-            : throw Failure(response.Status, response.Body, what);
+            : throw Failure(response.Status, response.Body, operation);
 
-    /// <summary>A failed call, carrying Azure DevOps' own message (its error body's <c>message</c>).</summary>
-    private static InvalidOperationException Failure(HttpStatusCode status, string body, string what)
+    /// <summary>
+    /// A failed call as a keyed refusal (<c>gitsync.azure.failed.{operation}</c>), so a viewer reads
+    /// it in their language; Azure DevOps' own diagnostic (its error body's <c>message</c>) travels
+    /// VERBATIM as the <c>detail</c> argument — it is the service's text, not ours to translate.
+    /// </summary>
+    private static Exception Failure(HttpStatusCode status, string body, string operation)
+        => GitSyncRefusal.Of("gitsync.azure.failed." + operation,
+            ("status", (int)status), ("detail", ErrorMessage(body) ?? status.ToString())).ToException();
+
+    /// <summary>The <c>message</c> of an Azure DevOps error body; null when the body is not one
+    /// (a proxy page, an empty 401).</summary>
+    private static string? ErrorMessage(string body)
     {
-        string? message = null;
         try
         {
-            message = JsonNode.Parse(body)?["message"]?.GetValue<string>();
+            return JsonNode.Parse(body)?["message"]?.GetValue<string>() is { Length: > 0 } m ? m : null;
         }
         catch (JsonException)
         {
-            // Not a JSON error body (a proxy page, an empty 401): the status says what is known.
+            return null;
         }
-        return new InvalidOperationException(
-            $"Azure Repos could not {what} (HTTP {(int)status}){(message is { Length: > 0 } m ? ": " + m : ".")}");
+    }
+
+    /// <summary>The <c>typeKey</c> of an Azure DevOps error body (e.g. <c>GitItemNotFoundException</c>).</summary>
+    private static string? ErrorType(string body)
+    {
+        try
+        {
+            return JsonNode.Parse(body)?["typeKey"]?.GetValue<string>();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The REST operations a failure names — an open vocabulary of string constants; each
+    /// value names the catalog key <c>gitsync.azure.failed.{value}</c>.</summary>
+    internal static class Operation
+    {
+        public const string ReadRepository = "readRepository";
+        public const string ReadRefs = "readRefs";
+        public const string ReadCommit = "readCommit";
+        public const string ListItems = "listItems";
+        public const string ReadBlob = "readBlob";
+        public const string ReadDiff = "readDiff";
+        public const string CreateBranch = "createBranch";
+        public const string Push = "push";
     }
 
     private static string StripHeads(string reference)
@@ -660,7 +729,7 @@ public sealed class AzureReposRepoClient : IGitHubRepoClient
         if (string.IsNullOrEmpty(s))
             return "";
         if (s.Contains('\\') || s.Split('/').Any(seg => seg.Length == 0 || seg is "." or ".."))
-            throw new ArgumentException($"Invalid repo subdirectory '{subdirectory}'.");
+            throw GitSyncRefusal.Of("gitsync.azure.invalidSubdirectory", ("subdirectory", subdirectory ?? "")).ToException();
         return s + "/";
     }
 }
