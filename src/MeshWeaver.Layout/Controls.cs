@@ -331,6 +331,14 @@ public static class Controls
     /// <returns>A new <see cref="InstallAppControl"/>.</returns>
     public static InstallAppControl InstallApp(object manifestHref) => new(manifestHref);
 
+    /// <summary>
+    /// Creates the embedded payment-method form for one open payment setup. It carries no secret:
+    /// the renderer obtains the provider's one-time client secret in the buyer's own circuit.
+    /// </summary>
+    /// <param name="setupId">The provider's setup id, or a data-binding expression.</param>
+    /// <returns>A new <see cref="PaymentSetupFormControl"/>.</returns>
+    public static PaymentSetupFormControl PaymentSetupForm(object setupId) => new(setupId);
+
     /// <summary>Creates a data grid control that renders <paramref name="elements"/> as a tabular view.</summary>
     /// <param name="elements">A collection or data-binding expression providing the rows.</param>
     /// <returns>A new <see cref="DataGridControl"/>.</returns>
