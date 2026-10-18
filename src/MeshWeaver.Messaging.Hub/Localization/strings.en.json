@@ -2130,6 +2130,7 @@
   "settings.groupCommercial": "Commercial",
   "settings.groupFleet": "Fleet",
   "settings.aiUsageCost": "AI usage & cost",
+  "settings.instanceModels": "Models on this instance",
   "settings.signInProviders": "Sign-in providers",
   "settings.fleet": "Fleet",
   "settings.connectedInstances": "Connected instances",
