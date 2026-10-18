@@ -239,6 +239,7 @@ exist on the target, or the event is refused.
 |---|---|---|---|
 | `github` / `pull_request`, `check_suite`, … | `Hosting/Babysitter` | the PR steward's heal/observe half (`Hosting/PrBabysitter`) | the repository and pull-request numbers — a TRIGGER; it re-reads GitHub |
 | `control` / `feedback-issue-status` | `Feedback/Inbox` | `FeedbackIssueStatus` (`Feedback/Feedback`) | the control instance's STATEMENT of one handed-over feedback's GitHub issue and its state |
+| `control` / `instance-request-status` | `Admin/InstanceRequests/FromControl` | `InstanceRequestStatusFromControl` (`MeshWeaver.Hosting.Instance`) | the control instance's STATEMENT of the state of one run a customer instance requested |
 
 🚨 **The second is a deliberate, narrow exception to the trigger-only rule.** A portal holds no GitHub
 credential, so it cannot re-read the issue a feedback it handed over became; the control instance,
@@ -257,6 +258,22 @@ which filed it and follows its state, states it instead (MeshWeaver.Plugins `Hos
   record must claim a lane key, the control instance must hold it, and the portal must list
   `Feedback/Inbox` under `ControlLane:EventTargets`. A portal no deployment record of the control
   instance names gets nothing.
+
+🚨 **The third row is the second exception, and it has the same shape.** A customer instance has no
+account on the control instance, so it cannot read the run it requested
+(MeshWeaver.Plugins `Hosting/Guide` → *A customer instance requests and approves its own actions*).
+The owner decided that the instance shows what it requested (policy `customer-instance-requests`).
+What keeps it narrow:
+
+- **The statement is signed twice** with the requesting deployment's own key, and carries its own
+  discriminator (`"kind": "instance-request-status"`).
+- **It is sent only to the deployment that requested the run.** It names that deployment, so any
+  other instance refuses it, whether at the lane or at the inner signature.
+- **One node, four fields.** The node must be an `InstanceActionRequest` this instance handed over
+  (`Sent`), a request and not an approval, of the same kind. Only `controlState`, `controlDetail`,
+  `controlStateAt` and `controlAction` move, and never backwards.
+- **Only where the lane is enabled and the target declared**
+  (`ControlLane__EventTargets__<n>: Admin/InstanceRequests/FromControl`).
 
 No other forwarded event may be acted on by its word. A new exception is a design decision of its
 own, recorded here with what bounds it.
