@@ -231,6 +231,17 @@ establish, never a guess from the operating system.
 written to a node, an activity, a log line, a URL, a cache or browser storage.
 `ClientPublicKey` is public by nature and is serialized.
 
+### The embedded form gets the secret in the buyer's session, never through the control
+
+`RevealsClientSecret` / `RevealClientSecret(setupId, buyer)` hands an open, client-rendered setup's
+one-time secret to the embedded form (`PaymentSetupFormControl`, see the GUI page *Badges, Icons &
+Status* → "Embedded payment-method form"). The default is *not supported*, so every existing
+provider keeps compiling and gains no way to leak a secret. A provider that implements it reads the
+setup server-side, and answers only when the setup's stamped buyer is the `buyer` passed and the
+setup can still be completed. The caller passes the signed-in identity of the session the form
+renders in, never a value from the page. The answer, `PaymentSetupClientSecret`, is `[JsonIgnore]`
+on its secret and masked in `ToString`, like `PaymentMethodSetupSession.ClientSecret`.
+
 ### A verified fact must be this request's own
 
 `PaymentMethodSetupFact` comes from an authenticated delivery (`PaymentDelivery.Setup`) or from

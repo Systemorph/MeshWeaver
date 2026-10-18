@@ -243,6 +243,37 @@ Controls.Stack
 The labels and install steps are the platform's own (`qr.*`, `share.*`, `install.*` in the string
 catalog), in the viewer's language.
 
+## Embedded payment-method form
+
+**`PaymentSetupFormControl`** (`Controls.PaymentSetupForm(setupId)`) renders the payment provider's
+own in-page form for one open, client-rendered payment setup. For Stripe that is the Payment Element,
+with the Express Checkout Element for Apple Pay and Google Pay where the device and account are
+eligible. The person saves a method on the page they are on, and **nothing is charged**. It was first
+used by the coupon journey's review page (MeshWeaver.Plugins#2064).
+
+🚨 **The control carries no secret, by construction.** It names only the setup (`SetupId`) and what
+is public by nature: `Provider` (which renderer draws it), `ClientPublicKey` (the publishable key),
+`ReturnUrl` (where an off-page 3-D Secure step returns to) and `Note`. The provider's one-time client
+secret is never a property of the control, so it cannot land in a layout area's data, a node or a
+stream snapshot. The renderer runs server-side in the **buyer's own circuit**. It asks the site's
+provider for the secret with that circuit's signed-in identity
+(`IPaymentMethodSetupProvider.RevealClientSecret(setupId, buyer)`), and the provider answers only the
+buyer the setup was opened for. The secret then goes straight to the provider's script in that one
+browser. The form never decides whether a method was saved. The provider's verified delivery or
+server-side read does that.
+
+```csharp
+Controls.PaymentSetupForm(new JsonPointerReference("setupId"))
+    .WithProvider("Stripe")
+    .WithClientPublicKey(new JsonPointerReference("publishableKey"))
+    .WithReturnUrl(new JsonPointerReference("returnUrl"))
+```
+
+The labels are the platform's own (`paymentSetup.*` in the string catalog), in the viewer's language.
+The renderers live with the portal hosts (MeshWeaver.Plugins). Loading a provider's script needs that
+host's Content-Security-Policy to admit it (for Stripe, `https://js.stripe.com` in `script-src`; its
+frames and API are already inside `frame-src https:` and `connect-src https:`).
+
 ---
 
 # See Also
