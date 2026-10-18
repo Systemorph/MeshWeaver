@@ -290,6 +290,35 @@ state; no bound was raised. `BakeOutput.NotYetSettled` is the predicate, pinned 
 
 Use this to capture a named release with author-written `ReleaseNotes`.
 
+#### 🚨 A release request builds every source edit written BEFORE it
+
+The watcher may consume a request without compiling — "satisfied by the existing current build" —
+when the record reads `Ok` and not `IsDirty`. `IsDirty` compares `CompiledSources` with
+`CurrentSourceVersions`, and `CurrentSourceVersions` is what the sources watcher publishes from the
+type's synced source query. That query trails a source write. A source edit commits on its own hub
+and reaches the query a moment later. So "edit, then press Compile" can land the request inside
+that window. The request is then stamped handled against the snapshot from before the edit, and
+nothing is dispatched. The snapshot arrives afterwards, and the record sits at `Ok` + `IsDirty`
+with its request spent. The edit is never built, and the Compile button appears to have done
+nothing. Measured on CI as the platform-compatibility ladder's rung 4 (`IsDirty = True`,
+`LastReleaseRequestHandledAt == RequestedReleaseAt`, the previous assembly). The race predates the
+day it was found: the deterministic repro fails on a build a day older as well.
+
+`InstallUnfulfilledReleaseRequestWatcher` closes it from the other side. A settled `Ok` record of a
+`Compiled` build with a source version written **at or before** `LastReleaseRequestHandledAt`, which
+its `CompiledSources` does not contain, carries an unfulfilled request. The watcher dispatches the
+compile that request asked for, through the one Pending door. Three cases are left alone:
+
+- Sources written after the request belong to a later request. A healthy type still never
+  auto-compiles on an edit.
+- A version that is not an instant (the `Version` fallback) is never judged.
+- An adopted build's drift belongs to the adoption judgement.
+
+It is bounded. The compile replaces `CompiledSources` with the set it consumed, and a failure settles
+at `Error`. The same request-and-snapshot pair is re-driven at most once per activation; a second
+match is logged at Error instead of dispatched. Proven by `AReleaseRequestBuildsTheEditWrittenBeforeItTest`
+(every edit-then-request is built; an edit with no request after it is not).
+
 ### Re-triggering after a source edit
 
 `RunCompile` records a `CompiledSources` snapshot — `{sourceNodePath → version}`
