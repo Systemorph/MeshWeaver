@@ -177,7 +177,7 @@ and its writers switch together.
 `LauncherArrangementPaths.Place(cache, rowPath, group, order, options)`. The launcher view routes a
 drop on a `{user}/_Apps/…` row there. A move keeps the tile's `hidden` flag.
 
-### Top-level tiles and the Settings group (2026-10-18)
+### Top-level tiles and the Settings group
 
 Maintainer, 2026-10-18: *"let's then put the Threads app also top level"* and *"all the settings at
 bottom under Settings"*. Both are DATA on the app root, read by the directory shape-tolerantly

@@ -532,8 +532,7 @@ public sealed class AppDirectory
                 settingsPath, LabelKey: null, BuiltIn: true)
             : new AppDirectoryEntry(SettingsId, "Settings", SettingsIcon, null, SettingsGroup,
                 settingsPath, LabelKey: "common.settings", BuiltIn: true);
-        // The settings tiles sit in ONE group, last (maintainer, 2026-10-18: "all the settings at
-        // bottom under Settings"); the Inbox stays top-level, in no group.
+        // The settings tiles sit in ONE group, last (Architecture/AppsHome); the Inbox stays top-level.
         settings = settings with { GroupDeclared = true, GroupOrder = LastGroupOrder, GroupLabelKey = SettingsGroupLabelKey };
         var list = ImmutableList.Create(
             settings,
