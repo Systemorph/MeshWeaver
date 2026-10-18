@@ -322,14 +322,35 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
         ex => logger.LogWarning(ex, "Delete of {Path} did not answer", path));
 ```
 
-- **Where it is checked: by the owning node hub, in its commit turn.** The delete first seals the
-  path against the owner's own writes and opens the subtree-deletion scope, then asks the owning hub
-  to compare `ExpectedVersion` with the node's **live** version. The owner answers on the same turn
-  every own write and every cross-hub patch commits on. So every write the owner has already
-  acknowledged is in the version it compares, and any later write is refused instead of being
-  acknowledged: an own write is refused in its turn (`SubtreeDeletionInFlightException`), and a
-  cross-hub patch is refused at its durable flush (`NotFound`, "Node being deleted"). The check and
-  the delete are one step: nothing acknowledged can land between them.
+- **Where it is checked: by the owning node hub, in its commit turn.** The delete opens the
+  subtree-deletion scope, then asks the owning hub to compare `ExpectedVersion` with the node's
+  **live** version. The owner answers on the same turn every own write and every cross-hub patch
+  commits on. So every write the owner has already acknowledged is in the version it compares.
+- **The owner holds the seal.** When the version matches, the owner seals the path **in that same
+  turn**, in its own process, so the seal holds whichever process or silo runs the delete. While the
+  seal is held, an own write to the path is **deferred**: it is neither acknowledged nor refused.
+  Its storage guard also refuses writes of the row, so a cross-hub patch is refused at its durable
+  flush (`NotFound`, "Node being deleted"). And the owner confirms only once every write of the row
+  that its process admitted **before** the seal has settled. Such a flush, acknowledged before the
+  check and already below the guard, would otherwise land after a delete on another silo and store
+  the node again. The check and the delete are one step: nothing acknowledged can land between them.
+- **Released on the delete's commit or abort message.** When the delete finishes, it sends
+  `ReleaseDeleteSeal` with its outcome. The message goes to the node-operation hub of the owner's
+  process, which the owner names in its answer. That address still resolves after the row is gone;
+  the node's own address does not. A successful delete waits for that hub to acknowledge the release
+  before it answers, so a caller that recreates the path at once is not refused by the owner's row
+  guard. If no answer came back from the owner, the abort goes to the node itself. If it gets there
+  before the version check runs, it leaves a mark for that activation, and the check then refuses
+  to take the seal.
+  - **Committed** (the root row is gone): the owner tombstones the path, and every deferred write is
+    refused with `SubtreeDeletionInFlightException`. Nothing it deferred was acknowledged, and its
+    pending flush cannot store the node again.
+  - **Aborted** (any other end, for example `Conflict`, `HasChildren` or a timeout): the deferred
+    writes run their commit turn again and are applied.
+  - **The deleter died:** no message comes. The seal lasts exactly as long as the owning activation.
+    Its teardown releases the seal and refuses the deferred writes, and the next activation is
+    unsealed. No timer releases a seal: one that fired while the delete was still running would let
+    through a write that the delete then removes.
 - **Why the live version, not the stored one.** An own write is acknowledged from the owner's
   in-memory commit, about one persistence-sampler interval before it is stored. A check against the
   stored row matched the old version in that window, and the delete removed a change its writer had
@@ -342,11 +363,10 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **And checked again by the store, in the delete itself.** The root row is removed with a
   compare-and-delete (`IStorageAdapter.DeleteIfVersionAtMost`; on Postgres
   `DELETE … WHERE version <= $expected` and the row count). A row newer than the confirmed version was
-  written after the owner's check, by a writer the seal did not stop (another process, or anything
-  that writes the store without passing the owner). The store refuses to remove it, and the delete
+  written after the owner's check, by a writer that never passed the owner (anything that writes
+  the store directly). The store refuses to remove it, and the delete
   answers `Conflict` naming the stored version. A row at or below the confirmed version is the node
-  the deleter read, one sampler flush behind, so it is removed. The guarantee therefore no longer
-  depends on the seal alone, which is held only in the deleting process. Only a row in **writable**
+  the deleter read, one sampler flush behind, so it is removed. So the guarantee does not rest on the seal alone. Only a row in **writable**
   storage counts as a survivor. Shipped content that a read-only provider serves under a removed
   writable row is not this delete's to remove, so it is no conflict.
 - **When the same path has copies in several writable providers,** a copy newer than the confirmed
@@ -377,20 +397,23 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
 - **A recycling owner is asked again.** If the owner's activation is torn down while it compares,
   it answers `ShuttingDown`, as it does for an ordinary delete check. The delete then asks the next
   activation, within the same time budget.
-- **Not covered yet** (tracked on #6856): the seal is still held only in the deleting process. When
-  the owning activation runs on another silo, that silo can acknowledge an own write after the
-  comparison. The store refuses the delete only if that write was flushed before it. If the delete
-  reaches the store first, the later flush stores the node again: nothing acknowledged is lost, but
-  the delete has reported success for a node that exists again. Only the in-memory and Postgres
-  stores implement `DeleteIfVersionAtMost` atomically (Postgres in MeshWeaver.Plugins, as one
-  conditional `DELETE` whose row count is the verdict; its path router forwards the call). The
-  file-system store (and the caching adapter over it) and Snowflake use the interface default: they
-  read, compare, then delete, which checks the version but not atomically, so a write landing between
-  the read and the delete is removed. On the file-system backend that matters only with more than one
-  writer per directory; it is a single-writer store. And when the store refuses a delete because of a write from another process, the
-  owner here adopts that write only when its change notification, or a declared feed gap, arrives.
-  Until then the node stream can still show the older version, and a retry naming it is refused
-  again. That is safe, because nothing is removed, and the conflict names the stored version.
+- **Not covered yet: the owner is recycled while the delete is still running.** The owner's
+  teardown releases the seal, so a replacement activation can acknowledge a write while the stored
+  row is still at the confirmed version. If the paused delete then reaches the store before that
+  write is flushed, it removes the row, and the flush stores the node again. Keeping the seal across
+  activations would instead block every write to the path forever when the deleter has died. The
+  sound fix is a fence in the store, and that is an open design decision on #6856.
+- **Not covered yet.** Only the in-memory and Postgres stores implement `DeleteIfVersionAtMost`
+  atomically (Postgres in MeshWeaver.Plugins, as one conditional `DELETE` whose row count is the
+  verdict; its path router forwards the call). The file-system store (and the caching adapter over
+  it) and Snowflake use the interface default: they read, compare, then delete. That checks the
+  version but not atomically, so a write landing between the read and the delete is removed. On the
+  file-system backend that matters only with more than one writer per directory; it is a
+  single-writer store. Snowflake is tracked separately, in bug triage. And when the store refuses a
+  delete because of a write from another process, the owner here adopts that write only when its
+  change notification, or a declared feed gap, arrives. Until then the node stream can still show
+  the older version, and a retry naming it is refused again. That is safe, because nothing is
+  removed, and the conflict names the stored version.
 - **Omitted** (`null`, the default), the delete removes whatever version is there, exactly as before.
 
 ---

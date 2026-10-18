@@ -474,7 +474,173 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
         if (string.IsNullOrEmpty(path))
             return EmptyScope.Instance;
         _versionGuardedDeletions.AddOrUpdate(path, 1, (_, count) => count + 1);
-        return new CountedScope(_versionGuardedDeletions, path);
+        // Lifting a deleter-side seal announces itself like an owner seal's release, so an own write
+        // the seal DEFERRED re-runs its commit turn (see VersionGuardLifted).
+        return new CountedScope(_versionGuardedDeletions, path,
+            () => _versionGuardReleased.OnNext(new VersionGuardRelease(path, DeleteSealOutcome.Lifted)));
+    }
+
+    // ── The OWNER's seal (#6856) ───────────────────────────────────────────────────────────────
+    //
+    // The seal above is taken by the DELETING process. When the owning activation runs in another
+    // process (another silo), its own commit turn reads ITS process's registry, which the deleter
+    // never touched — so it could acknowledge a write after the comparison, and a delete that then
+    // reached the store first reported success for a node the later flush stored again. The owner
+    // therefore takes a seal of its own, in the same commit turn that confirms the version, and holds
+    // it until the deleter's commit or abort message arrives (ReleaseDeleteSeal), or until the owning
+    // activation is torn down — whichever comes first. No timer: an owner whose deleter died keeps
+    // the seal exactly as long as that activation lives, and its teardown releases it.
+
+    private readonly ConcurrentDictionary<string, OwnerDeleteSeal> _ownerSeals = new(StringComparer.Ordinal);
+    private readonly ISubject<VersionGuardRelease> _versionGuardReleased =
+        Subject.Synchronize(new Subject<VersionGuardRelease>());
+
+    /// <summary>
+    /// Takes the OWNER's seal of <paramref name="path"/> for the version-guarded delete
+    /// <paramref name="sealId"/> (#6856). Call it from the owner's commit turn that confirmed the
+    /// version, so no own write commits between the comparison and the seal. While it is held the
+    /// owner's own writes to <paramref name="path"/> are deferred, and the storage write guard of this
+    /// process refuses writes of the row (a cross-hub patch's durable flush among them). Taking the same
+    /// <paramref name="sealId"/> twice is one seal.
+    /// <para>🚨 Refused (<c>false</c>) when the delete's ABORT reached this owner before the
+    /// comparison did (<see cref="ReleaseOwnerDeleteSeal"/> with an abort mark): the delete has already
+    /// given up, so a seal taken now would have no release left to receive.</para>
+    /// </summary>
+    /// <param name="sealId">The delete's seal id (<see cref="ValidateDeleteRequest.SealId"/>).</param>
+    /// <param name="path">The node the delete targets.</param>
+    /// <param name="bindToOwnerLifetime">Couples a release to the owning activation's lifetime and
+    /// returns a handle that detaches it — the hub's <c>RegisterForDisposalDetachable</c>.</param>
+    /// <returns><c>true</c> when the seal is held for <paramref name="sealId"/>; <c>false</c> when the
+    /// delete was already aborted.</returns>
+    public bool TakeOwnerDeleteSeal(string sealId, string path, Func<IDisposable, IDisposable> bindToOwnerLifetime)
+    {
+        if (string.IsNullOrEmpty(sealId) || string.IsNullOrEmpty(path))
+            return false;
+        while (true)
+        {
+            if (_ownerSeals.TryGetValue(sealId, out var existing))
+            {
+                if (!existing.IsAbortMark)
+                    return true; // the same delete asked twice: one seal
+                // The abort arrived first. Consume its mark; the delete is over.
+                if (_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, existing)))
+                {
+                    existing.Teardown.Dispose();
+                    return false;
+                }
+                continue;
+            }
+            var seal = OwnerDeleteSeal.Held(path,
+                new CountedScope(_versionGuardedDeletions, path, onDisposed: null, register: true),
+                BeginRowDeletion(path));
+            if (!_ownerSeals.TryAdd(sealId, seal))
+            {
+                // Lost a race to a concurrent take or abort mark: undo, and tell any write that saw
+                // the momentary seal to look again.
+                seal.Scopes!.Dispose();
+                _versionGuardReleased.OnNext(new VersionGuardRelease(path, DeleteSealOutcome.Lifted));
+                continue;
+            }
+            // Bound AFTER it is registered: a teardown already under way releases at once, and that
+            // release finds the seal to remove.
+            seal.Teardown.Disposable = bindToOwnerLifetime(System.Reactive.Disposables.Disposable.Create(
+                () => ReleaseOwnerDeleteSeal(sealId, path, DeleteSealOutcome.OwnerTeardown)));
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Releases the owner's seal <paramref name="sealId"/> (#6856): on the deleter's commit or abort
+    /// message, or from the owning activation's teardown. <see cref="DeleteSealOutcome.Committed"/> first
+    /// tombstones <paramref name="path"/> in this process, so neither a deferred write nor a pending
+    /// flush stores the deleted node again. Then the seal is lifted and every deferred own write hears
+    /// the outcome.
+    /// <para>An unknown id is a no-op — unless <paramref name="markAbortOnOwner"/> is given and the
+    /// outcome is <see cref="DeleteSealOutcome.Aborted"/>: then the abort overtook the comparison (the
+    /// deleter gave up before the owner answered), and an abort MARK is left for the id, bound to the
+    /// owning activation's lifetime, so a comparison that runs later refuses to take the seal
+    /// (<see cref="TakeOwnerDeleteSeal"/>).</para>
+    /// </summary>
+    /// <param name="sealId">The delete's seal id.</param>
+    /// <param name="path">The node the seal covers; a release naming another path is ignored.</param>
+    /// <param name="outcome">A <see cref="DeleteSealOutcome"/> value.</param>
+    /// <param name="markAbortOnOwner">The owning activation's <c>RegisterForDisposalDetachable</c>, when
+    /// the release is handled by the owner itself.</param>
+    /// <returns><c>true</c> when this call released a held seal.</returns>
+    public bool ReleaseOwnerDeleteSeal(string sealId, string path, string outcome,
+        Func<IDisposable, IDisposable>? markAbortOnOwner = null)
+    {
+        if (string.IsNullOrEmpty(sealId))
+            return false;
+        while (true)
+        {
+            if (_ownerSeals.TryGetValue(sealId, out var seal))
+            {
+                if (seal.IsAbortMark || !string.Equals(seal.Path, path, StringComparison.OrdinalIgnoreCase))
+                    return false;
+                if (!_ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, seal)))
+                    continue;
+                if (string.Equals(outcome, DeleteSealOutcome.Committed, StringComparison.Ordinal))
+                    MarkDeleted(seal.Path);
+                // Detach from the owner's lifetime; a teardown release is already running inside it.
+                if (!string.Equals(outcome, DeleteSealOutcome.OwnerTeardown, StringComparison.Ordinal))
+                    seal.Teardown.Dispose();
+                seal.Scopes!.Dispose();
+                _versionGuardReleased.OnNext(new VersionGuardRelease(seal.Path, outcome));
+                return true;
+            }
+            if (markAbortOnOwner is null
+                || !string.Equals(outcome, DeleteSealOutcome.Aborted, StringComparison.Ordinal))
+                return false;
+            var mark = OwnerDeleteSeal.AbortMark(path);
+            if (!_ownerSeals.TryAdd(sealId, mark))
+                continue;
+            // Lives exactly as long as the activation that could still run the comparison.
+            mark.Teardown.Disposable = markAbortOnOwner(System.Reactive.Disposables.Disposable.Create(
+                () => _ownerSeals.TryRemove(new KeyValuePair<string, OwnerDeleteSeal>(sealId, mark))));
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Emits once, the next time a version-guard seal on <paramref name="path"/> is lifted, with the
+    /// <see cref="DeleteSealOutcome"/> it was lifted for — or at once with
+    /// <see cref="DeleteSealOutcome.Lifted"/> when no seal holds it any more. An own write the seal
+    /// deferred subscribes to this and then re-runs its commit turn, which checks the seal again: with
+    /// two seals on the path, lifting one re-defers it. Subscribed to the releases BEFORE the state
+    /// is read, so a release in between cannot be missed.
+    /// </summary>
+    /// <param name="path">The sealed path.</param>
+    /// <returns>The outcome of the lift.</returns>
+    public IObservable<string> VersionGuardLifted(string path)
+        => _versionGuardReleased
+            .Where(r => string.Equals(r.Path, path, StringComparison.OrdinalIgnoreCase))
+            .Select(r => r.Outcome)
+            .Merge(Observable.Defer(() => IsVersionGuardedDeletionInFlight(path)
+                ? Observable.Never<string>()
+                : Observable.Return(DeleteSealOutcome.Lifted)))
+            .Take(1);
+
+    private sealed record VersionGuardRelease(string Path, string Outcome);
+
+    private sealed class OwnerDeleteSeal
+    {
+        private OwnerDeleteSeal(string path, System.Reactive.Disposables.CompositeDisposable? scopes)
+        {
+            Path = path;
+            Scopes = scopes;
+        }
+
+        public static OwnerDeleteSeal Held(string path, IDisposable versionGuard, IDisposable rowGuard)
+            => new(path, new System.Reactive.Disposables.CompositeDisposable(versionGuard, rowGuard));
+
+        /// <summary>The delete was aborted before the owner compared: no guards, only the refusal.</summary>
+        public static OwnerDeleteSeal AbortMark(string path) => new(path, null);
+
+        public string Path { get; }
+        public System.Reactive.Disposables.CompositeDisposable? Scopes { get; }
+        public bool IsAbortMark => Scopes is null;
+        public System.Reactive.Disposables.SingleAssignmentDisposable Teardown { get; } = new();
     }
 
     /// <summary>
@@ -489,24 +655,42 @@ public sealed class RecentlyDeletedRegistry : IAddressTombstones
            && !_versionGuardedDeletions.IsEmpty
            && _versionGuardedDeletions.ContainsKey(path);
 
-    private sealed class CountedScope(ConcurrentDictionary<string, int> counts, string key) : IDisposable
+    private sealed class CountedScope : IDisposable
     {
+        private readonly ConcurrentDictionary<string, int> _counts;
+        private readonly string _key;
+        private readonly Action? _onDisposed;
         private int _disposed;
+
+        public CountedScope(ConcurrentDictionary<string, int> counts, string key, Action? onDisposed, bool register = false)
+        {
+            _counts = counts;
+            _key = key;
+            _onDisposed = onDisposed;
+            if (register)
+                counts.AddOrUpdate(key, 1, (_, count) => count + 1);
+        }
 
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)
                 return;
+            Decrement();
+            _onDisposed?.Invoke();
+        }
+
+        private void Decrement()
+        {
             while (true)
             {
-                if (!counts.TryGetValue(key, out var count))
+                if (!_counts.TryGetValue(_key, out var count))
                     return;
                 if (count <= 1)
                 {
-                    if (counts.TryRemove(new KeyValuePair<string, int>(key, count)))
+                    if (_counts.TryRemove(new KeyValuePair<string, int>(_key, count)))
                         return;
                 }
-                else if (counts.TryUpdate(key, count - 1, count))
+                else if (_counts.TryUpdate(_key, count - 1, count))
                     return;
             }
         }

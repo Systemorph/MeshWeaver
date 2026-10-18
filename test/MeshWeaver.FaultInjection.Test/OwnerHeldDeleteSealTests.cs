@@ -1,0 +1,307 @@
+using System;
+using System.Reactive;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using System.Threading;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Hosting.Orleans.Test;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.FaultInjection.Test;
+
+/// <summary>
+/// <b>The owner holds the delete seal</b> (MeshWeaver#6856). A delete guarded by
+/// <see cref="DeleteNodeRequest.ExpectedVersion"/> runs on silo 1; the node's OWNER lives on silo 0.
+/// Before the fix the only seal was held by the deleting process, so the owner on silo 0 never saw it:
+/// after it confirmed the version it could still acknowledge an own write, and when the delete then
+/// reached the store first, that write's later flush stored the node again while the delete had
+/// reported success. Now the owner takes the seal in the turn that confirms the version, defers its
+/// own writes while it holds it, and releases it on the deleter's commit or abort message — or, when
+/// the deleter dies, on its own teardown. No timer is involved anywhere.
+///
+/// <para>Controlled switches, no clocks: the deleter's store holds the delete (<c>HoldDeletes</c>) or the
+/// delete's child enumeration (<c>HoldEnumerations</c>) — both AFTER the owner's verdict — and the owner's
+/// store holds the owner's flush (<c>HoldWrites</c>), so that on the old code the acknowledged write lands
+/// after the delete, the resurrection order. The only fixed waits are the short negative windows in which
+/// a deferred write must NOT answer.</para>
+/// </summary>
+public abstract class OwnerHeldDeleteSealTestBase(FaultInjectionCluster mesh)
+{
+    /// <summary>Silo the node's owner is activated on (the primary; never killed).</summary>
+    protected const int OwnerSilo = 0;
+
+    /// <summary>Silo the delete runs on.</summary>
+    protected const int DeleterSilo = 1;
+
+    /// <summary>How long a deferred write is watched for an answer it must not give.</summary>
+    protected static readonly TimeSpan DeferredWindow = TimeSpan.FromSeconds(2);
+
+    protected FaultInjectionCluster Mesh => mesh;
+
+    protected static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    /// <summary>Creates <c>{prefix}-{guid}/Doc</c> on the owner silo and proves its owner is activated THERE.</summary>
+    protected async Task<(string Path, IMessageHub Owner)> ArrangeOwnedNode(string prefix, bool withChild = false)
+    {
+        var services = mesh.Silo(OwnerSilo);
+        var hub = mesh.Hub(OwnerSilo);
+        var access = services.GetRequiredService<AccessService>();
+        var meshService = services.GetRequiredService<IMeshService>();
+        var ns = $"{prefix}-{Guid.NewGuid():N}";
+        var path = $"{ns}/Doc";
+        await access.RunAsSystem(() => meshService.CreateNode(
+                new MeshNode("Doc", ns) { Name = "v1", NodeType = "Markdown", State = MeshNodeState.Active }))
+            .Should().Within(TestTimeouts.Convergence).Emit("the node is created on its owner's silo", Ct);
+        if (withChild)
+            await access.RunAsSystem(() => meshService.CreateNode(
+                    new MeshNode("Child", path) { Name = "child", NodeType = "Markdown", State = MeshNodeState.Active }))
+                .Should().Within(TestTimeouts.Convergence).Emit("the child is created", Ct);
+        await access.RunAsSystem(() => hub.NodeOperationIssuingHub()
+                .Observe(new PingRequest(), o => o.WithTarget(new Address(path))))
+            .Should().Within(TestTimeouts.Convergence).Emit($"the owner answers a ping on silo {OwnerSilo}", Ct);
+        var owner = hub.GetHostedHub(new Address(path), HostedHubCreation.Never);
+        owner.Should().NotBeNull(
+            $"the owner must be activated on silo {OwnerSilo} — with the owner beside the deleter the case "
+            + "measures the in-process seal, not the cross-process one");
+        mesh.Hub(DeleterSilo).GetHostedHub(new Address(path), HostedHubCreation.Never).Should().BeNull(
+            "the deleter's silo must not host the owner");
+        return (path, owner!);
+    }
+
+    /// <summary>The version the store of record holds — what the deleter read.</summary>
+    protected long StoredVersion(string path)
+        => (mesh.Stored(path) ?? throw new InvalidOperationException($"'{path}' is not stored")).Version;
+
+    /// <summary>A version-guarded delete issued on the deleter silo, connected and replayed.</summary>
+    protected IConnectableObservable<IMessageDelivery<DeleteNodeResponse>> Delete(string path, long expected)
+    {
+        var deleter = mesh.Hub(DeleterSilo);
+        var access = mesh.Silo(DeleterSilo).GetRequiredService<AccessService>();
+        return access.RunAsSystem(() => deleter.NodeOperationIssuingHub().Observe(
+                new DeleteNodeRequest(path) { ExpectedVersion = expected },
+                o => o.WithTarget(deleter.NodeOperationTarget())))
+            .Replay(1);
+    }
+
+    /// <summary>
+    /// An OWN write on the owner (the commit turn the seal guards), materialized and replayed so its
+    /// one answer — the acknowledged node or the refusal — can be asserted on, or its absence.
+    /// </summary>
+    protected IConnectableObservable<Notification<MeshNode>> OwnWrite(IMessageHub owner, string name)
+        => mesh.Silo(OwnerSilo).GetRequiredService<AccessService>()
+            .RunAsSystem(() => owner.GetWorkspace().GetMeshNodeStream().Update(n => n with { Name = name }))
+            .Materialize()
+            .Where(n => n.Kind != NotificationKind.OnCompleted)
+            .Replay();
+
+    /// <summary>The owner silo's registry — the process that must hold the seal.</summary>
+    protected RecentlyDeletedRegistry OwnerRegistry
+        => mesh.Silo(OwnerSilo).GetRequiredService<RecentlyDeletedRegistry>();
+}
+
+/// <summary>Commit and abort, on one cluster (neither case removes a silo).</summary>
+public class OwnerHeldDeleteSealTest(OwnerHeldDeleteSealTest.Cluster cluster)
+    : OwnerHeldDeleteSealTestBase(cluster), IClassFixture<OwnerHeldDeleteSealTest.Cluster>
+{
+    /// <summary>
+    /// THE FALSIFIER. The guarded delete passed the owner's version check and is paused at the
+    /// deleter's store. An own write on the owner in that window must not be acknowledged: it is
+    /// deferred, and refused once the delete commits. The node stays deleted. On the old code the
+    /// write was acknowledged at once (the owner's process held no seal), and its flush — held here
+    /// until after the delete — stored the node again.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AWriteOnTheOwnerAfterTheVersionCheck_IsDeferredAndRefusedOnCommit_AndTheNodeStaysDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-commit");
+        var read = StoredVersion(path);
+
+        using var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        using var flushHold = Mesh.Storage(OwnerSilo).HoldWrites(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the guarded delete passed the owner's verdict and reached the deleter's store", ct);
+        var write = OwnWrite(owner, "written after the version check");
+        using var writeConnection = write.Connect();
+        await write.Should().NotEmit(DeferredWindow,
+            "a write the confirmed delete would remove is neither acknowledged nor refused while the seal is held",
+            ct);
+        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeTrue(
+            "the OWNER's process holds the seal from its verdict until the deleter commits or aborts");
+
+        deleteHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "the deleter named the version the owner confirmed");
+
+        var answer = await write.Should().Within(TestTimeouts.Convergence)
+            .Emit("the deferred write is answered once the delete commits", ct);
+        answer.Kind.Should().Be(NotificationKind.OnError,
+            "the node is deleted: a write deferred by its seal is refused, never acknowledged");
+        answer.Exception.Should().BeOfType<SubtreeDeletionInFlightException>();
+
+        flushHold.Release();
+        Mesh.Stored(path).Should().BeNull("nothing acknowledged after the version check can store the node again");
+    }
+
+    /// <summary>
+    /// NEGATIVE CONTROL: the same deferred write is APPLIED when the delete aborts after the owner's
+    /// check. The delete here is non-recursive and the node has a child, so it gives up at its
+    /// has-children decision — paused on the deleter's child enumeration, which runs after the
+    /// owner's verdict. Its abort message releases the seal and the write commits.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AWriteDeferredByTheSeal_IsApplied_WhenTheDeleteAborts()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-abort", withChild: true);
+        var read = StoredVersion(path);
+
+        using var enumerationHold = Mesh.Storage(DeleterSilo).HoldEnumerations(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Where(_ => OwnerRegistry.IsVersionGuardedDeletionInFlight(path))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the owner confirmed the version and took the seal", ct);
+        await enumerationHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the delete is paused at its child enumeration, after the owner's verdict", ct);
+
+        var write = OwnWrite(owner, "written while the delete was undecided");
+        using var writeConnection = write.Connect();
+        await write.Should().NotEmit(DeferredWindow, "the seal defers the write while the delete is undecided", ct);
+
+        enumerationHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeFalse("the node has a child and the delete is not recursive");
+        response.RejectionReason.Should().Be(NodeDeletionRejectionReason.HasChildren);
+
+        var answer = await write.Should().Within(TestTimeouts.Convergence)
+            .Emit("the abort releases the seal and the deferred write runs", ct);
+        answer.Kind.Should().Be(NotificationKind.OnNext, answer.Exception?.Message ?? "the delete aborted");
+        answer.Value.Name.Should().Be("written while the delete was undecided");
+        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeFalse("the abort lifted the owner's seal");
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => Mesh.Stored(path))
+            .Where(n => n?.Name == "written while the delete was undecided")
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the applied write reaches the store", ct);
+    }
+
+    /// <summary>
+    /// A flush the OWNER's process admitted before the seal — an own write acknowledged before the
+    /// version check, still on its way to the store — must settle before the owner confirms. Held
+    /// here below the owner's storage guard. Before, the owner confirmed at once, the delete on the
+    /// other silo removed the older row, and the released flush then stored the node again; the
+    /// deleter's own settle step sees only its own process.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task AFlushAdmittedBeforeTheSeal_SettlesBeforeTheOwnerConfirms_AndTheNodeStaysDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-admitted");
+
+        using var flushHold = Mesh.Storage(OwnerSilo).HoldWrites(path);
+        var acked = OwnWrite(owner, "acknowledged before the version check");
+        using var ackConnection = acked.Connect();
+        var ack = await acked.Should().Within(TestTimeouts.Convergence).Emit("an own write is acknowledged from memory", ct);
+        ack.Kind.Should().Be(NotificationKind.OnNext, ack.Exception?.Message ?? "no seal yet");
+        await Mesh.Storage(OwnerSilo).HeldWrites(path).Should().Within(TestTimeouts.Convergence)
+            .Emit("its flush was admitted by the owner's storage guard and is held below it", ct);
+
+        var delete = Delete(path, ack.Value!.Version);
+        using var deleteConnection = delete.Connect();
+        await delete.Should().NotEmit(DeferredWindow,
+            "the owner does not confirm while a flush it admitted before the seal is still on its way", ct);
+
+        flushHold.Release();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "the deleter named the version the owner acknowledged");
+        Mesh.Stored(path).Should().BeNull("the admitted flush landed BEFORE the delete, never after it");
+    }
+
+    /// <summary>
+    /// A delete answers success only once the owner's seal — and its row guard — is lifted, so a
+    /// caller that recreates the path at once is accepted. Before, the release was posted and the
+    /// success sent in the same breath, to different hubs, and the recreate could meet the guard.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ADeleteAnswersAfterTheOwnersGuardIsLifted_SoAnImmediateRecreateIsAccepted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, _) = await ArrangeOwnedNode("seal-recreate");
+        var delete = Delete(path, StoredVersion(path));
+        using var deleteConnection = delete.Connect();
+        var response = (await delete.Should().Within(TestTimeouts.Convergence).Emit("a delete always answers", ct)).Message;
+        response.Success.Should().BeTrue(response.Error ?? "nothing changed since the read");
+
+        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeFalse(
+            "the success is sent only after the owner acknowledged the release");
+        OwnerRegistry.IsUnderActiveDeletion(path, out _).Should().BeFalse("the owner's row guard is lifted too");
+
+        var services = Mesh.Silo(OwnerSilo);
+        var slash = path.LastIndexOf('/');
+        await services.GetRequiredService<AccessService>().RunAsSystem(() => services.GetRequiredService<IMeshService>()
+                .CreateNode(new MeshNode(path[(slash + 1)..], path[..slash]) { Name = "recreated", NodeType = "Markdown", State = MeshNodeState.Active }))
+            .Should().Within(TestTimeouts.Convergence).Emit("the path can be recreated the moment the delete answers", ct);
+    }
+
+    /// <summary>Its own cluster.</summary>
+    public class Cluster : FaultInjectionCluster;
+}
+
+/// <summary>
+/// The deleter DIES after the owner's check: no commit or abort message will ever come. The owner
+/// keeps the seal — nothing times it out — until its own activation is torn down, which releases it.
+/// </summary>
+public class OwnerHeldDeleteSealDeleterDeathTest(OwnerHeldDeleteSealDeleterDeathTest.Cluster cluster)
+    : OwnerHeldDeleteSealTestBase(cluster), IClassFixture<OwnerHeldDeleteSealDeleterDeathTest.Cluster>
+{
+    [Fact(Timeout = 180_000)]
+    public async Task WhenTheDeleterDies_TheOwnersTeardownReleasesTheSeal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (path, owner) = await ArrangeOwnedNode("seal-death");
+        var read = StoredVersion(path);
+
+        var deleteHold = Mesh.Storage(DeleterSilo).HoldDeletes(path);
+        var delete = Delete(path, read);
+        using var deleteConnection = delete.Connect();
+        await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
+            .Emit("the guarded delete passed the owner's verdict and reached the deleter's store", ct);
+
+        var write = OwnWrite(owner, "written before the deleter died");
+        using var writeConnection = write.Connect();
+        await write.Should().NotEmit(DeferredWindow, "the seal defers the write", ct);
+
+        await Mesh.Kill(DeleterSilo);
+        await write.Should().NotEmit(DeferredWindow,
+            "no message will release the seal now, and nothing may time it out: it lasts as long as the owner",
+            ct);
+        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeTrue("the owner still holds the seal");
+
+        owner.Dispose();
+        var answer = await write.Should().Within(TestTimeouts.Convergence)
+            .Emit("the owner's teardown releases the seal and answers the deferred write", ct);
+        answer.Kind.Should().Be(NotificationKind.OnError, "a write deferred by a seal the teardown released was never acknowledged");
+        OwnerRegistry.IsVersionGuardedDeletionInFlight(path).Should().BeFalse("the teardown released the seal");
+
+        // The delete never reached the store, so the node lives on and the next activation is unsealed.
+        Mesh.Stored(path).Should().NotBeNull("the deleter died before its delete reached the store");
+        var services = Mesh.Silo(OwnerSilo);
+        await services.GetRequiredService<AccessService>().RunAsSystem(() =>
+                services.GetRequiredService<IMeshNodeStreamCache>()
+                    .Update(path, n => n with { Name = "after the teardown" }, Mesh.Hub(OwnerSilo).JsonSerializerOptions))
+            .Should().Within(TestTimeouts.Convergence).Emit("a write to the fresh activation is not deferred", ct);
+    }
+
+    /// <summary>Its own cluster: the case kills a silo.</summary>
+    public class Cluster : FaultInjectionCluster;
+}
