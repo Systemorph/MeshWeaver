@@ -319,6 +319,29 @@ public class FileSystemAssemblyStoreTest : IDisposable
             .Should().Be(newest, "the version still resolves to its newest publication");
     }
 
+    /// <summary>
+    /// Review on #6969: a publication writes its pdb BEFORE its dll, so another writer's eviction can
+    /// run while a build exists only as its pdb. That in-flight build is the newest of its version and
+    /// must be kept — ranking dlls alone deleted its symbols out from under the first writer.
+    /// The interleave is pinned deterministically: writer A's pdb is on disk, its dll is not, and
+    /// writer B publishes into the same type.
+    /// </summary>
+    [Fact]
+    public async Task An_in_flight_builds_pdb_survives_another_writers_eviction()
+    {
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("older"), Encoding.UTF8.GetBytes("older-pdb"))
+            .Should().Emit();
+        var inFlightPdb = Path.Combine(root, "Store_Plugin",
+            $"v9-{FileSystemAssemblyStore.FrameworkTag}-aaaaaaaaaaaa.pdb");
+        File.WriteAllBytes(inFlightPdb, Encoding.UTF8.GetBytes("writer-A-pdb"));
+
+        await store.Put("Store/Plugin", 9, Encoding.UTF8.GetBytes("writer-B"), Encoding.UTF8.GetBytes("writer-B-pdb"))
+            .Should().Emit();
+
+        File.Exists(inFlightPdb).Should().BeTrue(
+            "writer A's build is in flight — its dll is the next thing it publishes");
+    }
+
     /// <summary>The sibling budget never reaches across versions: each kept version keeps its own
     /// newest build, so a mixed-replica window over the last versions still resolves.</summary>
     [Fact]

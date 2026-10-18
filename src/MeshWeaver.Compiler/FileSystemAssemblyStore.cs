@@ -500,18 +500,27 @@ public sealed class FileSystemAssemblyStore : IAssemblyStore
 
             // 🚨 The SIBLING axis (#6940). Within a kept version, keep only the newest
             // KeepBuildsPerVersion BUILDS — a build is a (version, content hash) pair, its dll and
-            // pdb together — ranked by the dll's write time, which is what the version-only lookup
-            // answers by and what a rollback's TryTouch moves. An older sibling is superseded on
-            // exactly the argument an older version is: the record names the newest publication by
-            // identity, an activation that already loaded the older one keeps its mapping, and a
-            // reader that still asks for it gets a recoverable MISS that recompiles.
+            // pdb together — ranked by the newest write time of either file. The dll's time is what
+            // the version-only lookup answers by and what a rollback's TryTouch moves. An older
+            // sibling is superseded on exactly the argument an older version is: the record names
+            // the newest publication by identity, an activation that already loaded the older one
+            // keeps its mapping, and a reader that still asks for it gets a recoverable MISS.
+            //
+            // 🚨 A build is identified from EITHER file, never from the dll alone (review on #6969).
+            // PutWithLocationCore publishes the pdb BEFORE the dll, so another writer's eviction can
+            // run in between and see a pdb with no dll yet. Ranking only dlls left that in-flight
+            // build out of the kept set and deleted its pdb — the writer then finished "successfully"
+            // without the symbols it supplied. Counted from either file, the in-flight build is the
+            // newest one of its version and is kept.
             var keptBuilds = mine
-                .Where(x => !x.Identity.IsPdb && keptVersions.Contains(x.Identity.Version))
-                .GroupBy(x => x.Identity.Version)
-                .SelectMany(g => g
-                    .OrderByDescending(x => x.File.LastWriteTimeUtc)
+                .Where(x => keptVersions.Contains(x.Identity.Version))
+                .GroupBy(x => (x.Identity.Version, x.Identity.Hash))
+                .Select(build => (build.Key, Newest: build.Max(x => x.File.LastWriteTimeUtc)))
+                .GroupBy(build => build.Key.Version)
+                .SelectMany(version => version
+                    .OrderByDescending(build => build.Newest)
                     .Take(KeepBuildsPerVersion)
-                    .Select(x => (x.Identity.Version, x.Identity.Hash)))
+                    .Select(build => build.Key))
                 .ToHashSet();
 
             var evicted = 0;
