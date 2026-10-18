@@ -302,6 +302,15 @@ on:
         required: false
         type: string
         default: ''
+      stage-source:
+        description: >-
+          The bake-source segment stage-repo publishes under (e.g. `plugins`). The staged checkout
+          is taken at the commit that source's SEALED publication was baked from, so it must be
+          one of upstream-sources. Empty = derived from stage-repo's name
+          (Systemorph/MeshWeaver.Plugins → `plugins`).
+        required: false
+        type: string
+        default: ''
       stage-modules:
         description: >-
           Module directories to sparse-checkout from stage-repo and copy into the bake mount
@@ -1294,7 +1303,10 @@ jobs:
           ORIGIN="the portal image '$PORTAL_REF' (the ref this run RESOLVED, whose /app the identity was read from), chosen by this run's trigger ($TRIGGER)"
           GATE_LOG="$RUNNER_TEMP/upstream-gate.log"
           # shellcheck disable=SC2086
-          if mw-platform-gate/.github/scripts/check-release-availability.sh \
+          # SOURCE_COMMITS_OUT: which commit each sealed upstream was baked from — the stage step
+          # below checks the upstream's SOURCE out at exactly that commit.
+          if SOURCE_COMMITS_OUT="$RUNNER_TEMP/upstream-source-commits.txt" \
+             mw-platform-gate/.github/scripts/check-release-availability.sh \
                --identity "${{ steps.identity.outputs.identity }}" \
                --identity-origin "$ORIGIN" $UPSTREAMS 2>&1 | tee "$GATE_LOG"; then
             echo "every upstream is published for ${{ steps.identity.outputs.identity }} — building."
@@ -1425,11 +1437,51 @@ jobs:
           owner: ${{ steps.stage-repo-parts.outputs.owner }}
           repositories: ${{ steps.stage-repo-parts.outputs.name }}
           permission-contents: read
+      # 🚨 The staged SOURCE must be the commit the composed upstream PUBLICATION was baked from —
+      # never the stage repo's default-branch HEAD. The bake composes the upstream's SEALED bytes
+      # (for the identity resolved above) and installs the staged node definitions beside them;
+      # HEAD is a third thing, chosen by when this job happened to START. Measured 2026-10-17: a
+      # Plugins merge raised Store's `minMeshVersion` to 3.1.11117 while the newest sealed set was
+      # 3.1.11102, and every satellite bake that started after it went RED on
+      # `PackagePlatformFloorException: Package 'Store' was not installed` — then on every package
+      # that requires Store/Plugin — while the identical dispatch that started before it was green
+      # (Manufacturing, Crm, SocialMedia, Reinsurance). The commit is read off the publication's own
+      # `source-commit.txt` by the availability gate, so it is the publication this run was cleared
+      # against. No fall-back to HEAD: an unknown commit is RED, naming what is missing.
+      - name: Resolve the stage repo's commit — the one the upstream publication was baked from
+        id: stage-ref
+        if: inputs.stage-modules != ''
+        env:
+          STAGE_REPO: ${{ inputs.stage-repo }}
+          STAGE_SOURCE: ${{ inputs.stage-source }}
+          UPSTREAMS: ${{ inputs.upstream-sources }}
+        run: |
+          set -euo pipefail
+          src="$STAGE_SOURCE"
+          if [ -z "$src" ]; then
+            # The fleet's naming: Systemorph/MeshWeaver.Plugins publishes as `plugins`.
+            src="${STAGE_REPO##*/}"; src="${src#MeshWeaver.}"
+            src=$(printf '%s' "$src" | tr '[:upper:]' '[:lower:]')
+          fi
+          declared=""
+          read -r -a upstream_list <<< "$UPSTREAMS"
+          for u in "${upstream_list[@]}"; do [ "$u" = "$src" ] && declared=1; done
+          case "$declared" in
+            1) ;;
+            *) echo "::error::stage-repo '$STAGE_REPO' stages SOURCE from upstream '$src', which is not in upstream-sources ('${UPSTREAMS}'). Its source can only be staged at the commit of a sealed publication this run was cleared against — declare it in upstream-sources, or set stage-source to the bake-source segment ${STAGE_REPO} publishes under."
+               exit 1 ;;
+          esac
+          COMMITS="$RUNNER_TEMP/upstream-source-commits.txt"
+          sha=$(grep -m1 "^$src=" "$COMMITS" 2>/dev/null | cut -d= -f2- || true)
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::the sealed '$src' publication this run was cleared against names no source commit ('${sha:-<none>}' in $COMMITS) — refusing to stage ${STAGE_REPO}'s default branch instead: its node definitions and package floors need not match the sealed bytes this bake composes."; exit 1; }
+          echo "ref=$sha" >> "$GITHUB_OUTPUT"
+          echo "staging ${STAGE_REPO} at $sha — the commit the sealed '$src' publication was baked from"
       - name: Stage cross-repo modules
         if: inputs.stage-modules != ''
         uses: actions/checkout@v7
         with:
           repository: ${{ inputs.stage-repo }}
+          ref: ${{ steps.stage-ref.outputs.ref }}
           token: ${{ steps.stage-token.outputs.token }}
           path: cross-repo-stage
           sparse-checkout: ${{ inputs.stage-modules }}

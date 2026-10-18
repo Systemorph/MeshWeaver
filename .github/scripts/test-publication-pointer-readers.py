@@ -180,8 +180,8 @@ def run_compose(workdir: Path, root: Path, *, upstreams: str = SOURCE, packages:
     return proc, out / MODULE
 
 
-def run_availability(workdir: Path, root: Path, *, sources: str = SOURCE
-                     ) -> subprocess.CompletedProcess[str]:
+def run_availability(workdir: Path, root: Path, *, sources: str = SOURCE,
+                     commits_out: Path | None = None) -> subprocess.CompletedProcess[str]:
     """The upstream gate every publishing repo runs, asked about ONE identity.
 
     🚨 It is the THIRD Azure-direct reader of this prefix, and until #4341's follow-up the page and
@@ -194,6 +194,9 @@ def run_availability(workdir: Path, root: Path, *, sources: str = SOURCE
     env = environment(workdir, root)
     env.update(BAKE_PUBLISH_TARGETS=f"{ACCOUNT}/{SHARE}")
     env.pop("GITHUB_STEP_SUMMARY", None)
+    env.pop("SOURCE_COMMITS_OUT", None)
+    if commits_out is not None:
+        env["SOURCE_COMMITS_OUT"] = str(commits_out)
     return subprocess.run(
         [str(AVAILABILITY), "--identity", IDENTITY, *sources.split()],
         capture_output=True, text=True, timeout=180, check=False, env=env)
@@ -437,6 +440,44 @@ def main() -> int:
               and "no sealed publication" not in proc.stdout,
               "a reader that probes the prefix answers ABSENT here and holds every publishing "
               "repo's build on a publication that is sealed and live", proc)
+
+        # 🚨 WHICH COMMIT the live publication was baked from — what node-repo-publish-bake.yml
+        # stages the upstream's SOURCE at. Staging the stage repo's HEAD instead paired one
+        # commit's sealed bytes with a later commit's package floors (a Plugins merge raised
+        # Store's minMeshVersion past every sealed platform set, and every satellite bake that
+        # started after it refused Store). Discriminating: the flat copy and the pointed-at
+        # generation record DIFFERENT commits, so only the pointer-following answer passes.
+        print("the availability gate names the commit the POINTED-AT publication was sealed from:")
+        root = base / "avail-commit" / "remote"
+        stage(root, pointer=GENERATION)
+        prefix = root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE
+        flat_sha, gen_sha = "f" * 40, "a1" * 20
+        (prefix / "source-commit.txt").write_text(flat_sha + "\n", encoding="utf-8")
+        (prefix / GENERATION / "source-commit.txt").write_text(gen_sha + "\n", encoding="utf-8")
+        commits = base / "avail-commit" / "commits.txt"
+        proc = run_availability(base / "avail-commit" / "run", root, commits_out=commits)
+        recorded = commits.read_text(encoding="utf-8") if commits.exists() else ""
+        check("check-release-availability.sh records the LIVE publication's source commit",
+              proc.returncode == 0 and recorded == f"{SOURCE}={gen_sha}\n",
+              f"expected '{SOURCE}={gen_sha}' (the generation `_current` names), got {recorded!r} — "
+              "a caller staging source at any other commit pairs it with bytes it was not baked "
+              "beside", proc)
+
+        # …and a publication whose marker is missing records an EMPTY commit, loudly, without
+        # changing the availability verdict — the caller that needs the commit fails on the gap.
+        print("the availability gate with a sealed publication that records no source commit:")
+        root = base / "avail-nocommit" / "remote"
+        stage(root, pointer=GENERATION)
+        (root / ACCOUNT / SHARE / "prebuilt-bundles" / IDENTITY / SOURCE / GENERATION
+         / "source-commit.txt").unlink()
+        commits = base / "avail-nocommit" / "commits.txt"
+        proc = run_availability(base / "avail-nocommit" / "run", root, commits_out=commits)
+        recorded = commits.read_text(encoding="utf-8") if commits.exists() else ""
+        check("…and an unreadable marker records an EMPTY commit and warns, never a guess",
+              proc.returncode == 0 and recorded == f"{SOURCE}=\n"
+              and "source-commit.txt could not be read" in proc.stdout,
+              f"got {recorded!r}: an unknown commit must reach the caller as unknown, so it refuses "
+              "rather than staging the default branch", proc)
 
         # The control that keeps the case above from passing by never refusing: same reader, same
         # fixture shape, NOTHING sealed anywhere. It must still say ABSENT, and say it in the

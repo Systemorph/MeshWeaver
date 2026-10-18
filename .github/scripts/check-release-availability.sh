@@ -47,6 +47,15 @@
 #                          receives the identical publication, so one is the answer and querying
 #                          all of them would only add ways to be flaky.
 #
+#   SOURCE_COMMITS_OUT     optional. A file to append one `<source>=<commit>` line to for every
+#                          source answered SEALED: the commit that publication's own
+#                          `source-commit.txt` says it was baked from (publish-bake-bundles.sh
+#                          writes it before the sentinel). An unreadable or `unknown` marker
+#                          writes `<source>=` and a warning — this script's verdict is
+#                          AVAILABILITY, so it never fails on it; a caller that NEEDS the commit
+#                          (node-repo-publish-bake.yml stages the upstream's source at it) fails
+#                          RED on the empty value itself.
+#
 # AUTH: `az login` must already have happened (the CD jobs use OIDC); data-plane access uses
 # --auth-mode login --backup-intent, i.e. the "Storage File Data Privileged Contributor" role.
 set -uo pipefail
@@ -257,6 +266,31 @@ summary "- 🎯 asking about framework identity \`$IDENTITY\` — from $ORIGIN_T
 # failures with different fixes — wait for/trigger the upstream, versus fix the credential, the
 # share or the network — and folding them into one count reported the second as the first. Both
 # still exit 1: neither is a pass, and this gate never goes advisory (MeshWeaver#3583).
+# 🚨 WHICH COMMIT a sealed publication was baked from, for a caller that has to stage that
+# upstream's SOURCE beside its bytes. Staging the upstream's default-branch HEAD instead paired the
+# sealed bytes of one commit with the node definitions and `minMeshVersion` floors of a later one:
+# on 2026-10-17 a Plugins merge raised Store's floor to a platform no sealed set had reached yet,
+# and every satellite bake that STARTED after it refused Store ("needs platform ≥ 3.1.11117, this
+# instance runs 3.1.11102") while the identical dispatch nine minutes earlier was green — the
+# verdict depended on when a queued job happened to start, not on anything it was given.
+record_source_commit() { # <source> <publication-dir>
+  _sc_local="$(mktemp)"
+  _sc_sha=""
+  if az storage file download --account-name "$ACCOUNT" --share-name "$SHARE" \
+      --path "$2/source-commit.txt" --dest "$_sc_local" \
+      --auth-mode login --backup-intent --only-show-errors > /dev/null 2>&1; then
+    _sc_sha=$(tr -d '[:space:]' < "$_sc_local")
+  fi
+  rm -f "$_sc_local"
+  case "$_sc_sha" in
+    [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+      echo "source commit: $1 was sealed from $_sc_sha ($2/source-commit.txt)" ;;
+    *)
+      echo "::warning::$2/source-commit.txt could not be read or records no commit ('${_sc_sha:-<unreadable>}') — which commit '$1' was sealed from is unknown."
+      _sc_sha="" ;;
+  esac
+  printf '%s=%s\n' "$1" "$_sc_sha" >> "$SOURCE_COMMITS_OUT"
+}
 ABSENT=()       # asked, and the answer was NO
 UNDETERMINED=() # could not ask — a REFUSAL, never a smaller number
 for source in "${SOURCES[@]}"; do
@@ -277,7 +311,8 @@ for source in "${SOURCES[@]}"; do
     --path "$publication/$SENTINEL" --auth-mode login --backup-intent \
     --query exists -o tsv --only-show-errors 2>/dev/null || echo "unknown")
   case "$exists" in
-    true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`";;
+    true)  echo "sealed: $source (identity $IDENTITY) at $publication"; summary "- ✅ \`$source\` is published for \`$IDENTITY\`"
+           [ -z "${SOURCE_COMMITS_OUT:-}" ] || record_source_commit "$source" "$publication";;
     false)
       if [ -n "$RESOLVE_FAULT" ]; then
         UNDETERMINED+=("$source — $RESOLVE_FAULT, and $publication holds no sealed copy to fall back on, so which publication applies could not be read (MeshWeaver#3461 phase 5: the flat copy is gone once a generation is live). Re-run; a pointer being replaced is one small write")

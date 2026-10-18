@@ -441,6 +441,22 @@ alongside its assemblies. Until it does, `stage-repo`/`stage-modules` stay, mark
 gate already refuses to build when the upstream artifact is missing, which is the behaviour that
 does not change when the artifact grows.
 
+#### 🚨 While staging stays, the staged source is the SEALED commit — never the upstream's HEAD
+
+The staged node definitions and the composed upstream bytes must come from **one commit**. The
+publish-bake lane therefore checks `stage-repo` out at the commit the upstream's sealed
+publication was baked from — the `source-commit.txt` the availability gate reads off the very
+publication it cleared — and goes RED when that commit is unknown or when the staged source is not
+one of `upstream-sources` (override the derived segment with `stage-source`). It never falls back
+to the default branch.
+
+Staging HEAD made the verdict a function of *when the job started*. Measured on 2026-10-17: a
+Plugins merge stamped Store's `minMeshVersion` to `3.1.11117` while the newest sealed platform set
+was `3.1.11102`. Every satellite bake that started after that merge failed
+`PackagePlatformFloorException: Package 'Store' was not installed`, and then every package that
+requires `Store/Plugin` — while the same kind of dispatch, sent nine minutes earlier and started
+before the merge, was green (Manufacturing, Crm, SocialMedia and Reinsurance).
+
 ### What closing it looks like
 
 The gate (does the upstream exist?) is done. What is missing is the FETCH — a way for a build to
