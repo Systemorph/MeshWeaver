@@ -17,15 +17,19 @@ namespace Memex.Portal.Shared.Test;
 /// A GitSync activity names its read identity from this (<see cref="GitHubSyncService.ReadIdentityFor"/>),
 /// so an operator reading "installation N (account)" reads the account that performed the read.
 /// </summary>
-public class GitHubAppInstallationSelectionTest
+public class GitHubAppInstallationSelectionTest : IAsyncDisposable
 {
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(10);
+
+    // One registry per test (xUnit builds one instance per test), owned here and torn down below:
+    // a minted token runs on its HTTP pool, whose cancel thread lives until the registry is disposed.
+    private readonly IoPoolRegistry pools = new();
 
     private const string TwoInstallations =
         """[{"id": 11, "account": {"login": "Contoso"}}, {"id": 33, "account": {"login": "Fabrikam"}}]""";
 
-    private static GitHubAppTokenService Service(RSA key, long? installationId, string? owner) =>
-        new(new IoPoolRegistry(),
+    private GitHubAppTokenService Service(RSA key, long? installationId, string? owner) =>
+        new(pools,
             Options.Create(new GitHubAppOptions
             {
                 ClientId = "Iv23liTestApp",
@@ -61,5 +65,14 @@ public class GitHubAppInstallationSelectionTest
         using var key = RSA.Create(2048);
         var installation = await Service(key, 162001736, "Northwind").GetInstallation().FirstAsync().Timeout(Budget).Await();
         Assert.Equal(new GitHubAppInstallation(162001736, null), installation);
+    }
+
+    /// <summary>Disposes the registry and waits for its pools to report they have unwound —
+    /// <see cref="IoPoolRegistry.Dispose"/> only starts the cleanup.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        pools.Dispose();
+        await pools.Disposed.FirstAsync().Timeout(Budget).Await();
+        GC.SuppressFinalize(this);
     }
 }
