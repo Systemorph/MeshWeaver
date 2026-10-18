@@ -240,6 +240,7 @@ exist on the target, or the event is refused.
 | `github` / `pull_request`, `check_suite`, … | `Hosting/Babysitter` | the PR steward's heal/observe half (`Hosting/PrBabysitter`) | the repository and pull-request numbers — a TRIGGER; it re-reads GitHub |
 | `control` / `feedback-issue-status` | `Feedback/Inbox` | `FeedbackIssueStatus` (`Feedback/Feedback`) | the control instance's STATEMENT of one handed-over feedback's GitHub issue and its state |
 | `control` / `instance-request-status` | `Admin/InstanceRequests/FromControl` | `InstanceRequestStatusFromControl` (`MeshWeaver.Hosting.Instance`) | the control instance's STATEMENT of the state of one run a customer instance requested |
+| `control` / `approval-notice` | `Approvals/Workspace` | `ApprovalsFromControl` (`Approvals` package) | the control instance's STATEMENT that an action ABOUT this deployment waits for an approval there (or no longer does) |
 
 🚨 **The second is a deliberate, narrow exception to the trigger-only rule.** A portal holds no GitHub
 credential, so it cannot re-read the issue a feedback it handed over became; the control instance,
@@ -274,6 +275,24 @@ What keeps it narrow:
   `controlStateAt` and `controlAction` move, and never backwards.
 - **Only where the lane is enabled and the target declared**
   (`ControlLane__EventTargets__<n>: Admin/InstanceRequests/FromControl`).
+
+🚨 **The fourth row is the third exception.** The maintainer decided on 2026-10-18 that an approval
+about an instance reaches that instance's own administrators, and that *"control should only know about
+the basic config of the instance, nothing more"*. Control cannot see who those administrators are, so
+it states the request and the instance decides who sees it (MeshWeaver.Plugins
+`Approvals/AcrossInstances`). What keeps it narrow:
+
+- **The statement is signed twice** with the destination deployment's own key, and carries its own
+  discriminator (`"kind": "approval-notice"`).
+- **It names no recipient** and travels only to the deployment the action is about. For an action about
+  the control instance itself, it goes to the deployment declared under
+  `Hosting:ApprovalNotice:OperatorsDeployment`.
+- **One node type, one namespace.** The consumer writes one `Approvals/Elsewhere` copy in
+  `Admin/_ApprovalsElsewhere`, which only the instance's global administrators read. It then raises
+  their `approvals` notices, which point at the copy. Its link must be the https address of exactly the
+  stated `Ops/Actions/<id>` on the stated source host. It moves forward only.
+- **It decides nothing.** The copy answers every decision with where to approve: on the control
+  instance, at the gate. A decision that travels back is designed, not built, in the same doc.
 
 No other forwarded event may be acted on by its word. A new exception is a design decision of its
 own, recorded here with what bounds it.
