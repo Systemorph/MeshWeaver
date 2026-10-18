@@ -148,7 +148,9 @@ internal sealed class SubtreeDeletionGuardStorageAdapter(
     /// </remarks>
     public IObservable<bool?> WriteIfVersion(
         MeshNode node, long expectedVersion, JsonSerializerOptions options)
-        => registry is null
+        // The owner's store fence (#6856) writes past the row guard its own seal holds: admitted by
+        // instance, so every other write of the row is still refused while the fence runs.
+        => registry is null || registry.IsAdmittedFenceWrite(node)
             ? inner.WriteIfVersion(node, expectedVersion, options)
             : Admitted(
                 [node.Path],
