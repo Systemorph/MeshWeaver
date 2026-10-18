@@ -276,11 +276,11 @@ What keeps it narrow:
 - **Only where the lane is enabled and the target declared**
   (`ControlLane__EventTargets__<n>: Admin/InstanceRequests/FromControl`).
 
-🚨 **The fourth row is the third exception.** The maintainer decided on 2026-10-18 that an approval
-about an instance reaches that instance's own administrators, and that *"control should only know about
-the basic config of the instance, nothing more"*. Control cannot see who those administrators are, so
-it states the request and the instance decides who sees it (MeshWeaver.Plugins
-`Approvals/AcrossInstances`). What keeps it narrow:
+🚨 **The fourth row is the third exception.** An approval about an instance reaches that instance's
+own administrators, and the control instance knows an instance through its deployment record and
+nothing more. Both decisions are recorded with their attribution in MeshWeaver.Plugins
+`Approvals/AcrossInstances` → "The boundary rule". Control cannot see who those administrators are, so
+it states the request and the instance decides who sees it. What keeps it narrow:
 
 - **The statement is signed twice** with the destination deployment's own key, and carries its own
   discriminator (`"kind": "approval-notice"`).
