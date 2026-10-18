@@ -8,7 +8,8 @@ using Microsoft.Extensions.Options;
 namespace MeshWeaver.GitSync;
 
 /// <summary>
-/// Mints the Entra access token an Azure Repos push authenticates with (MeshWeaver#5248): the
+/// Mints the Entra access token every Azure Repos read and push authenticates with (MeshWeaver#5248,
+/// #6500): the
 /// instance's <b>workload identity</b>, exchanged through a federated credential on the app
 /// registration DECLARED in <see cref="AzureDevOpsOptions"/> (the client's tenant + client id from
 /// the instance's deployment record), for the Azure DevOps scope
