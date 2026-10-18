@@ -387,39 +387,26 @@ public class MeshQuery : IMeshQueryCore
 
     /// <summary>
     /// 🚨 NEW unified surface — each <see cref="IMeshQueryProvider"/> emits
-    /// snapshots of <see cref="QueryResult"/> rows; we combine via
-    /// <see cref="Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>,
-    /// dedupe by <see cref="QueryResult.Path"/> (highest-score wins; provider
-    /// name as final tiebreak), and re-emit on every change. Providers run
-    /// their async I/O inside their own hosted hubs — the call here never
-    /// touches the mesh hub's action block.
+    /// snapshots of <see cref="QueryResult"/> rows; we combine them progressively
+    /// (<see cref="CombineAnswers"/>), dedupe by <see cref="QueryResult.Path"/>
+    /// (highest-score wins; provider name as final tiebreak), and re-emit on every
+    /// change. Providers run their async I/O inside their own hosted hubs — the call
+    /// here never touches the mesh hub's action block.
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
-    {
-        IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
         // Subscribe on the DRAINABLE Query pool (see Query<T>): off the calling hub's action block
         // AND tracked, so teardown's DrainAll cancel+joins the subscribe before the scope disposes.
-        return QueryPool.SubscribeThroughPool(WithMembers(matched =>
-        {
-            if (matched.Count == 0)
-                return Observable.Return(empty);
-            // .StartWith(empty) per provider so CombineLatest emits as soon as ANY
-        // source converges instead of stalling on the slowest: source B's rows
-        // render immediately (the other sources contribute their empty seed),
-        // then the snapshot re-emits — re-merged + re-ordered by score — as A and
-        // C return. Same progressive shape as Autocomplete; the brief leading
-        // all-empty frame is the cost of not waiting for the whole fan-out.
-            var streams = matched.Select(p => p.Query(request, Options).StartWith(empty)).ToList();
-            return Observable.CombineLatest(streams)
-                .Select(snapshots => MergeSnapshots(snapshots));
-        }));
-    }
+        => QueryPool.SubscribeThroughPool(WithMembers(matched => CombineAnswers(
+            matched,
+            p => p.Query(request, Options),
+            MergeSnapshots,
+            string.Join(" | ", request.EffectiveQueries),
+            request.UserId)));
 
     /// <summary>
-    /// 🚨 NEW unified autocomplete — same shape as <see cref="Query"/> but with
-    /// <c>.StartWith(empty)</c> per provider so <see cref="Observable.CombineLatest{TSource}(IEnumerable{IObservable{TSource}})"/>
-    /// emits as soon as ANY provider produces. Slow providers don't gate the
-    /// UI — partial autocomplete suggestions render immediately.
+    /// 🚨 NEW unified autocomplete — the same progressive combination as <see cref="Query"/>
+    /// (<see cref="CombineAnswers"/>): slow providers don't gate the UI, partial autocomplete
+    /// suggestions render as soon as ANY provider produces rows.
     /// </summary>
     public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
         string basePath, string prefix,
@@ -427,17 +414,127 @@ public class MeshQuery : IMeshQueryCore
         int limit = 10,
         string? contextPath = null,
         string? context = null)
+        => WithMembers(matched => CombineAnswers(
+            matched,
+            p => p.Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context),
+            snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix),
+            $"autocomplete '{prefix}' under '{basePath}'",
+            userId: null));
+
+    /// <summary>One provider's contribution to a progressive snapshot fan-out: whether it has
+    /// ANSWERED yet, and the rows of its latest answer.</summary>
+    private readonly record struct ProviderAnswer(bool Answered, IReadOnlyCollection<QueryResult> Rows);
+
+    /// <summary>
+    /// The progressive snapshot fan-out behind <see cref="Query"/> and <see cref="Autocomplete"/>:
+    /// every provider's latest answer combined with <c>CombineLatest</c>, so a fast provider's rows
+    /// render without waiting for a slow one — but <b>every frame it emits is an ANSWER</b>.
+    ///
+    /// <para>🚨 MeshWeaver#6827 ("autocomplete shows up and disappears"). Each provider used to be
+    /// seeded with <c>.StartWith(empty)</c>, so the very first frame — and every frame until the
+    /// slowest provider answered — was the empty seed, byte-identical to a definitive "nothing
+    /// matches". A consumer cannot tell those apart, and every consumer read it as the answer: the
+    /// search bar settled on it and closed its dropdown while a mesh-wide fan-out (2–5 s over ~130
+    /// partition schemas on a large instance) was still running; a Monaco suggest widget fed the
+    /// empty snapshot was closed by it; a node-existence gate answered <c>false</c> first for a node
+    /// that exists (Doc/Architecture/CqrsAndContentAccess). Now a frame with no rows is emitted only
+    /// once EVERY provider has answered — a provider that completes without emitting counts as an
+    /// empty answer — so an empty frame always means "the answer is empty", never "not yet".</para>
+    ///
+    /// <para>Withholding the seed must not turn a stalled provider into a hang (policy
+    /// <c>query-fanin-stall-terminal</c>): when the fan-in's rung of the budget ladder
+    /// (<see cref="MeshOperationOptions.QueryInitialBudget"/>) elapses with NOTHING emitted and a
+    /// provider still silent, the fan-out faults with <see cref="QueryProviderStalledException"/>
+    /// naming it. Once rows have been emitted the consumer holds a real (partial) answer, so a
+    /// laggard then never faults it — its rows join when it answers.</para>
+    /// </summary>
+    /// <param name="matched">The fan-out's members.</param>
+    /// <param name="leg">Opens one member's live snapshot stream.</param>
+    /// <param name="merge">Combines the members' latest rows into one snapshot.</param>
+    /// <param name="query">The query, for the stall terminal's attribution.</param>
+    /// <param name="userId">The viewer, for the stall terminal's attribution.</param>
+    private IObservable<IReadOnlyCollection<QueryResult>> CombineAnswers(
+        IReadOnlyList<IMeshQueryProvider> matched,
+        Func<IMeshQueryProvider, IObservable<IReadOnlyCollection<QueryResult>>> leg,
+        Func<IList<IReadOnlyCollection<QueryResult>>, IReadOnlyCollection<QueryResult>> merge,
+        string? query,
+        string? userId)
     {
         IReadOnlyCollection<QueryResult> empty = Array.Empty<QueryResult>();
-        return WithMembers(matched =>
+        if (matched.Count == 0)
+            return Observable.Return(empty);
+        var names = matched.Select(p => p.Name).ToArray();
+        var budget = OperationOptions.QueryInitialBudget;
+        var logger = Logger;
+        return Observable.Create<IReadOnlyCollection<QueryResult>>(observer =>
         {
-            if (matched.Count == 0)
-                return Observable.Return(empty);
-            var streams = matched.Select(p => p
-                .Autocomplete(basePath, prefix, Options, mode, limit, contextPath, context)
-                .StartWith(empty));
-            return Observable.CombineLatest(streams)
-                .Select(snapshots => MergeAutocompleteSnapshots(snapshots, limit, contextPath, prefix));
+            // Built PER SUBSCRIPTION, as the Query<T> merge builds its own: a probe shared by every
+            // subscription of this cold observable would let the first to answer silence the rest.
+            var probe = new InitialStallProbe(names);
+            // One gate for the whole subscription: the stall terminal is delivered from a timer
+            // thread while the providers may be emitting on their own.
+            var gate = new object();
+            var emitted = false;
+            var terminated = false;
+            var legs = matched.Select((p, i) => leg(p)
+                .Select(rows => new ProviderAnswer(true, rows))
+                .DefaultIfEmpty(new ProviderAnswer(true, empty))
+                .Do(_ => probe.MarkSeen(i))
+                // The not-yet-answered seed keeps CombineLatest progressive (it emits as soon as ANY
+                // provider produces); the subscriber below keeps the seed itself from being emitted.
+                .StartWith(new ProviderAnswer(false, empty)))
+                .ToList();
+            var subscription = Observable.CombineLatest(legs)
+                .Select(answers => (
+                    Complete: answers.All(a => a.Answered),
+                    Rows: merge(answers.Select(a => a.Rows).ToList())))
+                .Subscribe(
+                    frame =>
+                    {
+                        lock (gate)
+                        {
+                            if (terminated) return;
+                            // Only a LEADING empty frame is withheld — one from before anything was
+                            // published, which is "not yet", not an answer. Once rows have been
+                            // published, an empty frame is an UPDATE that clears them (a provider
+                            // removed its last row) and must reach the consumer even while a peer is
+                            // still silent, or the removed rows would stay on screen for ever.
+                            if (!emitted && !frame.Complete && frame.Rows.Count == 0) return;
+                            emitted = true;
+                            observer.OnNext(frame.Rows);
+                        }
+                    },
+                    ex =>
+                    {
+                        lock (gate)
+                        {
+                            if (terminated) return;
+                            terminated = true;
+                            observer.OnError(ex);
+                        }
+                    },
+                    () =>
+                    {
+                        lock (gate)
+                        {
+                            if (terminated) return;
+                            terminated = true;
+                            observer.OnCompleted();
+                        }
+                    });
+            var arm = probe.Arm(budget, logger, query, userId, (stalled, reportTermination) =>
+            {
+                lock (gate)
+                {
+                    // Something real was already shown, or the stream already ended: a laggard
+                    // provider is then not an unanswered query, and the terminal is declined.
+                    if (terminated || emitted) return;
+                    terminated = true;
+                    reportTermination();
+                    observer.OnError(stalled);
+                }
+            });
+            return new System.Reactive.Disposables.CompositeDisposable(subscription, arm);
         });
     }
 
@@ -725,7 +822,7 @@ public class MeshQuery : IMeshQueryCore
                 var terminated = false;
                 var probeArm = singleProbe.Arm(
                     singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser,
-                    stalled =>
+                    (stalled, reportTermination) =>
                     {
                         lock (singleGate)
                         {
@@ -734,6 +831,7 @@ public class MeshQuery : IMeshQueryCore
                             // is what makes the terminal exactly-once.
                             if (terminated || sawInitial) return;
                             terminated = true;
+                            reportTermination();
                             observer.OnError(stalled);
                         }
                     });
@@ -1070,7 +1168,7 @@ public class MeshQuery : IMeshQueryCore
             // than adding one (MeshHubDisposalLeakTest's TimerQueue shape).
             subscriptions.Add(stallProbe.Arm(
                 OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId,
-                stalled =>
+                (stalled, reportTermination) =>
                 {
                     lock (gate)
                     {
@@ -1079,6 +1177,7 @@ public class MeshQuery : IMeshQueryCore
                         // terminal exactly-once.
                         if (terminated || initialCount == initialTarget) return;
                         terminated = true;
+                        reportTermination();
                         observer.OnError(stalled);
                     }
                 }));
@@ -1157,20 +1256,25 @@ public class MeshQuery : IMeshQueryCore
         /// <summary>
         /// Arms the stall timer. The returned subscription is added to the merge's disposables, so
         /// an unsubscribed query cancels it; <see cref="MarkSeen"/> cancels it earlier, on the
-        /// answer. When it fires with providers still missing it logs the laggards BY NAME and then
-        /// hands <paramref name="onStalled"/> the <see cref="QueryProviderStalledException"/> that
-        /// carries that attribution — the caller decides what a terminal means for its observer
-        /// (the merge faults it; nothing else may).
+        /// answer. When it fires with providers still missing it hands <paramref name="onStalled"/>
+        /// the <see cref="QueryProviderStalledException"/> that carries the laggards' attribution —
+        /// the caller decides what a terminal means for its observer (the merge faults it; nothing
+        /// else may). The laggards are logged BY NAME only when the caller ACCEPTS the terminal, by
+        /// invoking the report action it is handed — before it faults the observer, so the warning
+        /// precedes the fault the consumer sees. A declined terminal (the query already has an
+        /// answer to show) is no termination, and a warning saying "terminated" there would be false.
         /// </summary>
         /// <param name="delay">The fan-in's rung of the budget ladder
         /// (<see cref="MeshOperationOptions.QueryInitialBudget"/>).</param>
         /// <param name="logger">Diagnostic sink; absent on the hub-less unsecured registration.</param>
         /// <param name="query">The query text, for attribution.</param>
         /// <param name="userId">The identity the query ran under, for attribution.</param>
-        /// <param name="onStalled">Delivers the terminal. Invoked at most once, on a timer thread.</param>
+        /// <param name="onStalled">Delivers the terminal: given the exception and the action that
+        /// reports the termination, which it invokes only when it accepts the terminal. Invoked at
+        /// most once, on a timer thread.</param>
         public IDisposable Arm(
             TimeSpan delay, ILogger? logger, string? query, string? userId,
-            Action<QueryProviderStalledException> onStalled)
+            Action<QueryProviderStalledException, Action> onStalled)
         {
             var sub = Observable.Timer(delay).Subscribe(_ =>
             {
@@ -1178,14 +1282,13 @@ public class MeshQuery : IMeshQueryCore
                 if (missing is null)
                     return;
                 var stalled = new QueryProviderStalledException(missing, delay, query, userId);
-                logger?.LogWarning(stalled,
+                onStalled(stalled, () => logger?.LogWarning(stalled,
                     "Query provider(s) [{Providers}] did not emit an Initial within {Delay}s for query "
                     + "'{Query}' (user '{UserId}') — the query is stalled on its all-providers Initial "
                     + "gate and has NO snapshot to answer with, so it is TERMINATED as unavailable "
                     + "(retryable) rather than left hanging with no error. Fix the stalled provider; "
                     + "never bump the consumer's timeout.",
-                    missing, delay.TotalSeconds, query, userId);
-                onStalled(stalled);
+                    missing, delay.TotalSeconds, query, userId));
             });
             // Publish the arm so MarkSeen can release it — and re-check, because a provider may have
             // answered synchronously between the subscribe above and this line, in which case the
