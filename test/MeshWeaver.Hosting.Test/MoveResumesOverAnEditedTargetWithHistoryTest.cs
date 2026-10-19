@@ -80,7 +80,7 @@ public class MoveResumesOverAnEditedTargetWithHistoryTest(ITestOutputHelper outp
         retry.RejectionReason.Should().Be(NodeMoveRejectionReason.TargetAlreadyExists);
         retry.Error.Should().Contain("relocated by an earlier attempt",
             "refused by the source-unchanged check, after the target was recognised as this node relocated");
-        (await Stored(source))!.Name.Should().Be("Submission, edited after the copy", "a refused retry deletes nothing");
+        (await Stored(source))!.Name.Should().Be("Submission, edited after the copy", "a refused retry deletes nothing at the source");
         (await Stored(target))!.Name.Should().Be("Submission", "and leaves the target as the copy left it");
     }
 

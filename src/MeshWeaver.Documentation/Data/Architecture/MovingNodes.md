@@ -243,7 +243,13 @@ both hold:
 
 Descendants the earlier attempt never reached are created, and then the delete leg removes the source.
 The resume never writes over the target and never deletes at it. Every other case keeps the
-`TargetAlreadyExists` refusal and changes nothing, on either side:
+`TargetAlreadyExists` refusal. A refusal never writes over or deletes a node that already existed at
+the target, and never deletes anything at the source. It is NOT a no-op at the target, though: the
+copy creates the root before its descendants and runs every create it issued to its verdict, so a
+collision on one descendant can leave NEW partial copies behind — nodes this attempt itself created
+(the root, siblings that landed). They are named in the copy's `Written`, never deleted by the
+refusal, and the next attempt resumes them, so re-issuing the move once the collision is cleared
+finishes it:
 
 | Between the attempts | Store keeps history | Retry |
 |---|---|---|

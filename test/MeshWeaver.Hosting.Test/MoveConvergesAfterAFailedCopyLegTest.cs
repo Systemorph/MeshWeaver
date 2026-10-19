@@ -52,7 +52,7 @@ public class MoveConvergesAfterAFailedCopyLegTest(ITestOutputHelper output) : Mo
         first.RejectionReason.Should().Be(NodeMoveRejectionReason.TargetAlreadyExists);
         // The half-landing this issue is about: the copy wrote the root at the target, the delete
         // leg never ran, and the source subtree is whole.
-        (await Stored(target)).Should().NotBeNull("precondition: the copy created the root before the refused descendant");
+        (await Stored(target)).Should().NotBeNull("a refusal is not a no-op at the target: the copy created the root before the refused descendant, and that new partial copy stays");
         (await Stored(source)).Should().NotBeNull("a failed copy leg deletes nothing at the source");
         (await Stored($"{source}/Attachment")).Should().NotBeNull();
         (await Stored($"{source}/Notes")).Should().NotBeNull();
@@ -117,7 +117,7 @@ public class MoveConvergesAfterAFailedCopyLegTest(ITestOutputHelper output) : Mo
         retry.Error.Should().Contain("relocated by an earlier attempt",
             "refused by the source-unchanged check, after the target was recognised as this node relocated");
         (await Stored(target))!.Name.Should().Be("Submission, triaged", "the target's newer edit is never overwritten");
-        (await Stored(source))!.Name.Should().Be("Submission", "a refused retry deletes nothing");
+        (await Stored(source))!.Name.Should().Be("Submission", "a refused retry deletes nothing at the source");
     }
 
     private async Task<MoveNodeResponse> Move(string source, string target) =>
