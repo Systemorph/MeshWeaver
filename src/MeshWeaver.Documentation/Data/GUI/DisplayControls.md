@@ -243,13 +243,15 @@ localizes it. Every renderer loads the frame lazily, draws a theme-aware border,
 | `Kind` | Accepted `Src` | Sandbox |
 |---|---|---|
 | `EmbedKind.Document` (default) | a RELATIVE address of this portal (`/api/content/…`) | none — browsers refuse to draw a PDF in a sandboxed frame |
-| `EmbedKind.App` | an absolute `http`/`https` or a scheme-relative `//host` address | ALWAYS, with `Allow`'s tokens only; no referrer is sent |
+| `EmbedKind.App` | an `http`/`https` or scheme-relative `//host` address on ANOTHER host than the portal's | ALWAYS, with `Allow`'s tokens only; no referrer is sent |
 
 A refused address draws the title as text and no frame. `Allow` takes tokens from `EmbedSandbox`
 (`Scripts`, `SameOrigin`, `Forms`, `Popups`, `Downloads`; `Scripts` + `Forms` by default) and
 nothing else — `allow-top-navigation` and `allow-popups-to-escape-sandbox` are never written. An app
-on the portal's own origin is refused outright, because script plus same-origin would let it lift
-its own sandbox.
+on the portal's own host is refused outright however it is spelled (`https://portal…`, `//portal…`,
+or `https:/app`, which a browser resolves against the page), because script plus same-origin would
+let it lift its own sandbox. Renderers pass the origin they are served from to
+`EmbedSources.SafeSrc`, and a render with no page origin refuses an app.
 
 ```csharp
 // A PDF from a node's content collection, with a download link beside it.

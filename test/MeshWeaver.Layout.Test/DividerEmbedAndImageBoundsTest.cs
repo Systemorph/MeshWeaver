@@ -130,6 +130,27 @@ public class DividerEmbedAndImageBoundsTest(ITestOutputHelper output) : HubTestB
     public void EmbedSources_SafeSrc_AcceptsOnlyItsKindsAddresses(string? src, string kind, string? expected) =>
         EmbedSources.SafeSrc(src, kind).Should().Be(expected);
 
+    /// <summary>
+    /// 🚨 Review 4317450539: an App address on the PORTAL's own host is the portal, however it is
+    /// spelled — absolute, scheme-relative, or a scheme-qualified relative form a browser resolves
+    /// against the page. Script plus same-origin would let it reach its parent and lift its sandbox.
+    /// </summary>
+    [Theory]
+    [InlineData("https://portal.example.com/app", null)]
+    [InlineData("https://PORTAL.example.com/app", null)]
+    [InlineData("//portal.example.com/app", null)]
+    [InlineData("/\\portal.example.com/app", null)]
+    [InlineData("https://portal.example.com:443/app", null)]
+    [InlineData("https:/app", null)]
+    [InlineData("https:app", null)]
+    [InlineData("http:/\\other.example.com", "http://other.example.com")]
+    [InlineData("https://portal.example.com:8443/app", "https://portal.example.com:8443/app")]
+    [InlineData("http://portal.example.com/app", "http://portal.example.com/app")]
+    [InlineData("https://home.example.com/app", "https://home.example.com/app")]
+    [InlineData("//home.example.com/app", "//home.example.com/app")]
+    public void EmbedSources_AnAppOnThePortalsOwnHostIsRefused(string src, string? expected) =>
+        EmbedSources.SafeSrc(src, EmbedKind.App, "https://portal.example.com").Should().Be(expected);
+
     [Theory]
     [InlineData(EmbedKind.Document, null, null)]
     [InlineData(EmbedKind.Document, "allow-scripts", null)]

@@ -17,11 +17,11 @@ public static class EmbedKind
     public const string Document = "Document";
 
     /// <summary>
-    /// A page of another site — an external app such as a dashboard. Only an absolute
-    /// <c>http</c>/<c>https</c> (or scheme-relative <c>//host</c>) address is accepted, the frame is
-    /// ALWAYS sandboxed with <see cref="EmbedControl.Allow"/>'s tokens and nothing else, and it sends
-    /// no referrer. A relative address is refused: a same-origin page with <c>allow-scripts</c> and
-    /// <c>allow-same-origin</c> could lift its own sandbox.
+    /// A page of another site — an external app such as a dashboard. Only an <c>http</c>/<c>https</c>
+    /// (or scheme-relative <c>//host</c>) address on ANOTHER host is accepted, the frame is ALWAYS
+    /// sandboxed with <see cref="EmbedControl.Allow"/>'s tokens and nothing else, and it sends no
+    /// referrer. A portal address is refused however it is spelled: a same-origin page with
+    /// <c>allow-scripts</c> and <c>allow-same-origin</c> could lift its own sandbox.
     /// </summary>
     public const string App = "App";
 }
@@ -63,27 +63,62 @@ public static class EmbedSources
 {
     /// <summary>
     /// The address a renderer may put into the frame's <c>src</c>, or <c>null</c> when it must draw
-    /// nothing but the title: a <see cref="EmbedKind.Document"/> takes only a relative address of this
-    /// portal; an <see cref="EmbedKind.App"/> only an absolute <c>http</c>/<c>https</c> or a
-    /// scheme-relative one. An unknown kind accepts nothing. The address is judged as a browser reads
-    /// it (<see cref="LinkHrefs.Normalize"/>).
+    /// nothing but the title. The address is judged as a browser reads it (<see cref="LinkHrefs.Normalize"/>).
+    /// <list type="bullet">
+    /// <item>A <see cref="EmbedKind.Document"/> takes only a relative address of this portal.</item>
+    /// <item>An <see cref="EmbedKind.App"/> takes only an address with an AUTHORITY — <c>http://host…</c>,
+    /// <c>https://host…</c> or scheme-relative <c>//host…</c> — whose host is not the portal's. A
+    /// scheme-qualified relative spelling (<c>https:/app</c>, <c>https:app</c>) is refused: a browser
+    /// resolves it against the page, so it is the portal itself. And an address on
+    /// <paramref name="portalOrigin"/>'s host and port is refused: a same-origin page granted
+    /// <see cref="EmbedSandbox.Scripts"/> and <see cref="EmbedSandbox.SameOrigin"/> can reach its
+    /// parent and remove its own sandbox.</item>
+    /// <item>An unknown kind accepts nothing.</item>
+    /// </list>
+    /// 🚨 Every renderer passes the origin it is served from (<c>scheme://host[:port]</c>); only a
+    /// caller with no page — a server-side check — passes <c>null</c>, which skips the same-host test.
     /// </summary>
     /// <param name="src">The address.</param>
     /// <param name="kind">One of <see cref="EmbedKind"/>.</param>
+    /// <param name="portalOrigin">The origin the page is served from, or <c>null</c> when there is no page.</param>
     /// <returns>The normalized address, or <c>null</c> when refused.</returns>
-    public static string? SafeSrc(string? src, string? kind)
+    public static string? SafeSrc(string? src, string? kind, string? portalOrigin = null)
     {
         var normalized = LinkHrefs.Normalize(src);
         if (normalized.Length == 0)
             return null;
-        var external = LinkHrefs.IsExternal(normalized);
-        var scheme = LinkHrefs.SchemeOf(normalized);
         return kind switch
         {
-            EmbedKind.Document => scheme is null && !external ? normalized : null,
-            EmbedKind.App => external ? normalized : null,
+            EmbedKind.Document => LinkHrefs.SchemeOf(normalized) is null && !LinkHrefs.IsExternal(normalized) ? normalized : null,
+            EmbedKind.App => IsForeignAuthority(normalized, portalOrigin) ? normalized : null,
             _ => null,
         };
+    }
+
+    /// <summary>True when <paramref name="normalized"/> names a host other than <paramref name="portalOrigin"/>'s, in an authority form.</summary>
+    private static bool IsForeignAuthority(string normalized, string? portalOrigin)
+    {
+        var scheme = LinkHrefs.SchemeOf(normalized);
+        Uri? portal = null;
+        if (portalOrigin is not null && !Uri.TryCreate(portalOrigin, UriKind.Absolute, out portal))
+            return false;
+        string absolute;
+        if (scheme is null)
+        {
+            if (!normalized.StartsWith("//", StringComparison.Ordinal))
+                return false;
+            // A scheme-relative address takes the PAGE's scheme, so its default port is the page's too.
+            absolute = (portal?.Scheme ?? "https") + ":" + normalized;
+        }
+        else if (scheme is "http" or "https" && normalized.AsSpan(scheme.Length + 1).StartsWith("//"))
+            absolute = normalized;
+        else
+            return false;
+        if (!Uri.TryCreate(absolute, UriKind.Absolute, out var target) || string.IsNullOrEmpty(target.Host))
+            return false;
+        return portal is null
+               || !string.Equals(target.Host, portal.Host, StringComparison.OrdinalIgnoreCase)
+               || target.Port != portal.Port;
     }
 
     /// <summary>
