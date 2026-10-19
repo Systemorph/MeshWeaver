@@ -2624,6 +2624,9 @@ public static class DataExtensions
         var lateVerdicts = hub.ServiceProvider.GetService<ILatePatchVerdictSink>();
         var ackLogger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Data.PatchAck");
+        // The deletion (and move) scopes the storage guard enforces — asked in the merge turn so a
+        // patch under one is refused before it commits (#6953). Resolved here for the same reason.
+        var deletionScopes = hub.ServiceProvider.GetService<MeshWeaver.Mesh.IActiveDeletionScopes>();
         // The writes on this store that are waiting for it to load, in arrival order (#6594).
         // Resolved on the handler's turn for the same reason as the two services above.
         var coldLane = hub.ServiceProvider.GetRequiredService<ColdStoreWriteLanes>().For(primary);
@@ -2941,6 +2944,29 @@ public static class DataExtensions
                         .SerializeToNode(liveEntity, liveEntity.GetType(), jsonOpts)
                         as System.Text.Json.Nodes.JsonObject
                         ?? new System.Text.Json.Nodes.JsonObject();
+                    // 🚨 A DELETE OR MOVE OF THIS NODE'S SUBTREE IS IN FLIGHT (#6953) — refuse the
+                    // patch IN THIS TURN, before it commits. Its durable flush would be refused by
+                    // the storage guard anyway, but only AFTER the merge had committed here: the
+                    // writer heard "not applied" while this owner went on serving the change, and
+                    // its next save stored it once the scope closed (a move that failed) — or lost it
+                    // to the tombstone (a move that succeeded). Refused here, nothing is committed
+                    // and nothing is left pending; the writer may retry once the operation is over.
+                    var patchedPath = (currentNode[jsonOpts.PropertyNamingPolicy?.ConvertName("Path") ?? "Path"]
+                            ?? currentNode["Path"] ?? currentNode["path"]) is System.Text.Json.Nodes.JsonValue pathValue
+                        && pathValue.TryGetValue<string>(out var livePath)
+                            ? livePath
+                            : hub.Address.Path;
+                    if (deletionScopes is not null
+                        && deletionScopes.IsUnderActiveDeletion(patchedPath, out var deletionRoot))
+                    {
+                        AckOnce(false, new MeshNodeError(
+                            MeshNodeErrorCode.NotFound, hubPath,
+                            // The same words ClassifyPatchException gives the flush's refusal of it.
+                            "Node being deleted: "
+                            + new MeshWeaver.Mesh.SubtreeDeletionInFlightException(patchedPath, deletionRoot).Message
+                            + " The patch was NOT applied."));
+                        return null;
+                    }
                     var patchNode = System.Text.Json.Nodes.JsonNode.Parse(patchText)
                         as System.Text.Json.Nodes.JsonObject
                         ?? throw new InvalidOperationException("Patch must be a JSON object");
@@ -3818,20 +3844,9 @@ public static class DataExtensions
         SchemaReference reference,
         GetDataRequest _)
     {
-        var typeName = reference.Type;
-
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            var workspace = hub.GetWorkspace();
-            var contentTypeSource = workspace.DataContext.TypeSources.Values
-                .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
-            var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
-
-            if (typeSource != null)
-                typeName = typeSource.TypeDefinition.CollectionName;
-            else
-                return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
-        }
+        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? DefaultSchemaTypeName(hub) : reference.Type;
+        if (typeName is null)
+            return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
 
         var schema = GenerateJsonSchema(hub, typeName);
         return Observable.Return(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version));
@@ -4268,6 +4283,27 @@ public static class DataExtensions
     }
 
 
+    /// <summary>
+    /// The type a <see cref="SchemaReference"/> with no type name describes on <paramref name="hub"/>: the
+    /// node's declared CONTENT type (<see cref="IContentTypeSource"/>) when a data source declares one,
+    /// else the first registered type that is not <c>MeshNode</c>, else <c>MeshNode</c>; null when the
+    /// hub has no data at all.
+    /// </summary>
+    internal static string? DefaultSchemaTypeName(IMessageHub hub)
+    {
+        var workspace = hub.GetWorkspace();
+        var contentType = workspace.DataContext.DataSources
+            .OfType<IContentTypeSource>()
+            .Select(ds => ds.ContentType)
+            .FirstOrDefault(t => t is not null);
+        if (contentType is not null)
+            return hub.TypeRegistry.GetCollectionName(contentType) ?? contentType.Name;
+
+        var nonNode = workspace.DataContext.TypeSources.Values
+            .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
+        return (nonNode ?? workspace.DataContext.TypeSources.Values.FirstOrDefault())?.TypeDefinition.CollectionName;
+    }
+
     internal static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
@@ -4284,50 +4320,7 @@ public static class DataExtensions
             }
         }
 
-        var type = typeDefinition!.Type;
-
-        // Use System.Text.Json schema generation first
-        var options = hub.JsonSerializerOptions;
-        var schema = options.GetJsonSchemaAsNode(type, new()
-        {
-            TransformSchemaNode = (ctx, node) =>
-            {
-                // Add documentation from XML docs
-                if (ctx.TypeInfo.Type == type)
-                {
-                    // Add title for the main type
-                    node["title"] = type.Name;
-
-                    // Add description for the main type
-                    var typeDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
-                    if (!string.IsNullOrEmpty(typeDescription))
-                    {
-                        node["description"] = typeDescription;
-                    }
-                }
-
-                // Add descriptions for properties
-                if (ctx.PropertyInfo != null && node is JsonObject jsonObj)
-                {
-                    // Get the actual PropertyInfo from the declaring type
-                    var declaringType = ctx.PropertyInfo.DeclaringType;
-                    var propertyName = ctx.PropertyInfo.Name;
-                    var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!);
-                    if (actualPropertyInfo != null)
-                    {
-                        var propertyDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(actualPropertyInfo);
-                        if (!string.IsNullOrEmpty(propertyDescription))
-                        {
-                            jsonObj["description"] = propertyDescription;
-                        }
-                    }
-                }
-
-                return node;
-            }
-        });
-
-        return schema.ToJsonString();
+        return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions).ToJsonString();
     }
 
     internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)

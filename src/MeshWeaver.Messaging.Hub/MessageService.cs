@@ -2429,30 +2429,22 @@ public class MessageService : IMessageService
         return Observable.Return(ReportRoutingFailure(delivery, requestFates?.Find(delivery.Id)));
     }
 
-    private volatile CancellationTokenSource cancellationTokenSource = new();
+    /// <summary>
+    /// The cancellation handed to handler turns. It owns the rotation of its sources, and a turn
+    /// only ever reads a token captured while the source was alive (#6958 — see
+    /// <see cref="TurnCancellation"/>).
+    /// </summary>
+    private readonly TurnCancellation turnCancellation = new();
 
     /// <summary>
-    /// Cancels in-flight handler execution by swapping in a fresh cancellation token source and
-    /// cancelling the previous one, unblocking handlers observing the token. Safe to call repeatedly;
-    /// a disposed source is ignored.
+    /// Cancels in-flight handler execution by retiring the current cancellation generation and
+    /// installing a fresh one, unblocking handlers observing the token. Safe to call repeatedly and
+    /// concurrently with a turn that is reading the token.
     /// </summary>
     public void CancelExecution()
     {
-        try
-        {
-            var old = cancellationTokenSource;
-            cancellationTokenSource = new CancellationTokenSource();
-            if (!old.IsCancellationRequested)
-            {
-                logger.LogDebug("Cancelling execution pipeline for hub {Address}", Address);
-                old.Cancel();
-            }
-            old.Dispose();
-        }
-        catch (ObjectDisposedException)
-        {
-            // Already disposed, ignore
-        }
+        if (turnCancellation.CancelAndRoll())
+            logger.LogDebug("Cancelling execution pipeline for hub {Address}", Address);
     }
 
     // Pipeline LEAF. Runs the message's handler chain INLINE on the single turn
@@ -2582,7 +2574,7 @@ public class MessageService : IMessageService
         {
             // ShutdownRequest uses CancellationToken.None so disposal can't be cancelled
             // by CancelExecution() — other handlers CAN be cancelled to unblock the pipeline.
-            var token = delivery.Message is ShutdownRequest ? CancellationToken.None : cancellationTokenSource.Token;
+            var token = delivery.Message is ShutdownRequest ? CancellationToken.None : turnCancellation.Token;
             MessageTrace.Write($"hub={Address} msg={messageTypeName} id={delivery.Id} HandleMessageAsync ENTER");
             fate?.Add("HANDLER_ENTER", Address);
             // A rule chain that completes WITHOUT emitting is silent in every other diagnostic —

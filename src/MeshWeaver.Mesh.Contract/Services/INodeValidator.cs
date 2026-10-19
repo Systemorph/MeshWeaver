@@ -127,6 +127,15 @@ public record NodeValidationContext
     /// treated as a listing, which is the closed direction.
     /// </summary>
     public bool IsPointRead { get; init; }
+
+    /// <summary>
+    /// For a Create that RELOCATES a stored node (the copy leg of a move): that stored source, as the
+    /// create handler READ and VERIFIED it — the requester holds the move entitlement on it (or is
+    /// the platform) and it has the new node's NodeType. Null for every other create, and never taken
+    /// from the message: <see cref="CreateNodeRequest.AuthorshipFrom"/> is only a claim. A validator
+    /// may treat content equal to this source's as carried rather than newly written.
+    /// </summary>
+    public MeshNode? RelocatedFrom { get; init; }
 }
 
 /// <summary>

@@ -739,6 +739,13 @@ drops `content`. See [CQRS — Queries vs. Content Access](/Doc/Architecture/Cqr
 
 ---
 
+## Autocomplete
+
+A search bar completes this language as you type — qualifiers, their values, `content.<property>:`
+from the NodeType's schema (enum members, booleans, `[MeshNode]` reference members), node names and
+semantic matches. The vocabulary it offers is exactly the one this page describes; see
+[Query Autocomplete](/Doc/GUI/QueryAutocomplete).
+
 ## Live Query Syntax Explorer
 
 The cell below renders a quick-reference card for the most common query patterns — a handy cheat sheet while you build queries:

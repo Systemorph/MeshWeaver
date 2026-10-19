@@ -1153,8 +1153,14 @@ public static class MeshExtensions
             hub.NoteRequestStage(request.Id, $"CREATE_STAGE {stage}");
         }
 
+        // The VERIFIED stored source this create relocates, or null — what the content guard may
+        // compare a relocation against (NodeValidationContext.RelocatedFrom). Never the message's
+        // claim: see RelocationSourceFor.
+        MeshNode? relocationSource = null;
         var existingObs = AuthorshipSourceFor(hub, capturedRequest, persistence, logger)
             .Do(source => authorshipSource = source)
+            .SelectMany(source => RelocationSourceFor(hub, capturedRequest, persistence, source))
+            .Do(source => relocationSource = source)
             .SelectMany(_ =>
             {
                 EnterCreateStage(CreateStageExistenceRead);
@@ -1341,7 +1347,8 @@ public static class MeshExtensions
                         // chain stalled before ANY validator was asked (resolving them).
                         return RunCreationValidatorsObs(
                             hub, node, capturedRequest,
-                            onStage: detail => EnterCreateStage($"{CreateStageValidators}: {detail}"));
+                            onStage: detail => EnterCreateStage($"{CreateStageValidators}: {detail}"),
+                            relocatedFrom: relocationSource);
                     })
                     .SelectMany(validationError =>
                     {
@@ -7453,6 +7460,34 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// 🚨 The stored node a create RELOCATES, verified — never the message's claim
+    /// (<see cref="CreateNodeRequest.AuthorshipFrom"/> is caller-settable). A non-platform requester
+    /// gets the source <see cref="AuthorshipSourceFor"/> already verified: the move entitlement
+    /// (Delete on its namespace) held and the SAME NodeType. The platform — whose stamps are kept
+    /// anyway, so the authorship read is skipped for it — gets the stored source read here, again
+    /// only of the same NodeType. Null when the request names no source. A failed read is NOT turned
+    /// into null: it fails the create as the unavailability it is, never as a content refusal
+    /// (review on #6971). Cold; emits once.
+    /// </summary>
+    private static IObservable<MeshNode?> RelocationSourceFor(
+        IMessageHub hub, CreateNodeRequest request, IStorageAdapter? persistence, MeshNode? verifiedAuthorshipSource)
+    {
+        var from = request.AuthorshipFrom?.Trim();
+        if (string.IsNullOrEmpty(from) || persistence is null)
+            return Observable.Return<MeshNode?>(null);
+        if (verifiedAuthorshipSource is not null)
+            return Observable.Return<MeshNode?>(verifiedAuthorshipSource);
+        if (!RequestIdentity.IsPlatform(request.CreatedBy))
+            return Observable.Return<MeshNode?>(null);
+        return ReadNodeAuthoritative(hub, persistence, from)
+            .Select(source => source is not null
+                && string.Equals(source.NodeType, request.Node.NodeType, StringComparison.OrdinalIgnoreCase)
+                    ? source
+                    : null)
+            .DefaultIfEmpty(null);
+    }
+
+    /// <summary>
     /// Whether <paramref name="activityPath"/> names a governed activity that is EXECUTING one of
     /// <paramref name="allowed"/> standards — the check <see cref="BroadGrantGuard"/> runs at the
     /// write boundary, for a control plane that has to authorize a governed request itself (the
@@ -7511,7 +7546,8 @@ public static class MeshExtensions
         MeshNode node,
         CreateNodeRequest request,
         AccessContext? accessContext = null,
-        Action<string>? onStage = null)
+        Action<string>? onStage = null,
+        MeshNode? relocatedFrom = null)
     {
         // Named BEFORE the validators are resolved: resolving is DI construction of every scoped
         // validator, and a construction that blocks would otherwise read as a silent validator.
@@ -7522,7 +7558,8 @@ public static class MeshExtensions
             Operation = NodeOperation.Create,
             Node = node,
             Request = request,
-            AccessContext = accessContext ?? accessService?.Context ?? accessService?.CircuitContext
+            AccessContext = accessContext ?? accessService?.Context ?? accessService?.CircuitContext,
+            RelocatedFrom = relocatedFrom,
         };
 
         var validators = hub.ServiceProvider.GetServices<INodeValidator>()
@@ -10371,11 +10408,7 @@ public static class MeshExtensions
                         return;
                     }
                     var msg = ex.Message ?? "Unknown error";
-                    var reason = msg.Contains("already exists", StringComparison.OrdinalIgnoreCase)
-                        ? NodeCopyRejectionReason.TargetAlreadyExists
-                        : msg.Contains("not found", StringComparison.OrdinalIgnoreCase)
-                            ? NodeCopyRejectionReason.SourceNotFound
-                            : NodeCopyRejectionReason.Unknown;
+                    var reason = CopyReasonForFailure(ex, msg);
                     logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
                     hub.Post(CopyNodeResponse.Fail(msg, reason), o => o.ResponseFor(request));
                 });
@@ -10510,6 +10543,27 @@ public static class MeshExtensions
     private const string MoveStagePreflight = "delete-preflight";
     private const string MoveStageCopy = "copy";
     private const string MoveStageDeleteSource = "delete-source";
+
+    /// <summary>
+    /// The copy reason a failed copy maps to. A per-node create carries its OWN typed verdict
+    /// (<see cref="NodeCreationFailure.RejectionReasonKey"/>, stamped by
+    /// <see cref="NodeCreationFailure.ToException(CreateNodeResponse,string)"/>), and that verdict wins:
+    /// reading the wording alone filed a create a validator REFUSED as <see cref="NodeCopyRejectionReason.Unknown"/>,
+    /// so a move's caller could not tell a deterministic refusal — which every retry meets again — from a
+    /// failure worth retrying (#6952: the feedback hand-over retried one refused relocation on every
+    /// activation). The wording is the fallback for a failure that carries no typed verdict.
+    /// </summary>
+    private static NodeCopyRejectionReason CopyReasonForFailure(Exception ex, string message) =>
+        IsNodeAlreadyExists(ex) ? NodeCopyRejectionReason.TargetAlreadyExists
+        : ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason.ValidationFailed
+            or NodeCreationRejectionReason.InvalidNodeType
+            or NodeCreationRejectionReason.InvalidPath
+            ? NodeCopyRejectionReason.ValidationFailed
+        : message.Contains("already exists", StringComparison.OrdinalIgnoreCase)
+            ? NodeCopyRejectionReason.TargetAlreadyExists
+        : message.Contains("not found", StringComparison.OrdinalIgnoreCase)
+            ? NodeCopyRejectionReason.SourceNotFound
+            : NodeCopyRejectionReason.Unknown;
 
     /// <summary>
     /// The move reason a failed copy leg maps to. <see cref="NodeCopyRejectionReason.Unknown"/> is an

@@ -63,6 +63,49 @@ public class ControlsSerializationTest(ITestOutputHelper output) : HubTestBase(o
         Controls.Button("x").OpenInNewTab.Should().BeNull();
     }
 
+    /// <summary>
+    /// #6954: a navigating chip is a <see cref="BadgeControl"/> with <c>Href</c>, <c>Tooltip</c> and
+    /// <c>MaxWidth</c>. All three must cross the wire under their camelCase names — the Blazor and
+    /// React renderers read exactly those — and equality must see them, or a diff that only changes
+    /// where a chip points would never reach the client.
+    /// </summary>
+    [HubFact]
+    public void BadgeHrefTooltipAndMaxWidthSurviveSerialization()
+    {
+        var host = GetHost();
+        var badge = Controls.Badge("Qualified — awaiting the second review")
+            .WithHref("/Crm/Journey/abc")
+            .WithTooltip("Qualified — awaiting the second review")
+            .WithMaxWidth("160px")
+            .WithBackgroundColor("var(--accent-fill-rest)");
+
+        var serialized = JsonSerializer.Serialize<UiControl>(badge, host.JsonSerializerOptions);
+        Output.WriteLine($"Serialized: {serialized}");
+        serialized.Should().Contain("\"href\":\"/Crm/Journey/abc\"");
+        serialized.Should().Contain("\"tooltip\":");
+        serialized.Should().Contain("\"maxWidth\":\"160px\"");
+
+        var roundTripped = JsonSerializer.Deserialize<UiControl>(serialized, host.JsonSerializerOptions)
+            .Should().BeOfType<BadgeControl>().Subject;
+        // Not `?.`: a short-circuit would skip the assertion on exactly the null it must catch.
+        (roundTripped.Href?.ToString()).Should().Be("/Crm/Journey/abc");
+        (roundTripped.Tooltip?.ToString()).Should().Be("Qualified — awaiting the second review");
+        (roundTripped.MaxWidth?.ToString()).Should().Be("160px");
+
+        badge.WithHref("/Crm/Journey/other").Should().NotBe(badge,
+            "a chip that points somewhere else is a different control, so the diff must reach the client");
+    }
+
+    /// <summary>A badge without <c>Href</c> stays a plain pill: none of the new fields is written.</summary>
+    [HubFact]
+    public void PlainBadgeCarriesNoNavigationFields()
+    {
+        var host = GetHost();
+        var serialized = JsonSerializer.Serialize<UiControl>(Controls.Badge("Draft"), host.JsonSerializerOptions);
+        serialized.Should().NotContain("\"href\"");
+        serialized.Should().NotContain("\"maxWidth\"");
+    }
+
     [HubFact]
     public void OptionCollectionSerialization()
     {
