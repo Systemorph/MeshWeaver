@@ -133,6 +133,32 @@ heading that names what it is, inside any Markdown body (a Space body, a Markdow
 definition):
 
 ```markdown
+## `Controls.Catalog` — the standard list of nodes
+
+When a page shows ONE set of nodes (the clients, the funds, the partners, an inbox) declare it with
+`Controls.Catalog` and nothing else. It is only the search control with the set as its hidden query,
+plus the settings every such list should share:
+
+```csharp
+Controls.Catalog("Partners",
+    "nodeType:Crm/Counterparty scope:subtree content.type:Crm/CounterpartyType/Partner partitions:all",
+    itemArea: "Card")
+```
+
+- **The filter carries no `sort:`.** Each Sort-by choice (`CatalogSort`) appends its own, and the
+  first one is the hidden query, so re-sorting changes the ORDER and never WHICH nodes show. The default
+  choices are `CatalogSort.Default`: **Last activity** (`sort:subtreeLastModified-desc`), Name, Last changed.
+- **The store orders.** There is no client-side `WithSortBy` — that would re-sort the hits and silently
+  override whatever the reader picked in the dropdown.
+- **One hit per row, through the hit's own area** (`itemArea`), searchable, the first `pageSize`
+  (20) shown before "Show all".
+- **Places a reader sees as different are different catalogs.** Clients, partners and suppliers are
+  three catalogs over three filters, not one list with a type column.
+
+Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamespace` for the "+",
+`WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
+computes it beside the catalog, never instead of it.
+
 ## Reports by type
 
 @@("area/Search?groupBy=type")
