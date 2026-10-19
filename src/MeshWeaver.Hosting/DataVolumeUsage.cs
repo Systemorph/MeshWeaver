@@ -119,7 +119,7 @@ public static class DataVolumeUsage
     {
         var normalized = paths
             .Where(p => !string.IsNullOrWhiteSpace(p))
-            .Select(p => Path.TrimEndingDirectorySeparator(p.Trim()))
+            .Select(Canonical)
             .Distinct(StringComparer.Ordinal)
             .ToImmutableList();
         return normalized
@@ -128,6 +128,14 @@ public static class DataVolumeUsage
                 && p.StartsWith(other + Path.DirectorySeparatorChar, StringComparison.Ordinal)))
             .ToImmutableList();
     }
+
+    /// <summary>
+    /// The ONE key a root goes by — absolute, <c>..</c> resolved, no trailing separator — used for
+    /// scheduling, readings, faults and the publication alike, so <c>Modules:Root=./data</c> is
+    /// found again when its reading comes back (it is what <see cref="Measure"/> records).
+    /// </summary>
+    public static string Canonical(string path) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path.Trim()));
 
     /// <summary>The mount points of the volumes this process sees (read from the OS); empty when
     /// they cannot be listed — the walk then simply does not recognise a nested mount.</summary>
@@ -161,7 +169,8 @@ public static class DataVolumeUsage
         CancellationToken cancellationToken = default)
     {
         var started = nowUtc();
-        var rootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var rootPath = Canonical(root);
+        cancellationToken.ThrowIfCancellationRequested();
         var foreignMounts = mountPoints.Remove(rootPath);
         DirectoryInfo[] directories;
         FileInfo[] looseFiles;
@@ -212,8 +221,9 @@ public static class DataVolumeUsage
         DateTime? newest = null;
         foreach (var child in children)
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
+            // 🚨 THROW, never break: a walk cut short must not publish its partial totals as a
+            // complete reading ("every directory read") — the caller keeps the previous one.
+            cancellationToken.ThrowIfCancellationRequested();
             DataVolumeUsageEntry entry;
             if (child is FileInfo file)
                 entry = new DataVolumeUsageEntry(file.Name, file.Length, 1, 0, file.LastWriteTimeUtc, 0, false,
@@ -251,8 +261,9 @@ public static class DataVolumeUsage
         var first = true;
         while (!pending.IsEmpty)
         {
-            if (cancellationToken.IsCancellationRequested)
-                break;
+            // 🚨 THROW, never break: a walk cut short must not publish its partial totals as a
+            // complete reading ("every directory read") — the caller keeps the previous one.
+            cancellationToken.ThrowIfCancellationRequested();
             pending = pending.Pop(out var current);
             FileSystemInfo[] children;
             try
@@ -371,8 +382,9 @@ public sealed class DataVolumeUsageCensus
     /// <summary>The fault of each root's latest pass, when that pass faulted.</summary>
     public ImmutableDictionary<string, string> Faults => Volatile.Read(ref faults);
 
-    /// <summary>Declare the roots this replica measures.</summary>
-    public void SetRoots(ImmutableList<string> roots) => Roots = roots;
+    /// <summary>Declare the roots this replica measures, by their canonical key.</summary>
+    public void SetRoots(ImmutableList<string> roots) =>
+        Roots = roots.Select(DataVolumeUsage.Canonical).Distinct(StringComparer.Ordinal).ToImmutableList();
 
     /// <summary>Record a finished walk; clears that root's fault.</summary>
     public void Record(DataVolumeUsageReading reading)
@@ -383,7 +395,11 @@ public sealed class DataVolumeUsageCensus
 
     /// <summary>Record a pass that faulted; the previous reading (if any) stays and is labelled stale by the fault.</summary>
     public void RecordFault(string root, Exception exception) =>
-        ImmutableInterlocked.Update(ref faults, d => d.SetItem(root, $"{exception.GetType().Name}: {exception.Message}"));
+        RecordFault(root, $"{exception.GetType().Name}: {exception.Message}");
+
+    /// <summary>Record a pass that faulted, by its reason; the previous reading (if any) stays.</summary>
+    public void RecordFault(string root, string reason) =>
+        ImmutableInterlocked.Update(ref faults, d => d.SetItem(DataVolumeUsage.Canonical(root), reason));
 
     /// <summary>The publication: one sentence per configured root, or why there is none.</summary>
     public string Describe()

@@ -74,22 +74,55 @@ public sealed class DataVolumeUsageHostedService(
     }
 
     private IObservable<Unit> Pass(string root, IIoPool pool) =>
-        pool.InvokeBlocking(ct => DataVolumeUsage.Measure(
-                root, DataVolumeUsage.MountPoints(), () => DateTimeOffset.UtcNow, ct))
-            .Do(reading =>
-            {
-                census.Record(reading);
-                logger.LogInformation("DataVolumeUsage: {Reading}", DataVolumeUsage.Describe(reading));
-            })
-            .Select(_ => Unit.Default)
-            .Catch<Unit, Exception>(ex =>
-            {
-                census.RecordFault(root, ex);
-                logger.LogWarning(ex,
-                    "DataVolumeUsage: the walk of {Root} faulted — the previous reading (if any) stays, the next pass walks again",
-                    root);
-                return Observable.Return(Unit.Default);
-            });
+        pool.InvokeBlocking(ct =>
+        {
+            Apply(census, root,
+                () => DataVolumeUsage.Measure(root, DataVolumeUsage.MountPoints(), () => DateTimeOffset.UtcNow, ct),
+                logger);
+            return Unit.Default;
+        });
+
+    /// <summary>
+    /// One pass's outcome onto the census — the whole decision, pure enough to drive from a test.
+    ///
+    /// <para>🚨 Only a COMPLETE reading replaces the previous one. A walk that threw (cancelled
+    /// mid-way, an IO fault) and a reading that carries a <see cref="DataVolumeUsageReading.Fault"/>
+    /// (the root vanished or could not be enumerated) both go the failure way: recorded as the
+    /// root's fault — the check then reads Degraded and names it — logged at Warning, and the last
+    /// real measurement stays the published one. Replacing it with "nothing was measured" or with a
+    /// partial total would make the instrument lie about exactly the volume it exists to describe.</para>
+    /// </summary>
+    /// <param name="census">The census to update.</param>
+    /// <param name="root">The root, by any spelling; it is keyed canonically.</param>
+    /// <param name="measure">The walk.</param>
+    /// <param name="logger">Where a failed pass is reported.</param>
+    public static void Apply(
+        DataVolumeUsageCensus census, string root, Func<DataVolumeUsageReading> measure, ILogger? logger)
+    {
+        DataVolumeUsageReading reading;
+        try
+        {
+            reading = measure();
+        }
+        catch (Exception ex)
+        {
+            census.RecordFault(root, ex);
+            logger?.LogWarning(ex,
+                "DataVolumeUsage: the walk of {Root} did not complete — the previous reading (if any) stays, "
+                + "the next pass walks again", root);
+            return;
+        }
+        if (reading.Fault is not null)
+        {
+            census.RecordFault(root, reading.Fault);
+            logger?.LogWarning(
+                "DataVolumeUsage: {Root} could not be enumerated ({Fault}) — the previous reading (if any) stays, "
+                + "the next pass walks again", root, reading.Fault);
+            return;
+        }
+        census.Record(reading);
+        logger?.LogInformation("DataVolumeUsage: {Reading}", DataVolumeUsage.Describe(reading));
+    }
 
     /// <inheritdoc />
     public Task StopAsync(CancellationToken cancellationToken)

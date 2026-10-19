@@ -127,6 +127,72 @@ public sealed class DataVolumeUsageTest : IDisposable
     }
 
     [Fact]
+    public void A_relative_configured_root_reads_as_measured_once_walked()
+    {
+        // Copilot on #6992: Measure records the CANONICAL path; a census keyed by the configured
+        // string ("./x/../data") never found it and /health said NOT MEASURED YET for ever.
+        File("modules/MeshWeaver.AI@1/MeshWeaver.AI.dll", 10 * KiB);
+        var relative = Path.GetRelativePath(Directory.GetCurrentDirectory(), root);
+        var configured = Path.Combine(relative, "sub", "..");
+        var census = new DataVolumeUsageCensus();
+
+        census.SetRoots(DataVolumeUsage.RootsOf([configured]));
+        DataVolumeUsageHostedService.Apply(census, census.Roots.Single(),
+            () => DataVolumeUsage.Measure(configured, ImmutableHashSet<string>.Empty, () => Now), logger: null);
+
+        census.Roots.Single().Should().Be(Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)));
+        census.Describe().Should().NotContain("NOT MEASURED YET");
+        census.Describe().Should().Contain("modules/");
+    }
+
+    [Fact]
+    public void A_cancelled_walk_never_replaces_the_previous_reading()
+    {
+        // Copilot on #6992: a cancelled walk used to BREAK and return partial totals that read
+        // "every directory read"; it must throw, and the census must keep the last complete walk.
+        File("modules/MeshWeaver.AI@1/MeshWeaver.AI.dll", 10 * KiB);
+        var key = DataVolumeUsage.RootsOf([root]).Single();
+        var census = new DataVolumeUsageCensus();
+        census.SetRoots([key]);
+        DataVolumeUsageHostedService.Apply(census, key,
+            () => DataVolumeUsage.Measure(root, ImmutableHashSet<string>.Empty, () => Now), logger: null);
+        File("prebuilt-bundles/c003e001/plugins/Store.zip", 50 * KiB);
+        using var cancelled = new System.Threading.CancellationTokenSource();
+        cancelled.Cancel();
+
+        Func<DataVolumeUsageReading> walk = () => DataVolumeUsage.Measure(root, ImmutableHashSet<string>.Empty, () => Now, cancelled.Token);
+        Assert.ThrowsAny<OperationCanceledException>(() => walk());
+        DataVolumeUsageHostedService.Apply(census, key, walk, logger: null);
+
+        census.Latest[key].TotalBytes.Should().Be(10 * KiB);
+        census.IsDegraded.Should().BeTrue();
+        census.Describe().Should().Contain("FAULTED");
+    }
+
+    [Fact]
+    public void A_root_that_vanishes_after_a_good_walk_keeps_the_good_walk_and_degrades()
+    {
+        // Copilot on #6992: a Fault-bearing reading used to be RECORDED as the latest one,
+        // replacing the last real measurement with "nothing was measured".
+        File("modules/MeshWeaver.AI@1/MeshWeaver.AI.dll", 10 * KiB);
+        var key = DataVolumeUsage.RootsOf([root]).Single();
+        var census = new DataVolumeUsageCensus();
+        census.SetRoots([key]);
+        DataVolumeUsageHostedService.Apply(census, key,
+            () => DataVolumeUsage.Measure(root, ImmutableHashSet<string>.Empty, () => Now), logger: null);
+        Directory.Delete(root, recursive: true);
+
+        DataVolumeUsageHostedService.Apply(census, key,
+            () => DataVolumeUsage.Measure(root, ImmutableHashSet<string>.Empty, () => Now), logger: null);
+
+        census.Latest[key].Fault.Should().BeNull();
+        census.Latest[key].TotalBytes.Should().Be(10 * KiB);
+        census.IsDegraded.Should().BeTrue();
+        census.Describe().Should().Contain("FAULTED");
+        census.Describe().Should().Contain("modules/");
+    }
+
+    [Fact]
     public void The_interval_defaults_and_is_clamped_to_its_floor()
     {
         DataVolumeUsage.IntervalOf(null).Should().Be(DataVolumeUsage.DefaultInterval);
