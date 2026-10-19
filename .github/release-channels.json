@@ -41,21 +41,50 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration",
-        "memex-control"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "arm",
-          "control-first"
-        ],
-        "state": "Phase D (portal, migration) and control-first (control), forward only"
-      },
       "notation": "any",
-      "status": "written"
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "arm",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "Phase D, after the arming PUT, forward only"
+        },
+        {
+          "workflow": "main-cd.yml",
+          "job": "control-first",
+          "repositories": [
+            "memex-control"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "every accepted control build, forward only"
+        },
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph"
+          ],
+          "state": "only when the released set is in the legacy notation (decided by the PROMOTED set, CI_VERSION — call tags with --version <that set>)",
+          "notation": "legacy"
+        }
+      ]
     },
     {
       "id": "minor-latest",
@@ -66,21 +95,50 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration",
-        "memex-control"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "arm",
-          "control-first"
-        ],
-        "state": "Phase D and control-first, forward only"
-      },
       "notation": "any",
-      "status": "written"
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "arm",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "Phase D, after the arming PUT, forward only"
+        },
+        {
+          "workflow": "main-cd.yml",
+          "job": "control-first",
+          "repositories": [
+            "memex-control"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "every accepted control build, forward only"
+        },
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph"
+          ],
+          "state": "only when the released set is in the legacy notation (decided by the PROMOTED set, CI_VERSION — call tags with --version <that set>)",
+          "notation": "legacy"
+        }
+      ]
     },
     {
       "id": "patch-latest",
@@ -91,21 +149,50 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration",
-        "memex-control"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "arm",
-          "control-first"
-        ],
-        "state": "legacy sets only; a SemVer set never moves it"
-      },
       "notation": "legacy",
-      "status": "written"
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "arm",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "Phase D, after the arming PUT, forward only"
+        },
+        {
+          "workflow": "main-cd.yml",
+          "job": "control-first",
+          "repositories": [
+            "memex-control"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "every accepted control build, forward only"
+        },
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph"
+          ],
+          "state": "only when the released set is in the legacy notation (decided by the PROMOTED set, CI_VERSION — call tags with --version <that set>)",
+          "notation": "legacy"
+        }
+      ]
     },
     {
       "id": "minor-stable",
@@ -116,19 +203,24 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "stable-promote"
-        ],
-        "state": "owed: the stable promoter (serialised, compare-and-swap, after the channel/<line>-stable git tag)"
-      },
       "notation": "any",
-      "status": "declared"
+      "status": "declared",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "stable-promote",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "owed: the stable promoter (serialised, compare-and-swap, after the channel/<line>-stable git tag)"
+        }
+      ]
     },
     {
       "id": "mac",
@@ -138,23 +230,27 @@
       "platforms": [
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration"
-      ],
       "hostProfiles": [
         "mac-studio",
         "mac-mini"
       ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "mac-accept"
-        ],
-        "state": "owed: needs a self-hosted Apple-silicon runner and the mac-accept job (Doc/Architecture/ReleaseEditions, the Mac deployment gap)"
-      },
       "notation": "any",
-      "status": "declared"
+      "status": "declared",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "mac-accept",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "owed: needs a self-hosted Apple-silicon runner and the mac-accept job (Doc/Architecture/ReleaseEditions, the Mac deployment gap)"
+        }
+      ]
     },
     {
       "id": "enterprise",
@@ -165,19 +261,24 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration"
-      ],
-      "writer": {
-        "workflow": "release.yml",
-        "jobs": [
-          "release"
-        ],
-        "state": "owed: release.yml moves it forward only, after the release marker, once activated by flipping status to written"
-      },
       "notation": "any",
-      "status": "declared"
+      "status": "declared",
+      "writers": [
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "owed: forward only, after the release marker, once activated by flipping status to written"
+        }
+      ]
     },
     {
       "id": "main",
@@ -188,22 +289,37 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "memex-portal-ai",
-        "memex-migration",
-        "memex-control",
-        "mw-plugin-test"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "promote",
-          "control-promote"
-        ],
-        "state": "phase B, forward only"
-      },
       "notation": "any",
-      "status": "written"
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "promote",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration",
+            "mw-plugin-test"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "phase B, forward only (GHCR carries mw-plugin-test:main only)"
+        },
+        {
+          "workflow": "main-cd.yml",
+          "job": "control-promote",
+          "repositories": [
+            "memex-control"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "identity tags of the accepted control image"
+        }
+      ]
     },
     {
       "id": "latest",
@@ -214,20 +330,36 @@
         "linux/amd64",
         "linux/arm64"
       ],
-      "repositories": [
-        "mw-plugin-test",
-        "memex-portal-ai",
-        "memex-migration"
-      ],
-      "writer": {
-        "workflow": "main-cd.yml",
-        "jobs": [
-          "promote"
-        ],
-        "state": "phase B; release.yml also moves it on GHCR"
-      },
       "notation": "any",
-      "status": "written"
+      "status": "written",
+      "writers": [
+        {
+          "workflow": "main-cd.yml",
+          "job": "promote",
+          "repositories": [
+            "mw-plugin-test"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io",
+            "ghcr.io/systemorph",
+            "cr.meshweaver.cloud"
+          ],
+          "state": "phase B — MeshWeaver.Plugins pins MW_TEST_IMAGE to it"
+        },
+        {
+          "workflow": "release.yml",
+          "job": "release",
+          "repositories": [
+            "memex-migration",
+            "mw-plugin-test",
+            "memex-portal-ai"
+          ],
+          "registries": [
+            "ghcr.io/systemorph"
+          ],
+          "state": "the GHCR mirror of every official release"
+        }
+      ]
     }
   ]
 }

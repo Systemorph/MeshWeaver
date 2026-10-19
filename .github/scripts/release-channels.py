@@ -11,7 +11,10 @@ every reader goes through this script:
   release-channels.py tags --version <v> --writer <workflow> [--job <job>] [--repository <repo>]
         # the `written` labels that writer moves for a set of version <v> (one per line)
   release-channels.py is-protected <tag>
-        # exit 0 when <tag> is a declared channel label (any status), 1 when it is not
+        # exit 0: <tag> is a declared label (any status) — PROTECTED
+        # exit 1: <tag> matches no declared label — the ONLY status that means "not protected"
+        # exit 2: the lookup FAILED (declaration missing or malformed) — a caller must ABORT, never
+        #         read it as "not protected" (a pruner that did would delete every label)
   release-channels.py protected-patterns
         # JSON: [{id, tag, regex, status, repositories}] — what a pruner excludes BY NAME
   release-channels.py check [<repo root>]
@@ -31,6 +34,7 @@ import importlib.util
 import json
 import re
 import sys
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,7 +44,8 @@ DEFAULT_FILE = HERE.parent / "release-channels.json"
 STATUSES = ("written", "declared", "retired")
 NOTATIONS = ("any", "legacy")
 PLACEHOLDERS = ("major", "minor", "patch")
-REQUIRED_FIELDS = ("id", "tag", "edition", "meaning", "repositories", "writer", "notation", "status")
+REQUIRED_FIELDS = ("id", "tag", "edition", "meaning", "writers", "notation", "status")
+BINDING_FIELDS = ("workflow", "job", "repositories")
 # A label must look like a tag and must NEVER be SELECTABLE as a version. The self-updater
 # (memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs) keeps every tag matching
 # `PlatformVersionTag` = ^\d+\.\d+\.\d+([-+].*)?$ EXCEPT one ending in `-latest` (`MovingPointer`), so
@@ -143,12 +148,26 @@ def validate(doc: dict) -> list[str]:
             problems.append(f"{where} ({cid}): status {entry.get('status')!r} is not one of {STATUSES}")
         if entry.get("notation") not in NOTATIONS:
             problems.append(f"{where} ({cid}): notation {entry.get('notation')!r} is not one of {NOTATIONS}")
-        writer = entry.get("writer")
-        if not isinstance(writer, dict) or not writer.get("workflow") or not writer.get("jobs"):
-            problems.append(f"{where} ({cid}): `writer` must name a `workflow` and its `jobs`")
-        repos = entry.get("repositories")
-        if repos is not None and (not isinstance(repos, list) or not all(isinstance(r, str) and r for r in repos)):
-            problems.append(f"{where} ({cid}): `repositories` must be a list of repository names")
+        # A writer is a BINDING — workflow, job and the repositories THAT job writes the label to,
+        # together. Separate job and repository lists cannot express "promote writes `latest` to the
+        # tester only" and would hand a pointer to the wrong publishing job.
+        writers = entry.get("writers")
+        if not isinstance(writers, list) or not writers:
+            problems.append(f"{where} ({cid}): `writers` must be a non-empty list of workflow/job/repositories bindings")
+            writers = []
+        for k, binding in enumerate(writers):
+            at = f"{where} ({cid}) writers[{k}]"
+            if not isinstance(binding, dict):
+                problems.append(f"{at} is not an object")
+                continue
+            for field in BINDING_FIELDS:
+                if not binding.get(field):
+                    problems.append(f"{at} has no `{field}`")
+            repos = binding.get("repositories")
+            if repos and (not isinstance(repos, list) or not all(isinstance(r, str) and r for r in repos)):
+                problems.append(f"{at}: `repositories` must be a list of repository names")
+            if binding.get("notation", "any") not in NOTATIONS:
+                problems.append(f"{at}: notation {binding.get('notation')!r} is not one of {NOTATIONS}")
     return problems
 
 
@@ -179,22 +198,30 @@ def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
     for entry in channels(doc):
         if entry.get("status") != "written":
             continue
-        writer = entry.get("writer") or {}
-        if writer.get("workflow") != workflow:
-            continue
-        if job is not None and job not in (writer.get("jobs") or []):
-            continue
-        if repository is not None and repository not in (entry.get("repositories") or []):
-            continue
-        if entry.get("notation") == "legacy" and not legacy:
-            continue
-        out.append(render(entry["tag"], major, minor, patch))
+        for binding in entry.get("writers") or []:
+            if binding.get("workflow") != workflow:
+                continue
+            if job is not None and binding.get("job") != job:
+                continue
+            if repository is not None and repository not in (binding.get("repositories") or []):
+                continue
+            notation = binding.get("notation") or entry.get("notation")
+            if notation == "legacy" and not legacy:
+                continue
+            tag = render(entry["tag"], major, minor, patch)
+            if tag not in out:
+                out.append(tag)
     return out
+
+
+def repositories(entry: dict) -> list[str]:
+    """Every repository any writer binding puts the label on — what a pruner protects it in."""
+    return sorted({r for b in entry.get("writers") or [] for r in (b.get("repositories") or [])})
 
 
 def protected_patterns(doc: dict) -> list[dict]:
     return [{"id": e["id"], "tag": e["tag"], "regex": template_regex(e["tag"]).pattern,
-             "status": e["status"], "repositories": list(e.get("repositories") or [])}
+             "status": e["status"], "repositories": repositories(e)}
             for e in channels(doc)]
 
 
@@ -224,9 +251,10 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
         return problems
     workflows = root / ".github" / "workflows"
     for entry in channels(doc):
-        wf = entry["writer"]["workflow"]
-        if not (workflows / wf).is_file():
-            problems.append(f"{entry['id']}: writer workflow .github/workflows/{wf} does not exist")
+        for binding in entry["writers"]:
+            wf = binding["workflow"]
+            if not (workflows / wf).is_file():
+                problems.append(f"{entry['id']}: writer workflow .github/workflows/{wf} does not exist")
     # The line pointers are spelled by platform-version.py in main-cd today. They must be EXACTLY
     # the `written` main-cd labels declared here — a pointer CD moves but this file does not declare
     # is a pointer retention may delete, and a declared one CD never moves protects nothing.
@@ -270,15 +298,28 @@ def self_test() -> int:
     expect("legacy set: arm also moves the patch pointer",
            sorted(tags_for(real, "3.0.0-ci.8080", "main-cd.yml", job="arm")) == ["3-latest", "3.0-latest", "3.0.0-latest"])
     expect("a `declared` label is never handed to a writer",
-           tags_for(real, "3.1.0", "release.yml") == [])
+           "3-enterprise" not in tags_for(real, "3.1.0", "release.yml"))
     flipped = json.loads(json.dumps(real))
     for e in flipped["channels"]:
         if e["id"] == "enterprise":
             e["status"] = "written"
     expect("flipping enterprise to `written` hands release.yml N-enterprise",
-           tags_for(flipped, "3.1.0", "release.yml") == ["3-enterprise"])
+           sorted(tags_for(flipped, "3.1.0", "release.yml", repository="memex-portal-ai")) == ["3-enterprise", "latest"])
     expect("literal labels are returned to their writer (promote moves main and latest on the tester)",
            sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")) == ["latest", "main"])
+    expect("bindings hold together: promote does NOT write `latest` to the portal",
+           tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-portal-ai") == ["main"])
+    expect("bindings hold together: promote writes no `main` to memex-control (control-promote does)",
+           tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="memex-control") == []
+           and tags_for(real, "3.1.10050", "main-cd.yml", job="control-promote", repository="memex-control") == ["main"])
+    expect("release.yml writes `latest` (GHCR) for every released repository",
+           tags_for(real, "3.1.0", "release.yml", repository="memex-portal-ai") == ["latest"])
+    expect("release.yml moves the line pointers only for a legacy-notation set",
+           sorted(tags_for(real, "3.0.0-ci.8080", "release.yml", repository="memex-portal-ai"))
+           == ["3-latest", "3.0-latest", "3.0.0-latest", "latest"])
+    expect("control-first moves the line pointers on memex-control only",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="control-first")) == ["3-latest", "3.1-latest"]
+           and tags_for(real, "3.1.10050", "main-cd.yml", job="control-first", repository="memex-portal-ai") == [])
     expect("--repository narrows to the declared repositories",
            tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="mw-plugin-test") == [])
     try:
@@ -301,7 +342,11 @@ def self_test() -> int:
 
     expect("an empty channel list is refused", bool(broken(lambda d: d.update(channels=[]))))
     expect("an unknown status is refused", bool(broken(lambda d: d["channels"][0].update(status="maybe"))))
-    expect("a missing writer is refused", bool(broken(lambda d: d["channels"][0].pop("writer"))))
+    expect("a missing writer is refused", bool(broken(lambda d: d["channels"][0].pop("writers"))))
+    expect("a binding without repositories is refused",
+           bool(broken(lambda d: d["channels"][0]["writers"][0].pop("repositories"))))
+    expect("a binding without a job is refused",
+           bool(broken(lambda d: d["channels"][0]["writers"][0].pop("job"))))
     expect("a duplicate tag is refused", bool(broken(lambda d: d["channels"].append(dict(d["channels"][0], id="dup")))))
     expect("an unknown placeholder is refused", bool(broken(lambda d: d["channels"][0].update(tag="{epoch}-latest"))))
     expect("a VERSION-SHAPED label is refused",
@@ -313,7 +358,6 @@ def self_test() -> int:
            bool(broken(lambda d: d["channels"][0].update(tag="{Major}-mac"))))
     expect("an unbalanced brace is refused ({major}-mac})",
            bool(broken(lambda d: d["channels"][0].update(tag="{major}-mac}"))))
-    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         empty = Path(tmp) / "release-channels.json"
         empty.write_text(json.dumps({"schema": 1, "channels": []}))
@@ -345,15 +389,33 @@ def self_test() -> int:
     expect("check fires when the lock reads a declared label as a pin",
            any("as a PIN" in p for p in check(real, root, FakePV, lambda tag: tag != "3-mac")))
     missing_writer = json.loads(json.dumps(real))
-    missing_writer["channels"][3]["writer"]["workflow"] = "no-such-workflow.yml"
+    missing_writer["channels"][3]["writers"][0]["workflow"] = "no-such-workflow.yml"
     expect("check fires on a writer workflow that does not exist",
            any("does not exist" in p for p in check(missing_writer, root, FakePV, always_floating)))
+
+    # is-protected's exit statuses: 0 protected, 1 not, 2 the lookup FAILED (a pruner must abort).
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = Path(tmp) / "absent.json"
+        malformed = Path(tmp) / "malformed.json"
+        malformed.write_text(json.dumps({"schema": 1, "channels": []}))
+        expect("is-protected: a declared label exits 0", main(["rc", "is-protected", "3-mac"]) == 0)
+        expect("is-protected: an immutable tag exits 1", main(["rc", "is-protected", "3.1.10050"]) == 1)
+        expect("is-protected: a MISSING declaration exits 2, never 1",
+               main(["rc", "is-protected", "3-mac"], declaration=missing) == 2)
+        expect("is-protected: a MALFORMED declaration exits 2, never 1",
+               main(["rc", "is-protected", "3-mac"], declaration=malformed) == 2)
 
     print(f"release-channels self-test: {'FAILED' if failures else 'passed'} ({len(failures)} failure(s))")
     return 1 if failures else 0
 
 
-def main(argv: list[str]) -> int:
+def main(argv: list[str], declaration: Path = DEFAULT_FILE) -> int:
+    if len(argv) == 3 and argv[1] == "is-protected":
+        try:
+            return 0 if is_protected(load(declaration), argv[2]) else 1
+        except ChannelError as error:
+            print(f"::error::release-channels: {error} — protection UNKNOWN, abort", file=sys.stderr)
+            return 2
     try:
         if argv[1:] == ["--self-test"]:
             return self_test()
@@ -366,16 +428,14 @@ def main(argv: list[str]) -> int:
                 n = len(channels(load(root / ".github" / "release-channels.json")))
                 print(f"release-channels: {n} declared channel label(s), all consistent")
             return 1 if problems else 0
-        if len(argv) == 3 and argv[1] == "is-protected":
-            return 0 if is_protected(load(), argv[2]) else 1
         if argv[1:] == ["protected-patterns"]:
-            print(json.dumps(protected_patterns(load()), indent=2))
+            print(json.dumps(protected_patterns(load(declaration)), indent=2))
             return 0
         if len(argv) >= 2 and argv[1] == "tags":
             opts = dict(zip(argv[2::2], argv[3::2]))
             if "--version" not in opts or "--writer" not in opts:
                 raise ChannelError("tags needs --version <v> and --writer <workflow>")
-            for tag in tags_for(load(), opts["--version"], opts["--writer"], opts.get("--job"), opts.get("--repository")):
+            for tag in tags_for(load(declaration), opts["--version"], opts["--writer"], opts.get("--job"), opts.get("--repository")):
                 print(tag)
             return 0
     except ChannelError as error:

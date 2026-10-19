@@ -30,8 +30,8 @@ Every moving label lives in
 | Command | Who calls it |
 |---|---|
 | `release-channels.py protected-patterns` | a pruner: the JSON list of label patterns it must exclude by name |
-| `release-channels.py is-protected <tag>` | a shell step: exit 0 when the tag is a declared label |
-| `release-channels.py tags --version <v> --writer <workflow> [--job <job>]` | a writer: the `written` labels it moves for that set |
+| `release-channels.py is-protected <tag>` | a shell step: exit 0 means protected, 1 means not a declared label, and 2 means the lookup failed. A caller must abort on 2 and never read it as unprotected |
+| `release-channels.py tags --version <v> --writer <workflow> [--job <job>] [--repository <r>]` | a writer: the `written` labels that binding moves for that set |
 | `release-channels.py check .` | every pull request (`CI's own shell`) |
 | `release-channels.py --self-test` | every pull request: shows that each check can fail |
 
@@ -47,6 +47,11 @@ Every moving label lives in
 | `{major}-enterprise` | enterprise | newest **official** release of the major (clean `x.y.z`) | `release.yml` (owed) | declared |
 | `main` | continuous | newest promoted set, before arming | `main-cd.yml` `promote` | written |
 | `latest` | continuous | the tester's moving tag; GHCR's latest release | `main-cd.yml` `promote`, `release.yml` | written |
+
+Each label lists its **writer bindings**. A binding names a workflow, a job, and the repositories
+and registries that job writes the label to. For example, `promote` writes `latest` only to
+`mw-plugin-test`, while `release.yml` writes it to GHCR for every released repository. A pruner
+protects a label in the union of its bindings' repositories.
 
 `declared` means the label is reserved and **already protected**, but no workflow writes it yet. A
 label is therefore protected before its first write, which is the order
@@ -118,7 +123,30 @@ Mac Studio or Mac mini that serves an instance needs the following:
 | G6 | **Retention visibility** | AXIS 3 asks every declared installation's `/api/version` | the host reachable through a tunnel, or declared in `.github/acr-retention/instances.json`. Otherwise the digest it runs is unprotected |
 | G7 | **Acceptance** | nothing proves an arm64 set boots on Apple silicon. Hosted arm64 macOS runners cannot run Colima's VM (no nested virtualization) | a self-hosted Apple-silicon runner (a Mac mini) running `memex-local up` and `verify` against the candidate set. On green it writes `3-mac` (the `mac-accept` job) |
 | G8 | **Ingress and identity** | `memex.localhost` with mkcert, reachable from the host only | a real hostname and certificate (ACME, or a tunnel that terminates TLS), and the Entra redirect URIs for it |
+| G10 | **Shared artifact store** | each portal resolves bundles from the store its deployment mounts | the host consumes its control's store read-only (below). The `linux/arm64` bundles for a set exist before `3-mac` is written |
 | G9 | **Backups and telemetry** | Postgres lives on the Colima VM disk. Logs stay on the host | database dumps to the estate's backup store, and logs and metrics shipped to the estate's observability stack |
+
+### Mac hosts and the shared artifact store
+
+The estate's compiled modules and bundles are produced **once** by the build server and the control
+instance. They are kept in a control-owned shared artifact store. Portals mount that store
+read-only, and a client environment's control syncs it one way from the upstream control. A Mac host
+fits this model as an ordinary portal:
+
+- **It consumes, never produces.** A Mac host mounts its control's store read-only when the two
+  share a network. Otherwise it syncs one way from that control, the same way a client control
+  syncs from upstream. It never writes into a shared store.
+- **Its builds are its own identity.** The Mac edition runs `linux/arm64`. That framework identity
+  differs from the `linux/amd64` identity AKS runs, so its compiled bundles are stored and
+  addressed under their own identity key, beside the amd64 ones and never in place of them. The
+  store's sweep counts the arm64 identity as a represented identity and keeps its latest sealed
+  publication like any other.
+- **`3-mac` waits for its bundles.** If only amd64 bundles exist for a set, a Mac host refuses
+  adoption and compiles from live source. That works, but slowly. So `mac-accept` requires the
+  set's `linux/arm64` bundles to be present (main-cd's arm64 bake leg) before it moves `3-mac`.
+- **The prune job reads the same declaration.** It skips every label in
+  `.github/release-channels.json` across all of a label's repositories, so the image a Mac host
+  seeds from survives while the label names it.
 
 **Order of delivery:**
 
