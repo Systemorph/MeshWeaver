@@ -142,6 +142,74 @@ way an instance does. Until then, **arming deletion on the plugin registry insta
 half**, because that is the store a satellite's gate pulls from over the HTTP prebuilt surface; the
 gap must be closed, or the arming scoped to instances no CI lane pulls from.
 
+## Whose consumers a store accounts for
+
+Rule 4 is only as good as the consumer inventory behind it, and an inventory with a gap refuses the
+whole pass. Which instances must have reported is therefore the question that decides whether a
+pass can ever complete. The answer is **declared**: the store's expected consumers are the
+`Hosting/Deployment` records whose `pluginRepos` mount a registry served under one of **this
+host's** names. Those names are the `host` on the host's own record (`Hosting:Deployment`) and the
+host of `PluginCatalog:HomeUrl`. A mount marked `isRegistrySource` is a git source a registry serves
+from, not a registry an instance pulls from.
+
+Three kinds of record are deliberately **not** expected consumers, and the ledger counts each
+apart (`… N retired, M not mounting this store, K reporting without a record`):
+
+| record | why it is not counted |
+|---|---|
+| retired (`retired`, `retiredAt`, or an inactive node) | declared gone |
+| this host's own record | what this host runs is protected by its live identity and its adoption stamps (rules 1 and 5) |
+| a record that mounts some other registry | its instance is served out of another store; its report describes that store's consumer |
+
+🚨 **Holding a record is not consuming the store (#6989).** The denominator used to be *every*
+record the host held. The public instance and the company instance both hold a synced copy of the
+whole `Deployments/*` folder, while every instance reports to the control instance
+(`Hosting:ReportTo`). Each pass on those two hosts therefore refused, by construction, on every
+tick: `the fleet consumer inventory is INCOMPLETE — 6 refusal(s) over 6 expected instance(s)`. The
+shared volume was never reclaimed, and the report-only ledger never got far enough to be read.
+
+**Reports reach the store that needs them.** A registry serves each consumer the bundles keyed on
+that consumer's own framework identity, out of the registry's own store. So every instance also
+delivers its inventory report to each registry it mounts, at `POST /api/instances/inventory`. It
+presents the same registry credential it pulls with, beside the copy it sends to the report sink
+(`DeploymentReportService.DeliverToStores`). The registry files the report at
+`Ops/ConsumerReports/<instance>` under the instance id the credential **authenticated**, and stamps
+that id as `registeredInstance` (`DeploymentReportService.FileStoreReport`). The deployment the body
+names is not the key. A report can only add protection, and binding the key to the sender closes
+the one way it could do harm: one instance's key making another instance's record read as freshly
+reported. When a record's registry instance id differs from its record id, the record declares it
+as `registryInstanceId`.
+
+The two kinds of report are matched two ways. A store-filed report may stand only for the record
+whose declared registry identity (`registryInstanceId`, else the record id) equals its
+`registeredInstance`. An unrelated registry account that happens to share the record's id cannot
+satisfy it. A report filed by the trusted report sink carries no such stamp and is matched by the
+deployment id it names. A store-filed report also keeps **protecting** when its record no longer
+mounts this store: the record may have moved to another registry before its instance applied the
+change, and the builds that instance is still served from here must not be collected. Such a
+report adds references but does not make the record an expected consumer, so it can never make a
+pass complete.
+
+**What still refuses**, and must:
+
+- A declared consumer with no report, an unreadable one, or one older than `StaleAfter` (24 h). A
+  consumer on an image that does not deliver to its stores yet is such a consumer, so the
+  registry's pass completes only once every instance that mounts it runs a build carrying the
+  delivery. Until then it keeps refusing, and the refusal names each silent instance.
+- A host that cannot name its own store (no `host` on its own record and no `PluginCatalog:HomeUrl`)
+  while it holds records that mount a registry: without its name, no mount can be shown to be
+  about another store.
+- A host that holds reports and no records at all, and a control instance whose record query
+  returned nothing. Both are a missing denominator, not a fleet of zero.
+
+Whether a completed pass **deletes** is still `PrebuiltBundleRetention.Delete` alone, and the
+chart's report-only default is unchanged. Completing a pass is what makes "read one report, then
+arm" possible at all.
+
+🚨 **The registry's denominator comes from its synced copy of the records.** If that copy is
+retired, the registry holds consumer reports and no records, and it refuses (the missing-denominator
+row above). The consumer declaration must then reach it another way first.
+
 ## Rolling it out
 
 1. **Report-only, everywhere** — the chart default above. The sweep runs, plans and writes its
