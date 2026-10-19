@@ -301,6 +301,45 @@ public class DeploymentPinnedReferencesTest
     }
 
     [Fact]
+    public void AStoreReportFromAnAccountThatIsNotTheDeclaredRegistryIdentity_DoesNotSatisfyTheRecord()
+    {
+        // `customer` declares that it reaches this store as `customer-portal`. A fresh report from
+        // a DIFFERENT registry account that happens to be called `customer` is not that consumer:
+        // `customer-portal` is still silent, and the pass must not complete.
+        var fleet = SyncedFleet().Select(r => r.Id == "customer"
+            ? Deployment("customer", extra: """{ "registryInstanceId": "customer-portal" }""")
+            : r).ToImmutableList();
+
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(fleet,
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             StoreReport("customer", TimeSpan.FromMinutes(5), "s-unrelated-account")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/customer");
+    }
+
+    [Fact]
+    public void AStoreReportOfARecordThatMovedToAnotherRegistry_StillProtectsWhatItIsServedFromHere()
+    {
+        // `customer`'s record now mounts another registry, but its instance has not applied that
+        // yet: a fresh, authenticated report still arrives HERE. It no longer counts as an expected
+        // consumer, and its builds must still be protected — they are being served from this store.
+        var fleet = SyncedFleet().Select(r => r.Id == "customer"
+            ? Deployment("customer", mounts: "https://other-registry.example")
+            : r).ToImmutableList();
+
+        var references = Resolve(fleet,
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             StoreReport("customer", TimeSpan.FromMinutes(10), "s-customer-still-served")],
+            new ConsumerScope("registry", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().Contain("s-customer-still-served",
+            because: "a report this store authenticated names a build it is serving, whatever the record now mounts");
+    }
+
+    [Fact]
     public void AHostThatCannotNameItsStore_RefusesRatherThanReadingEveryMountAsSomeoneElses()
     {
         var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(), [],

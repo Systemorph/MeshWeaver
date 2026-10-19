@@ -180,6 +180,16 @@ the one way it could do harm: one instance's key making another instance's recor
 reported. When a record's registry instance id differs from its record id, the record declares it
 as `registryInstanceId`.
 
+The two kinds of report are matched two ways. A store-filed report may stand only for the record
+whose declared registry identity (`registryInstanceId`, else the record id) equals its
+`registeredInstance`. An unrelated registry account that happens to share the record's id cannot
+satisfy it. A report filed by the trusted report sink carries no such stamp and is matched by the
+deployment id it names. A store-filed report also keeps **protecting** when its record no longer
+mounts this store: the record may have moved to another registry before its instance applied the
+change, and the builds that instance is still served from here must not be collected. Such a
+report adds references but does not make the record an expected consumer, so it can never make a
+pass complete.
+
 **What still refuses**, and must:
 
 - A declared consumer with no report, an unreadable one, or one older than `StaleAfter` (24 h). A

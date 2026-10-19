@@ -188,8 +188,21 @@ public static class DeploymentPinnedReferences
         // so two nodes can describe one deployment. Every one of them contributes its references —
         // an extra consumer is a consumer — but the FRESHNESS verdict is taken from the newest,
         // because a stale duplicate beside a current report is not a stale instance.
-        var unclaimed = inventories
-            .GroupBy(node => ReporterOf(node, options), StringComparer.OrdinalIgnoreCase)
+        //
+        // 🚨 TWO KINDS OF REPORT, MATCHED TWO WAYS (#6993 review). A report a STORE filed carries the
+        // registry instance id the store AUTHENTICATED (`registeredInstance`); it may stand only for
+        // the record that DECLARES that registry identity (`registryInstanceId`, else the record id).
+        // A report the trusted report sink filed carries no such stamp and is matched by the
+        // deployment id it names. Mixing the two let an unrelated registry account whose id happens
+        // to equal a record id satisfy a record that declared another registry identity.
+        var storeReports = inventories
+            .Where(node => RegisteredInstanceOf(node, options) is not null)
+            .GroupBy(node => RegisteredInstanceOf(node, options)!, StringComparer.OrdinalIgnoreCase)
+            .ToImmutableDictionary(group => group.Key, group => group.ToImmutableList(),
+                StringComparer.OrdinalIgnoreCase);
+        var sinkReports = inventories
+            .Where(node => RegisteredInstanceOf(node, options) is null)
+            .GroupBy(node => SinkReporterOf(node, options), StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(group => group.Key, group => group.ToImmutableList(),
                 StringComparer.OrdinalIgnoreCase);
 
@@ -226,14 +239,14 @@ public static class DeploymentPinnedReferences
             if (pin is not null)
                 references.Add(pin);
 
-            // An instance's reports are filed under the id it reports as: its Deployment id when it
-            // reached the report sink, the id the registry AUTHENTICATED it as when it reached a store
-            // it consumes (`registryInstanceId`, declared on the record when the two differ).
-            var keys = ReportKeysOf(record, options).ToImmutableList();
-            var reports = keys
-                .SelectMany(key => unclaimed.TryGetValue(key, out var bucket) ? bucket : [])
-                .ToImmutableList();
-            unclaimed = unclaimed.RemoveRange(keys);
+            // A record's reports: the store-filed ones authenticated as the registry identity it
+            // DECLARES (`registryInstanceId`, else its id), and the sink-filed ones naming its id.
+            var registryKey = RegistryIdentityOf(record, options);
+            var fromStore = storeReports.TryGetValue(registryKey, out var stored) ? stored : [];
+            var fromSink = sinkReports.TryGetValue(record.Id, out var sunk) ? sunk : [];
+            storeReports = storeReports.Remove(registryKey);
+            sinkReports = sinkReports.Remove(record.Id);
+            var reports = fromStore.AddRange(fromSink);
 
             // 🚨 #6989 — HOLDING A RECORD IS NOT CONSUMING THIS STORE. A host can hold a synced copy of
             // the whole Deployments folder; what makes a record an EXPECTED consumer of THIS store is
@@ -246,6 +259,23 @@ public static class DeploymentPinnedReferences
             var isSelf = string.Equals(record.Id, scope.SelfDeployment, StringComparison.OrdinalIgnoreCase);
             if (isSelf || !MountedHostsOf(record, options).Overlaps(storeHosts))
             {
+                // 🚨 BUT A REPORT THIS STORE RECEIVED STILL PROTECTS (#6993 review). It arrived
+                // authenticated, so its instance pulled from here recently — a record may have moved
+                // to another registry before the instance applied it, and the builds it is still
+                // being served from here must not be collected. It protects; it does not count the
+                // record as expected, so it cannot make the pass complete. Sink-filed reports of such
+                // a record describe another store's consumer and are not read.
+                foreach (var report in fromStore)
+                {
+                    try
+                    {
+                        references.AddRange(ReportedBuildsOf(report, options));
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        refusals.Add($"{record.Path}: {exception.Message}");
+                    }
+                }
                 elsewhere++;
                 logger?.LogInformation(
                     "PrebuiltBundleRetention: {Deployment} is not an expected consumer of this store — {Reason}",
@@ -313,6 +343,8 @@ public static class DeploymentPinnedReferences
         // control instance by construction, and a control instance whose Deployment records have
         // gone missing would otherwise read as "zero expected consumers, inventory complete" over
         // a fleet that is very much running.
+        // Every report no record claimed, one bucket per reporting instance.
+        var unclaimed = storeReports.Values.Concat(sinkReports.Values).ToImmutableList();
         if (deployments.Count == 0 && unclaimed.Count > 0)
             refusals.Add(
                 $"{unclaimed.Count} instance(s) file {DeploymentReportService.InventoryNodeType} reports here, which makes "
@@ -333,7 +365,7 @@ public static class DeploymentPinnedReferences
                 + "and only one of those two readings may authorise deleting a remote consumer's artifacts.");
 
         // Whatever is left reported for no record: an unexpected consumer is still a consumer.
-        foreach (var orphan in unclaimed.Values.SelectMany(bucket => bucket))
+        foreach (var orphan in unclaimed.SelectMany(bucket => bucket))
         {
             try
             {
@@ -374,29 +406,27 @@ public static class DeploymentPinnedReferences
     /// <summary>The Deployment record's plugin-registry mounts field.</summary>
     public const string PluginReposField = "pluginRepos";
 
-    /// <summary>
-    /// The id a report was filed under: the registry instance id a STORE authenticated its sender as
+    /// <summary>The registry instance id a STORE authenticated a report's sender as
     /// (<see cref="DeploymentReport.RegisteredInstance"/>, stamped by the store, never by the sender),
-    /// else the deployment id the report names, else the node's own id.
-    /// </summary>
-    private static string ReporterOf(MeshNode node, JsonSerializerOptions options) =>
+    /// or null on a report the trusted report sink filed.</summary>
+    private static string? RegisteredInstanceOf(MeshNode node, JsonSerializerOptions options) =>
         Field(node, nameof(DeploymentReport.RegisteredInstance), options) is { } registered
         && !string.IsNullOrWhiteSpace(registered)
             ? registered.Trim()
-            : Field(node, nameof(DeploymentReport.Deployment), options) is { } id && !string.IsNullOrWhiteSpace(id)
-                ? id
-                : node.Id;
+            : null;
 
-    /// <summary>The ids a record's reports may be filed under: its own id, and the registry instance id
-    /// it declares (<c>registryInstanceId</c>) when that differs.</summary>
-    private static IEnumerable<string> ReportKeysOf(MeshNode record, JsonSerializerOptions options)
-    {
-        yield return record.Id;
-        if (Field(record, RegistryInstanceIdField, options) is { } registered
-            && !string.IsNullOrWhiteSpace(registered)
-            && !string.Equals(registered.Trim(), record.Id, StringComparison.OrdinalIgnoreCase))
-            yield return registered.Trim();
-    }
+    /// <summary>The deployment a sink-filed report names, else the node's own id.</summary>
+    private static string SinkReporterOf(MeshNode node, JsonSerializerOptions options) =>
+        Field(node, nameof(DeploymentReport.Deployment), options) is { } id && !string.IsNullOrWhiteSpace(id)
+            ? id
+            : node.Id;
+
+    /// <summary>The ONE registry identity a record's store-filed reports may carry: its declared
+    /// <c>registryInstanceId</c>, else its record id.</summary>
+    private static string RegistryIdentityOf(MeshNode record, JsonSerializerOptions options) =>
+        Field(record, RegistryInstanceIdField, options) is { } registered && !string.IsNullOrWhiteSpace(registered)
+            ? registered.Trim()
+            : record.Id;
 
     /// <summary>
     /// The hosts of every plugin registry this record DECLARES its instance consumes — its
