@@ -942,10 +942,7 @@ public static class MeshExtensions
     private const string MoveCaseRenameCopyOutstandingKey = "activity.node.move.caseRenameCopyOutstanding";
 
     /// <inheritdoc cref="CopyStalledKey"/>
-    private const string MoveCaseRenameCopyMayHaveWrittenKey = "activity.node.move.caseRenameCopyMayHaveWritten";
-
-    /// <inheritdoc cref="CopyStalledKey"/>
-    private const string MoveCaseRenameResumedKeptKey = "activity.node.move.caseRenameResumedKept";
+    private const string MoveCaseRenameUndoUnprovenKey = "activity.node.move.caseRenameUndoUnproven";
 
     /// <summary>
     /// Fully synchronous handler — returns <see cref="IMessageDelivery"/>, never <see cref="Task"/>.
@@ -1658,7 +1655,12 @@ public static class MeshExtensions
                         resultNode.Path));
                     var postCreationDeadline = Observable.Timer(deadline).Subscribe(
                         postCreationSignal.Fire, postCreationSignal.Fail);
-                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger, EnterPostCreationStage)
+                    // How many post-creation handlers matched: a success answer says whether any ran,
+                    // because their writes are not reported and a caller undoing this create (a
+                    // failed case-only rename leg, #6951) cannot remove what it was never told of.
+                    var postCreationHandlersMatched = 0;
+                    RunPostCreationHandlersObs(hub, resultNode, capturedRequest.CreatedBy, logger, EnterPostCreationStage,
+                            matched => postCreationHandlersMatched = matched)
                         .Finally(() =>
                         {
                             postCreationSignal.Cancel();
@@ -1705,7 +1707,11 @@ public static class MeshExtensions
                             {
                                 logger.LogDebug("[CreateNode] step=post-handlers-done path={Path} — posting Ok", resultNode.Path);
                                 hub.NoteRequestStage(request.Id, "CREATE_POST_HANDLERS_DONE");
-                                Respond(CreateNodeResponse.Ok(resultNode));
+                                Respond(CreateNodeResponse.Ok(resultNode) with
+                                {
+                                    Confirmed = string.Equals(mode, "confirm", StringComparison.Ordinal),
+                                    PostCreationHandlersRan = postCreationHandlersMatched > 0,
+                                });
                                 // 🚨 STRICTLY AFTER the response (#3153) — see the method's remarks.
                                 ActivatePendingControlPlane(hub, resultNode, logger);
                             });
@@ -7789,18 +7795,20 @@ public static class MeshExtensions
         MeshNode node,
         string? createdBy,
         ILogger logger,
-        Action<string>? onStage = null)
+        Action<string>? onStage = null,
+        Action<int>? onMatched = null)
         // 🚨 DEFERRED: the builder resolves the handling hub's services, and its callers run it from
         // inside Subscribe callbacks that may fire after that hub is disposed — an eager
         // ObjectDisposedException would leave the callback instead of reaching its error arm.
-        => Observable.Defer(() => BuildPostCreationHandlers(hub, node, createdBy, logger, onStage));
+        => Observable.Defer(() => BuildPostCreationHandlers(hub, node, createdBy, logger, onStage, onMatched));
 
     private static IObservable<System.Reactive.Unit> BuildPostCreationHandlers(
         IMessageHub hub,
         MeshNode node,
         string? createdBy,
         ILogger logger,
-        Action<string>? onStage)
+        Action<string>? onStage,
+        Action<int>? onMatched)
     {
         if (string.IsNullOrEmpty(node.NodeType))
             return Observable.Empty<System.Reactive.Unit>();
@@ -7831,6 +7839,7 @@ public static class MeshExtensions
                 return h.Matches(node);
             })
             .ToList();
+        onMatched?.Invoke(handlers.Count);
 
         if (handlers.Count == 0)
             return Observable.Empty<System.Reactive.Unit>();
@@ -9837,39 +9846,34 @@ public static class MeshExtensions
                 // The copy leg failed without saying what it wrote.
                 return Observable.Throw<MeshNode>(RenameUnresolved(staging, null,
                     failed.Message, MoveCaseRenameUnresolvedKey, ("reason", failed.Message)));
-            // 🚨 What the failed copy wrote must be ESTABLISHED before anything is undone (review of
-            // #6976): a copy that ran out of time, or one of whose creates failed after it may have
-            // written, leaves the leg's target unknown — removing only what is known and moving the
-            // subtree back would leave a row of the new casing behind (or, on a case-insensitive
-            // store, resume onto it) under an answer that says nothing was renamed.
-            if (copyLeg.WrittenUnsettled || !copyLeg.PossiblyWritten.IsEmpty)
-                return Observable.Throw<MeshNode>(copyLeg.PossiblyWritten.IsEmpty
-                    ? RenameUnresolved(staging, copyLeg.Log,
-                        $"{copyLeg.Message} The copy to '{legTarget}' ran out of time with creates still outstanding, "
-                        + "so what it wrote is unknown.",
-                        MoveCaseRenameCopyOutstandingKey,
-                        ("legTarget", legTarget), ("error", copyLeg.Message))
-                    : RenameUnresolved(staging, copyLeg.Log,
-                        $"{copyLeg.Message} Creates of the copy to '{legTarget}' failed after they may have written: "
-                        + $"{string.Join(", ", copyLeg.PossiblyWritten)}.",
-                        MoveCaseRenameCopyMayHaveWrittenKey,
-                        ("legTarget", legTarget), ("error", copyLeg.Message),
-                        ("paths", string.Join(", ", copyLeg.PossiblyWritten))));
-            // 🚨 A RESUMED target is never removed as compensation: this attempt did not write it,
-            // and it may carry edits made after the earlier attempt landed it (#6310). It is kept,
-            // and with it in place the subtree cannot be cleanly moved back.
-            if (!copyLeg.Resumed.IsEmpty)
+            // 🚨 ONE RULE for undoing a failed copy leg (review of #6976): the undo removes ONLY rows
+            // this attempt PROVABLY inserted (CopyNodeResponse.Written — a new row, not a Transient it
+            // confirmed, no post-creation handler that may have written elsewhere) AND that are still
+            // exactly as it wrote them, under a deletion scope on the leg's target. ANY doubt — creates
+            // still outstanding, a create that may have written although it failed, a target it
+            // resumed onto, a success it cannot prove was a plain insert, a row changed since — and
+            // NOTHING is touched: the answer is Unknown, naming source, staging and target.
+            if (copyLeg.WrittenUnsettled && copyLeg.PossiblyWritten.IsEmpty)
                 return Observable.Throw<MeshNode>(RenameUnresolved(staging, copyLeg.Log,
-                    $"{copyLeg.Message} The copy to '{legTarget}' resumed onto {string.Join(", ", copyLeg.Resumed)}, which "
-                    + "already held this subtree relocated by an earlier attempt and may carry newer edits, so they were kept.",
-                    MoveCaseRenameResumedKeptKey,
-                    ("legTarget", legTarget), ("error", copyLeg.Message),
-                    ("paths", string.Join(", ", copyLeg.Resumed))));
+                    $"{copyLeg.Message} The copy to '{legTarget}' ran out of time with creates still outstanding, "
+                    + "so what it wrote is unknown.",
+                    MoveCaseRenameCopyOutstandingKey,
+                    ("legTarget", legTarget), ("error", copyLeg.Message)));
+            var unprovable = copyLeg.PossiblyWritten
+                .Concat(copyLeg.Resumed)
+                .Concat(copyLeg.Unproven)
+                .Distinct(StringComparer.Ordinal)
+                .ToImmutableList();
+            if (!unprovable.IsEmpty)
+                return Observable.Throw<MeshNode>(UndoUnproven(staging, legTarget, copyLeg, unprovable));
             return RemoveWritesOfFailedCopy(legTarget, copyLeg)
-                .Catch((Exception cleanupFailed) => Observable.Throw<System.Reactive.Unit>(RenameUnresolved(staging, copyLeg.Log,
-                    $"{copyLeg.Message} Removing what that copy had written at '{legTarget}' failed too ({cleanupFailed.Message}).",
-                    MoveCaseRenameCleanupFailedKey,
-                    ("legTarget", legTarget), ("error", copyLeg.Message), ("cleanupError", cleanupFailed.Message))))
+                .Catch((Exception cleanupFailed) => Observable.Throw<System.Reactive.Unit>(
+                    cleanupFailed is CopyWritesChangedException changed
+                        ? UndoUnproven(staging, legTarget, copyLeg, changed.Paths)
+                        : RenameUnresolved(staging, copyLeg.Log,
+                            $"{copyLeg.Message} Removing what that copy had written at '{legTarget}' failed too ({cleanupFailed.Message}).",
+                            MoveCaseRenameCleanupFailedKey,
+                            ("legTarget", legTarget), ("error", copyLeg.Message), ("cleanupError", cleanupFailed.Message))))
                 .SelectMany(_ => secondLeg
                     ? RestoreAfterFailedRename(staging, copyLeg, copyLeg.Log)
                     // Leg 1: the source was never touched and the staging copy is gone again — the
@@ -9877,24 +9881,71 @@ public static class MeshExtensions
                     : Observable.Throw<MeshNode>(copyLeg));
         }
 
-        // Removes exactly the paths a failed copy leg CREATED at `legTarget` — never a path it did not
-        // create (resumed, or possibly written: AfterFailedRenameLeg has already refused those).
+        MoveFailedException UndoUnproven(string staging, string legTarget, MoveCopyLegFailedException copyLeg,
+            ImmutableList<string> paths)
+        {
+            var listed = string.Join(", ", paths);
+            return RenameUnresolved(staging, copyLeg.Log,
+                $"{copyLeg.Message} What the copy to '{legTarget}' left there is not provably its own unchanged "
+                + $"insert ({listed}), so it was left as it is and nothing was moved back.",
+                MoveCaseRenameUndoUnprovenKey,
+                ("legTarget", legTarget), ("error", copyLeg.Message), ("paths", listed));
+        }
+
+        // Removes exactly the rows a failed copy leg PROVABLY inserted at `legTarget`, and only while
+        // each is unchanged (review of #6976). The relocation scope guards the leg's SOURCE, never its
+        // target, so the work runs inside a deletion scope on `legTarget`: writes admitted under it
+        // settle first and new ones are refused while the check and the deletes run. Then every row is
+        // read back and compared with the version and stamp its create landed at — a row edited since
+        // (newer version, other stamp), replaced (other stamp) or gone fails the WHOLE undo before
+        // anything is removed (CopyWritesChangedException) — and each is removed with the store's
+        // conditional delete, so a row that moved past the version this copy wrote is never removed.
         IObservable<System.Reactive.Unit> RemoveWritesOfFailedCopy(string legTarget, MoveCopyLegFailedException copyLeg)
         {
             if (copyLeg.Written.IsEmpty)
                 return Observable.Return(System.Reactive.Unit.Default);
             var ordered = copyLeg.Written.OrderByDescending(p => p.Length).ToList();
-            return storage.DeleteMany(ordered)
-                .Take(1)
-                .Do(deleted =>
-                {
-                    foreach (var p in deleted)
-                        changeFeed?.Publish(MeshChangeEvent.Deleted(p));
-                    logger.LogInformation(
-                        "[MoveNode] case-only rename {Source} -> {Target}: removed the {Count} path(s) its failed copy leg wrote under {LegTarget}",
-                        sourcePath, targetPath, ordered.Count, legTarget);
-                })
-                .Select(_ => System.Reactive.Unit.Default);
+            bool AsWritten(string path, MeshNode? row) =>
+                row is not null
+                && copyLeg.WrittenVersions.TryGetValue(path, out var version)
+                && copyLeg.WrittenLastModified.TryGetValue(path, out var lastModified)
+                && row.Version <= version
+                && MeshNode.StorageStable(row.LastModified) == MeshNode.StorageStable(lastModified);
+            return registry.WithinSubtreeDeletion(legTarget, () =>
+                ordered.ToObservable()
+                    .Select(path => storage.Read(path, hub.JsonSerializerOptions)
+                        .Take(1)
+                        .DefaultIfEmpty(null)
+                        .Select(row => (Path: path, Unchanged: AsWritten(path, row))))
+                    .Concat()
+                    .ToList()
+                    .SelectMany(checks =>
+                    {
+                        var changed = checks.Where(c => !c.Unchanged).Select(c => c.Path).ToImmutableList();
+                        if (!changed.IsEmpty)
+                            return Observable.Throw<System.Reactive.Unit>(new CopyWritesChangedException(changed));
+                        return ordered.ToObservable()
+                            .Select(path => storage.DeleteIfVersionAtMost(path, copyLeg.WrittenVersions[path], hub.JsonSerializerOptions)
+                                .Take(1)
+                                .Do(removed =>
+                                {
+                                    if (removed)
+                                        changeFeed?.Publish(MeshChangeEvent.Deleted(path));
+                                })
+                                .Select(removed => (Path: path, Removed: removed)))
+                            .Concat()
+                            .ToList()
+                            .SelectMany(results =>
+                            {
+                                var kept = results.Where(r => !r.Removed).Select(r => r.Path).ToImmutableList();
+                                if (!kept.IsEmpty)
+                                    return Observable.Throw<System.Reactive.Unit>(new CopyWritesChangedException(kept));
+                                logger.LogInformation(
+                                    "[MoveNode] case-only rename {Source} -> {Target}: removed the {Count} row(s) its failed copy leg inserted under {LegTarget}",
+                                    sourcePath, targetPath, ordered.Count, legTarget);
+                                return Observable.Return(System.Reactive.Unit.Default);
+                            });
+                    }));
         }
 
         IObservable<MeshNode> RestoreAfterFailedRename(string staging, Exception failed, ActivityLog? failedLog)
@@ -10052,6 +10103,9 @@ public static class MeshExtensions
                         d.Message.Error ?? "Node copy failed", MoveReasonForCopy(d.Message), d.Message.Log)
                     {
                         Written = d.Message.Written,
+                        WrittenVersions = d.Message.WrittenVersions,
+                        WrittenLastModified = d.Message.WrittenLastModified,
+                        Unproven = d.Message.Unproven,
                         Resumed = d.Message.Resumed,
                         PossiblyWritten = d.Message.PossiblyWritten,
                         WrittenUnsettled = d.Message.WrittenUnsettled,
@@ -10146,8 +10200,13 @@ public static class MeshExtensions
         // first, so a copy that fails part-way has written some of the target. A caller that undoes
         // the copy — a case-only rename moving its subtree back — must remove exactly those paths
         // and nothing else (a target path the copy did NOT write may be someone else's node), so
-        // every failure response carries them, in THREE sets that must never be merged:
-        //   • `written` — creates THIS attempt made that answered success: the caller's to remove.
+        // every failure response carries them, in FOUR sets that must never be merged:
+        //   • `written` — creates THIS attempt made that PROVE a plain insert of one new row (not a
+        //     Transient it confirmed, no post-creation handler ran), with the version and stamp each
+        //     landed at (`writtenRows`): the only paths a caller may remove, and only while unchanged.
+        //   • `unproven` — creates that answered success without that proof: a pre-existing
+        //     Transient confirmed Active (the row predates the request), or post-creation handlers
+        //     that ran (their writes — a grant below the node, a partition record — are not reported).
         //   • `resumed` — targets that already held the node relocated by an earlier attempt and
         //     stood in for the create (AlreadyRelocated, #6310). Not written here, and possibly
         //     carrying edits made after that attempt (TargetHasCarried accepts a target with a newer
@@ -10158,6 +10217,8 @@ public static class MeshExtensions
         // `createStarted` says whether a create was ever issued: a copy that runs out of time after
         // that point cannot say what landed (WrittenUnsettled).
         var written = ImmutableList<string>.Empty;
+        var writtenRows = ImmutableDictionary<string, (long Version, DateTimeOffset LastModified)>.Empty;
+        var unproven = ImmutableList<string>.Empty;
         var resumed = ImmutableList<string>.Empty;
         var possiblyWritten = ImmutableList<string>.Empty;
         var createStarted = false;
@@ -10179,7 +10240,10 @@ public static class MeshExtensions
         // A PRESERVING copy carries authorship by naming the stored source (CreateNodeRequest.
         // AuthorshipFrom): the create handler re-checks the move entitlement and reads the stamps
         // from storage, because a requester never chooses its own author stamps.
-        IObservable<MeshNode> CreatePreservingAuthorship(MeshNode node, string fromPath) =>
+        // Emits the created node and whether the create PROVES it did nothing but insert this one row:
+        // not a Transient it confirmed (that row predates the request), and no post-creation handler
+        // ran (their writes are not reported) — the only creates an undo may remove (#6951).
+        IObservable<(MeshNode Node, bool ProvenInsert)> CreatePreservingAuthorship(MeshNode node, string fromPath) =>
             Observable.Defer(() => hub.NodeOperationIssuingHub()
                 .Observe(new CreateNodeRequest(node)
                     {
@@ -10190,8 +10254,8 @@ public static class MeshExtensions
                         ? o.WithTarget(hub.NodeOperationTarget())
                         : o.WithTarget(hub.NodeOperationTarget()).WithAccessContext(callerAccessContext))
                 .SelectMany(d => d.Message is { Success: true, Node: { } created }
-                    ? Observable.Return(created)
-                    : Observable.Throw<MeshNode>(d.Message.ToException(node.Path))));
+                    ? Observable.Return((created, !d.Message.Confirmed && !d.Message.PostCreationHandlersRan))
+                    : Observable.Throw<(MeshNode, bool)>(d.Message.ToException(node.Path))));
 
         // 🚨 A RELOCATION IS RESUMABLE (#6310). A preserving copy is the copy leg of a MOVE, and a
         // move is copy-then-delete: when its reply is lost (#6107) the copy can land while the
@@ -10275,12 +10339,26 @@ public static class MeshExtensions
         IObservable<MeshNode> CreateRetargeted(MeshNode stored)
         {
             var retargeted = RetargetNode(stored, sourcePath, targetPath, preserveAuthorship: copyRequest.PreserveAuthorship);
-            // The create ITSELF: its success is this attempt's write, and its failure is classified
-            // before anything else reads it — a failure that may have written is recorded as such.
+            // The create ITSELF: a success that PROVES a plain insert is this attempt's removable write
+            // (recorded with the version and stamp it landed at); any other success — a confirmed
+            // Transient, post-creation handlers that ran, or a surface that cannot say — is recorded
+            // as unproven. A failure is classified before anything else reads it — one that may have
+            // written is recorded as such.
             var created = (copyRequest.PreserveAuthorship
                     ? CreatePreservingAuthorship(retargeted, stored.Path)
-                    : CreateUnderCaller(retargeted))
-                .Do(_ => ImmutableInterlocked.Update(ref written, w => w.Add(retargeted.Path)))
+                    : CreateUnderCaller(retargeted).Select(n => (Node: n, ProvenInsert: false)))
+                .Do(outcome =>
+                {
+                    if (!outcome.ProvenInsert)
+                    {
+                        ImmutableInterlocked.Update(ref unproven, u => u.Add(retargeted.Path));
+                        return;
+                    }
+                    ImmutableInterlocked.Update(ref writtenRows, w => w.SetItem(retargeted.Path,
+                        (outcome.Node.Version, outcome.Node.LastModified)));
+                    ImmutableInterlocked.Update(ref written, w => w.Add(retargeted.Path));
+                })
+                .Select(outcome => outcome.Node)
                 .Catch((Exception ex) => CreateMayHaveWritten(retargeted.Path, ex)
                     .SelectMany(mayHaveWritten =>
                     {
@@ -10752,32 +10830,48 @@ public static class MeshExtensions
                                 LocalizableText.Keyed($"{CopyUnavailablePrefix} {stalled.Message}", CopyStalledKey,
                                     ("path", $"{sourcePath} -> {targetPath}"), ("stage", stalled.Stage),
                                     ("seconds", stalled.BudgetSeconds)),
-                                NodeCopyRejectionReason.Unknown) with
-                            {
-                                Written = Volatile.Read(ref written),
-                                Resumed = Volatile.Read(ref resumed),
-                                PossiblyWritten = Volatile.Read(ref possiblyWritten),
-                                WrittenUnsettled = Volatile.Read(ref createStarted),
-                            },
+                                NodeCopyRejectionReason.Unknown)
+                            .WithWritesOfFailedCopy(Volatile.Read(ref written), Volatile.Read(ref writtenRows),
+                                Volatile.Read(ref unproven), Volatile.Read(ref resumed), Volatile.Read(ref possiblyWritten),
+                                outstanding: Volatile.Read(ref createStarted)),
                             o => o.ResponseFor(request));
                         return;
                     }
                     var msg = ex.Message ?? "Unknown error";
                     var reason = CopyReasonForFailure(ex, msg);
                     logger.LogError(ex, "Copy {Source} -> {Target} failed", sourcePath, targetPath);
-                    var mayHaveWritten = Volatile.Read(ref possiblyWritten);
-                    hub.Post(CopyNodeResponse.Fail(msg, reason) with
-                        {
-                            Written = Volatile.Read(ref written),
-                            Resumed = Volatile.Read(ref resumed),
-                            PossiblyWritten = mayHaveWritten,
-                            WrittenUnsettled = !mayHaveWritten.IsEmpty,
-                        },
+                    hub.Post(CopyNodeResponse.Fail(msg, reason)
+                            .WithWritesOfFailedCopy(Volatile.Read(ref written), Volatile.Read(ref writtenRows),
+                                Volatile.Read(ref unproven), Volatile.Read(ref resumed), Volatile.Read(ref possiblyWritten),
+                                outstanding: false),
                         o => o.ResponseFor(request));
                 });
 
         return request.Processed();
     }
+
+    /// <summary>
+    /// A failed copy's answer with what it left at the target (#6951): the four sets, the version and
+    /// stamp each provable insert landed at, and <see cref="CopyNodeResponse.WrittenUnsettled"/> when
+    /// creates were still outstanding (<paramref name="outstanding"/>) or one may have written.
+    /// </summary>
+    private static CopyNodeResponse WithWritesOfFailedCopy(this CopyNodeResponse response,
+        ImmutableList<string> written,
+        ImmutableDictionary<string, (long Version, DateTimeOffset LastModified)> writtenRows,
+        ImmutableList<string> unproven,
+        ImmutableList<string> resumed,
+        ImmutableList<string> possiblyWritten,
+        bool outstanding)
+        => response with
+        {
+            Written = written,
+            WrittenVersions = writtenRows.ToImmutableDictionary(kv => kv.Key, kv => kv.Value.Version),
+            WrittenLastModified = writtenRows.ToImmutableDictionary(kv => kv.Key, kv => kv.Value.LastModified),
+            Unproven = unproven,
+            Resumed = resumed,
+            PossiblyWritten = possiblyWritten,
+            WrittenUnsettled = outstanding || !possiblyWritten.IsEmpty,
+        };
 
     /// <summary>
     /// The namespace a path lives in — everything before its last segment, or the path itself when
@@ -10888,6 +10982,16 @@ public static class MeshExtensions
     }
 
     /// <summary>
+    /// The undo of a failed relocation leg found rows it had inserted no longer as it wrote them —
+    /// edited, replaced or removed since (#6951) — and left them in place.
+    /// </summary>
+    private sealed class CopyWritesChangedException(ImmutableList<string> paths)
+        : InvalidOperationException($"rows changed since the copy wrote them: {string.Join(", ", paths)}")
+    {
+        public ImmutableList<string> Paths { get; } = paths;
+    }
+
+    /// <summary>
     /// A move that FAILED after it began to change storage — a case-only rename whose second leg
     /// failed (#6951) — carried with the reason the answer reports and a message saying where the
     /// subtree now is.
@@ -10952,6 +11056,16 @@ public static class MeshExtensions
 
         /// <summary>What the failed copy wrote at its target (<see cref="CopyNodeResponse.Written"/>).</summary>
         public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
+
+        /// <summary>Version each provable insert landed at (<see cref="CopyNodeResponse.WrittenVersions"/>).</summary>
+        public ImmutableDictionary<string, long> WrittenVersions { get; init; } = ImmutableDictionary<string, long>.Empty;
+
+        /// <summary>Stamp each provable insert landed with (<see cref="CopyNodeResponse.WrittenLastModified"/>).</summary>
+        public ImmutableDictionary<string, DateTimeOffset> WrittenLastModified { get; init; } =
+            ImmutableDictionary<string, DateTimeOffset>.Empty;
+
+        /// <summary>Successes that do not prove a plain insert (<see cref="CopyNodeResponse.Unproven"/>).</summary>
+        public ImmutableList<string> Unproven { get; init; } = ImmutableList<string>.Empty;
 
         /// <summary>Targets the failed copy resumed onto rather than wrote (<see cref="CopyNodeResponse.Resumed"/>).</summary>
         public ImmutableList<string> Resumed { get; init; } = ImmutableList<string>.Empty;

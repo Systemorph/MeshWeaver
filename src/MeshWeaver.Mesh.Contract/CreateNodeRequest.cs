@@ -90,6 +90,21 @@ public record CreateNodeResponse(MeshNode? Node)
     public bool Success => Error == null && Node != null;
 
     /// <summary>
+    /// On success: true when the create CONFIRMED a node that already existed as
+    /// <see cref="MeshNodeState.Transient"/> (Transient → Active) instead of inserting a new row.
+    /// The row predates this request, so a caller undoing the create must never remove it (#6951).
+    /// </summary>
+    public bool Confirmed { get; init; }
+
+    /// <summary>
+    /// On success: true when one or more post-creation handlers matched the node and ran. Their
+    /// writes — a grant below the node, a partition record, seeded children — are not reported
+    /// here, so a caller undoing the create cannot establish that removing the node's own row
+    /// undoes everything the create did (#6951).
+    /// </summary>
+    public bool PostCreationHandlersRan { get; init; }
+
+    /// <summary>
     /// The rejection reason if the node was rejected.
     /// </summary>
     public NodeCreationRejectionReason? RejectionReason { get; init; }
@@ -1095,13 +1110,38 @@ public record CopyNodeResponse(MeshNode? Node)
     public int SatellitesCopied { get; init; }
 
     /// <summary>
-    /// On a FAILED copy: the target paths THIS attempt created before it gave up — every create that
-    /// answered success. A copy runs every create it issued to its own verdict before it answers, so
-    /// this is the whole set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a caller
-    /// undoing a failed copy (the case-only rename of a move, #6951) may remove, and the only thing
-    /// it may: never a <see cref="Resumed"/> target, never a <see cref="PossiblyWritten"/> one.
+    /// On a FAILED copy: the target paths THIS attempt PROVABLY inserted before it gave up — creates
+    /// that answered success, inserted a new row (not a Transient they confirmed) and ran no
+    /// post-creation handler. A copy runs every create it issued to its own verdict before it answers,
+    /// so this is the whole set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a
+    /// caller undoing a failed copy (the case-only rename of a move, #6951) may remove — and only
+    /// while each row is unchanged (<see cref="WrittenVersions"/>, <see cref="WrittenLastModified"/>):
+    /// never an <see cref="Unproven"/>, <see cref="Resumed"/> or <see cref="PossiblyWritten"/> one.
     /// </summary>
     public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// For each <see cref="Written"/> path: the version its create landed the row at. With
+    /// <see cref="WrittenLastModified"/> it is what a caller undoing the copy compares the stored row
+    /// against — a row that has since been edited (newer version, other stamp) or replaced (other
+    /// stamp) is no longer this copy's write and must not be removed.
+    /// </summary>
+    public ImmutableDictionary<string, long> WrittenVersions { get; init; } = ImmutableDictionary<string, long>.Empty;
+
+    /// <summary>
+    /// For each <see cref="Written"/> path: the <see cref="MeshNode.LastModified"/> its create landed
+    /// the row with (see <see cref="WrittenVersions"/>).
+    /// </summary>
+    public ImmutableDictionary<string, DateTimeOffset> WrittenLastModified { get; init; } =
+        ImmutableDictionary<string, DateTimeOffset>.Empty;
+
+    /// <summary>
+    /// On a FAILED copy: target paths whose create answered success WITHOUT proving it only inserted
+    /// that one row — it confirmed a node that already existed as Transient (the row predates the
+    /// request), or post-creation handlers ran and may have written other nodes it does not report
+    /// (a grant below the node, a partition record). Never removable by a caller undoing the copy.
+    /// </summary>
+    public ImmutableList<string> Unproven { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
     /// On a FAILED relocating copy: the targets it found already holding the same node relocated by

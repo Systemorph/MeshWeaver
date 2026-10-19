@@ -78,12 +78,12 @@ public class CaseOnlyRenameDoesNotRestoreOverACreateThatFailedAfterWritingTest(I
         moved.Success.Should().BeFalse("the second leg's create failed");
         moved.RejectionReason.Should().Be(NodeMoveRejectionReason.Unknown,
             "a create that failed after it may have written leaves the target unknown, so nothing may be moved back over it");
-        moved.Error.Should().NotContain("moved back", "the subtree was not restored");
+        moved.Error.Should().NotContain("The subtree was moved back", "the subtree was not restored");
         var staging = StagingNamedIn(moved.Error!, target);
         Output.WriteLine($"staging named in the answer: {staging}");
         moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
         moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameCopyMayHaveWritten", "a German viewer reads it in German");
+            .Should().Contain("activity.node.move.caseRenameUndoUnproven", "a German viewer reads it in German");
 
         // Nothing was moved back: the staging path the answer names still holds the whole subtree.
         (await StoredAt(staging, ct)).Should().NotBeNull("the complete copy is at the staging path the answer names");

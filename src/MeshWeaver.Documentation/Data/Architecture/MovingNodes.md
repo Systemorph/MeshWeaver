@@ -271,33 +271,49 @@ and differs from both ends in every store, so each leg writes new keys and remov
 runs the whole move contract above — the delete pre-flight, the subtree-deletion scope of that leg's
 source, satellites, authorship and completeness. Both legs share the one move deadline.
 
-**A failed leg is undone only as far as what it did is established**, and the answer is keyed so a
-viewer reads it in their own language:
+**A failed leg is undone by ONE rule: the undo removes only rows this attempt PROVABLY inserted and
+that are still exactly as it wrote them — any doubt, and nothing is touched.** The rule replaced a
+series of per-case fixes, each of which a later review found another hole in, so it is stated once:
+
+- **Removable** are exactly the paths in `CopyNodeResponse.Written`: creates that answered success,
+  INSERTED a new row (`CreateNodeResponse.Confirmed` is false — not a Transient that existed before
+  the request and was only confirmed Active) and ran NO post-creation handler
+  (`CreateNodeResponse.PostCreationHandlersRan` is false — a handler writes elsewhere, e.g. a Space's
+  creator grant below the root and its partition record, and the create's answer does not report it).
+- **The removal runs inside a deletion scope on the leg's TARGET** (`RecentlyDeletedRegistry.
+  WithinSubtreeDeletion`): the relocation scope guards the leg's SOURCE only, so without it a write to
+  the target could land between the check and the delete. Writes admitted under the target settle
+  first; new ones are refused while the undo runs. Every row is then read back and compared with the
+  version and stamp its create landed at (`WrittenVersions`, `WrittenLastModified`) — a row edited
+  since, replaced or gone fails the whole undo before anything is removed — and each is removed with
+  the store's conditional delete (`DeleteIfVersionAtMost`), never a path-only one.
+- **Doubt means nothing is touched**: creates still outstanding (`WrittenUnsettled`), a create that
+  may have written although it failed (`PossiblyWritten`), a target resumed onto (`Resumed`), a success
+  that does not prove a plain insert (`Unproven`), or a row changed since it was written. The answer is
+  then `Unknown`, names source, staging and target, and lists the paths the undo could not account for.
 
 | The failed leg… | What happens | Answer |
 |---|---|---|
 | was refused before it wrote anything | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: its own refusal; leg 2: `caseRenameRestored`, the leg's own reason |
-| failed in its COPY part-way | first the paths that copy CREATED are removed — exactly those, from `CopyNodeResponse.Written` — then leg 2 moves the subtree back | leg 1: the copy's own verdict; leg 2: `caseRenameRestored` carrying the copy's transcript |
-| failed in its COPY with a create that may have written anyway (`PossiblyWritten`), or ran out of time with creates outstanding | nothing is removed and nothing is moved back: the leg's target is not established | `Unknown`, `caseRenameCopyMayHaveWritten` / `caseRenameCopyOutstanding` |
-| failed in its COPY after RESUMING onto a target an earlier attempt had landed (`Resumed`) | the resumed target is kept — it may carry newer edits — and nothing is moved back | `Unknown`, `caseRenameResumedKept`, naming the resumed paths |
-| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameDeleteFailed`, naming source, staging and target |
-| removing the copy's writes, or the move back, failed | nothing more is done; the staging path is the recovery data | `Unknown`, `caseRenameCleanupFailed` / `caseRenameRestoreFailed`, naming all three paths |
+| failed in its COPY, and everything it left is a provable, unchanged insert | those rows are removed (scoped, conditional), then leg 2 moves the subtree back | leg 1: the copy's own verdict; leg 2: `caseRenameRestored` carrying the copy's transcript |
+| failed in its COPY leaving anything the rule cannot account for | nothing is removed and nothing is moved back | `Unknown`, `caseRenameUndoUnproven` (naming the paths) / `caseRenameCopyOutstanding` |
+| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameDeleteFailed` |
+| removing the copy's writes, or the move back, failed | nothing more is done; the staging path is the recovery data | `Unknown`, `caseRenameCleanupFailed` / `caseRenameRestoreFailed` |
 
 Each cause has its own catalog key (`activity.node.move.caseRename…`), so the whole answer renders in
 the viewer's language; only upstream text — an exception's own message, the failed leg's English
-verdict — travels as a raw argument, and the failed copy's keyed transcript is carried before it.
+verdict, the listed paths — travels as a raw argument, and the failed copy's keyed transcript is
+carried before it.
 
-**A failed copy reports what it left at the target in three sets that are never merged**
-(`CopyNodeResponse`): `Written` — creates THIS attempt made that answered success, the only paths a
-caller undoing the copy may remove; `Resumed` — targets that already held the node relocated by an
-earlier attempt (#6310) and stood in for the create, which this attempt did not write and which may
-carry edits made since; and `PossiblyWritten` — creates that FAILED with an outcome that does not
-establish nothing landed. A failed create is not proof of no write: the create handler writes the row
-before its post-creation steps, and when a critical step fails and the rollback of the row fails too
-(or a step runs past the deadline) it answers a failure over a row that stays. So `NodeAlreadyExists`
-counts as no write; a judged refusal (`ValidationFailed`, `InvalidPath`, `InvalidNodeType`) is
-confirmed by reading the path — a row there is possibly ours; anything else is possibly written. A
-non-empty `PossiblyWritten` sets `WrittenUnsettled`.
+**What a failed copy reports** (`CopyNodeResponse`, sets never merged): `Written` (+ the version and
+stamp of each), `Unproven`, `Resumed` — targets that already held the node relocated by an earlier
+attempt (#6310) and stood in for the create, possibly carrying edits made since — and
+`PossiblyWritten`. A failed create is not proof of no write: the create handler writes the row before
+its post-creation steps, and when a critical step fails and the rollback fails too (or a step runs past
+the deadline) it answers a failure over a row that stays. So `NodeAlreadyExists` counts as no write; a
+judged refusal (`ValidationFailed`, `InvalidPath`, `InvalidNodeType`) is confirmed by reading the path —
+a row there is possibly ours; anything else is possibly written. A non-empty `PossiblyWritten` sets
+`WrittenUnsettled`.
 
 Removing the copy's writes BEFORE moving back is what keeps a refused descendant from surviving as a
 renamed root: the copy creates the root before its descendants, so a refused descendant create in
@@ -305,11 +321,11 @@ leg 2 leaves the root at the target, and on a case-insensitive store the move ba
 RESUME onto that new-cased root (#6310) while answering "nothing was renamed" — measured on the
 in-memory mesh before the fix: `TestData/vhvgruppe-… → TestData/VHVGruppe-…` with `…/birgit` refused
 at the target answered "moved back" and the source key read back `TestData/VHVGruppe-…`. For that set
-to be complete the copy now runs EVERY create it issued to its own verdict before it answers (a first
-failure no longer cuts the rest off mid-flight), and reports `WrittenUnsettled` when it ran out of
-time with creates outstanding or a create may have written although it failed (`PossiblyWritten`). A stall after the subtree started to leave the source answers `Unknown`
-naming all three paths (`activity.node.move.caseRenameStalled`). The refusals of `Same` and
-`IntoOwnSubtree` are keyed too (`activity.node.move.ontoItself`, `activity.node.move.intoOwnSubtree`).
+to be complete the copy runs EVERY create it issued to its own verdict before it answers (a first
+failure no longer cuts the rest off mid-flight). A stall after the subtree started to leave the source
+answers `Unknown` naming all three paths (`activity.node.move.caseRenameStalled`). The refusals of
+`Same` and `IntoOwnSubtree` are keyed too (`activity.node.move.ontoItself`,
+`activity.node.move.intoOwnSubtree`).
 
 On a case-insensitive **file system** (macOS, Windows) the two-step is what makes the new casing reach
 the disk: the first leg removes the old files and their now-empty directories, so the second leg's
@@ -328,7 +344,12 @@ for one target descendant and `FailDeletes` kills that create's own rollback, so
 the fix the rename answered "moved back" over it — now `Unknown`, nothing moved back, staging intact) and
 `AFailedCopyDoesNotClaimAResumedTargetTest` (a second identical copy resumes onto the root the first
 landed and reports it under `Resumed`, not `Written` — before the fix it was `Written`, so an undo
-would have deleted it).
+would have deleted it), `AFailedCopyDoesNotClaimAConfirmedTransientTargetTest` (a Transient root the
+copy only confirmed was `Written`; now `Unproven`), `CaseOnlyRenameKeepsWhatAPostCreationHandlerWroteTest`
+(a handler writes a child under the target root, then a descendant is refused; before the fix the
+rename answered "moved back" with the child left under the new casing) and
+`CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest` (`HoldWrites` parks the second leg while the test
+edits the landed target root; before the fix the undo deleted the edit and answered "moved back").
 
 ## What this means for callers
 
