@@ -175,4 +175,107 @@ public class DisposalRegistryConcurrencyTest(ITestOutputHelper output) : HubTest
         Volatile.Read(ref lateDisposals).Should().Be(1,
             "the held entry is reaped by the host's disposal exactly once — no leak");
     }
+
+    // ── A throwing teardown must not orphan the entries detached with it (#6988 review) ─────────────
+
+    private sealed class Counter
+    {
+        private int disposals;
+        public int Disposals => Volatile.Read(ref disposals);
+        public IDisposable Create(AsyncSubject<Unit>? reached = null) => Disposable.Create(() =>
+        {
+            Interlocked.Increment(ref disposals);
+            reached?.OnNext(Unit.Default);
+            reached?.OnCompleted();
+        });
+    }
+
+    private static IDisposable Throwing(string area)
+        => Disposable.Create(() => throw new InvalidOperationException($"teardown of {area} failed (test)"));
+
+    /// <summary>
+    /// Host disposal: a throwing entry FIRST in an area's list, a counter after it in the same list,
+    /// and a counter under a separate area key. Every one is disposed, and the failure is still
+    /// reported — after the drain — as the exception itself.
+    /// </summary>
+    [HubFact]
+    public async Task HostDispose_AThrowingTeardown_DoesNotOrphanTheRest_AndIsRethrownAfterTheDrain()
+    {
+        var host = await RenderProbeAreaAsync();
+        var sameKey = new Counter();
+        var otherKey = new Counter();
+        host.RegisterForDisposal(RegistryArea, Throwing(RegistryArea));
+        host.RegisterForDisposal(RegistryArea, sameKey.Create());
+        host.RegisterForDisposal(RegistryArea + "-sibling", otherKey.Create());
+
+        var act = () => host.Dispose();
+
+        act.Should().Throw<InvalidOperationException>(
+            "a teardown failure is reported, never swallowed — but only after every entry was drained");
+        sameKey.Disposals.Should().Be(1, "the entry after the throwing one in the SAME area is still disposed");
+        otherKey.Disposals.Should().Be(1, "an entry under a SEPARATE area key is still disposed");
+    }
+
+    /// <summary>
+    /// Area pass through <c>UpdateArea</c> → <c>DisposeChildAreas</c>: a throwing child entry must not
+    /// strand the entries detached in the same pass.
+    /// </summary>
+    [HubFact]
+    public async Task ChildAreaPass_AThrowingTeardown_DoesNotOrphanTheRest()
+    {
+        var host = await RenderProbeAreaAsync();
+        var sameKeyReached = new AsyncSubject<Unit>();
+        var otherKeyReached = new AsyncSubject<Unit>();
+        var sameKey = new Counter();
+        var otherKey = new Counter();
+        host.RegisterForDisposal(ProbeView + "/c", Throwing(ProbeView + "/c"));
+        host.RegisterForDisposal(ProbeView + "/c", sameKey.Create(sameKeyReached));
+        host.RegisterForDisposal(ProbeView + "/d", otherKey.Create(otherKeyReached));
+
+        host.UpdateArea(new RenderingContext(ProbeView), Controls.Html("re-rendered"));
+
+        await sameKeyReached.Should().Within(10.Seconds())
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
+        await otherKeyReached.Should().Within(10.Seconds())
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
+        sameKey.Disposals.Should().Be(1);
+        otherKey.Disposals.Should().Be(1);
+    }
+
+    /// <summary>
+    /// Area pass through <c>DisposeExistingAreas</c> — the incident's frame: a container's observable
+    /// child clears its own area before rendering. An earlier sibling's buildup registers, during the
+    /// SAME render, a throwing entry and a counter under that child's area and a counter under its
+    /// descendant; the child's pass must dispose all of them.
+    /// </summary>
+    [HubFact]
+    public async Task ExistingAreaPass_AThrowingTeardown_DoesNotOrphanTheRest()
+    {
+        var host = await RenderProbeAreaAsync();
+        var sameKeyReached = new AsyncSubject<Unit>();
+        var otherKeyReached = new AsyncSubject<Unit>();
+        var sameKey = new Counter();
+        var otherKey = new Counter();
+        var childArea = ProbeView + "/x";
+
+        var registrar = Controls.Html("registrar").WithBuildup((h, _, store) =>
+        {
+            h.RegisterForDisposal(childArea, Throwing(childArea));
+            h.RegisterForDisposal(childArea, sameKey.Create(sameKeyReached));
+            h.RegisterForDisposal(childArea + "/z", otherKey.Create(otherKeyReached));
+            return new EntityStoreAndUpdates(store, [], h.Stream.StreamId);
+        });
+        var view = Controls.Stack
+            .WithView(registrar, "w")
+            .WithView(Observable.Return<UiControl?>(Controls.Html("child")), "x");
+
+        host.UpdateArea(new RenderingContext(ProbeView), view);
+
+        await sameKeyReached.Should().Within(10.Seconds())
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
+        await otherKeyReached.Should().Within(10.Seconds())
+            .Emit(cancellationToken: TestContext.Current.CancellationToken);
+        sameKey.Disposals.Should().Be(1);
+        otherKey.Disposals.Should().Be(1);
+    }
 }

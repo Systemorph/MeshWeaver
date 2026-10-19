@@ -1674,12 +1674,42 @@ public record LayoutAreaHost : IDisposable
         // registers another disposable now meets a disposed host (and disposes it at once) instead of
         // mutating a list this loop is enumerating (#6975).
         var held = Interlocked.Exchange(ref disposablesByArea, null);
-        if (held is not null)
-            foreach (var disposable in held.Values.SelectMany(list => list))
+        // pendingClickActions is held apart from disposablesByArea on purpose: no area re-render may
+        // release a pending click action — only the host's own teardown (see OnClick). It joins the
+        // SAME drain, so a throwing area entry can never skip it.
+        DrainDisposables(
+            (held?.Values.SelectMany(list => list) ?? [])
+                .Append(pendingClickActions));
+    }
+
+    /// <summary>
+    /// Disposes EVERY entry of <paramref name="detached"/> — entries already taken out of the registry,
+    /// so whatever this loop skipped would be orphaned for good — even when some of them throw. The
+    /// failures are collected and reported only after the drain: one is rethrown as itself with its
+    /// original stack, several as an <see cref="AggregateException"/>. Never swallowed: the caller's own
+    /// error path (a render's "Cannot update" log, a render failure, the host's disposer) still sees the
+    /// fault. The one drain all three teardown paths use (#6975).
+    /// </summary>
+    private static void DrainDisposables(IEnumerable<IDisposable> detached)
+    {
+        var failures = ImmutableList<Exception>.Empty;
+        foreach (var disposable in detached)
+        {
+            try
+            {
                 disposable.Dispose();
-        // Held apart from disposablesByArea on purpose: no area re-render may release a pending
-        // click action — only the host's own teardown (see OnClick).
-        pendingClickActions.Dispose();
+            }
+            catch (Exception ex)
+            {
+                failures = failures.Add(ex);
+            }
+        }
+
+        if (failures.Count == 1)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        if (failures.Count > 1)
+            throw new AggregateException(
+                "Several registered disposables failed while a layout area was torn down.", failures);
     }
 
     /// <summary>
@@ -1738,8 +1768,7 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var disposable in TakeDisposables(key => IsAreaOrDescendant(key, contextArea)))
-            disposable.Dispose();
+        DrainDisposables(TakeDisposables(key => IsAreaOrDescendant(key, contextArea)));
 
         return RemoveViews(store, contextArea);
     }
@@ -1752,8 +1781,7 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates DisposeChildAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var disposable in TakeDisposables(key => IsAreaOrDescendant(key, contextArea) && key != contextArea))
-            disposable.Dispose();
+        DrainDisposables(TakeDisposables(key => IsAreaOrDescendant(key, contextArea) && key != contextArea));
 
         return RemoveViews(store, contextArea);
     }
