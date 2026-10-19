@@ -145,9 +145,15 @@ public class DeploymentPinnedReferencesTest
 
     private static readonly DateTimeOffset Now = new(2026, 9, 12, 12, 0, 0, TimeSpan.Zero);
 
-    private static MeshNode Deployment(string id, string? pin = null, string? extra = null)
+    /// <summary>The store the fixtures' retention runs on: the registry every fixture record mounts.</summary>
+    private const string StoreHost = "registry.example";
+
+    private static MeshNode Deployment(string id, string? pin = null, string? extra = null,
+        string? mounts = "https://" + StoreHost)
     {
         var content = new JsonObject { ["host"] = id + ".example" };
+        if (mounts is not null)
+            content["pluginRepos"] = new JsonArray(new JsonObject { ["name"] = "Plugins", ["url"] = mounts });
         if (pin is not null)
             content["pinnedImageTag"] = pin;
         if (extra is not null)
@@ -179,8 +185,140 @@ public class DeploymentPinnedReferencesTest
     private static ImmutableList<PinnedPlatformReference> Resolve(
         IReadOnlyList<MeshNode> deployments, IReadOnlyList<MeshNode> reports,
         bool isControlInstance = false) =>
+        Resolve(deployments, reports,
+            new ConsumerScope("registry", [StoreHost], isControlInstance));
+
+    private static ImmutableList<PinnedPlatformReference> Resolve(
+        IReadOnlyList<MeshNode> deployments, IReadOnlyList<MeshNode> reports, ConsumerScope scope) =>
         DeploymentPinnedReferences.Resolve(deployments, reports, Options, Now,
-            DeploymentPinnedReferences.StaleAfter, isControlInstance);
+            DeploymentPinnedReferences.StaleAfter, scope);
+
+    /// <summary>A report as a STORE files it: keyed by the instance its credential authenticated as.</summary>
+    private static MeshNode StoreReport(string registeredInstance, TimeSpan age, string running,
+        string? claimedDeployment = null)
+    {
+        var report = Report(claimedDeployment ?? registeredInstance, age, running);
+        ((JsonObject)report.Content!)["registeredInstance"] = registeredInstance;
+        return report with { Id = registeredInstance };
+    }
+
+    // ── #6989: whose consumers a store accounts for ──────────────────────────────────────────────
+    //
+    // The fleet as it is: one report sink (the control instance), one plugin registry every other
+    // instance mounts, and a synced copy of the whole Deployments folder on hosts that are neither.
+    // The denominator used to be "every record this host holds", so every host but the sink refused
+    // on every pass, for ever, and its shared volume was never reclaimed.
+
+    private const string Company = "company.example";
+
+    private static ImmutableList<MeshNode> SyncedFleet() =>
+    [
+        Deployment("registry", extra: $$"""{ "host": "{{StoreHost}}" }""", mounts: null),
+        Deployment("company", extra: $$"""{ "host": "{{Company}}" }"""),
+        Deployment("control", extra: """{ "host": "control.example" }"""),
+        Deployment("customer"),
+    ];
+
+    [Fact]
+    public void AHostHoldingASyncedCopyOfRecords_WhoseInstancesMountAnotherRegistry_CompletesItsPass()
+    {
+        // The company instance: it holds every record (a synced copy), it is not the report sink, and
+        // nobody mounts it. Its consumers are itself alone — protected by its live identity and its
+        // adoption stamps — so the inventory is COMPLETE. Before #6989 this was "INCOMPLETE — 4
+        // refusal(s) over 4 expected instance(s)" on every tick.
+        var references = Resolve(SyncedFleet(),
+            [Report("company", TimeSpan.FromDays(12), "s-company-stale")],
+            new ConsumerScope("company", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().NotContain("s-company-stale",
+            because: "a report describing ANOTHER store's consumer is not a consumer of this one");
+    }
+
+    [Fact]
+    public void TheReportSink_WhichNobodyMounts_CompletesItsPass_TooEvenWithStaleFleetReports()
+    {
+        // The control instance holds the records AND the reports, and is mounted by nobody either.
+        Resolve(SyncedFleet(),
+                [Report("customer", TimeSpan.FromDays(30), "s-customer")],
+                new ConsumerScope("control", [], IsControlInstance: true))
+            .Should().BeEmpty(because: "no record mounts the control instance's store, so the fleet's "
+                + "reports describe another store's consumers — and the pass is COMPLETE, not refused");
+    }
+
+    [Fact]
+    public void TheRegistry_WhoseMountingConsumersAllReportedThere_CompletesAndProtectsWhatTheyRun()
+    {
+        var references = Resolve(SyncedFleet(),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             StoreReport("customer", TimeSpan.FromHours(5), "s-customer")],
+            new ConsumerScope("registry", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().Contain(["s-company", "s-control", "s-customer"],
+            because: "the registry serves each consumer bundles keyed on what it runs; those identities are referenced");
+    }
+
+    [Fact]
+    public void TheRegistry_WithAMountingConsumerSilent_StillRefuses_NamingIt()
+    {
+        // The negative control: the fix narrows the denominator to the DECLARED consumers, and a
+        // declared consumer that has not reported still refuses the whole pass.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/customer").And.Contain("1 refusal(s) over 3 expected instance(s)")
+            .And.Contain("1 not mounting this store");
+    }
+
+    [Fact]
+    public void AReportCanOnlyStandForTheInstanceTheStoreAuthenticated_NotTheOneItsBodyClaims()
+    {
+        // `customer` holds a key; its body claims to be `company`. Filed under `customer`, it cannot
+        // make the silent `company` read as reported.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(),
+            [StoreReport("customer", TimeSpan.FromMinutes(5), "s-customer", claimedDeployment: "company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/company");
+    }
+
+    [Fact]
+    public void ADeclaredRegistryInstanceId_IsWhereARecordsStoreReportIsFound()
+    {
+        var fleet = SyncedFleet().Select(r => r.Id == "customer"
+            ? Deployment("customer", extra: """{ "registryInstanceId": "customer-portal" }""")
+            : r).ToImmutableList();
+
+        Resolve(fleet,
+                [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+                 StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+                 StoreReport("customer-portal", TimeSpan.FromHours(1), "s-customer")],
+                new ConsumerScope("registry", [], IsControlInstance: false))
+            .Select(r => r.Identity).Should().Contain("s-customer");
+    }
+
+    [Fact]
+    public void AHostThatCannotNameItsStore_RefusesRatherThanReadingEveryMountAsSomeoneElses()
+    {
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(), [],
+            new ConsumerScope(null, [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("cannot name the store");
+    }
+
+    [Fact]
+    public void ARegistrySourceRepository_IsNotAMountOfARegistry()
+    {
+        var registry = Deployment("registry", extra: """
+            { "pluginRepos": [ { "url": "https://github.com/example/plugins", "isRegistrySource": true },
+                               { "url": "https://registry.example/" } ] }
+            """, mounts: null);
+
+        DeploymentPinnedReferences.MountedHostsOf(registry, Options).Should().Equal(StoreHost);
+    }
 
     [Fact]
     public void ACompleteFreshFleet_ProtectsEveryRunningAndAdoptedBuildOfEveryInstance()

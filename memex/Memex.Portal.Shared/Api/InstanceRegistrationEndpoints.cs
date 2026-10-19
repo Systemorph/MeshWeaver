@@ -38,6 +38,10 @@ public static class InstanceRegistrationEndpoints
         // …and the coupon mint (a plan-bearing, single-use registration key minted into an
         // operator's vault without anyone seeing it) — 404 until the registry configures it.
         endpoints.MapRegistrationCoupons();
+        // …and the consumer reports a registry's prebuilt-bundle retention needs to account for the
+        // instances it serves (#6989) — mapped here so no registry can serve bundles without hearing
+        // what its consumers run.
+        endpoints.MapConsumerInventory();
         return endpoints;
     }
 
