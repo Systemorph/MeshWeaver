@@ -48,6 +48,7 @@ Every moving label lives in
 | `main` | continuous | newest promoted set, before arming (also `hosting-operator:main`) | `main-cd.yml` `promote`, `hosting-operator.yml` | written |
 | `latest` | continuous | the tester's moving tag, GHCR's latest release, and `memex-portal-ai-base:latest` | `main-cd.yml` `promote`, `release.yml`, `base-image-acr.yml` | written |
 | `edge` | edge | newest unverified edge build; never a fleet seed | `edge-images.yml` | written |
+| `gliner-multi-2.1`, `1.7.4-flix-large-v3-q8` | service | the s1-extract and whisper model-service line tags, re-pushed by each main build | `s1-extract-image.yml`, `whisper-image.yml` | written |
 
 Each label lists its **writer bindings**. A binding names a workflow, a job, and the repositories
 and registries that job writes the label to. For example, `promote` writes `latest` only to
@@ -74,7 +75,9 @@ second entry, for example `{major}-mac-studio`.
   names at the moment of the sweep.
 - **Every status is protected.** `written`, `declared` and `retired` labels are all excluded.
   Removing an entry is the only way to release a label, and that takes a reviewed pull request.
-- **Never shaped like a version.** The self-updater (`VersionSelect`) selects every tag matching
+- **Never shaped like a version on a self-update repository.** The version-shape rule applies to
+  the repositories a self-updater lists (`memex-portal-ai`, `memex-migration`, `memex-control`). A
+  model-service line tag such as whisper's is never a roll candidate. The self-updater (`VersionSelect`) selects every tag matching
   `^\d+\.\d+\.\d+([-+].*)?$` except those ending in `-latest`. A label such as `3.1.0-mac` would be
   rolled to as if it were a build. `check` refuses that shape, so a new label is `{major}-<word>`,
   `{major}.{minor}-<word>`, or ends in `-latest`. This is why only `{major}.{minor}-stable` is
@@ -127,7 +130,7 @@ Mac Studio or Mac mini that serves an instance needs the following:
 | G6 | **Retention visibility** | AXIS 3 asks every declared installation's `/api/version` | the host reachable through a tunnel, or declared in `.github/acr-retention/instances.json`. Otherwise the digest it runs is unprotected |
 | G7 | **Acceptance** | nothing proves an arm64 set boots on Apple silicon. Hosted arm64 macOS runners cannot run Colima's VM (no nested virtualization) | a self-hosted Apple-silicon runner (a Mac mini) running `memex-local up` and `verify` against the candidate set. On green it writes `3-mac` (the `mac-accept` job) |
 | G8 | **Ingress and identity** | `memex.localhost` with mkcert, reachable from the host only | a real hostname and certificate (ACME, or a tunnel that terminates TLS), and the Entra redirect URIs for it |
-| G10 | **Shared artifact store** | each portal resolves bundles from the store its deployment mounts | the host consumes its control's store read-only (below). The `linux/arm64` bundles for a set exist before `3-mac` is written |
+| G10 | **Architecture-safe bundles** | the framework identity (`FrameworkBuildIdentity.FrameworkVersion`, `c<major>e<epoch>`) does not name an architecture, and `publish-bake-bundles.sh` refuses a second architecture under an existing publication | arm64 bundles published and addressed under a distinct, architecture-qualified key beside the amd64 ones. This is a prerequisite for G7. The host then consumes its control's store read-only (below) |
 | G9 | **Backups and telemetry** | Postgres lives on the Colima VM disk. Logs stay on the host | database dumps to the estate's backup store, and logs and metrics shipped to the estate's observability stack |
 
 ### Mac hosts and the shared artifact store
@@ -140,14 +143,17 @@ fits this model as an ordinary portal:
 - **It consumes, never produces.** A Mac host mounts its control's store read-only when the two
   share a network. Otherwise it syncs one way from that control, the same way a client control
   syncs from upstream. It never writes into a shared store.
-- **Its builds are its own identity.** The Mac edition runs `linux/arm64`. That framework identity
-  differs from the `linux/amd64` identity AKS runs, so its compiled bundles are stored and
-  addressed under their own identity key, beside the amd64 ones and never in place of them. The
-  store's sweep counts the arm64 identity as a represented identity and keeps its latest sealed
-  publication like any other.
-- **`3-mac` waits for its bundles.** If only amd64 bundles exist for a set, a Mac host refuses
-  adoption and compiles from live source. That works, but slowly. So `mac-accept` requires the
-  set's `linux/arm64` bundles to be present (main-cd's arm64 bake leg) before it moves `3-mac`.
+- **Its builds need their own key, and that does not exist yet.** The Mac edition runs
+  `linux/arm64`. Today's framework identity is the major/epoch compatibility key, which names no
+  architecture, and the bake refuses to publish a second architecture under a key that already
+  holds one: "One framework identity cannot hold two architectures". So arm64 and amd64 bundles
+  cannot both be published today. The outstanding prerequisite (G10) is architecture-safe
+  publication and addressing: an architecture-qualified key for bundles, published beside the
+  amd64 ones and resolved by architecture. The store's sweep then counts each architecture as a
+  represented identity.
+- **`3-mac` waits for that.** Without arm64 bundles, a Mac host refuses adoption and compiles from
+  live source. That works, but slowly. G7 (`mac-accept`) therefore activates `3-mac` only once G10
+  has landed and requires the set's arm64 bundles to be present.
 - **The prune job reads the same declaration.** It skips every label in
   `.github/release-channels.json` across all of a label's repositories, so the image a Mac host
   seeds from survives while the label names it.
@@ -160,8 +166,9 @@ fits this model as an ordinary portal:
    bash 3.2 tests.
 3. **G2 and G3.** A host-install step: the keychain-held pull token, Colima at boot, and the power
    settings. These need a maintainer-issued registry token.
-4. **G7.** Register a self-hosted Apple-silicon runner, add `mac-accept` to `main-cd.yml`, and flip
-   `{major}-mac` to `written`.
+4. **G10, then G7.** Make bundle publication and addressing architecture-safe. Then register a
+   self-hosted Apple-silicon runner, add `mac-accept` to `main-cd.yml`, and flip `{major}-mac` to
+   `written`.
 5. **G5, G6, G8 and G9.** Write the Mac host's deployment record, tunnel, backups and telemetry
    when the first host is commissioned.
 

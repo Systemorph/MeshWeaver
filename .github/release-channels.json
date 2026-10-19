@@ -248,7 +248,7 @@
             "meshweaver.azurecr.io",
             "cr.meshweaver.cloud"
           ],
-          "state": "owed: needs a self-hosted Apple-silicon runner and the mac-accept job (Doc/Architecture/ReleaseEditions, the Mac deployment gap)"
+          "state": "owed: G10 (architecture-safe bundle publication/addressing) first, then a self-hosted Apple-silicon runner and the mac-accept job, which requires the set's arm64 bundles (Doc/Architecture/ReleaseEditions)"
         }
       ]
     },
@@ -404,6 +404,54 @@
             "meshweaver.azurecr.io"
           ],
           "state": "each edge publish, via ContainerImageTags"
+        }
+      ],
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "s1-extract-line",
+      "tag": "gliner-multi-2.1",
+      "edition": "service",
+      "meaning": "The s1-extract model-service line tag, re-pushed by every main build of that image (the per-build tag is <line>-<sha>). A service image, never a self-update candidate.",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "writers": [
+        {
+          "workflow": "s1-extract-image.yml",
+          "job": "publish",
+          "repositories": [
+            "s1-extract"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "every main build"
+        }
+      ],
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "whisper-line",
+      "tag": "1.7.4-flix-large-v3-q8",
+      "edition": "service",
+      "meaning": "The Swiss-German whisper model-service line tag, re-pushed by every main build of that image (the per-build tag is <line>-<sha>). Version-SHAPED, which is allowed only because no self-updater lists this repository.",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "writers": [
+        {
+          "workflow": "whisper-image.yml",
+          "job": "publish",
+          "repositories": [
+            "whisper-swiss-german"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "every main build"
         }
       ],
       "notation": "any",

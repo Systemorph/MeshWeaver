@@ -54,6 +54,10 @@ BINDING_FIELDS = ("workflow", "job", "repositories")
 TAG_CHARS_RE = re.compile(r"^[A-Za-z0-9{}][A-Za-z0-9._{}-]*$")
 VERSION_SHAPED_RE = re.compile(r"^\d+\.\d+\.\d+([-+].*)?$")
 MOVING_POINTER_RE = re.compile(r"-latest$", re.IGNORECASE)
+# The repositories a self-updater LISTS (SelfUpdateHostedService rolls the portal and its migration;
+# the control lane rolls memex-control). The version-shape refusal guards THESE — a model-service
+# line tag such as whisper's `1.7.4-flix-large-v3-q8` is never a roll candidate.
+SELF_UPDATE_REPOSITORIES = frozenset({"memex-portal-ai", "memex-migration", "memex-control"})
 VERSION_CORE_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 LEGACY_SET_RE = re.compile(r"^\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?[.-]ci\.(\d+)$")
 
@@ -146,7 +150,8 @@ def validate(doc: dict) -> list[str]:
                 problems.append(
                     f"{where}: {tag!r} does not render to a valid image tag (got {rendered!r}) — only "
                     f"{{{'}, {'.join(PLACEHOLDERS)}}} placeholders, lower case and balanced, are allowed")
-            elif VERSION_SHAPED_RE.match(rendered) and not MOVING_POINTER_RE.search(rendered):
+            elif (VERSION_SHAPED_RE.match(rendered) and not MOVING_POINTER_RE.search(rendered)
+                  and SELF_UPDATE_REPOSITORIES & set(_binding_repositories(entry))):
                 problems.append(
                     f"{where}: {tag!r} renders as {rendered!r}, which VersionSelect would SELECT as a version "
                     "(dotted shape without the excluded `-latest` suffix) — a self-updater would roll to a moving label")
@@ -182,6 +187,14 @@ def validate(doc: dict) -> list[str]:
             if binding.get("notation", "any") not in NOTATIONS:
                 problems.append(f"{at}: notation {binding.get('notation')!r} is not one of {NOTATIONS}")
     return problems
+
+
+def _binding_repositories(entry: dict) -> list[str]:
+    out: list[str] = []
+    for b in entry.get("writers") or []:
+        if isinstance(b, dict) and isinstance(b.get("repositories"), list):
+            out += [r for r in b["repositories"] if isinstance(r, str)]
+    return out
 
 
 def render(template: str, major: int, minor: int, patch: int) -> str | None:
@@ -233,7 +246,9 @@ def repositories(entry: dict) -> list[str]:
 
 
 def protected_patterns(doc: dict) -> list[dict]:
-    return [{"id": e["id"], "tag": e["tag"], "regex": template_regex(e["tag"]).pattern,
+    # `(?i)` IN the exported expression: the predicate matches case-insensitively, and a pruner
+    # compiling the bare pattern would protect a NARROWER set than is-protected and the lock do.
+    return [{"id": e["id"], "tag": e["tag"], "regex": "(?i)" + template_regex(e["tag"]).pattern,
              "status": e["status"], "repositories": repositories(e)}
             for e in channels(doc)]
 
@@ -419,6 +434,19 @@ def self_test() -> int:
     missing_writer["channels"][3]["writers"][0]["workflow"] = "no-such-workflow.yml"
     expect("check fires on a writer workflow that does not exist",
            any("does not exist" in p for p in check(missing_writer, root, FakePV, always_floating)))
+
+    # protected-patterns and is-protected agree on EVERY spelling (case included).
+    exported = [re.compile(p["regex"]) for p in protected_patterns(real)]
+    for tag in ("3-latest", "3-LATEST", "3-MAC", "MAIN", "Edge", "3.1.10050", "staging-abc1234-1",
+                "gliner-multi-2.1", "1.7.4-FLIX-large-v3-q8", "abc1234"):
+        expect(f"protected-patterns and is-protected agree on {tag}",
+               is_protected(real, tag) == any(r.match(tag) for r in exported))
+    expect("the model-service line tags are protected (s1-extract, whisper)",
+           is_protected(real, "gliner-multi-2.1") and is_protected(real, "1.7.4-flix-large-v3-q8")
+           and tags_for(real, "3.1.10050", "whisper-image.yml", job="publish", repository="whisper-swiss-german") == ["1.7.4-flix-large-v3-q8"]
+           and tags_for(real, "3.1.10050", "s1-extract-image.yml", job="publish", repository="s1-extract") == ["gliner-multi-2.1"])
+    expect("a version-shaped label is still refused on a SELF-UPDATE repository",
+           bool(broken(lambda d: [e for e in d["channels"] if e["id"] == "whisper-line"][0]["writers"][0].update(repositories=["memex-portal-ai"]))))
 
     # The publishers outside main-cd/release.yml are declared too (regression: they were omitted).
     expect("edge is protected (edge-images.yml writes it for portal and migration)",
