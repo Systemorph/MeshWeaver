@@ -901,8 +901,10 @@ advisories rather than holds — the newest release, which a roll targets, carri
 CD run on this publisher. A portal still running the previous reader keeps reading the publication's
 copy until it rolls; that copy now changes only with the content (each core commit republishes it),
 so it can be stale for a same-commit reconcile, as before the first fix, and never moves backwards.
-`_releases/_surface/*` is not yet collected by `PrebuiltBundleRetention`, which keeps no `_db` files
-either; both are one small file per release.
+`PrebuiltBundleRetention` retires `_releases/_surface/<version>` together with that version's
+marker, and removes an orphan continuous-build surface once it is past the retention window (MeshWeaver#6990,
+[Prebuilt Bundle Retention](../PrebuiltBundleRetention) → "Per-release surfaces follow their
+marker"). `_releases/_db/*`, a few bytes per release, is still not collected.
 
 ### Evidence
 
