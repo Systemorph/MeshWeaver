@@ -85,11 +85,15 @@ public class MoveRenamesByCaseOnlyTest(ITestOutputHelper output) : MonolithMeshT
             refused.Success.Should().BeFalse($"'{target}' lies inside the subtree being moved");
             refused.RejectionReason.Should().Be(NodeMoveRejectionReason.ValidationFailed,
                 "a move into its own subtree is a verdict, not a failure worth retrying");
+            refused.Log!.Messages.Select(m => m.MessageKey).Should().Contain("activity.node.move.intoOwnSubtree",
+                "the refusal is keyed, so a German viewer reads it in German");
         }
 
         var onto = await Move(source, source, ct);
         onto.Success.Should().BeFalse("a move onto itself moves nothing");
         onto.RejectionReason.Should().Be(NodeMoveRejectionReason.ValidationFailed);
+        onto.Log!.Messages.Select(m => m.MessageKey).Should().Contain("activity.node.move.ontoItself",
+            "the refusal is keyed, so a German viewer reads it in German");
 
         (await StoredAt(source, ct))!.Path.Should().Be(source, "every refusal left the source where it was");
         (await StoredAt($"{source}/child", ct)).Should().NotBeNull();

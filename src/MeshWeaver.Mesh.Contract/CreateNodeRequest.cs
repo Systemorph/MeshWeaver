@@ -1094,6 +1094,21 @@ public record CopyNodeResponse(MeshNode? Node)
     /// <summary>Number of satellite nodes copied.</summary>
     public int SatellitesCopied { get; init; }
 
+    /// <summary>
+    /// On a FAILED copy: the target paths it nevertheless wrote — every create that landed, plus
+    /// every target it found already holding the same node relocated (#6310) — before it gave up.
+    /// A copy runs every create it issued to its own verdict before it answers, so this is the whole
+    /// set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a caller undoing a failed
+    /// copy (the case-only rename of a move, #6951) must remove, and the only thing it may.
+    /// </summary>
+    public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// True when the copy failed with creates it had issued still outstanding (it ran out of time),
+    /// so <see cref="Written"/> may be incomplete and what the target holds is unknown.
+    /// </summary>
+    public bool WrittenUnsettled { get; init; }
+
     /// <summary>Creates a successful copy response.</summary>
     public static CopyNodeResponse Ok(MeshNode node, int descendantsCopied = 0, int satellitesCopied = 0)
         => new(node) { DescendantsCopied = descendantsCopied, SatellitesCopied = satellitesCopied };

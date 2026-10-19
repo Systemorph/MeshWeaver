@@ -55,8 +55,12 @@ public class MoveRenamesByCaseOnlyOnTheFileSystemTest(ITestOutputHelper output) 
 
         var after = Entries(partitionDir, id);
         Output.WriteLine($"after: {string.Join(", ", after)}");
-        after.Should().OnlyContain(name => name.StartsWith(targetLeaf, StringComparison.Ordinal),
-            "the volume holds the new casing only — no old-casing file, no staging sibling");
+        // EXACT names only: the staging sibling is `{targetLeaf}-recase-{token}`, so a bare
+        // StartsWith(targetLeaf) would accept an orphaned staging tree as "the new casing".
+        after.Should().NotContain(name => name.Contains(MovePaths.StagingMarker, StringComparison.Ordinal),
+            "the staging sibling the rename passed through is gone, directory and node file alike");
+        after.Should().OnlyContain(name => name == targetLeaf || name.StartsWith(targetLeaf + ".", StringComparison.Ordinal),
+            "the volume holds the new casing only — the target's directory and its node file, nothing else");
         after.Should().Contain(targetLeaf, "the subtree's directory carries the new casing");
         after.Should().Contain(n => n.StartsWith(targetLeaf + ".", StringComparison.Ordinal),
             "and so does the node's own file");

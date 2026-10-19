@@ -269,11 +269,29 @@ the SAME key in some stores and a DIFFERENT key in others, and copy-then-delete 
 staging sibling sits under the TARGET's parent (so it needs exactly the Create grant the target does)
 and differs from both ends in every store, so each leg writes new keys and removes old ones, and each
 runs the whole move contract above — the delete pre-flight, the subtree-deletion scope of that leg's
-source, satellites, authorship and completeness. Both legs share the one move deadline. If the second
-leg fails, the subtree is moved back to the source and the answer says so (reason: the second leg's
-own); if moving it back fails too, the answer is `Unknown` and names the staging path that holds the
-subtree. A stall after the subtree started to leave the source answers `Unknown` naming all three paths
-(`activity.node.move.caseRenameStalled`). In no outcome is the subtree left at two casings.
+source, satellites, authorship and completeness. Both legs share the one move deadline.
+
+**A failed leg is undone only as far as what it did is established**, and the answer is keyed so a
+viewer reads it in their own language:
+
+| The failed leg… | What happens | Answer |
+|---|---|---|
+| was refused before it wrote anything | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: its own refusal; leg 2: `caseRenameRestored`, the leg's own reason |
+| failed in its COPY part-way | first the paths that copy wrote are removed — exactly those, from `CopyNodeResponse.Written` — then leg 2 moves the subtree back | leg 1: the copy's own verdict; leg 2: `caseRenameRestored` carrying the copy's transcript |
+| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameUnresolved`, naming source, staging and target |
+| left its writes unknown (a copy that ran out of time with creates outstanding), or the clean-up or the move back failed | nothing more is done; the staging path is the recovery data | `Unknown`, `caseRenameUnresolved`, naming all three paths |
+
+Removing the copy's writes BEFORE moving back is what keeps a refused descendant from surviving as a
+renamed root: the copy creates the root before its descendants, so a refused descendant create in
+leg 2 leaves the root at the target, and on a case-insensitive store the move back would otherwise
+RESUME onto that new-cased root (#6310) while answering "nothing was renamed" — measured on the
+in-memory mesh before the fix: `TestData/vhvgruppe-… → TestData/VHVGruppe-…` with `…/birgit` refused
+at the target answered "moved back" and the source key read back `TestData/VHVGruppe-…`. For that set
+to be complete the copy now runs EVERY create it issued to its own verdict before it answers (a first
+failure no longer cuts the rest off mid-flight), and reports `WrittenUnsettled` only when it ran out of
+time with creates outstanding. A stall after the subtree started to leave the source answers `Unknown`
+naming all three paths (`activity.node.move.caseRenameStalled`). The refusals of `Same` and
+`IntoOwnSubtree` are keyed too (`activity.node.move.ontoItself`, `activity.node.move.intoOwnSubtree`).
 
 On a case-insensitive **file system** (macOS, Windows) the two-step is what makes the new casing reach
 the disk: the first leg removes the old files and their now-empty directories, so the second leg's
@@ -281,7 +299,12 @@ writes create entries with the new names. Only the segments the moved subtree OW
 ancestor segment whose casing differs (`VhvGruppe/x → VHVGruppe/x` where `VhvGruppe` is a node of its
 own) stays as that ancestor's directory is named. Pinned by `MoveRenamesByCaseOnlyTest` (in-memory:
 the rename, the refusals, the classifier) and `MoveRenamesByCaseOnlyOnTheFileSystemTest`, which reads
-the names the volume actually holds and passes on case-sensitive and case-insensitive volumes alike.
+the names the volume actually holds — the target's exact directory and node file, and no staging
+entry — and passes on case-sensitive and case-insensitive volumes alike. The failure paths are pinned
+by isolated faults: `CaseOnlyRenameUndoesARefusedSecondLegTest` (one create refused at the target's
+exact casing; the restored subtree reads back at the source's casing) and
+`CaseOnlyRenameReportsAPartialFirstLegDeleteTest` (`FaultInjectingStorageAdapter.FailDeleteMany` stops
+the first leg's delete part-way; the answer names the staging path, which holds the whole subtree).
 
 ## What this means for callers
 
