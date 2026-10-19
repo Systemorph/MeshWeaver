@@ -335,6 +335,23 @@ public class CachingStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc />
+    /// <remarks>Read, compare (version and incarnation), delete — NOT atomic, like
+    /// <see cref="DeleteIfVersionAtMost"/> here: the file-system store is single-writer by design.</remarks>
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => Observable.Defer(() =>
+        {
+            IStorageAdapter innerAdapter =
+                new FileSystemStorageAdapter(_baseDirectory, _ioPoolRegistry, _writeOptionsModifier, _logger, _contributedParsers);
+            return innerAdapter.Read(path, options)
+                .Take(1)
+                .SelectMany(stored => stored is null || stored.Version > maxVersion
+                                      || !StorageIncarnation.Matches(stored, incarnation)
+                    ? Observable.Return(false)
+                    : Delete(path).Select(_ => true));
+        });
+
+    /// <inheritdoc />
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() => Observable.Return(ListChildPathsCore(parentPath)));
 

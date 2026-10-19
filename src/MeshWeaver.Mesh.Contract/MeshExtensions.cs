@@ -4870,7 +4870,11 @@ public static class MeshExtensions
                                                     capturedRequest, executionContext,
                                                     recentlyDeleted, logger, collectedMessages,
                                                     deletedProgress, drainProgress, absenceProbeBudget,
-                                                    sealLease?.SealId)
+                                                    sealLease?.SealId,
+                                                    // The incarnation the delete read (#6856): only
+                                                    // that node may be removed, never one created
+                                                    // in its place since.
+                                                    rootNode.CreatedDate == default ? null : rootNode.CreatedDate)
                                                 .Select(d => (IReadOnlyList<string>?)d))
                                             .TimeoutAtStage(budget, () =>
                                             {
@@ -5651,11 +5655,12 @@ public static class MeshExtensions
         ImmutableList<string>.Builder deletedProgress,
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
-        string? rootDeleteKey = null)
+        string? rootDeleteKey = null,
+        DateTimeOffset? rootIncarnation = null)
         => RunDeletePass(
             meshHub, issuingHub, storage, rootPath, plannedPaths, baseRequest, callerAccessContext,
             recentlyDeleted, logger, collectedMessages, deletedProgress, progress,
-            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty, rootDeleteKey);
+            absenceProbeBudget, pass: 1, deletedSoFar: ImmutableList<string>.Empty, rootDeleteKey, rootIncarnation);
 
     private static IObservable<IReadOnlyList<string>> RunDeletePass(
         IMessageHub meshHub,
@@ -5673,7 +5678,8 @@ public static class MeshExtensions
         TimeSpan absenceProbeBudget,
         int pass,
         ImmutableList<string> deletedSoFar,
-        string? rootDeleteKey = null)
+        string? rootDeleteKey = null,
+        DateTimeOffset? rootIncarnation = null)
     {
         // 🚨 "Delete wins" — tombstone every path of THIS pass BEFORE the fan-out.
         // FanOutDeleteSubtree ACTIVATES each leaf's per-node hub to process its own
@@ -5690,7 +5696,7 @@ public static class MeshExtensions
         return FanOutDeleteSubtree(
                 meshHub, issuingHub, storage, rootPath, toDelete, baseRequest, callerAccessContext,
                 logger, collectedMessages, deletedProgress, progress, absenceProbeBudget,
-                rootAlreadyDeleted: pass > 1, rootDeleteKey)
+                rootAlreadyDeleted: pass > 1, rootDeleteKey, rootIncarnation)
             .Catch<IReadOnlyList<string>, Exception>(ex =>
             {
                 // Fold this pass's partial deletions into the accumulated total so
@@ -5769,7 +5775,7 @@ public static class MeshExtensions
                         return RunDeletePass(
                             meshHub, issuingHub, storage, rootPath, survivorSet, baseRequest,
                             callerAccessContext, recentlyDeleted, logger, collectedMessages,
-                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc, rootDeleteKey);
+                            deletedProgress, progress, absenceProbeBudget, pass + 1, acc, rootDeleteKey, rootIncarnation);
                     });
             });
     }
@@ -5818,7 +5824,8 @@ public static class MeshExtensions
         IObserver<string> progress,
         TimeSpan absenceProbeBudget,
         bool rootAlreadyDeleted = false,
-        string? rootDeleteKey = null)
+        string? rootDeleteKey = null,
+        DateTimeOffset? rootIncarnation = null)
     {
         // 🚨 Record each commit AS IT LANDS, not at the end. The caller bounds this whole fan-out
         // with one Timeout, and a timeout UNSUBSCRIBES — discarding the deleted-path list
@@ -5913,7 +5920,12 @@ public static class MeshExtensions
                     // call is subscribed once by the registry and recorded on its actual termination;
                     // this pipeline only reads the replay. The release asks that record whether the row
                     // was removed, not whether this pipeline got as far as noting it.
-                    var call = storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions);
+                    // 🚨 And only the INCARNATION the delete read (#6856): a node deleted and created
+                    // again since starts over at version 1, which "version <= confirmed" alone accepts —
+                    // a late root delete would remove the node created in its place.
+                    var call = rootIncarnation is { } incarnation
+                        ? storage.DeleteIfIncarnationAtMost(path, confirmedVersion, incarnation, meshHub.JsonSerializerOptions)
+                        : storage.DeleteIfVersionAtMost(path, confirmedVersion, meshHub.JsonSerializerOptions);
                     return rootDeletes is null || rootDeleteKey is null
                         ? call
                         : rootDeletes.ObserveRootDelete(rootDeleteKey, call);
