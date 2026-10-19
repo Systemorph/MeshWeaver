@@ -283,6 +283,14 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options)
             .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
 
+    /// <inheritdoc />
+    /// <remarks>Held like every delete, then decided ATOMICALLY (version and incarnation) by the store
+    /// underneath; its answer is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => HeldDelete([path], () => _inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options)
+            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
+
     /// <summary>
     /// Each answer the store underneath gave to a compare-and-delete of <paramref name="path"/>
     /// (replayed) — the positive proof that a held delete actually RAN, and what it decided.
