@@ -367,6 +367,20 @@ public static class Controls
     /// <returns>A new <see cref="ImageControl"/>.</returns>
     public static ImageControl Image(object source, object alt) => new(source, alt);
 
+    /// <summary>Creates a thin themed rule between two regions of a page (<see cref="DividerControl"/>).</summary>
+    /// <returns>A new horizontal <see cref="DividerControl"/>.</returns>
+    public static DividerControl Divider => new();
+
+    /// <summary>
+    /// Creates a framed document or app (<see cref="EmbedControl"/>): a PDF this portal serves by
+    /// default (<see cref="EmbedKind.Document"/>), or an external page with
+    /// <see cref="EmbedControl.WithKind"/> <see cref="EmbedKind.App"/>, which is always sandboxed.
+    /// </summary>
+    /// <param name="src">The address, or a data-binding expression.</param>
+    /// <param name="title">The localized accessible name of the frame.</param>
+    /// <returns>A new <see cref="EmbedControl"/>.</returns>
+    public static EmbedControl Embed(object src, object title) => new(src, title);
+
     /// <summary>
     /// Creates a new instance of <see cref="MenuItemControl"/> with the specified title and icon.
     /// </summary>
