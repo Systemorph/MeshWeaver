@@ -223,6 +223,34 @@ public sealed record PrebuiltStoreScan(
     ImmutableList<PrebuiltIdentityEntry> Identities,
     ImmutableList<ReleaseMarkerEntry> Markers);
 
+/// <summary>
+/// The KEEP rules of <see cref="PrebuiltBundleStore.Plan"/>, as the short names the once-per-pass
+/// summary tallies (<see cref="PrebuiltBundleSweepPlan.KeptTally"/>). An open vocabulary of string
+/// constants (policy <c>open-vocabulary-string-constants</c>): a reader must treat an unknown value
+/// as a rule it does not know, never as one of these.
+/// </summary>
+public static class PrebuiltRetentionKeepRule
+{
+    /// <summary>The framework identity this process runs.</summary>
+    public const string Live = "live";
+    /// <summary>A seal that could not be read — unreadable is never unreferenced.</summary>
+    public const string Unreadable = "unreadable";
+    /// <summary>A publication pointer that could not be followed.</summary>
+    public const string PointerUnknown = "pointer-unknown";
+    /// <summary>Named by a release (non-prerelease) marker.</summary>
+    public const string ReleaseMarker = "release-marker";
+    /// <summary>Pinned by a consumer outside this process.</summary>
+    public const string Pinned = "pinned";
+    /// <summary>Named by a NodeType record's adoption stamp.</summary>
+    public const string AdoptionStamp = "adoption-stamp";
+    /// <summary>The newest sealed publication of a source on a platform major.</summary>
+    public const string NewestSealed = "newest-sealed";
+    /// <summary>Within the minimum-age retention window.</summary>
+    public const string RetentionWindow = "window";
+    /// <summary>An unsealed source whose seal may still be in flight.</summary>
+    public const string SealInFlight = "seal-in-flight";
+}
+
 /// <summary>What a sweep decided, before any deletion.</summary>
 /// <param name="LiveIdentity">The framework identity this process runs.</param>
 /// <param name="LivePlatformVersion">This process's platform version, or null when unknown.</param>
@@ -254,6 +282,26 @@ public sealed record PrebuiltBundleSweepPlan(
 
     /// <summary>Why each surviving generation survived, keyed by its full directory path.</summary>
     public ImmutableDictionary<string, string> ProtectedGenerations { get; init; } = ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// Which KEEP rule protected each surviving identity, keyed by identity — the bounded companion
+    /// of <see cref="Protected"/>, whose reasons are per-identity prose. Values are
+    /// <see cref="PrebuiltRetentionKeepRule"/> constants.
+    /// </summary>
+    public ImmutableDictionary<string, string> ProtectedRules { get; init; } = ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// The kept identities counted per rule (<c>window=612, release-marker=40, …</c>) — bounded by
+    /// the number of rules, never by the size of the store, so it can travel on the once-per-pass
+    /// Warning summary (#6991) where the itemized <see cref="Protected"/> list cannot.
+    /// </summary>
+    public string KeptTally =>
+        ProtectedRules.IsEmpty
+            ? "(nothing)"
+            : string.Join(", ", ProtectedRules.Values
+                .GroupBy(r => r, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => $"{g.Key}={g.Count()}"));
 
     /// <summary>Total bytes across every identity.</summary>
     public long TotalBytes => Identities.Sum(i => i.Bytes);
@@ -630,10 +678,14 @@ public static class PrebuiltBundleStore
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => string.Join(", ", g.Select(m => m.Version)), StringComparer.Ordinal);
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
-        void Keep(string identity, string reason)
+        var rules = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        void Keep(string identity, string rule, string reason)
         {
             if (!reasons.ContainsKey(identity))
+            {
                 reasons[identity] = reason;
+                rules[identity] = rule;
+            }
         }
 
         var sources = scan.Identities.SelectMany(i => i.Sources.Where(s => s.IsSealed).Select(s => s.Name))
@@ -674,9 +726,9 @@ public static class PrebuiltBundleStore
         foreach (var identity in scan.Identities)
         {
             if (string.Equals(identity.Identity, liveIdentity, StringComparison.Ordinal))
-                Keep(identity.Identity, "the framework identity this process runs");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Live, "the framework identity this process runs");
             else if (identity.HasReadFault)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Unreadable,
                     $"its seal could not be read ({identity.Sources.First(s => s.ReadFault is not null).ReadFault}) — unreadable is never unreferenced");
             // 🚨 The same rule one field over, and phase 5 is what made it load-bearing at the
             // IDENTITY level (#3461). A source whose `_current` could not be followed reads as
@@ -685,15 +737,15 @@ public static class PrebuiltBundleStore
             // reading that established nothing. The generation rules already keep every generation
             // of such a source; this keeps the identity that holds them.
             else if (identity.Sources.FirstOrDefault(s => s.PointerFault is not null) is { } faulted)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.PointerUnknown,
                     $"which publication of '{faulted.Name}' applies is unknown ({faulted.PointerFault}) "
                     + "— an inventory that could not be read licenses no deletion");
             else if (cleanMarkersOf.TryGetValue(identity.Identity, out var releases))
-                Keep(identity.Identity, $"named by release marker {releases}");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.ReleaseMarker, $"named by release marker {releases}");
             else if (pinnedReasons.TryGetValue(identity.Identity, out var pinnedBy))
-                Keep(identity.Identity, pinnedBy);
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Pinned, pinnedBy);
             else if (stampedIdentities.Contains(identity.Identity))
-                Keep(identity.Identity, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.AdoptionStamp, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
         }
 
         foreach (var source in sources)
@@ -710,7 +762,7 @@ public static class PrebuiltBundleStore
                          .Where(g => g.Key is not null))
             {
                 var latest = family.OrderByDescending(i => newestVersionOf[i.Identity], comparer).First();
-                Keep(latest.Identity,
+                Keep(latest.Identity, PrebuiltRetentionKeepRule.NewestSealed,
                     $"the newest sealed '{source}' publication on platform major {family.Key} ({newestVersionOf[latest.Identity]}) — what Family strictness adopts");
             }
         }
@@ -720,12 +772,12 @@ public static class PrebuiltBundleStore
         foreach (var identity in scan.Identities)
             if (nowUtc - identity.NewestWriteUtc < minimumAge
                 || readable.Any(m => m.Identity == identity.Identity && nowUtc - m.WrittenUtc < minimumAge))
-                Keep(identity.Identity, $"within the {minimumAge.TotalDays:N0}-day retention window");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.RetentionWindow, $"within the {minimumAge.TotalDays:N0}-day retention window");
 
         // 7. a seal in flight.
         foreach (var identity in scan.Identities)
             if (identity.HasUnsealedSource && nowUtc - identity.NewestWriteUtc < retention.UnsealedGrace)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.SealInFlight,
                     $"a source is unsealed and its newest write is {(nowUtc - identity.NewestWriteUtc).TotalMinutes:N0} min old — a seal may be in flight (grace {retention.UnsealedGrace})");
 
         var collectable = scan.Identities
@@ -823,6 +875,7 @@ public static class PrebuiltBundleStore
             CollectableGenerations = collectableGenerations.ToImmutable().Sort(
                 (a, b) => a.NewestWriteUtc.CompareTo(b.NewestWriteUtc)),
             ProtectedGenerations = generationReasons.ToImmutable(),
+            ProtectedRules = rules.ToImmutable(),
         };
     }
 
@@ -889,6 +942,14 @@ public static class PrebuiltBundleStore
 
         if (!retention.Delete)
         {
+            // 🚨 #6991: the pass OUTCOME is the one line an operator needs, and the cluster ships
+            // only Warning+ to Loki — so it is a Warning, once per pass (boot + every Interval, per
+            // replica), carrying the denominator and the per-rule kept tally but never a per-identity
+            // list. The itemized lists below stay Information: they scale with the store.
+            logger?.LogWarning(
+                "PrebuiltBundleRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. {Summary}. "
+                + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s)",
+                plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count);
             logger?.LogInformation(
                 "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Kept: {Kept}",
                 plan.Summary,
@@ -986,6 +1047,14 @@ public static class PrebuiltBundleStore
             }
         }
 
+        // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why); the
+        // itemized kept list stays on the Information line after it.
+        logger?.LogWarning(
+            "PrebuiltBundleRetention: pass outcome — COLLECTED {Identities} identity(ies) and {Generations} superseded "
+            + "generation(s) reclaiming {Reclaimed}, retired {Markers} marker(s), {Failed} removal(s) failed. {Summary}. "
+            + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s)",
+            deletedIdentities, deletedGenerations, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers, failedDeletes,
+            plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count);
         logger?.LogInformation(
             "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies) and {Generations} superseded generation(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
             plan.Summary, deletedIdentities, deletedGenerations, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,

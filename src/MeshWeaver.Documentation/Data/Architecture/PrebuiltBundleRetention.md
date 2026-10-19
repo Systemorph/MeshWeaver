@@ -105,7 +105,10 @@ incomplete writes `ABORTED: …` with the plan's summary — both are failures, 
 `TheReportNamesItsDenominator_SoAnUnexaminedStoreCannotReadAsACleanOne` pins the distinction.
 
 **Reading it today is break-glass.** `PrebuiltBundleRetentionStatus` is written and has no reader:
-the ledger is a file on the data volume and the log line is in Loki. Surfacing the last pass on the
+the ledger is a file on the data volume and the log line is in Loki — since #6991 as one
+`PrebuiltBundleRetention: pass outcome` Warning per pass, carrying the denominator and the kept
+count per rule ([What each pass did](../CiContentBake#what-each-pass-did-one-warning-outcome-line)).
+Surfacing the last pass on the
 Fleet Console — or in the pod's health payload beside `nodetype_bake` — is the step that makes
 "read one report" something an operator can actually do, and it is not built yet.
 

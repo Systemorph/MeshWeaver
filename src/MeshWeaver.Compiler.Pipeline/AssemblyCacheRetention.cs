@@ -89,6 +89,23 @@ public sealed record AssemblyCacheGeneration(
 /// </param>
 public sealed record AssemblyCacheClaim(string Tag, string Holder, DateTimeOffset? AtUtc);
 
+/// <summary>
+/// The KEEP rules of <see cref="AssemblyCacheGenerations.Plan"/>, as the short names the once-per-pass
+/// summary tallies (<see cref="AssemblyCacheSweepPlan.KeptTally"/>). An open vocabulary of string
+/// constants (policy <c>open-vocabulary-string-constants</c>).
+/// </summary>
+public static class AssemblyCacheKeepRule
+{
+    /// <summary>The framework this process is running.</summary>
+    public const string Live = "live";
+    /// <summary>A fresh (or unreadable) claim by a live process.</summary>
+    public const string Claimed = "claimed";
+    /// <summary>Among the most recently written generations.</summary>
+    public const string Recent = "recent";
+    /// <summary>Younger than the minimum age.</summary>
+    public const string MinimumAge = "minimum-age";
+}
+
 /// <summary>What a sweep found and what it decided, before any deletion happens.</summary>
 /// <param name="LiveTag">The framework generation the sweeping process itself is running.</param>
 /// <param name="Generations">Every generation present in the cache.</param>
@@ -114,6 +131,26 @@ public sealed record AssemblyCacheSweepPlan(
 
     /// <summary>Bytes the plan would reclaim.</summary>
     public long CollectableBytes => Collectable.Sum(g => g.Bytes);
+
+    /// <summary>
+    /// The kept generations counted per rule (<c>claimed=3, recent=2, live=1</c>) — bounded by the
+    /// number of rules, never by the size of the cache, so it travels on the once-per-pass Warning
+    /// summary (#6991) where the itemized <see cref="Protected"/> list does not.
+    /// </summary>
+    public string KeptTally =>
+        ProtectedRules.IsEmpty
+            ? "(nothing)"
+            : string.Join(", ", ProtectedRules.Values
+                .GroupBy(r => r, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => $"{g.Key}={g.Count()}"));
+
+    /// <summary>
+    /// Which KEEP rule protected each surviving generation, keyed by tag — the bounded companion of
+    /// <see cref="Protected"/>. Values are <see cref="AssemblyCacheKeepRule"/> constants.
+    /// </summary>
+    public ImmutableDictionary<string, string> ProtectedRules { get; init; } =
+        ImmutableDictionary<string, string>.Empty;
 
     /// <summary>One line an operator can read at 3am.</summary>
     public string Summary =>
@@ -331,32 +368,39 @@ public static class AssemblyCacheGenerations
         var minimumAge = retention.MinimumAge < TimeSpan.FromDays(30)
             ? TimeSpan.FromDays(30) : retention.MinimumAge;
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rules = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
         var collectable = ImmutableList.CreateBuilder<AssemblyCacheGeneration>();
 
         foreach (var generation in generations)
         {
             // Each branch is a KEEP. Ordered most-authoritative first purely so the reported reason
             // is the strongest one; any single match is enough to protect.
-            var reason =
+            (string Rule, string Reason)? keep =
                 string.Equals(generation.Tag, liveTag, StringComparison.OrdinalIgnoreCase)
-                    ? "the framework this process is running"
+                    ? (AssemblyCacheKeepRule.Live, "the framework this process is running")
                 : claimed.TryGetValue(generation.Tag, out var holders)
-                    ? $"claimed by {holders}"
+                    ? (AssemblyCacheKeepRule.Claimed, $"claimed by {holders}")
                 : recent.Contains(generation.Tag)
-                    ? $"among the {retention.KeepGenerations} most recently written"
+                    ? (AssemblyCacheKeepRule.Recent, $"among the {retention.KeepGenerations} most recently written")
                 : nowUtc - generation.NewestWriteUtc < minimumAge
-                    ? $"newer than the {minimumAge} minimum age"
+                    ? (AssemblyCacheKeepRule.MinimumAge, $"newer than the {minimumAge} minimum age")
                 : null;
 
-            if (reason is null)
+            if (keep is not { } k)
                 collectable.Add(generation);
             else
-                reasons[generation.Tag] = reason;
+            {
+                reasons[generation.Tag] = k.Reason;
+                rules[generation.Tag] = k.Rule;
+            }
         }
 
         return new AssemblyCacheSweepPlan(
             liveTag, generations, claims, collectable.ToImmutable(), reasons.ToImmutable(),
-            unrecognisedFiles, unrecognisedBytes);
+            unrecognisedFiles, unrecognisedBytes)
+        {
+            ProtectedRules = rules.ToImmutable(),
+        };
     }
 
     /// <summary>
@@ -411,6 +455,14 @@ public static class AssemblyCacheGenerations
 
         if (!retention.Delete)
         {
+            // 🚨 #6991: the pass OUTCOME is a Warning, once per pass (once per pod start), because
+            // the cluster ships only Warning+ to Loki and this is the one line that says whether the
+            // sweep ran and what it decided. It carries counts and the per-rule tally only; the
+            // itemized lists below stay Information.
+            logger?.LogWarning(
+                "AssemblyCacheRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. "
+                + "{Summary}. Kept {KeptCount} generation(s) by rule: {KeptTally}",
+                plan.Summary, plan.Protected.Count, plan.KeptTally);
             logger?.LogInformation(
                 "AssemblyCacheRetention: {Summary}. DELETING NOTHING — collection is not armed. "
                 + "Keeping: {Kept}. Would collect: {Collectable}",
@@ -447,6 +499,13 @@ public static class AssemblyCacheGenerations
                 }
             }
 
+        // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why).
+        logger?.LogWarning(
+            "AssemblyCacheRetention: pass outcome — COLLECTED {DeletedFiles} file(s) across {Generations} "
+            + "generation(s), reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. {Summary}. "
+            + "Kept {KeptCount} generation(s) by rule: {KeptTally}",
+            deletedFiles, plan.Collectable.Count, deletedBytes / (1024d * 1024d), failed,
+            plan.Summary, plan.Protected.Count, plan.KeptTally);
         logger?.LogInformation(
             "AssemblyCacheRetention: {Summary}. COLLECTED {DeletedFiles} file(s) across "
             + "{Generations} generation(s), reclaiming {DeletedMb:N1} MB{Failed}. Kept: {Kept}",

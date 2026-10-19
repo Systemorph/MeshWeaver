@@ -980,4 +980,65 @@ public class PrebuiltBundleRetentionTest : IDisposable
             try { Directory.Delete(emptyRoot, recursive: true); } catch { /* best effort */ }
         }
     }
+    // ---- the pass outcome reaches Loki (#6991) -------------------------------------------------
+
+    /// <summary>
+    /// 🚨 The cluster ships only Warning+ to Loki, so a pass whose outcome logs at Information is a
+    /// pass nobody can see ran (#6991). Each pass — report-only and armed alike — emits exactly ONE
+    /// Warning outcome line carrying the denominator and the per-rule kept tally, and the itemized
+    /// lines (which scale with the store) stay below Warning.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "REPORT ONLY")]
+    [InlineData(true, "COLLECTED 1 identity(ies)")]
+    public void SweepCore_EmitsExactlyOneWarningOutcomePerPass(bool armed, string verdict)
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-old", "plugins", DaysAgo(500));
+        Sealed("s-recent", "plugins", DaysAgo(2));
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now, log);
+
+        var warnings = log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
+        warnings.Should().ContainSingle("one outcome line per pass is what keeps Warning+ affordable");
+        warnings[0].Message.Should().Contain("pass outcome").And.Contain(verdict)
+            .And.Contain("3 identity directory(ies)", "the line carries what the pass scanned")
+            .And.Contain("Kept 2 identity(ies) by rule:")
+            .And.Contain($"{PrebuiltRetentionKeepRule.Live}=1")
+            .And.Contain($"{PrebuiltRetentionKeepRule.RetentionWindow}=1");
+        warnings[0].Message.Should().NotContain("s-recent",
+            "the Warning line is bounded by the number of rules, never by the size of the store");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("s-recent"),
+            "the itemized kept list stays at Information");
+    }
+
+    /// <summary>
+    /// An aborted pass is already a Warning, and it is the ONLY Warning — no outcome line claims
+    /// the pass completed.
+    /// </summary>
+    [Fact]
+    public void SweepCore_AnAbortedPass_IsOneWarning()
+    {
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("nothing collected");
+    }
+
+    private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Enqueue((logLevel, formatter(state, exception)));
+    }
 }
