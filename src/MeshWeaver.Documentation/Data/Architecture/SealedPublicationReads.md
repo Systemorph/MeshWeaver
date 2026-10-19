@@ -902,7 +902,7 @@ CD run on this publisher. A portal still running the previous reader keeps readi
 copy until it rolls; that copy now changes only with the content (each core commit republishes it),
 so it can be stale for a same-commit reconcile, as before the first fix, and never moves backwards.
 `PrebuiltBundleRetention` retires `_releases/_surface/<version>` together with that version's
-marker, and removes an orphan pre-release surface once it is past the retention window (MeshWeaver#6990,
+marker, and removes an orphan continuous-build surface once it is past the retention window (MeshWeaver#6990,
 [Prebuilt Bundle Retention](../PrebuiltBundleRetention) → "Per-release surfaces follow their
 marker"). `_releases/_db/*`, a few bytes per release, is still not collected.
 

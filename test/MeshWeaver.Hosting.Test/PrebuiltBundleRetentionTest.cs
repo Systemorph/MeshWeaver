@@ -1038,7 +1038,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         plan.ProtectedSurfaces["3.0.0"].Should().Contain("marker is kept");
         plan.ProtectedSurfaces["3.0.0-ci.2"].Should().Contain("marker is kept");
         plan.ProtectedSurfaces["3.1.0-ci.9001"].Should().Contain("may be in flight");
-        plan.ProtectedSurfaces["2.9.0"].Should().Contain("clean release");
+        plan.ProtectedSurfaces["2.9.0"].Should().Contain("cut release");
         plan.ProtectedSurfaces["3.0.0-ci.3"].Should().Contain("pins");
         plan.Summary.Should().Contain("release surfaces to retire=2");
 
@@ -1092,6 +1092,86 @@ public class PrebuiltBundleRetentionTest : IDisposable
         SurfacesOnDisk().Should().HaveCount(8);
         File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root)).Should().Contain("report only")
             .And.Contain("release surfaces to retire=2");
+    }
+
+    // ---- continuous builds vs cut releases (MeshWeaver#6990 review) ---------------------------
+
+    /// <summary>
+    /// A CUT release is exactly what <c>release.yml</c> promotes: the tag must match
+    /// <c>^[0-9]+\.[0-9]+\.[0-9]+$</c> AND equal <c>PlatformVersion</c>, which on the SemVer line is
+    /// <c>X.Y.0</c>. A main-CD build is <c>X.Y.&lt;run&gt;</c> (<c>main-cd.yml</c>, policy
+    /// <c>platform-semver-versioning</c>) — no hyphen, and still a continuous build.
+    /// </summary>
+    [Theory]
+    [InlineData("3.0.0", true)]
+    [InlineData("3.1.0", true)]
+    [InlineData("4.0.0", true)]
+    [InlineData("2.5.3", true)]
+    [InlineData("3.1.0+abc123", true)]
+    [InlineData("garbage", true)]
+    [InlineData("3.1.11217", false)]
+    [InlineData("3.1.11217-edge", false)]
+    [InlineData("3.0.0-ci.8080", false)]
+    [InlineData("3.0.0-rc9.ci.7824", false)]
+    [InlineData("3.0.0-rc8", false)]
+    [InlineData("3.1.0-dev", false)]
+    public void ACutRelease_IsTheCleanVersionReleaseYmlPromotes_NeverAContinuousBuild(string version, bool cut)
+    {
+        PlatformVersionLine.IsCutRelease(version).Should().Be(cut);
+    }
+
+    private ImmutableList<PinnedPlatformReference> SemVerStore()
+    {
+        Marker("3.1.11300", Live); Surface("3.1.11300", DaysAgo(1)); Sealed(Live, "plugins", DaysAgo(1));
+        // A deliberately cut release: kept for ever, with its surface.
+        Marker("3.1.0", "s-cut"); Surface("3.1.0", DaysAgo(200)); Sealed("s-cut", "plugins", DaysAgo(200));
+        // A continuous CD build past the window, nothing references it: identity, marker AND surface go.
+        Marker("3.1.11000", "s-cd"); Surface("3.1.11000", DaysAgo(60)); Sealed("s-cd", "plugins", DaysAgo(60));
+        // A CD build a Deployment pins: kept however old.
+        Marker("3.1.11100", "s-pin"); Surface("3.1.11100", DaysAgo(50)); Sealed("s-pin", "plugins", DaysAgo(50));
+        // A recent CD build: inside the window.
+        Marker("3.1.11290", "s-recent"); Surface("3.1.11290", DaysAgo(5)); Sealed("s-recent", "plugins", DaysAgo(5));
+        // Orphan CD surfaces: the old one goes, the recent one stays.
+        Surface("3.1.10900", DaysAgo(90));
+        Surface("3.1.11295", DaysAgo(2));
+        return [new PinnedPlatformReference("Deployment Deployments/fabrikam", "memex-portal-ai:3.1.11100", null)];
+    }
+
+    [Fact]
+    public void ContinuousSemVerBuilds_PastTheWindow_AreCollected_WithTheirMarkersAndSurfaces()
+    {
+        var pinned = SemVerStore();
+
+        var plan = PlanNow(liveVersion: "3.1.11300", pinned: pinned);
+
+        plan.AbortReason.Should().BeNull();
+        Ids(plan).Should().Equal("s-cd");
+        plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.1.11000");
+        plan.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.1.10900", "3.1.11000");
+        plan.Protected[Live].Should().Contain("runs");
+        plan.Protected["s-cut"].Should().Contain("release marker 3.1.0");
+        plan.Protected["s-pin"].Should().Contain("pinned by Deployment Deployments/fabrikam");
+        plan.Protected["s-recent"].Should().Contain("retention window");
+        plan.ProtectedSurfaces["3.1.0"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.1.11295"].Should().Contain("may be in flight");
+    }
+
+    [Fact]
+    public void ContinuousSemVerBuilds_AreActuallyRemoved_AndCutReleasesStay()
+    {
+        var pinned = SemVerStore();
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.11300", [], pinned, retention, Now);
+
+        result.Deleted.Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-cd")).Should().BeFalse();
+        Directory.Exists(Path.Combine(root, "s-cut")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-pin")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-recent")).Should().BeTrue();
+        Directory.GetFiles(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName))
+            .Select(f => Path.GetFileName(f)!).OrderBy(n => n, StringComparer.Ordinal)
+            .Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11300");
+        SurfacesOnDisk().Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11295", "3.1.11300");
     }
 
     [Fact]

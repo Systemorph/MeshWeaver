@@ -66,6 +66,25 @@ public static class PlatformVersionLine
         return core;
     }
 
+    /// <summary>
+    /// 🚨 <b>True when <paramref name="version"/> names a deliberately CUT release</b> — the clean
+    /// <c>X.Y.Z</c> that <c>release.yml</c> promotes from an annotated <c>vX.Y.Z</c> tag — and false
+    /// for every CONTINUOUS build, in either notation. The ONE predicate the identity, marker and
+    /// surface retention rules share (MeshWeaver#6990).
+    ///
+    /// <para>"No hyphen" is NOT this question. Since policy <c>platform-semver-versioning</c> a
+    /// main-CD build is published as a plain <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>
+    /// (<c>3.1.11217</c>), so a hyphen test reads every CD build as a cut release and keeps its
+    /// identity, marker and surface for ever. A version is a continuous build exactly when it
+    /// carries a publication lineage (<see cref="PlatformReleaseOrder.BuildOrdinal"/> is not null:
+    /// <c>3.0.0-ci.N</c>, <c>3.1.N</c>, <c>-edge</c>, a source build), and a cut release has none —
+    /// it is a retag of a sealed continuous set. Any other pre-release label (the retired
+    /// <c>3.0.0-rc8</c>) is not a cut release either. A version that parses as neither (garbage)
+    /// is treated as cut, so it is KEPT: an unreadable name licenses no deletion.</para>
+    /// </summary>
+    public static bool IsCutRelease(string? version) =>
+        !IsPrerelease(version) && PlatformReleaseOrder.BuildOrdinal(version) is null;
+
     /// <summary>True when the version carries a pre-release label (<c>-ci.&lt;n&gt;</c>, historically <c>-rc…</c>).</summary>
     public static bool IsPrerelease(string? version)
     {
@@ -214,6 +233,9 @@ public sealed record ReleaseMarkerEntry(
 
     /// <summary>True for a <c>-ci.&lt;n&gt;</c> (or any other pre-release) marker.</summary>
     public bool IsPrerelease => PlatformVersionLine.IsPrerelease(Version);
+
+    /// <summary>True for a deliberately cut release (<see cref="PlatformVersionLine.IsCutRelease"/>) — what retention keeps for ever.</summary>
+    public bool IsCutRelease => PlatformVersionLine.IsCutRelease(Version);
 }
 
 /// <summary>
@@ -227,8 +249,8 @@ public sealed record ReleaseMarkerEntry(
 /// <param name="Bytes">The file's size.</param>
 public sealed record ReleaseSurfaceEntry(string Version, string Path, DateTimeOffset WrittenUtc, long Bytes)
 {
-    /// <summary>True for a <c>-ci.&lt;n&gt;</c> (or any other pre-release) surface.</summary>
-    public bool IsPrerelease => PlatformVersionLine.IsPrerelease(Version);
+    /// <summary>True for a deliberately cut release (<see cref="PlatformVersionLine.IsCutRelease"/>) — what retention keeps for ever.</summary>
+    public bool IsCutRelease => PlatformVersionLine.IsCutRelease(Version);
 }
 
 /// <summary>What one scan of the store found.</summary>
@@ -248,7 +270,7 @@ public sealed record PrebuiltStoreScan(
 /// <param name="Identities">Every identity found.</param>
 /// <param name="Collectable">The identities no rule protects, oldest first.</param>
 /// <param name="Protected">Why each surviving identity survived, keyed by identity.</param>
-/// <param name="CollectableMarkers">The pre-release markers whose identity goes with this plan, or is already gone.</param>
+/// <param name="CollectableMarkers">The continuous-build markers whose identity goes with this plan, or is already gone.</param>
 /// <param name="AbortReason">Why NOTHING may be collected, or null when the plan is sound.</param>
 /// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they abort cleanup because the consumer inventory is incomplete.</param>
 public sealed record PrebuiltBundleSweepPlan(
@@ -277,7 +299,7 @@ public sealed record PrebuiltBundleSweepPlan(
     /// <summary>
     /// Per-release surface files (<c>_releases/_surface/&lt;version&gt;</c>) no reader can reach any
     /// more, oldest first (MeshWeaver#6990): the surface of every marker in
-    /// <see cref="CollectableMarkers"/>, which goes AFTER its marker, and an orphan pre-release
+    /// <see cref="CollectableMarkers"/>, which goes AFTER its marker, and an orphan continuous-build
     /// surface that no marker names, no consumer pins, and that is older than the retention window.
     /// Empty whenever the plan aborted.
     /// </summary>
@@ -359,7 +381,8 @@ public sealed record PrebuiltBundleSweepResult(
 /// <para><b>What references an identity</b> (each is a KEEP; they are ORed):</para>
 /// <list type="number">
 /// <item>it is the framework identity <b>this process runs</b>;</item>
-/// <item>a <b>clean release marker</b> (<c>_releases/X.Y.Z</c>, no pre-release label) names it —
+/// <item>a <b>cut release marker</b> (<c>_releases/X.Y.Z</c> promoted by <c>release.yml</c>,
+/// <see cref="PlatformVersionLine.IsCutRelease"/> — never a continuous <c>3.1.&lt;run&gt;</c> build) names it —
 /// support has not been established as ended, so the release stays available;</item>
 /// <item>a <b>NodeType record's adoption stamp</b> (<c>CompiledFrameworkVersion</c>, written by
 /// <c>PrebuiltAssemblySeeder</c> and by every local compile) names it;</item>
@@ -373,9 +396,9 @@ public sealed record PrebuiltBundleSweepResult(
 /// </list>
 ///
 /// <para>Everything else is collected, oldest first, one identity at a time, each removal logged
-/// with the bytes reclaimed. The pre-release markers of a removed identity (and of an identity
+/// with the bytes reclaimed. The continuous-build markers of a removed identity (and of an identity
 /// already gone for longer than the age window) are removed with it, so <c>_releases/</c> does not grow
-/// forever; a clean release marker is never removed. A release marker that cannot be read, or a
+/// forever; a cut release marker is never removed. A release marker that cannot be read, or a
 /// store that cannot be listed, ABORTS the sweep with nothing collected: a partial picture licenses
 /// no deletion.</para>
 ///
@@ -386,8 +409,8 @@ public sealed record PrebuiltBundleSweepResult(
 /// clean one). So a surface is retired exactly when its marker is, and only after that marker's
 /// removal succeeded: the publisher writes surface-then-marker, so a reader that finds the marker
 /// must find the surface. An ORPHAN surface, one no marker names, goes only when it is a
-/// pre-release, not the running version, not pinned by any consumer, and older than the retention
-/// window (a young one may precede its marker). A clean release's surface is never retired, like
+/// continuous build, not the running version, not pinned by any consumer, and older than the retention
+/// window (a young one may precede its marker). A cut release's surface is never retired, like
 /// its marker. A surface directory that cannot be listed aborts the pass with everything else.</para>
 ///
 /// <para>🚨 <b>And the same rule one level down, for GENERATIONS</b> (MeshWeaver#3461,
@@ -683,8 +706,10 @@ public static class PrebuiltBundleStore
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Version).OrderByDescending(v => v, comparer).First(),
                 StringComparer.Ordinal);
+        // 🚨 CUT releases only (PlatformVersionLine.IsCutRelease), never "no hyphen": a main-CD
+        // build is a plain 3.1.<run>, and reading it as clean kept every CD identity for ever.
         var cleanMarkersOf = readable
-            .Where(m => !m.IsPrerelease)
+            .Where(m => m.IsCutRelease)
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => string.Join(", ", g.Select(m => m.Version)), StringComparer.Ordinal);
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
@@ -799,7 +824,7 @@ public static class PrebuiltBundleStore
             .Select(v => v!)
             .ToImmutableHashSet(StringComparer.Ordinal);
         var markers = readable
-            .Where(m => m.IsPrerelease)
+            .Where(m => !m.IsCutRelease)
             .Where(m => !string.Equals(m.Identity, liveIdentity, StringComparison.Ordinal))
             .Where(m => livePlatformVersion is null || !string.Equals(m.Version, livePlatformVersion, StringComparison.Ordinal))
             // A pinned version's marker is the ONLY way its pin reaches an identity — never retired,
@@ -818,7 +843,7 @@ public static class PrebuiltBundleStore
         // rule above has already decided that, and the surface follows it rather than forming a
         // second opinion. A surface no marker names (an orphan: the marker write failed after the
         // surface landed, or the marker was retired before this rule existed) is judged on the
-        // marker rule's own terms for an absent identity: never a clean version, never the running
+        // marker rule's own terms for an absent identity: never a cut release, never the running
         // one, never a pinned one, and only once it is older than the window.
         var markerVersions = scan.Markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
         var retiringVersions = markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
@@ -830,7 +855,7 @@ public static class PrebuiltBundleStore
             var keep =
                 retiringVersions.Contains(surface.Version) ? null
                 : markerVersions.Contains(surface.Version) ? "its release marker is kept"
-                : !surface.IsPrerelease ? "a clean release's surface is never retired"
+                : surface.IsCutRelease ? "a cut release's surface is never retired"
                 : livePlatformVersion is not null && string.Equals(normalized, livePlatformVersion, StringComparison.Ordinal)
                     ? "the platform version this process runs"
                 : pinnedVersions.Contains(normalized) ? "a consumer pins this version"
