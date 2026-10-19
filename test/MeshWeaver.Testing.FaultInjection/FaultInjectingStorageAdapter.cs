@@ -48,6 +48,8 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _enumerationHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _deleteManyFaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _deleteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
@@ -118,6 +120,36 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _conditionalWriteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail conditional writes of {k}",
             s => _conditionalWriteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, a <c>DeleteMany</c> whose batch names <paramref name="path"/> deletes every OTHER
+    /// path of the batch and then FAULTS, leaving <paramref name="path"/> stored — a batch delete that
+    /// died part-way, as a sequential <c>DeleteMany</c> does when its store goes away mid-batch
+    /// (MeshWeaver#6951: a move whose delete leg fails after its copy landed). Each faulted batch is
+    /// an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path the batch stops at.</param>
+    public FaultSwitch FailDeleteMany(string path)
+    {
+        var key = Norm(path);
+        return _deleteManyFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail DeleteMany at {k}",
+            s => _deleteManyFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, a single-path <c>Delete</c> of <paramref name="path"/> FAULTS without deleting
+    /// anything — the row stays stored. This is the rollback a create runs when a critical
+    /// post-creation step failed (#638) dying on its store, so the create answers a failure over a
+    /// row it DID write (MeshWeaver#6951: a copy must not read that failure as "nothing landed").
+    /// Batch deletes (<c>DeleteMany</c>) are untouched. Each faulted delete is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose deletes fault.</param>
+    public FaultSwitch FailDeletes(string path)
+    {
+        var key = Norm(path);
+        return _deleteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail deletes of {k}",
+            s => _deleteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -271,7 +303,14 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc />
-    public IObservable<string> Delete(string path) => HeldDelete([path], () => _inner.Delete(path));
+    public IObservable<string> Delete(string path) => HeldDelete([path], () => Observable.Defer(() =>
+    {
+        if (!_deleteFaults.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
+            return _inner.Delete(path);
+        fault.NoteArrival($"Delete {Norm(path)}");
+        return Observable.Throw<string>(new InvalidOperationException(
+            $"{Name}: injected fault — Delete of {Norm(path)} failed and removed nothing"));
+    }));
 
     /// <inheritdoc />
     public IObservable<bool> DeleteIfExists(string path) => HeldDelete([path], () => _inner.DeleteIfExists(path));
@@ -281,6 +320,14 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     /// store actually gave is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
         => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options)
+            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
+
+    /// <inheritdoc />
+    /// <remarks>Held like every delete, then decided ATOMICALLY (version and incarnation) by the store
+    /// underneath; its answer is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => HeldDelete([path], () => _inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options)
             .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
 
     /// <summary>
@@ -293,7 +340,23 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
-        => HeldDelete(paths, () => _inner.DeleteMany(paths));
+        => HeldDelete(paths, () => Observable.Defer(() =>
+        {
+            foreach (var path in paths)
+            {
+                if (!_deleteManyFaults.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
+                    continue;
+                var stop = Norm(path);
+                fault.NoteArrival($"DeleteMany [{string.Join(", ", paths.Select(Norm))}] stops at {stop}");
+                var others = paths.Where(p => !string.Equals(Norm(p), stop, StringComparison.OrdinalIgnoreCase)).ToList();
+                return (others.Count == 0
+                        ? Observable.Return<IReadOnlyList<string>>(Array.Empty<string>())
+                        : _inner.DeleteMany(others))
+                    .SelectMany(_ => Observable.Throw<IReadOnlyList<string>>(new InvalidOperationException(
+                        $"{Name}: injected fault — DeleteMany stopped at {stop} after deleting {others.Count} other path(s)")));
+            }
+            return _inner.DeleteMany(paths);
+        }));
 
     /// <inheritdoc />
     public IObservable<string?> FindDeleteBlockingProvider(string path) => _inner.FindDeleteBlockingProvider(path);
