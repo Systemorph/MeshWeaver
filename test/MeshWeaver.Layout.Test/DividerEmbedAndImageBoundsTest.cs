@@ -151,6 +151,26 @@ public class DividerEmbedAndImageBoundsTest(ITestOutputHelper output) : HubTestB
     public void EmbedSources_AnAppOnThePortalsOwnHostIsRefused(string src, string? expected) =>
         EmbedSources.SafeSrc(src, EmbedKind.App, "https://portal.example.com").Should().Be(expected);
 
+    /// <summary>
+    /// 🚨 Review 4318326977: hosts are compared as a browser keys an origin — the IDNA-canonical
+    /// form — so a Unicode, a punycode, a full-width or a trailing-dot spelling of the portal's host
+    /// is the portal.
+    /// </summary>
+    [Theory]
+    [InlineData("https://xn--bcher-kva.example", "https://bücher.example/app")]
+    [InlineData("https://bücher.example", "https://xn--bcher-kva.example/app")]
+    [InlineData("https://BÜCHER.example", "https://bücher.example/app")]
+    [InlineData("https://portal.example.com", "https://\uFF50\uFF4F\uFF52\uFF54\uFF41\uFF4C.example.com/app")]
+    [InlineData("https://portal.example.com", "https://portal.example.com./app")]
+    [InlineData("https://portal.example.com", "//portal.example.com./app")]
+    public void EmbedSources_AnIdnAliasOfThePortalIsRefused(string portal, string src) =>
+        EmbedSources.SafeSrc(System.Text.RegularExpressions.Regex.Unescape(src), EmbedKind.App, portal).Should().BeNull();
+
+    [Fact]
+    public void EmbedSources_AnotherIdnHostStaysAllowed() =>
+        EmbedSources.SafeSrc("https://bücher.example/app", EmbedKind.App, "https://portal.example.com")
+            .Should().Be("https://bücher.example/app");
+
     [Theory]
     [InlineData(EmbedKind.Document, null, null)]
     [InlineData(EmbedKind.Document, "allow-scripts", null)]

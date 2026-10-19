@@ -114,11 +114,29 @@ public static class EmbedSources
             absolute = normalized;
         else
             return false;
-        if (!Uri.TryCreate(absolute, UriKind.Absolute, out var target) || string.IsNullOrEmpty(target.Host))
+        if (!Uri.TryCreate(absolute, UriKind.Absolute, out var target) || CanonicalHost(target) is not { } host)
             return false;
-        return portal is null
-               || !string.Equals(target.Host, portal.Host, StringComparison.OrdinalIgnoreCase)
-               || target.Port != portal.Port;
+        if (portal is null)
+            return true;
+        // 🚨 Compared as the browser compares origins: on the IDNA-canonical host (review
+        // 4318326977), so a Unicode and a punycode spelling of one host, or a full-width one, are the
+        // same host. A host that has no valid IDNA form is refused.
+        return CanonicalHost(portal) is { } portalHost
+               && (!string.Equals(host, portalHost, StringComparison.Ordinal) || target.Port != portal.Port);
+    }
+
+    /// <summary>The host as a browser keys an origin — IDNA (punycode), lower case; <c>null</c> when it has none.</summary>
+    private static string? CanonicalHost(Uri uri)
+    {
+        try
+        {
+            var host = uri.IdnHost;
+            return string.IsNullOrEmpty(host) ? null : host.TrimEnd('.').ToLowerInvariant();
+        }
+        catch (Exception e) when (e is UriFormatException or ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
