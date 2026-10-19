@@ -90,21 +90,6 @@ public record CreateNodeResponse(MeshNode? Node)
     public bool Success => Error == null && Node != null;
 
     /// <summary>
-    /// On success: true when the create CONFIRMED a node that already existed as
-    /// <see cref="MeshNodeState.Transient"/> (Transient → Active) instead of inserting a new row.
-    /// The row predates this request, so a caller undoing the create must never remove it (#6951).
-    /// </summary>
-    public bool Confirmed { get; init; }
-
-    /// <summary>
-    /// On success: true when one or more post-creation handlers matched the node and ran. Their
-    /// writes — a grant below the node, a partition record, seeded children — are not reported
-    /// here, so a caller undoing the create cannot establish that removing the node's own row
-    /// undoes everything the create did (#6951).
-    /// </summary>
-    public bool PostCreationHandlersRan { get; init; }
-
-    /// <summary>
     /// The rejection reason if the node was rejected.
     /// </summary>
     public NodeCreationRejectionReason? RejectionReason { get; init; }
@@ -1110,61 +1095,21 @@ public record CopyNodeResponse(MeshNode? Node)
     public int SatellitesCopied { get; init; }
 
     /// <summary>
-    /// On a FAILED copy: the target paths THIS attempt PROVABLY inserted before it gave up — creates
-    /// that answered success, inserted a new row (not a Transient they confirmed) and ran no
-    /// post-creation handler. A copy runs every create it issued to its own verdict before it answers,
-    /// so this is the whole set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a
-    /// caller undoing a failed copy (the case-only rename of a move, #6951) may remove — and only
-    /// while each row is unchanged (<see cref="WrittenVersions"/>, <see cref="WrittenLastModified"/>):
-    /// never an <see cref="Unproven"/>, <see cref="Resumed"/> or <see cref="PossiblyWritten"/> one.
+    /// On a FAILED copy: every target path it changed before it gave up — each create that landed,
+    /// and each target it found already holding the same node relocated (#6310) and resumed onto. A
+    /// copy runs every create it issued to its own verdict before it answers, so this is the whole set
+    /// unless <see cref="WrittenUnsettled"/> says otherwise. Empty with <see cref="WrittenUnsettled"/>
+    /// false means the copy PROVABLY wrote nothing at the target — the one case in which a caller (the
+    /// case-only rename of a move, #6951) may treat the target as untouched. It is never a list to
+    /// delete: nothing establishes that a row there is still the one this copy wrote.
     /// </summary>
     public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
-    /// For each <see cref="Written"/> path: the version its create landed the row at. With
-    /// <see cref="WrittenLastModified"/> it is what a caller undoing the copy compares the stored row
-    /// against — a row that has since been edited (newer version, other stamp) or replaced (other
-    /// stamp) is no longer this copy's write and must not be removed.
-    /// </summary>
-    public ImmutableDictionary<string, long> WrittenVersions { get; init; } = ImmutableDictionary<string, long>.Empty;
-
-    /// <summary>
-    /// For each <see cref="Written"/> path: the <see cref="MeshNode.LastModified"/> its create landed
-    /// the row with (see <see cref="WrittenVersions"/>).
-    /// </summary>
-    public ImmutableDictionary<string, DateTimeOffset> WrittenLastModified { get; init; } =
-        ImmutableDictionary<string, DateTimeOffset>.Empty;
-
-    /// <summary>
-    /// On a FAILED copy: target paths whose create answered success WITHOUT proving it only inserted
-    /// that one row — it confirmed a node that already existed as Transient (the row predates the
-    /// request), or post-creation handlers ran and may have written other nodes it does not report
-    /// (a grant below the node, a partition record). Never removable by a caller undoing the copy.
-    /// </summary>
-    public ImmutableList<string> Unproven { get; init; } = ImmutableList<string>.Empty;
-
-    /// <summary>
-    /// On a FAILED relocating copy: the targets it found already holding the same node relocated by
-    /// an earlier attempt (#6310) and resumed onto instead of creating. This attempt did not write
-    /// them, and they may carry edits made after that earlier attempt — a caller undoing the copy
-    /// must keep them.
-    /// </summary>
-    public ImmutableList<string> Resumed { get; init; } = ImmutableList<string>.Empty;
-
-    /// <summary>
-    /// On a FAILED copy: the target paths whose create FAILED with an outcome that does not establish
-    /// that nothing was written — the create handler writes the row before its post-creation steps,
-    /// so it can answer a failure over a row that stays (a failed rollback, a post-creation step past
-    /// its deadline), and a create that ran out of time may land later. Whether these paths hold a
-    /// row of this copy's is unknown; whenever this is non-empty <see cref="WrittenUnsettled"/> is true.
-    /// </summary>
-    public ImmutableList<string> PossiblyWritten { get; init; } = ImmutableList<string>.Empty;
-
-    /// <summary>
-    /// True when what the failed copy wrote is not fully known: it ran out of time with creates it
-    /// had issued still outstanding, or a create failed after it may have written
-    /// (<see cref="PossiblyWritten"/>). <see cref="Written"/> may then be incomplete and what the
-    /// target holds is unknown.
+    /// True when what the failed copy wrote is not fully known: it ran out of time with creates it had
+    /// issued still outstanding, or a create failed after it may have written (the create handler
+    /// writes the row before its post-creation steps, so it can answer a failure over a row that
+    /// stays). <see cref="Written"/> may then be incomplete and what the target holds is unknown.
     /// </summary>
     public bool WrittenUnsettled { get; init; }
 

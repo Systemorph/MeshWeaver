@@ -25,7 +25,8 @@ namespace MeshWeaver.FaultInjection.Test;
 /// SUCCEEDED as written, so the rename removed what it knew of, moved staging back to the source and,
 /// on this case-insensitive store, RESUMED (#6310) onto the surviving new-cased row — reporting the
 /// subtree restored while one node kept the new casing. The copy now reports such a path as possibly
-/// written, and the rename answers Unknown, naming the staging path, without restoring.</para>
+/// written — what the copy wrote is unsettled — and the rename answers Unknown, naming the staging
+/// path, without deleting or restoring anything.</para>
 ///
 /// <para>Isolated faults: a critical post-creation handler that fails for exactly ONE path (the
 /// descendant at the target's casing, compared ordinally — leg 1 and every other create are
@@ -83,7 +84,7 @@ public class CaseOnlyRenameDoesNotRestoreOverACreateThatFailedAfterWritingTest(I
         Output.WriteLine($"staging named in the answer: {staging}");
         moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
         moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameUndoUnproven", "a German viewer reads it in German");
+            .Should().Contain("activity.node.move.caseRenameCopyUnsettled", "a German viewer reads it in German");
 
         // Nothing was moved back: the staging path the answer names still holds the whole subtree.
         (await StoredAt(staging, ct)).Should().NotBeNull("the complete copy is at the staging path the answer names");

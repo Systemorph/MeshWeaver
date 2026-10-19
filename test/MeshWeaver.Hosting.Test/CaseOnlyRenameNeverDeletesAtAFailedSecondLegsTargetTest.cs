@@ -16,24 +16,26 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// 🚨 A case-only rename whose SECOND leg (staging → target) fails part-way must not leave the
-/// leg's writes behind when it moves the subtree back (#6951, review of #6976).
+/// 🚨 A case-only rename whose SECOND leg (staging → target) fails NEVER deletes at the target
+/// (#6951, review of #6976). It moves the subtree back only when the leg's copy provably wrote
+/// nothing there; otherwise it answers Unknown naming source, staging and target, and leaves both
+/// as they are for the operator.
 ///
-/// <para>The copy creates the root before its descendants, so a refused DESCENDANT create leaves the
-/// root (and any sibling that landed) at the final target. Moving staging back to the source does not
-/// remove those: on a case-sensitive store both casings survive, and on a case-insensitive one — this
-/// in-memory store — the restore's create of the source root meets the new-cased root at the SAME
-/// key, recognises it as the same node relocated (#6310), and RESUMES onto it, so the answer said
-/// "nothing was renamed" over a root that had been renamed. The rename now removes exactly the paths
-/// the failed leg wrote before it restores.</para>
+/// <para>Why it never deletes: nothing on the platform proves that a row at the target is still the
+/// one this copy inserted — storage writes are not insert-only, the deletion scope is in-process,
+/// and no compare-and-delete checks identity across silos — so a compensating delete could remove
+/// somebody else's node. Four review rounds each found another way it could; the undo now fails
+/// closed instead.</para>
 ///
-/// <para>Isolated fault: one create validator refuses exactly ONE path, compared ORDINALLY — the
-/// descendant at the target's casing — so leg 1 (to staging) and the restore (to the source's
-/// casing) are untouched, and the control in the same test is that the restored subtree reads back
-/// at the source's own casing, byte for byte.</para>
+/// <para>Isolated fault: one create validator refuses exactly the paths it is told to, compared
+/// ORDINALLY, so leg 1 (to staging) and the restore (to the source's casing) are untouched. Refusing
+/// a target DESCENDANT leaves the root the copy already wrote — Unknown, nothing deleted. Refusing the
+/// target ROOT means the copy wrote nothing — the subtree is moved back.</para>
 /// </summary>
-public class CaseOnlyRenameUndoesARefusedSecondLegTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+public class CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
+    private const string StagingMarker = "-recase-";
+
     private readonly RefuseExactPathCreationValidator refusing = new();
 
     private IStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
@@ -44,44 +46,74 @@ public class CaseOnlyRenameUndoesARefusedSecondLegTest(ITestOutputHelper output)
             .AddSingleton<INodeValidator>(refusing));
 
     [Fact(Timeout = 90_000)]
-    public async Task ARefusedTargetDescendant_LeavesNoRootAtTheTarget_AndTheSourceKeepsItsCasing()
+    public async Task ARefusedTargetDescendant_LeavesTargetAndStagingAsTheyAre_AndIsUnknown()
     {
         var ct = TestContext.Current.CancellationToken;
+        var (source, target) = await CreateTree(ct);
+        refusing.Refuse($"{target}/birgit");
+
+        var moved = await Move(source, target, ct);
+
+        moved.Success.Should().BeFalse("the second leg's descendant create was refused");
+        moved.RejectionReason.Should().Be(NodeMoveRejectionReason.Unknown,
+            "the copy had already written the target root, and a failed rename never deletes at its target");
+        moved.Error.Should().NotContain("The subtree was moved back", "nothing was moved back");
+        moved.Error.Should().Contain($"'{source}'").And.Contain($"'{target}'");
+        var staging = StagingNamedIn(moved.Error!, target);
+        moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
+        moved.Log!.Messages.Select(m => m.MessageKey)
+            .Should().Contain("activity.node.move.caseRenameCopyWrote", "a German viewer reads it in German");
+
+        // The target is left exactly as the copy left it: its root, at the new casing.
+        (await StoredAt(target, ct))!.Path.Should().Be(target, "nothing was deleted at the target");
+        // And staging keeps the complete subtree — the recovery data the answer names.
+        (await StoredAt(staging, ct)).Should().NotBeNull("staging holds the complete copy");
+        (await Descendants(staging, ct)).OrderBy(p => p, StringComparer.Ordinal).Should().Equal(
+            [$"{staging}/birgit", $"{staging}/birgit/notes"], "the staging copy is complete");
+    }
+
+    [Fact(Timeout = 90_000)]
+    public async Task ARefusedTargetRoot_WroteNothing_SoTheSubtreeIsMovedBack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (source, target) = await CreateTree(ct);
+        var id = source[(source.LastIndexOf('-') + 1)..];
+        refusing.Refuse(target);
+
+        var moved = await Move(source, target, ct);
+
+        moved.Success.Should().BeFalse("the second leg's root create was refused");
+        moved.RejectionReason.Should().Be(NodeMoveRejectionReason.ValidationFailed,
+            "the copy provably wrote nothing, the subtree is back, so the copy's own verdict is the answer");
+        moved.Error.Should().Contain("moved back", "the answer says the subtree was restored");
+        moved.Log!.Messages.Select(m => m.MessageKey)
+            .Should().Contain("activity.node.move.caseRenameRestored", "a German viewer reads it in German");
+
+        (await StoredAt(source, ct))!.Path.Should().Be(source, "the source key carries the source's casing again");
+        (await StoredAt($"{source}/birgit", ct))!.Path.Should().Be($"{source}/birgit");
+        (await StoredAt($"{source}/birgit/notes", ct))!.Path.Should().Be($"{source}/birgit/notes");
+        var siblings = await ChildrenOf(TestPartition, ct);
+        siblings.Where(p => p.Contains(id, StringComparison.Ordinal))
+            .Should().Equal([source], "no staging sibling and no second casing is left behind");
+    }
+
+    private async Task<(string Source, string Target)> CreateTree(CancellationToken ct)
+    {
         var id = Guid.NewGuid().ToString("N")[..8];
         var source = $"{TestPartition}/vhvgruppe-{id}";
         var target = $"{TestPartition}/VHVGruppe-{id}";
         await Create(source, "Group", ct);
         await Create($"{source}/birgit", "Birgit", ct);
         await Create($"{source}/birgit/notes", "Notes", ct);
-        refusing.Refuse($"{target}/birgit");
+        return (source, target);
+    }
 
-        var moved = await Move(source, target, ct);
-
-        moved.Success.Should().BeFalse("the second leg's descendant create was refused");
-        moved.RejectionReason.Should().Be(NodeMoveRejectionReason.ValidationFailed,
-            "the subtree is back where it was, so the copy leg's own verdict is the answer");
-        moved.Error.Should().Contain("moved back", "the answer says the subtree was restored");
-
-        // The control: what is stored under the source key carries the SOURCE's casing. Before the
-        // fix the restore resumed onto the leg's new-cased root, so this read back the TARGET casing.
-        (await StoredAt(source, ct))!.Path.Should().Be(source,
-            "nothing at the source key keeps the casing the failed leg wrote");
-        (await StoredAt($"{source}/birgit", ct))!.Path.Should().Be($"{source}/birgit");
-        (await StoredAt($"{source}/birgit/notes", ct))!.Path.Should().Be($"{source}/birgit/notes");
-        var descendants = await Descendants(source, ct);
-        Output.WriteLine($"descendants of {source}: {string.Join(", ", descendants)}");
-        descendants.Should().HaveCount(2, "the whole subtree is back, once");
-        descendants.Should().OnlyContain(p => p.StartsWith(source + "/", StringComparison.Ordinal),
-            "every restored descendant carries the source's casing");
-
-        var siblings = await ChildrenOf(TestPartition, ct);
-        Output.WriteLine($"siblings: {string.Join(", ", siblings.Where(p => p.Contains(id, StringComparison.Ordinal)))}");
-        siblings.Where(p => p.Contains(id, StringComparison.Ordinal))
-            .Should().Equal([source], "no staging sibling and no second casing is left behind");
-
-        moved.Log.Should().NotBeNull("the restored outcome travels as a keyed transcript");
-        moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameRestored", "a German viewer reads it in German");
+    private static string StagingNamedIn(string error, string target)
+    {
+        var start = error.IndexOf($"'{target}{StagingMarker}", StringComparison.Ordinal);
+        start.Should().BeGreaterThanOrEqualTo(0, $"the answer names the staging path; it said: {error}");
+        var end = error.IndexOf('\'', start + 1);
+        return error[(start + 1)..end];
     }
 
     private Task<MoveNodeResponse> Move(string source, string target, CancellationToken ct) =>

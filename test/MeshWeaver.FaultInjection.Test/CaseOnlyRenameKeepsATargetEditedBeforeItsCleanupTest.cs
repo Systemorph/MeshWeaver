@@ -19,15 +19,16 @@ using Xunit;
 namespace MeshWeaver.FaultInjection.Test;
 
 /// <summary>
-/// 🚨 Undoing a failed case-only rename leg must not discard a write somebody else made to what that
-/// leg had written (#6951, review of #6976).
+/// 🚨 A failed case-only rename leg must not discard writes somebody else made at its target
+/// (#6951, review of #6976).
 ///
 /// <para>The relocation scope guards the leg's SOURCE, not its target, so while the leg's remaining
-/// creates finish, a row the copy already landed at the target can be edited. The clean-up used to
-/// delete every path the copy wrote, path-only — so the edit was destroyed, and the subtree was then
-/// moved back with the answer "nothing was renamed". The clean-up now runs inside a deletion scope on
-/// the leg's target (admitted writes drained, new ones refused) and removes a row only while it is
-/// still exactly what the copy wrote; a row that changed is kept and the answer is Unknown.</para>
+/// creates finish, a row the copy already landed at the target can be edited, and a new child can be
+/// created beside it. The clean-up used to delete every path the copy wrote, path-only — so the edit
+/// was destroyed, and the subtree was then moved back with the answer "nothing was renamed". A failed
+/// rename now never deletes at its target (nothing proves a row there is still this copy's, across
+/// silos): the answer is Unknown, the edit and the concurrent child both survive, and staging keeps the
+/// complete subtree.</para>
 ///
 /// <para>Isolated faults, both in one create validator that compares paths ORDINALLY: it PARKS the
 /// second leg's create of one descendant (at the target's casing) so the test can edit the
@@ -41,6 +42,7 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
 {
     private const string StagingMarker = "-recase-";
     private const string EditedName = "Edited by someone else";
+    private const string ConcurrentChild = "extra";
 
     private readonly ParkOrRefuseExactPath validator = new();
 
@@ -86,6 +88,15 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
                 .Take(1)
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
             Output.WriteLine($"edited root: version={edited?.Version} lastModified={edited?.LastModified:O}");
+            // …and somebody creates a child beside what the copy is writing.
+            await Store.Write(MeshNode.FromPath($"{target}/{ConcurrentChild}") with
+                    {
+                        Name = "Concurrent",
+                        NodeType = "Markdown",
+                        State = MeshNodeState.Active,
+                    }, Mesh.JsonSerializerOptions)
+                .Take(1)
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
 
             validator.Release();
             moved = await move;
@@ -100,15 +111,17 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
         var root = await StoredAt(target, ct);
         root.Should().NotBeNull("an edited target row is never removed by the clean-up");
         root!.Name.Should().Be(EditedName, "the edit made after the copy landed the row is kept");
+        (await StoredAt($"{target}/{ConcurrentChild}", ct)).Should().NotBeNull(
+            "a child created concurrently under the target is never removed by a failed rename");
 
         moved.Success.Should().BeFalse("the second leg's grandchild create was refused");
         moved.RejectionReason.Should().Be(NodeMoveRejectionReason.Unknown,
-            "a target row changed after the copy wrote it, so the subtree cannot be cleanly moved back");
+            "the copy had already written the target root, and a failed rename never deletes at its target");
         moved.Error.Should().NotContain("The subtree was moved back", "nothing was moved back over the edited target");
         var staging = StagingNamedIn(moved.Error!, target);
         moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
         moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameUndoUnproven", "a German viewer reads it in German");
+            .Should().Contain("activity.node.move.caseRenameCopyWrote", "a German viewer reads it in German");
 
         (await StoredAt(staging, ct)).Should().NotBeNull("the complete copy is at the staging path the answer names");
         (await Descendants(staging, ct)).OrderBy(p => p, StringComparer.Ordinal).Should().Equal(

@@ -16,16 +16,15 @@ using Xunit;
 namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
-/// 🚨 Undoing a failed case-only rename leg cannot claim a clean undo when a create it made ran
-/// post-creation handlers (#6951, review of #6976).
+/// 🚨 A failed case-only rename leg leaves what a post-creation handler wrote at the target alone
+/// (#6951, review of #6976).
 ///
 /// <para>A successful create runs the post-creation handlers that match the node, and they write
 /// elsewhere — a Space's creator grant below its root, its partition record. None of that is in the
-/// create's answer, so removing the rows the copy wrote leaves the handlers' writes behind. The undo
-/// used to remove the root, move the subtree back and answer "nothing was renamed" with a generated
-/// child still stored under the new casing. A create now says whether handlers ran
-/// (<see cref="CreateNodeResponse.PostCreationHandlersRan"/>); such a write is unproven, and the
-/// rename then touches nothing and answers Unknown.</para>
+/// create's answer. The undo used to remove the rows the copy wrote, move the subtree back and answer
+/// "nothing was renamed" with a generated child still stored under the new casing. A failed rename
+/// now never deletes at its target: the copy wrote the root, so the answer is Unknown and the root and
+/// everything under it are left for the operator.</para>
 ///
 /// <para>Isolated fault: a best-effort post-creation handler that matches exactly the TARGET root
 /// (compared ordinally — leg 1's staging root is untouched) and writes one child under it, and a
@@ -72,12 +71,12 @@ public class CaseOnlyRenameKeepsWhatAPostCreationHandlerWroteTest(ITestOutputHel
 
         moved.Success.Should().BeFalse("the second leg's descendant create was refused");
         moved.RejectionReason.Should().Be(NodeMoveRejectionReason.Unknown,
-            "the root's create ran post-creation handlers whose writes the copy cannot account for");
+            "the copy had already written the target root, and a failed rename never deletes at its target");
         moved.Error.Should().NotContain("The subtree was moved back", "nothing was moved back");
         var staging = StagingNamedIn(moved.Error!, target);
         moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
         moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameUndoUnproven", "a German viewer reads it in German");
+            .Should().Contain("activity.node.move.caseRenameCopyWrote", "a German viewer reads it in German");
 
         (await StoredAt(target, ct)).Should().NotBeNull("the target root whose handlers ran was left as it is");
         (await StoredAt(staging, ct)).Should().NotBeNull("the complete copy is at the staging path the answer names");
