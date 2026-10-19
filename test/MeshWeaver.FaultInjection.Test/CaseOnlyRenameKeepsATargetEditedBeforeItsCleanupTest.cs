@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
@@ -27,18 +29,20 @@ namespace MeshWeaver.FaultInjection.Test;
 /// the leg's target (admitted writes drained, new ones refused) and removes a row only while it is
 /// still exactly what the copy wrote; a row that changed is kept and the answer is Unknown.</para>
 ///
-/// <para>Isolated faults: <see cref="FaultInjectingStorageAdapter.HoldWrites"/> parks the second leg's
-/// create of one descendant (at the target's casing) so the test can edit the already-landed target
-/// root in that window, and one create validator refuses exactly the grandchild at the target's
-/// casing so the leg fails and its clean-up runs. The controls: the edit is still stored afterwards,
-/// and the staging path the answer names still holds the whole subtree.</para>
+/// <para>Isolated faults, both in one create validator that compares paths ORDINALLY: it PARKS the
+/// second leg's create of one descendant (at the target's casing) so the test can edit the
+/// already-landed target root in that window, and REFUSES exactly the grandchild at the target's
+/// casing so the leg fails and its clean-up runs. (Not a storage hold: storage keys are
+/// case-insensitive, so a hold on the target's descendant would also catch the SOURCE's row of the
+/// same name and, through a batched write, park the first leg.) The controls: the edit is still
+/// stored afterwards, and the staging path the answer names still holds the whole subtree.</para>
 /// </summary>
 public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string StagingMarker = "-recase-";
     private const string EditedName = "Edited by someone else";
 
-    private readonly RefuseExactPath refusing = new();
+    private readonly ParkOrRefuseExactPath validator = new();
 
     private FaultInjectingStorageAdapter Storage => Mesh.ServiceProvider.GetRequiredService<FaultInjectingStorageAdapter>();
 
@@ -47,7 +51,7 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
     /// <summary>The injector goes in BEFORE the base adds in-memory persistence.</summary>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder.AddFaultInjectingStorage())
-            .ConfigureServices(services => services.AddSingleton<INodeValidator>(refusing));
+            .ConfigureServices(services => services.AddSingleton<INodeValidator>(validator));
 
     [Fact(Timeout = 120_000)]
     public async Task ATargetRowEditedBeforeTheCleanup_IsKept_AndTheAnswerIsUnknown()
@@ -59,10 +63,11 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
         await Create(source, "Group", ct);
         await Create($"{source}/birgit", "Birgit", ct);
         await Create($"{source}/birgit/notes", "Notes", ct);
-        refusing.Refuse($"{target}/birgit/notes");
+        validator.Refuse($"{target}/birgit/notes");
+        validator.Park($"{target}/birgit");
 
         MoveNodeResponse moved;
-        using (var hold = Storage.HoldWrites($"{target}/birgit"))
+        try
         {
             var move = ObserveNodeOperation(new MoveNodeRequest(source, target))
                 .Select(d => d.Message)
@@ -70,9 +75,9 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
 
             // The second leg has landed the target root and is parked on a descendant: edit the root.
-            await Storage.HeldWrites($"{target}/birgit")
+            await validator.Arrived
                 .Should().Within(TestTimeouts.Convergence)
-                .Emit("the second leg's descendant create reached the store", ct);
+                .Emit("the second leg's descendant create reached the parked validator", ct);
             var landed = await StoredAt(target, ct);
             landed.Should().NotBeNull("the second leg created the target root before its descendants");
             Output.WriteLine($"landed root: path={landed!.Path} version={landed.Version} lastModified={landed.LastModified:O}");
@@ -82,8 +87,13 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
                 .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
             Output.WriteLine($"edited root: version={edited?.Version} lastModified={edited?.LastModified:O}");
 
-            hold.Dispose();
+            validator.Release();
             moved = await move;
+        }
+        finally
+        {
+            // Never strand the parked create, whatever an assertion above did.
+            validator.Release();
         }
 
         // The control: the edit survived.
@@ -133,20 +143,46 @@ public class CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest(ITestOutputHel
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
 
     /// <summary>
-    /// Refuses the create of exactly the paths it is told to, compared ORDINALLY. Instance state owned
-    /// by the test's mesh, never static.
+    /// Refuses, or parks until <see cref="Release"/>, the create of exactly the paths it is told to,
+    /// compared ORDINALLY — the same node at another casing is created normally. A parked create is
+    /// announced on <see cref="Arrived"/>. Instance state owned by the test's mesh, never static.
     /// </summary>
-    private sealed class RefuseExactPath : INodeValidator
+    private sealed class ParkOrRefuseExactPath : INodeValidator
     {
+        private readonly AsyncSubject<string> arrived = new();
+        private readonly AsyncSubject<Unit> released = new();
         private ImmutableHashSet<string> refused = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+        private ImmutableHashSet<string> parked = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
 
         public void Refuse(string path) => ImmutableInterlocked.Update(ref refused, s => s.Add(path));
+
+        public void Park(string path) => ImmutableInterlocked.Update(ref parked, s => s.Add(path));
+
+        /// <summary>Emits the first parked path once its create reaches this validator.</summary>
+        public IObservable<string> Arrived => arrived.AsObservable();
+
+        /// <summary>Lets every parked create through; idempotent.</summary>
+        public void Release()
+        {
+            released.OnNext(Unit.Default);
+            released.OnCompleted();
+        }
 
         public IReadOnlyCollection<NodeOperation> SupportedOperations { get; } = [NodeOperation.Create];
 
         public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
-            => Observable.Return(refused.Contains(context.Node.Path)
-                ? NodeValidationResult.Invalid($"creating '{context.Node.Path}' is refused by this test")
-                : NodeValidationResult.Valid());
+        {
+            var path = context.Node.Path;
+            if (refused.Contains(path))
+                return Observable.Return(NodeValidationResult.Invalid($"creating '{path}' is refused by this test"));
+            if (!parked.Contains(path))
+                return Observable.Return(NodeValidationResult.Valid());
+            return Observable.Defer(() =>
+            {
+                arrived.OnNext(path);
+                arrived.OnCompleted();
+                return released.Take(1).Select(_ => NodeValidationResult.Valid());
+            });
+        }
     }
 }

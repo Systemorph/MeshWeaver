@@ -348,7 +348,7 @@ would have deleted it), `AFailedCopyDoesNotClaimAConfirmedTransientTargetTest` (
 copy only confirmed was `Written`; now `Unproven`), `CaseOnlyRenameKeepsWhatAPostCreationHandlerWroteTest`
 (a handler writes a child under the target root, then a descendant is refused; before the fix the
 rename answered "moved back" with the child left under the new casing) and
-`CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest` (`HoldWrites` parks the second leg while the test
+`CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest` (an ordinal-path create validator parks the second leg while the test
 edits the landed target root; before the fix the undo deleted the edit and answered "moved back").
 
 ## What this means for callers
