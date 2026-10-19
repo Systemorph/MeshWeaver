@@ -888,6 +888,33 @@ less than `DataVolume:MinimumFreeBytes` free (default 1 GiB), naming the path, t
 bytes; Degraded too when a configured path cannot be measured; Healthy with nothing configured. The
 retention above is what keeps it green.
 
+### What fills it: the usage census
+
+The free-space signal says THAT the volume is full, never WHAT fills it. Four writers share it —
+`modules/`, `prebuilt-bundles/`, `assembly-cache/` and the CI publisher, which writes the share
+directly and logs nothing on any portal — and the retention passes report at Information, which the
+cluster does not ship. On the public instance the 128 GiB share sat at 2–3 MiB free for 33 hours
+(#6983) and a fix aimed at one writer shipped without anyone being able to say whether it was the
+one.
+
+`/health` therefore also carries **`data_volume_usage`** (`DataVolumeUsageHealthCheck`, evaluated by
+`DataVolumeUsage` in `MeshWeaver.Hosting`): the last background walk of each configured data root —
+nested store roots fold into their parent, so `/data` is walked once — with every top-level
+directory's bytes, files, entry count and newest write, biggest first, and its five largest
+children (the identity directory, module generation or NodeType directory that holds the space).
+A directory that is another volume's mount point (`/data/dumps`) is named and not counted; a
+directory that cannot be enumerated is counted, and the numbers then say they are a floor.
+
+- **Read-only.** The walk enumerates and stats; it never writes or deletes.
+- **Off the probe.** It runs in `DataVolumeUsageHostedService` on the file-system `IIoPool`, behind
+  the bake, then every `DataVolume:UsageInterval` (6 h, floor 15 min); the check prints the last
+  reading.
+- **A census.** It carries the census tag, so it prints whatever its status. "NOT MEASURED YET" and
+  "no data volume configured" are their own sentences. It is Degraded only when a walk faulted or
+  could not read its root.
+- **Read it through the control instance**, never the cluster: a `Sample` action
+  (`{ "requestedAction": "Sample" }`) captures each replica's `/health` body on `Ops/Status/<id>`.
+
 ## Node repos run the same lane — as reusable workflows
 
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
