@@ -68,7 +68,7 @@ public class CaseOnlyRenameReportsAPartialFirstLegDeleteTest(ITestOutputHelper o
         Output.WriteLine($"staging named in the answer: {staging}");
         moved.Log.Should().NotBeNull("the outcome travels as a keyed transcript");
         moved.Log!.Messages.Select(m => m.MessageKey)
-            .Should().Contain("activity.node.move.caseRenameUnresolved", "a German viewer reads it in German");
+            .Should().Contain("activity.node.move.caseRenameDeleteFailed", "a German viewer reads it in German");
 
         // The control: the staging path the answer names holds the complete subtree.
         (await StoredAt(staging, ct)).Should().NotBeNull("the complete copy is at the staging path the answer names");

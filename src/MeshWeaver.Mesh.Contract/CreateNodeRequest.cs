@@ -1095,17 +1095,36 @@ public record CopyNodeResponse(MeshNode? Node)
     public int SatellitesCopied { get; init; }
 
     /// <summary>
-    /// On a FAILED copy: the target paths it nevertheless wrote — every create that landed, plus
-    /// every target it found already holding the same node relocated (#6310) — before it gave up.
-    /// A copy runs every create it issued to its own verdict before it answers, so this is the whole
-    /// set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a caller undoing a failed
-    /// copy (the case-only rename of a move, #6951) must remove, and the only thing it may.
+    /// On a FAILED copy: the target paths THIS attempt created before it gave up — every create that
+    /// answered success. A copy runs every create it issued to its own verdict before it answers, so
+    /// this is the whole set unless <see cref="WrittenUnsettled"/> says otherwise. It is what a caller
+    /// undoing a failed copy (the case-only rename of a move, #6951) may remove, and the only thing
+    /// it may: never a <see cref="Resumed"/> target, never a <see cref="PossiblyWritten"/> one.
     /// </summary>
     public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
 
     /// <summary>
-    /// True when the copy failed with creates it had issued still outstanding (it ran out of time),
-    /// so <see cref="Written"/> may be incomplete and what the target holds is unknown.
+    /// On a FAILED relocating copy: the targets it found already holding the same node relocated by
+    /// an earlier attempt (#6310) and resumed onto instead of creating. This attempt did not write
+    /// them, and they may carry edits made after that earlier attempt — a caller undoing the copy
+    /// must keep them.
+    /// </summary>
+    public ImmutableList<string> Resumed { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// On a FAILED copy: the target paths whose create FAILED with an outcome that does not establish
+    /// that nothing was written — the create handler writes the row before its post-creation steps,
+    /// so it can answer a failure over a row that stays (a failed rollback, a post-creation step past
+    /// its deadline), and a create that ran out of time may land later. Whether these paths hold a
+    /// row of this copy's is unknown; whenever this is non-empty <see cref="WrittenUnsettled"/> is true.
+    /// </summary>
+    public ImmutableList<string> PossiblyWritten { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// True when what the failed copy wrote is not fully known: it ran out of time with creates it
+    /// had issued still outstanding, or a create failed after it may have written
+    /// (<see cref="PossiblyWritten"/>). <see cref="Written"/> may then be incomplete and what the
+    /// target holds is unknown.
     /// </summary>
     public bool WrittenUnsettled { get; init; }
 

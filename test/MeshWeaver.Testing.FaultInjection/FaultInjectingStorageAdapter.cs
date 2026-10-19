@@ -49,6 +49,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _enumerationHolds = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteManyFaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _deleteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
@@ -134,6 +135,21 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _deleteManyFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail DeleteMany at {k}",
             s => _deleteManyFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, a single-path <c>Delete</c> of <paramref name="path"/> FAULTS without deleting
+    /// anything — the row stays stored. This is the rollback a create runs when a critical
+    /// post-creation step failed (#638) dying on its store, so the create answers a failure over a
+    /// row it DID write (MeshWeaver#6951: a copy must not read that failure as "nothing landed").
+    /// Batch deletes (<c>DeleteMany</c>) are untouched. Each faulted delete is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose deletes fault.</param>
+    public FaultSwitch FailDeletes(string path)
+    {
+        var key = Norm(path);
+        return _deleteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail deletes of {k}",
+            s => _deleteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -287,7 +303,14 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc />
-    public IObservable<string> Delete(string path) => HeldDelete([path], () => _inner.Delete(path));
+    public IObservable<string> Delete(string path) => HeldDelete([path], () => Observable.Defer(() =>
+    {
+        if (!_deleteFaults.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
+            return _inner.Delete(path);
+        fault.NoteArrival($"Delete {Norm(path)}");
+        return Observable.Throw<string>(new InvalidOperationException(
+            $"{Name}: injected fault — Delete of {Norm(path)} failed and removed nothing"));
+    }));
 
     /// <inheritdoc />
     public IObservable<bool> DeleteIfExists(string path) => HeldDelete([path], () => _inner.DeleteIfExists(path));
