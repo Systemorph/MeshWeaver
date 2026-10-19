@@ -70,6 +70,58 @@ public sealed class CompareAndDeleteTests : IDisposable
     private static async Task<MeshNode?> Stored(IStorageAdapter store)
         => await store.Read(Path, JsonOptions).DefaultIfEmpty(null).FirstAsync().Await();
 
+    private static readonly DateTimeOffset Born = new(2026, 3, 1, 12, 0, 0, TimeSpan.Zero);
+
+    private static async Task SeedIncarnation(IStorageAdapter store, long version, DateTimeOffset createdDate, string name)
+        // A JSON-persisted type: a Markdown node's file carries no CreatedDate (front matter), so on the
+        // file-system store it reads back without an incarnation — the pipeline then falls back to the
+        // version-only compare-and-delete, which the tests above cover.
+        => await store.Write(Node(version, name) with { NodeType = "Incarnated", CreatedDate = createdDate }, JsonOptions)
+            .FirstAsync().Await();
+
+    /// <summary>
+    /// The incarnation-aware compare-and-delete (#6856), CONTROL: the incarnation the deleter read,
+    /// at or below the confirmed version, is removed.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Stores))]
+    public async Task TheConfirmedIncarnation_IsRemoved(string kind)
+    {
+        var store = Build(kind);
+        await SeedIncarnation(store, 3, Born, "original");
+        (await store.DeleteIfIncarnationAtMost(Path, 3, Born, JsonOptions).FirstAsync().Await())
+            .Should().BeTrue();
+        (await Stored(store)).Should().BeNull();
+    }
+
+    /// <summary>
+    /// THE FALSIFIER: the node was deleted and created again — a new incarnation, back at version 1,
+    /// which "version at most the confirmed one" alone accepts. It is refused and survives.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(Stores))]
+    public async Task ARecreatedNode_IsRefused_AndSurvives(string kind)
+    {
+        var store = Build(kind);
+        await SeedIncarnation(store, 1, Born.AddMinutes(5), "re-created");
+        (await store.DeleteIfIncarnationAtMost(Path, 3, Born, JsonOptions).FirstAsync().Await())
+            .Should().BeFalse("the stored node is another incarnation than the one the deleter confirmed");
+        (await Stored(store))!.Name.Should().Be("re-created");
+        (await Guarded(store, 3)).Should().BeTrue(
+            "negative control: the version-only compare-and-delete removes the re-created node");
+    }
+
+    /// <summary>The incarnation is compared at microsecond precision, the precision every store keeps.</summary>
+    [Fact]
+    public void TheIncarnation_IsComparedAtMicrosecondPrecision()
+    {
+        var node = Node(1, "x") with { CreatedDate = Born.AddTicks(7) };
+        StorageIncarnation.Matches(node, Born).Should().BeTrue("sub-microsecond ticks are not kept by a store");
+        StorageIncarnation.Matches(node, Born.AddTicks(10)).Should().BeFalse("one microsecond apart is another incarnation");
+        StorageIncarnation.Matches(node with { CreatedDate = default }, Born).Should().BeFalse(
+            "a row with no creation date is never a match for a known incarnation");
+    }
+
     /// <summary>CONTROL: the row the deleter confirmed is removed.</summary>
     [Theory]
     [MemberData(nameof(Stores))]

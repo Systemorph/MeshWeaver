@@ -249,6 +249,45 @@ public interface IStorageAdapter
                 : DeleteIfExists(path)));
 
     /// <summary>
+    /// <see cref="DeleteIfVersionAtMost"/> that ALSO requires the stored row to be the same
+    /// INCARNATION of the node — the one created at <paramref name="incarnation"/> (its
+    /// <see cref="MeshNode.CreatedDate"/>, set once at creation and never updated). Removes the row
+    /// only while both hold; otherwise refuses and removes nothing (#6856).
+    ///
+    /// <para>🚨 <b>Why the version is not enough.</b> Versions are monotonic per node, not per path: a
+    /// node deleted and created again starts over at version 1. A guarded delete whose storage call is
+    /// still running — its pipeline timed out, or a later drain pass is still in flight — compares
+    /// <c>version &lt;= confirmed</c>, which a re-created node satisfies, and removed a node that was
+    /// created after the delete decided. The incarnation tells the node the deleter confirmed from a
+    /// node that merely took its place.</para>
+    ///
+    /// <para><b>Why <see cref="MeshNode.CreatedDate"/>.</b> It is stamped once, when the node is
+    /// created, kept by every update (the stores' upserts never overwrite it), and already stored by
+    /// every backend — so it needs no schema change, and it is the lineage the create-compensation path
+    /// already relies on. Compared at microsecond precision, the precision every store keeps
+    /// (<see cref="StorageIncarnation"/>). A copy, import or restore that writes a node with an
+    /// explicitly preserved <see cref="MeshNode.CreatedDate"/> is treated as the same incarnation.</para>
+    ///
+    /// <para>Backends that can express the condition MUST override — Postgres via
+    /// <c>DELETE … WHERE path = $1 AND version &lt;= $2 AND created_date = $3</c>, in-memory under its
+    /// mutation lock. The default below checks the incarnation with a READ and then removes through
+    /// <see cref="DeleteIfVersionAtMost"/> — atomic for the version where that is, NOT for the
+    /// incarnation: correct only for single-writer backends. 🚨 Decorators MUST forward.</para>
+    /// </summary>
+    /// <param name="path">The node to remove.</param>
+    /// <param name="maxVersion">The newest stored version the caller is entitled to remove.</param>
+    /// <param name="incarnation">The <see cref="MeshNode.CreatedDate"/> of the node the caller confirmed.</param>
+    /// <param name="options">Serializer options for the default's comparison read.</param>
+    /// <returns>Whether this call removed a stored row.</returns>
+    IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => System.Reactive.Linq.Observable.Defer(() => System.Reactive.Linq.Observable.SelectMany(
+            System.Reactive.Linq.Observable.Take(Read(path, options), 1),
+            stored => stored is null || stored.Version > maxVersion || !StorageIncarnation.Matches(stored, incarnation)
+                ? System.Reactive.Linq.Observable.Return(false)
+                : DeleteIfVersionAtMost(path, maxVersion, options)));
+
+    /// <summary>
     /// Deletes many nodes in as few round-trips as the backend allows, emitting the paths this
     /// adapter actually removed. The DELETE-side twin of <see cref="WriteMany"/>: the default is
     /// correct everywhere, and a backend that can do better overrides it (Postgres windows by
@@ -465,4 +504,30 @@ public interface IStorageAdapter
 /// </summary>
 public interface IScopedQueryStorageAdapter : IStorageAdapter
 {
+}
+
+/// <summary>
+/// A stored node's INCARNATION (#6856): its <see cref="MeshNode.CreatedDate"/>, set once at creation,
+/// compared at microsecond precision — the precision every store keeps (Postgres <c>timestamptz</c>).
+/// </summary>
+public static class StorageIncarnation
+{
+    /// <summary>The incarnation normalized to UTC microseconds.</summary>
+    /// <param name="createdDate">A <see cref="MeshNode.CreatedDate"/>.</param>
+    /// <returns>The normalized value.</returns>
+    public static DateTimeOffset Normalize(DateTimeOffset createdDate)
+    {
+        var utc = createdDate.ToUniversalTime();
+        return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
+    }
+
+    /// <summary>
+    /// True when <paramref name="stored"/> is the incarnation created at <paramref name="incarnation"/>.
+    /// A stored row with no creation date is never a match for a known incarnation.
+    /// </summary>
+    /// <param name="stored">The stored row.</param>
+    /// <param name="incarnation">The incarnation the caller confirmed.</param>
+    /// <returns><c>true</c> for the same incarnation.</returns>
+    public static bool Matches(MeshNode stored, DateTimeOffset incarnation)
+        => stored.CreatedDate != default && Normalize(stored.CreatedDate) == Normalize(incarnation);
 }
