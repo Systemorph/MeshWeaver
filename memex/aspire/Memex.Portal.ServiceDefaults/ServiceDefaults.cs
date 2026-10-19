@@ -444,6 +444,10 @@ public static class ServiceDefaults
         builder.Services.AddSingleton<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness>());
 
+        // #6983: the read-only background walk behind the data_volume_usage census below —
+        // registered beside its check so no host can publish the check without the walk.
+        builder.Services.AddDataVolumeUsageCensus();
+
         builder.Services.AddHealthChecks()
             .Add(new HealthCheckRegistration(
                 MeshWeaver.Hosting.AspNetCore.Portal.UserDirectoryReadiness.HealthCheckName,
@@ -494,6 +498,14 @@ public static class ServiceDefaults
             // (1 GiB) on the volume of any configured store root — no probe tag, pulling the pod
             // frees nothing — naming the path, used and total.
             .AddCheck(DataVolumeFreeSpace.HealthCheckName, new DataVolumeHealthCheck(builder.Configuration))
+            // #6983: WHAT fills that volume — the last background walk's bytes per top-level
+            // directory and its largest children. data_volume_free_space says THAT it is full; on
+            // 2026-10-18/19 the public instance's share sat full for 33 h and nothing could say
+            // which of modules/, prebuilt-bundles/, assembly-cache/ held the space. Census-tagged
+            // (the clean reading IS the publication; "not measured yet" prints as its own
+            // sentence), no probe tag — a full volume is never a reason to pull the pod.
+            .AddCheck<DataVolumeUsageHealthCheck>(
+                DataVolumeUsage.HealthCheckName, tags: [ProbeEndpoints.CensusTag])
             // 🚨 The two bake verdicts that existed ONLY in a boot log (#3703, #3704). Both carry
             // ProbeEndpoints.CensusTag and NO probe tag: a census publishes a NUMBER, so it prints
             // on ProbeEndpoints.Health whatever its status, and can never restart a pod or take one
