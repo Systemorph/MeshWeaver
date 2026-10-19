@@ -116,6 +116,9 @@ on:
       - '.github/scripts/check-pin-set-consistency.py'
       - '.github/scripts/check-pinned-digests.py'
       - '.github/acr-retention/instances.json'
+      # The lock classifies every declared release-channel label as floating (never locked).
+      - '.github/release-channels.json'
+      - '.github/scripts/release-channels.py'
 
 permissions:
   contents: read
