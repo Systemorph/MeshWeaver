@@ -212,4 +212,7 @@ Controls.SearchBox
     .WithMaxSuggestions(8)
 ```
 
+The search box completes the query language as you type — qualifiers, values, content properties from
+the NodeType's schema, node names and semantic matches: see [Query Autocomplete](/Doc/GUI/QueryAutocomplete).
+
 Back to the [GUI overview](/Doc/GUI).
