@@ -117,6 +117,7 @@ from __future__ import annotations
 import argparse
 import base64
 import contextlib
+import functools
 import importlib.util
 import io
 import json
@@ -255,13 +256,36 @@ LINE_POINTER_RE = re.compile(
     r"^\d+(?:\.\d+){0,2}-(?:" + "|".join(sorted(FLOATING_TAGS)) + r")$")
 
 
+@functools.lru_cache(maxsize=1)
+def _declared_channels():
+    """The declared release channels (`.github/release-channels.json`), read through their ONE reader.
+
+    🚨 FAIL CLOSED. An edition label (`3-mac`, `3-enterprise`) matches neither FLOATING_TAGS nor
+    LINE_POINTER_RE; read as an ordinary pin it would be LOCKED to whatever digest it named that
+    night — the exact defect LINE_POINTER_RE was added for, one label family over. So the declaration
+    is not optional: a missing or malformed file raises rather than quietly classifying fewer tags
+    as floating (policy `declared-release-channels`)."""
+    here = Path(__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location("mw_release_channels", here / "release-channels.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load release-channels.py beside lock-pinned-digests.py")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["mw_release_channels"] = module
+    spec.loader.exec_module(module)
+    return module, module.load()
+
+
 def is_floating_tag(tag: str) -> bool:
-    """Whether `tag` names a MOVING manifest — a bare floating word, or a version-line pointer.
+    """Whether `tag` names a MOVING manifest — a bare floating word, a version-line pointer, or a
+    declared release-channel label (`.github/release-channels.json`).
 
     A floating tag has no fixed manifest to protect, so it is never locked and never counted as a
     pin. Compared case-insensitively, the way the bare words always were."""
     lowered = tag.strip().lower()
-    return lowered in FLOATING_TAGS or bool(LINE_POINTER_RE.match(lowered))
+    if lowered in FLOATING_TAGS or LINE_POINTER_RE.match(lowered):
+        return True
+    module, doc = _declared_channels()
+    return module.is_protected(doc, lowered)
 
 # Where a deployment overlay lives. Narrow ON PURPOSE — see the module docstring: widening this to
 # every YAML/JSON under `deploy/` drags in test fixtures whose tags never existed.
@@ -6125,8 +6149,11 @@ ingress:
     # `stable` and `nightly` move exactly as `latest` does and are PRESERVED by the extractor.
     # …and every LINE POINTER, which membership alone missed: `3.0.0-latest` is what CD actually
     # publishes and what a record seeded by `ImageLine.PointerFor` names, and it was being locked.
+    # …and every DECLARED EDITION LABEL (`.github/release-channels.json`, policy
+    # `declared-release-channels`): `3-mac` and `3-enterprise` match neither of the above and were
+    # read as pins until the classification consulted the declaration.
     for _moving in sorted(FLOATING_TAGS) + ["3-latest", "3.0-latest", "3.0.0-latest",
-                                            "3.0.0-stable"]:
+                                            "3.0.0-stable", "3-mac", "3-enterprise"]:
         _scan = _scan2("Systemorph/Memex",
                        FIXTURE_OVERLAY_FOREIGN.replace("3.0.0-ci.8411", _moving),
                        "deployments/aks/build/values.build.public.yaml")
