@@ -499,13 +499,25 @@ hub.Observe(request, o => o.WithTarget(hub.NodeOperationTarget()))
   | owner teardown while held or fencing | the fence writes the confirmed state; the dispose flush cannot pass the row guard: superseded by the fence |
   | X acknowledged after the version check | impossible: every own write after the check is deferred until the seal settles |
 
-- **Not covered yet: a late root delete against a recreated node.** A root storage delete that is still
-  running when another hub recreates the node at a low version (for example 1) can remove the recreated
-  node, because `DeleteIfVersionAtMost(V)` compares versions, not the node's incarnation. The owner
-  fences and refuses its own writes, but it cannot block a create made elsewhere. Closing this needs an
-  incarnation-aware compare-and-delete in `IStorageAdapter`; it is a follow-up on #6856.
-- **Not covered yet.** Only the in-memory and Postgres stores implement `DeleteIfVersionAtMost`
-  (and the fence's `WriteIfVersion`)
+- **A late root delete never removes a recreated node.** Versions count per node, not per path: a
+  node that is deleted and created again starts back at version 1, so "version at most V" alone would
+  let a root delete that is still running remove the new node. The owner fences its own writes, but it
+  cannot block a create made by another hub. So the root removal also compares the node's
+  **incarnation**: `IStorageAdapter.DeleteIfIncarnationAtMost(path, V, incarnation)` removes the row
+  only when its version is at most V **and** it is the incarnation the deleter read. The incarnation
+  is `MeshNode.CreatedDate`. It is set once, when the node is created, every upsert keeps it, every
+  store already persists it, and a recreate mints a new one. It is compared in UTC at microsecond
+  precision, the precision Postgres `timestamptz` keeps (`StorageIncarnation`). On Postgres this is
+  one statement, `DELETE … WHERE path = $1 AND version <= $2 AND created_date = $3`, in
+  MeshWeaver.Plugins. A recreated node is refused, survives, and the delete answers `Conflict`.
+  Limits: a copy, import or restore that **keeps** the original `CreatedDate` counts as the same
+  incarnation. A row stored without a `CreatedDate` (older data, and Markdown nodes on the
+  file-system store, whose front matter does not carry it) has no incarnation to compare, so the
+  delete falls back to the version-only check. Regression:
+  `ALateDeleteNeverRemovesARecreatedNodeTest` (two silos; a held late delete, a delete and recreate
+  on the other silo, then the release: the recreated node survives).
+- **Not covered yet.** Only the in-memory and Postgres stores implement `DeleteIfVersionAtMost`,
+  `DeleteIfIncarnationAtMost` (and the fence's `WriteIfVersion`)
   atomically (Postgres in MeshWeaver.Plugins, as one conditional `DELETE` whose row count is the
   verdict; its path router forwards the call). The file-system store (and the caching adapter over
   it) and Snowflake use the interface default: they read, compare, then delete. That checks the

@@ -580,6 +580,16 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
     /// <c>DELETE … WHERE version &lt;= $2</c> row count (#6856).
     /// </remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => DeleteIfAtMost(path, maxVersion, incarnation: null);
+
+    /// <inheritdoc />
+    /// <remarks>Atomic, exactly as <see cref="DeleteIfVersionAtMost"/>: the version AND the incarnation
+    /// are compared and the exact row removed in ONE <c>Mutate</c> section (#6856).</remarks>
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => DeleteIfAtMost(path, maxVersion, incarnation);
+
+    private IObservable<bool> DeleteIfAtMost(string path, long maxVersion, DateTimeOffset? incarnation)
         => Observable.Defer(() =>
         {
             var key = Norm(path);
@@ -589,6 +599,7 @@ public sealed class InMemoryStorageAdapter : SimpleMeshNodeStorage, IStorageAdap
             {
                 if (_nodes.TryGetValue(key, out var existing)
                     && existing.Version <= maxVersion
+                    && (incarnation is not { } expected || StorageIncarnation.Matches(existing, expected))
                     && _nodes.TryRemove(new KeyValuePair<string, MeshNode>(key, existing)))
                 {
                     won = true;

@@ -188,6 +188,35 @@ public class StorageAdapterDecoratorsForwardBatchReadGuard
             .Should().BeTrue();
     }
 
+    /// <summary>
+    /// The incarnation-aware compare-and-delete (#6856) has the same hazard one level up: a decorator
+    /// that forwards <see cref="IStorageAdapter.DeleteIfVersionAtMost"/> but inherits
+    /// <see cref="IStorageAdapter.DeleteIfIncarnationAtMost"/> turns the incarnation check into a
+    /// separate read below it — a node deleted and re-created between that read and the delete is
+    /// removed, the defect the incarnation exists to close.
+    /// </summary>
+    [Fact]
+    public void EveryDecoratorThatForwardsTheCompareAndDelete_ForwardsTheIncarnationAwareOne()
+    {
+        var forwarding = Decorators()
+            .Where(t => DeclaresMethod(t, nameof(IStorageAdapter.DeleteIfVersionAtMost)))
+            .ToList();
+        forwarding.Count.Should().BeGreaterThanOrEqualTo(3,
+            "the production chain's decorators forward the compare-and-delete; fewer means the predicate "
+            + $"stopped matching. Saw: {string.Join(", ", forwarding.Select(t => t.Name))}");
+
+        var downgrading = forwarding
+            .Where(t => !DeclaresMethod(t, nameof(IStorageAdapter.DeleteIfIncarnationAtMost)))
+            .Select(t => $"{t.FullName} forwards DeleteIfVersionAtMost but declares no DeleteIfIncarnationAtMost")
+            .ToList();
+        downgrading.Should().BeEmpty(
+            "a decorator that forwards the compare-and-delete must forward the incarnation-aware one too. "
+            + "Offenders:\n  " + string.Join("\n  ", downgrading));
+
+        DeclaresMethod(typeof(CompareAndDeleteForwardingDouble), nameof(IStorageAdapter.DeleteIfIncarnationAtMost))
+            .Should().BeFalse("mutation arm: a double forwarding only the version check is flagged");
+    }
+
     /// <summary>Forwards the compare-and-delete — the shape that rule wants.</summary>
     private sealed class CompareAndDeleteForwardingDouble(IStorageAdapter inner) : InertDecorator(inner)
     {
