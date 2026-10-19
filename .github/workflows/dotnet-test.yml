@@ -4514,7 +4514,7 @@ jobs:
         exit 1
 
     - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
+      uses: EnricoMi/publish-unit-test-result-action@v2.25.0
       if: always() && needs.precheck.outputs.skip != 'true'
       # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
       # above is the gate. action_fail removed + continue-on-error so a throttled
