@@ -980,4 +980,132 @@ public class PrebuiltBundleRetentionTest : IDisposable
             try { Directory.Delete(emptyRoot, recursive: true); } catch { /* best effort */ }
         }
     }
+
+    // ---- per-release surfaces (MeshWeaver#6990) -----------------------------------------------
+
+    private string Surface(string version, DateTimeOffset? writtenAt = null, int bytes = 512)
+    {
+        var dir = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+            SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, version);
+        File.WriteAllBytes(path, new byte[bytes]);
+        File.SetLastWriteTimeUtc(path, (writtenAt ?? Now - TimeSpan.FromDays(100)).UtcDateTime);
+        return path;
+    }
+
+    private string[] SurfacesOnDisk() =>
+        Directory.GetFiles(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+                SealedPublicationIndex.ReleaseSurfaceDirectoryName))
+            .Select(f => Path.GetFileName(f)!).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+    /// <summary>
+    /// The store every surface test builds: one surface per reader-visible case. What a reader can
+    /// still name keeps its surface; what nothing can name any more loses it.
+    /// </summary>
+    private ImmutableList<PinnedPlatformReference> SurfaceStore()
+    {
+        Marker("3.1.0-ci.9000", Live); Surface("3.1.0-ci.9000");
+        Sealed(Live, "plugins", DaysAgo(1));
+        // A clean release: marker and surface are kept, however old.
+        Marker("3.0.0", "s-rel"); Surface("3.0.0", DaysAgo(300)); Sealed("s-rel", "plugins", DaysAgo(200));
+        // A ci build nothing references: its identity, marker AND surface go together.
+        Marker("3.0.0-ci.1", "s-c1"); Surface("3.0.0-ci.1", DaysAgo(230)); Sealed("s-c1", "plugins", DaysAgo(230));
+        // A ci build a Deployment pins: kept with its marker.
+        Marker("3.0.0-ci.2", "s-c2"); Surface("3.0.0-ci.2", DaysAgo(220)); Sealed("s-c2", "plugins", DaysAgo(220));
+        // Orphans — no marker names them.
+        Surface("3.0.0-ci.0", DaysAgo(240));                 // old pre-release: unreachable, goes
+        Surface("3.1.0-ci.9001", MinutesAgo(2));             // its marker is in flight: kept
+        Surface("2.9.0", DaysAgo(400));                      // a clean version: never retired
+        Surface("3.0.0-ci.3", DaysAgo(240));                 // pinned by version: kept
+        return [
+            new PinnedPlatformReference("Deployment Deployments/fabrikam", "memex-portal-ai:3.0.0-ci.2", null),
+            new PinnedPlatformReference("instance report Deployments/Modules/initech", "3.0.0-ci.3", "s-c2"),
+        ];
+    }
+
+    [Fact]
+    public void AReleaseSurface_IsRetiredWithItsMarker_AndOnlyWhatNoReaderCanNameGoes()
+    {
+        var pinned = SurfaceStore();
+
+        var plan = PlanNow(liveVersion: "3.1.0-ci.9000", pinned: pinned);
+
+        plan.AbortReason.Should().BeNull();
+        plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.0.0-ci.1");
+        plan.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.0.0-ci.0", "3.0.0-ci.1");
+        plan.ProtectedSurfaces["3.1.0-ci.9000"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.0.0"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.0.0-ci.2"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.1.0-ci.9001"].Should().Contain("may be in flight");
+        plan.ProtectedSurfaces["2.9.0"].Should().Contain("clean release");
+        plan.ProtectedSurfaces["3.0.0-ci.3"].Should().Contain("pins");
+        plan.Summary.Should().Contain("release surfaces to retire=2");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.Deleted.Should().BeTrue();
+        result.DeletedSurfaces.Should().Be(2);
+        SurfacesOnDisk().Should().Equal("2.9.0", "3.0.0", "3.0.0-ci.2", "3.0.0-ci.3", "3.1.0-ci.9000", "3.1.0-ci.9001");
+        File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root))
+            .Should().Contain("retired release surface 3.0.0-ci.1").And.Contain("retired release surface 3.0.0-ci.0");
+    }
+
+    [Fact]
+    public void AnIncompleteConsumerInventory_RetiresNoSurface()
+    {
+        SurfaceStore();
+        // A consumer names a version no marker resolves: who reads which surface is unknown.
+        var pinned = ImmutableList.Create(new PinnedPlatformReference("Deployment Deployments/ghost", "3.0.0-ci.77", null));
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.AbortReason.Should().Contain("inventory is incomplete");
+        result.Plan!.CollectableSurfaces.Should().BeEmpty();
+        result.DeletedSurfaces.Should().Be(0);
+        SurfacesOnDisk().Should().HaveCount(8);
+    }
+
+    [Fact]
+    public void AnUnreadableReleaseMarker_RetiresNoSurface()
+    {
+        var pinned = SurfaceStore();
+        var marker = Marker("3.0.0-ci.5", "s-c5");
+        File.WriteAllText(marker, "");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.AbortReason.Should().Contain("3.0.0-ci.5");
+        result.Plan!.CollectableSurfaces.Should().BeEmpty();
+        SurfacesOnDisk().Should().HaveCount(8);
+    }
+
+    [Fact]
+    public void ReportOnly_NamesTheSurfacesItWouldRetire_AndRemovesNone()
+    {
+        var pinned = SurfaceStore();
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
+
+        result.Deleted.Should().BeFalse();
+        result.Plan!.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.0.0-ci.0", "3.0.0-ci.1");
+        SurfacesOnDisk().Should().HaveCount(8);
+        File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root)).Should().Contain("report only")
+            .And.Contain("release surfaces to retire=2");
+    }
+
+    [Fact]
+    public void ASurfaceIsNeverMistakenForAReleaseMarker()
+    {
+        // `_surface` lives UNDER `_releases`; a scan that read it as a marker would abort every
+        // pass on a ~8.7 MB "identity" — or worse, take it for one.
+        Marker("3.1.0-ci.9000", Live); Surface("3.1.0-ci.9000");
+        Sealed(Live, "plugins", DaysAgo(1));
+
+        var scan = PrebuiltBundleStore.Scan(root);
+
+        scan.Markers.Select(m => m.Version).Should().Equal("3.1.0-ci.9000");
+        scan.Surfaces.Select(s => s.Version).Should().Equal("3.1.0-ci.9000");
+        scan.Surfaces[0].Bytes.Should().Be(512);
+    }
 }

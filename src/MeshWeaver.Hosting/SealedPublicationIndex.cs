@@ -185,6 +185,14 @@ public static class SealedPublicationIndex
     public const string ReleaseMarkerDirectoryName = "_releases";
 
     /// <summary>
+    /// The subdirectory of <see cref="ReleaseMarkerDirectoryName"/> holding one portal type surface
+    /// per release (<c>_releases/_surface/&lt;version&gt;</c>, policy <c>exact-release-surface</c>).
+    /// The ONE definition; <c>PublishedBundleCatalogue.ReleaseSurfaceDirectoryName</c> forwards to
+    /// it, and <c>PrebuiltBundleStore</c> retires each file together with its release marker.
+    /// </summary>
+    public const string ReleaseSurfaceDirectoryName = "_surface";
+
+    /// <summary>
     /// The REVERSE of the release markers: framework identity → the newest platform version
     /// published under it — <b>newest by SEALED-PUBLICATION LINEAGE</b>
     /// (<see cref="Plugin.Packaging.PlatformReleaseOrder.Newest"/>), the same total order the

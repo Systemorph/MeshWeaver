@@ -142,6 +142,46 @@ way an instance does. Until then, **arming deletion on the plugin registry insta
 half**, because that is the store a satellite's gate pulls from over the HTTP prebuilt surface; the
 gap must be closed, or the arming scoped to instances no CI lane pulls from.
 
+## Per-release surfaces follow their marker
+
+Every core CD run writes the release's portal type surface to `_releases/_surface/<release-version>`
+on each publish target (policy `exact-release-surface`, [Sealed Publication Reads](../SealedPublicationReads)).
+One file is about 8.7 MB, and at the measured release cadence that is roughly 0.3 GB a day per share.
+Until MeshWeaver#6990 nothing removed one. The same pass now does.
+
+**The rule is taken from the readers, not invented beside them.** Every reader reaches a surface
+through a release version: the release gate (`PublishedBundleCatalogue.ReleaseSurfaceOf`) reads the
+surface of the version a roll targets, and `release.yml` copies the ci version's surface to the clean
+one. So a surface is referenced exactly as long as its version is, and the marker rule above already
+decides that. `PrebuiltBundleStore.Plan` therefore keeps no second opinion:
+
+| Surface `_surface/<v>` | Decision |
+|---|---|
+| its marker `_releases/<v>` is retired by this plan | retired with it, **after** the marker removal succeeded |
+| its marker is kept (live, clean, pinned, inside the window, …) | kept |
+| no marker names it, and `<v>` is a clean version | kept — a clean release's surface is never retired, like its marker |
+| no marker names it, and `<v>` is the running version or a pinned one | kept |
+| no marker names it, and it is younger than the 30-day window | kept — its marker may be in flight |
+| no marker names it, and none of the above holds | retired |
+
+The order matters. The publisher writes surface-then-marker, so a reader that finds the marker always
+finds the surface. The sweep removes in the reverse order, and a surface whose marker could not be
+removed stays with it until the next pass.
+
+**It fails closed with the rest of the pass.** An unreadable marker, a consumer reference that
+resolves to no marker, or a `_surface` directory that cannot be listed aborts the whole pass, and no
+surface is retired. Report-only mode names the surfaces it would retire in the log line and
+`release surfaces to retire=N / X MB` in the ledger summary. Surfaces are retired only when deletion is
+armed, exactly like identities. The ledger records each one as `retired release surface <v>`.
+
+`_releases/_db/<version>` (a few bytes per release) is still not collected.
+
+Evidence: `PrebuiltBundleRetentionTest` →
+`AReleaseSurface_IsRetiredWithItsMarker_AndOnlyWhatNoReaderCanNameGoes`,
+`AnIncompleteConsumerInventory_RetiresNoSurface`, `AnUnreadableReleaseMarker_RetiresNoSurface`,
+`ReportOnly_NamesTheSurfacesItWouldRetire_AndRemovesNone`,
+`ASurfaceIsNeverMistakenForAReleaseMarker`.
+
 ## Whose consumers a store accounts for
 
 Rule 4 is only as good as the consumer inventory behind it, and an inventory with a gap refuses the

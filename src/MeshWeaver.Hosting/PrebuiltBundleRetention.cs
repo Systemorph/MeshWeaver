@@ -216,12 +216,31 @@ public sealed record ReleaseMarkerEntry(
     public bool IsPrerelease => PlatformVersionLine.IsPrerelease(Version);
 }
 
+/// <summary>
+/// One <c>_releases/_surface/&lt;version&gt;</c> file: the portal type surface measured on THAT
+/// release's image (policy <c>exact-release-surface</c>). The file NAME is the platform version,
+/// spelled exactly as the release marker's; retention never reads the content.
+/// </summary>
+/// <param name="Version">The platform version (the file name).</param>
+/// <param name="Path">Full path of the surface file.</param>
+/// <param name="WrittenUtc">The file's last write.</param>
+/// <param name="Bytes">The file's size.</param>
+public sealed record ReleaseSurfaceEntry(string Version, string Path, DateTimeOffset WrittenUtc, long Bytes)
+{
+    /// <summary>True for a <c>-ci.&lt;n&gt;</c> (or any other pre-release) surface.</summary>
+    public bool IsPrerelease => PlatformVersionLine.IsPrerelease(Version);
+}
+
 /// <summary>What one scan of the store found.</summary>
 /// <param name="Identities">Every identity directory.</param>
 /// <param name="Markers">Every release marker.</param>
 public sealed record PrebuiltStoreScan(
     ImmutableList<PrebuiltIdentityEntry> Identities,
-    ImmutableList<ReleaseMarkerEntry> Markers);
+    ImmutableList<ReleaseMarkerEntry> Markers)
+{
+    /// <summary>Every per-release surface file under <c>_releases/_surface</c> (MeshWeaver#6990).</summary>
+    public ImmutableList<ReleaseSurfaceEntry> Surfaces { get; init; } = ImmutableList<ReleaseSurfaceEntry>.Empty;
+}
 
 /// <summary>What a sweep decided, before any deletion.</summary>
 /// <param name="LiveIdentity">The framework identity this process runs.</param>
@@ -255,6 +274,18 @@ public sealed record PrebuiltBundleSweepPlan(
     /// <summary>Why each surviving generation survived, keyed by its full directory path.</summary>
     public ImmutableDictionary<string, string> ProtectedGenerations { get; init; } = ImmutableDictionary<string, string>.Empty;
 
+    /// <summary>
+    /// Per-release surface files (<c>_releases/_surface/&lt;version&gt;</c>) no reader can reach any
+    /// more, oldest first (MeshWeaver#6990): the surface of every marker in
+    /// <see cref="CollectableMarkers"/>, which goes AFTER its marker, and an orphan pre-release
+    /// surface that no marker names, no consumer pins, and that is older than the retention window.
+    /// Empty whenever the plan aborted.
+    /// </summary>
+    public ImmutableList<ReleaseSurfaceEntry> CollectableSurfaces { get; init; } = ImmutableList<ReleaseSurfaceEntry>.Empty;
+
+    /// <summary>Why each surviving surface survived, keyed by version.</summary>
+    public ImmutableDictionary<string, string> ProtectedSurfaces { get; init; } = ImmutableDictionary<string, string>.Empty;
+
     /// <summary>Total bytes across every identity.</summary>
     public long TotalBytes => Identities.Sum(i => i.Bytes);
 
@@ -267,6 +298,7 @@ public sealed record PrebuiltBundleSweepPlan(
         + $" ({LivePlatformVersion ?? "version unknown"}), collectable={Collectable.Count} / {Mb(CollectableBytes)}"
         + (CollectableGenerations.IsEmpty ? "" : $", superseded generations={CollectableGenerations.Count}")
         + $", markers to retire={CollectableMarkers.Count}"
+        + (CollectableSurfaces.IsEmpty ? "" : $", release surfaces to retire={CollectableSurfaces.Count} / {Mb(CollectableSurfaces.Sum(f => f.Bytes))}")
         + (UnresolvedPins.IsEmpty ? "" : $", unresolved consumer references (cleanup blocked): {string.Join(", ", UnresolvedPins)}")
         + (AbortReason is null ? "" : $", ABORTED: {AbortReason}");
 
@@ -296,6 +328,9 @@ public sealed record PrebuiltBundleSweepResult(
     /// <summary>Superseded generation directories actually removed from inside retained identities.</summary>
     public int DeletedGenerations { get; init; }
 
+    /// <summary>Per-release surface files actually removed from <c>_releases/_surface</c> (MeshWeaver#6990).</summary>
+    public int DeletedSurfaces { get; init; }
+
     /// <summary>One ledger line.</summary>
     public string LedgerLine =>
         $"{AtUtc:O} " + (Plan is null
@@ -305,7 +340,7 @@ public sealed record PrebuiltBundleSweepResult(
                 : Deleted
                     ? $"removed {DeletedIdentities} identity(ies) / {PrebuiltBundleSweepPlan.Mb(DeletedBytes)}, "
                       + (DeletedGenerations == 0 ? "" : $"{DeletedGenerations} superseded generation(s), ")
-                      + $"{DeletedMarkers} marker(s){(FailedDeletes == 0 ? "" : $", {FailedDeletes} failed")} — {Plan.Summary}"
+                      + $"{DeletedMarkers} marker(s), {DeletedSurfaces} release surface(s){(FailedDeletes == 0 ? "" : $", {FailedDeletes} failed")} — {Plan.Summary}"
                     : $"report only — {Plan.Summary}");
 }
 
@@ -343,6 +378,17 @@ public sealed record PrebuiltBundleSweepResult(
 /// forever; a clean release marker is never removed. A release marker that cannot be read, or a
 /// store that cannot be listed, ABORTS the sweep with nothing collected: a partial picture licenses
 /// no deletion.</para>
+///
+/// <para><b>Per-release surfaces follow their marker</b> (MeshWeaver#6990). Every core CD run
+/// writes <c>_releases/_surface/&lt;version&gt;</c> (about 8.7 MB). Every reader reaches one THROUGH
+/// a release version — the release gate (<c>PublishedBundleCatalogue.ReleaseSurfaceOf</c>, for the
+/// version a roll targets) and <c>release.yml</c> (which copies the ci version's surface to the
+/// clean one). So a surface is retired exactly when its marker is, and only after that marker's
+/// removal succeeded: the publisher writes surface-then-marker, so a reader that finds the marker
+/// must find the surface. An ORPHAN surface, one no marker names, goes only when it is a
+/// pre-release, not the running version, not pinned by any consumer, and older than the retention
+/// window (a young one may precede its marker). A clean release's surface is never retired, like
+/// its marker. A surface directory that cannot be listed aborts the pass with everything else.</para>
 ///
 /// <para>🚨 <b>And the same rule one level down, for GENERATIONS</b> (MeshWeaver#3461,
 /// <c>Doc/Architecture/SealedPublicationGenerations</c> → "Retention"). Under the generation
@@ -401,7 +447,19 @@ public static class PrebuiltBundleStore
                 }
             }
 
-        return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable());
+        // Listed, never read: retention decides on a surface's NAME and age. A directory that
+        // cannot be listed throws, and the caller aborts the whole pass.
+        var surfaces = ImmutableList.CreateBuilder<ReleaseSurfaceEntry>();
+        var surfaceDirectory = Path.Combine(markerDirectory, SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        if (Directory.Exists(surfaceDirectory))
+            foreach (var file in Directory.EnumerateFiles(surfaceDirectory).OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var info = new FileInfo(file);
+                surfaces.Add(new ReleaseSurfaceEntry(info.Name, file,
+                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero), info.Length));
+            }
+
+        return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable()) { Surfaces = surfaces.ToImmutable() };
     }
 
     private static PrebuiltIdentityEntry ReadIdentity(string identityDirectory, string identity, ILogger? logger)
@@ -752,6 +810,39 @@ public static class PrebuiltBundleStore
                         || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= minimumAge))
             .ToImmutableList();
 
+        // ══════════════ PER-RELEASE SURFACES (MeshWeaver#6990) ══════════════
+        //
+        // Every reader of `_releases/_surface/<v>` names a RELEASE VERSION first: the release gate
+        // reads the surface of the version a roll targets, release.yml copies the ci version's to
+        // the clean one. So a surface is referenced exactly as long as its version is. The marker
+        // rule above has already decided that, and the surface follows it rather than forming a
+        // second opinion. A surface no marker names (an orphan: the marker write failed after the
+        // surface landed, or the marker was retired before this rule existed) is judged on the
+        // marker rule's own terms for an absent identity: never a clean version, never the running
+        // one, never a pinned one, and only once it is older than the window.
+        var markerVersions = scan.Markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        var retiringVersions = markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        var surfaceReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var collectableSurfaces = ImmutableList.CreateBuilder<ReleaseSurfaceEntry>();
+        foreach (var surface in scan.Surfaces)
+        {
+            var normalized = PlatformVersionLine.Normalize(surface.Version) ?? surface.Version;
+            var keep =
+                retiringVersions.Contains(surface.Version) ? null
+                : markerVersions.Contains(surface.Version) ? "its release marker is kept"
+                : !surface.IsPrerelease ? "a clean release's surface is never retired"
+                : livePlatformVersion is not null && string.Equals(normalized, livePlatformVersion, StringComparison.Ordinal)
+                    ? "the platform version this process runs"
+                : pinnedVersions.Contains(normalized) ? "a consumer pins this version"
+                : nowUtc - surface.WrittenUtc < minimumAge
+                    ? $"no marker names it, and it is within the {minimumAge.TotalDays:N0}-day retention window — its marker may be in flight"
+                : null;
+            if (keep is not null)
+                surfaceReasons[surface.Version] = keep;
+            else
+                collectableSurfaces.Add(surface);
+        }
+
         // ══════════════ GENERATIONS INSIDE A RETAINED IDENTITY (MeshWeaver#3461) ══════════════
         //
         // 🚨 THE IDENTITY-LEVEL RULES ABOVE NEVER REACH IN HERE, and under the generation layout
@@ -823,6 +914,9 @@ public static class PrebuiltBundleStore
             CollectableGenerations = collectableGenerations.ToImmutable().Sort(
                 (a, b) => a.NewestWriteUtc.CompareTo(b.NewestWriteUtc)),
             ProtectedGenerations = generationReasons.ToImmutable(),
+            CollectableSurfaces = collectableSurfaces.ToImmutable().Sort(
+                (a, b) => a.WrittenUtc.CompareTo(b.WrittenUtc)),
+            ProtectedSurfaces = surfaceReasons.ToImmutable(),
         };
     }
 
@@ -890,10 +984,11 @@ public static class PrebuiltBundleStore
         if (!retention.Delete)
         {
             logger?.LogInformation(
-                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Kept: {Kept}",
+                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Would retire release surfaces: {Surfaces}. Kept: {Kept}",
                 plan.Summary,
                 plan.Collectable.Count == 0 ? "(nothing)" : string.Join(", ", plan.Collectable.Select(i => $"{i.Identity} ({PrebuiltBundleSweepPlan.Mb(i.Bytes)})")),
                 plan.CollectableGenerations.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableGenerations.Select(g => $"{g.Directory} ({PrebuiltBundleSweepPlan.Mb(g.Bytes)})")),
+                plan.CollectableSurfaces.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableSurfaces.Select(f => f.Version)),
                 Describe(plan.Protected));
             var report = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, null);
             AppendLedger(root, report, logger);
@@ -971,12 +1066,14 @@ public static class PrebuiltBundleStore
         }
 
         var deletedMarkers = 0;
+        var retiredVersions = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         foreach (var marker in plan.CollectableMarkers)
         {
             try
             {
                 File.Delete(marker.Path);
                 deletedMarkers++;
+                retiredVersions.Add(marker.Version);
                 lines.Add($"{nowUtc:O}   retired marker {marker.Version} → {marker.Identity}");
             }
             catch (Exception ex)
@@ -986,14 +1083,39 @@ public static class PrebuiltBundleStore
             }
         }
 
+        // Per-release surfaces AFTER their markers (MeshWeaver#6990): the reverse of the publisher's
+        // surface-then-marker order, so no reader finds a marker whose surface is gone. A surface
+        // whose marker could not be removed stays with it, and the next pass re-plans both.
+        var deletedSurfaces = 0;
+        var markerRetiring = plan.CollectableMarkers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        foreach (var surface in plan.CollectableSurfaces)
+        {
+            if (markerRetiring.Contains(surface.Version) && !retiredVersions.Contains(surface.Version))
+                continue;
+            try
+            {
+                File.Delete(surface.Path);
+                deletedSurfaces++;
+                deletedBytes += surface.Bytes;
+                lines.Add($"{nowUtc:O}   retired release surface {surface.Version} {PrebuiltBundleSweepPlan.Mb(surface.Bytes)}");
+            }
+            catch (Exception ex)
+            {
+                failedDeletes++;
+                logger?.LogWarning(ex,
+                    "PrebuiltBundleRetention: could not remove release surface {Path} — it stays, and the next pass considers it again",
+                    surface.Path);
+            }
+        }
+
         logger?.LogInformation(
-            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies) and {Generations} superseded generation(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
-            plan.Summary, deletedIdentities, deletedGenerations, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
+            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies), {Generations} superseded generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
+            plan.Summary, deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
             failedDeletes == 0 ? "" : $" ({failedDeletes} removal(s) failed)",
             Describe(plan.Protected));
 
         var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null)
-            { DeletedGenerations = deletedGenerations };
+            { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
         AppendLedger(root, result, logger, lines);
         return result;
     }
