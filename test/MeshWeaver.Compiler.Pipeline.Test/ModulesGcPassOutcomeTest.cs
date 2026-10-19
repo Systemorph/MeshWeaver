@@ -86,6 +86,45 @@ public class ModulesGcPassOutcomeTest : IDisposable
         log.Entries.Should().Contain(e => e.Level == LogLevel.Information && e.Message.Contains("SKIPPING"));
     }
 
+    /// <summary>
+    /// A superseded set record the ORDINARY prune cannot delete (duplicate pruning has nothing to
+    /// do) is counted on the outcome line — it must never read "0 could not be read or removed"
+    /// while a record refused deletion. Itemized at Information, never a second Warning.
+    /// </summary>
+    [Fact]
+    public void AnOrdinaryPruneFailure_IsCountedOnTheOneWarningOutcome()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the refusal below is a POSIX directory permission
+        ModuleSetStore.Propose(root, Landed("A@1"), "replica-1").Should().NotBeNull();
+        var current = ModuleSetStore.Propose(root, Landed("A@2"), "replica-1")!;
+        ModuleSetStore.RecordAdoption(root, current, "replica-1");
+        ModuleSetStore.Read(root).Current!.Sequence.Should().Be(2);
+        var sets = ModuleSetStore.SetsDirectory(root);
+        var mode = File.GetUnixFileMode(sets);
+        File.SetUnixFileMode(sets, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var log = new OutcomeLogger();
+        try
+        {
+            ModuleLandingService.CollectGarbage(root, log, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+        }
+        finally
+        {
+            File.SetUnixFileMode(sets, mode);
+        }
+
+        Directory.EnumerateFiles(sets, "000000001-*").Should().NotBeEmpty("the refused record is still there");
+        log.Entries.Where(e => e.Level >= LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — completed")
+            .And.Contain("retired 0 module set record(s) (1 could not be read or removed)");
+        log.Entries.Should().Contain(e => e.Level == LogLevel.Information && e.Message.Contains("could not be removed"));
+    }
+
+    private static ModuleActivationList Landed(string generation) => new()
+    {
+        Entries = [new ModuleActivationEntry { Name = "A", Directory = generation }],
+    };
+
     private sealed class OutcomeLogger : ILogger
     {
         public ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();

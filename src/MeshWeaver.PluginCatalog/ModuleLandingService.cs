@@ -280,11 +280,19 @@ public sealed class ModuleLandingService : IDisposable
         // the CURRENT set, so a record whose generations are still in the reference set above is
         // never the one removed. Skipped entirely when anything was unreadable, for the same
         // fail-closed reason the generation deletes are.
+        // #6991: the per-record problems of BOTH prune calls below are itemized at Information and
+        // COUNTED into the pass's one Warning outcome line — N refused records never become N
+        // shipped lines, and never a "0 could not be read or removed" either.
         var prunedSets = 0;
+        var pruneProblems = 0;
+        void OnPruneProblem(string msg)
+        {
+            pruneProblems++;
+            logger?.LogInformation("Modules GC: {Message}", msg);
+        }
         if (readFaults == 0 && setIndex.Current is { } onSet)
         {
-            prunedSets = ModuleSetStore.Prune(baseDirectory, onSet.Sequence,
-                msg => logger?.LogDebug("{Message}", msg));
+            prunedSets = ModuleSetStore.Prune(baseDirectory, onSet.Sequence, OnPruneProblem);
             if (prunedSets > 0)
                 logger?.LogInformation(
                     "Modules GC: removed {Count} superseded module set record(s) below sequence "
@@ -296,17 +304,10 @@ public sealed class ModuleLandingService : IDisposable
         // forever. Retiring it says the conflict once, where it is decided, and leaves the one
         // record the mesh actually resolves to. Gated on the same fail-closed counter as the
         // pruning above: with anything unreadable on the volume this pass removes nothing.
-        // #6991: the per-record pruning problems are itemized at Information and COUNTED into the
-        // pass's one Warning outcome line, so N unreadable records never become N shipped lines.
-        var pruneProblems = 0;
         if (readFaults == 0)
             prunedSets += ModuleSetStore.PruneDuplicateProposals(baseDirectory,
                 onRetired: msg => logger?.LogInformation("Modules GC: {Message}", msg),
-                onWarn: msg =>
-                {
-                    pruneProblems++;
-                    logger?.LogInformation("Modules GC: {Message}", msg);
-                });
+                onWarn: OnPruneProblem);
         // 🚨 #2509: with any entry file unreadable, `referenced` is INCOMPLETE — an ACTIVE
         // generation would read as an orphan. Generation deletes are skipped wholesale this pass.
         var referencesReliable = readFaults == 0;
