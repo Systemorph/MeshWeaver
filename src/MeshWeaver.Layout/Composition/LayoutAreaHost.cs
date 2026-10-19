@@ -1,5 +1,4 @@
 ﻿using System.Collections;
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Reactive.Concurrency;
 using System.Reactive.Disposables;
@@ -1440,7 +1439,79 @@ public record LayoutAreaHost : IDisposable
     }
 
 
-    private readonly ConcurrentDictionary<string, List<IDisposable>> disposablesByArea = new();
+    /// <summary>
+    /// The area-keyed disposal registry, held as ONE immutable value swapped atomically (#6975).
+    /// <para>🚨 It is written from more than one thread BY DESIGN, so it must never be a shared mutable
+    /// list. A top-level re-render runs <see cref="RenderObservable"/>'s <c>Scan</c> on the generator's
+    /// emission thread — off the hub, on the Layout I/O pool (<see cref="ScheduleRenderSubscribe{T}"/>) —
+    /// while a nested area's emission re-renders through <see cref="UpdateArea"/> on the stream's action
+    /// block, and view code registers from inside its own (pool-thread) subscriptions. The old shape,
+    /// <c>ConcurrentDictionary&lt;string, List&lt;IDisposable&gt;&gt;</c>, made the DICTIONARY safe and
+    /// left every <c>List</c> shared: a <c>RegisterForDisposal</c> that had resolved an area's list via
+    /// <c>GetOrAdd</c> just before a teardown pass <c>TryRemove</c>d it then <c>Add</c>ed into the
+    /// detached list — during the pass's <c>ForEach</c> (the "Collection was modified" render failure of
+    /// #6975) or after it (a subscription that is never disposed). Host <see cref="Dispose"/> enumerated
+    /// the LIVE lists, so a disposable whose teardown registered another one failed the same way on the
+    /// same thread.</para>
+    /// <para><b>Semantics.</b> A teardown pass TAKES its entries in one atomic swap and disposes them
+    /// outside it; a registration is atomic against that swap, so it lands either before (taken and
+    /// disposed by this pass) or after (held for the next pass or the host's disposal) — never in
+    /// between, never lost. <c>null</c> means the host is disposed: a registration arriving then is
+    /// disposed immediately, because nothing would ever reap it.</para>
+    /// </summary>
+    private ImmutableDictionary<string, ImmutableList<IDisposable>>? disposablesByArea =
+        ImmutableDictionary<string, ImmutableList<IDisposable>>.Empty;
+
+    /// <summary>
+    /// Adds <paramref name="disposable"/> under <paramref name="area"/> in one atomic swap; when
+    /// <paramref name="replace"/> is set the key's previous entries are taken out in the same swap and
+    /// returned for the caller to dispose. Returns <c>false</c> when the host is already disposed (the
+    /// caller then disposes <paramref name="disposable"/> itself).
+    /// </summary>
+    private bool TryRegister(string area, IDisposable disposable, bool replace, out ImmutableList<IDisposable> replaced)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref disposablesByArea);
+            if (current is null)
+            {
+                replaced = ImmutableList<IDisposable>.Empty;
+                return false;
+            }
+
+            var existing = current.GetValueOrDefault(area) ?? ImmutableList<IDisposable>.Empty;
+            var next = current.SetItem(area,
+                replace ? ImmutableList.Create(disposable) : existing.Add(disposable));
+            if (ReferenceEquals(Interlocked.CompareExchange(ref disposablesByArea, next, current), current))
+            {
+                replaced = replace ? existing : ImmutableList<IDisposable>.Empty;
+                return true;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Takes every entry whose area key satisfies <paramref name="owned"/> out of the registry in ONE
+    /// atomic swap and returns them. The caller disposes them outside the swap, so a disposal callback
+    /// that registers (or tears down) re-enters a registry that no longer holds what is being disposed.
+    /// </summary>
+    private ImmutableList<IDisposable> TakeDisposables(Func<string, bool> owned)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref disposablesByArea);
+            if (current is null)
+                return ImmutableList<IDisposable>.Empty;
+
+            var keys = current.Keys.Where(owned).ToArray();
+            if (keys.Length == 0)
+                return ImmutableList<IDisposable>.Empty;
+
+            var next = current.RemoveRange(keys);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref disposablesByArea, next, current), current))
+                return keys.Aggregate(ImmutableList<IDisposable>.Empty, (acc, key) => acc.AddRange(current[key]));
+        }
+    }
 
     // Captured in the constructor: the drainable-subscribe scheduler that runs render subscribes as TRACKED leaves
     // on the mesh's teardown-drainable Layout I/O pool. Null on hubs without I/O pools registered
@@ -1478,9 +1549,14 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     /// <param name="area">The area key that owns the disposable.</param>
     /// <param name="disposable">The subscription or resource to dispose on teardown.</param>
+    /// <remarks>
+    /// Safe from any thread, and from inside another disposable's teardown. Registered after the host
+    /// was disposed, <paramref name="disposable"/> is disposed at once — nothing would ever reap it.
+    /// </remarks>
     public void RegisterForDisposal(string area, IDisposable disposable)
     {
-        disposablesByArea.GetOrAdd(area, _ => new()).Add(disposable);
+        if (!TryRegister(area, disposable, replace: false, out _))
+            disposable.Dispose();
     }
 
     /// <summary>
@@ -1489,17 +1565,18 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     public void ReplaceDisposable(string key, IDisposable disposable)
     {
-        // Dispose existing disposables with this key
-        if (disposablesByArea.TryRemove(key, out var existing))
+        // The swap that installs the new disposable is the one that takes the old ones out, so a
+        // concurrent registration under the same key can never slip between them and be dropped.
+        if (!TryRegister(key, disposable, replace: true, out var existing))
         {
-            foreach (var d in existing)
-            {
-                try { d.Dispose(); }
-                catch { /* ignore disposal errors */ }
-            }
+            disposable.Dispose();
+            return;
         }
-        // Add the new disposable
-        disposablesByArea.GetOrAdd(key, _ => new()).Add(disposable);
+        foreach (var d in existing)
+        {
+            try { d.Dispose(); }
+            catch { /* ignore disposal errors */ }
+        }
     }
 
     /// <summary>
@@ -1507,9 +1584,7 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     /// <param name="disposable">The subscription or resource to dispose on host teardown.</param>
     public void RegisterForDisposal(IDisposable disposable)
-    {
-        disposablesByArea.GetOrAdd(string.Empty, _ => new()).Add(disposable);
-    }
+        => RegisterForDisposal(string.Empty, disposable);
 
     /// <summary>
     /// Returns an observable that emits the current and future values of the Data item with key
@@ -1595,9 +1670,13 @@ public record LayoutAreaHost : IDisposable
     /// </summary>
     public void Dispose()
     {
-        foreach (var disposable in disposablesByArea.ToArray())
-            disposable.Value.ForEach(d => d.Dispose());
-        disposablesByArea.Clear();
+        // Swap the registry to its disposed state FIRST, then dispose what it held: a teardown that
+        // registers another disposable now meets a disposed host (and disposes it at once) instead of
+        // mutating a list this loop is enumerating (#6975).
+        var held = Interlocked.Exchange(ref disposablesByArea, null);
+        if (held is not null)
+            foreach (var disposable in held.Values.SelectMany(list => list))
+                disposable.Dispose();
         // Held apart from disposablesByArea on purpose: no area re-render may release a pending
         // click action — only the host's own teardown (see OnClick).
         pendingClickActions.Dispose();
@@ -1659,9 +1738,8 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates DisposeExistingAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var area in disposablesByArea.Where(x => IsAreaOrDescendant(x.Key, contextArea)).ToArray())
-            if (disposablesByArea.TryRemove(area.Key, out var disposables))
-                disposables.ForEach(d => d.Dispose());
+        foreach (var disposable in TakeDisposables(key => IsAreaOrDescendant(key, contextArea)))
+            disposable.Dispose();
 
         return RemoveViews(store, contextArea);
     }
@@ -1674,9 +1752,8 @@ public record LayoutAreaHost : IDisposable
     private EntityStoreAndUpdates DisposeChildAreas(EntityStore store, RenderingContext context)
     {
         var contextArea = context.Area;
-        foreach (var area in disposablesByArea.Where(x => IsAreaOrDescendant(x.Key, contextArea) && x.Key != contextArea).ToArray())
-            if (disposablesByArea.TryRemove(area.Key, out var disposables))
-                disposables.ForEach(d => d.Dispose());
+        foreach (var disposable in TakeDisposables(key => IsAreaOrDescendant(key, contextArea) && key != contextArea))
+            disposable.Dispose();
 
         return RemoveViews(store, contextArea);
     }

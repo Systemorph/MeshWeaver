@@ -146,6 +146,8 @@ public static object DistributionStatistics(LayoutAreaHost host, RenderingContex
 
 All subscriptions created inside the host must be registered for disposal with `host.RegisterForDisposal(...)` so they are cleaned up when the layout area closes.
 
+`RegisterForDisposal` is safe from any thread and from inside another disposable's teardown. The registry is one immutable value swapped atomically: a re-render takes the area's entries out in one swap and disposes them afterwards, so a registration lands either before the swap (disposed by that pass) or after it (held for the next pass, or the host's disposal). A registration that arrives after the host itself was disposed is disposed at once, because nothing would ever reap it. This matters because the registry has more than one writer: a top-level re-render runs on the Layout I/O pool, a nested re-render runs through `UpdateArea` on the stream's action block, and view code registers from its own subscriptions. With a shared mutable list per area, a registration landing during a teardown failed the re-render with *"Collection was modified"*, or was never disposed at all (#6975). `test/MeshWeaver.Layout.Test/DisposalRegistryConcurrencyTest` pins the behaviour.
+
 ## Subject — server-side result bus
 
 `Subject<T>` is an observable that you push values into explicitly (it implements both `IObserver<T>` and `IObservable<T>`). Storing the raw `double[]` sample array in a Subject rather than in a named data slot means:
