@@ -37,13 +37,27 @@ readonly MONITORING_NS="monitoring"             # observability namespace (§11)
 readonly HOSTNAME_LOCAL="memex.localhost"       # default hostname (§6)
 readonly TLS_SECRET="memex-portal-tls"          # ingress TLS secret name (§5)
 readonly HOST_PORT="${MEMEX_PORT:-8443}"        # unprivileged host port (§6/§7)
-readonly COLIMA_CPU="${MEMEX_COLIMA_CPU:-8}"    # VM sizing (§2)
-readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-16}"   # VM sizing (§2)
+# HOST PROFILE — the Mac edition's hardware tiers (Doc/Architecture/ReleaseEditions, gap G4). A
+# Mac Studio and a Mac mini run the SAME linux/arm64 image; what differs is how large a VM and how
+# large a host-native Ollama model their unified memory holds. A profile only sets DEFAULTS: an
+# explicit MEMEX_COLIMA_CPU / MEMEX_COLIMA_MEM / MEMEX_OLLAMA_MODEL always wins. Unset = the
+# developer-laptop defaults this file always had. An unknown profile is refused by check_profile
+# (preflight), never silently read as the default.
+#   mac-studio  VM 12 CPU / 32 GiB, qwen3.6 (~23 GB)   — a host with >= 64 GB unified memory
+#   mac-mini    VM  6 CPU / 12 GiB, qwen3:8b (~5 GB)   — a host with >= 24 GB unified memory
+case "${MEMEX_PROFILE:-}" in
+  mac-studio) _PROFILE_CPU=12; _PROFILE_MEM=32; _PROFILE_MODEL="qwen3.6" ;;
+  mac-mini)   _PROFILE_CPU=6;  _PROFILE_MEM=12; _PROFILE_MODEL="qwen3:8b" ;;
+  *)          _PROFILE_CPU=8;  _PROFILE_MEM=16; _PROFILE_MODEL="qwen3.6" ;;
+esac
+readonly HOST_PROFILE="${MEMEX_PROFILE:-}"
+readonly COLIMA_CPU="${MEMEX_COLIMA_CPU:-$_PROFILE_CPU}"    # VM sizing (§2)
+readonly COLIMA_MEM="${MEMEX_COLIMA_MEM:-$_PROFILE_MEM}"    # VM sizing (§2)
 # The model `up` pulls and aliases as `qwen3.6-code` — the id the portal's OpenAICompatible__Models__0
 # names (share/values.local.yaml). qwen3.6 is ~23 GB and needs a host with RAM to spare beside the VM
 # (§2 "Host sizing"); a smaller host sets a smaller tool-capable model, or `none` to skip the pull
 # entirely (#6024). The small e2e model (qwen-small) is always pulled — it is ~400 MB.
-readonly OLLAMA_MODEL="${MEMEX_OLLAMA_MODEL:-qwen3.6}"
+readonly OLLAMA_MODEL="${MEMEX_OLLAMA_MODEL:-$_PROFILE_MODEL}"
 # The chart's portal/migration containers hardcode these image refs with
 # imagePullPolicy: IfNotPresent (deploy/helm/.../deployment.yaml). Both the
 # local-build and ACR-pull paths retag onto these names so k3s finds them (§3).
@@ -74,6 +88,16 @@ readonly ACR="meshweaver.azurecr.io"
 # "meshweaver.azurecr.io/memex-portal-ai:latest: not found" that reads like broken credentials.
 # `main` is the moving tag CD advances on every merge, which is what "update from ACR" means.
 readonly ACR_DEFAULT_TAG="main"
+# A RELEASE-CHANNEL LABEL to follow instead of `main` (Doc/Architecture/ReleaseEditions, gap G1):
+# `3-latest` (the newest ARMED set — `main` is promoted but not yet armed), or an edition label such
+# as `3-mac` once its writer ships. Labels are declared in core's .github/release-channels.json.
+# 🚨 A label is a SEED, never a running pin: `up`/`update --channel` resolve it to the VERSION the
+# image reports (MESHWEAVER_PLATFORM_VERSION) and deploy that version tag, so "what does this host
+# run" always has an immutable answer (recorded in $CHANNEL_STATE). `autoroll` follows the label.
+readonly CHANNEL="${MEMEX_CHANNEL:-}"
+# The variable a platform image reports its version in (MeshWeaver.Mesh.PlatformBuildInfo) — the
+# same literal core's check-image-build-identity.sh reads.
+readonly PLATFORM_VERSION_VAR="MESHWEAVER_PLATFORM_VERSION"
 # The ACR registry name `az acr login` takes (the host above minus its domain).
 readonly ACR_NAME="meshweaver"
 # Verbose logging for this local install (deployment-config override; never edits
@@ -85,6 +109,9 @@ readonly LOG_LEVEL="${MEMEX_LOG_LEVEL:-Debug}"
 readonly MEMEX_LOCAL_VERSION="0.2.0"
 
 readonly LOCAL_HOME="${MEMEX_LOCAL_HOME:-$HOME/.memex-local}"
+# What the last `--channel` resolved to: `<label> <version> <utc>` — the immutable answer to "what
+# does this host run" when it follows a moving label.
+readonly CHANNEL_STATE="$LOCAL_HOME/channel.state"
 readonly OVERLAY="$LOCAL_HOME/values.local.yaml"
 # ── REGISTRY MODE — this install CONSUMES a remote plugin registry ──────────────────────────────
 # Written by `memex-local registry <url> [--key mwr_…] [--id ID]`, read by helm_deploy as one more
@@ -187,7 +214,66 @@ resolve_repo() {
 # ---------------------------------------------------------------------------
 need() { command -v "$1" >/dev/null 2>&1 || die "required tool '$1' not found — install it (see: brew install $2)"; }
 
+# The host profile must be one this file knows. An unknown one is refused here rather than read as
+# the default: a Mac mini told it is a `mac-studo` would otherwise size a 32 GiB VM it cannot hold.
+check_profile() {
+  case "$HOST_PROFILE" in
+    ""|mac-studio|mac-mini) return 0 ;;
+    *) die "unknown MEMEX_PROFILE '$HOST_PROFILE' — known profiles: mac-studio, mac-mini (or unset for the laptop defaults)" ;;
+  esac
+}
+
+# A channel label must be a LABEL: `3-latest`, `3.1-latest`, `3-mac`, `3-enterprise`. Never a
+# version (`3.1.10050` — use --tag), never a version-shaped label the self-updater would select
+# (`3.1.0-mac`), never a sha or a staging tag. Pure; exit status only.
+channel_label_ok() {
+  local label="$1"
+  case "$label" in
+    *[!a-z0-9.-]*|"") return 1 ;;
+  esac
+  # <major>[.<minor>[.<patch>]]-<word>, the word starting with a letter
+  printf '%s\n' "$label" | grep -Eq '^[0-9]+(\.[0-9]+){0,2}-[a-z][a-z0-9]*$' || return 1
+  # a three-part numeric head is selectable as a version unless it is a -latest pointer
+  if printf '%s\n' "$label" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-'; then
+    case "$label" in *-latest) ;; *) return 1 ;; esac
+  fi
+  return 0
+}
+
+# The platform version an image reports, from its `docker image inspect` env lines on stdin. Pure.
+version_from_env() {
+  local line value=""
+  while IFS= read -r line; do
+    case "$line" in "${PLATFORM_VERSION_VAR}="*) value="${line#"${PLATFORM_VERSION_VAR}="}" ;; esac
+  done
+  printf '%s\n' "$value" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' || return 1
+  printf '%s\n' "$value"
+}
+
+# Resolve a channel label to the VERSION it currently names, and prove the version tag is the same
+# bytes. Prints the version. Fails closed on every step: a label that names an image reporting no
+# version, or whose version tag holds different bytes (the label moved mid-resolution, or a set was
+# mis-armed), is refused rather than deployed. Needs a registry login (image_pull_acr does it).
+resolve_channel() {
+  local label="$1" env_lines version label_id version_id
+  channel_label_ok "$label" || die "'$label' is not a channel label (expected e.g. 3-latest, 3.1-latest, 3-mac) — pin a version with --tag instead"
+  docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$label" >/dev/null \
+    || die "cannot pull $ACR/memex-portal-ai:$label — is the label declared and written yet? (core .github/release-channels.json; a 'declared' label has no image until its writer ships)"
+  env_lines="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$ACR/memex-portal-ai:$label")" \
+    || die "cannot inspect $ACR/memex-portal-ai:$label"
+  version="$(printf '%s\n' "$env_lines" | version_from_env)" \
+    || die "$ACR/memex-portal-ai:$label reports no $PLATFORM_VERSION_VAR — refusing to run a moving label with no version behind it"
+  docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$version" >/dev/null \
+    || die "label $label names version $version, but $ACR/memex-portal-ai:$version cannot be pulled"
+  label_id="$(docker image inspect --format '{{.Id}}' "$ACR/memex-portal-ai:$label")"
+  version_id="$(docker image inspect --format '{{.Id}}' "$ACR/memex-portal-ai:$version")"
+  [ -n "$label_id" ] && [ "$label_id" = "$version_id" ] \
+    || die "label $label and version $version are DIFFERENT images ($label_id vs $version_id) — the label moved while resolving, or the set was mis-armed; re-run, and do not deploy the label"
+  printf '%s\n' "$version"
+}
+
 preflight() {
+  check_profile
   need colima colima
   need kubectl kubernetes-cli
   need helm helm
@@ -588,10 +674,14 @@ another flow). Re-run the image step; do NOT roll."
 }
 
 image_pull_acr() {                                     # §3 Option A
-  local tag="${1:-$ACR_DEFAULT_TAG}"
+  local tag="${1:-$ACR_DEFAULT_TAG}" channel="${2:-}"
   need docker docker
   need az azure-cli
-  step "Pulling multi-arch images from ACR ($ACR, tag=$tag) (§3 Option A)"
+  if [ -n "$channel" ]; then
+    step "Following channel $channel from ACR ($ACR) — resolving it to a version (§3 Option A)"
+  else
+    step "Pulling multi-arch images from ACR ($ACR, tag=$tag) (§3 Option A)"
+  fi
   # The registry is private. `az acr login` is idempotent (a docker credential helper entry), and
   # failing HERE names the remedy — a bare `docker pull` denial reads like a missing tag.
   #
@@ -613,6 +703,12 @@ image_pull_acr() {                                     # §3 Option A
                        its subscription ('az acr login' resolves the registry through ARM first)
      no ACR access  -> build the image instead:  memex-local update --build
                        or keep the running one:  memex-local update --skip-image"
+  fi
+  if [ -n "$channel" ]; then
+    tag="$(resolve_channel "$channel")" || exit 1
+    ok "channel $channel → version $tag (deploying the VERSION, not the label)"
+    mkdir -p "$LOCAL_HOME"
+    printf '%s %s %s\n' "$channel" "$tag" "$(date -u +%FT%TZ)" > "$CHANNEL_STATE"
   fi
   info "Verify the tag is multi-arch (must list arm64):"
   docker manifest inspect "$ACR/memex-portal-ai:$tag" | grep -A1 '"architecture"' || \
@@ -1993,14 +2089,16 @@ cmd_e2e() {
 cmd_up() {
   # Registry mode runs the CI-built image — the whole point is consuming what the registry bakes
   # against — so ACR is the default there; a source build stays one flag away (--build).
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no" rebuild_base=""
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" with_obs="no" rebuild_base="" channel="$CHANNEL"
   registry_mode && image_source="acr"
+  [ -n "$channel" ] && image_source="acr"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --channel) shift; channel="${1:?--channel needs a label, e.g. 3-latest}"; image_source="acr" ;;
       --from-acr) image_source="acr" ;;
       --build)    image_source="build" ;;
       --skip-image) image_source="skip" ;;
-      --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
+      --tag) shift; acr_tag="${1:?--tag needs a value}"; channel="" ;;
       --with-observability) with_obs="yes" ;;
       --rebuild-base) rebuild_base="--rebuild-base" ;;
       *) die "up: unknown flag '$1'" ;;
@@ -2014,7 +2112,7 @@ cmd_up() {
 
   case "$image_source" in                        # §3
     build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # portal + migration, then the /next React GUI
-    acr)   image_pull_acr "$acr_tag" ;;
+    acr)   image_pull_acr "$acr_tag" "$channel" ;;
     skip)  info "Skipping image step (--skip-image); relying on IfNotPresent/cache" ;;
   esac
 
@@ -2217,10 +2315,12 @@ cmd_logs() {
 }
 
 cmd_update() {
-  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" rebuild_base=""
+  local image_source="build" acr_tag="$ACR_DEFAULT_TAG" rebuild_base="" channel="$CHANNEL"
   registry_mode && image_source="acr"              # §17 — same default as `up`
+  [ -n "$channel" ] && image_source="acr"
   while [ $# -gt 0 ]; do
     case "$1" in
+      --channel) shift; channel="${1:?--channel needs a label, e.g. 3-latest}"; image_source="acr" ;;
       --from-acr|--acr) image_source="acr" ;;
       --build) image_source="build" ;;
       # Force a rebuild of the portal-ai BASE (the Node + Claude Code + Copilot layer). It is cached
@@ -2233,7 +2333,7 @@ cmd_update() {
       # forced a full ~10-minute rebuild of images that were already current — or tempted you
       # into hand-patching the live Deployment, which the next helm upgrade silently reverts.
       --skip-image) image_source="skip" ;;
-      --tag) shift; acr_tag="${1:?--tag needs a value}" ;;
+      --tag) shift; acr_tag="${1:?--tag needs a value}"; channel="" ;;
       *) die "update: unknown flag '$1'" ;;
     esac
     shift
@@ -2245,7 +2345,7 @@ cmd_update() {
   step "Rolling memex to a newer image ($image_source)"
   case "$image_source" in
     build) image_build_local "$rebuild_base"; portal_next_build_local ;;   # §3 Option B — portal + migration, then the /next React GUI
-    acr)   image_pull_acr "$acr_tag" ;;          # §3 Option A — retags onto the chart's image names
+    acr)   image_pull_acr "$acr_tag" "$channel" ;;   # §3 Option A — retags onto the chart's image names
     skip)  info "reusing the images already in Colima's store — config re-apply only" ;;
   esac
 
@@ -2333,7 +2433,30 @@ cmd_observability() {                            # §11
   info "Then open http://localhost:3000  (user: admin)  — query {namespace=\"memex\"}"
 }
 
+# The effective host profile — what `up` would size the VM and pull for. Refuses an unknown profile.
+cmd_profile() {
+  [ $# -eq 0 ] || die "profile: takes no arguments (set MEMEX_PROFILE=mac-studio|mac-mini)"
+  check_profile
+  info "profile:   ${HOST_PROFILE:-<none — laptop defaults>}"
+  info "vm:        ${COLIMA_CPU} CPU / ${COLIMA_MEM} GiB"
+  info "model:     ${OLLAMA_MODEL}"
+  info "channel:   ${CHANNEL:-<none — main, or --tag>}"
+  if [ -f "$CHANNEL_STATE" ]; then info "running:   $(cat "$CHANNEL_STATE")"; fi
+}
+
+# Resolve a channel label to the version it names now (no deploy). `channel <label>`.
+cmd_channel() {
+  [ $# -eq 1 ] || die "channel: usage: memex-local channel <label>   (e.g. 3-latest, 3-mac)"
+  channel_label_ok "$1" || die "'$1' is not a channel label (expected e.g. 3-latest, 3.1-latest, 3-mac) — pin a version with --tag instead"
+  need docker docker
+  need az azure-cli
+  az acr login -n "$ACR_NAME" -o none >/dev/null 2>&1 || die "cannot log in to $ACR (see 'memex-local up --from-acr' for the remedy)"
+  resolve_channel "$1"
+}
+
 cmd_doctor() {
+  step "Host profile"
+  cmd_profile
   step "Checking required tools"
   local tools=(colima kubectl helm mkcert ollama openssl curl)
   local t
@@ -2410,8 +2533,11 @@ COMMANDS:
   status          colima / pods / ingress / port-forward / health.
   logs [--migration|--postgres] [--tail N] [--no-follow]
                   Tail logs (portal by default). Log level: $LOG_LEVEL.
-  update [--build|--from-acr|--skip-image] [--tag T] [--rebuild-base]
+  update [--build|--from-acr|--skip-image] [--tag T|--channel L] [--rebuild-base]
                   Roll portal+migration to a newer image, then refresh forward.
+                  --channel L follows a release-channel LABEL (3-latest, or 3-mac
+                  once written): it is resolved to the VERSION the image reports
+                  and that version is deployed; \`up\` takes it too.
                   Same image-source default as \`up\` (ACR in registry mode).
                   --rebuild-base forces a rebuild of the portal-ai base layer
                   (Node + the Claude Code / Copilot CLIs), which is otherwise
@@ -2441,7 +2567,9 @@ COMMANDS:
                   list. \`up\` runs this for you when the instance is not set up yet.
   port-forward    (Re)start the host:${HOST_PORT} -> ingress:443 forward.
   observability   Install Grafana/Loki/Promtail/Prometheus (§11).
-  doctor          Preflight: tools, chart/assets, cluster.
+  doctor          Preflight: host profile, tools, chart/assets, cluster.
+  profile         The effective host profile: VM size, model, channel, running version.
+  channel <L>     Resolve a channel label to the version it names now (no deploy).
   help | version
 
 ENV OVERRIDES:
@@ -2454,6 +2582,11 @@ ENV OVERRIDES:
                        about 48 GB with the defaults. See LocalColimaMac §2 "Host sizing".
   MEMEX_OLLAMA_MODEL   Ollama model 'up' pulls and aliases as qwen3.6-code (default
                        qwen3.6, ~23 GB); 'none' skips the pull on a small host.
+  MEMEX_PROFILE        Mac host profile: mac-studio (VM 12/32, qwen3.6; >= 64 GB host) or
+                       mac-mini (VM 6/12, qwen3:8b; >= 24 GB host). Sets defaults only;
+                       the variables above still win. Doc/Architecture/ReleaseEditions.
+  MEMEX_CHANNEL        Follow a release-channel label by default (up/update/autoroll),
+                       e.g. 3-latest. A label is a seed: the resolved version is what runs.
   MEMEX_PORT           Host port for the forward (default 8443).
   MEMEX_LOCAL_HOME     State dir (default ~/.memex-local).
 
@@ -2494,6 +2627,10 @@ readonly PORTAL_DEPLOYMENT="memex-portal-deployment"
 # This is the local equivalent of the AKS in-pod self-update, host-driven because the pod has no
 # Azure identity here (no IMDS in Colima — ManagedIdentityCredential can never work in-cluster).
 # Requires: `az` logged in, and multi-arch (arm64) images in ACR — CD builds them since #1675/#1676.
+# The registry tag the acr poll follows: the channel label when MEMEX_CHANNEL is set (baked into the
+# launchd job's environment by `autoroll up`), else `main`. Each staged image's reported version is
+# written to $CHANNEL_STATE, so a host following a moving label still records what it runs.
+readonly AUTOROLL_ACR_TAG="${CHANNEL:-$ACR_DEFAULT_TAG}"
 readonly AUTOROLL_SOURCE_STATE="$LOCAL_HOME/autoroll.source"     # 'acr' enables the registry poll
 readonly AUTOROLL_ACR_STATE="$LOCAL_HOME/autoroll.acr.digest"    # last STAGED portal manifest digest
 readonly AUTOROLL_ACR_CHECKED="$LOCAL_HOME/autoroll.acr.checked" # mtime throttles the az poll
@@ -2588,7 +2725,9 @@ cmd_autoroll() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>HOME</key><string>${HOME}</string>
+    <key>HOME</key><string>${HOME}</string>${CHANNEL:+
+    <key>MEMEX_CHANNEL</key><string>${CHANNEL}</string>}${HOST_PROFILE:+
+    <key>MEMEX_PROFILE</key><string>${HOST_PROFILE}</string>}
   </dict>
   <key>StandardOutPath</key><string>${AUTOROLL_LOG}</string>
   <key>StandardErrorPath</key><string>${AUTOROLL_LOG}</string>
@@ -2597,7 +2736,7 @@ PLIST
       launchctl unload "$AUTOROLL_PLIST" >/dev/null 2>&1 || true
       launchctl load "$AUTOROLL_PLIST"
       if [ "$source" = "acr" ]; then
-        ok "Auto-roll ON (source=acr) — polling $ACR/memex-portal-ai:main every ${AUTOROLL_ACR_INTERVAL_MIN}m + local builds every 30s; newer image → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
+        ok "Auto-roll ON (source=acr) — polling $ACR/memex-portal-ai:$AUTOROLL_ACR_TAG every ${AUTOROLL_ACR_INTERVAL_MIN}m + local builds every 30s; newer image → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
       else
         ok "Auto-roll ON (source=build) — watching portal + migration images every 30s; a new build → re-migrate then rollout restart. Log: $AUTOROLL_LOG"
       fi
@@ -2621,7 +2760,7 @@ PLIST
       else
         info "Auto-roll: stopped"
       fi
-      info "source:    $(cat "$AUTOROLL_SOURCE_STATE" 2>/dev/null || echo build) (acr = also tracks $ACR/memex-portal-ai:$ACR_DEFAULT_TAG + the plugins checkout every ${AUTOROLL_ACR_INTERVAL_MIN}m)"
+      info "source:    $(cat "$AUTOROLL_SOURCE_STATE" 2>/dev/null || echo build) (acr = also tracks $ACR/memex-portal-ai:$AUTOROLL_ACR_TAG + the plugins checkout every ${AUTOROLL_ACR_INTERVAL_MIN}m)"
       info "acr:       last staged digest: $(cat "$AUTOROLL_ACR_STATE" 2>/dev/null || echo none)"
       info "plugins:   last applied sha:   $(cat "$AUTOROLL_PLUGINS_STATE" 2>/dev/null || echo none)"
       info "portal:    $AUTOROLL_IMAGE   last: $(cat "$AUTOROLL_STATE" 2>/dev/null || echo none)"
@@ -2641,7 +2780,7 @@ PLIST
         # 🚨 Same rule as image_pull_acr: keep Azure's answer. Guessing "(az not logged in /
         # offline?)" in a line that repeats every polling window is worse than saying nothing —
         # a missing AcrPull role reads as a transient network blip forever.
-        rdigest="$(az acr manifest show-metadata -r "${ACR%%.*}" -n "memex-portal-ai:$ACR_DEFAULT_TAG" --query digest -o tsv 2>&1)" \
+        rdigest="$(az acr manifest show-metadata -r "${ACR%%.*}" -n "memex-portal-ai:$AUTOROLL_ACR_TAG" --query digest -o tsv 2>&1)" \
           || { racr_err="$rdigest"; rdigest=""; }
         rlast="$(cat "$AUTOROLL_ACR_STATE" 2>/dev/null || true)"
         if [ -z "$rdigest" ]; then
@@ -2650,7 +2789,7 @@ PLIST
             "$(printf '%s' "${racr_err:-<no output>}" | tr '\n' ' ' | cut -c1-400)"
         elif [ "$rdigest" != "$rlast" ]; then
           printf '%s autoroll: acr %s:%s moved (%s -> %s) — pulling portal + migration\n' \
-            "$(date -u +%FT%TZ)" "memex-portal-ai" "$ACR_DEFAULT_TAG" "${rlast:-none}" "$rdigest"
+            "$(date -u +%FT%TZ)" "memex-portal-ai" "$AUTOROLL_ACR_TAG" "${rlast:-none}" "$rdigest"
           # 🚨 Inverted so the FAILING step's output is the one kept: each arm assigns its combined
           # output and negates, so the first failure short-circuits with its own message in
           # $stage_err. The success arm below is unchanged. Written this way because
@@ -2658,8 +2797,8 @@ PLIST
           # this line did — three commands deep, with no reason. Raised in review of #2903.
           local stage_err=""
           if ! stage_err="$(az acr login -n "${ACR%%.*}" 2>&1)" \
-              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" 2>&1)" \
-              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-migration:$ACR_DEFAULT_TAG" 2>&1)"; then
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" 2>&1)" \
+              || ! stage_err="$(docker pull --platform linux/arm64 "$ACR/memex-migration:$AUTOROLL_ACR_TAG" 2>&1)"; then
             printf '%s autoroll: acr pull FAILED — keeping current images, will retry. Last error: %s\n' \
               "$(date -u +%FT%TZ)" \
               "$(printf '%s' "${stage_err:-<no output>}" | tr '\n' ' ' | cut -c1-400)"
@@ -2668,12 +2807,16 @@ PLIST
             # ConfigurationBinder NREs at startup — the exact crash that forced local source
             # builds before the registry went multi-arch.
             local arch
-            arch="$(docker image inspect "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" --format '{{.Architecture}}' 2>/dev/null)"
+            arch="$(docker image inspect "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" --format '{{.Architecture}}' 2>/dev/null)"
             if [ "$arch" = "arm64" ]; then
-              docker tag "$ACR/memex-portal-ai:$ACR_DEFAULT_TAG" "$AUTOROLL_IMAGE"
-              docker tag "$ACR/memex-migration:$ACR_DEFAULT_TAG" "$AUTOROLL_MIG_IMAGE"
+              docker tag "$ACR/memex-portal-ai:$AUTOROLL_ACR_TAG" "$AUTOROLL_IMAGE"
+              docker tag "$ACR/memex-migration:$AUTOROLL_ACR_TAG" "$AUTOROLL_MIG_IMAGE"
               printf '%s\n' "$rdigest" > "$AUTOROLL_ACR_STATE"
-              printf '%s autoroll: acr images staged — the roll continues below\n' "$(date -u +%FT%TZ)"
+              local staged_version
+              staged_version="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$AUTOROLL_IMAGE" 2>/dev/null | version_from_env || true)"
+              printf '%s %s %s\n' "$AUTOROLL_ACR_TAG" "${staged_version:-unknown}" "$(date -u +%FT%TZ)" > "$CHANNEL_STATE"
+              printf '%s autoroll: acr images staged (%s → version %s) — the roll continues below\n' \
+                "$(date -u +%FT%TZ)" "$AUTOROLL_ACR_TAG" "${staged_version:-unknown}"
             else
               printf '%s autoroll: acr image is %s, not arm64 — REFUSING to stage (would crash under emulation), will retry\n' \
                 "$(date -u +%FT%TZ)" "${arch:-unknown}"
@@ -2764,6 +2907,8 @@ main() {
     port-forward)  cmd_port_forward "$@" ;;
     observability) cmd_observability "$@" ;;
     doctor)        cmd_doctor "$@" ;;
+    profile)       cmd_profile "$@" ;;
+    channel)       cmd_channel "$@" ;;
     version|--version|-v) cmd_version ;;
     help|--help|-h) cmd_help ;;
     *) die "unknown command '$cmd' (try: memex-local help)" ;;
