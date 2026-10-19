@@ -2450,7 +2450,12 @@ cmd_channel() {
   channel_label_ok "$1" || die "'$1' is not a channel label (expected e.g. 3-latest, 3.1-latest, 3-mac) — pin a version with --tag instead"
   need docker docker
   need az azure-cli
-  az acr login -n "$ACR_NAME" -o none >/dev/null 2>&1 || die "cannot log in to $ACR (see 'memex-local up --from-acr' for the remedy)"
+  # Keep Azure's own answer (MemexLocalSurfacesAzureErrorsGuard): it names the missing role exactly.
+  local acr_err=""
+  if ! acr_err="$(az acr login -n "$ACR_NAME" -o none 2>&1)"; then
+    [ -n "$acr_err" ] && printf '%s\n' "$acr_err" >&2
+    die "cannot log in to $ACR — Azure's own answer is printed above (signed out: az login; signed in: the account needs AcrPull on '$ACR_NAME' and Reader on its subscription)"
+  fi
   resolve_channel "$1"
 }
 
