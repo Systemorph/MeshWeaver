@@ -145,13 +145,15 @@ Controls.Catalog("Partners",
     itemArea: "Card")
 ```
 
-- **The filter carries no `sort:`.** Each Sort-by choice (`CatalogSort`) appends its own, and the
-  first one is the hidden query, so re-sorting changes the ORDER and never WHICH nodes show. The default
-  choices are `CatalogSort.Default`: **Last activity** (`sort:subtreeLastModified-desc`), Name, Last changed.
-- **The store orders.** There is no client-side `WithSortBy` — that would re-sort the hits and silently
-  override whatever the reader picked in the dropdown.
-- **One hit per row, through the hit's own area** (`itemArea`), searchable, the first `pageSize`
-  (20) shown before "Show all".
+- **A search bar and "Load more" — nothing else.** No sort dropdown, no view-options bar. The
+  hits come `pageSize` (20) at a time from the STORE, and "Load more" fetches the next page.
+- **The query language is typed into the same bar**, and the placeholder teaches it by example
+  ("Search partners — e.g. a name, sort:name, sort:lastModified-desc"). The typed text follows the
+  hidden query, so a typed `sort:` replaces the default order.
+- **The filter carries no `sort:`.** The catalog appends the default order (`CatalogSort`, **Last
+  activity** — `sort:subtreeLastModified-desc` — unless you pass another), and the store orders; there
+  is no client-side `WithSortBy` to re-sort the hits behind the reader's back.
+- **One hit per row, through the hit's own area** (`itemArea`).
 - **Places a reader sees as different are different catalogs.** Clients, partners and suppliers are
   three catalogs over three filters, not one list with a type column.
 

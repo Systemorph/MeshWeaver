@@ -425,34 +425,32 @@ public static class Controls
     public static MeshSearchControl MeshSearch => new();
 
     /// <summary>
-    /// A <b>catalog</b>: the standard way to show one set of nodes — titled, searchable, re-sortable,
-    /// one hit per row rendered through the hit's OWN <paramref name="itemArea"/>, the first
-    /// <paramref name="pageSize"/> shown before "Show all". It is nothing but <see cref="MeshSearch"/>
-    /// with the set as its hidden query: <paramref name="filter"/> plus the first sort is the hidden
-    /// query, every sort is a Sort-by option over the SAME filter, and the store does the ordering —
-    /// there is no client-side <c>SortBy</c> to override the reader's pick. Refine it with any
+    /// A <b>catalog</b>: the standard way to show one set of nodes — a search bar over the set, one
+    /// hit per row rendered through the hit's OWN <paramref name="itemArea"/>, <paramref name="pageSize"/>
+    /// at a time with "Load more". It is nothing but <see cref="MeshSearch"/> with the set as its
+    /// hidden query (<paramref name="filter"/> plus the default <paramref name="sort"/>). There is no
+    /// sort dropdown and no view-options bar: a reader re-orders or narrows by TYPING the query
+    /// language into the same bar (<c>sort:name</c>), and the placeholder says so by example — the
+    /// typed text follows the hidden query, so its <c>sort:</c> wins. Refine it with any
     /// <c>With…</c> of <see cref="MeshSearchControl"/> (create, columns, render mode).
     /// </summary>
     /// <param name="title">The catalog's title; also names the search placeholder.</param>
     /// <param name="filter">The set, as a query WITHOUT <c>sort:</c> (e.g. <c>nodeType:X scope:subtree partitions:all</c>).</param>
     /// <param name="itemArea">The area each hit renders through (e.g. <c>Card</c>); null for the default card.</param>
-    /// <param name="sorts">The Sort-by choices, default first; null means <see cref="CatalogSort.Default"/>.</param>
-    /// <param name="pageSize">How many hits show before "Show all".</param>
+    /// <param name="sort">The default order; null means <see cref="CatalogSort.LastActivity"/>.</param>
+    /// <param name="pageSize">Hits per page before "Load more".</param>
     public static MeshSearchControl Catalog(
-        string title, string filter, string? itemArea = null,
-        IReadOnlyList<CatalogSort>? sorts = null, int pageSize = 20)
+        string title, string filter, string? itemArea = null, CatalogSort? sort = null, int pageSize = 20)
     {
-        sorts = sorts is { Count: > 0 } ? sorts : CatalogSort.Default;
+        sort ??= CatalogSort.LastActivity;
         var control = MeshSearch
             .WithTitle(title)
-            .WithHiddenQuery(CatalogSort.Sorted(filter, sorts[0].Sort))
-            .WithSortOptions(sorts.Select(s => new MeshSearchSortOption(s.Label, CatalogSort.Sorted(filter, s.Sort))).ToArray())
+            .WithHiddenQuery(CatalogSort.Sorted(filter, sort.Sort))
             .WithRenderMode(MeshSearchRenderMode.Flat)
             .WithMaxColumns(1)
-            .WithItemLimit(pageSize)
-            .WithPlaceholder($"Search {title.ToLowerInvariant()}…")
+            .WithPageSize(pageSize)
+            .WithPlaceholder(CatalogSort.Placeholder(title, sort))
             .WithShowSearchBox(true)
-            .WithViewOptions()
             .WithReactiveMode(true)
             .WithShowEmptyMessage(true)
             .WithShowLoadingIndicator(true);

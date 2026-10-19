@@ -1,11 +1,11 @@
 namespace MeshWeaver.Layout;
 
 /// <summary>
-/// One Sort-by choice of a catalog (<see cref="Controls.Catalog"/>): a <paramref name="Label"/> and the
+/// One order of a catalog (<see cref="Controls.Catalog"/>): a <paramref name="Label"/> and the
 /// <c>sort:</c> term the STORE applies (<c>sort:name</c>, <c>sort:lastModified-desc</c>). The catalog
-/// appends it to its filter, so re-sorting never changes WHICH nodes show — only their order.
+/// appends its default to the filter; a reader types any other into the search bar.
 /// </summary>
-/// <param name="Label">The label shown in the "Sort by" dropdown.</param>
+/// <param name="Label">A human name for the order (e.g. "Last activity").</param>
 /// <param name="Sort">The store-side sort term, e.g. <c>sort:name</c>.</param>
 public record CatalogSort(string Label, string Sort)
 {
@@ -19,8 +19,14 @@ public record CatalogSort(string Label, string Sort)
     /// <summary>Alphabetical by name.</summary>
     public static readonly CatalogSort Name = new("Name", "sort:name");
 
-    /// <summary>The default choices, in order: last activity, name, last changed.</summary>
-    public static readonly IReadOnlyList<CatalogSort> Default = [LastActivity, Name, LastChanged];
+    /// <summary>The well-known orders, in the order a placeholder offers them.</summary>
+    public static readonly IReadOnlyList<CatalogSort> WellKnown = [LastActivity, Name, LastChanged];
+
+    /// <summary>The search placeholder of a catalog: what it searches, and — by example — that the
+    /// query language works in the same bar (the orders other than <paramref name="current"/>). Pure.</summary>
+    public static string Placeholder(string title, CatalogSort current) =>
+        $"Search {title.ToLowerInvariant()} — e.g. a name, "
+        + string.Join(", ", WellKnown.Where(s => s.Sort != current.Sort).Select(s => s.Sort));
 
     /// <summary><paramref name="filter"/> with <paramref name="sort"/> appended — the one place a
     /// catalog query gets its order. Pure.</summary>
