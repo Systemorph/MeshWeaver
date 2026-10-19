@@ -57,13 +57,21 @@ class ChannelError(ValueError):
     """The declaration is malformed, or a question was asked of it that it cannot answer."""
 
 
-def load(path: Path = DEFAULT_FILE) -> dict:
+def load(path: Path = DEFAULT_FILE, validated: bool = True) -> dict:
+    """The declaration, VALIDATED. A malformed one raises rather than loading: an empty or broken
+    channel list would otherwise yield an empty protected set, and every label it no longer matches
+    would be read as an ordinary pin by the lock and as deletable by a pruner."""
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
         raise ChannelError(f"{path} is missing — no channel can be protected without it") from error
     except json.JSONDecodeError as error:
         raise ChannelError(f"{path} is not valid JSON: {error}") from error
+    if validated:
+        problems = validate(doc)
+        if problems:
+            raise ChannelError(f"{path} is malformed — refusing to protect from it: " + "; ".join(problems))
+    return doc
 
 
 def channels(doc: dict) -> list[dict]:
@@ -119,7 +127,11 @@ def validate(doc: dict) -> list[str]:
             if not TAG_CHARS_RE.match(tag):
                 problems.append(f"{where}: {tag!r} is not a valid tag template")
             rendered = render(tag, 3, 1, 0)
-            if rendered is not None and VERSION_SHAPED_RE.match(rendered) and not MOVING_POINTER_RE.search(rendered):
+            if rendered is None or "{" in rendered or "}" in rendered or not TAG_CHARS_RE.match(rendered):
+                problems.append(
+                    f"{where}: {tag!r} does not render to a valid image tag (got {rendered!r}) — only "
+                    f"{{{'}, {'.join(PLACEHOLDERS)}}} placeholders, lower case and balanced, are allowed")
+            elif VERSION_SHAPED_RE.match(rendered) and not MOVING_POINTER_RE.search(rendered):
                 problems.append(
                     f"{where}: {tag!r} renders as {rendered!r}, which VersionSelect would SELECT as a version "
                     "(dotted shape without the excluded `-latest` suffix) — a self-updater would roll to a moving label")
@@ -141,10 +153,13 @@ def validate(doc: dict) -> list[str]:
 
 
 def render(template: str, major: int, minor: int, patch: int) -> str | None:
+    """The tag a template names for one line, or None when it is not a renderable template — an
+    unknown or mis-cased placeholder, or an unbalanced brace."""
     try:
-        return template.format(major=major, minor=minor, patch=patch)
-    except (KeyError, IndexError, ValueError):
+        out = template.format(major=major, minor=minor, patch=patch)
+    except (KeyError, IndexError, ValueError, AttributeError):
         return None
+    return None if ("{" in out or "}" in out) else out
 
 
 def version_core(version: str) -> tuple[int, int, int]:
@@ -156,7 +171,8 @@ def version_core(version: str) -> tuple[int, int, int]:
 
 def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
              repository: str | None = None) -> list[str]:
-    """The `written` labels `workflow` (optionally `job`) moves for a set of `version`."""
+    """The `written` labels `workflow` (optionally `job`) moves for a set of `version` — templated
+    line labels rendered for that line, and literal labels (`main`, `latest`) unchanged."""
     major, minor, patch = version_core(version)
     legacy = bool(LEGACY_SET_RE.match(version.strip()))
     out: list[str] = []
@@ -170,8 +186,6 @@ def tags_for(doc: dict, version: str, workflow: str, job: str | None = None,
             continue
         if repository is not None and repository not in (entry.get("repositories") or []):
             continue
-        if "{" not in entry["tag"]:
-            continue  # a bare label (`main`) carries no line; its writer spells it
         if entry.get("notation") == "legacy" and not legacy:
             continue
         out.append(render(entry["tag"], major, minor, patch))
@@ -231,7 +245,9 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
         is_floating = _load_module("mw_lock_pinned_digests_rc", "lock-pinned-digests.py").is_floating_tag
     for entry in channels(doc):
         sample = render(entry["tag"], 3, 1, 0)
-        if sample is not None and not is_floating(sample):
+        if sample is None:
+            problems.append(f"{entry['id']}: {entry['tag']!r} does not render, so nothing it names is protected")
+        elif not is_floating(sample):
             problems.append(
                 f"{entry['id']}: lock-pinned-digests.py reads {sample!r} as a PIN, not a floating label")
     return problems
@@ -261,6 +277,8 @@ def self_test() -> int:
             e["status"] = "written"
     expect("flipping enterprise to `written` hands release.yml N-enterprise",
            tags_for(flipped, "3.1.0", "release.yml") == ["3-enterprise"])
+    expect("literal labels are returned to their writer (promote moves main and latest on the tester)",
+           sorted(tags_for(real, "3.1.10050", "main-cd.yml", job="promote", repository="mw-plugin-test")) == ["latest", "main"])
     expect("--repository narrows to the declared repositories",
            tags_for(real, "3.1.10050", "main-cd.yml", job="arm", repository="mw-plugin-test") == [])
     try:
@@ -291,6 +309,19 @@ def self_test() -> int:
     expect("a dotted label with a non-`-latest` suffix is refused (VersionSelect would select it)",
            bool(broken(lambda d: d["channels"][3].update(tag="{major}.{minor}.{patch}-mac"))))
     expect("a wrong schema is refused", bool(broken(lambda d: d.update(schema=2))))
+    expect("a mis-cased placeholder is refused ({Major}-mac renders nothing)",
+           bool(broken(lambda d: d["channels"][0].update(tag="{Major}-mac"))))
+    expect("an unbalanced brace is refused ({major}-mac})",
+           bool(broken(lambda d: d["channels"][0].update(tag="{major}-mac}"))))
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        empty = Path(tmp) / "release-channels.json"
+        empty.write_text(json.dumps({"schema": 1, "channels": []}))
+        try:
+            load(empty)
+            expect("the operational loader REFUSES a malformed declaration (no silent empty protected set)", False)
+        except ChannelError:
+            expect("the operational loader REFUSES a malformed declaration (no silent empty protected set)", True)
 
     # check — parity with platform-version.py and the lock, with fakes so each arm is shown to fire
     class FakePV:
