@@ -424,6 +424,39 @@ public static class Controls
     /// <summary>Gets a new mesh-node search control that searches across the mesh.</summary>
     public static MeshSearchControl MeshSearch => new();
 
+    /// <summary>
+    /// A <b>catalog</b>: the standard way to show one set of nodes — a search bar over the set, one
+    /// hit per row rendered through the hit's OWN <paramref name="itemArea"/>, <paramref name="pageSize"/>
+    /// at a time with "Load more". It is nothing but <see cref="MeshSearch"/> with the set as its
+    /// hidden query (<paramref name="filter"/> plus the default <paramref name="sort"/>). There is no
+    /// sort dropdown and no view-options bar: a reader re-orders or narrows by TYPING the query
+    /// language into the same bar (<c>sort:name</c>), and the placeholder says so by example — the
+    /// typed text follows the hidden query, so its <c>sort:</c> wins. Refine it with any
+    /// <c>With…</c> of <see cref="MeshSearchControl"/> (create, columns, render mode).
+    /// </summary>
+    /// <param name="title">The catalog's title; also names the search placeholder.</param>
+    /// <param name="filter">The set, as a query WITHOUT <c>sort:</c> (e.g. <c>nodeType:X scope:subtree partitions:all</c>).</param>
+    /// <param name="itemArea">The area each hit renders through (e.g. <c>Card</c>); null for the default card.</param>
+    /// <param name="sort">The default order; null means <see cref="CatalogSort.LastActivity"/>.</param>
+    /// <param name="pageSize">Hits per page before "Load more".</param>
+    public static MeshSearchControl Catalog(
+        string title, string filter, string? itemArea = null, CatalogSort? sort = null, int pageSize = 20)
+    {
+        sort ??= CatalogSort.LastActivity;
+        var control = MeshSearch
+            .WithTitle(title)
+            .WithHiddenQuery(CatalogSort.Sorted(filter, sort.Sort))
+            .WithRenderMode(MeshSearchRenderMode.Flat)
+            .WithMaxColumns(1)
+            .WithPageSize(pageSize)
+            .WithPlaceholder(CatalogSort.Placeholder(title, sort))
+            .WithShowSearchBox(true)
+            .WithReactiveMode(true)
+            .WithShowEmptyMessage(true)
+            .WithShowLoadingIndicator(true);
+        return itemArea is null ? control : control.WithItemArea(itemArea);
+    }
+
     /// <summary>Creates a mesh-node picker control bound to <paramref name="data"/>.</summary>
     /// <param name="data">The bound node path value or data-binding expression.</param>
     /// <returns>A new <see cref="MeshNodePickerControl"/>.</returns>
