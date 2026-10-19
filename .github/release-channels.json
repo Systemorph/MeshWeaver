@@ -1,0 +1,233 @@
+{
+  "_comment": [
+    "THE DECLARED RELEASE CHANNELS — every MOVING image label the platform publishes or reserves,",
+    "in ONE place (policy `declared-release-channels`; manual Doc/Architecture/ReleaseEditions).",
+    "",
+    "A channel label is a TAG that moves (`3-latest`, `3-mac`, `3-enterprise`, `main`), never a",
+    "version: versions stay plain SemVer and carry no channel word (policy",
+    "`platform-semver-versioning`). A label names WHICH build an edition currently offers; a",
+    "deployment still runs a resolved VERSION (a pointer is a seed, never a running pin).",
+    "",
+    "WHO READS THIS FILE, and the one rule each reader keeps:",
+    "  * retention (lock-pinned-digests.py, and any pruner) — every label matching an entry below is",
+    "    PROTECTED: the tag is never deleted, nor the manifest it names at the moment of the sweep. A",
+    "    label is moving, so it is never LOCKED to a digest (that would pin bytes the label has",
+    "    left); it is excluded by NAME. Removing an entry is the ONLY way to release a label.",
+    "    `declared` entries are protected too, so a label is safe before its writer ships.",
+    "  * writers (main-cd.yml, release.yml) — a workflow may write a moving label only if an entry",
+    "    here names that workflow as its writer and is `written`.",
+    "  * `release-channels.py check .` (every pull request) — the file is well formed, every",
+    "    writer exists, the line pointers agree with platform-version.py, and lock-pinned-digests.py",
+    "    classifies every label as floating.",
+    "",
+    "`status`: written  — a writer moves it today.",
+    "          declared — reserved and protected; no writer yet (`writer.state` says what is owed).",
+    "          retired  — no writer moves it any more; still protected while a consumer may resolve it.",
+    "`notation`: any | legacy — `legacy` labels are written only for a pre-SemVer set (`3.0.0-ci.<n>`)."
+  ],
+  "schema": 1,
+  "placeholders": {
+    "major": "the version's major, e.g. 3",
+    "minor": "the version's minor, e.g. 1",
+    "patch": "the version's patch — the legacy notation's line patch, e.g. 0 in 3.0.0-ci.8080"
+  },
+  "channels": [
+    {
+      "id": "major-latest",
+      "tag": "{major}-latest",
+      "edition": "standard",
+      "meaning": "The newest ARMED set of the major — the standard Linux edition (AKS and any Kubernetes host), multi-arch linux/amd64 + linux/arm64. What a new instance seeds from.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration",
+        "memex-control"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "arm",
+          "control-first"
+        ],
+        "state": "Phase D (portal, migration) and control-first (control), forward only"
+      },
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "minor-latest",
+      "tag": "{major}.{minor}-latest",
+      "edition": "standard",
+      "meaning": "The newest armed set of one minor line of the standard edition.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration",
+        "memex-control"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "arm",
+          "control-first"
+        ],
+        "state": "Phase D and control-first, forward only"
+      },
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "patch-latest",
+      "tag": "{major}.{minor}.{patch}-latest",
+      "edition": "standard",
+      "meaning": "The legacy notation's patch line (3.0.0-latest). Written only for a pre-SemVer set; kept protected because existing records and ImageLine seeds still name it.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration",
+        "memex-control"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "arm",
+          "control-first"
+        ],
+        "state": "legacy sets only; a SemVer set never moves it"
+      },
+      "notation": "legacy",
+      "status": "written"
+    },
+    {
+      "id": "minor-stable",
+      "tag": "{major}.{minor}-stable",
+      "edition": "standard",
+      "meaning": "The newest set of one minor line that earned trust: sealed, every satellite's main passed on it, canary clean (Doc/Architecture/ReleaseChannels, 'What promotes a set to stable'). Not an official release.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "stable-promote"
+        ],
+        "state": "owed: the stable promoter (serialised, compare-and-swap, after the channel/<line>-stable git tag)"
+      },
+      "notation": "any",
+      "status": "declared"
+    },
+    {
+      "id": "mac",
+      "tag": "{major}-mac",
+      "edition": "mac",
+      "meaning": "The newest armed set of the major whose linux/arm64 variant passed the Mac acceptance on Apple silicon (Colima k3s on a Mac Studio or Mac mini host). What a Mac host seeds from and its host-side roller follows.",
+      "platforms": [
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration"
+      ],
+      "hostProfiles": [
+        "mac-studio",
+        "mac-mini"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "mac-accept"
+        ],
+        "state": "owed: needs a self-hosted Apple-silicon runner and the mac-accept job (Doc/Architecture/ReleaseEditions, the Mac deployment gap)"
+      },
+      "notation": "any",
+      "status": "declared"
+    },
+    {
+      "id": "enterprise",
+      "tag": "{major}-enterprise",
+      "edition": "enterprise",
+      "meaning": "The newest OFFICIAL release of the major (a clean x.y.z cut by release.yml, supported per the Release Support Policy). What an enterprise install on the Stable policy seeds from.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration"
+      ],
+      "writer": {
+        "workflow": "release.yml",
+        "jobs": [
+          "release"
+        ],
+        "state": "owed: release.yml moves it forward only, after the release marker, once activated by flipping status to written"
+      },
+      "notation": "any",
+      "status": "declared"
+    },
+    {
+      "id": "main",
+      "tag": "main",
+      "edition": "continuous",
+      "meaning": "The newest PROMOTED set (before arming). What CI consumers and memex-local's default pull read; not a fleet seed.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "memex-portal-ai",
+        "memex-migration",
+        "memex-control",
+        "mw-plugin-test"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "promote",
+          "control-promote"
+        ],
+        "state": "phase B, forward only"
+      },
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "latest",
+      "tag": "latest",
+      "edition": "continuous",
+      "meaning": "The tester's moving tag (MeshWeaver.Plugins pins MW_TEST_IMAGE to it) and the GHCR mirror's latest release.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "repositories": [
+        "mw-plugin-test",
+        "memex-portal-ai",
+        "memex-migration"
+      ],
+      "writer": {
+        "workflow": "main-cd.yml",
+        "jobs": [
+          "promote"
+        ],
+        "state": "phase B; release.yml also moves it on GHCR"
+      },
+      "notation": "any",
+      "status": "written"
+    }
+  ]
+}
