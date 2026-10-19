@@ -239,6 +239,121 @@ caller as `NodeMoveRejectionReason.ValidationFailed` — a verdict every retry m
 as `Unknown`, which a caller has to treat as worth retrying. The feedback hand-over retried such a move
 on every activation for exactly that reason (#6952).
 
+## Where the target may lie — and the case-only rename (#6951)
+
+The mesh keys paths **case-insensitively**: the deletion registry, the in-memory store and the file
+system store all compare with `OrdinalIgnoreCase`, while a Postgres row's `path` is case-sensitive
+inside its (lower-cased) partition schema. A target that equals the source ignoring case is therefore
+the SAME key in some stores and a DIFFERENT key in others, and copy-then-delete is wrong for it in both:
+
+- **case-insensitive store** — the copy's create finds the node already there, the relocation resume
+  (#6310) can recognise it as "this source, already relocated", and the delete leg's plan then names
+  the only copy. Measured on the in-memory mesh before the fix: `TestData/vhvgruppe-… →
+  TestData/VHVGruppe-…` answered `success=True` naming the node at the OLD casing, and a move onto
+  itself also answered success — a move that reports success while relocating nothing;
+- **case-sensitive store** — the copy writes a new row, but the source's subtree-deletion scope compares
+  ignoring case and refuses the move's own target writes: *"Cannot write 'VHVGruppe/BirgitSalzwedel':
+  the subtree 'VhvGruppe/BirgitSalzwedel' is currently being deleted"* — the production refusal.
+
+`HandleMoveNodeRequest` now classifies the target before it reads or writes anything
+(`MovePaths.Classify`, on whole segments, ignoring case):
+
+| Relation | Example | Outcome |
+|---|---|---|
+| `Same` | `A/b → A/b` | refused, `ValidationFailed` — nothing to move |
+| `IntoOwnSubtree` | `A/b → A/b/c`, also `A/b → a/B/c` | refused, `ValidationFailed` — the copy would write into what the delete removes |
+| `CaseOnlyRename` | `VhvGruppe/x → VHVGruppe/x` | renamed through a staging sibling (below) |
+| `Distinct` | everything else | the ordinary move |
+
+**A case-only rename is two ordinary relocations**: source → `{target's parent}/recase-{token}` →
+target. The staging sibling sits under the TARGET's parent (so it needs exactly the Create grant the
+target does), its leaf is `recase-` plus a 12-character random token — a fixed length, so a long
+target leaf never pushes the staging name (or the atomic write's temporary file name beside it) past
+a file system's 255-byte component limit — and it differs from both ends in every store, so each leg
+writes new keys and removes old ones, and each
+runs the whole move contract above — the delete pre-flight, the subtree-deletion scope of that leg's
+source, satellites, authorship and completeness. Both legs share the one move deadline.
+
+**A failed case-only rename never deletes at its target.** It either restores — when the failed
+leg's copy provably wrote nothing — or answers `Unknown` naming source, staging and target, and the
+operator resolves. Nothing on the platform proves that a row at the target is still the one the copy
+inserted: storage writes are not insert-only (a competing create between the create handler's
+existence read and its write is returned as success), the deletion scope
+(`RecentlyDeletedRegistry.WithinSubtreeDeletion`) blocks in-process writers only, and no
+compare-and-delete checks identity across silos (another silo can delete and re-create the target at
+version 1). A compensating delete could therefore remove somebody else's node, so the undo fails
+closed. Four review rounds of #6976 each found another way a compensating delete went wrong before
+this rule replaced it.
+
+| The failed leg… | What happens | Answer |
+|---|---|---|
+| was refused before it wrote anything | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: its own refusal; leg 2: `caseRenameRestored`, the leg's own reason |
+| failed in its COPY having provably written nothing (`Written` empty, `WrittenUnsettled` false) | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: the copy's own verdict; leg 2: `caseRenameRestored` carrying the copy's transcript |
+| failed in its COPY after writing at its target | nothing is deleted, nothing is moved back; target and staging stay as they are | `Unknown`, `caseRenameCopyWrote`, naming the written paths and where the complete subtree is |
+| failed in its COPY without being able to say what it wrote | nothing is deleted, nothing is moved back | `Unknown`, `caseRenameCopyUnsettled`, naming where the complete subtree is |
+| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameDeleteFailed`, naming the possibly incomplete path and where the complete subtree is |
+| the move back itself failed | nothing more is done | `Unknown`, `caseRenameRestoreFailed` |
+
+**Where the complete subtree is depends on WHICH leg failed and WHERE**, and every `Unknown` answer
+says it ("The complete subtree is at …"):
+
+| Failed in | Source | Staging | Target |
+|---|---|---|---|
+| leg 1, copy | complete, untouched | partial (what the copy wrote) | untouched |
+| leg 1, deleting the source | may be partial | **complete** | untouched |
+| leg 2, copy | gone | **complete**, untouched | partial (what the copy wrote) |
+| leg 2, deleting staging | gone | may be partial | **complete** |
+
+The table is the expectation, not a verdict: an operator resolving an `Unknown` reads ALL THREE paths
+the answer names — source, staging and target — before deciding which to keep, and never assumes
+staging is complete merely because the second leg failed. Each cause has its own catalog key (`activity.node.move.caseRename…`),
+so the whole answer renders in the viewer's language; only upstream text — an exception's own message,
+the failed leg's English verdict, the listed paths — travels as a raw argument, and the failed copy's
+keyed transcript is carried before it.
+
+**What a failed copy reports** (`CopyNodeResponse`): `Written` — every target path a create landed at,
+or a resumed relocation (#6310) stood in for — and `WrittenUnsettled` when that set may be incomplete:
+creates still outstanding when it ran out of time, or a create that failed after it may have written.
+A failed create is not proof of no write: the create handler writes the row before its post-creation
+steps, and when a critical step fails and the rollback fails too (or a step runs past the deadline) it
+answers a failure over a row that stays. So `NodeAlreadyExists` counts as no write; a judged refusal
+(`ValidationFailed`, `InvalidPath`, `InvalidNodeType`) is confirmed by reading the path — a row there
+is possibly ours; anything else is possibly written. For `Written` to be complete the copy runs EVERY
+create it issued to its own verdict before it answers (a first failure no longer cuts the rest off
+mid-flight). `Written` is never a list to delete — only its emptiness is used.
+
+A stall after the subtree started to leave the source answers `Unknown` naming all three paths
+(`activity.node.move.caseRenameStalled`). The refusals of `Same` and `IntoOwnSubtree` are keyed too
+(`activity.node.move.ontoItself`, `activity.node.move.intoOwnSubtree`).
+
+On a case-insensitive **file system** (macOS, Windows) the two-step is what makes the new casing reach
+the disk: the first leg removes the old files and their now-empty directories, so the second leg's
+writes create entries with the new names. That depends on the delete pruning the node's OWN directory:
+`FileSystemStorageAdapter` starts pruning empty directories at `{path}/` itself — which, in the
+JSON + `index.md` split pattern, held the node's `index.md` — rather than at the parent of its file;
+starting at the parent left an empty old-cased directory that the second leg then reused on a
+case-insensitive volume, reporting success with the descendants under the old casing. Only the segments the moved subtree OWNS are re-cased; an
+ancestor segment whose casing differs (`VhvGruppe/x → VHVGruppe/x` where `VhvGruppe` is a node of its
+own) stays as that ancestor's directory is named. Pinned by `MoveRenamesByCaseOnlyTest` (in-memory:
+the rename, the refusals, the classifier) and `MoveRenamesByCaseOnlyOnTheFileSystemTest`, which reads
+the names the volume actually holds — the target's exact directory and node file, and no staging
+entry — and passes on case-sensitive and case-insensitive volumes alike, for a plain source, a
+JSON + `index.md` split source, and a 200-character id. The failure paths are pinned
+by isolated faults: `CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest` (one create refused at
+the target's exact casing: a refused DESCENDANT leaves the root the copy wrote — `Unknown`, target and
+staging untouched; a refused ROOT means nothing was written — the subtree is moved back and reads back
+at the source's casing), `CaseOnlyRenameReportsAPartialFirstLegDeleteTest`
+(`FaultInjectingStorageAdapter.FailDeleteMany` stops the first leg's delete part-way; the answer names
+the staging path, which holds the whole subtree),
+`CaseOnlyRenameDoesNotRestoreOverACreateThatFailedAfterWritingTest` (a critical post-creation step fails
+for one target descendant and `FailDeletes` kills that create's own rollback, so its row stays; before
+the fix the rename answered "moved back" over it — now `Unknown`, nothing moved back, staging intact),
+`CaseOnlyRenameKeepsWhatAPostCreationHandlerWroteTest` (a handler writes a child under the target root,
+then a descendant is refused; the child and root stay) and
+`CaseOnlyRenameKeepsATargetEditedBeforeItsCleanupTest` (an ordinal-path create validator parks the
+second leg while the test edits the landed target root and creates a child beside it; before the fix
+the undo deleted the edit and answered "moved back" — now both survive and the answer is `Unknown`).
+
 ## What this means for callers
 
 - **Moving a node moves its comments, threads, approvals and grants.** A satellite's `MainNode` is
@@ -249,6 +364,8 @@ on every activation for exactly that reason (#6952).
   refusal a DELETE of the source would get — if you may not delete it, you may not move it — and every
   create validator that refuses the copy leg. `ValidationFailed` is a verdict: do not retry it
   unchanged.
+- **Renaming by case is a move.** Send `MoveNodeRequest(old, newCasing)`; a move onto itself or into
+  its own subtree is refused with `ValidationFailed`.
 - **Do not write to a node while it is being moved.** The write is refused (*"Node being deleted"*)
   and nothing is committed; retry once the move has answered.
 - **`CopyNodeRequest.IncludeSatellites` costs an enumeration, not a filter.** It is not free, and it
