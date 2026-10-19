@@ -224,6 +224,46 @@ permission check, reachable from every ingress that forwards deliveries) forward
 `DeleteAndPublish`) is checked by `MeshNodeDeletionDataValidator`, which runs the same chain beside
 `RlsDataValidator`.
 
+## A half-landed move is finished by re-issuing it (#6310)
+
+Copy-then-delete is not atomic. A move whose reply is lost (#6107), or whose copy leg fails part-way
+— the copy creates the root before its descendants, so a refused descendant leaves the root behind —
+ends with the copy (or part of it) at the target and the source untouched. Re-issuing the same
+`MoveNodeRequest` CONVERGES: it finishes the move instead of refusing the target it wrote itself.
+
+In the copy leg of a move (a preserving copy), a create refused with `NodeAlreadyExists` is checked
+against what is stored at the target, and the existing node **stands in for the create** only when
+both hold:
+
+1. **It is the same node** — same `NodeType`, `CreatedBy` and `CreatedDate`. A preserving create
+   copies these verbatim from the stored source, and no other create can mint them.
+2. **The source is unchanged since the copy landed** — the source's `LastModified` is one the target
+   has carried: its current stamp (nobody wrote to the target since), or one of its recorded versions
+   (somebody did; the target's later state is then its NEWER state, and it is kept).
+
+Descendants the earlier attempt never reached are created, and then the delete leg removes the source.
+The resume never writes over the target and never deletes at it. Every other case keeps the
+`TargetAlreadyExists` refusal and changes nothing, on either side:
+
+| Between the attempts | Store keeps history | Retry |
+|---|---|---|
+| nothing written | either | resumes; source removed |
+| a foreign node cleared from a descendant's target | either | resumes, carries the rest; source removed |
+| the TARGET edited | yes | resumes; the target's edit is kept, the stale source removed |
+| the TARGET edited | no (in-memory) | refused — "unchanged" cannot be established; both kept |
+| the SOURCE edited | either | refused — resuming would discard the source's edit; both kept |
+| a different node at the target | either | refused — a genuine collision |
+
+Once a retry has converged, a further one answers `SourceNotFound` and touches nothing. On the
+file-system store a node kept as `.md` front matter carries neither `CreatedBy` nor `CreatedDate`, so
+"the same node" cannot be established for it and its retry is refused like any collision; JSON-stored
+nodes on that store, and every node on Postgres, carry both. Pinned by
+`MoveResumesAHalfLandedMoveTest` (the copy leg alone landed, root only; a source edit; a foreign
+target), `MoveConvergesAfterAFailedCopyLegTest` (a real move whose copy leg failed on a descendant,
+retried to convergence and once more; a target edit on a store without history) and
+`MoveResumesOverAnEditedTargetWithHistoryTest` (the file-system store, which keeps versions: a target
+edit resumes and is kept, a source edit is refused).
+
 ## A relocation carries what is on disk
 
 The copy leg re-creates the source through `CreateNodeRequest`, so every create validator judges it —
