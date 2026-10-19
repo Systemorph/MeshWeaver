@@ -318,6 +318,17 @@
             "cr.meshweaver.cloud"
           ],
           "state": "identity tags of the accepted control image"
+        },
+        {
+          "workflow": "hosting-operator.yml",
+          "job": "publish",
+          "repositories": [
+            "hosting-operator"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "every merge that touches the operator image"
         }
       ]
     },
@@ -358,8 +369,45 @@
             "ghcr.io/systemorph"
           ],
           "state": "the GHCR mirror of every official release"
+        },
+        {
+          "workflow": "base-image-acr.yml",
+          "job": "base",
+          "repositories": [
+            "memex-portal-ai-base"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "what main-cd's ContainerBaseImage references; rebuilt by hand or on a base Dockerfile change"
         }
       ]
+    },
+    {
+      "id": "edge",
+      "tag": "edge",
+      "edition": "edge",
+      "meaning": "The newest UNVERIFIED edge build (edge-images.yml applies it in the publish itself, by design an unverified channel). Never a fleet seed.",
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "writers": [
+        {
+          "workflow": "edge-images.yml",
+          "job": "edge-images",
+          "repositories": [
+            "memex-portal-ai",
+            "memex-migration"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "each edge publish, via ContainerImageTags"
+        }
+      ],
+      "notation": "any",
+      "status": "written"
     }
   ]
 }

@@ -45,8 +45,9 @@ Every moving label lives in
 | `{major}.{minor}-stable` | standard | newest set of a minor line that earned trust ([Release Channels](../ReleaseChannels)) | the stable promoter (owed) | declared |
 | `{major}-mac` | mac | newest armed set whose `linux/arm64` variant passed Mac acceptance on Apple silicon | `main-cd.yml` `mac-accept` (owed) | declared |
 | `{major}-enterprise` | enterprise | newest **official** release of the major (clean `x.y.z`) | `release.yml` (owed) | declared |
-| `main` | continuous | newest promoted set, before arming | `main-cd.yml` `promote` | written |
-| `latest` | continuous | the tester's moving tag; GHCR's latest release | `main-cd.yml` `promote`, `release.yml` | written |
+| `main` | continuous | newest promoted set, before arming (also `hosting-operator:main`) | `main-cd.yml` `promote`, `hosting-operator.yml` | written |
+| `latest` | continuous | the tester's moving tag, GHCR's latest release, and `memex-portal-ai-base:latest` | `main-cd.yml` `promote`, `release.yml`, `base-image-acr.yml` | written |
+| `edge` | edge | newest unverified edge build; never a fleet seed | `edge-images.yml` | written |
 
 Each label lists its **writer bindings**. A binding names a workflow, a job, and the repositories
 and registries that job writes the label to. For example, `promote` writes `latest` only to
@@ -80,6 +81,9 @@ second entry, for example `{major}-mac-studio`.
   declared. The legacy-shaped `3.0.0-stable` that [Release Channels](../ReleaseChannels) uses as an
   example matches `PlatformVersionTag` and not `MovingPointer`. Before anything writes that shape,
   `VersionSelect` must exclude `-stable` as it excludes `-latest`.
+- **Held to its publishers.** For a `written` literal label (`main`, `latest`, `edge`), `check`
+  requires each binding's workflow to have that job, to spell the label, and to name every bound
+  repository. A binding that drifts from what its workflow writes fails the check.
 - **Held to the writers.** `check` renders sample sets in both notations and requires
   `platform-version.py line-pointers` (the speller main-cd uses today) to equal the `written`
   `main-cd.yml#arm` labels. If CD moves a pointer the file does not declare, the check fails.

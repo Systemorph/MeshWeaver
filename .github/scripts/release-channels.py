@@ -103,6 +103,11 @@ def template_regex(template: str) -> re.Pattern[str]:
 
 def validate(doc: dict) -> list[str]:
     problems: list[str] = []
+    # TYPES FIRST: a wrong-typed root or field must be a validation problem (so load() raises
+    # ChannelError and is-protected exits 2), never an AttributeError/TypeError that escapes as a
+    # generic failure a caller could read as "not protected".
+    if not isinstance(doc, dict):
+        return [f"the declaration's root must be an object, got {type(doc).__name__}"]
     if doc.get("schema") != 1:
         problems.append(f"`schema` must be 1, got {doc.get('schema')!r}")
     try:
@@ -121,7 +126,12 @@ def validate(doc: dict) -> list[str]:
         for field in REQUIRED_FIELDS:
             if field not in entry or entry[field] in (None, "", []):
                 problems.append(f"{where} ({entry.get('id', '?')}) has no `{field}`")
+        for field in ("id", "tag", "edition", "meaning", "notation", "status"):
+            if field in entry and not isinstance(entry[field], str):
+                problems.append(f"{where}: `{field}` must be a string, got {type(entry[field]).__name__}")
         cid, tag = entry.get("id"), entry.get("tag")
+        if not isinstance(cid, str):
+            cid = repr(cid)
         if cid in seen_ids:
             problems.append(f"{where}: duplicate id {cid!r}")
         seen_ids.add(cid)
@@ -163,6 +173,9 @@ def validate(doc: dict) -> list[str]:
             for field in BINDING_FIELDS:
                 if not binding.get(field):
                     problems.append(f"{at} has no `{field}`")
+            for field in ("workflow", "job"):
+                if field in binding and not isinstance(binding[field], str):
+                    problems.append(f"{at}: `{field}` must be a string")
             repos = binding.get("repositories")
             if repos and (not isinstance(repos, list) or not all(isinstance(r, str) and r for r in repos)):
                 problems.append(f"{at}: `repositories` must be a list of repository names")
@@ -253,8 +266,22 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
     for entry in channels(doc):
         for binding in entry["writers"]:
             wf = binding["workflow"]
-            if not (workflows / wf).is_file():
+            path = workflows / wf
+            if not path.is_file():
                 problems.append(f"{entry['id']}: writer workflow .github/workflows/{wf} does not exist")
+                continue
+            text = path.read_text(encoding="utf-8")
+            # A `declared` entry names the job that is OWED, so only a `written` binding must exist.
+            if entry["status"] == "written" and not re.search(rf"^  {re.escape(binding['job'])}:\s*$", text, re.MULTILINE):
+                problems.append(f"{entry['id']}: {wf} has no job `{binding['job']}`")
+            # A LITERAL label must appear in its writer, beside each repository it is bound to — so a
+            # binding that no longer matches what the workflow writes is caught, not just a missing file.
+            if entry["status"] == "written" and "{" not in entry["tag"]:
+                if not re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(entry['tag'])}(?![A-Za-z0-9_.-])", text):
+                    problems.append(f"{entry['id']}: {wf} never spells `{entry['tag']}` — the binding is stale")
+                for repo in binding["repositories"]:
+                    if repo not in text:
+                        problems.append(f"{entry['id']}: {wf} never names repository `{repo}` — the binding is stale")
     # The line pointers are spelled by platform-version.py in main-cd today. They must be EXACTLY
     # the `written` main-cd labels declared here — a pointer CD moves but this file does not declare
     # is a pointer retention may delete, and a declared one CD never moves protects nothing.
@@ -393,11 +420,44 @@ def self_test() -> int:
     expect("check fires on a writer workflow that does not exist",
            any("does not exist" in p for p in check(missing_writer, root, FakePV, always_floating)))
 
+    # The publishers outside main-cd/release.yml are declared too (regression: they were omitted).
+    expect("edge is protected (edge-images.yml writes it for portal and migration)",
+           is_protected(real, "edge") and tags_for(real, "3.1.10050", "edge-images.yml", repository="memex-migration") == ["edge"])
+    expect("hosting-operator:main is declared (hosting-operator.yml#publish)",
+           tags_for(real, "3.1.10050", "hosting-operator.yml", job="publish", repository="hosting-operator") == ["main"])
+    expect("memex-portal-ai-base:latest is declared (base-image-acr.yml#base)",
+           tags_for(real, "3.1.10050", "base-image-acr.yml", job="base", repository="memex-portal-ai-base") == ["latest"])
+    patterns = {p["id"]: p["repositories"] for p in protected_patterns(real)}
+    expect("protected-patterns names the base-image and operator repositories",
+           "memex-portal-ai-base" in patterns["latest"] and "hosting-operator" in patterns["main"])
+    stale = json.loads(json.dumps(real))
+    for e in stale["channels"]:
+        if e["id"] == "edge":
+            e["writers"][0]["repositories"].append("no-such-repo")
+    expect("check fires on a literal-label binding naming a repository its workflow never writes",
+           any("never names repository" in p for p in check(stale, root, FakePV, always_floating)))
+    wrong_job = json.loads(json.dumps(real))
+    wrong_job["channels"][0]["writers"][0]["job"] = "no-such-job"
+    expect("check fires on a binding naming a job its workflow does not have",
+           any("has no job" in p for p in check(wrong_job, root, FakePV, always_floating)))
+
     # is-protected's exit statuses: 0 protected, 1 not, 2 the lookup FAILED (a pruner must abort).
     with tempfile.TemporaryDirectory() as tmp:
         missing = Path(tmp) / "absent.json"
         malformed = Path(tmp) / "malformed.json"
         malformed.write_text(json.dumps({"schema": 1, "channels": []}))
+        root_list = Path(tmp) / "root-list.json"
+        root_list.write_text("[]")
+        int_tag = Path(tmp) / "int-tag.json"
+        bad = json.loads(json.dumps(real))
+        for e in bad["channels"]:
+            if e["id"] == "mac":
+                e["tag"] = 3
+        int_tag.write_text(json.dumps(bad))
+        expect("is-protected: a JSON root of [] exits 2, never 1",
+               main(["rc", "is-protected", "3-mac"], declaration=root_list) == 2)
+        expect("is-protected: a non-string tag exits 2, never 1",
+               main(["rc", "is-protected", "3-mac"], declaration=int_tag) == 2)
         expect("is-protected: a declared label exits 0", main(["rc", "is-protected", "3-mac"]) == 0)
         expect("is-protected: an immutable tag exits 1", main(["rc", "is-protected", "3.1.10050"]) == 1)
         expect("is-protected: a MISSING declaration exits 2, never 1",
@@ -413,7 +473,7 @@ def main(argv: list[str], declaration: Path = DEFAULT_FILE) -> int:
     if len(argv) == 3 and argv[1] == "is-protected":
         try:
             return 0 if is_protected(load(declaration), argv[2]) else 1
-        except ChannelError as error:
+        except Exception as error:  # noqa: BLE001 — ANY failed lookup is "unknown", never "unprotected"
             print(f"::error::release-channels: {error} — protection UNKNOWN, abort", file=sys.stderr)
             return 2
     try:
