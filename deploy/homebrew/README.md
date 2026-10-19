@@ -113,6 +113,39 @@ in your Microsoft Entra `ClientId` / `TenantId` / `ClientSecret` (`LocalColimaMa
 §9), or uncomment `Authentication__EnableDevLogin` for a no-Azure login. Re-run
 `memex-local up` to apply.
 
+## Mac hosts: profiles and release channels
+
+A Mac Studio or Mac mini that hosts an instance runs the **Mac edition**: the same `linux/arm64`
+platform image in Colima's VM, sized for the host
+([Release Editions](../../src/MeshWeaver.Documentation/Data/Architecture/ReleaseEditions.md)).
+
+**Profiles** (`MEMEX_PROFILE`) set defaults only. An explicit `MEMEX_COLIMA_*` or
+`MEMEX_OLLAMA_MODEL` still wins, and an unknown profile is refused.
+
+| Profile | VM | Host-native model | Host memory |
+|---|---|---|---|
+| `mac-studio` | 12 CPU / 32 GiB | `qwen3.6` (~23 GB) | 64 GB or more |
+| `mac-mini` | 6 CPU / 12 GiB | `qwen3:8b` (~5 GB) | 24 GB or more |
+| (unset) | 8 CPU / 16 GiB | `qwen3.6` | the developer-laptop defaults |
+
+**Channels** (`--channel <label>` on `up`/`update`, or `MEMEX_CHANNEL`) follow a declared
+release-channel label instead of `main`. `main` is the promoted set before it is armed. `3-latest` is
+the newest armed set, and `3-mac` takes over once its writer ships. The labels are declared in core's
+`.github/release-channels.json`. A label is only a **seed**. It is resolved to the version its image
+reports (`MESHWEAVER_PLATFORM_VERSION`), the version tag is checked to name the same bytes, and that
+version is what gets deployed. The result is recorded in `~/.memex-local/channel.state`. `autoroll up
+--acr` follows the label too: the launchd job carries `MEMEX_CHANNEL`.
+
+```bash
+MEMEX_PROFILE=mac-studio memex-local profile        # what this host would size and pull
+memex-local channel 3-latest                        # the version a label names right now
+MEMEX_PROFILE=mac-mini memex-local up --channel 3-latest
+```
+
+This covers gaps G1 and G4 of the Mac host gap analysis. A headless host still needs the
+remaining gaps closed: a pull credential that is not a person's `az login`, Colima at boot, and a
+reachable hostname.
+
 ## Auto-update (auto-roll) — the local equivalent of AKS self-update
 
 On AKS the portal self-updates by polling ACR and patching its own Deployment
@@ -234,7 +267,10 @@ log, ollama log, grafana password) — exactly the paths the doc uses.
 | `MEMEX_REPO` | auto-detected from checkout | repo root for chart + local build |
 | `MEMEX_CHART_DIR` | `$MEMEX_REPO/deploy/helm` or vendored copy | explicit chart dir |
 | `MEMEX_LOG_LEVEL` | `Debug` | verbose log level (`Trace` for max) |
-| `MEMEX_COLIMA_CPU` / `MEMEX_COLIMA_MEM` | `8` / `16` | VM sizing (§2) |
+| `MEMEX_COLIMA_CPU` / `MEMEX_COLIMA_MEM` | `8` / `16` (or the profile's) | VM sizing (§2) |
+| `MEMEX_OLLAMA_MODEL` | `qwen3.6` (or the profile's) | host-native model `up` pulls; `none` skips it |
+| `MEMEX_PROFILE` | unset | Mac host profile, `mac-studio` or `mac-mini` (below) |
+| `MEMEX_CHANNEL` | unset (`main`) | release-channel label `up`/`update`/`autoroll` follow (below) |
 | `MEMEX_PORT` | `8443` | host port for the forward (§6/§7) |
 | `MEMEX_LOCAL_HOME` | `~/.memex-local` | state directory |
 
