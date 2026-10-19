@@ -133,6 +133,34 @@ heading that names what it is, inside any Markdown body (a Space body, a Markdow
 definition):
 
 ```markdown
+## `Controls.Catalog` — the standard list of nodes
+
+When a page shows ONE set of nodes (the clients, the funds, the partners, an inbox) declare it with
+`Controls.Catalog` and nothing else. It is only the search control with the set as its hidden query,
+plus the settings every such list should share:
+
+```csharp
+Controls.Catalog("Partners",
+    "nodeType:Crm/Counterparty scope:subtree content.type:Crm/CounterpartyType/Partner partitions:all",
+    itemArea: "Card")
+```
+
+- **A search bar and "Load more" — nothing else.** No sort dropdown, no view-options bar. The
+  hits come `pageSize` (20) at a time from the STORE, and "Load more" fetches the next page.
+- **The query language is typed into the same bar**, and the placeholder teaches it by example
+  ("Search partners — e.g. a name, sort:name, sort:lastModified-desc"). The typed text follows the
+  hidden query, so a typed `sort:` replaces the default order.
+- **The filter carries no `sort:`.** The catalog appends the default order (`CatalogSort`, **Last
+  activity** — `sort:subtreeLastModified-desc` — unless you pass another), and the store orders; there
+  is no client-side `WithSortBy` to re-sort the hits behind the reader's back.
+- **One hit per row, through the hit's own area** (`itemArea`).
+- **Places a reader sees as different are different catalogs.** Clients, partners and suppliers are
+  three catalogs over three filters, not one list with a type column.
+
+Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamespace` for the "+",
+`WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
+computes it beside the catalog, never instead of it.
+
 ## Reports by type
 
 @@("area/Search?groupBy=type")
