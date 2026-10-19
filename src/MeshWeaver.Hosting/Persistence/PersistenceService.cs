@@ -473,19 +473,35 @@ public sealed class PersistenceService : IStorageAdapter
     /// providers is beyond what separate stores can give.</para>
     /// </summary>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
+        => DeleteCopiesIf(path, maxVersion, incarnation: null, options);
+
+    /// <inheritdoc />
+    /// <remarks>The same fan-out as <see cref="DeleteIfVersionAtMost"/>; a copy that is newer OR another
+    /// incarnation anywhere refuses the whole delete before any copy is removed (#6856).</remarks>
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => DeleteCopiesIf(path, maxVersion, incarnation, options);
+
+    private IObservable<bool> DeleteCopiesIf(
+        string path, long maxVersion, DateTimeOffset? incarnation, JsonSerializerOptions options)
         // Deferred: provider reads may start eagerly, and the probe must read storage as it is when
         // the delete RUNS (see the interface default).
         => Observable.Defer(() => _writable
             .Select(p => p.Adapter.Read(path, options).Take(1).DefaultIfEmpty(null))
             .Merge()
-            .Any(stored => stored is not null && stored.Version > maxVersion)
-            .SelectMany(newerSomewhere => newerSomewhere
+            .Any(stored => stored is not null
+                && (stored.Version > maxVersion
+                    || (incarnation is { } expected && !StorageIncarnation.Matches(stored, expected))))
+            .SelectMany(refusedSomewhere => refusedSomewhere
                 ? Observable.Return(false)
-                : RemoveCopiesAtMost(path, maxVersion, options)));
+                : RemoveCopiesAtMost(path, maxVersion, incarnation, options)));
 
-    private IObservable<bool> RemoveCopiesAtMost(string path, long maxVersion, JsonSerializerOptions options)
+    private IObservable<bool> RemoveCopiesAtMost(
+        string path, long maxVersion, DateTimeOffset? incarnation, JsonSerializerOptions options)
         => _writable
-            .Select(p => p.Adapter.DeleteIfVersionAtMost(path, maxVersion, options)
+            .Select(p => (incarnation is { } expected
+                    ? p.Adapter.DeleteIfIncarnationAtMost(path, maxVersion, expected, options)
+                    : p.Adapter.DeleteIfVersionAtMost(path, maxVersion, options))
                 .Take(1)
                 .SelectMany(removed => removed
                     ? Observable.Return((Removed: true, Survives: false))
