@@ -224,6 +224,15 @@ public record MeshSearchControl()
     public object? ShowViewOptions { get; init; }
 
     /// <summary>
+    /// STORE-SIDE paging: the view asks the store for this many hits (<c>Limit</c>), renders a
+    /// "Load more" button while the store may hold more, and each click fetches the NEXT page
+    /// (<c>Skip</c>) and appends it. Unlike <see cref="SectionConfig.ItemLimit"/> — a client-side
+    /// <c>Take</c> over a fully fetched set with a "Show all" link — nothing beyond the loaded pages
+    /// is read. Null means no paging.
+    /// </summary>
+    public int? PageSize { get; init; }
+
+    /// <summary>
     /// Optional user-selectable sort choices for the view-options "Sort by" dropdown (only rendered
     /// when <see cref="ShowViewOptions"/> is on). Each entry carries a full hidden query, so picking
     /// one can change the ordering AND the result set. The FIRST entry is the default and should equal
@@ -508,6 +517,11 @@ public record MeshSearchControl()
     /// <summary>Returns a copy with the skeleton-card loading indicator set to <paramref name="show"/>.</summary>
     /// <param name="show"><c>false</c> suppresses skeleton cards while results load.</param>
     public MeshSearchControl WithShowLoadingIndicator(bool show) => this with { ShowLoadingIndicator = show };
+
+    /// <summary>Returns a copy that pages in the store, <paramref name="pageSize"/> hits at a time,
+    /// with a "Load more" button (<see cref="PageSize"/>).</summary>
+    /// <param name="pageSize">Hits per page; must be positive.</param>
+    public MeshSearchControl WithPageSize(int pageSize) => this with { PageSize = pageSize };
 
     // Reactive mode
     /// <summary>Returns a copy with reactive live-update mode set to <paramref name="reactive"/>.</summary>

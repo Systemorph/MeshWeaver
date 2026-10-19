@@ -551,18 +551,9 @@ public static class StandardReducers
 
     private static ChangeItem<object> ReduceEntityStoreTo(ChangeItem<EntityStore> current, SchemaReference reference, IMessageHub hub)
     {
-        var typeName = reference.Type;
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            var workspace = hub.GetWorkspace();
-            var contentTypeSource = workspace.DataContext.TypeSources.Values
-                .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
-            var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
-            if (typeSource != null)
-                typeName = typeSource.TypeDefinition.CollectionName;
-            else
-                return new ChangeItem<object>(new SchemaInfo("", "{}"), current.StreamId, current.Version);
-        }
+        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? DataExtensions.DefaultSchemaTypeName(hub) : reference.Type;
+        if (typeName is null)
+            return new ChangeItem<object>(new SchemaInfo("", "{}"), current.StreamId, current.Version);
 
         var schema = DataExtensions.GenerateJsonSchema(hub, typeName);
         return new ChangeItem<object>(new SchemaInfo(typeName, schema), current.StreamId, current.Version);

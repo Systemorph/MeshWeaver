@@ -3844,20 +3844,9 @@ public static class DataExtensions
         SchemaReference reference,
         GetDataRequest _)
     {
-        var typeName = reference.Type;
-
-        if (string.IsNullOrWhiteSpace(typeName))
-        {
-            var workspace = hub.GetWorkspace();
-            var contentTypeSource = workspace.DataContext.TypeSources.Values
-                .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
-            var typeSource = contentTypeSource ?? workspace.DataContext.TypeSources.Values.FirstOrDefault();
-
-            if (typeSource != null)
-                typeName = typeSource.TypeDefinition.CollectionName;
-            else
-                return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
-        }
+        var typeName = string.IsNullOrWhiteSpace(reference.Type) ? DefaultSchemaTypeName(hub) : reference.Type;
+        if (typeName is null)
+            return Observable.Return(new GetDataResponse(new SchemaInfo("", "{}"), hub.Version));
 
         var schema = GenerateJsonSchema(hub, typeName);
         return Observable.Return(new GetDataResponse(new SchemaInfo(typeName, schema), hub.Version));
@@ -4294,6 +4283,27 @@ public static class DataExtensions
     }
 
 
+    /// <summary>
+    /// The type a <see cref="SchemaReference"/> with no type name describes on <paramref name="hub"/>: the
+    /// node's declared CONTENT type (<see cref="IContentTypeSource"/>) when a data source declares one,
+    /// else the first registered type that is not <c>MeshNode</c>, else <c>MeshNode</c>; null when the
+    /// hub has no data at all.
+    /// </summary>
+    internal static string? DefaultSchemaTypeName(IMessageHub hub)
+    {
+        var workspace = hub.GetWorkspace();
+        var contentType = workspace.DataContext.DataSources
+            .OfType<IContentTypeSource>()
+            .Select(ds => ds.ContentType)
+            .FirstOrDefault(t => t is not null);
+        if (contentType is not null)
+            return hub.TypeRegistry.GetCollectionName(contentType) ?? contentType.Name;
+
+        var nonNode = workspace.DataContext.TypeSources.Values
+            .FirstOrDefault(ts => ts.TypeDefinition.Type.FullName != "MeshWeaver.Mesh.MeshNode");
+        return (nonNode ?? workspace.DataContext.TypeSources.Values.FirstOrDefault())?.TypeDefinition.CollectionName;
+    }
+
     internal static string GenerateJsonSchema(IMessageHub hub, string typeName)
     {
         var typeRegistry = hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
@@ -4310,50 +4320,7 @@ public static class DataExtensions
             }
         }
 
-        var type = typeDefinition!.Type;
-
-        // Use System.Text.Json schema generation first
-        var options = hub.JsonSerializerOptions;
-        var schema = options.GetJsonSchemaAsNode(type, new()
-        {
-            TransformSchemaNode = (ctx, node) =>
-            {
-                // Add documentation from XML docs
-                if (ctx.TypeInfo.Type == type)
-                {
-                    // Add title for the main type
-                    node["title"] = type.Name;
-
-                    // Add description for the main type
-                    var typeDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(type);
-                    if (!string.IsNullOrEmpty(typeDescription))
-                    {
-                        node["description"] = typeDescription;
-                    }
-                }
-
-                // Add descriptions for properties
-                if (ctx.PropertyInfo != null && node is JsonObject jsonObj)
-                {
-                    // Get the actual PropertyInfo from the declaring type
-                    var declaringType = ctx.PropertyInfo.DeclaringType;
-                    var propertyName = ctx.PropertyInfo.Name;
-                    var actualPropertyInfo = declaringType.GetProperty(propertyName.ToPascalCase()!);
-                    if (actualPropertyInfo != null)
-                    {
-                        var propertyDescription = MeshWeaver.Messaging.Serialization.XmlDocs.Summary(actualPropertyInfo);
-                        if (!string.IsNullOrEmpty(propertyDescription))
-                        {
-                            jsonObj["description"] = propertyDescription;
-                        }
-                    }
-                }
-
-                return node;
-            }
-        });
-
-        return schema.ToJsonString();
+        return ContentJsonSchema.Generate(typeDefinition!.Type, hub.JsonSerializerOptions).ToJsonString();
     }
 
     internal static IEnumerable<TypeDescription> GetDomainTypes(IMessageHub hub)

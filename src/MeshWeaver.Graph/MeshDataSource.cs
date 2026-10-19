@@ -2442,7 +2442,7 @@ public static class MeshDataSourceExtensions
 /// This data source aggregates multiple type sources and allows partition-based
 /// access to objects stored in the hub's persistence partition.
 /// </summary>
-public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>
+public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>, IContentTypeSource
 {
     private readonly IStorageAdapter? _persistenceCore;
     private readonly string _hubPath;
