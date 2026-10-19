@@ -425,7 +425,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-b", "plugins", DaysAgo(400));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("s-a", StringComparison.Ordinal))
@@ -436,6 +437,12 @@ public class PrebuiltBundleRetentionTest : IDisposable
         result.FailedDeletes.Should().Be(1);
         result.DeletedIdentities.Should().Be(1);
         Directory.Exists(Path.Combine(root, "s-b")).Should().BeFalse();
+        // #6991: a failed removal is itemized below Warning and COUNTED in the pass's one outcome.
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N failed removals must not become N shipped Warning lines")
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("could not remove"));
     }
 
     [Fact]
@@ -847,7 +854,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Generation(Live, "plugins", "gen-new", DaysAgo(1));
         Pointer(Live, "plugins", "gen-new");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("gen-a", StringComparison.Ordinal))
@@ -857,6 +865,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         result.FailedDeletes.Should().Be(1);
         result.DeletedGenerations.Should().Be(1);
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
         Directory.Exists(Path.Combine(root, Live, "plugins", "gen-b")).Should().BeFalse();
     }
 
@@ -1026,7 +1036,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, log);
 
         log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
-            .Which.Message.Should().Contain("nothing collected");
+            .Which.Message.Should().Contain("pass outcome — ABORTED").And.Contain("nothing collected",
+                "every pass, an aborted one included, carries the one tag an operator queries for");
     }
 
     private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger

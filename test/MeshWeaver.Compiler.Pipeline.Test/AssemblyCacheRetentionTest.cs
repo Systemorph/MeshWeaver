@@ -436,6 +436,42 @@ public class AssemblyCacheRetentionTest : IDisposable
             .And.Contain($"{AssemblyCacheKeepRule.MinimumAge}=1");
     }
 
+    /// <summary>
+    /// A file the sweep cannot delete is itemized below Warning and COUNTED in the pass's one
+    /// outcome line — N failed files must never become N shipped Warning lines (#6991).
+    /// </summary>
+    [Fact]
+    public void Sweep_FailedDeletions_AreCountedInTheOneWarningOutcome()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the refusal below is a POSIX directory permission
+        WriteAssembly(LiveTag, Now - TimeSpan.FromHours(1));
+        var locked = WriteAssembly("cccccccc", Now - TimeSpan.FromDays(90), typeDirectory: "Locked_Type");
+        WriteAssembly("cccccccc", Now - TimeSpan.FromDays(90), typeDirectory: "Locked_Type");
+        var lockedDirectory = Path.GetDirectoryName(locked)!;
+        var mode = File.GetUnixFileMode(lockedDirectory);
+        File.SetUnixFileMode(lockedDirectory, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var log = new OutcomeLogger();
+        try
+        {
+            var result = AssemblyCacheGenerations.SweepCore(
+                CacheRoot, LiveTag,
+                AssemblyCacheRetention.ReportOnly with { Delete = true, KeepGenerations = 1 },
+                Now, log);
+
+            result.FailedDeletes.Should().Be(2);
+        }
+        finally
+        {
+            File.SetUnixFileMode(lockedDirectory, mode);
+        }
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome").And.Contain("2 file(s) could not be deleted");
+        log.Entries.Count(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                               && e.Message.Contains("could not delete")).Should().Be(2);
+    }
+
     private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger
     {
         public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();

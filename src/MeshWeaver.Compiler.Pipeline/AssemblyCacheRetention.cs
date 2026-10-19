@@ -445,7 +445,7 @@ public static class AssemblyCacheGenerations
             // assembly a live pod is about to load. A partial listing is not a picture of the cache,
             // so it licenses nothing.
             logger?.LogWarning(ex,
-                "AssemblyCacheRetention: could not read {Root} — NOTHING collected. A cache we cannot "
+                "AssemblyCacheRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A cache we cannot "
                 + "enumerate completely can never be pruned safely",
                 rootDirectory);
             return new AssemblyCacheSweepResult(null, false, 0, 0, 0, $"cache could not be read: {ex.Message}");
@@ -493,7 +493,8 @@ public static class AssemblyCacheGenerations
                     // next sweep re-plans it. Aborting the whole sweep because one file is momentarily
                     // locked would leave the share growing for the sake of tidiness.
                     failed++;
-                    logger?.LogWarning(ex,
+                    // Information (#6991): itemized; the pass's one Warning outcome carries the count.
+                    logger?.LogInformation(ex,
                         "AssemblyCacheRetention: could not delete {Path} — it stays, and the next sweep "
                         + "will consider it again", path);
                 }

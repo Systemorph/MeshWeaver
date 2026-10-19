@@ -915,7 +915,7 @@ public static class PrebuiltBundleStore
             {
                 var absent = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0,
                     $"the published bundle root '{root}' does not exist");
-                logger?.LogWarning("PrebuiltBundleRetention: {Reason} — nothing collected", absent.AbortReason);
+                logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Reason} — nothing collected", absent.AbortReason);
                 return absent;
             }
             scan = Scan(root, logger);
@@ -924,7 +924,7 @@ public static class PrebuiltBundleStore
         {
             // 🚨 FAIL CLOSED: a partial listing is not a picture of the store, so it licenses nothing.
             logger?.LogWarning(ex,
-                "PrebuiltBundleRetention: could not read {Root} — NOTHING collected. A store that cannot be "
+                "PrebuiltBundleRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A store that cannot be "
                 + "enumerated completely can never be pruned safely", root);
             var failed = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0, $"store could not be read: {ex.Message}");
             AppendLedger(root, failed, logger);
@@ -934,7 +934,7 @@ public static class PrebuiltBundleStore
         var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
-            logger?.LogWarning("PrebuiltBundleRetention: {Summary}. NOTHING collected", plan.Summary);
+            logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Summary}. NOTHING collected", plan.Summary);
             var aborted = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, plan.AbortReason);
             AppendLedger(root, aborted, logger);
             return aborted;
@@ -993,7 +993,8 @@ public static class PrebuiltBundleStore
                 // Surfaced, not swallowed: the directory (or what is left of it) stays, and the next
                 // pass re-plans it — a half-removed identity reads as unsealed to every reader.
                 failedDeletes++;
-                logger?.LogWarning(ex,
+                // Information (#6991): itemized; the pass's one Warning outcome carries the count.
+                logger?.LogInformation(ex,
                     "PrebuiltBundleRetention: could not remove {Directory} — it stays, and the next pass considers it again",
                     identity.Directory);
             }
@@ -1025,7 +1026,7 @@ public static class PrebuiltBundleStore
             catch (Exception ex)
             {
                 failedDeletes++;
-                logger?.LogWarning(ex,
+                logger?.LogInformation(ex,
                     "PrebuiltBundleRetention: could not remove superseded generation {Directory} — it stays, "
                     + "and the next pass considers it again", generation.Directory);
             }
@@ -1043,7 +1044,7 @@ public static class PrebuiltBundleStore
             catch (Exception ex)
             {
                 failedDeletes++;
-                logger?.LogWarning(ex, "PrebuiltBundleRetention: could not remove release marker {Path}", marker.Path);
+                logger?.LogInformation(ex, "PrebuiltBundleRetention: could not remove release marker {Path}", marker.Path);
             }
         }
 

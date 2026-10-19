@@ -121,7 +121,7 @@ public sealed class ModuleGenerationsGcHostedService : IHostedService, IDisposab
                     // behind (an intact orphan, a .trash-* remainder) is one a later pass — the
                     // next pod start — already plans for. Surfaced, never swallowed.
                     logger?.LogWarning(ex,
-                        "[ModuleActivation] modules GC pass over {ModuleRoot} faulted — nothing "
+                        "Modules GC: pass outcome — FAULTED: [ModuleActivation] modules GC pass over {ModuleRoot} faulted — nothing "
                         + "was collected; the next pod start plans it again.", moduleRoot);
                     completed.OnError(ex);
                 });

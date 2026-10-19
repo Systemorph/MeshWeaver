@@ -924,22 +924,30 @@ at Information, so whether a pass ran, what it removed and whether it refused we
 
 | collector | runs | outcome line |
 |---|---|---|
-| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY …` / `… COLLECTED …` |
-| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY …` / `… COLLECTED …` |
-| modules GC | once per pod start | `Modules GC: pass outcome — completed / FAILED CLOSED / CANCELLED …` |
+| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
+| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
+| modules GC | once per pod start | `Modules GC: pass outcome — completed / FAILED CLOSED / CANCELLED / FAULTED …` |
 
 Each carries the **denominator** (what was scanned and its bytes), what was removed or would be,
 and what was **kept, counted per KEEP rule** (`live=1, window=612, release-marker=40` —
 `PrebuiltRetentionKeepRule`, `AssemblyCacheKeepRule`). The tally is bounded by the number of rules,
 never by the size of the store, which is what makes Warning affordable: a pass is one line, a few
 hundred bytes. The itemized lists — every kept identity with its reason, every removed directory —
-stay at Information, because they scale with the store (811 identities on one share). A pass that
-aborts was already a Warning (`… NOTHING collected`, `… faulted — nothing was collected`) and is then
-the pass's only Warning line. Per-write eviction in the assembly store (`Assembly cache: evicted …`)
+stay at Information, because they scale with the store (811 identities on one share) — and so do
+the per-item FAILURES (a directory, file or set record that could not be removed or read): each is
+itemized at Information and COUNTED on the outcome line, so N failures never become N shipped lines.
+A pass that aborts or faults (`… ABORTED: … NOTHING collected`, `… FAULTED: … faulted — nothing was
+collected`) carries the same `pass outcome` tag and is then the pass's only Warning line. The one
+deliberate exception: a modules-GC reference record that cannot be READ stays an Error per file — a
+corrupt record is a defect to triage, not a retention outcome — and the outcome line says `FAILED
+CLOSED` with the count. Per-write eviction in the assembly store (`Assembly cache: evicted …`)
 is not a pass — it fires on every compile — and stays at Information.
 
-Read them through a governed `Logs` action (`{ "requestedAction": "Logs", "query": "pass outcome" }`)
-on the control instance.
+Read them through a governed `Logs` action on the control instance. Because aborts and faults carry
+the tag too, one query finds every pass, whatever its verdict: `{ "requestedAction": "Logs", "query":
+"pass outcome" }`. A host whose every pass aborts therefore still answers with one line per pass,
+never with silence; zero lines means no pass ran (or the query is wrong — check it against a host
+with a known pass).
 
 ## Node repos run the same lane — as reusable workflows
 

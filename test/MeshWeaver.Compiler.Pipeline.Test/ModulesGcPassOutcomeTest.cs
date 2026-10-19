@@ -57,6 +57,35 @@ public class ModulesGcPassOutcomeTest : IDisposable
                 "silence must never be the only evidence that a pass removed nothing");
     }
 
+    /// <summary>
+    /// An unreadable reference record fails the pass CLOSED: the orphan survives, and the verdict
+    /// travels on the ONE Warning outcome line with both counts — the explanatory "SKIPPING" line is
+    /// Information. The read fault itself stays an Error (a corrupt record is a defect to triage,
+    /// not a retention outcome). The `sets` metadata directory is counted apart from referenced
+    /// generations.
+    /// </summary>
+    [Fact]
+    public void AnUnreadableReference_FailsClosed_InTheOneWarningOutcome()
+    {
+        var orphan = Path.Combine(root, "modules", "Orphan@1.0.0");
+        Directory.CreateDirectory(orphan);
+        var sets = ModuleSetStore.SetsDirectory(root);
+        Directory.CreateDirectory(sets);
+        File.WriteAllText(Path.Combine(sets, "000000001-garbage000000000.proposed.json"), "{ not json");
+        var log = new OutcomeLogger();
+
+        var removed = ModuleLandingService.CollectGarbage(
+            root, log, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
+
+        removed.Should().Be(0);
+        Directory.Exists(orphan).Should().BeTrue("unreadable is never unreferenced");
+        log.Entries.Where(e => e.Level == LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — FAILED CLOSED")
+            .And.Contain("1 unreferenced generation(s) NOT deleted")
+            .And.Contain("kept 0 referenced generation(s), 1 non-generation director(ies)");
+        log.Entries.Should().Contain(e => e.Level == LogLevel.Information && e.Message.Contains("SKIPPING"));
+    }
+
     private sealed class OutcomeLogger : ILogger
     {
         public ConcurrentQueue<(LogLevel Level, string Message)> Entries { get; } = new();

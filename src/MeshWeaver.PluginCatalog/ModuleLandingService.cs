@@ -296,10 +296,17 @@ public sealed class ModuleLandingService : IDisposable
         // forever. Retiring it says the conflict once, where it is decided, and leaves the one
         // record the mesh actually resolves to. Gated on the same fail-closed counter as the
         // pruning above: with anything unreadable on the volume this pass removes nothing.
+        // #6991: the per-record pruning problems are itemized at Information and COUNTED into the
+        // pass's one Warning outcome line, so N unreadable records never become N shipped lines.
+        var pruneProblems = 0;
         if (readFaults == 0)
-            ModuleSetStore.PruneDuplicateProposals(baseDirectory,
+            prunedSets += ModuleSetStore.PruneDuplicateProposals(baseDirectory,
                 onRetired: msg => logger?.LogInformation("Modules GC: {Message}", msg),
-                onWarn: msg => logger?.LogWarning("Modules GC: {Message}", msg));
+                onWarn: msg =>
+                {
+                    pruneProblems++;
+                    logger?.LogInformation("Modules GC: {Message}", msg);
+                });
         // 🚨 #2509: with any entry file unreadable, `referenced` is INCOMPLETE — an ACTIVE
         // generation would read as an orphan. Generation deletes are skipped wholesale this pass.
         var referencesReliable = readFaults == 0;
@@ -333,6 +340,7 @@ public sealed class ModuleLandingService : IDisposable
         // The pass's denominator, for its one outcome line (#6991).
         var scanned = 0;
         var keptReferenced = 0;
+        var keptOther = 0;
         var keptYoung = 0;
         var keptInUse = 0;
         var skippedUnreliable = 0;
@@ -360,14 +368,22 @@ public sealed class ModuleLandingService : IDisposable
             var isOrphanGeneration = !isTransient && leaf.Contains('@') && !referenced.Contains(leaf);
             if (!isTransient && !isOrphanGeneration)
             {
-                keptReferenced++;
+                // A generation directory (name@version) the reference set names, or anything else
+                // the GC never collects (the `sets` metadata directory, an unknown name) — counted
+                // apart, so "referenced" means referenced.
+                if (leaf.Contains('@'))
+                    keptReferenced++;
+                else
+                    keptOther++;
                 continue;
             }
             if (isOrphanGeneration && !referencesReliable)
             {
                 skippedUnreliable++;
+                // Information, not Warning (#6991): the pass's outcome line below carries the
+                // verdict FAILED CLOSED with both counts; this line only explains it once.
                 if (!reportedUnreliable)
-                    logger?.LogWarning(
+                    logger?.LogInformation(
                         "Modules GC: {Faults} activation entry or set record file(s) could not be "
                         + "read, so the reference set is incomplete — SKIPPING every generation "
                         + "delete this pass (unreadable is never unreferenced, #2509). A later pass "
@@ -437,13 +453,14 @@ public sealed class ModuleLandingService : IDisposable
         // one line per replica boot; the per-directory "removed" lines above stay Information.
         logger?.LogWarning(
             "Modules GC: pass outcome — {Verdict}: removed {Removed} of {Scanned} directory(ies) under {ModulesRoot}; "
-            + "kept {Referenced} referenced, {Young} younger than {MinAge}, {InUse} in use; "
+            + "kept {Referenced} referenced generation(s), {Other} non-generation director(ies) (metadata such as sets/, "
+            + "unknown names — never collected), {Young} younger than {MinAge}, {InUse} in use; "
             + "{SkippedUnreliable} unreferenced generation(s) NOT deleted because {Faults} reference file(s) "
             + "could not be read; {Unfinished} delete(s) left for a later pass; retired {Sets} module set "
-            + "record(s) and {Records} landing record file(s)",
+            + "record(s) ({PruneProblems} could not be read or removed) and {Records} landing record file(s)",
             cancelled ? "CANCELLED" : readFaults > 0 ? "FAILED CLOSED" : "completed",
-            removed, scanned, modulesRoot, keptReferenced, keptYoung, minAge ?? DefaultGarbageMinAge, keptInUse,
-            skippedUnreliable, readFaults, deleteUnfinished, prunedSets, retired);
+            removed, scanned, modulesRoot, keptReferenced, keptOther, keptYoung, minAge ?? DefaultGarbageMinAge,
+            keptInUse, skippedUnreliable, readFaults, deleteUnfinished, prunedSets, pruneProblems, retired);
         return removed;
     }
 
