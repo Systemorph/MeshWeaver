@@ -61,12 +61,17 @@ public class ALateDeleteNeverRemovesARecreatedNodeTest(ALateDeleteNeverRemovesAR
                     .Observe(new DeleteNodeRequest(path), o => o.WithTarget(mesh.Hub(OwnerSilo).NodeOperationTarget())))
                 .Should().Within(TestTimeouts.Convergence).Emit("delete B removes the node", ct))
             .Message.Success.Should().BeTrue();
+        // Delete B tore the owner down; its teardown fences A's seal (the row is gone) and then lifts the
+        // owner's version guard and row guard. Only then is the path writable again: wait for that, then
+        // create ONCE — any failure of the create fails the test.
+        var ownerRegistry = services.GetRequiredService<RecentlyDeletedRegistry>();
         await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .SelectMany(_ => access.RunAsSystem(() => meshService.CreateNode(
-                    new MeshNode("Doc", ns) { Name = "re-created", NodeType = "Markdown", State = MeshNodeState.Active }))
-                .Select(n => (MeshNode?)n)
-                .Catch(Observable.Return<MeshNode?>(null)))
-            .Where(n => n is not null)
+            .Where(_ => !ownerRegistry.IsVersionGuardedDeletionInFlight(path))
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the old owner's teardown fence settles and its version guard is lifted", ct);
+        ownerRegistry.IsUnderActiveDeletion(path, out _).Should().BeFalse("the old owner's row guard is lifted with it");
+        await access.RunAsSystem(() => meshService.CreateNode(
+                new MeshNode("Doc", ns) { Name = "re-created", NodeType = "Markdown", State = MeshNodeState.Active }))
             .Should().Within(TestTimeouts.Convergence).Emit("the node is created again on silo 0", ct);
         var recreated = mesh.Stored(path);
         recreated.Should().NotBeNull();
@@ -75,11 +80,17 @@ public class ALateDeleteNeverRemovesARecreatedNodeTest(ALateDeleteNeverRemovesAR
             "the precondition: a re-created node starts over, so 'version <= confirmed' alone accepts it");
         recreated.CreatedDate.Should().NotBe(original.CreatedDate, "a new incarnation");
 
-        // Delete A's held storage delete now runs.
+        // Delete A's held storage delete now runs — and the store refuses it.
         hold.Release();
         (await mesh.Storage(DeleterSilo).ConditionalDeleteResults(path).Should().Within(TestTimeouts.Convergence)
                 .Emit("delete A's storage delete reached the store", ct))
             .Should().BeFalse("it confirmed another incarnation; the node created in its place is not its to remove");
+        // The store's refusal is recorded by the adapter BEFORE the delete pipeline handles it: the
+        // completed operation is delete A's answer, which must name the conflict.
+        var responseA = (await deleteA.Should().Within(TestTimeouts.Convergence)
+            .Emit("delete A completes with an answer", ct)).Message;
+        responseA.Success.Should().BeFalse("the node at the path is not the incarnation delete A confirmed");
+        responseA.RejectionReason.Should().Be(NodeDeletionRejectionReason.Conflict, responseA.Error ?? "the stored row is another incarnation");
         mesh.Stored(path).Should().NotBeNull("the re-created node survives");
         mesh.Stored(path)!.Name.Should().Be("re-created");
     }
