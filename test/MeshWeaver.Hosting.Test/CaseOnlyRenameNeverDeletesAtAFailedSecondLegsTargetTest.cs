@@ -34,7 +34,7 @@ namespace MeshWeaver.Hosting.Test;
 /// </summary>
 public class CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string StagingMarker = "-recase-";
+    private const string StagingMarker = "recase-";
 
     private readonly RefuseExactPathCreationValidator refusing = new();
 
@@ -93,7 +93,8 @@ public class CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest(ITestOutput
         (await StoredAt($"{source}/birgit", ct))!.Path.Should().Be($"{source}/birgit");
         (await StoredAt($"{source}/birgit/notes", ct))!.Path.Should().Be($"{source}/birgit/notes");
         var siblings = await ChildrenOf(TestPartition, ct);
-        siblings.Where(p => p.Contains(id, StringComparison.Ordinal))
+        siblings.Where(p => p.Contains(id, StringComparison.Ordinal)
+                || p.StartsWith($"{TestPartition}/{StagingMarker}", StringComparison.Ordinal))
             .Should().Equal([source], "no staging sibling and no second casing is left behind");
     }
 
@@ -110,7 +111,7 @@ public class CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest(ITestOutput
 
     private static string StagingNamedIn(string error, string target)
     {
-        var start = error.IndexOf($"'{target}{StagingMarker}", StringComparison.Ordinal);
+        var start = error.IndexOf($"'{target[..(target.LastIndexOf('/') + 1)]}{StagingMarker}", StringComparison.Ordinal);
         start.Should().BeGreaterThanOrEqualTo(0, $"the answer names the staging path; it said: {error}");
         var end = error.IndexOf('\'', start + 1);
         return error[(start + 1)..end];

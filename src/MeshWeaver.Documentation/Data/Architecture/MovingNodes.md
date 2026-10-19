@@ -265,9 +265,12 @@ the SAME key in some stores and a DIFFERENT key in others, and copy-then-delete 
 | `CaseOnlyRename` | `VhvGruppe/x → VHVGruppe/x` | renamed through a staging sibling (below) |
 | `Distinct` | everything else | the ordinary move |
 
-**A case-only rename is two ordinary relocations**: source → `{target}-recase-{token}` → target. The
-staging sibling sits under the TARGET's parent (so it needs exactly the Create grant the target does)
-and differs from both ends in every store, so each leg writes new keys and removes old ones, and each
+**A case-only rename is two ordinary relocations**: source → `{target's parent}/recase-{token}` →
+target. The staging sibling sits under the TARGET's parent (so it needs exactly the Create grant the
+target does), its leaf is `recase-` plus a 12-character random token — a fixed length, so a long
+target leaf never pushes the staging name (or the atomic write's temporary file name beside it) past
+a file system's 255-byte component limit — and it differs from both ends in every store, so each leg
+writes new keys and removes old ones, and each
 runs the whole move contract above — the delete pre-flight, the subtree-deletion scope of that leg's
 source, satellites, authorship and completeness. Both legs share the one move deadline.
 
@@ -286,13 +289,24 @@ this rule replaced it.
 |---|---|---|
 | was refused before it wrote anything | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: its own refusal; leg 2: `caseRenameRestored`, the leg's own reason |
 | failed in its COPY having provably written nothing (`Written` empty, `WrittenUnsettled` false) | leg 1: nothing to undo; leg 2: the subtree is moved back from staging | leg 1: the copy's own verdict; leg 2: `caseRenameRestored` carrying the copy's transcript |
-| failed in its COPY after writing at its target | nothing is deleted, nothing is moved back; target and staging stay as they are | `Unknown`, `caseRenameCopyWrote`, naming the written paths |
-| failed in its COPY without being able to say what it wrote | nothing is deleted, nothing is moved back | `Unknown`, `caseRenameCopyUnsettled` |
-| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameDeleteFailed` |
-| the move back itself failed | nothing more is done; the staging path is the recovery data | `Unknown`, `caseRenameRestoreFailed` |
+| failed in its COPY after writing at its target | nothing is deleted, nothing is moved back; target and staging stay as they are | `Unknown`, `caseRenameCopyWrote`, naming the written paths and where the complete subtree is |
+| failed in its COPY without being able to say what it wrote | nothing is deleted, nothing is moved back | `Unknown`, `caseRenameCopyUnsettled`, naming where the complete subtree is |
+| copied completely, then failed DELETING its source | nothing is moved back: that leg's source may now be incomplete | `Unknown`, `caseRenameDeleteFailed`, naming the possibly incomplete path and where the complete subtree is |
+| the move back itself failed | nothing more is done | `Unknown`, `caseRenameRestoreFailed` |
 
-Every `Unknown` names source, staging (the minted address that holds the complete copy whenever the
-second leg failed) and target. Each cause has its own catalog key (`activity.node.move.caseRename…`),
+**Where the complete subtree is depends on WHICH leg failed and WHERE**, and every `Unknown` answer
+says it ("The complete subtree is at …"):
+
+| Failed in | Source | Staging | Target |
+|---|---|---|---|
+| leg 1, copy | complete, untouched | partial (what the copy wrote) | untouched |
+| leg 1, deleting the source | may be partial | **complete** | untouched |
+| leg 2, copy | gone | **complete**, untouched | partial (what the copy wrote) |
+| leg 2, deleting staging | gone | may be partial | **complete** |
+
+The table is the expectation, not a verdict: an operator resolving an `Unknown` reads ALL THREE paths
+the answer names — source, staging and target — before deciding which to keep, and never assumes
+staging is complete merely because the second leg failed. Each cause has its own catalog key (`activity.node.move.caseRename…`),
 so the whole answer renders in the viewer's language; only upstream text — an exception's own message,
 the failed leg's English verdict, the listed paths — travels as a raw argument, and the failed copy's
 keyed transcript is carried before it.
@@ -314,12 +328,17 @@ A stall after the subtree started to leave the source answers `Unknown` naming a
 
 On a case-insensitive **file system** (macOS, Windows) the two-step is what makes the new casing reach
 the disk: the first leg removes the old files and their now-empty directories, so the second leg's
-writes create entries with the new names. Only the segments the moved subtree OWNS are re-cased; an
+writes create entries with the new names. That depends on the delete pruning the node's OWN directory:
+`FileSystemStorageAdapter` starts pruning empty directories at `{path}/` itself — which, in the
+JSON + `index.md` split pattern, held the node's `index.md` — rather than at the parent of its file;
+starting at the parent left an empty old-cased directory that the second leg then reused on a
+case-insensitive volume, reporting success with the descendants under the old casing. Only the segments the moved subtree OWNS are re-cased; an
 ancestor segment whose casing differs (`VhvGruppe/x → VHVGruppe/x` where `VhvGruppe` is a node of its
 own) stays as that ancestor's directory is named. Pinned by `MoveRenamesByCaseOnlyTest` (in-memory:
 the rename, the refusals, the classifier) and `MoveRenamesByCaseOnlyOnTheFileSystemTest`, which reads
 the names the volume actually holds — the target's exact directory and node file, and no staging
-entry — and passes on case-sensitive and case-insensitive volumes alike. The failure paths are pinned
+entry — and passes on case-sensitive and case-insensitive volumes alike, for a plain source, a
+JSON + `index.md` split source, and a 200-character id. The failure paths are pinned
 by isolated faults: `CaseOnlyRenameNeverDeletesAtAFailedSecondLegsTargetTest` (one create refused at
 the target's exact casing: a refused DESCENDANT leaves the root the copy wrote — `Unknown`, target and
 staging untouched; a refused ROOT means nothing was written — the subtree is moved back and reads back

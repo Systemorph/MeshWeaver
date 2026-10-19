@@ -38,7 +38,7 @@ namespace MeshWeaver.FaultInjection.Test;
 public class CaseOnlyRenameDoesNotRestoreOverACreateThatFailedAfterWritingTest(ITestOutputHelper output)
     : MonolithMeshTestBase(output)
 {
-    private const string StagingMarker = "-recase-";
+    private const string StagingMarker = "recase-";
 
     private readonly FailAfterWritingHandler failing = new();
 
@@ -94,7 +94,7 @@ public class CaseOnlyRenameDoesNotRestoreOverACreateThatFailedAfterWritingTest(I
 
     private static string StagingNamedIn(string error, string target)
     {
-        var start = error.IndexOf($"'{target}{StagingMarker}", StringComparison.Ordinal);
+        var start = error.IndexOf($"'{target[..(target.LastIndexOf('/') + 1)]}{StagingMarker}", StringComparison.Ordinal);
         start.Should().BeGreaterThanOrEqualTo(0, $"the answer names the staging path; it said: {error}");
         var end = error.IndexOf('\'', start + 1);
         return error[(start + 1)..end];

@@ -32,8 +32,11 @@ internal static class MovePathRelation
 /// </summary>
 internal static class MovePaths
 {
-    /// <summary>The marker a case-only rename's staging sibling carries after the target's leaf.</summary>
-    public const string StagingMarker = "-recase-";
+    /// <summary>The prefix of a case-only rename's staging sibling's leaf: <c>recase-{token}</c>.</summary>
+    public const string StagingPrefix = "recase-";
+
+    /// <summary>Hex characters of the random token after <see cref="StagingPrefix"/>.</summary>
+    public const int StagingTokenLength = 12;
 
     /// <summary>
     /// Classifies <paramref name="target"/> against <paramref name="source"/> on whole path
@@ -59,18 +62,33 @@ internal static class MovePaths
     }
 
     /// <summary>
-    /// The staging sibling a case-only rename to <paramref name="target"/> passes through: under the TARGET's parent (so it needs the same
-    /// Create grant the target does), named after the target's leaf plus <see cref="StagingMarker"/>
-    /// and a fresh token, so it is <see cref="MovePathRelation.Distinct"/> from both ends in every
-    /// store — case-sensitive or not.
+    /// The staging sibling a case-only rename to <paramref name="target"/> passes through: under the
+    /// TARGET's parent (so it needs the same Create grant the target does), with the leaf
+    /// <c>{StagingPrefix}{token}</c> — a fresh random token — so it is
+    /// <see cref="MovePathRelation.Distinct"/> from both ends in every store, case-sensitive or not.
     /// </summary>
     /// <param name="target">The new casing of the node being renamed.</param>
     /// <remarks>
-    /// Distinct by construction: the staging leaf is the target's leaf EXTENDED (never followed by
-    /// a <c>/</c>), so it neither equals nor lies under the source or the target, ignoring case or not.
+    /// <para>🚨 The leaf's length is BOUNDED, independently of the target's (#6951, review of #6976).
+    /// It used to be the target's leaf plus a suffix, so a target whose own leaf fits the file
+    /// system's 255-byte component limit — with room for the atomic write's temporary name — could
+    /// still overflow it at the staging path, failing the first leg on a name nobody asked for.</para>
+    /// <para>Distinct by construction: a sibling of the target (never under it, never under the
+    /// source, which shares the target's parent ignoring case), whose leaf is re-drawn on the
+    /// one-in-2^48 chance it equals the target's leaf ignoring case.</para>
     /// </remarks>
     public static string CaseRenameStaging(string target)
-        => $"{Normalize(target)}{StagingMarker}{Guid.NewGuid().ToString("N")[..12]}";
+    {
+        var normalized = Normalize(target);
+        var slash = normalized.LastIndexOf('/');
+        var parent = slash < 0 ? string.Empty : normalized[..(slash + 1)];
+        var targetLeaf = normalized[(slash + 1)..];
+        string leaf;
+        do
+            leaf = StagingPrefix + Guid.NewGuid().ToString("N")[..StagingTokenLength];
+        while (string.Equals(leaf, targetLeaf, StringComparison.OrdinalIgnoreCase));
+        return parent + leaf;
+    }
 
     private static string Normalize(string? path) => path?.Trim('/') ?? string.Empty;
 }

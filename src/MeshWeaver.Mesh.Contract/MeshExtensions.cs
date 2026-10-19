@@ -9829,10 +9829,13 @@ public static class MeshExtensions
             if (stage == MoveStageDeleteSource)
             {
                 // This leg's copy landed in full and the delete of its source failed part-way: the
-                // leg's source may now be incomplete, so nothing may be moved back from it.
+                // leg's source may now be incomplete, so nothing may be moved back from it. The
+                // COMPLETE copy is at the leg's target — the staging path after leg 1, the requested
+                // target after leg 2 — and the answer says so (review of #6976).
                 var removed = secondLeg ? staging : sourcePath;
                 return Observable.Throw<MeshNode>(RenameUnresolved(staging, null,
-                    $"removing '{removed}' after its copy to '{legTarget}' had landed failed ({failed.Message}).",
+                    $"the copy to '{legTarget}' had landed in full, and removing '{removed}' then failed part-way "
+                    + $"({failed.Message}), so '{removed}' may be incomplete. The complete subtree is at '{legTarget}'.",
                     MoveCaseRenameDeleteFailedKey,
                     ("removed", removed), ("legTarget", legTarget), ("error", failed.Message)));
             }
@@ -9847,22 +9850,25 @@ public static class MeshExtensions
             // therefore undone only when its copy PROVABLY WROTE NOTHING (no create landed, nothing
             // resumed, nothing outstanding or uncertain): then a failed second leg moves the subtree
             // back from staging, and a failed first leg's own verdict stands. Anything else is Unknown,
-            // naming source, staging and target; the target is left as it is and staging keeps its
-            // copy — the operator resolves.
+            // naming source, staging and target; the target is left as it is — the operator resolves.
+            // Where the COMPLETE copy is differs by leg and is said (review of #6976): a failed copy
+            // in leg 1 never touched the source; a failed copy in leg 2 never touched staging.
+            var complete = secondLeg ? staging : sourcePath;
             if (copyLeg.WrittenUnsettled)
                 return Observable.Throw<MeshNode>(RenameUnresolved(staging, copyLeg.Log,
                     $"{copyLeg.Message} What the copy to '{legTarget}' wrote could not be established, so nothing "
-                    + "was removed there and nothing was moved back.",
+                    + $"was removed there and nothing was moved back. The complete subtree is at '{complete}'.",
                     MoveCaseRenameCopyUnsettledKey,
-                    ("legTarget", legTarget), ("error", copyLeg.Message)));
+                    ("legTarget", legTarget), ("error", copyLeg.Message), ("complete", complete)));
             if (!copyLeg.Written.IsEmpty)
             {
                 var listed = string.Join(", ", copyLeg.Written);
                 return Observable.Throw<MeshNode>(RenameUnresolved(staging, copyLeg.Log,
                     $"{copyLeg.Message} The copy to '{legTarget}' had already written {listed}; a failed rename never "
-                    + "deletes at its target, so that was left as it is and nothing was moved back.",
+                    + "deletes at its target, so that was left as it is and nothing was moved back. The complete "
+                    + $"subtree is at '{complete}'.",
                     MoveCaseRenameCopyWroteKey,
-                    ("legTarget", legTarget), ("error", copyLeg.Message), ("paths", listed)));
+                    ("legTarget", legTarget), ("error", copyLeg.Message), ("paths", listed), ("complete", complete)));
             }
             return secondLeg
                 ? RestoreAfterFailedRename(staging, copyLeg, copyLeg.Log)

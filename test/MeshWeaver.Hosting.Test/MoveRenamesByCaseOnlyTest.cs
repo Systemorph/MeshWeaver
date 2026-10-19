@@ -119,12 +119,20 @@ public class MoveRenamesByCaseOnlyTest(ITestOutputHelper output) : MonolithMeshT
     {
         var staging = MovePaths.CaseRenameStaging("P/VHVGruppe/BirgitSalzwedel");
 
-        staging.Should().StartWith("P/VHVGruppe/BirgitSalzwedel-recase-",
+        staging.Should().StartWith($"P/VHVGruppe/{MovePaths.StagingPrefix}",
             "it is a sibling of the target, so it needs the same Create grant the target does");
         MovePaths.Classify("P/VhvGruppe/BirgitSalzwedel", staging).Should().Be(MovePathRelation.Distinct);
         MovePaths.Classify(staging, "P/VHVGruppe/BirgitSalzwedel").Should().Be(MovePathRelation.Distinct);
-        MovePaths.CaseRenameStaging("Abc").Should().StartWith("Abc-recase-",
+        MovePaths.CaseRenameStaging("Abc").Should().StartWith(MovePaths.StagingPrefix,
             "a root-level node stages at the root");
+        MovePaths.CaseRenameStaging("Abc").Should().NotContain("/", "a root-level node stages at the root");
+
+        // The leaf is bounded independently of the target's: a long target leaf never lengthens it.
+        var longStaging = MovePaths.CaseRenameStaging("P/" + new string('X', 240));
+        longStaging.Should().HaveLength("P/".Length + MovePaths.StagingPrefix.Length + MovePaths.StagingTokenLength,
+            "the staging leaf is the prefix and a fixed-length token, whatever the target's leaf is");
+        MovePaths.CaseRenameStaging("P/A").Should().NotBe(MovePaths.CaseRenameStaging("P/A"),
+            "each attempt mints its own staging path");
     }
 
     private Task<MoveNodeResponse> Move(string source, string target, CancellationToken ct) =>

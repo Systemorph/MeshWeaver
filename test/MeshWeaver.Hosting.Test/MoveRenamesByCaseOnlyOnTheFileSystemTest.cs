@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -36,13 +37,67 @@ public class MoveRenamesByCaseOnlyOnTheFileSystemTest(ITestOutputHelper output) 
     {
         var ct = TestContext.Current.CancellationToken;
         var id = Guid.NewGuid().ToString("N")[..8];
-        var sourceLeaf = $"vhvgruppe-{id}";
-        var targetLeaf = $"VHVGruppe-{id}";
-        var source = $"{TestPartition}/{sourceLeaf}";
-        var target = $"{TestPartition}/{targetLeaf}";
+        var source = $"{TestPartition}/vhvgruppe-{id}";
         await Create(source, "Group", ct);
         await Create($"{source}/birgit", "Birgit", ct);
 
+        await RenameAndAssertOnlyTheNewCasing(id, $"vhvgruppe-{id}", $"VHVGruppe-{id}", ct);
+    }
+
+    /// <summary>
+    /// 🚨 A source stored in the JSON + index.md SPLIT pattern — <c>{leaf}.json</c> beside
+    /// <c>{leaf}/index.md</c> (review of #6976). Deleting it removed both files but started pruning
+    /// empty directories at the PARENT of the .json, so the node's own <c>{leaf}/</c> directory —
+    /// emptied of its children and its index — stayed. On a case-insensitive volume the second leg
+    /// then wrote into that old-cased directory and the move answered success with the descendants
+    /// under the old casing; on a case-sensitive one the empty old-cased directory was left behind.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ACaseOnlyRename_OfAJsonPlusIndexSource_LeavesOnlyTheNewCasingOnDisk()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var sourceLeaf = $"vhvgruppe-{id}";
+        var source = $"{TestPartition}/{sourceLeaf}";
+        var created = await Create(source, "Group", ct);
+        await Create($"{source}/birgit", "Birgit", ct);
+
+        // Re-store the source root in the split pattern, as an authored content tree holds it.
+        var partitionDir = Path.Combine(root, TestPartition);
+        File.Delete(Path.Combine(partitionDir, sourceLeaf + ".md"));
+        await File.WriteAllTextAsync(Path.Combine(partitionDir, sourceLeaf + ".json"),
+            JsonSerializer.Serialize(created with { Content = null, PreRenderedHtml = null }, Mesh.JsonSerializerOptions), ct);
+        await File.WriteAllTextAsync(Path.Combine(partitionDir, sourceLeaf, "index.md"), "# Group\n", ct);
+        Output.WriteLine($"split source: {string.Join(", ", Directory.GetFileSystemEntries(Path.Combine(partitionDir, sourceLeaf)).Select(Path.GetFileName))}");
+
+        await RenameAndAssertOnlyTheNewCasing(id, sourceLeaf, $"VHVGruppe-{id}", ct);
+    }
+
+    /// <summary>
+    /// 🚨 A LONG id (review of #6976): the staging sibling used to be the target's leaf plus a
+    /// 20-character suffix, so a leaf that fits the 255-byte component limit — with the atomic
+    /// write's temporary name — overflowed it at the staging path and the first leg failed. The
+    /// staging leaf is now bounded independently of the target's.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task ACaseOnlyRename_OfALongId_LeavesOnlyTheNewCasingOnDisk()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid().ToString("N")[..8];
+        var padding = new string('x', 200 - $"vhvgruppe-{id}".Length);
+        var sourceLeaf = $"vhvgruppe-{id}{padding}";
+        var targetLeaf = $"VHVGruppe-{id}{padding}";
+        sourceLeaf.Should().HaveLength(200);
+        await Create($"{TestPartition}/{sourceLeaf}", "Group", ct);
+        await Create($"{TestPartition}/{sourceLeaf}/birgit", "Birgit", ct);
+
+        await RenameAndAssertOnlyTheNewCasing(id, sourceLeaf, targetLeaf, ct);
+    }
+
+    private async Task RenameAndAssertOnlyTheNewCasing(string id, string sourceLeaf, string targetLeaf, CancellationToken ct)
+    {
+        var source = $"{TestPartition}/{sourceLeaf}";
+        var target = $"{TestPartition}/{targetLeaf}";
         var partitionDir = Path.Combine(root, TestPartition);
         Output.WriteLine($"volume is case-{(VolumeIsCaseInsensitive(partitionDir) ? "INsensitive" : "sensitive")}");
         Output.WriteLine($"before: {string.Join(", ", Entries(partitionDir, id))}");
@@ -55,9 +110,9 @@ public class MoveRenamesByCaseOnlyOnTheFileSystemTest(ITestOutputHelper output) 
 
         var after = Entries(partitionDir, id);
         Output.WriteLine($"after: {string.Join(", ", after)}");
-        // EXACT names only: the staging sibling is `{targetLeaf}-recase-{token}`, so a bare
-        // StartsWith(targetLeaf) would accept an orphaned staging tree as "the new casing".
-        after.Should().NotContain(name => name.Contains(MovePaths.StagingMarker, StringComparison.Ordinal),
+        // EXACT names only, and the staging sibling (`recase-{token}`) is listed too, so an orphaned
+        // staging tree can never pass as "the new casing".
+        after.Should().NotContain(name => name.StartsWith(MovePaths.StagingPrefix, StringComparison.Ordinal),
             "the staging sibling the rename passed through is gone, directory and node file alike");
         after.Should().OnlyContain(name => name == targetLeaf || name.StartsWith(targetLeaf + ".", StringComparison.Ordinal),
             "the volume holds the new casing only — the target's directory and its node file, nothing else");
@@ -76,7 +131,7 @@ public class MoveRenamesByCaseOnlyOnTheFileSystemTest(ITestOutputHelper output) 
     private static string[] Entries(string dir, string id) =>
         Directory.GetFileSystemEntries(dir)
             .Select(Path.GetFileName)
-            .Where(n => n!.Contains(id, StringComparison.Ordinal))
+            .Where(n => n!.Contains(id, StringComparison.Ordinal) || n.StartsWith(MovePaths.StagingPrefix, StringComparison.Ordinal))
             .Select(n => n!)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
