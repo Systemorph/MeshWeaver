@@ -103,8 +103,10 @@ public static class DeploymentPinnedReferences
         return new ConsumerScope(
             string.IsNullOrWhiteSpace(self) ? null : self,
             HostOf(homeUrl) is { } host ? [host] : [],
-            IsControlInstance(configuration),
-            string.IsNullOrEmpty(ops) ? DeploymentReportService.DefaultOperationalSpace : ops);
+            IsControlInstance(configuration))
+        {
+            OperationalSpace = string.IsNullOrEmpty(ops) ? DeploymentReportService.DefaultOperationalSpace : ops,
+        };
     }
 
     /// <summary>
@@ -639,16 +641,19 @@ public static class DeploymentPinnedReferences
 /// states them (<c>PluginCatalog:HomeUrl</c>), lower-case.</param>
 /// <param name="IsControlInstance">Whether this host is the fleet's report sink
 /// (<see cref="DeploymentPinnedReferences.IsControlInstance"/>).</param>
-/// <param name="OperationalSpace">The partition reports are FILED in on this host
-/// (<c>Hosting:OperationalSpace</c>): the sink files under <c>{space}/Modules</c>, a store under
-/// <c>{space}/ConsumerReports</c>, and a <c>Hosting/ModuleInventory</c> node anywhere else is not a
-/// report (#6989).</param>
 public sealed record ConsumerScope(
     string? SelfDeployment,
     ImmutableHashSet<string> StoreHosts,
-    bool IsControlInstance,
-    string OperationalSpace = DeploymentReportService.DefaultOperationalSpace)
+    bool IsControlInstance)
 {
+    /// <summary>
+    /// The partition reports are FILED in on this host (<c>Hosting:OperationalSpace</c>): the sink
+    /// files under <c>{space}/Modules</c>, a store under <c>{space}/ConsumerReports</c>, and a
+    /// <c>Hosting/ModuleInventory</c> node anywhere else is not a report (#6989). An init property,
+    /// not a positional parameter, so the record's primary constructor keeps its shape.
+    /// </summary>
+    public string OperationalSpace { get; init; } = DeploymentReportService.DefaultOperationalSpace;
+
     /// <summary>A host that names no store and owns no fleet — an ordinary installation.</summary>
     public static ConsumerScope None { get; } = new(null, [], false);
 }

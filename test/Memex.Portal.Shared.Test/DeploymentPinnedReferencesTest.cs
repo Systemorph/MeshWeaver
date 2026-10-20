@@ -278,10 +278,10 @@ public class DeploymentPinnedReferencesTest
             .Select(r => Elsewhere(r, $"Fleet/{DeploymentReportService.StoreReportsSegment}"))
             .ToImmutableList();
 
-        Resolve(SyncedFleet(), underFleet, new ConsumerScope("registry", [], false, OperationalSpace: "Fleet"))
+        Resolve(SyncedFleet(), underFleet, new ConsumerScope("registry", [], false) { OperationalSpace = "Fleet" })
             .Select(r => r.Identity).Should().Contain(["s-company", "s-control", "s-customer"]);
         Assert.Throws<InvalidOperationException>(() =>
-            Resolve(SyncedFleet(), underOps, new ConsumerScope("registry", [], false, OperationalSpace: "Fleet")));
+            Resolve(SyncedFleet(), underOps, new ConsumerScope("registry", [], false) { OperationalSpace = "Fleet" }));
     }
 
     [Fact]
