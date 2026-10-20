@@ -19,6 +19,7 @@
 #   @@MW-STORE dump\t<relative path>\t<KiB>\t<mtime>  a file under the DATA share's dumps/ directory
 #   @@MW-STORE deleted\t<class>\t<relative path>\t<KiB>   --execute only
 #   @@MW-STORE kept\t<class>\t<relative path>\t<reason>   --execute only: a candidate the re-check spared
+#   @@MW-STORE unreadable\t<relative path>\t<du|stat>  a read that failed — the report is then INCOMPLETE
 #   @@MW-STORE done                                   the walk reached its end
 #   @@MW-STORE refused\t<sentence>                    it refused, and why — then exit non-zero
 #
@@ -74,8 +75,24 @@ emit "begin${tab}${now}${tab}${mode}"
 set -- $(df -Pk "$rootreal" | tail -1)
 emit "df${tab}${2:-0}${tab}${3:-0}${tab}${4:-0}"
 
-kib() { du -sk "$1" 2>/dev/null | cut -f1; }
-mtime() { stat -c %Y "$1" 2>/dev/null || echo 0; }
+# fd 3 is the log itself: kib/mtime run inside $(…), whose stdout is the VALUE, so their report of a
+# failed read goes to fd 3, which still points at the pod's stdout.
+exec 3>&1
+incomplete="$(mktemp)"; rm -f "$incomplete"   # exists ⇔ some read failed
+# A read that fails is NEVER a zero: it is reported as `unreadable` (and the size printed is what du
+# managed to count), so the operator can mark the whole report incomplete — an incomplete walk licenses
+# no deletion and must not read as a clean one.
+kib() {
+  _out="$(du -sk "$1" 2>/dev/null)" || { emit "unreadable${tab}${1#"$rootreal"/}${tab}du" >&3; : > "$incomplete"; }
+  _k="$(printf '%s' "$_out" | cut -f1)"
+  echo "${_k:-0}"
+}
+mtime() {
+  stat -c %Y "$1" 2>/dev/null && return 0
+  emit "unreadable${tab}${1#"$rootreal"/}${tab}stat" >&3
+  : > "$incomplete"
+  echo 0
+}
 # The newest mtime of a directory and its immediate children: a directory's own stamp on an SMB share
 # moves only when an entry is added or removed, so a generation still being written could read older
 # than it is from the directory alone.
@@ -171,7 +188,7 @@ dump_cut=$((now - dump_age_days * 86400))
 
 # A candidate list, one `<class>\t<relative path>` per line; reported in both modes.
 cands="$(mktemp)"
-trap 'rm -f "$cands"' EXIT
+trap 'rm -f "$cands" "$incomplete"' EXIT
 if [ -d "$rootreal/assembly-cache" ]; then
   find "$rootreal/assembly-cache" -type f -name '.tmp-*' 2>/dev/null | while IFS= read -r f; do
     t="$(mtime "$f")"
@@ -192,6 +209,8 @@ fi
 if [ "$mode" = execute ]; then
   while IFS="$tab" read -r class rel; do
     [ -n "$rel" ] || continue
+    # An incomplete walk licenses no deletion — not even of the garbage classes.
+    if [ -e "$incomplete" ]; then emit "kept${tab}${class}${tab}${rel}${tab}the walk was incomplete (a read failed)"; continue; fi
     f="$rootreal/$rel"
     case "$class" in
       cache-tmp)      cut="$tmp_cut";  under="$rootreal/assembly-cache/" ;;

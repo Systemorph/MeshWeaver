@@ -11,6 +11,7 @@
 # plane records (MeshWeaver.Plugins Hosting/InstanceAction, kind `StoragePrune`, and the standing
 # sweep that files one per instance; Doc/Architecture/StoragePrune):
 #
+#   ::hosting:: storage_complete=true|false  false when any read failed — sizes are then lower bounds
 #   ::hosting:: storage_size_kib=<n>       the share's size, as the mount reports it
 #   ::hosting:: storage_used_kib=<n>       what is used on it
 #   ::hosting:: storage_bundle_kib=<n>     of which the prebuilt-bundle store
@@ -278,9 +279,11 @@ condense='
 | [ $rows[] | select(.[0] == "dump") | {path: .[1], kib: (.[2] | tonumber), ageDays: age(.[3])} ] as $dumps
 | [ $rows[] | select(.[0] == "deleted") | {class: .[1], path: .[2], kib: (.[3] | tonumber)} ] as $deleted
 | [ $rows[] | select(.[0] == "kept") | {class: .[1], path: .[2], reason: .[3]} ] as $kept
+| [ $rows[] | select(.[0] == "unreadable") | {path: .[1], read: .[2]} ] as $unreadable
 | ([ $items[] | select(.class | IN("bundle-unsealed-generation", "bundle-superseded-generation", "bundle-legacy-identity")) ]) as $eligible
 | {
     version: 1, namespace: $ns, claim: $claim, mode: $mode, dumpsShadowed: ($shadowed == "1"),
+    complete: ($unreadable | length == 0), unreadableCount: ($unreadable | length), unreadable: ($unreadable[:10]),
     measuredAt: ($now | todate), minimumAgeDays: $minAge,
     df: {sizeKiB: ($df[1] | tonumber), usedKiB: ($df[2] | tonumber), availableKiB: ($df[3] | tonumber)},
     top: ([ $rows[] | select(.[0] == "top") | {name: .[1], kib: (.[2] | tonumber)} ]
@@ -334,6 +337,10 @@ printf '%s' "$report" | jq -r '.bundles.classes[] | "    \(.count) × \(.class):
 hosting::log "eligible  $(r '.bundles.eligibleKiB') KiB past the ${MIN_AGE_DAYS}-day minimum and not current — NOT deleted: bundle deletion needs the complete consumer inventory and the publication lease"
 hosting::log "deletable $(r '.deletable.cacheTmp.count') temp file(s), $(r '.deletable.misplacedDumps.count') shadowed dump file(s)"
 [ "$mode" = report ] || hosting::log "deleted   $(r '.deleted.count') file(s), $(r '.deleted.kib') KiB; kept on re-check: $(r '.keptCount')"
+if [ "$(r '.complete')" != "true" ]; then
+  hosting::log "INCOMPLETE $(r '.unreadableCount') path(s) could not be read (first: $(r '[.unreadable[].path] | join(", ")')) — every size and class below is a LOWER bound, and an incomplete walk licenses no deletion"
+fi
+hosting::say storage_complete "$(r '.complete')"
 hosting::say storage_size_kib "$(r '.df.sizeKiB')"
 hosting::say storage_used_kib "$(r '.df.usedKiB')"
 hosting::say storage_bundle_kib "$(r '.bundles.kib')"

@@ -4481,7 +4481,7 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
     && ok "…every bundle item gets exactly one class: current (even when old), young, unsealed, superseded, legacy — a legacy identity once, never again through its generations" || bad "classes" "json: ${_sp_json}"
   [ "$(printf '%s' "$_sp_json" | jq -r '.bundles.sources[0] | "\(.identity)/\(.source) current=\(.current) gens=\(.generations) unsealedOld=\(.unsealedOld) supersededOld=\(.supersededOld) young=\(.young) lease=\(.leaseFile)"')" = "c003e001/plugins current=gen-cur gens=4 unsealedOld=1 supersededOld=1 young=1 lease=true" ] \
     && ok "…per source: the generation _current names, the counts of each kind, and the lease file" || bad "per source" "json: ${_sp_json}"
-  [ "$(printf '%s' "$_sp_json" | jq -r '.deletable.cacheTmp.count, .deletable.misplacedDumps.count, .deleted.count, .mode, .dumpsShadowed, .claim' | tr '\n' ' ')" = "1 1 0 report true memex-data " ] \
+  [ "$(printf '%s' "$_sp_json" | jq -r '.deletable.cacheTmp.count, .deletable.misplacedDumps.count, .deleted.count, .mode, .dumpsShadowed, .claim, .complete' | tr '\n' ' ')" = "1 1 0 report true memex-data true " ] \
     && ok "…what this command MAY delete is counted (one old temp file, one shadowed old dump) and nothing is deleted" || bad "deletable" "json: ${_sp_json}"
   [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim | "\(.claimName) \(.readOnly)"')" = "memex-data true" ] \
     && [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.containers[0].volumeMounts[0].readOnly')" = true ] \
@@ -4530,6 +4530,22 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
     && ok "walker: an EMPTY mount is refused (a claim that did not attach is not a clean volume)" || bad "empty mount" "rc ${_sp_erc}: ${_sp_eout}"
   _sp_zout="$(_sp_walk "$_sp_root2" MW_MODE=execute MW_TMP_AGE_DAYS=0)"; _sp_zrc=$?
   [ "$_sp_zrc" -ne 0 ] && [ -e "$_sp_root2/assembly-cache/k1/.tmp-new" ] && ok "walker: a zero-day temp window is refused (it would delete a compile in flight)" || bad "zero window" "rc ${_sp_zrc}: ${_sp_zout}"
+
+  # A read that FAILS is never a zero: the walker reports it, the report says incomplete, and an
+  # execute run deletes nothing — not even the garbage classes. `du` is made to fail for one identity.
+  _sp_dustub="$(mktemp -d)"
+  printf '#!/bin/sh\ncase "$*" in *s4567ef*) echo "du: cannot read directory" >&2; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v du)" > "$_sp_dustub/du"; chmod +x "$_sp_dustub/du"
+  _sp_root3="$(mktemp -d)"; _sp_tree "$_sp_root3"
+  _sp_ilog="$(mktemp)"; env PATH="$_sp_dustub:$PATH" MW_ROOT="$_sp_root3" MW_NOW="$_sp_now" MW_MODE=execute MW_DUMPS_SHADOWED=1 sh "$SP_POD" > "$_sp_ilog"
+  grep -q "^@@MW-STORE unreadable	prebuilt-bundles/s4567ef	du$" "$_sp_ilog" && ! grep -q "^@@MW-STORE deleted	" "$_sp_ilog" && [ -e "$_sp_root3/assembly-cache/k1/.tmp-old" ] \
+    && grep -q "^@@MW-STORE kept	cache-tmp	assembly-cache/k1/.tmp-old	the walk was incomplete" "$_sp_ilog" \
+    && ok "walker: a failed read is reported as unreadable, and an execute run then deletes NOTHING" || bad "incomplete walk" "$(cat "$_sp_ilog")"
+  _sp_log="$_sp_ilog"
+  sp -- --namespace memex-cloud
+  [ "$_sp_rc" -eq 0 ] && [ "$(printf '%s' "$_sp_json" | jq -r '.complete, .unreadableCount, .unreadable[0].path' | tr '\n' ' ')" = "false 1 prebuilt-bundles/s4567ef " ] \
+    && case "$_sp_out" in *"INCOMPLETE 1 path(s)"*"::hosting:: storage_complete=false"*) true ;; *) false ;; esac \
+    && ok "…and the report says INCOMPLETE (storage_complete=false), naming the path" || bad "incomplete report" "rc ${_sp_rc}; json: ${_sp_json}; out: ${_sp_out}"
+  rm -rf "$_sp_dustub" "$_sp_root3" "$_sp_ilog"
 
   _sp_log="$SP_FIX/pod-refused.txt"
   sp -- --namespace memex-cloud
