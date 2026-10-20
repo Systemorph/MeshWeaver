@@ -4382,6 +4382,213 @@ fi
 unset _da_out _da_rc _da_calls _da_manifest _da_json _da_fact _da_pod
 
 echo
+echo "── hosting-storage-prune: what fills a data volume, measured IN the cluster; garbage only, never a bundle ──"
+# The StoragePrune action's one step (MeshWeaver.Plugins Hosting/InstanceAction, kind StoragePrune;
+# Doc/Architecture/StoragePrune). The walker (bin/_storage_prune_pod.sh) is run here FOR REAL against a
+# fixture tree, and its output is what the stub kubectl hands back — so the classification is tested
+# on the walker's actual lines, not on a hand-written log that could drift from it.
+#
+# 🛡️ THE PROTECTION TESTS. A prune is judged by what survives it. The execute run below must delete
+# EXACTLY the two files the contract lets this command delete (an old assembly-cache temp file and an
+# old dump shadowed by a dump volume) and leave every other byte — every generation, current or not,
+# sealed or not, young or old; every legacy identity; the release markers; the caches; a young temp
+# file; a young dump; a temp file reached only through a symlink — exactly as it was.
+SP_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/storage-prune" && pwd)"
+SP_FIX="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/storage-prune" && pwd)"
+SP_POD="$BIN/_storage_prune_pod.sh"
+if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && command -v find >/dev/null && command -v cksum >/dev/null && command -v comm >/dev/null; then
+  _sp_now=1792000000
+  _sp_at() { touch -d "@$(( _sp_now - $2 * 86400 ))" "$1"; }   # _sp_at <path> <age in days>
+  _sp_tree() {   # builds the fixture tree under $1
+    local r="$1" pb="$1/prebuilt-bundles"
+    mkdir -p "$r/assembly-cache/k1" "$r/nuget-cache/pkg" "$r/modules/m" "$r/dataprotection-keys" \
+             "$r/dumps/podA" "$r/dumps/podB" "$pb/_releases" \
+             "$pb/c003e001/plugins/gen-cur" "$pb/c003e001/plugins/gen-old-sealed" "$pb/c003e001/plugins/gen-old-unsealed" \
+             "$pb/c003e001/plugins/gen-young" "$pb/c003e001/meshweaver-content" \
+             "$pb/s0123abcd/plugins" "$pb/s4567ef/plugins" "$r/elsewhere"
+    echo old > "$r/assembly-cache/k1/.tmp-old";    _sp_at "$r/assembly-cache/k1/.tmp-old" 3
+    echo new > "$r/assembly-cache/k1/.tmp-new";    _sp_at "$r/assembly-cache/k1/.tmp-new" 0
+    echo dll > "$r/assembly-cache/k1/Real.dll";    _sp_at "$r/assembly-cache/k1/Real.dll" 90
+    echo tmp > "$r/elsewhere/.tmp-outside";        _sp_at "$r/elsewhere/.tmp-outside" 90
+    ln -s ../elsewhere "$r/assembly-cache/link"
+    echo pkg > "$r/nuget-cache/pkg/x.nupkg";       _sp_at "$r/nuget-cache/pkg/x.nupkg" 400
+    echo mod > "$r/modules/m/old.dll";             _sp_at "$r/modules/m/old.dll" 400
+    echo key > "$r/dataprotection-keys/key.xml";   _sp_at "$r/dataprotection-keys/key.xml" 400
+    echo d1 > "$r/dumps/podA/coredump.1.2";        _sp_at "$r/dumps/podA/coredump.1.2" 20
+    echo d2 > "$r/dumps/podB/coredump.3.4";        _sp_at "$r/dumps/podB/coredump.3.4" 1
+    echo m > "$pb/_releases/3.0.0-ci.1";           _sp_at "$pb/_releases/3.0.0-ci.1" 100
+    : > "$pb/c003e001/_publishing.plugins"
+    echo gen-cur > "$pb/c003e001/plugins/_current"
+    for g in gen-cur gen-old-sealed; do echo b > "$pb/c003e001/plugins/$g/bundle.zip"; : > "$pb/c003e001/plugins/$g/_complete"
+      _sp_at "$pb/c003e001/plugins/$g/bundle.zip" 60; _sp_at "$pb/c003e001/plugins/$g/_complete" 60; _sp_at "$pb/c003e001/plugins/$g" 60; done
+    echo b > "$pb/c003e001/plugins/gen-old-unsealed/bundle.zip"
+    _sp_at "$pb/c003e001/plugins/gen-old-unsealed/bundle.zip" 45; _sp_at "$pb/c003e001/plugins/gen-old-unsealed" 45
+    echo b > "$pb/c003e001/plugins/gen-young/bundle.zip"; _sp_at "$pb/c003e001/plugins/gen-young/bundle.zip" 3; _sp_at "$pb/c003e001/plugins/gen-young" 3
+    : > "$pb/c003e001/meshweaver-content/_complete"; echo z > "$pb/c003e001/meshweaver-content/Doc.zip"
+    _sp_at "$pb/c003e001/meshweaver-content/_complete" 50; _sp_at "$pb/c003e001/meshweaver-content/Doc.zip" 50; _sp_at "$pb/c003e001/meshweaver-content" 50
+    echo b > "$pb/s0123abcd/plugins/b.zip"; : > "$pb/s0123abcd/plugins/_complete"
+    _sp_at "$pb/s0123abcd/plugins/b.zip" 90; _sp_at "$pb/s0123abcd/plugins/_complete" 90; _sp_at "$pb/s0123abcd/plugins" 90; _sp_at "$pb/s0123abcd" 90
+    echo b > "$pb/s4567ef/plugins/b.zip"; _sp_at "$pb/s4567ef/plugins/b.zip" 5; _sp_at "$pb/s4567ef/plugins" 5; _sp_at "$pb/s4567ef" 5
+    # A legacy identity that already used the generation layout: classified ONCE, as the identity.
+    mkdir -p "$pb/s89abcd/plugins/gen-a"; echo gen-a > "$pb/s89abcd/plugins/_current"; : > "$pb/s89abcd/plugins/gen-a/_complete"
+    _sp_at "$pb/s89abcd/plugins/gen-a/_complete" 90; _sp_at "$pb/s89abcd/plugins/gen-a" 90; _sp_at "$pb/s89abcd/plugins/_current" 90; _sp_at "$pb/s89abcd/plugins" 90; _sp_at "$pb/s89abcd" 90
+    # The shared store's per-architecture stores: <rid>/prebuilt-bundles/<identity>/<source>/… (Doc/Architecture/SharedArtifactStore).
+    local mac="$r/osx-arm64/prebuilt-bundles"
+    mkdir -p "$mac/c003e001/plugins/gen-mac"
+    echo gen-mac > "$mac/c003e001/plugins/_current"; : > "$mac/c003e001/plugins/gen-mac/_complete"
+    echo b > "$mac/c003e001/plugins/gen-mac/b.zip"
+    _sp_at "$mac/c003e001/plugins/gen-mac/b.zip" 70; _sp_at "$mac/c003e001/plugins/gen-mac/_complete" 70; _sp_at "$mac/c003e001/plugins/gen-mac" 70
+  }
+  # Every file and link with its content digest and mtime — the "nothing else changed" witness.
+  _sp_census() { (cd "$1" && find . \( -type f -o -type l \) | LC_ALL=C sort | while IFS= read -r f; do
+      if [ -L "$f" ]; then printf '%s -> %s\n' "$f" "$(readlink "$f")"; else printf '%s %s %s\n' "$f" "$(stat -c %Y "$f")" "$(cksum < "$f" | cut -d' ' -f1)"; fi; done); }
+  _sp_walk() {  # _sp_walk <root> [env…] → walker output on stdout
+    local r="$1"; shift
+    env MW_ROOT="$r" MW_NOW="$_sp_now" "$@" sh "$SP_POD"
+  }
+  sp() {  # sp [env…] -- <args…>; sets $_sp_out $_sp_rc $_sp_calls $_sp_manifest $_sp_json
+    local envs=() st
+    while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+    st="$(mktemp -d)"
+    _sp_out="$(env HOSTING_SP_DEPLOYMENTS="$SP_FIX/deployments-shadowed.json" HOSTING_SP_LOG="$_sp_log" \
+      HOSTING_STORAGE_INTERVAL=0 "${envs[@]}" PATH="$SP_STUBS:$PATH" HOSTING_SP_STATE="$st" hosting-storage-prune "$@" 2>&1)"; _sp_rc=$?
+    _sp_calls="$(cat "$st/kubectl.log" 2>/dev/null || true)"
+    _sp_manifest="$(cat "$st/manifest.json" 2>/dev/null || true)"
+    _sp_json="$(printf '%s\n' "$_sp_out" | sed -n 's/^::hosting:: storage_report=//p' | tail -1 | base64 -d 2>/dev/null | gzip -dc 2>/dev/null || true)"
+    rm -rf "$st"
+  }
+
+  # ── the walker, report mode: reads everything, writes nothing ──
+  _sp_root="$(mktemp -d)"; _sp_tree "$_sp_root"
+  _sp_before="$(_sp_census "$_sp_root")"
+  _sp_log="$(mktemp)"; _sp_walk "$_sp_root" MW_MODE=report MW_DUMPS_SHADOWED=1 > "$_sp_log"; _sp_wrc=$?
+  [ "$_sp_wrc" -eq 0 ] && grep -q '^@@MW-STORE done$' "$_sp_log" && ok "walker: a report walks the whole tree to its end" || bad "walker report" "rc ${_sp_wrc}: $(cat "$_sp_log")"
+  [ "$(_sp_census "$_sp_root")" = "$_sp_before" ] && ok "walker: a REPORT changes nothing on the volume, even with candidates present" || bad "report is read-only" "census changed"
+  grep -q "^@@MW-STORE generation	c003e001	plugins	gen-cur	current	" "$_sp_log" \
+    && grep -q "^@@MW-STORE generation	c003e001	plugins	gen-old-sealed	sealed	" "$_sp_log" \
+    && grep -q "^@@MW-STORE generation	c003e001	plugins	gen-old-unsealed	unsealed	" "$_sp_log" \
+    && grep -q "^@@MW-STORE flat	c003e001	meshweaver-content	1	" "$_sp_log" \
+    && grep -q "^@@MW-STORE identity	s0123abcd	legacy	" "$_sp_log" \
+    && grep -q "^@@MW-STORE generation	osx-arm64/c003e001	plugins	gen-mac	current	" "$_sp_log" \
+    && ! grep -q "^@@MW-STORE top	osx-arm64	" "$_sp_log" \
+    && ok "walker: every generation is reported with its state (current / sealed / unsealed), flat sources, legacy identities, and each per-architecture store of the shared store (<rid>/prebuilt-bundles, not double-counted at the top)" || bad "walker states" "$(cat "$_sp_log")"
+
+  # ── the operator: classification ──
+  sp -- --namespace memex-cloud
+  [ "$_sp_rc" -eq 0 ] && ok "storage prune measures the data volume and reports" || bad "storage prune happy path" "exited ${_sp_rc}: ${_sp_out}"
+  [ "$(printf '%s\n' "$_sp_out" | tail -1 | cut -c1-29)" = "::hosting:: storage_report=H4" ] && ok "…and the gzip+base64 report is the LAST line, inside the lane's log tail" || bad "report last" "last: $(printf '%s\n' "$_sp_out" | tail -1 | cut -c1-80)"
+  [ "$(printf '%s' "$_sp_json" | jq -r '[.bundles.classes[] | "\(.class)=\(.count)"] | sort | join(",")')" = "bundle-current=3,bundle-legacy-identity=2,bundle-superseded-generation=1,bundle-unsealed-generation=1,bundle-young=2" ] \
+    && ok "…every bundle item gets exactly one class: current (even when old), young, unsealed, superseded, legacy — a legacy identity once, never again through its generations" || bad "classes" "json: ${_sp_json}"
+  [ "$(printf '%s' "$_sp_json" | jq -r '.bundles.sources[0] | "\(.identity)/\(.source) current=\(.current) gens=\(.generations) unsealedOld=\(.unsealedOld) supersededOld=\(.supersededOld) young=\(.young) lease=\(.leaseFile)"')" = "c003e001/plugins current=gen-cur gens=4 unsealedOld=1 supersededOld=1 young=1 lease=true" ] \
+    && ok "…per source: the generation _current names, the counts of each kind, and the lease file" || bad "per source" "json: ${_sp_json}"
+  [ "$(printf '%s' "$_sp_json" | jq -r '.deletable.cacheTmp.count, .deletable.misplacedDumps.count, .deleted.count, .mode, .dumpsShadowed, .claim, .complete' | tr '\n' ' ')" = "1 1 0 report true memex-data true " ] \
+    && ok "…what this command MAY delete is counted (one old temp file, one shadowed old dump) and nothing is deleted" || bad "deletable" "json: ${_sp_json}"
+  [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim | "\(.claimName) \(.readOnly)"')" = "memex-data true" ] \
+    && [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.containers[0].volumeMounts[0].readOnly')" = true ] \
+    && ok "a report mounts the portal's /data claim READ-ONLY" || bad "read-only claim" "manifest: ${_sp_manifest}"
+  [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.automountServiceAccountToken, .spec.template.spec.securityContext.runAsNonRoot, .spec.backoffLimit, ([.spec.template.spec.containers[0].env[] | select(.valueFrom != null)] | length)' | tr '\n' ' ')" = "false true 0 0 " ] \
+    && ok "…with no ServiceAccount token, non-root, one attempt, and no secret in its environment" || bad "job hygiene" "manifest: ${_sp_manifest}"
+  [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "MW_DUMPS_SHADOWED") | .value')" = 1 ] \
+    && ok "…and a separate dump claim over /data/dumps is detected and handed to the walker" || bad "shadowed detection" "manifest: ${_sp_manifest}"
+  case "$_sp_calls" in *"delete job mw-storage-prune-"*) ok "the walk Job is deleted once its log is read" ;; *) bad "job deleted" "calls: ${_sp_calls}" ;; esac
+  case "$_sp_out" in *"::hosting:: storage_deleted_kib=0"*"::hosting:: storage_report="*) ok "…and a report states storage_deleted_kib=0" ;; *) bad "deleted 0" "out: ${_sp_out}" ;; esac
+
+  sp HOSTING_SP_DEPLOYMENTS="$SP_FIX/deployments-plain.json" -- --namespace memex
+  [ "$_sp_rc" -eq 0 ] && [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.containers[0].env[] | select(.name == "MW_DUMPS_SHADOWED") | .value')" = 0 ] \
+    && ok "no dump volume over /data/dumps: the data share's dumps/ is the LIVE dump root, never a candidate" || bad "not shadowed" "rc ${_sp_rc}; manifest: ${_sp_manifest}"
+
+  sp -- --namespace memex-ops --claim artifact-store
+  [ "$_sp_rc" -eq 0 ] && [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.claimName, (.spec.template.spec.containers[0].env[] | select(.name == "MW_DUMPS_SHADOWED") | .value)' | tr '\n' ' ')" = "artifact-store 0 " ] \
+    && case "$_sp_calls" in *"get deployments"*) false ;; *"get pvc artifact-store"*) true ;; *) false ;; esac \
+    && ok "--claim names the shared artifact store outright: no Deployment read, never a shadowed dumps/" || bad "named claim" "rc ${_sp_rc}; calls: ${_sp_calls}"
+  sp HOSTING_SP_NO_PVC=1 -- --namespace memex-ops --claim artifact-store
+  [ "$_sp_rc" -ne 0 ] && [ -z "$_sp_manifest" ] && case "$_sp_out" in *"it never creates one"*) true ;; *) false ;; esac \
+    && ok "…a named claim that does not exist is refused, nothing created" || bad "named claim absent" "rc ${_sp_rc}; out: ${_sp_out}"
+
+  # ── execute: the protection proof ──
+  _sp_xlog="$(mktemp)"; _sp_walk "$_sp_root" MW_MODE=execute MW_DUMPS_SHADOWED=1 > "$_sp_xlog"; _sp_xrc=$?
+  _sp_after="$(_sp_census "$_sp_root")"
+  # comm, not diff: the operator image (Azure Linux) carries coreutils, and diffutils is not promised.
+  _sp_gone="$(comm -23 <(printf '%s\n' "$_sp_before" | LC_ALL=C sort) <(printf '%s\n' "$_sp_after" | LC_ALL=C sort) | cut -d' ' -f1 | tr '\n' ' ')"
+  _sp_new="$(comm -13 <(printf '%s\n' "$_sp_before" | LC_ALL=C sort) <(printf '%s\n' "$_sp_after" | LC_ALL=C sort) | grep -c . || true)"
+  [ "$_sp_xrc" -eq 0 ] && [ "$_sp_gone" = "./assembly-cache/k1/.tmp-old ./dumps/podA/coredump.1.2 " ] && [ "$_sp_new" -eq 0 ] \
+    && ok "walker EXECUTE deletes exactly the old temp file and the old shadowed dump — every other byte (all generations, current or not, legacy identities, release markers, caches, the young temp file, the young dump, the temp file behind a symlink) is untouched" \
+    || bad "execute protects everything else" "rc ${_sp_xrc}; gone: ${_sp_gone}; changed/new lines: ${_sp_new}; log: $(cat "$_sp_xlog")"
+  [ -d "$_sp_root/dumps" ] && [ ! -d "$_sp_root/dumps/podA" ] && [ -d "$_sp_root/dumps/podB" ] \
+    && ok "…the dump directory it emptied goes, the dumps/ mount point itself stays" || bad "dump dirs" "$(ls -R "$_sp_root/dumps")"
+  grep -q "^@@MW-STORE deleted	cache-tmp	assembly-cache/k1/.tmp-old	" "$_sp_xlog" && grep -q "^@@MW-STORE deleted	misplaced-dump	dumps/podA/coredump.1.2	" "$_sp_xlog" \
+    && ok "…and every deletion is reported by class and path" || bad "deletions reported" "$(cat "$_sp_xlog")"
+
+  # Not shadowed → the data share's dumps/ is the live root: nothing there may go, at any age.
+  _sp_root2="$(mktemp -d)"; _sp_tree "$_sp_root2"
+  _sp_walk "$_sp_root2" MW_MODE=execute MW_DUMPS_SHADOWED=0 > /dev/null
+  [ -f "$_sp_root2/dumps/podA/coredump.1.2" ] && [ ! -e "$_sp_root2/assembly-cache/k1/.tmp-old" ] \
+    && ok "walker EXECUTE without a shadowing dump volume keeps every dump (it is the live dump root)" || bad "unshadowed dumps kept" "$(ls -R "$_sp_root2/dumps")"
+  _sp_empty="$(mktemp -d)"
+  _sp_eout="$(_sp_walk "$_sp_empty" MW_MODE=report)"; _sp_erc=$?
+  [ "$_sp_erc" -ne 0 ] && case "$_sp_eout" in *"is EMPTY"*) true ;; *) false ;; esac \
+    && ok "walker: an EMPTY mount is refused (a claim that did not attach is not a clean volume)" || bad "empty mount" "rc ${_sp_erc}: ${_sp_eout}"
+  _sp_zout="$(_sp_walk "$_sp_root2" MW_MODE=execute MW_TMP_AGE_DAYS=0)"; _sp_zrc=$?
+  [ "$_sp_zrc" -ne 0 ] && [ -e "$_sp_root2/assembly-cache/k1/.tmp-new" ] && ok "walker: a zero-day temp window is refused (it would delete a compile in flight)" || bad "zero window" "rc ${_sp_zrc}: ${_sp_zout}"
+
+  # A read that FAILS is never a zero: the walker reports it, the report says incomplete, and an
+  # execute run deletes nothing — not even the garbage classes. `du` is made to fail for one identity.
+  _sp_dustub="$(mktemp -d)"
+  printf '#!/bin/sh\ncase "$*" in *s4567ef*) echo "du: cannot read directory" >&2; exit 1 ;; esac\nexec %s "$@"\n' "$(command -v du)" > "$_sp_dustub/du"; chmod +x "$_sp_dustub/du"
+  _sp_root3="$(mktemp -d)"; _sp_tree "$_sp_root3"
+  _sp_ilog="$(mktemp)"; env PATH="$_sp_dustub:$PATH" MW_ROOT="$_sp_root3" MW_NOW="$_sp_now" MW_MODE=execute MW_DUMPS_SHADOWED=1 sh "$SP_POD" > "$_sp_ilog"
+  grep -q "^@@MW-STORE unreadable	prebuilt-bundles/s4567ef	du$" "$_sp_ilog" && ! grep -q "^@@MW-STORE deleted	" "$_sp_ilog" && [ -e "$_sp_root3/assembly-cache/k1/.tmp-old" ] \
+    && grep -q "^@@MW-STORE kept	cache-tmp	assembly-cache/k1/.tmp-old	the walk was incomplete" "$_sp_ilog" \
+    && ok "walker: a failed read is reported as unreadable, and an execute run then deletes NOTHING" || bad "incomplete walk" "$(cat "$_sp_ilog")"
+  _sp_log="$_sp_ilog"
+  sp -- --namespace memex-cloud
+  [ "$_sp_rc" -eq 0 ] && [ "$(printf '%s' "$_sp_json" | jq -r '.complete, .unreadableCount, .unreadable[0].path' | tr '\n' ' ')" = "false 1 prebuilt-bundles/s4567ef " ] \
+    && case "$_sp_out" in *"INCOMPLETE 1 path(s)"*"::hosting:: storage_complete=false"*) true ;; *) false ;; esac \
+    && ok "…and the report says INCOMPLETE (storage_complete=false), naming the path" || bad "incomplete report" "rc ${_sp_rc}; json: ${_sp_json}; out: ${_sp_out}"
+  rm -rf "$_sp_dustub" "$_sp_root3" "$_sp_ilog"
+
+  _sp_log="$SP_FIX/pod-refused.txt"
+  sp -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && case "$_sp_out" in *"is EMPTY"*) true ;; *) false ;; esac && case "$_sp_out" in *"storage_report="*) false ;; *) true ;; esac \
+    && ok "the walker's own refusal is the verdict, and no report is made" || bad "pod refusal" "rc ${_sp_rc}; out: ${_sp_out}"
+  case "$_sp_calls" in *"delete job"*) ok "…and the Job is still deleted" ;; *) bad "job deleted on refusal" "calls: ${_sp_calls}" ;; esac
+  _sp_log="$SP_FIX/pod-partial.txt"
+  sp -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && case "$_sp_out" in *"never reached the end"*) true ;; *) false ;; esac && case "$_sp_out" in *"storage_report="*) false ;; *) true ;; esac \
+    && ok "a walk that never reached the end reports nothing partial" || bad "partial walk" "rc ${_sp_rc}; out: ${_sp_out}"
+  _sp_log="$_sp_xlog"
+  sp HOSTING_SP_JOB=failed -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && case "$_sp_out" in *"FAILED"*) true ;; *) false ;; esac && case "$_sp_out" in *"storage_report="*) false ;; *) true ;; esac \
+    && ok "a failed Job reports nothing" || bad "failed job" "rc ${_sp_rc}; out: ${_sp_out}"
+  sp -- --namespace memex-cloud --execute
+  [ "$_sp_rc" -eq 0 ] && [ "$(printf '%s' "$_sp_manifest" | jq -r '.spec.template.spec.volumes[0].persistentVolumeClaim.readOnly, (.spec.template.spec.containers[0].env[] | select(.name == "MW_MODE") | .value)' | tr '\n' ' ')" = "false execute " ] \
+    && [ "$(printf '%s' "$_sp_json" | jq -r '.deleted.count, .deleted.byClass["cache-tmp"], .deleted.byClass["misplaced-dump"]' | tr '\n' ' ')" = "2 1 1 " ] \
+    && ok "--execute (only) mounts the claim writable, and the report counts what the walker deleted" || bad "execute report" "rc ${_sp_rc}; json: ${_sp_json}"
+  sp HOSTING_SP_DEPLOYMENTS="$SP_FIX/deployments-emptydir.json" -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && [ -z "$_sp_manifest" ] && case "$_sp_out" in *"emptyDir dies with the pod"*) true ;; *) false ;; esac \
+    && ok "a /data on an emptyDir is refused by name" || bad "emptyDir refused" "rc ${_sp_rc}; out: ${_sp_out}"
+  sp HOSTING_SP_DEPLOYMENTS="$SP_FIX/deployments-subpath.json" -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && [ -z "$_sp_manifest" ] && case "$_sp_out" in *"sub-path"*) true ;; *) false ;; esac \
+    && ok "a /data mounted from a sub-path of a shared claim is refused — never guess what else shares it" || bad "subpath refused" "rc ${_sp_rc}; out: ${_sp_out}"
+  sp HOSTING_SP_FORBID=1 -- --namespace memex-cloud
+  [ "$_sp_rc" -ne 0 ] && case "$_sp_out" in *"REFUSED, not absent"*) true ;; *) false ;; esac \
+    && ok "a Forbidden Deployments read is REFUSED, never 'no portal'" || bad "forbidden read" "rc ${_sp_rc}; out: ${_sp_out}"
+  sp HOSTING_DRY_RUN=true -- --namespace memex-cloud
+  [ "$_sp_rc" -eq 0 ] && [ -z "$_sp_calls" ] && case "$_sp_out" in *"::hosting:: storage_report=dry-run"*) true ;; *) false ;; esac \
+    && ok "a dry run narrates and touches nothing" || bad "dry run" "rc ${_sp_rc}; calls: ${_sp_calls}; out: ${_sp_out}"
+  refuses_hard "storage prune refuses a minimum age below the contract's 30 days" "never lets it below 30" env HOSTING_STORAGE_MIN_AGE_DAYS=7 hosting-storage-prune --namespace n
+  refuses_hard "storage prune refuses a claim that is not a plain name" "not a plain name" hosting-storage-prune --namespace n --claim 'c;id'
+  refuses_hard "storage prune refuses an unknown argument" "unknown argument" hosting-storage-prune --namespace n --delete-bundles
+  refuses_hard "storage prune refuses a value flag with no value (never loops)" "needs a value" hosting-storage-prune --namespace
+  rm -rf "$_sp_root" "$_sp_root2" "$_sp_empty" "$_sp_xlog"
+elif [ -n "${CI:-}" ]; then
+  bad "the storage walker is tested" "this CI runner lacks GNU stat -c / touch -d / find / cksum / comm — the suite's runner must carry them"
+else
+  echo "  note  storage walker not run here (needs GNU stat/touch); CI runs it"
+fi
+unset _sp_out _sp_rc _sp_calls _sp_manifest _sp_json _sp_log
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

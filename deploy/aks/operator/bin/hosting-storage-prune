@@ -1,0 +1,353 @@
+#!/usr/bin/env bash
+# hosting-storage-prune --namespace <ns> [--claim <pvc>] [--execute]
+#
+# Without --claim the claim is the one the namespace's portal mounts at /data (a per-instance data
+# volume). With --claim it is that claim, named outright — the shared, control-owned artifact store
+# (Doc/Architecture/SharedArtifactStore), which no portal mounts writable and no Deployment names as
+# /data. A named claim is never treated as having a shadowed dumps/ directory.
+#
+# MEASURE what fills an instance's /data share — and, with --execute, remove the two kinds of garbage
+# on it that no reader can ever resolve — IN THE CLUSTER, and report it as ONE machine line the control
+# plane records (MeshWeaver.Plugins Hosting/InstanceAction, kind `StoragePrune`, and the standing
+# sweep that files one per instance; Doc/Architecture/StoragePrune):
+#
+#   ::hosting:: storage_complete=true|false  false when any read failed — sizes are then lower bounds
+#   ::hosting:: storage_size_kib=<n>       the share's size, as the mount reports it
+#   ::hosting:: storage_used_kib=<n>       what is used on it
+#   ::hosting:: storage_bundle_kib=<n>     of which the prebuilt-bundle store
+#   ::hosting:: storage_eligible_kib=<n>   bundle bytes past the 30-day minimum that are NOT current —
+#                                          eligible under the retention contract, NOT deleted here
+#   ::hosting:: storage_deletable_kib=<n>  what this command itself may delete (cache-tmp, misplaced-dump)
+#   ::hosting:: storage_deleted_kib=<n>    what it did delete (0 on a report)
+#   ::hosting:: storage_report=<base64 of gzip of the report JSON>   — always the LAST line, so it is
+#                                          inside the 120-line / 24 KB log tail the operations lane hands back
+#
+# 🚨 WHY THIS EXISTS. On 2026-10-19 the public instance's 128 GiB /data share was 100% full and every
+# core CD and module publication failed with "The specified share is full". The portal's own bundle
+# sweep (PrebuiltBundleRetention) had planned NOTHING for weeks — correctly: the fleet consumer
+# inventory it needs was incomplete, and incomplete licenses no deletion. Nobody could see that,
+# because its verdict was a log line in one pod. This is the measurement the control instance runs on
+# a schedule, so the share's contents, and what the contract would and would not let go, are a record.
+#
+# HOW IT READS. The data claim belongs to the INSTANCE's namespace; a Job here cannot mount another
+# namespace's claim. So the script creates ONE short-lived Job in the instance's namespace that mounts
+# the portal's data claim (read-only for a report), walks it with the in-pod half
+# (bin/_storage_prune_pod.sh), and exits. This script reads that Job's log, deletes the Job, classifies
+# and condenses. Which claim is the data share — and whether a SEPARATE dump volume is mounted over
+# /data/dumps — is read off the portal Deployment itself, never assumed.
+#
+# 🚨 WHAT IT NEVER DOES:
+#   • it never deletes under prebuilt-bundles/. Bundles are release artifacts
+#     (Doc/Architecture/ReleasedArtifactRetention): deleting one needs the complete fleet consumer
+#     inventory and the publication lease, which a pod has neither of. They are CLASSIFIED and reported;
+#   • it never touches assembly-cache content, nuget-cache or modules/ — each has its own collector in
+#     the portal (AssemblyCacheRetention, ModuleGenerationsGc); their sizes are reported;
+#   • a report mounts the claim `readOnly: true`. Only --execute mounts it writable, and then deletes
+#     ONLY `cache-tmp` (assembly-cache/**/.tmp-* older than a day) and `misplaced-dump` (files on the
+#     DATA share's dumps/ directory older than seven days, only while a dump volume shadows it), each
+#     re-checked in the pod at the moment of deletion;
+#   • the Job carries no secret, mounts no ServiceAccount token, and runs as non-root.
+#
+# DECLARED, NOT DERIVED: the walker image is pinned below (overridable for a test).
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-storage-prune"
+
+# ── declared ────────────────────────────────────────────────────────────────────────────────────
+WALKER_IMAGE="${HOSTING_STORAGE_WALKER_IMAGE:-mcr.microsoft.com/azurelinux/busybox:1.36}"
+# Walking a full 128 GiB share of ~900 identity directories took ~7 minutes (2026-10-19); the budget
+# is three times that and still inside the operations lane's 45-minute hard cut.
+JOB_DEADLINE="${HOSTING_STORAGE_DEADLINE:-1800}"
+# The retention contract's minimum age (ReleasedArtifactRetention: 30 days, never shorter).
+MIN_AGE_DAYS="${HOSTING_STORAGE_MIN_AGE_DAYS:-30}"
+# The encoded report must fit the operations lane's log tail (ActionsExecutor.TailBytes = 24 KB,
+# shared with the run's other closing lines).
+FACT_BUDGET="${HOSTING_STORAGE_FACT_BUDGET:-14000}"
+interval="${HOSTING_STORAGE_INTERVAL:-10}" grace="${HOSTING_STORAGE_GRACE:-180}"
+
+namespace="" execute=0 named_claim=""
+# A value flag with no value would make `shift 2` fail without shifting — an endless loop, not an
+# error. So every value flag checks that its value is there first.
+needs_value() { [ $# -ge 2 ] || hosting::die "$1 needs a value"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace) needs_value "$@"; namespace="$2"; shift 2 ;;
+    --claim)     needs_value "$@"; named_claim="$2"; shift 2 ;;
+    --execute)   execute=1; shift ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::safe_name namespace "$namespace"
+[ -z "$named_claim" ] || hosting::safe_name claim "$named_claim"
+for n in "$JOB_DEADLINE" "$MIN_AGE_DAYS" "$FACT_BUDGET" "$interval" "$grace"; do
+  [[ "$n" =~ ^[0-9]+$ ]] || hosting::die "a numeric setting ('${n}') is not a whole number — refusing"
+done
+[ "$MIN_AGE_DAYS" -ge 30 ] \
+  || hosting::die "the minimum age is ${MIN_AGE_DAYS} days — the retention contract never lets it below 30 (ReleasedArtifactRetention); refusing"
+[[ "$WALKER_IMAGE" =~ ^[A-Za-z0-9][A-Za-z0-9./_:@-]*$ ]] || hosting::die "walker image '${WALKER_IMAGE}' is not a plain image reference — refusing"
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the Deployment and the Job are JSON, and the report is condensed with jq"
+command -v gzip >/dev/null 2>&1 || hosting::die "gzip is not installed in this image — the report is carried gzip-compressed"
+
+mode=report
+[ "$execute" = 0 ] || mode=execute
+
+hosting::step "Measure the data volume"
+if hosting::dry; then
+  echo "  DRY-RUN would walk the data volume of ${namespace} in a $([ "$mode" = execute ] && echo "read-write" || echo "read-only") Job and report what fills it$([ "$mode" = execute ] && echo ", deleting only abandoned temp files and shadowed dumps")"
+  hosting::say storage_report dry-run
+  exit 0
+fi
+
+# ── which claim is /data, and is /data/dumps a separate volume: read off the portal Deployment ──
+dumps_shadowed=0 dumps_claim=""
+if [ -n "$named_claim" ]; then
+  claim="$named_claim"
+  hosting::probe output kubectl -n "$namespace" get pvc "$claim" -o name
+  case $? in
+    2) hosting::die_refused "PersistentVolumeClaim ${claim} in ${namespace}" ;;
+    1) hosting::die "no PersistentVolumeClaim '${claim}' in namespace ${namespace} (${HOSTING_PROBE_ERR:-nothing listed}) — there is no store to measure. This command measures a claim; it never creates one" ;;
+  esac
+else
+  hosting::probe output kubectl -n "$namespace" get deployments -o json
+  case $? in
+    2) hosting::die_refused "the Deployments of ${namespace}, which say which claim is its data volume" ;;
+    1) hosting::die "cannot read the Deployments of ${namespace} (${HOSTING_PROBE_ERR:-nothing listed}) — there is no portal whose data volume could be measured" ;;
+  esac
+  volume="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -c '
+    [ .items[] | .spec.template.spec as $s
+      | $s.containers[]? | select(.name == "memex-portal")
+      | (.volumeMounts // []) as $mounts
+      | ($mounts | map(select(.mountPath == "/data")) | first) as $data
+      | select($data != null)
+      | (($s.volumes // []) | map(select(.name == $data.name)) | first) as $dv
+      | ($mounts | map(select(.mountPath == "/data/dumps")) | first) as $dm
+      | (if $dm == null then null else (($s.volumes // []) | map(select(.name == $dm.name)) | first) end) as $dumpv
+      | { claim: ($dv.persistentVolumeClaim.claimName // null),
+          subPath: ($data.subPath // ""),
+          dumpsClaim: ($dumpv.persistentVolumeClaim.claimName // null) } ]
+    | first // empty')" \
+    || hosting::die "the Deployments of ${namespace} could not be read as JSON (jq failed) — nothing is known about its data volume"
+  [ -n "$volume" ] \
+    || hosting::die "no portal container in ${namespace} mounts a volume at /data — there is no data volume to measure"
+  claim="$(printf '%s' "$volume" | jq -r '.claim // ""')"
+  sub_path="$(printf '%s' "$volume" | jq -r '.subPath')"
+  dumps_claim="$(printf '%s' "$volume" | jq -r '.dumpsClaim // ""')"
+  [ -n "$claim" ] \
+    || hosting::die "the portal of ${namespace} mounts /data from a volume that is not a PersistentVolumeClaim — an emptyDir dies with the pod; there is no share to measure"
+  hosting::safe_name claim "$claim"
+  [ -z "$sub_path" ] \
+    || hosting::die "the portal of ${namespace} mounts /data from a sub-path ('${sub_path}') of claim ${claim} — this command measures a whole data claim and refuses to guess what else shares it"
+  # The data share's own dumps/ directory is "misplaced" only while a DIFFERENT claim is mounted over it:
+  # then the portal cannot see those bytes at all. Same claim, or no mount, and it is the live dump root.
+  if [ -n "$dumps_claim" ] && [ "$dumps_claim" != "$claim" ]; then dumps_shadowed=1; fi
+fi
+hosting::log "data      $([ -n "$named_claim" ] && echo "named claim" || echo "/data →") ${claim}, $([ "$mode" = execute ] && echo "READ-WRITE (execute)" || echo "read-only (report)")"
+hosting::log "dumps     $([ "$dumps_shadowed" = 1 ] && echo "/data/dumps → claim ${dumps_claim}: the data share's own dumps/ is shadowed" || echo "no separate dump volume over /data/dumps — the data share's dumps/ is live, never pruned here")"
+hosting::log "walker    ${WALKER_IMAGE}"
+
+# ── the walk Job ────────────────────────────────────────────────────────────────────────────────
+pod_script_file="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_storage_prune_pod.sh"
+[ -r "$pod_script_file" ] || hosting::die "the in-pod walker ${pod_script_file} is missing from this operator — refusing to start a Job with nothing to run"
+pod_script="$(cat "$pod_script_file")"
+
+readonly_mount=true
+[ "$mode" = report ] || readonly_mount=false
+job="mw-storage-prune-$(date -u +%Y%m%d%H%M%S)"
+manifest="$(jq -n \
+  --arg ns "$namespace" --arg job "$job" --arg image "$WALKER_IMAGE" --arg claim "$claim" \
+  --arg script "$pod_script" --arg mode "$mode" --arg shadowed "$dumps_shadowed" \
+  --argjson ro "$readonly_mount" --argjson deadline "$JOB_DEADLINE" '
+  { apiVersion: "batch/v1", kind: "Job",
+    metadata: { name: $job, namespace: $ns,
+                labels: { "app.kubernetes.io/managed-by": "hosting-operator", "meshweaver.io/purpose": "storage-prune" } },
+    spec: { backoffLimit: 0, activeDeadlineSeconds: $deadline, ttlSecondsAfterFinished: 600,
+      template: { metadata: { labels: { "meshweaver.io/purpose": "storage-prune" } },
+        spec: { restartPolicy: "Never", automountServiceAccountToken: false,
+          securityContext: { runAsNonRoot: true, runAsUser: 1654, runAsGroup: 1654 },
+          containers: [ { name: "walk", image: $image, command: ["/bin/sh", "-c", $script],
+            env: [ {name: "MW_MODE", value: $mode}, {name: "MW_DUMPS_SHADOWED", value: $shadowed} ],
+            resources: { requests: { cpu: "100m", memory: "64Mi" }, limits: { memory: "256Mi" } },
+            securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: { drop: ["ALL"] } },
+            volumeMounts: [ { name: "data", mountPath: "/store", readOnly: $ro } ] } ],
+          volumes: [ { name: "data", persistentVolumeClaim: { claimName: $claim, readOnly: $ro } } ] } } } }')"
+
+created=0
+cleanup() {
+  [ "$created" = 1 ] || return 0
+  created=0
+  hosting::do kubectl -n "$namespace" delete job "$job" --wait=false >&2 \
+    || hosting::log "could not delete job/${job} in ${namespace} — its ttlSecondsAfterFinished (600 s) removes it"
+}
+trap 'hosting::on_exit; cleanup' EXIT
+
+hosting::do kubectl -n "$namespace" create -f - <<< "$manifest" >&2 \
+  || hosting::die "could not create the walk Job ${job} in ${namespace}"
+created=1
+hosting::log "job       ${job} (deadline ${JOB_DEADLINE}s)"
+
+job_state=""
+read_job_state() {
+  hosting::probe any kubectl -n "$namespace" get job "$job" -o json
+  case $? in
+    2) hosting::die_refused "job/${job} in ${namespace}, the walk this run created" ;;
+    1) job_state="absent"; return 0 ;;
+  esac
+  job_state="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '
+    if (.status.succeeded // 0) >= 1 then "succeeded"
+    elif ((.status.conditions // []) | any(.type == "Failed" and .status == "True")) then "failed"
+    else "active" end')"
+}
+
+pod_log=""
+read_log() {
+  hosting::probe any kubectl -n "$namespace" logs "job/${job}"
+  case $? in
+    0) pod_log="$HOSTING_PROBE_OUT" ;;
+    2) hosting::die_refused "the log of job/${job} in ${namespace}" ;;
+    *) pod_log="" ;;
+  esac
+}
+
+limit=$(( JOB_DEADLINE + grace )) waited=0
+while :; do
+  read_job_state
+  case "$job_state" in
+    succeeded|failed) break ;;
+    absent) hosting::die "the walk Job ${job} disappeared while it was being waited on — nothing was measured" ;;
+  esac
+  [ "$waited" -ge "$limit" ] && hosting::die "the walk Job ${job} has not finished after ${waited}s (deadline ${JOB_DEADLINE}s) — refusing to report a partial walk"
+  sleep "$interval"
+  waited=$(( waited + interval ))
+  [ "$interval" -gt 0 ] || waited=$(( waited + 1 ))
+done
+read_log
+
+refused="$(printf '%s\n' "$pod_log" | sed -n 's/^@@MW-STORE refused	//p' | head -1)"
+[ -z "$refused" ] || hosting::die "the data volume of ${namespace} answered: ${refused}"
+[ "$job_state" = "succeeded" ] \
+  || hosting::die "the walk Job ${job} FAILED (deadline ${JOB_DEADLINE}s, or the pod could not start — a claim that cannot attach on another node). Last lines: $(printf '%s\n' "$pod_log" | tail -5 | tr '\n' ' ')"
+case "$pod_log" in
+  *"@@MW-STORE done"*) ;;
+  *) hosting::die "the walk Job ${job} succeeded but its log never reached the end of the walk — refusing to report a partial one. Last lines: $(printf '%s\n' "$pod_log" | tail -5 | tr '\n' ' ')" ;;
+esac
+cleanup
+
+# ── classify and condense ───────────────────────────────────────────────────────────────────────
+# Every bundle item gets exactly ONE class; the classes and what each means are the contract the
+# control instance reads (Doc/Architecture/StoragePrune → "The classes"):
+#   bundle-current                the generation a source's _current names, or a sealed flat source
+#                                 of a compatibility key — what portals serve. Protected.
+#   bundle-young                  inside the 30-day minimum age. Protected.
+#   bundle-unsealed-generation    older, never sealed, not current: a publication that never finished.
+#   bundle-superseded-generation  older, sealed, no longer current.
+#   bundle-legacy-identity        an s…/g… per-build identity directory older than the minimum age —
+#                                 the layout before compatibility keys.
+#   bundle-other                  anything the walker could not place. Protected (unreadable is kept).
+# The three middle classes are "eligible" — and NOT deleted by anyone yet: deleting needs the complete
+# fleet consumer inventory and the publication lease (ReleasedArtifactRetention).
+# shellcheck disable=SC2016  # a jq program, not shell
+condense='
+(split("\n") | map(select(startswith("@@MW-STORE "))) | map(.[11:] | split("\t"))) as $rows
+| ($rows | map(select(.[0] == "begin")) | first) as $begin
+| ($begin[1] | tonumber) as $now
+| def age($t): ((($now - ($t | tonumber)) / 86400) | floor); .
+| ($rows | map(select(.[0] == "df")) | first // ["df","0","0","0"]) as $df
+| ([ $rows[] | select(.[0] == "identity" and .[2] == "legacy") | .[1] ] | map({key: ., value: true}) | from_entries) as $legacyIds
+# A legacy identity is classified WHOLE (one item, its measured size); the generations inside it are
+# reported for their state only, never classified a second time.
+| [ $rows[] | select(.[0] == "generation") | select($legacyIds[.[1]] | not)
+    | {kind: "generation", identity: .[1], source: .[2], name: .[3], state: .[4], ageDays: age(.[5]), kib: (.[6] | tonumber), leaseFile: (.[7] == "1")} ] as $gens
+| [ $rows[] | select(.[0] == "flat")
+    | {kind: "flat", identity: .[1], source: .[2], sealed: (.[3] == "1"), ageDays: age(.[4]), kib: (.[5] | tonumber), leaseFile: (.[6] == "1")} ] as $flats
+| [ $rows[] | select(.[0] == "identity")
+    | {kind: "identity", identity: .[1], idKind: .[2], ageDays: age(.[3]), kib: (.[4] | tonumber)} ] as $ids
+| [ ($gens[] | . + {class: (
+        if .state == "current" then "bundle-current"
+        elif .ageDays < $minAge then "bundle-young"
+        elif .state == "unsealed" then "bundle-unsealed-generation"
+        else "bundle-superseded-generation" end)}),
+    ($flats[] | . + {class: (
+        if .sealed then "bundle-current"
+        elif .ageDays < $minAge then "bundle-young"
+        else "bundle-unsealed-generation" end)}),
+    ($ids[] | select(.idKind != "compat") | . + {class: (
+        if .idKind == "other" then "bundle-other"
+        elif .ageDays < $minAge then "bundle-young"
+        else "bundle-legacy-identity" end)}) ] as $items
+| ($rows | map(select(.[0] == "releases")) | first // ["releases","0","0"]) as $rel
+| [ $rows[] | select(.[0] == "tmp") | {path: .[1], kib: (.[2] | tonumber), ageDays: age(.[3])} ] as $tmps
+| [ $rows[] | select(.[0] == "dump") | {path: .[1], kib: (.[2] | tonumber), ageDays: age(.[3])} ] as $dumps
+| [ $rows[] | select(.[0] == "deleted") | {class: .[1], path: .[2], kib: (.[3] | tonumber)} ] as $deleted
+| [ $rows[] | select(.[0] == "kept") | {class: .[1], path: .[2], reason: .[3]} ] as $kept
+| [ $rows[] | select(.[0] == "unreadable") | {path: .[1], read: .[2]} ] as $unreadable
+| ([ $items[] | select(.class | IN("bundle-unsealed-generation", "bundle-superseded-generation", "bundle-legacy-identity")) ]) as $eligible
+| {
+    version: 1, namespace: $ns, claim: $claim, mode: $mode, dumpsShadowed: ($shadowed == "1"),
+    complete: ($unreadable | length == 0), unreadableCount: ($unreadable | length), unreadable: ($unreadable[:10]),
+    measuredAt: ($now | todate), minimumAgeDays: $minAge,
+    df: {sizeKiB: ($df[1] | tonumber), usedKiB: ($df[2] | tonumber), availableKiB: ($df[3] | tonumber)},
+    top: ([ $rows[] | select(.[0] == "top") | {name: .[1], kib: (.[2] | tonumber)} ]
+          + [ {name: "prebuilt-bundles", kib: (([ $items[].kib ] | add // 0) + ($rel[2] | tonumber))} ]
+          | sort_by(-.kib)),
+    bundles: {
+      kib: (([ $items[].kib ] | add // 0) + ($rel[2] | tonumber)),
+      releaseMarkers: {count: ($rel[1] | tonumber), kib: ($rel[2] | tonumber)},
+      identities: ($ids | group_by(.idKind) | map({key: .[0].idKind, value: length}) | from_entries),
+      classes: ($items | group_by(.class) | map({class: .[0].class, count: length, kib: ([.[].kib] | add // 0)}) | sort_by(-.kib)),
+      eligibleKiB: ([ $eligible[].kib ] | add // 0),
+      sources: ([ $gens[] ] | group_by([.identity, .source]) | map({
+          identity: .[0].identity, source: .[0].source,
+          current: (map(select(.state == "current")) | first | .name // null),
+          generations: length, leaseFile: (.[0].leaseFile),
+          unsealedOld: (map(select(.state == "unsealed" and .ageDays >= $minAge)) | length),
+          supersededOld: (map(select(.state == "sealed" and .ageDays >= $minAge)) | length),
+          young: (map(select(.state != "current" and .ageDays < $minAge)) | length),
+          kib: ([.[].kib] | add // 0) }) | sort_by(-.kib))[:$maxSources],
+      largest: ($items | sort_by(-.kib) | .[:$maxLargest] | map({class, identity, source, name, ageDays, kib}))
+    },
+    deletable: {
+      cacheTmp: {count: ([ $tmps[] | select(.ageDays >= 1) ] | length), kib: ([ $tmps[] | select(.ageDays >= 1) | .kib ] | add // 0), total: ($tmps | length)},
+      misplacedDumps: (if $shadowed == "1"
+        then {count: ([ $dumps[] | select(.ageDays >= 7) ] | length), kib: ([ $dumps[] | select(.ageDays >= 7) | .kib ] | add // 0), total: ($dumps | length)}
+        else {count: 0, kib: 0, total: ($dumps | length), note: "no dump volume shadows dumps/ — it is the live dump root"} end)
+    },
+    deleted: {count: ($deleted | length), kib: ([ $deleted[].kib ] | add // 0),
+              byClass: ($deleted | group_by(.class) | map({key: .[0].class, value: length}) | from_entries)},
+    kept: ($kept[:20]), keptCount: ($kept | length)
+  }'
+
+fact="" report=""
+for caps in "40 40" "20 25" "10 12" "5 6" "0 0"; do
+  read -r max_sources max_largest <<< "$caps"
+  report="$(printf '%s' "$pod_log" | jq -R -s -c \
+    --arg ns "$namespace" --arg claim "$claim" --arg mode "$mode" --arg shadowed "$dumps_shadowed" \
+    --argjson minAge "$MIN_AGE_DAYS" --argjson maxSources "$max_sources" --argjson maxLargest "$max_largest" "$condense")" \
+    || hosting::die "the walk of ${job} could not be classified (jq failed) — nothing is reported"
+  fact="$(printf '%s' "$report" | gzip -9 -n | base64 | tr -d '\n')"
+  [ "${#fact}" -gt "$FACT_BUDGET" ] || break
+done
+[ "${#fact}" -le "$FACT_BUDGET" ] \
+  || hosting::die "even the smallest condensation of the report (${#fact} bytes encoded) exceeds the ${FACT_BUDGET}-byte budget the operations lane carries back — refusing to report a fact that would be cut"
+
+r() { printf '%s' "$report" | jq -r "$1"; }
+hosting::log "share     $(r '.df.usedKiB') KiB used of $(r '.df.sizeKiB') KiB ($(r '.df.availableKiB') KiB free)"
+printf '%s' "$report" | jq -r '.top[] | "    \(.kib) KiB  \(.name)"'
+hosting::log "bundles   $(r '.bundles.kib') KiB — by class:"
+printf '%s' "$report" | jq -r '.bundles.classes[] | "    \(.count) × \(.class): \(.kib) KiB"'
+hosting::log "eligible  $(r '.bundles.eligibleKiB') KiB past the ${MIN_AGE_DAYS}-day minimum and not current — NOT deleted: bundle deletion needs the complete consumer inventory and the publication lease"
+hosting::log "deletable $(r '.deletable.cacheTmp.count') temp file(s), $(r '.deletable.misplacedDumps.count') shadowed dump file(s)"
+[ "$mode" = report ] || hosting::log "deleted   $(r '.deleted.count') file(s), $(r '.deleted.kib') KiB; kept on re-check: $(r '.keptCount')"
+if [ "$(r '.complete')" != "true" ]; then
+  hosting::log "INCOMPLETE $(r '.unreadableCount') path(s) could not be read (first: $(r '[.unreadable[].path] | join(", ")')) — every size and class below is a LOWER bound, and an incomplete walk licenses no deletion"
+fi
+hosting::say storage_complete "$(r '.complete')"
+hosting::say storage_size_kib "$(r '.df.sizeKiB')"
+hosting::say storage_used_kib "$(r '.df.usedKiB')"
+hosting::say storage_bundle_kib "$(r '.bundles.kib')"
+hosting::say storage_eligible_kib "$(r '.bundles.eligibleKiB')"
+hosting::say storage_deletable_kib "$(r '.deletable.cacheTmp.kib + .deletable.misplacedDumps.kib')"
+hosting::say storage_deleted_kib "$(r '.deleted.kib')"
+hosting::say storage_report "$fact"
