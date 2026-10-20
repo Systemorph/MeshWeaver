@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using MeshWeaver.Hosting;
 using MeshWeaver.Mesh;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace Memex.Portal.Shared.Test;
@@ -199,7 +200,100 @@ public class DeploymentPinnedReferencesTest
     {
         var report = Report(claimedDeployment ?? registeredInstance, age, running);
         ((JsonObject)report.Content!)["registeredInstance"] = registeredInstance;
-        return report with { Id = registeredInstance };
+        return report with
+        {
+            Id = registeredInstance,
+            Namespace = $"{DeploymentReportService.DefaultOperationalSpace}/{DeploymentReportService.StoreReportsSegment}",
+        };
+    }
+
+    /// <summary>The same body as <paramref name="report"/>, filed somewhere the platform never files one.</summary>
+    private static MeshNode Elsewhere(MeshNode report, string @namespace) => report with { Namespace = @namespace };
+
+    // ── #6989: a report is where the platform FILES one ──────────────────────────────────────────
+    //
+    // Inventories are read mesh-wide, and `Hosting/ModuleInventory` is a type anyone may create in a
+    // partition they own. Measured on the registry: a leftover probe under a user's partition was
+    // matched as the `memex` record's sink report and refused every pass, standing in for the report
+    // that never arrived.
+
+    [Fact]
+    public void AFreshCompleteReportInAUsersPartition_DoesNotSatisfyARecord()
+    {
+        // The dangerous direction: a hand-made body that LOOKS like a fresh, complete report for the
+        // silent `customer` would complete the pass and authorise deleting what `customer` runs.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             Elsewhere(StoreReport("customer", TimeSpan.FromMinutes(1), "s-forged"), "someone/OpsProbe/ConsumerReports"),
+             Elsewhere(Report("customer", TimeSpan.FromMinutes(1), "s-forged-sink"), "someone/OpsProbe/Modules")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/customer: no Hosting/ModuleInventory report has ever arrived",
+            because: "a node outside the filing locations is not a report, so `customer` is still silent");
+    }
+
+    [Fact]
+    public void ALegacyProbeInAUsersPartition_DoesNotRefuseAPassItsRecordsRealReportCompletes()
+    {
+        // The measured shape: an incomplete legacy body under a user's partition, named after a
+        // record whose own authenticated report is fresh and complete.
+        var references = Resolve(SyncedFleet(),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             StoreReport("customer", TimeSpan.FromHours(1), "s-customer"),
+             Elsewhere(Report("customer", TimeSpan.FromDays(40), "s-probe", complete: false), "someone/OpsProbe/Modules")],
+            new ConsumerScope("registry", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().Contain(["s-company", "s-control", "s-customer"])
+            .And.NotContain("s-probe", because: "a probe is not a consumer, and its legacy body is no refusal");
+    }
+
+    [Fact]
+    public void AnAuthenticatedStampOutsideTheStoresFilingLocation_IsNotAnAuthenticatedReport()
+    {
+        // `registeredInstance` is stamped by the STORE, at its filing location. The same field on a
+        // node under the sink's location was never stamped by anybody who authenticated anything; it
+        // is read as a sink report of the deployment its body names (`intruder`), never as `customer`.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(SyncedFleet(),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+             Elsewhere(StoreReport("customer", TimeSpan.FromMinutes(1), "s-claimed", claimedDeployment: "intruder"),
+                 $"{DeploymentReportService.DefaultOperationalSpace}/Modules")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/customer: no Hosting/ModuleInventory report has ever arrived");
+    }
+
+    [Fact]
+    public void TheFilingLocations_FollowTheConfiguredOperationalSpace()
+    {
+        var underOps = new[]
+        {
+            StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+            StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+            StoreReport("customer", TimeSpan.FromHours(1), "s-customer"),
+        };
+        var underFleet = underOps
+            .Select(r => Elsewhere(r, $"Fleet/{DeploymentReportService.StoreReportsSegment}"))
+            .ToImmutableList();
+
+        Resolve(SyncedFleet(), underFleet, new ConsumerScope("registry", [], false, OperationalSpace: "Fleet"))
+            .Select(r => r.Identity).Should().Contain(["s-company", "s-control", "s-customer"]);
+        Assert.Throws<InvalidOperationException>(() =>
+            Resolve(SyncedFleet(), underOps, new ConsumerScope("registry", [], false, OperationalSpace: "Fleet")));
+    }
+
+    [Fact]
+    public void ScopeOf_ReadsTheOperationalSpace_DefaultingToOps()
+    {
+        DeploymentPinnedReferences.ScopeOf(
+                new ConfigurationBuilder()
+                    .AddInMemoryCollection([new(DeploymentReportService.OperationalSpaceKey, "Fleet")]).Build(), null)
+            .OperationalSpace.Should().Be("Fleet");
+        DeploymentPinnedReferences.ScopeOf(
+                new ConfigurationBuilder().Build(), null)
+            .OperationalSpace.Should().Be(DeploymentReportService.DefaultOperationalSpace);
     }
 
     // ── #6989: whose consumers a store accounts for ──────────────────────────────────────────────
