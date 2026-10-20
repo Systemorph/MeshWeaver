@@ -82,7 +82,9 @@ identifier, `<rid>/prebuilt-bundles/`, each in exactly the layout every reader a
 - **A reader that serves OTHER runtimes keeps the template.** The expansion writes the unexpanded root
   to `PreWarm:PrebuiltBundleRootTemplate`, so a registry answering a client of another architecture
   (the portal's prebuilt-bundle endpoints) can resolve the CLIENT's store. 🚨 Until those endpoints do,
-  the instance that serves the prebuilt surface to other architectures must not become a Consumer.
+  the instance that serves the prebuilt surface to other architectures takes NO role in the store —
+  neither Consumer nor Owner, since either role renders the `{rid}` root and switches its lookup to its
+  own runtime's store. Provisioning the store on such an instance must not also switch its read root.
 - **Aspire refuses a Consumer.** A consumer's binding is a Kubernetes static PV; a Docker volume of its
   own would hold none of the owner's publications, so the AppHost fails by name instead.
 - **A consumer's teardown never deletes the store.** `hosting-pv-purge` deletes a namespace's shares,
