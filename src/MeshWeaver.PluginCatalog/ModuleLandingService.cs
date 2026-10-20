@@ -110,9 +110,25 @@ public sealed class ModuleLandingService : IDisposable
     /// else the legacy fixed folder <c>modules/&lt;name&gt;/</c>. Pure — the one resolution rule,
     /// shared by boot and the serving side.
     /// </summary>
+    /// <remarks>
+    /// 🚨 Shared-tier aware (Doc/Architecture/SharedArtifactStore, increment 3): a GENERATION this
+    /// instance does not hold itself resolves to the environment store's SEALED copy when the process
+    /// has a shared tier (<see cref="SharedModuleTier.Root"/>); the instance's own copy always wins,
+    /// and without a tier this is exactly the local path it always was.
+    /// </remarks>
     public static string ModuleDirectoryFor(
         string baseDirectory, string moduleName, ModuleActivationEntry? entry) =>
-        Path.Combine(baseDirectory, "modules",
+        ModuleDirectoryInTier(baseDirectory, SharedModuleTier.Root, moduleName, entry);
+
+    /// <summary>
+    /// <see cref="ModuleDirectoryFor"/> with the shared tier's root stated — the pure form tests use,
+    /// and the one rule the process-wide form delegates to. A DISTINCT name, not an overload: an added
+    /// overload makes every dependent's <c>cref</c> to the original ambiguous (CS0419 under
+    /// warnings-as-errors).
+    /// </summary>
+    public static string ModuleDirectoryInTier(
+        string baseDirectory, string? sharedRoot, string moduleName, ModuleActivationEntry? entry) =>
+        SharedModuleTier.Resolve(baseDirectory, sharedRoot,
             string.IsNullOrWhiteSpace(entry?.Directory) ? moduleName : entry!.Directory!);
 
     /// <summary>
@@ -1280,73 +1296,85 @@ public sealed class ModuleLandingService : IDisposable
         // CollectGarbage), skip-on-locked, once no entry references them.
         var modulesRoot = Path.Combine(baseDirectory, "modules");
         var target = Path.Combine(modulesRoot, generation);
-        var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(staging);
-        try
+
+        // 🚨 THE SHARED TIER (Doc/Architecture/SharedArtifactStore, increment 3). The leaf is the
+        // content address, so a SEALED copy in the environment's store already carries these bytes:
+        // a consumer records the landing against it and writes nothing to its own volume, and the
+        // store's owner publishes the generation there instead of here. Either is only ever a
+        // saving — a store that is absent, read-only to the owner, full or mid-publication falls
+        // through to the local landing below, exactly as before the tier existed.
+        var servedFromShared = !Directory.Exists(target)
+            && LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets);
+        if (!servedFromShared)
         {
-            foreach (var (fileName, bytes) in assemblies)
-                File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
-            // Static web assets keep their RELATIVE path — a view pack's components request
-            // _content/<pack>/leaflet/leaflet.js, and the host's module asset provider serves
-            // <module folder>/wwwroot, so the shape has to survive the trip intact.
-            foreach (var (relativePath, bytes) in staticAssets ?? [])
-            {
-                var destination = Path.Combine(
-                    staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.WriteAllBytes(destination, bytes);
-            }
-            // 🚨 NATIVE payloads keep their relative path for a harder reason than the assets do
-            // (#4126): the path IS the contract. ModuleNativeAssets composes its probe from
-            // exactly runtimes/<rid>/native/<file> under the module folder and has no recursive
-            // walk, so a byte written anywhere else is a module that loads, reports nothing, and
-            // throws DllNotFoundException at its first P/Invoke. The shape was refused above, at
-            // the top of this method, before anything touched the disk.
-            foreach (var (relativePath, bytes) in nativeAssets ?? [])
-            {
-                var destination = Path.Combine(
-                    staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
-                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.WriteAllBytes(destination, bytes);
-            }
-            // 🚨 An EXISTING target is the right answer, never a collision (#3656): the leaf is the
-            // content address, so a directory already carrying this name already carries these
-            // bytes. Another replica landing the same bundle concurrently, or an earlier landing
-            // this deployment's entry has since moved off — either way the landing ADOPTS it
-            // instead of writing a second copy under a second name, which is the whole point of
-            // addressing it by content. Probed first and caught as well: the other replica's
-            // rename can land between the probe and ours.
-            var alreadyLanded = Directory.Exists(target);
-            if (!alreadyLanded)
-            {
-                try
-                {
-                    Directory.Move(staging, target);
-                }
-                catch (IOException) when (Directory.Exists(target))
-                {
-                    alreadyLanded = true;
-                }
-            }
-            if (alreadyLanded)
-            {
-                RestoreMissingFiles(staging, target, name, generation);
-                Directory.Delete(staging, recursive: true);
-                AdoptLandedGeneration(target, name, generation);
-            }
-        }
-        catch
-        {
+            var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(staging);
             try
             {
-                if (Directory.Exists(staging))
+                foreach (var (fileName, bytes) in assemblies)
+                    File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
+                // Static web assets keep their RELATIVE path — a view pack's components request
+                // _content/<pack>/leaflet/leaflet.js, and the host's module asset provider serves
+                // <module folder>/wwwroot, so the shape has to survive the trip intact.
+                foreach (var (relativePath, bytes) in staticAssets ?? [])
+                {
+                    var destination = Path.Combine(
+                        staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.WriteAllBytes(destination, bytes);
+                }
+                // 🚨 NATIVE payloads keep their relative path for a harder reason than the assets do
+                // (#4126): the path IS the contract. ModuleNativeAssets composes its probe from
+                // exactly runtimes/<rid>/native/<file> under the module folder and has no recursive
+                // walk, so a byte written anywhere else is a module that loads, reports nothing, and
+                // throws DllNotFoundException at its first P/Invoke. The shape was refused above, at
+                // the top of this method, before anything touched the disk.
+                foreach (var (relativePath, bytes) in nativeAssets ?? [])
+                {
+                    var destination = Path.Combine(
+                        staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    File.WriteAllBytes(destination, bytes);
+                }
+                // 🚨 An EXISTING target is the right answer, never a collision (#3656): the leaf is the
+                // content address, so a directory already carrying this name already carries these
+                // bytes. Another replica landing the same bundle concurrently, or an earlier landing
+                // this deployment's entry has since moved off — either way the landing ADOPTS it
+                // instead of writing a second copy under a second name, which is the whole point of
+                // addressing it by content. Probed first and caught as well: the other replica's
+                // rename can land between the probe and ours.
+                var alreadyLanded = Directory.Exists(target);
+                if (!alreadyLanded)
+                {
+                    try
+                    {
+                        Directory.Move(staging, target);
+                    }
+                    catch (IOException) when (Directory.Exists(target))
+                    {
+                        alreadyLanded = true;
+                    }
+                }
+                if (alreadyLanded)
+                {
+                    RestoreMissingFiles(staging, target, name, generation);
                     Directory.Delete(staging, recursive: true);
+                    AdoptLandedGeneration(target, name, generation);
+                }
             }
             catch
             {
-                // Best-effort staging cleanup — the original failure is what must surface.
+                try
+                {
+                    if (Directory.Exists(staging))
+                        Directory.Delete(staging, recursive: true);
+                }
+                catch
+                {
+                    // Best-effort staging cleanup — the original failure is what must surface.
+                }
+                throw;
             }
-            throw;
         }
 
         // 🚨 The natives get a line of their OWN (#4126). Everything else about a native is
@@ -1604,6 +1632,77 @@ public sealed class ModuleLandingService : IDisposable
         }
         return Convert.ToHexStringLower(hash.GetHashAndReset())[..16];
     }
+
+    /// <summary>
+    /// The shared-tier half of a landing (see <see cref="SharedModuleTier"/>). True when the
+    /// generation is now served from the environment's store and the local landing must write
+    /// nothing: either the store already holds it SEALED (any instance), or this process is the
+    /// store's owner and has just published it there. False — land locally, as always — when there
+    /// is no tier, when a consumer finds no sealed copy, or when the owner's publication fails; the
+    /// failure is logged, never thrown, because a landing must not depend on the store.
+    /// </summary>
+    private bool LandInSharedTier(
+        string name, string generation,
+        IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets)
+    {
+        var sharedRoot = SharedRoot;
+        if (sharedRoot is null)
+            return false;
+        if (SharedModuleTier.SealedDirectory(sharedRoot, generation) is { } sealedCopy)
+        {
+            logger?.LogInformation(
+                "Module '{Name}': generation {Generation} is already sealed in the shared artifact store "
+                + "({Directory}) — recorded against it, nothing written to this instance's volume",
+                name, generation, sealedCopy);
+            return true;
+        }
+        if (!PublishesToShared)
+            return false;
+        try
+        {
+            var files = assemblies.Select(a => (a.FileName, a.Bytes))
+                .Concat(staticAssets ?? [])
+                .Concat(nativeAssets ?? [])
+                .ToList();
+            var published = SharedModuleTier.Publish(sharedRoot, generation, files);
+            logger?.LogInformation(
+                "Module '{Name}': generation {Generation} PUBLISHED to the shared artifact store at "
+                + "{Directory} (this instance owns the store)", name, generation, published);
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            logger?.LogWarning(ex,
+                "Module '{Name}': publishing generation {Generation} to the shared artifact store at "
+                + "{Root} failed ({Cause}) — landing it on this instance's own volume instead; consumers "
+                + "keep landing their own copy until the store holds it",
+                name, generation, sharedRoot, ex.Message);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The shared tier this service reads (and, on the owner, writes) — the process-wide
+    /// <see cref="SharedModuleTier.Root"/> unless a test states one.
+    /// </summary>
+    public string? SharedRoot
+    {
+        get => sharedRootOverride ?? SharedModuleTier.Root;
+        init => sharedRootOverride = SharedModuleTier.Normalize(value);
+    }
+
+    private readonly string? sharedRootOverride;
+
+    /// <summary>Whether landings publish into <see cref="SharedRoot"/> — the store's owner only.</summary>
+    public bool PublishesToShared
+    {
+        get => publishesOverride ?? SharedModuleTier.Publishes;
+        init => publishesOverride = value;
+    }
+
+    private readonly bool? publishesOverride;
 
     /// <summary>
     /// Takes over a generation directory that was ALREADY on the volume when this landing resolved

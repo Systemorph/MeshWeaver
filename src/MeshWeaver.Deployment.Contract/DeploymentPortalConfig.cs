@@ -382,6 +382,135 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// <c>&lt;store mount&gt;/{rid}/modules</c> — the shared MODULE tier (increment 3) — for a record that
+    /// takes part in the shared artifact store, else null. Rendered as <c>Modules__SharedRoot</c>; the
+    /// portal expands the placeholder at boot. Pure.
+    /// </summary>
+    public static string? ArtifactStoreModuleRoot(DeploymentContent d)
+    {
+        var mount = ArtifactStoreVolume(d)?.MountPath?.Trim().TrimEnd('/');
+        return string.IsNullOrEmpty(mount) ? null : $"{mount}/{ArtifactStoreSpec.RuntimeIdentifierPlaceholder}/{ArtifactStoreSpec.ModuleDirectory}";
+    }
+
+    /// <summary>
+    /// The upstream registry an OWNER replicates its store from (increment 4), trimmed, or null when the
+    /// record states none or is not the owner. Pure.
+    /// </summary>
+    public static string? ArtifactStoreUpstreamRegistry(DeploymentContent d) =>
+        ArtifactStoreRole(d) == ArtifactStoreSpec.OwnerRole
+        && d.ArtifactStore!.Upstream?.Registry is { } registry && !string.IsNullOrWhiteSpace(registry)
+            ? registry.Trim()
+            : null;
+
+    /// <summary>The upstream sync's schedule: the stated cron, else <see cref="ArtifactStoreSpec.DefaultLocalBuildSchedule"/>. Pure.</summary>
+    public static string ArtifactStoreUpstreamSchedule(DeploymentContent d) =>
+        d.ArtifactStore?.Upstream?.Schedule is { } cron && !string.IsNullOrWhiteSpace(cron)
+            ? cron.Trim()
+            : ArtifactStoreSpec.DefaultLocalBuildSchedule;
+
+    /// <summary>The local-source build's schedule: the stated cron, else <see cref="ArtifactStoreSpec.DefaultLocalBuildSchedule"/>. Pure.</summary>
+    public static string ArtifactStoreLocalBuildSchedule(DeploymentContent d) =>
+        d.ArtifactStore?.LocalBuildSchedule is { } cron && !string.IsNullOrWhiteSpace(cron)
+            ? cron.Trim()
+            : ArtifactStoreSpec.DefaultLocalBuildSchedule;
+
+    /// <summary>
+    /// A registry name component (<c>[a-z0-9._-]+</c>) — the alphabet a source name must keep, because
+    /// the sync addresses <c>&lt;registry&gt;/plugins/&lt;source&gt;</c> and the store names
+    /// <c>&lt;identity&gt;/&lt;source&gt;/</c> with it. Pure.
+    /// </summary>
+    public static bool IsSourceName(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Trim() is { } v && v is not ("." or "..")
+        && v.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '.' or '_' or '-');
+
+    /// <summary>
+    /// A local source's name: a lowercase DNS label of at most 36 characters, because it also names
+    /// the build's CronJob (<c>artifact-build-&lt;source&gt;</c>, which Kubernetes caps at 52). Pure.
+    /// </summary>
+    public static bool IsLocalSourceName(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Trim() is { Length: <= 36 } v
+        && v.All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-')
+        && v[0] != '-' && v[^1] != '-';
+
+    /// <summary>A Kubernetes object name (DNS-1123 label alphabet, ≤ 253). Pure.</summary>
+    private static bool IsObjectName(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && value.Trim().Length <= 253
+        && value.Trim().All(c => c is >= 'a' and <= 'z' or >= '0' and <= '9' or '-' or '.')
+        && char.IsAsciiLetterOrDigit(value.Trim()[0]) && char.IsAsciiLetterOrDigit(value.Trim()[^1]);
+
+    /// <summary>A registry host (<c>host[:port]</c>, no scheme, no path). Pure.</summary>
+    private static bool IsRegistryHost(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '-' or ':')
+        && !value.Contains("://", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Why an OWNER's upstream sync (increment 4) or local-source build (increment 5) cannot render a
+    /// working job — named at plan time. Called by <see cref="ArtifactStoreProblems"/>. Pure.
+    /// </summary>
+    private static IEnumerable<string> ArtifactStoreReplicationProblems(DeploymentContent d, string role)
+    {
+        var spec = d.ArtifactStore!;
+        var upstream = spec.Upstream;
+        var statesUpstream = upstream is not null
+            && (!string.IsNullOrWhiteSpace(upstream.Registry) || !upstream.Sources.IsEmpty
+                || !string.IsNullOrWhiteSpace(upstream.PullSecret));
+        if (role != ArtifactStoreSpec.OwnerRole)
+        {
+            if (statesUpstream)
+                yield return "the artifact-store CONSUMER states upstream — only the OWNER (the environment's control) replicates from an upstream; a consumer reads its owner's store";
+            if (!spec.LocalSources.IsEmpty)
+                yield return "the artifact-store CONSUMER states localSources — local sources are built by the environment's control, the store's OWNER";
+            yield break;
+        }
+        var upstreamSources = ImmutableHashSet<string>.Empty;
+        if (statesUpstream)
+        {
+            if (!IsRegistryHost(upstream!.Registry))
+                yield return $"artifactStore.upstream.registry '{upstream.Registry}' is not a registry host (host[:port], no scheme, no path)";
+            if (upstream.Sources.IsEmpty)
+                yield return "artifactStore.upstream states no sources — name the publications to replicate (e.g. plugins)";
+            foreach (var bad in upstream.Sources.Where(x => !IsSourceName(x)))
+                yield return $"artifactStore.upstream.sources entry '{bad}' is not a registry name component ([a-z0-9._-])";
+            if (!IsObjectName(upstream.PullSecret))
+                yield return "artifactStore.upstream.pullSecret names no Secret — the sync pulls with this environment's own credential, referenced by Secret name";
+            foreach (var bad in upstream.Identities.Where(x => string.IsNullOrWhiteSpace(x) || !x.Trim().All(char.IsAsciiLetterOrDigit)))
+                yield return $"artifactStore.upstream.identities entry '{bad}' is not a framework identity (letters and digits only)";
+            upstreamSources = upstream.Sources.Where(IsSourceName).Select(x => x.Trim()).ToImmutableHashSet();
+        }
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var local in spec.LocalSources)
+        {
+            if (!IsLocalSourceName(local.Source))
+            {
+                yield return $"artifactStore.localSources entry '{local.Source}' is not a lowercase DNS label of at most 36 characters — it names the build's CronJob (artifact-build-<source>, within the 52-character limit) as well as the publication";
+                continue;
+            }
+            var name = local.Source!.Trim();
+            if (!seen.Add(name))
+                yield return $"artifactStore.localSources names '{name}' twice — one source, one producer";
+            if (upstreamSources.Contains(name))
+                yield return $"artifactStore.localSources names '{name}', which upstream also replicates — a local build would race the sync on one prefix; a local source must carry its own name";
+            if (string.IsNullOrWhiteSpace(local.Repository)
+                || !local.Repository.Trim().StartsWith("https://", StringComparison.Ordinal)
+                || local.Repository.Trim().Any(char.IsWhiteSpace))
+                yield return $"artifactStore.localSources '{name}' states no https repository URL";
+            if (!string.IsNullOrWhiteSpace(local.Ref)
+                && !local.Ref.Trim().All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-' or '/'))
+                yield return $"artifactStore.localSources '{name}' ref '{local.Ref}' is not a branch or tag name";
+            if (!string.IsNullOrWhiteSpace(local.CredentialSecret) && !IsObjectName(local.CredentialSecret))
+                yield return $"artifactStore.localSources '{name}' credentialSecret '{local.CredentialSecret}' is not a Secret name";
+        }
+        if (!spec.LocalSources.IsEmpty
+            && (string.IsNullOrWhiteSpace(spec.TesterImageRepository)
+                || spec.TesterImageRepository.Trim().Any(char.IsWhiteSpace)
+                || spec.TesterImageRepository.Contains('@')
+                || spec.TesterImageRepository.Trim()[(spec.TesterImageRepository.Trim().LastIndexOf('/') + 1)..].Contains(':')))
+            yield return "artifactStore.localSources is set but testerImageRepository is not an image repository (no tag, no digest) — the build compiles with the platform's tester at the portal's tag";
+    }
+
+    /// <summary>
     /// Why a volume's <see cref="VolumeClaim.ReadOnly"/> cannot be honoured: the chart mounts <c>data</c>,
     /// <c>users</c> and <c>dumps</c> at its own fixed paths, outside the generic persistence mount that
     /// renders <c>readOnly</c>, so on those three the flag would be silently writable under Helm while
@@ -442,6 +571,7 @@ public static class DeploymentPortalConfig
             if (string.IsNullOrWhiteSpace(spec.SourceNamespace) || string.IsNullOrWhiteSpace(spec.SourceClaim))
                 problems.Add("the artifact-store CONSUMER states no sourceNamespace and sourceClaim — the binding reads the OWNER's share from that claim");
         }
+        problems.AddRange(ArtifactStoreReplicationProblems(d, role));
         return problems.ToImmutable();
     }
 
@@ -1021,6 +1151,12 @@ public static class DeploymentPortalConfig
             Set("PreWarm__PrebuiltBundleRetention__Enabled", "false");
             Set("PreWarm__PrebuiltBundleRetention__Delete", "false");
         }
+        // The shared MODULE tier beside the bundles (increment 3): every role reads it; only the OWNER
+        // publishes its landings there. A record outside the store renders neither, so its modules stay
+        // on its own volume exactly as before.
+        Set("Modules__SharedRoot", ArtifactStoreModuleRoot(d));
+        if (ArtifactStoreRole(d) == ArtifactStoreSpec.OwnerRole && ArtifactStoreModuleRoot(d) is not null)
+            Set("Modules__PublishToShared", "true");
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());

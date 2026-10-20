@@ -1,13 +1,14 @@
 ---
 Name: Shared Artifact Store
 Category: Architecture
-Description: One control-owned store per environment for the built artifacts every portal used to keep its own copy of — prebuilt bundles first, then modules, the assembly cache and the NuGet cache. The build server is the only producer, portals mount it read-only, a client environment's control replicates it one way from ours, each control builds its own local modules into it, and each control's standing prune job sweeps it against one inventory.
+Description: One control-owned store per environment for the built artifacts every portal used to keep its own copy of — prebuilt bundles and landed module generations (the assembly cache stays per instance, because its key is an instance-local clock). The build server is the only producer, portals mount it read-only, a client environment's control replicates it one way from ours, each control builds its own local modules into it, and each control's standing prune job sweeps it against one inventory.
 ---
 
 # Shared Artifact Store
 
-**Status: DESIGN, with the first increments landing** (maintainer, 2026-10-19). Each section says
-what is built and what is a prepared maintainer step.
+**Status: increments 1–6 are code; nothing is live until the maintainer steps run** (maintainer,
+2026-10-19; increments 3–5 built 2026-10-20). Each section says what is built and what is a prepared
+maintainer step.
 
 ## The defect
 
@@ -56,9 +57,10 @@ data volumes carry today, so every reader keeps its paths relative to one root:
 ```
 /artifacts/<rid>/prebuilt-bundles/<identity>/<source>/_current, <generation>/…, _complete
 /artifacts/<rid>/prebuilt-bundles/_releases/<version>
-/artifacts/<rid>/modules/…            (increment 3)
-/artifacts/<rid>/assembly-cache/…     (increment 3)
-/artifacts/nuget-cache/…              (increment 3; packages are architecture-neutral or carry their own runtimes/)
+/artifacts/<rid>/prebuilt-bundles/.artifact-store-staging/…   (the owner jobs' staging, increments 4–5)
+/artifacts/<rid>/modules/<name>@<id>/…, _complete              (increment 3)
+(no assembly-cache/: per instance by design — see increment 3)
+(nuget-cache/: not built)
 ```
 
 **The layout is architecture-aware.** The compatibility key (`c003e001`) names a platform major and
@@ -128,40 +130,181 @@ read-only mount, and the store is not its to prune).
 |---|---|---|---|
 | 1 | the store declared and created on control; the consumer binding command; the record fields; the read path for prebuilt bundles | core contract + chart + operator, Plugins plan, Memex records | **code: PRs open. Live: maintainer steps below** |
 | 2 | the bake publication writes ONCE, to control's store, each architecture lane to its own `<rid>` subtree | per-lane target list in core CD's platform bake (`BAKE_PUBLISH_TARGETS_LINUX_ARM64`), then the variables | code: core CD. Variables: maintainer step |
-| 3 | modules, assembly cache and NuGet cache: a read-only shared tier in front of the per-instance writable one — a portal resolves a content-addressed artifact from the store first and compiles only when the store has no build for its identity | core `FileSystemAssemblyStore`, module loader | design (below) |
-| 4 | one-way sync from our control's store to a client environment's control's store | control operator | design (below) |
-| 5 | local-module builds on each control | control build role | design (below) |
+| 3 | modules: a read-only shared tier in front of the per-instance writable one — a portal resolves a sealed generation from the store and lands its own copy only when the store has none; the owner publishes its landings there | core `SharedModuleTier`, `ModuleLandingService`, `Modules__SharedRoot` | **code** (below). Assembly cache: **not shared, by design** (below). NuGet cache: not built |
+| 4 | one-way sync from an upstream registry into a client environment's control's store | core contract `artifactStore.upstream`, chart CronJob `memex-artifact-store-sync`, `artifact-store-sync.sh`; Plugins `HelmValues` | **code** (below). Live: maintainer step |
+| 5 | local-source builds on each control, published into its own store | core contract `artifactStore.localSources`, chart CronJob `artifact-build-<source>`, `artifact-store-build.sh`; Plugins `HelmValues` | **code** (below). Live: maintainer step |
 | 6 | the standing prune job sweeps the one store | Plugins `StoragePrune` + core `hosting-storage-prune --claim` | Plugins half merged (#3993); the command ships with MeshWeaver#7000 and works once its operator image is on `hosting-operator:main` |
 | 7 | drop the per-volume copies on the portals' `/data` | per instance | maintainer step, last |
 
-### Increment 3 — a read-only tier, never a second writer
+### Increment 3 — a read-only module tier, never a second writer (built 2026-10-20)
 
-The assembly store is content-addressed (file name carries the content hash; the record names the
-build by path and MVID), so a shared read-only tier is safe by construction: a reader that finds the
-hash in the shared tier loads it; a reader that does not, compiles into its own writable tier exactly
-as today. Nothing a portal does writes the shared tier. The producer (the build lane, and control for
-local modules) writes it, sealing each publication with the same `_complete`-last rule the bundles
-use. "Portals never compile locally when a shared build exists" is then a property of the lookup
-order, not a policy a portal could forget.
+**What is shared, and why only that.** A landed module generation's leaf is its content address —
+`<name>@<16 hex of SHA-256 over the bytes>` (#3656) — so two instances landing the same bundle compute
+the same leaf for the same bytes, whatever platform build they run. That is the one part of `modules/`
+that is safe to share. Everything else under `modules/` is per-instance STATE and stays on the
+instance's own volume: the activation records, the link verdicts measured against THIS instance's
+platform, the module sets, the instance manifest, and the legacy fixed `modules/<name>/` folder, which
+is rewritten in place.
 
-### Increment 4 — one-way replication to a client environment
+**The layout.** `<store>/<rid>/modules/<name>@<id>/…` plus `_complete`, written strictly last and
+listing every file it seals. A record that takes part in the store renders
+`Modules__SharedRoot=<mount>/{rid}/modules` (`DeploymentPortalConfig.ArtifactStoreModuleRoot`, every
+role), and the OWNER also renders `Modules__PublishToShared=true`. The portal expands `{rid}` at boot
+(`BundleRootRuntimeIdentifier.ExpandConfiguredKey`) and sets the process-wide tier
+(`SharedModuleTier.Configure`) before the activation sidecar resolves a single directory.
 
-A client environment's control pulls from ours, never the reverse, and never writes our store. The
-unit of replication is a SEALED publication (a rid/identity/source generation with its `_complete`, a
-release marker); an unsealed generation is never copied. Replication writes the generation first and
-moves `_current` last — the reader contract of [Sealed Publication Generations](../SealedPublicationGenerations)
-— so a client portal never reads a half-copied generation. Transport: the fleet registry's existing
-bundle surface (`cr.meshweaver.cloud`, the `bundles.registry` path a client estate already pulls
-from), authenticated with that environment's registry key — no storage-account credential crosses the
-estate boundary. Retention on the client side protects a synced artifact while our control still
-advertises it or a local portal still uses it.
+**The read.** `ModuleLandingService.ModuleDirectoryFor` — the ONE resolution rule boot, the pin, the
+serving side and the install-completeness check already share — resolves the instance's own
+`modules/<leaf>` first, then the SEALED shared copy, then the ordinary local miss
+(`SharedModuleTier.Resolve`). An unsealed shared directory is never resolved. A root still carrying an
+unexpanded `{rid}` is ignored. So a store that is unmounted, empty or mid-publication is exactly the
+pre-tier behaviour: nothing here can dead-page a portal (policy `platform-delivery-must-be-tolerant`).
+The boot pin (`ModuleGenerationPin`) copies a resolved generation to process-local storage as before,
+so a sweep of the store never pulls bytes out from under a running process.
 
-### Increment 5 — local modules
+**The write.** A landing first computes its generation. If the store holds it sealed, a CONSUMER
+records the landing against it and writes nothing to its own volume. The OWNER publishes the generation
+into the store (`SharedModuleTier.Publish`: staged beside it, one rename, seal last; an existing sealed
+copy is the answer) instead of onto its own volume, and falls back to its own volume, logged, when the
+store write fails. A consumer that finds no sealed copy lands locally, exactly as before. The
+per-instance modules GC walks only `<root>/modules`, so no portal ever deletes from the store.
 
-An environment's own sources (repositories it tracks that our build server does not build) are built
-by its control's build role, at the platform its portals run, and published into its own store under
-their own source names. They are swept by the same job, under the same contract, with the local
-portals as the consumer inventory.
+**Measured by:** core `test/MeshWeaver.Compiler.Pipeline.Test/SharedModuleTierTest` (7 cases: owner
+publishes sealed and keeps no local copy; consumer records against the sealed copy and writes nothing;
+consumer with no sealed copy lands locally and never writes the store; an owner that cannot write the
+store still lands; local-first then sealed-only resolution; only a generation is shared; the GC never
+deletes from the store) and `ArtifactStoreReplicationRecordTest` (the rendered keys per role). Each
+was checked red against a reverted guard.
+
+#### The assembly cache is NOT shared — a finding, not a deferral
+
+The design above this section assumed the assembly cache is content-addressed across instances. It is
+not. `FileSystemAssemblyStore` names a build `<type>/v<version>-<tag>-<hash>.dll`, and `<version>` is
+the NodeType node's **persistence clock on that instance** (`IAssemblyStore`: "the version is the
+NodeType MeshNode's Version"). Two instances hold unrelated clocks for the same type, so
+`(type, version)` on one instance names different source than the same key on another. The
+version-only lookup (`TryGetAssemblyPath`, "the newest file for this version") would therefore hand an
+instance ANOTHER instance's bytes for a different source, with only the bind-time MVID check between
+that and a wrong bind. The identity lookup (`TryGetBuildPath` by content path and MVID) is safe, but
+it never hits a shared tier: an instance's record names only builds that instance compiled or adopted.
+
+So the cross-instance shared form of compiled NodeType output is the **prebuilt bundle store**
+(increment 1), keyed by framework identity, source and fingerprint — not the assembly cache. The
+assembly cache stays a per-instance compile cache on `/data` (0.9 GiB measured on the public instance,
+against ≈121 GiB of bundles). Sharing it would need a content key that does not include the instance's
+clock; that is a separate change to `FileSystemAssemblyStore` and is not proposed here.
+
+### Increment 4 — one-way replication to a client environment (built 2026-10-20)
+
+A client environment's control pulls, never the reverse, and never writes our store. It is declared on
+that control's record — the store's OWNER — as `artifactStore.upstream`:
+
+```json
+"artifactStore": {
+  "role": "Owner", "volume": "artifacts",
+  "upstream": { "registry": "cr.example.com", "sources": ["plugins"], "pullSecret": "upstream-pull",
+                "identities": [], "schedule": "*/30 * * * *" }
+}
+```
+
+`pullSecret` names a `kubernetes.io/dockerconfigjson` Secret in that control's namespace holding the
+environment's own pull credential — a reference, never a value. No storage-account credential crosses
+the estate boundary.
+
+**The transport** is the registry's existing bundle surface (`<registry>/plugins/<source>:<identity>`,
+the layout every `bundle-fetch` already reads — [Plugin Bundles in the Registry](../PluginBundlesInTheRegistry)).
+The chart renders the CronJob `memex-artifact-store-sync` (Forbid concurrency) when the record states a
+registry. Its init container copies the control image's own framework identity out of the portal
+image, and `artifact-store-sync.sh` replicates that identity plus any declared `identities`:
+
+- **The unit is a sealed publication.** The generation is named by the registry index digest
+  (`upstream-<24 hex>`), so a publication that has not changed upstream is a no-op: no pull at all.
+- **Pulled into `<root>/.artifact-store-staging/`** on the store's volume, never into a source
+  directory.
+- **Handed to `artifact-store-publish.sh`.** It checks the staged publication whole (`_complete`
+  present, every listed file present), renames it into place as its own generation, and moves
+  `_current` LAST. This is the reader contract of [Sealed Publication Generations](../SealedPublicationGenerations),
+  so a client portal never reads a half-copied publication.
+- **Outcomes.** An absent tag is "unsealed upstream": nothing is written and the run stays green. A
+  denied or torn pull refuses that source, leaves the generation that was current serving, and turns the
+  run red. **Nothing is ever deleted**: superseded generations are the owner's prune job's to collect.
+- **Architecture.** It writes `<mount>/linux-x64/prebuilt-bundles` (`artifactStore.runtimeIdentifier`),
+  because the registry publishes linux-x64 only.
+
+The record refuses an upstream on a CONSUMER, a registry that is not a host, an upstream with no
+sources, a source outside `[a-z0-9._-]`, a missing pull Secret and an identity outside `[A-Za-z0-9]`
+(`DeploymentPortalConfig.ArtifactStoreProblems`). The chart helper `memex.artifactStore` refuses the
+same shapes at `helm template`. Aspire refuses an upstream by name: it has no scheduler for the job.
+
+**Retention on the client side** is the client control's own prune job over its own store. A
+replicated generation is protected while it is current or a local portal still uses it; whether
+upstream still advertises it is not yet an input to that job (see "What is not built").
+
+**Measured by:** core `deploy/aks/scripts/test-artifact-store-jobs.sh` (chart gate), cases 1–13
+(publisher and sync, stub `oras`) and 19 (chart refusals), each checked red against a reverted guard.
+
+### Increment 5 — local sources (built 2026-10-20)
+
+An environment's own sources — repositories it tracks that our build server does not build — are
+declared on its control's record:
+
+```json
+"artifactStore": {
+  "role": "Owner", "volume": "artifacts",
+  "localSources": [ { "source": "fabrikam-models", "repository": "https://git.example.com/fabrikam/models.git",
+                      "ref": "main", "credentialSecret": "fabrikam-git" } ],
+  "testerImageRepository": "cr.example.com/mw-plugin-test",
+  "localBuildSchedule": "*/30 * * * *"
+}
+```
+
+The chart renders one CronJob per source, `artifact-build-<source>`, that runs **in the portal image**,
+so the compiler is the platform the environment's portals run. An init container copies the platform
+tester's `/app` out of `<testerImageRepository>:<the portal image's tag>`, and `artifact-store-build.sh`
+then:
+
+1. **clones** the repository at its ref. The read token (key `token` of `credentialSecret`) travels as
+   an HTTP header, never in a URL or a log line. The generation is named by the commit, `local-<12 hex>`,
+   and a commit already sealed and current builds nothing.
+2. **composes the gate host** with `compose-gate-host.sh`: the portal's `/app` with the tester CLI
+   beside it. The chart carries a byte-for-byte copy of the platform's script, and the chart gate pins
+   the equality.
+3. **composes the module surface from the store itself**: every `modules/*.module.nupkg` that the
+   CURRENT generation of each upstream source lists for this identity. These are the modules the
+   environment's portals run. When two sources list a name, the first wins.
+4. **runs the tester's `compile` verb** against the portal's `/app` and its implementation
+   frameworks.
+5. **publishes or refuses.** A bake keyed to another identity is refused, because it would be inert.
+   Otherwise it seals a publication — the bundles, `source-commit.txt`, `repository.txt`,
+   `architecture.txt`, an empty `modules/_index` (a local source owns no module), the platform surface
+   when the bake wrote one, and `_complete` — and hands it to `artifact-store-publish.sh`.
+
+A local source name is a lowercase DNS label of at most 36 characters, because it also names the
+CronJob. It may not be a name `upstream` replicates: one prefix, one producer. 🚨 On OUR control
+(no upstream), it must not be a name the build server publishes either. The record cannot see that
+list, so it is the declaring maintainer's check.
+
+**Measured by:** `test-artifact-store-jobs.sh` cases 14–18 (stub `git` and `dotnet`, the real
+`compose-gate-host.sh`): the publication and its markers, the compile on the composed host against the
+portal's `/app` with the store's module set, the token never in a URL or a log, the no-op on an
+unchanged commit, and the refusal of a foreign-identity bake. 🚨 **Not measured:** a real compile in a
+real cluster. The tester image name on a client estate, the portal image's user and the store's file
+permissions are first exercised by the first scheduled run (maintainer step 9).
+
+### What is not built
+
+- **The NuGet cache** (`/data/nuget-cache`) is still per instance. Packages are immutable per
+  `{id}/{version}`, so a read-only tier is safe, but `FileSystemNuGetPackageCache` is constructed in
+  the Memex `Program.cs` and has no tier yet.
+- **The upstream as a retention input.** The client control's prune job does not yet ask whether
+  upstream still advertises a replicated generation. It protects by current pointer and consumer
+  inventory only.
+- **Module generations in the prune report.** `hosting-storage-prune --claim` classifies the bundle
+  stores. A `<rid>/modules/` directory appears as a top-level directory with its size, not
+  generation by generation.
+- **A modules sync.** The upstream sync replicates bundle publications, which carry their composed
+  `modules/*.module.nupkg`. A client control's own landings fill its shared module tier. Our control's
+  landed generations are not replicated as such.
 
 ## Retention and the prune job
 
@@ -208,6 +351,27 @@ maintainer's act. In order:
 6. **Drop the per-volume copies** (`/data/prebuilt-bundles` on that instance) only after a week of
    adoption from the store. The `StoragePrune` report classifies them as legacy or superseded on the old
    share; deleting them is a destructive step and a person's decision.
+7. **Read the shared module tier** — only once the platform carrying `SharedModuleTier` is on the
+   instance (core: the increment 3–5 PR). The record change that makes an instance Owner or Consumer
+   already renders `Modules__SharedRoot`, so no second record change is needed. Verify it behaviourally:
+   the boot line `[ModuleActivation] shared module tier: /artifacts/linux-x64/modules (…)`, and, on
+   the owner, `PUBLISHED to the shared artifact store` on the next module landing.
+8. **Replicate into a client environment's control** (increment 4). In that environment, and only by
+   that environment's maintainer:
+   1. create the pull Secret (`kubernetes.io/dockerconfigjson`, the environment's own registry key) in
+      the control's namespace;
+   2. make its control the Owner of its own store (step 1, in that environment);
+   3. add `artifactStore.upstream` (registry, sources, `pullSecret`) to the control's record.
+
+   The next roll renders `memex-artifact-store-sync`. Trigger one run with
+   `kubectl create job --from=cronjob/memex-artifact-store-sync sync-now -n <ns>`. Confirm
+   `<mount>/linux-x64/prebuilt-bundles/<identity>/<source>/_current` names an `upstream-…` generation.
+   Then point that environment's portals at the store as Consumers (step 4, in that environment).
+9. **Build local sources** (increment 5). On the control that owns them: create the read-token Secret
+   (key `token`), then add `localSources` and `testerImageRepository` to the record. The tester image
+   must be pullable with the portal's pull secret at the portal's tag. Trigger one run with
+   `kubectl create job --from=cronjob/artifact-build-<source> build-now -n <ns>` and read its log end to
+   end: this is the first real compile on that cluster.
 
 ## Related
 

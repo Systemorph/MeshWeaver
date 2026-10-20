@@ -326,6 +326,16 @@ public static class MemexHostingExtensions
                 $"'{portal.Resource.Name}' declares artifactStore.role Consumer, which Aspire cannot render: a consumer binds the "
                 + "owner's share read-only through a Kubernetes static PersistentVolume, and a Docker volume of its own would hold none "
                 + "of the owner's publications. Run it as the Owner (or without artifactStore) under Aspire.");
+        // The OWNER's upstream sync (increment 4) and local-source build (increment 5) are Kubernetes
+        // CronJobs the chart renders beside the portal; Aspire has no scheduler for them, and an Owner
+        // that silently never replicates or builds would read as "nothing published upstream". Refused
+        // by name instead.
+        if (DeploymentPortalConfig.ArtifactStoreUpstreamRegistry(record) is not null
+            || record.ArtifactStore?.LocalSources.IsEmpty == false)
+            throw new InvalidOperationException(
+                $"'{portal.Resource.Name}' declares artifactStore.upstream or artifactStore.localSources, which Aspire cannot "
+                + "render: the upstream sync and the local-source build are Kubernetes CronJobs beside the portal. Declare the "
+                + "store without them under Aspire.");
         var prefix = $"{portal.Resource.Name}-";
         // A read-only volume (a consumer of the shared artifact store, Doc/Architecture/SharedArtifactStore)
         // is a read-only Docker mount too — and a change of the flag replaces the mount, like a change of source.
