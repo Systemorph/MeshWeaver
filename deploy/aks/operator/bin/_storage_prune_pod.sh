@@ -93,25 +93,18 @@ for entry in "$rootreal"/* "$rootreal"/.[!.]*; do
   [ -e "$entry" ] || continue
   name="${entry##*/}"
   [ "$name" = "prebuilt-bundles" ] && continue
+  case "$name" in linux-x64|linux-arm64|linux-musl-x64|linux-musl-arm64|osx-arm64|osx-x64|win-x64|win-arm64)
+    [ -d "$entry/prebuilt-bundles" ] && continue ;; esac
   emit "top${tab}${name}${tab}$(kib "$entry")"
 done
 
-# The sources of one identity. The shared artifact store adds a runtime-identifier level
-# (`<identity>/<rid>/<source>/…`, Doc/Architecture/SharedArtifactStore); a per-portal volume has none.
-# A child named like a RID (linux-x64, osx-arm64, …) that is not itself a publication is walked one
-# level deeper, and its sources are reported as `<rid>/<source>`. The lease file stays beside the
-# source directories of the level it guards.
+# The sources of one identity. `_prefix` is unused today and kept empty; the lease file sits beside
+# the source directories it guards.
 walk_sources() {
   _idpath="$1" _level="$2" _prefix="$3"
   for srcpath in "$_level"/*; do
     [ -d "$srcpath" ] || continue
     src="${srcpath##*/}"
-    if [ -z "$_prefix" ] && [ ! -f "$srcpath/_current" ] && [ ! -e "$srcpath/_complete" ]; then
-      case "$src" in
-        linux-x64|linux-arm64|linux-musl-x64|linux-musl-arm64|osx-arm64|osx-x64|win-x64|win-arm64)
-          walk_sources "$_idpath" "$srcpath" "$src/"; _level="$2"; _prefix=""; continue ;;
-      esac
-    fi
     locked=0
     [ -e "$_level/_publishing.$src" ] && locked=1
     if [ -f "$srcpath/_current" ]; then
@@ -135,17 +128,22 @@ walk_sources() {
   done
 }
 
-store="$rootreal/prebuilt-bundles"
-if [ -d "$store" ]; then
+# The bundle stores under the root. A per-portal data volume has ONE, `prebuilt-bundles/`. The shared
+# artifact store (Doc/Architecture/SharedArtifactStore) has one PER ARCHITECTURE, `<rid>/prebuilt-bundles/`
+# (linux-x64, osx-arm64, …): a compatibility key names no architecture, so each runtime gets its own
+# store and a reader resolves its own. Identities of a RID store are reported as `<rid>/<identity>`.
+walk_store() {
+  store="$1" idprefix="$2"
   for idpath in "$store"/*; do
     [ -e "$idpath" ] || continue
-    id="${idpath##*/}"
-    if [ "$id" = "_releases" ]; then
+    base="${idpath##*/}"
+    id="${idprefix}${base}"
+    if [ "$base" = "_releases" ]; then
       emit "releases${tab}$(ls "$idpath" 2>/dev/null | wc -l | tr -d ' ')${tab}$(kib "$idpath")"
       continue
     fi
     [ -d "$idpath" ] || { emit "identity${tab}${id}${tab}other${tab}$(mtime "$idpath")${tab}$(kib "$idpath")"; continue; }
-    case "$id" in
+    case "$base" in
       c[0-9][0-9][0-9]e[0-9][0-9][0-9]) kind=compat ;;
       s[0-9a-f]*|g[0-9a-f]*) kind=legacy ;;
       *) kind=other ;;
@@ -157,7 +155,15 @@ if [ -d "$store" ]; then
     fi
     walk_sources "$idpath" "$idpath" ""
   done
-fi
+}
+[ -d "$rootreal/prebuilt-bundles" ] && walk_store "$rootreal/prebuilt-bundles" ""
+for ridpath in "$rootreal"/*; do
+  rid="${ridpath##*/}"
+  case "$rid" in
+    linux-x64|linux-arm64|linux-musl-x64|linux-musl-arm64|osx-arm64|osx-x64|win-x64|win-arm64)
+      [ -d "$ridpath/prebuilt-bundles" ] && walk_store "$ridpath/prebuilt-bundles" "$rid/" ;;
+  esac
+done
 
 # ── the two classes this script may delete ─────────────────────────────────────────────────────
 tmp_cut=$((now - tmp_age_days * 86400))

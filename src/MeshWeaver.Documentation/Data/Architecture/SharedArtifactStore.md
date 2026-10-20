@@ -17,7 +17,7 @@ immutable package version — yet every portal keeps its own copy on its own `/d
 publication uploads the same bytes once per volume (`BAKE_PUBLISH_TARGETS` lists one share per
 portal), every portal compiles what another already compiled, and each volume fills on its own
 schedule: on 2026-10-19 the public instance's share filled while the control instance held the same
-artifacts (see [Storage Prune]](../StoragePrune) for the measurement).
+artifacts (see [Storage Prune](../StoragePrune) for the measurement).
 
 Per-instance state stays per instance: `dataprotection-keys/` (the instance's own keys) and dumps
 (which belong on the declared dump volume, never on `/data`).
@@ -54,25 +54,37 @@ chart creates the claim in control's namespace; `hosting-pv-resize` grows it fro
 data volumes carry today, so every reader keeps its paths relative to one root:
 
 ```
-/artifacts/prebuilt-bundles/<identity>/<rid>/<source>/_current, <generation>/…, _complete
-/artifacts/prebuilt-bundles/_releases/<version>
-/artifacts/modules/<rid>/…            (increment 3)
-/artifacts/assembly-cache/<rid>/…     (increment 3)
+/artifacts/<rid>/prebuilt-bundles/<identity>/<source>/_current, <generation>/…, _complete
+/artifacts/<rid>/prebuilt-bundles/_releases/<version>
+/artifacts/<rid>/modules/…            (increment 3)
+/artifacts/<rid>/assembly-cache/…     (increment 3)
 /artifacts/nuget-cache/…              (increment 3; packages are architecture-neutral or carry their own runtimes/)
 ```
 
 **The layout is architecture-aware.** The compatibility key (`c003e001`) names a platform major and
 epoch and NO architecture, and the publisher refuses a second architecture under an existing key. On
 a per-portal volume that never mattered — one volume, one architecture. A shared store serves every
-build the environment runs: the AKS portals (`linux-x64`), and the editions built for Apple hardware
-(`osx-arm64`) or arm nodes (`linux-arm64`). So the store adds a runtime-identifier level under the
-identity, `<identity>/<rid>/<source>/…`, the producer publishes each architecture it builds under its
-own `<rid>`, and a reader resolves `<identity>/<its own rid>/` — `RuntimeInformation.RuntimeIdentifier`
-of the running process, never a configured value — and treats a missing `<rid>` directory exactly as a
-missing identity today: nothing to adopt, compile as before. The per-portal volumes keep their flat
-`<identity>/<source>/` layout until they are retired; the store is new, so it starts architecture-aware
-rather than migrating into it. (Implementation: the reader half is the `PreWarm` bundle root resolver;
-the producer half is `publish-bake-bundles.sh`'s destination prefix — both ship with increment 2.)
+build the environment runs: the AKS portals (`linux-x64`) and the editions built for Apple hardware
+(`osx-arm64`) or arm nodes (`linux-arm64`). So the store holds ONE bundle store per runtime
+identifier, `<rid>/prebuilt-bundles/`, each in exactly the layout every reader already reads:
+
+- **The reader resolves its own.** A record that takes part in the store renders
+  `PreWarm__PrebuiltBundleRoot=<mount>/{rid}/prebuilt-bundles`, and the portal expands `{rid}` once at
+  boot to ITS process's runtime identifier (`<os>-<arch>` from the running process, never a configured
+  value) before anything reads the key. Every reader below that key — the pre-warm, the seal arrival,
+  the sync reconciler, the bundle endpoints — is unchanged. A missing `<rid>` store is a missing
+  bundle root: nothing to adopt, compile as before.
+- **The producer needs no new code.** A `BAKE_PUBLISH_TARGETS` entry is `<account>/<share>[/<base-path>]`
+  and the publisher writes `<base-path>/prebuilt-bundles/…`, so the store is published as one target
+  PER ARCHITECTURE the build server builds: `<account>/<share>/linux-x64`, and `…/osx-arm64` from the
+  arm64 build. The publisher's existing refusal of a second architecture under one key now protects
+  each per-architecture store instead of colliding in one.
+- **The prune job walks every per-architecture store** (`hosting-storage-prune --claim`, identities
+  reported as `<rid>/<identity>`).
+
+The per-portal volumes keep their single `prebuilt-bundles/` until they are retired; the store is
+new, so it starts architecture-aware rather than migrating into it.
+
 
 **Consumers bind the same share read-only.** A PVC is namespaced, so each portal namespace gets a
 STATIC PersistentVolume + PersistentVolumeClaim pointing at control's share — the pattern the CI
@@ -86,8 +98,8 @@ volume `readOnly: true` at `/artifacts` and `artifactStore: { role: Consumer, vo
 typed into a record — and refuses to bind a claim that is not bound.
 
 **The portal reads it.** For a record that declares an artifact store, `PreWarm__PrebuiltBundleRoot`
-renders as `<mount>/prebuilt-bundles` (`DeploymentPortalConfig.BundleRoot`), so every reader of the
-bundle root — the pre-warm, the seal arrival, the sync reconciler, the bundle endpoints — reads the
+renders as `<mount>/{rid}/prebuilt-bundles` (`DeploymentPortalConfig.BundleRoot`; the portal expands
+`{rid}` at boot), so every reader of the bundle root — the pre-warm, the seal arrival, the sync reconciler, the bundle endpoints — reads the
 shared store unchanged. A consumer's bundle retention sweep is disarmed (it cannot delete on a
 read-only mount, and the store is not its to prune).
 
@@ -116,9 +128,9 @@ order, not a policy a portal could forget.
 ### Increment 4 — one-way replication to a client environment
 
 A client environment's control pulls from ours, never the reverse, and never writes our store. The
-unit of replication is a SEALED publication (an identity/rid/source generation with its `_complete`, a
+unit of replication is a SEALED publication (a rid/identity/source generation with its `_complete`, a
 release marker); an unsealed generation is never copied. Replication writes the generation first and
-moves `_current` last — the reader contract of [Sealed Publication Generations]](../SealedPublicationGenerations)
+moves `_current` last — the reader contract of [Sealed Publication Generations](../SealedPublicationGenerations)
 — so a client portal never reads a half-copied generation. Transport: the fleet registry's existing
 bundle surface (`cr.meshweaver.cloud`, the `bundles.registry` path a client estate already pulls
 from), authenticated with that environment's registry key — no storage-account credential crosses the
@@ -135,7 +147,7 @@ portals as the consumer inventory.
 ## Retention and the prune job
 
 The store has ONE owner, so it has ONE sweep and ONE inventory: control's standing `StoragePrune`
-job ([Storage Prune]](../StoragePrune)) — the classes, the 30-day minimum, the last sealed set per source,
+job ([Storage Prune](../StoragePrune)) — the classes, the 30-day minimum, the last sealed set per source,
 major AND architecture, the consumer inventory of every portal that mounts the store, the
 protected-label set (core `.github/release-channels.json`, read through `release-channels.py`; a failed
 lookup aborts), and the publication lease shared with the publisher. Until the consumer inventory is complete it deletes
@@ -152,8 +164,7 @@ maintainer's act. In order:
    naming the claim (`hosting-storage-prune --namespace control --claim control-artifacts`): it refuses
    a claim that does not exist and reports the share's size from the mount.
 2. **Seed it** from the newest complete copy (a data share whose seals are healthy): copy
-   `prebuilt-bundles/<compatibility key>/` into `prebuilt-bundles/<compatibility key>/linux-x64/` and
-   `_releases/` with a share-to-share `azcopy`, then compare a `StoragePrune` report of the store
+   `prebuilt-bundles/<compatibility key>/` and `_releases/` into `linux-x64/prebuilt-bundles/` with a share-to-share `azcopy`, then compare a `StoragePrune` report of the store
    against one of the source share. *Break-glass:* there is no supported action for a share-to-share
    copy yet; the copy is a maintainer's command, and the report pair is its record.
 3. **Publish there.** Append control's share (`<account>/<share>`, the value
@@ -161,12 +172,12 @@ maintainer's act. In order:
    before any consumer exists, read off the claim's PV as a recorded break-glass read) to the repository
    variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD identity needs
    `Storage File Data Privileged Contributor` on the account (it already holds it on the same account
-   today). The publisher writes `<identity>/<rid>/<source>/` into the store (increment 2).
-4. **Point each portal at it** — only once the architecture-aware reader and publisher (increment 2)
-   are on the platform that portal runs, since a reader that does not look under `<rid>/` would find
-   nothing in the store. One instance at a time: merge its record change (volume `artifacts`
+   today). Publish one target per architecture: `<account>/<share>/linux-x64` (and `…/osx-arm64` from the arm64 build).
+4. **Point each portal at it** — only once its platform expands `{rid}` in the bundle root (the
+   Shared Artifact Store contract PR), since an older reader would look for a literal `{rid}`
+   directory and find nothing. One instance at a time: merge its record change (volume `artifacts`
    `readOnly: true`, `artifactStore.role: Consumer`). Its next roll runs `hosting-artifact-store-bind`
-   and renders `PreWarm__PrebuiltBundleRoot=/artifacts/prebuilt-bundles`. Verify it behaviourally: the
+   and renders `PreWarm__PrebuiltBundleRoot=/artifacts/{rid}/prebuilt-bundles`. Verify it behaviourally: the
    portal's `/health` `nodetype_bake` names the shared root, and its pre-warm adopts.
 5. **Drop the instance's share from `BAKE_PUBLISH_TARGETS`** once it reads the store.
 6. **Drop the per-volume copies** (`/data/prebuilt-bundles` on that instance) only after a week of
@@ -175,7 +186,7 @@ maintainer's act. In order:
 
 ## Related
 
-- [Storage Prune]](../StoragePrune) — the measurement and the prune of this store
-- [Released Artifact Retention]](../ReleasedArtifactRetention) — the contract
-- [Sealed Publication Generations]](../SealedPublicationGenerations) — the reader contract replication keeps
-- [Prebuilt Bundle Retention]](../PrebuiltBundleRetention) — the per-portal sweep this store retires
+- [Storage Prune](../StoragePrune) — the measurement and the prune of this store
+- [Released Artifact Retention](../ReleasedArtifactRetention) — the contract
+- [Sealed Publication Generations](../SealedPublicationGenerations) — the reader contract replication keeps
+- [Prebuilt Bundle Retention](../PrebuiltBundleRetention) — the per-portal sweep this store retires

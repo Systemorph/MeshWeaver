@@ -4432,11 +4432,12 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
     # A legacy identity that already used the generation layout: classified ONCE, as the identity.
     mkdir -p "$pb/s89abcd/plugins/gen-a"; echo gen-a > "$pb/s89abcd/plugins/_current"; : > "$pb/s89abcd/plugins/gen-a/_complete"
     _sp_at "$pb/s89abcd/plugins/gen-a/_complete" 90; _sp_at "$pb/s89abcd/plugins/gen-a" 90; _sp_at "$pb/s89abcd/plugins/_current" 90; _sp_at "$pb/s89abcd/plugins" 90; _sp_at "$pb/s89abcd" 90
-    # The shared store's architecture level: <identity>/<rid>/<source>/… (Doc/Architecture/SharedArtifactStore).
-    mkdir -p "$pb/c003e001/osx-arm64/plugins/gen-mac"
-    echo gen-mac > "$pb/c003e001/osx-arm64/plugins/_current"; : > "$pb/c003e001/osx-arm64/plugins/gen-mac/_complete"
-    echo b > "$pb/c003e001/osx-arm64/plugins/gen-mac/b.zip"
-    _sp_at "$pb/c003e001/osx-arm64/plugins/gen-mac/b.zip" 70; _sp_at "$pb/c003e001/osx-arm64/plugins/gen-mac/_complete" 70; _sp_at "$pb/c003e001/osx-arm64/plugins/gen-mac" 70
+    # The shared store's per-architecture stores: <rid>/prebuilt-bundles/<identity>/<source>/… (Doc/Architecture/SharedArtifactStore).
+    local mac="$r/osx-arm64/prebuilt-bundles"
+    mkdir -p "$mac/c003e001/plugins/gen-mac"
+    echo gen-mac > "$mac/c003e001/plugins/_current"; : > "$mac/c003e001/plugins/gen-mac/_complete"
+    echo b > "$mac/c003e001/plugins/gen-mac/b.zip"
+    _sp_at "$mac/c003e001/plugins/gen-mac/b.zip" 70; _sp_at "$mac/c003e001/plugins/gen-mac/_complete" 70; _sp_at "$mac/c003e001/plugins/gen-mac" 70
   }
   # Every file and link with its content digest and mtime — the "nothing else changed" witness.
   _sp_census() { (cd "$1" && find . \( -type f -o -type l \) | LC_ALL=C sort | while IFS= read -r f; do
@@ -4468,8 +4469,9 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
     && grep -q "^@@MW-STORE generation	c003e001	plugins	gen-old-unsealed	unsealed	" "$_sp_log" \
     && grep -q "^@@MW-STORE flat	c003e001	meshweaver-content	1	" "$_sp_log" \
     && grep -q "^@@MW-STORE identity	s0123abcd	legacy	" "$_sp_log" \
-    && grep -q "^@@MW-STORE generation	c003e001	osx-arm64/plugins	gen-mac	current	" "$_sp_log" \
-    && ok "walker: every generation is reported with its state (current / sealed / unsealed), flat sources, legacy identities, and the shared store's <rid>/<source> level" || bad "walker states" "$(cat "$_sp_log")"
+    && grep -q "^@@MW-STORE generation	osx-arm64/c003e001	plugins	gen-mac	current	" "$_sp_log" \
+    && ! grep -q "^@@MW-STORE top	osx-arm64	" "$_sp_log" \
+    && ok "walker: every generation is reported with its state (current / sealed / unsealed), flat sources, legacy identities, and each per-architecture store of the shared store (<rid>/prebuilt-bundles, not double-counted at the top)" || bad "walker states" "$(cat "$_sp_log")"
 
   # ── the operator: classification ──
   sp -- --namespace memex-cloud
