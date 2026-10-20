@@ -189,22 +189,29 @@ dump_cut=$((now - dump_age_days * 86400))
 # A candidate list, one `<class>\t<relative path>` per line; reported in both modes.
 cands="$(mktemp)"
 trap 'rm -f "$cands" "$incomplete"' EXIT
+# A listing that fails partway is an incomplete walk too, never a shorter one.
+listerr="$(mktemp)"
+trap 'rm -f "$cands" "$incomplete" "$listerr"' EXIT
 if [ -d "$rootreal/assembly-cache" ]; then
-  find "$rootreal/assembly-cache" -type f -name '.tmp-*' 2>/dev/null | while IFS= read -r f; do
+  find "$rootreal/assembly-cache" -type f -name '.tmp-*' 2>"$listerr" | while IFS= read -r f; do
     t="$(mtime "$f")"
     rel="${f#"$rootreal"/}"
     emit "tmp${tab}${rel}${tab}$(kib "$f")${tab}${t}"
     [ "$t" -gt 0 ] && [ "$t" -lt "$tmp_cut" ] && printf 'cache-tmp\t%s\n' "$rel" >> "$cands"
   done
 fi
+[ -s "$listerr" ] && { emit "unreadable${tab}assembly-cache${tab}find"; : > "$incomplete"; }
+: > "$listerr"
 if [ -d "$rootreal/dumps" ]; then
-  find "$rootreal/dumps" -type f 2>/dev/null | while IFS= read -r f; do
+  find "$rootreal/dumps" -type f 2>"$listerr" | while IFS= read -r f; do
     t="$(mtime "$f")"
     rel="${f#"$rootreal"/}"
     emit "dump${tab}${rel}${tab}$(kib "$f")${tab}${t}"
     [ "$dumps_shadowed" = 1 ] && [ "$t" -gt 0 ] && [ "$t" -lt "$dump_cut" ] && printf 'misplaced-dump\t%s\n' "$rel" >> "$cands"
   done
 fi
+
+[ -s "$listerr" ] && { emit "unreadable${tab}dumps${tab}find"; : > "$incomplete"; }
 
 if [ "$mode" = execute ]; then
   while IFS="$tab" read -r class rel; do

@@ -4579,6 +4579,7 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
   refuses_hard "storage prune refuses a minimum age below the contract's 30 days" "never lets it below 30" env HOSTING_STORAGE_MIN_AGE_DAYS=7 hosting-storage-prune --namespace n
   refuses_hard "storage prune refuses a claim that is not a plain name" "not a plain name" hosting-storage-prune --namespace n --claim 'c;id'
   refuses_hard "storage prune refuses an unknown argument" "unknown argument" hosting-storage-prune --namespace n --delete-bundles
+  refuses_hard "storage prune refuses a value flag with no value (never loops)" "needs a value" hosting-storage-prune --namespace
   rm -rf "$_sp_root" "$_sp_root2" "$_sp_empty" "$_sp_xlog"
 elif [ -n "${CI:-}" ]; then
   bad "the storage walker is tested" "this CI runner lacks GNU stat -c / touch -d / find / cksum / comm — the suite's runner must carry them"
