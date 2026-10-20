@@ -4452,6 +4452,12 @@ ab HOSTING_AB_PV="$AB_FIX/existing-pv-shared-handle.json" -- "${_ab_args[@]}"
 [ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"not this binding's own"*) true ;; *) false ;; esac \
   && ok "an existing binding whose volumeHandle is not its own (e.g. the owner's) is a refusal — handles must not collide" || bad "shared handle refused" "rc ${_ab_rc}; out: ${_ab_out}"
 case "$(cat "$AB_STUBS/kubectl")" in *'"create -f -")'*) ok "the binding is CREATED, never applied — a PV that appears meanwhile fails the run instead of being patched" ;; *) bad "create not apply" "stub" ;; esac
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-stale-secret.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"stale staging credentials"*) true ;; *) false ;; esac \
+  && ok "an existing binding staging with a stale Secret is a refusal" || bad "stale secret refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_SRC_PV="$AB_FIX/owner-pv-explicit-attrs.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -eq 0 ] && case "$_ab_out" in *"artifact_store_share=acmestore02/pvc-explicit"*) true ;; *) false ;; esac \
+  && ok "the owner PV's explicit storageAccount/shareName win over its handle (never the wrong share)" || bad "explicit attrs" "rc ${_ab_rc}; out: ${_ab_out}"
 ab HOSTING_AB_SRC_PV="$AB_FIX/owner-pv-custom-secret.json" -- "${_ab_args[@]}"
 [ "$_ab_rc" -eq 0 ] && [ "$(printf '%s\n' "$_ab_applied" | grep '"kind":"PersistentVolume"' | jq -r '.spec.csi.nodeStageSecretRef | "\(.name)/\(.namespace)"')" = "custom-share-key/control" ] \
   && ok "the owner PV's own nodeStageSecretRef is carried over (a share staged with a custom Secret)" || bad "custom secret" "rc ${_ab_rc}; applied: ${_ab_applied}"

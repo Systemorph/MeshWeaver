@@ -90,8 +90,14 @@ handle="$(printf '%s' "$src_pv" | jq -r '.spec.csi.volumeHandle // ""')"
 capacity="$(printf '%s' "$src_pv" | jq -r '.spec.capacity.storage // ""')"
 [ "$driver" = "file.csi.azure.com" ] \
   || hosting::die "the owner's store ${src_volume} is on driver '${driver:-<none>}', not the Azure Files CSI driver — a read-only static binding of it is not something this command knows how to make"
-# rg#account#share#…#…#secretnamespace — what the azurefile provisioner writes.
+# rg#account#share#…#…#secretnamespace — what the azurefile provisioner writes. The PV's explicit
+# attributes win over the handle where it states them (a statically provisioned owner may carry a
+# handle that is not in the provisioner's shape), exactly as hosting-pv-purge reads them.
 IFS='#' read -r h_rg h_account h_share _ _ h_secretns <<< "$handle"
+attr_account="$(printf '%s' "$src_pv" | jq -r '.spec.csi.volumeAttributes.storageAccount // ""')"
+attr_share="$(printf '%s' "$src_pv" | jq -r '.spec.csi.volumeAttributes.shareName // ""')"
+attr_rg="$(printf '%s' "$src_pv" | jq -r '.spec.csi.volumeAttributes.resourceGroup // ""')"
+h_account="${attr_account:-$h_account}"; h_share="${attr_share:-$h_share}"; h_rg="${attr_rg:-$h_rg}"
 [[ "$h_rg" =~ ^[A-Za-z0-9._()-]+$ && "$h_account" =~ ^[a-z0-9]{3,24}$ && "$h_share" =~ ^[a-z0-9][a-z0-9-]{1,62}$ ]] \
   || hosting::die "cannot read the owner's share from volumeHandle '${handle}' (expected <resource group>#<account>#<share>#…) — refusing to bind a share it could not name"
 attr_secretns="$(printf '%s' "$src_pv" | jq -r '.spec.csi.volumeAttributes.secretnamespace // ""')"
@@ -124,6 +130,7 @@ case $? in
     have_policy="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.persistentVolumeReclaimPolicy // ""')"
     have_label="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.metadata.labels["meshweaver.io/purpose"] // ""')"
     have_handle="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.csi.volumeHandle // ""')"
+    have_secret="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '"\(.spec.csi.nodeStageSecretRef.name // "")/\(.spec.csi.nodeStageSecretRef.namespace // "")"')"
     [ "$have_share" = "$share" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists and points at ${have_share}, not the owner's ${share} — refusing to rebind it. Whether the old binding is still read is a human's question; remove it deliberately, then re-run."
     [ "$have_ro" = "true" ] \
@@ -139,6 +146,10 @@ case $? in
     # collide in the kubelet's staging on one node.
     [ "$have_handle" = "$new_handle" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists with volumeHandle '${have_handle}', not this binding's own '${new_handle}' — refusing to accept a binding whose handle may collide with another; remove it deliberately, then re-run"
+    # The key it stages the share with must be the owner's CURRENT one: a binding left with a stale or
+    # foreign Secret mounts nothing (or the wrong account) on the next node that stages it.
+    [ "$have_secret" = "${secret_name}/${secretns}" ] \
+      || hosting::die "PersistentVolume ${pv_name} already exists staging with Secret '${have_secret}', not the owner's '${secret_name}/${secretns}' — refusing to accept stale staging credentials; remove it deliberately, then re-run"
     [ "$have_label" = "artifact-store" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists without the label meshweaver.io/purpose=artifact-store — the teardown guard would not recognise it as a binding; remove it deliberately, then re-run"
     hosting::log "PersistentVolume ${pv_name} exists — same share, read-only, for ${namespace}/${claim}"

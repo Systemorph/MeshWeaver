@@ -31,3 +31,59 @@ public class PrebuiltBundleRetentionEnabledTest
         Assert.Equal("PreWarm:PrebuiltBundleRetention:Enabled", PrebuiltBundleRetentionExtensions.EnabledConfigKey);
     }
 }
+
+/// <summary>
+/// The STARTUP half of the switch: a disabled pass is never scheduled, even with a bundle root configured
+/// and the application started. Observed through <see cref="PrebuiltBundleRetentionStatus"/>: on a host
+/// with no mesh the first pass faults at once (the adoption stamps cannot be read), so an ENABLED service
+/// records a fault the moment the application starts — the positive control — and a DISABLED one records
+/// nothing.
+/// </summary>
+public class PrebuiltBundleRetentionStartupTest
+{
+    private sealed class Lifetime : Microsoft.Extensions.Hosting.IHostApplicationLifetime
+    {
+        public readonly System.Threading.CancellationTokenSource Started = new();
+        public System.Threading.CancellationToken ApplicationStarted => Started.Token;
+        public System.Threading.CancellationToken ApplicationStopping => System.Threading.CancellationToken.None;
+        public System.Threading.CancellationToken ApplicationStopped => System.Threading.CancellationToken.None;
+        public void StopApplication() { }
+    }
+
+    private static PrebuiltBundleRetentionStatus StartAndSignal(bool enabled)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [ShippedPrebuiltBundles.PublishedRootConfigKey] = System.IO.Path.GetTempPath(),
+            [PrebuiltBundleRetentionExtensions.EnabledConfigKey] = enabled ? "true" : "false",
+        }).Build();
+        var services = new Microsoft.Extensions.DependencyInjection.ServiceCollection();
+        Microsoft.Extensions.DependencyInjection.ServiceCollectionServiceExtensions.AddSingleton<IConfiguration>(services, configuration);
+        var provider = Microsoft.Extensions.DependencyInjection.ServiceCollectionContainerBuilderExtensions.BuildServiceProvider(services);
+        var lifetime = new Lifetime();
+        var status = new PrebuiltBundleRetentionStatus();
+        var service = new PrebuiltBundleRetentionHostedService(provider, lifetime,
+            PrebuiltBundleRetentionExtensions.FromConfiguration(configuration), status,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<PrebuiltBundleRetentionHostedService>.Instance);
+        service.StartAsync(System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+        lifetime.Started.Cancel();
+        // The pass is kicked from the ApplicationStarted callback; give an async hop a bounded chance.
+        var deadline = System.DateTime.UtcNow.AddSeconds(5);
+        while (enabled && status.LastFault is null && status.Last is null && System.DateTime.UtcNow < deadline)
+            System.Threading.Thread.Sleep(20);
+        service.Dispose();
+        return status;
+    }
+
+    [Fact]
+    public void AnEnabledPassIsScheduled_ADisabledOneNever()
+    {
+        var enabled = StartAndSignal(enabled: true);
+        Assert.True(enabled.LastFault is not null || enabled.Last is not null, "positive control: an enabled service ran its first pass once the application started");
+
+        var disabled = StartAndSignal(enabled: false);
+        System.Threading.Thread.Sleep(200);
+        Assert.Null(disabled.LastFault);
+        Assert.Null(disabled.Last);
+    }
+}
