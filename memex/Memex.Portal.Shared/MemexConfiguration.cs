@@ -222,6 +222,11 @@ public static class MemexConfiguration
         /// </summary>
         public TBuilder ConfigureMemexMesh(IConfiguration configuration, bool isDevelopment = false)
         {
+            // The shared artifact store keeps one bundle store per runtime identifier, and a record that
+            // takes part in it renders PreWarm:PrebuiltBundleRoot with a {rid} placeholder
+            // (Doc/Architecture/SharedArtifactStore). Expanded FIRST, before anything reads the key, to
+            // this process's own identifier; a root without the placeholder is untouched.
+            MeshWeaver.Hosting.BundleRootRuntimeIdentifier.ExpandConfigured(configuration);
             // Boot-time module packs: DLL paths listed under Modules:Assemblies are loaded into
             // the default ALC BEFORE the container builds, and their MeshNodeProviderAttribute
             // registrations (services + nodes + hub configuration) fold into this mesh — the

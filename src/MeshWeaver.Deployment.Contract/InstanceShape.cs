@@ -335,7 +335,7 @@ public sealed record VolumeClaim
 /// <see cref="SourceNamespace"/> / <see cref="SourceClaim"/> — the share itself is read off the owner's
 /// bound volume, never typed into a record.</para>
 ///
-/// <para>Either role renders <c>PreWarm__PrebuiltBundleRoot</c> as <c>&lt;mount&gt;/prebuilt-bundles</c>
+/// <para>Either role renders <c>PreWarm__PrebuiltBundleRoot</c> as <c>&lt;mount&gt;/{rid}/prebuilt-bundles</c>
 /// (<see cref="DeploymentPortalConfig.BundleRoot"/>), so every reader of the bundle root reads the store.
 /// Names only — no credential.</para>
 /// </summary>
@@ -363,8 +363,15 @@ public sealed record ArtifactStoreSpec
     /// <summary>The consumer role.</summary>
     public const string ConsumerRole = "Consumer";
 
-    /// <summary>The directory under the store's mount that holds the prebuilt bundles — the layout every data volume carries today.</summary>
+    /// <summary>The directory under a per-architecture store that holds the prebuilt bundles — the layout every data volume carries today.</summary>
     public const string BundleDirectory = "prebuilt-bundles";
+
+    /// <summary>
+    /// The placeholder for the runtime identifier in the rendered bundle root
+    /// (<c>&lt;mount&gt;/{rid}/prebuilt-bundles</c>): a compatibility key names no architecture, so the store
+    /// keeps one bundle store per architecture and each portal expands this to its own at boot.
+    /// </summary>
+    public const string RuntimeIdentifierPlaceholder = "{rid}";
 }
 
 /// <summary>

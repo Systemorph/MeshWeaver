@@ -60,7 +60,7 @@ public class ArtifactStoreRecordTest
         foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
         {
             var config = DeploymentPortalConfig.PortalConfig(record, options);
-            Assert.Equal("/artifacts/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
+            Assert.Equal("/artifacts/{rid}/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
             Assert.Equal("false", config["PreWarm__PrebuiltBundleRetention__Delete"]);
             Assert.Equal("false", config["PreWarm__PrebuiltBundleRetention__Enabled"]);
         }
@@ -72,7 +72,7 @@ public class ArtifactStoreRecordTest
         var config = DeploymentPortalConfig.PortalConfig(Owner());
 
         Assert.Empty(DeploymentPortalConfig.ArtifactStoreProblems(Owner()));
-        Assert.Equal("/artifacts/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
+        Assert.Equal("/artifacts/{rid}/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
         Assert.False(config.ContainsKey("PreWarm__PrebuiltBundleRetention__Delete"));
         Assert.False(config.ContainsKey("PreWarm__PrebuiltBundleRetention__Enabled"));
         Assert.Equal(ArtifactStoreSpec.OwnerRole, DeploymentPortalConfig.ArtifactStoreRole(Owner()));

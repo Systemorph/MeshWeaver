@@ -107,6 +107,6 @@ the operations lane's log tail).
 
 ## Related
 
-- [Released Artifact Retention]](../ReleasedArtifactRetention) — the contract every class above answers to
-- [Prebuilt Bundle Retention]](../PrebuiltBundleRetention) — the portal-side sweep and its inventory gate
-- [Shared Artifact Store]](../SharedArtifactStore) — the one control-owned store this command will sweep
+- [Released Artifact Retention](../ReleasedArtifactRetention) — the contract every class above answers to
+- [Prebuilt Bundle Retention](../PrebuiltBundleRetention) — the portal-side sweep and its inventory gate
+- [Shared Artifact Store](../SharedArtifactStore) — the one control-owned store this command will sweep

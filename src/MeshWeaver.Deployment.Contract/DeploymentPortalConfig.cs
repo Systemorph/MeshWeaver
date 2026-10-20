@@ -371,13 +371,14 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
-    /// <c>&lt;store mount&gt;/prebuilt-bundles</c> for a record that takes part in the shared artifact
-    /// store, else null. Pure.
+    /// <c>&lt;store mount&gt;/{rid}/prebuilt-bundles</c> for a record that takes part in the shared artifact
+    /// store, else null — one bundle store per runtime identifier, the placeholder expanded by the portal
+    /// at boot to its own (core <c>BundleRootRuntimeIdentifier</c>). Pure.
     /// </summary>
     public static string? ArtifactStoreBundleRoot(DeploymentContent d)
     {
         var mount = ArtifactStoreVolume(d)?.MountPath?.Trim().TrimEnd('/');
-        return string.IsNullOrEmpty(mount) ? null : $"{mount}/{ArtifactStoreSpec.BundleDirectory}";
+        return string.IsNullOrEmpty(mount) ? null : $"{mount}/{ArtifactStoreSpec.RuntimeIdentifierPlaceholder}/{ArtifactStoreSpec.BundleDirectory}";
     }
 
     /// <summary>
