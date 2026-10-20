@@ -127,7 +127,7 @@ public class ArtifactStoreRecordTest
     {
         foreach (var name in new[] { "data", "users", "dumps" })
             Assert.Contains("always writable", Assert.Single(DeploymentPortalConfig.ReadOnlyVolumeProblems(
-                new DeploymentContent().WithVolume(name, "/mnt/" + name, readOnly: true))));
+                new DeploymentContent().WithReadOnlyVolume(name, "/mnt/" + name, "c-" + name))));
         Assert.Empty(DeploymentPortalConfig.ReadOnlyVolumeProblems(DeploymentRecordJson.Read(ConsumerJson)!));
         Assert.Empty(DeploymentPortalConfig.ReadOnlyVolumeProblems(new DeploymentContent().WithVolume("data", "/data")));
     }
