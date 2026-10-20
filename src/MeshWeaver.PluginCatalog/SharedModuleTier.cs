@@ -28,7 +28,7 @@ namespace MeshWeaver.PluginCatalog;
 /// a portal, it can only save a copy.</para>
 ///
 /// <para><b>One producer.</b> A CONSUMER mounts the store read-only and never writes it. The OWNER
-/// (the control instance, <see cref="PublishConfigKey"/>) lands every generation INTO the tier
+/// (the control instance, <see cref="PublishConfigKey"/>, set per module root by <see cref="Configure"/>) lands every generation INTO the tier
 /// (<see cref="Publish"/>) and falls back to its own writable tier when that fails. The per-instance
 /// modules GC (<see cref="ModuleLandingService.CollectGarbage(string, Microsoft.Extensions.Logging.ILogger?, TimeSpan?, DateTime?, CancellationToken)"/>)
 /// walks only <c>&lt;root&gt;/modules</c>, so no portal ever deletes from the tier; the store is
@@ -52,30 +52,44 @@ public static class SharedModuleTier
     /// <summary>The seal a producer writes strictly LAST into a published generation.</summary>
     public const string SealFileName = "_complete";
 
-    private static string? processRoot;
-    private static bool processPublishes;
-
-    /// <summary>The process-wide shared root, set once at boot by <see cref="Configure"/>; null → no tier.</summary>
-    public static string? Root => Volatile.Read(ref processRoot);
-
-    /// <summary>Whether this process is the store's producer (<see cref="PublishConfigKey"/>).</summary>
-    public static bool Publishes => Volatile.Read(ref processPublishes) && Root is not null;
+    /// <summary>One module root's tier: where its shared generations live and whether it publishes there.</summary>
+    /// <param name="Root">The shared tier's root; null → no tier.</param>
+    /// <param name="Publishes">Whether landings under this module root publish into <paramref name="Root"/>.</param>
+    public sealed record Setting(string? Root, bool Publishes);
 
     /// <summary>
-    /// Reads <see cref="ConfigKey"/> and <see cref="PublishConfigKey"/> into the process-wide
-    /// setting. Called once at boot, AFTER the <c>{rid}</c> expansion and BEFORE anything resolves a
-    /// module directory. A root still carrying an unexpanded placeholder is refused (null): an older
-    /// reader would otherwise look for a literal <c>{rid}</c> directory.
+    /// 🚨 The tier is configured PER MODULE ROOT, never process-wide (review of MeshWeaver#7009). Two
+    /// meshes in one process (a test host, a dev portal beside a run) each configure their own module
+    /// root; a process-global setting let the second clear or redirect the first's resolver and its
+    /// publication role. Keyed by the full module root, so every resolver and the landing service of ONE
+    /// tree read the same setting, and another tree is untouched.
     /// </summary>
+    private static ImmutableDictionary<string, Setting> settings =
+        ImmutableDictionary<string, Setting>.Empty.WithComparers(StringComparer.Ordinal);
+
+    private static string Key(string moduleRoot) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(moduleRoot));
+
+    /// <summary>The tier configured for <paramref name="moduleRoot"/>, or no tier.</summary>
+    public static Setting For(string moduleRoot) =>
+        settings.TryGetValue(Key(moduleRoot), out var setting) ? setting : new Setting(null, false);
+
+    /// <summary>
+    /// Reads <see cref="ConfigKey"/> and <see cref="PublishConfigKey"/> into the setting of
+    /// <paramref name="moduleRoot"/>. Called at boot, AFTER the <c>{rid}</c> expansion and BEFORE anything
+    /// resolves a module directory under that root. A root still carrying an unexpanded placeholder is
+    /// refused (no tier): an older reader would otherwise look for a literal <c>{rid}</c> directory.
+    /// </summary>
+    /// <param name="moduleRoot">The module root this configuration governs (<see cref="ModuleRoot"/>).</param>
     /// <param name="configuration">The host configuration.</param>
-    /// <returns>The root now in effect, or null.</returns>
-    public static string? Configure(IConfiguration? configuration)
+    /// <returns>The setting now in effect for that root.</returns>
+    public static Setting Configure(string moduleRoot, IConfiguration? configuration)
     {
         var root = Normalize(configuration?[ConfigKey]);
-        Volatile.Write(ref processRoot, root);
-        Volatile.Write(ref processPublishes,
-            bool.TryParse(configuration?[PublishConfigKey], out var publishes) && publishes);
-        return root;
+        var setting = new Setting(root,
+            root is not null && bool.TryParse(configuration?[PublishConfigKey], out var publishes) && publishes);
+        ImmutableInterlocked.Update(ref settings, s => s.SetItem(Key(moduleRoot), setting));
+        return setting;
     }
 
     /// <summary>A configured root as the tier uses it: trimmed, null when blank or still templated.</summary>
@@ -98,9 +112,11 @@ public static class SharedModuleTier
         && !leaf.StartsWith('.');
 
     /// <summary>
-    /// The SEALED shared copy of <paramref name="leaf"/>, or null — no tier, not a generation, or no
-    /// seal. Any I/O fault reading the tier answers null: the tier is an optimisation, never a reason
-    /// to fail a resolution.
+    /// The SEALED and WHOLE shared copy of <paramref name="leaf"/>, or null — no tier, not a generation,
+    /// no seal, or a seal naming a file the directory no longer holds (an incomplete volume restore, a
+    /// sweep that lost a race). A seal is a claim; it is honoured only while every file it lists is
+    /// there. Any I/O fault reading the tier answers null: the tier is an optimisation, never a reason to
+    /// fail a resolution.
     /// </summary>
     public static string? SealedDirectory(string? sharedRoot, string? leaf)
     {
@@ -109,7 +125,17 @@ public static class SharedModuleTier
         try
         {
             var directory = Path.Combine(root, leaf!);
-            return File.Exists(Path.Combine(directory, SealFileName)) ? directory : null;
+            var seal = Path.Combine(directory, SealFileName);
+            if (!File.Exists(seal))
+                return null;
+            foreach (var listed in File.ReadAllLines(seal).Select(l => l.Trim()).Where(l => l.Length > 0))
+            {
+                if (Path.IsPathRooted(listed) || listed.Split('/').Any(segment => segment == ".."))
+                    return null;
+                if (!File.Exists(Path.Combine(directory, listed.Replace('/', Path.DirectorySeparatorChar))))
+                    return null;
+            }
+            return directory;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
                                        or ArgumentException or NotSupportedException)
@@ -149,6 +175,22 @@ public static class SharedModuleTier
     /// <exception cref="ArgumentException">No tier, or <paramref name="leaf"/> is not a generation.</exception>
     public static string Publish(
         string sharedRoot, string leaf, IReadOnlyList<(string RelativePath, byte[] Bytes)> files)
+        => PublishWith(sharedRoot, leaf, files, MeshWeaver.Mesh.Persistence.AtomicFileWrite.OpenTempForWrite);
+
+    /// <summary>
+    /// <see cref="Publish"/> with the staging-file writer injected — the seam a test uses to stand the
+    /// store on a volume that accepts a write and then does not keep it (a full share). Production never
+    /// passes anything but <see cref="MeshWeaver.Mesh.Persistence.AtomicFileWrite.OpenTempForWrite"/>
+    /// (the same seam <c>FileSystemAssemblyStore</c> exposes).
+    /// </summary>
+    /// <param name="sharedRoot">The shared tier's root.</param>
+    /// <param name="leaf">The generation leaf.</param>
+    /// <param name="files">Each file as (path relative to the generation, bytes).</param>
+    /// <param name="openForWrite">Opens a staging path for writing.</param>
+    /// <returns>The sealed directory.</returns>
+    public static string PublishWith(
+        string sharedRoot, string leaf, IReadOnlyList<(string RelativePath, byte[] Bytes)> files,
+        Func<string, Stream> openForWrite)
     {
         var root = Normalize(sharedRoot)
             ?? throw new ArgumentException("no shared module tier is configured", nameof(sharedRoot));
@@ -157,8 +199,11 @@ public static class SharedModuleTier
                 $"'{leaf}' is not a content-addressed generation leaf — only generations are shared",
                 nameof(leaf));
         var target = Path.Combine(root, leaf);
-        if (File.Exists(Path.Combine(target, SealFileName)))
+        if (SealedDirectory(root, leaf) is not null)
             return target;
+        // A target that carries a seal but lacks a listed file (review of MeshWeaver#7009) falls
+        // through: the files missing from it are restored from the bytes in hand below, and the seal —
+        // already present — is left as it is.
 
         Directory.CreateDirectory(root);
         var staging = Path.Combine(root, $".staging-{leaf}-{Guid.NewGuid():N}");
@@ -169,7 +214,12 @@ public static class SharedModuleTier
             {
                 var destination = Path.Combine(staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.WriteAllBytes(destination, bytes);
+                // 🚨 Flushed and length-checked, never File.WriteAllBytes (review of
+                // MeshWeaver#7009): a full Azure Files share can accept a write and lose its bytes on
+                // writeback without an exception here, and the seal below would then vouch for a
+                // truncated module. ShortWriteException propagates, and the owner falls back to its
+                // own volume.
+                MeshWeaver.Mesh.Persistence.AtomicFileWrite.PublishBytesWith(destination, bytes, openForWrite);
             }
 
             var moved = false;
@@ -198,16 +248,20 @@ public static class SharedModuleTier
                 }
             }
 
-            // The seal, strictly last — and it lists what it seals, so a reader can check it.
-            var listed = Directory.EnumerateFiles(target, "*", SearchOption.AllDirectories)
-                .Select(f => Path.GetRelativePath(target, f).Replace('\\', '/'))
+            // The seal, strictly last — and it lists what it seals (the files this publication carries),
+            // so a reader checks it rather than trusting it. An existing seal is left as it is.
+            var listed = files
+                .Select(f => f.RelativePath.Replace('\\', '/'))
                 .Where(f => !string.Equals(f, SealFileName, StringComparison.Ordinal))
+                .Distinct(StringComparer.Ordinal)
                 .OrderBy(f => f, StringComparer.Ordinal)
                 .ToArray();
             MeshWeaver.Mesh.Persistence.AtomicFileWrite.PublishBytes(
                 Path.Combine(target, SealFileName),
                 System.Text.Encoding.UTF8.GetBytes(string.Join('\n', listed) + "\n"));
-            return target;
+            return SealedDirectory(root, leaf)
+                ?? throw new IOException(
+                    $"the shared generation {leaf} at {target} is not whole after publication — a listed file is missing");
         }
         finally
         {

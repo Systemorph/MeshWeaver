@@ -227,17 +227,9 @@ public static class MemexConfiguration
             // (Doc/Architecture/SharedArtifactStore). Expanded FIRST, before anything reads the key, to
             // this process's own identifier; a root without the placeholder is untouched.
             MeshWeaver.Hosting.BundleRootRuntimeIdentifier.ExpandConfigured(configuration);
-            // …and the shared MODULE tier beside it (increment 3): expanded to this runtime's store,
-            // then made the process-wide tier BEFORE the activation sidecar below resolves a single
-            // generation directory. Unset → no tier, and every resolution is the local one it was.
+            // …and the shared MODULE tier beside it (increment 3), expanded to this runtime's store.
             MeshWeaver.Hosting.BundleRootRuntimeIdentifier.ExpandConfiguredKey(
                 configuration, SharedModuleTier.ConfigKey);
-            if (SharedModuleTier.Configure(configuration) is { } sharedModules)
-                Console.WriteLine(
-                    $"[ModuleActivation] shared module tier: {sharedModules} "
-                    + (SharedModuleTier.Publishes
-                        ? "(this instance OWNS the store: landings publish there)"
-                        : "(read-only: sealed generations there are used, nothing is written)"));
             // Boot-time module packs: DLL paths listed under Modules:Assemblies are loaded into
             // the default ALC BEFORE the container builds, and their MeshNodeProviderAttribute
             // registrations (services + nodes + hub configuration) fold into this mesh — the
@@ -267,6 +259,15 @@ public static class MemexConfiguration
             // read from somewhere else is simply invisible, and on a deployment whose /app is
             // read-only the writer cannot use AppContext.BaseDirectory at all.
             var moduleRoot = ModuleRoot.Resolve(configuration);
+            // The shared module tier of THIS module root (increment 3), set BEFORE the activation
+            // sidecar below resolves a single generation directory — per root, so another mesh in the
+            // same process keeps its own. Unset → no tier, and every resolution is the local one it was.
+            if (SharedModuleTier.Configure(moduleRoot, configuration) is { Root: { } sharedModules } tier)
+                Console.WriteLine(
+                    $"[ModuleActivation] shared module tier: {sharedModules} "
+                    + (tier.Publishes
+                        ? "(this instance OWNS the store: landings publish there)"
+                        : "(read-only: sealed generations there are used, nothing is written)"));
 
             // The instance manifest (#2550) — read BEFORE anything else needs it, on the same
             // writable root the module activation sidecar lives on, and for the same reason it is

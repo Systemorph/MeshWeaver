@@ -122,5 +122,21 @@ public class ArtifactStoreReplicationRecordTest
         Assert.Contains("at most 36 characters", Problems(Locals(local with { Source = new string('a', 37) })));
         Assert.Contains("testerImageRepository", Problems(c with { ArtifactStore = c.ArtifactStore with { TesterImageRepository = "cr.example.com/mw-plugin-test:3.1" } }));
         Assert.Contains("testerImageRepository", Problems(c with { ArtifactStore = c.ArtifactStore with { TesterImageRepository = null } }));
+        // An upstream carrying only identities is a replication somebody asked for — validated, never silently dropped.
+        Assert.Contains("names no Secret", Problems(Up(new ArtifactStoreUpstream { Identities = ["c003e002"] })));
+        Assert.Contains("only the OWNER", Problems(Consumer() with { ArtifactStore = Consumer().ArtifactStore! with { Upstream = new ArtifactStoreUpstream { Identities = ["c003e002"] } } }));
+        Assert.Contains("localBuildModuleSources entry", Problems(c with { ArtifactStore = c.ArtifactStore with { LocalBuildModuleSources = ["Bad/Name"] } }));
+        Assert.Contains("but no localSources", Problems(c with { ArtifactStore = c.ArtifactStore with { LocalSources = [], LocalBuildModuleSources = ["plugins"] } }));
+    }
+
+    [Fact]
+    public void ALocalBuild_CompilesAgainstTheDeclaredModuleSources_ElseTheUpstreams()
+    {
+        var c = ClientControl();
+        Assert.Equal(["plugins"], DeploymentPortalConfig.ArtifactStoreLocalBuildModuleSources(c));
+        // Our own control: no upstream, its store filled by the build server — the module sources are declared.
+        var ours = c with { ArtifactStore = c.ArtifactStore! with { Upstream = null, LocalBuildModuleSources = ["plugins", "education"] } };
+        Assert.Equal(["plugins", "education"], DeploymentPortalConfig.ArtifactStoreLocalBuildModuleSources(ours));
+        Assert.Empty(DeploymentPortalConfig.ArtifactStoreProblems(ours));
     }
 }

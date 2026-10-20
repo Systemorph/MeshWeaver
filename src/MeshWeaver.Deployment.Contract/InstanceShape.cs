@@ -376,6 +376,16 @@ public sealed record ArtifactStoreSpec
     [Description("Owner: local sources this control builds into its own store")]
     public ImmutableList<ArtifactStoreLocalSource> LocalSources { get; init; } = ImmutableList<ArtifactStoreLocalSource>.Empty;
 
+    /// <summary>
+    /// OWNER only — the sources whose SEALED MODULE SETS (<c>modules/*.module.nupkg</c> of each source's
+    /// current generation in this store) a local-source build compiles against. Empty → the upstream's
+    /// sources. On a control with no upstream — ours, whose store the build server fills — name the
+    /// build server's sources here (e.g. <c>plugins</c>), or a local source that needs a module cannot
+    /// compile.
+    /// </summary>
+    [Description("Owner: sources whose sealed module sets the local build compiles against (blank: the upstream's)")]
+    public ImmutableList<string> LocalBuildModuleSources { get; init; } = ImmutableList<string>.Empty;
+
     /// <summary>OWNER only — when the local-source build runs (a cron expression). Blank → <see cref="DefaultLocalBuildSchedule"/>.</summary>
     [Description("Owner: cron schedule of the local-source build (blank: every 30 minutes)")]
     public string? LocalBuildSchedule { get; init; }

@@ -408,6 +408,16 @@ public static class DeploymentPortalConfig
             ? cron.Trim()
             : ArtifactStoreSpec.DefaultLocalBuildSchedule;
 
+    /// <summary>
+    /// The sources whose sealed module sets a local-source build compiles against: the declared
+    /// <see cref="ArtifactStoreSpec.LocalBuildModuleSources"/>, else the upstream's sources (a client
+    /// environment's control builds against what it replicates). Pure.
+    /// </summary>
+    public static ImmutableList<string> ArtifactStoreLocalBuildModuleSources(DeploymentContent d) =>
+        d.ArtifactStore is not { } spec ? ImmutableList<string>.Empty
+        : !spec.LocalBuildModuleSources.IsEmpty ? spec.LocalBuildModuleSources.Select(x => x.Trim()).ToImmutableList()
+        : spec.Upstream?.Sources.Select(x => x.Trim()).ToImmutableList() ?? ImmutableList<string>.Empty;
+
     /// <summary>The local-source build's schedule: the stated cron, else <see cref="ArtifactStoreSpec.DefaultLocalBuildSchedule"/>. Pure.</summary>
     public static string ArtifactStoreLocalBuildSchedule(DeploymentContent d) =>
         d.ArtifactStore?.LocalBuildSchedule is { } cron && !string.IsNullOrWhiteSpace(cron)
@@ -453,14 +463,18 @@ public static class DeploymentPortalConfig
     {
         var spec = d.ArtifactStore!;
         var upstream = spec.Upstream;
+        // ANY stated upstream field counts (review of MeshWeaver#7009): an upstream carrying only
+        // identities or a schedule is a replication somebody asked for, and must be validated as one —
+        // never left to render nothing in silence.
         var statesUpstream = upstream is not null
             && (!string.IsNullOrWhiteSpace(upstream.Registry) || !upstream.Sources.IsEmpty
-                || !string.IsNullOrWhiteSpace(upstream.PullSecret));
+                || !string.IsNullOrWhiteSpace(upstream.PullSecret) || !upstream.Identities.IsEmpty
+                || !string.IsNullOrWhiteSpace(upstream.Schedule));
         if (role != ArtifactStoreSpec.OwnerRole)
         {
             if (statesUpstream)
                 yield return "the artifact-store CONSUMER states upstream — only the OWNER (the environment's control) replicates from an upstream; a consumer reads its owner's store";
-            if (!spec.LocalSources.IsEmpty)
+            if (!spec.LocalSources.IsEmpty || !spec.LocalBuildModuleSources.IsEmpty)
                 yield return "the artifact-store CONSUMER states localSources — local sources are built by the environment's control, the store's OWNER";
             yield break;
         }
@@ -502,6 +516,10 @@ public static class DeploymentPortalConfig
             if (!string.IsNullOrWhiteSpace(local.CredentialSecret) && !IsObjectName(local.CredentialSecret))
                 yield return $"artifactStore.localSources '{name}' credentialSecret '{local.CredentialSecret}' is not a Secret name";
         }
+        foreach (var bad in spec.LocalBuildModuleSources.Where(x => !IsSourceName(x)))
+            yield return $"artifactStore.localBuildModuleSources entry '{bad}' is not a registry name component ([a-z0-9._-])";
+        if (spec.LocalSources.IsEmpty && !spec.LocalBuildModuleSources.IsEmpty)
+            yield return "artifactStore.localBuildModuleSources is set but no localSources — it names the module sets a local build compiles against, and nothing is built";
         if (!spec.LocalSources.IsEmpty
             && (string.IsNullOrWhiteSpace(spec.TesterImageRepository)
                 || spec.TesterImageRepository.Trim().Any(char.IsWhiteSpace)

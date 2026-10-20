@@ -13,8 +13,9 @@
 #   <bundle-root>/<identity>/<source>/<generation>/_complete   its seal
 #
 # THE RULES, and why:
-#   * the staged directory is checked BEFORE anything becomes visible: `_complete` present and
-#     every file it lists present — a publication that is not whole is refused (exit 1);
+#   * the staged directory is checked BEFORE anything becomes visible: `_complete` present, every
+#     file it lists present, and every module bundle `modules/_index` lists present — a publication
+#     that is not whole is refused (exit 1);
 #   * a generation is moved into place with ONE rename, so a reader never resolves a half-written
 #     one, and an existing SEALED generation of that name is the answer (the name is content-
 #     addressed by the caller: a registry index digest, a source commit) — nothing is rewritten;
@@ -68,6 +69,23 @@ while IFS= read -r name || [ -n "$name" ]; do
   fi
 done < "$staged/_complete"
 [ "$missing" -eq 0 ] || die "$missing file(s) listed in _complete are absent — refusing to publish '$source' for $identity"
+# The module set the publication carries is sealed beside the bundles (modules/_index, MeshWeaver#2707)
+# and `_complete` does not list it — so it is checked on its own: every indexed bundle present
+# (the same rule push-bundle-publication.sh applies before it seals the registry copy).
+if [ -f "$staged/modules/_index" ]; then
+  while IFS= read -r name || [ -n "$name" ]; do
+    name=$(printf '%s' "$name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [ -n "$name" ] || continue
+    case "$name" in
+      */*|..*) die "modules/_index lists '$name', which escapes modules/" ;;
+    esac
+    if [ ! -f "$staged/modules/$name" ]; then
+      log "indexed module '$name' is absent from $staged/modules"
+      missing=$((missing + 1))
+    fi
+  done < "$staged/modules/_index"
+  [ "$missing" -eq 0 ] || die "$missing module bundle(s) listed in modules/_index are absent — refusing to publish '$source' for $identity"
+fi
 
 source_dir="$root/$identity/$source"
 target="$source_dir/$generation"

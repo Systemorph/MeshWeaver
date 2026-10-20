@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.PluginCatalog;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
@@ -123,6 +124,10 @@ public class SharedModuleTierTest : IDisposable
         Assert.Equal(local, ModuleLandingService.ModuleDirectoryInTier(Consumer, Store, Module, entry));
 
         File.WriteAllText(Path.Combine(shared, SharedModuleTier.SealFileName), Module + ".dll\n");
+        // Sealed, but the file the seal lists is not there: a claim, not a copy — still the local miss.
+        Assert.Equal(local, ModuleLandingService.ModuleDirectoryInTier(Consumer, Store, Module, entry));
+
+        File.WriteAllBytes(Path.Combine(shared, Module + ".dll"), [1, 2, 3]);
         Assert.Equal(shared, ModuleLandingService.ModuleDirectoryInTier(Consumer, Store, Module, entry));
 
         // The instance's own copy always wins.
@@ -161,5 +166,110 @@ public class SharedModuleTierTest : IDisposable
         ModuleLandingService.CollectGarbage(Consumer, logger: null, minAge: TimeSpan.Zero, nowUtc: DateTime.UtcNow.AddHours(1));
 
         Assert.Single(Directory.EnumerateDirectories(Store));
+    }
+
+    [Fact]
+    public async Task ASealedButIncompleteCopy_IsNotUsed_AndTheOwnerRepairsIt()
+    {
+        ModuleActivationEntry entry;
+        using (var owner = new ModuleLandingService(baseDirectory: Owner) { SharedRoot = Store, PublishesToShared = true })
+            entry = await Land(owner);
+        var shared = Path.Combine(Store, entry.Directory!);
+        File.Delete(Path.Combine(shared, Module + ".dll"));   // an incomplete restore: the seal survived
+
+        using (var consumer = new ModuleLandingService(baseDirectory: Consumer) { SharedRoot = Store, PublishesToShared = false })
+            await Land(consumer);
+        Assert.True(File.Exists(Path.Combine(Consumer, "modules", entry.Directory!, Module + ".dll")),
+            "a consumer trusted a seal whose listed file is gone, and landed nothing of its own");
+
+        using (var owner = new ModuleLandingService(baseDirectory: Owner) { SharedRoot = Store, PublishesToShared = true })
+            await Land(owner);
+        Assert.True(File.Exists(Path.Combine(shared, Module + ".dll")), "the owner did not restore the missing file");
+        Assert.NotNull(SharedModuleTier.SealedDirectory(Store, entry.Directory));
+    }
+
+    [Fact]
+    public async Task AnOwnerHoldingTheGenerationLocally_StillPublishesIt_OnceTheStoreIsThere()
+    {
+        // The generation landed before the tier existed (or while the store was down).
+        ModuleActivationEntry entry;
+        using (var before = new ModuleLandingService(baseDirectory: Owner))
+            entry = await Land(before);
+        Assert.True(Directory.Exists(Path.Combine(Owner, "modules", entry.Directory!)));
+
+        using (var owner = new ModuleLandingService(baseDirectory: Owner) { SharedRoot = Store, PublishesToShared = true })
+            await Land(owner);
+
+        Assert.NotNull(SharedModuleTier.SealedDirectory(Store, entry.Directory));
+        Assert.Equal(Path.Combine(Owner, "modules", entry.Directory!),
+            ModuleLandingService.ModuleDirectoryInTier(Owner, Store, Module, entry));
+    }
+
+    [Fact]
+    public void TheTier_IsConfiguredPerModuleRoot_NeverProcessWide()
+    {
+        var withTier = new ConfigurationBuilder()
+            .AddInMemoryCollection(new System.Collections.Generic.Dictionary<string, string?>
+            {
+                [SharedModuleTier.ConfigKey] = Store,
+                [SharedModuleTier.PublishConfigKey] = "true",
+            }).Build();
+        var without = new ConfigurationBuilder().Build();
+
+        SharedModuleTier.Configure(Owner, withTier);
+        SharedModuleTier.Configure(Consumer, without);   // a second mesh in the same process
+
+        Assert.Equal(new SharedModuleTier.Setting(Store, true), SharedModuleTier.For(Owner));
+        Assert.Equal(new SharedModuleTier.Setting(null, false), SharedModuleTier.For(Consumer));
+        using var landing = new ModuleLandingService(baseDirectory: Owner);
+        Assert.Equal(Store, landing.SharedRoot);
+        Assert.True(landing.PublishesToShared);
+    }
+
+    [Fact]
+    public void AShareThatDropsBytes_SealsNothing_AndThePublicationFails()
+    {
+        const string leaf = Module + "@00112233445566ff";
+        var bytes = new byte[32 * 1024];
+        Array.Fill(bytes, (byte)0x5C);
+
+        // Keeps 2 KiB of every file and drops the rest — the full Azure Files share that accepts a
+        // write and loses it on writeback. The flush-and-length check must refuse it before the seal.
+        Assert.ThrowsAny<IOException>(() => SharedModuleTier.PublishWith(Store, leaf, [(Module + ".dll", bytes)],
+            path => new TruncatingStream(File.Create(path), 2048)));
+
+        Assert.Null(SharedModuleTier.SealedDirectory(Store, leaf));
+        Assert.False(File.Exists(Path.Combine(Store, leaf, SharedModuleTier.SealFileName)), "a truncated module was sealed");
+    }
+
+    /// <summary>Keeps the first <c>cap</c> bytes of every write and drops the rest, silently.</summary>
+    private sealed class TruncatingStream(Stream inner, int cap) : Stream
+    {
+        private long accepted;
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            var room = (int)Math.Max(0, Math.Min(count, cap - accepted));
+            if (room > 0)
+                inner.Write(buffer, offset, room);
+            accepted += count;
+        }
+
+        public override void Flush() => inner.Flush();
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => inner.Length;
+        public override long Position { get => inner.Position; set => throw new NotSupportedException(); }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+                inner.Dispose();
+            base.Dispose(disposing);
+        }
     }
 }

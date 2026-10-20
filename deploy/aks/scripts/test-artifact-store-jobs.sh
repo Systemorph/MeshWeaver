@@ -9,6 +9,7 @@
 #
 #   deploy/helm/files/artifact-store-publish.sh   the one writer: generation + `_current` LAST
 #   deploy/helm/files/artifact-store-sync.sh      one-way replication from an upstream registry
+#   deploy/helm/files/artifact-store-modules.sh   the local build's module surface, from the store
 #   deploy/helm/files/artifact-store-build.sh     the local-source build
 #   deploy/helm/templates/memex-portal/_artifact-store.tpl + artifact-store-jobs.yaml
 #
@@ -26,7 +27,8 @@ FILES="$REPO/deploy/helm/files"
 PUBLISH="$FILES/artifact-store-publish.sh"
 SYNC="$FILES/artifact-store-sync.sh"
 BUILD="$FILES/artifact-store-build.sh"
-for f in "$PUBLISH" "$SYNC" "$BUILD" "$FILES/compose-gate-host.sh"; do
+MODULES="$FILES/artifact-store-modules.sh"
+for f in "$PUBLISH" "$SYNC" "$BUILD" "$MODULES" "$FILES/compose-gate-host.sh"; do
   [ -f "$f" ] || { echo "::error::$f is missing"; exit 1; }
 done
 
@@ -34,7 +36,7 @@ WORK="$(mktemp -d)"
 trap 'chmod -R u+w "$WORK" 2>/dev/null; rm -rf "$WORK"' EXIT
 fails=0
 cases=0
-EXPECTED_CASES=19
+EXPECTED_CASES=23
 
 fail() { echo "::error::artifact-store jobs: $*"; fails=$((fails + 1)); }
 pointer() { sed -n 's/^[[:space:]]*\([^[:space:]]\{1,\}\).*/\1/p' "$1/_current" 2>/dev/null | head -n 1; }
@@ -94,6 +96,12 @@ for bad in "../x" "_current" ".hidden" "a b"; do
 done
 printf '../escape\n' >> "$WORK/p/s7/_complete"
 if sh "$PUBLISH" "$WORK/p/s7" "$R" c003e001 plugins gen-9 >"$WORK/out" 2>&1; then fail "case 7: a _complete listing an escaping path was accepted"; fi
+
+cases=$((cases + 1))   # 20. a module bundle modules/_index lists but the publication lacks is refused
+stage "$WORK/p/s20" a.zip
+mkdir -p "$WORK/p/s20/modules"; printf 'MeshWeaver.Lost.module.nupkg\n' > "$WORK/p/s20/modules/_index"
+if sh "$PUBLISH" "$WORK/p/s20" "$R" c003e001 edu gen-20 >"$WORK/out" 2>&1; then fail "case 20: a publication missing an indexed module was accepted"; fi
+[ ! -e "$R/c003e001/edu/gen-20" ] || fail "case 20: a publication missing an indexed module became visible"
 
 # ════════════════════════════ the sync ════════════════════════════
 # A stub oras: `resolve` answers from $STUB/digests/<repo>:<tag> (absent ⇒ "not found"); `pull`
@@ -184,7 +192,8 @@ sync_run SYNC_SOURCES="plugins" SYNC_IDENTITIES="c003e002" >/dev/null 2>&1
 
 # ════════════════════════════ the local-source build ════════════════════════════
 # A portal /app and a tester /app the real compose-gate-host.sh accepts, a stub git (a clone is a
-# directory and a fixed commit) and a stub dotnet (the compile writes a bake keyed to $BAKE_ID).
+# directory and a fixed commit) and a stub dotnet (the compile writes a bake keyed to $BAKE_ID, and
+# REFUSES an archive as --module: the real compile loads an entry assembly).
 B="$WORK/b"
 mkdir -p "$B/portal" "$B/tester" "$B/bin"
 printf 'MeshWeaver.Layout=aaaa\n' > "$B/portal/meshweaver-surface.manifest"
@@ -207,7 +216,13 @@ cat > "$B/bin/dotnet" <<'DOTNET'
 #!/bin/sh
 printf '%s\n' "$*" >> "$BUILD_STUB/dotnet.calls"
 out=""
-while [ $# -gt 0 ]; do [ "$1" = "--output" ] && out="$2"; shift; done
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output) out="$2" ;;
+    --module) case "$2" in *.dll) [ -f "$2" ] || { echo "no such module $2" >&2; exit 4; } ;; *) echo "--module expects an assembly, got $2" >&2; exit 4 ;; esac ;;
+  esac
+  shift
+done
 [ -n "$out" ] || exit 3
 printf '%s\n' "$BAKE_ID" > "$out/framework-mvid.txt"
 printf 'zip' > "$out/Fabrikam.Models.zip"
@@ -215,28 +230,39 @@ exit "${DOTNET_EXIT:-0}"
 DOTNET
 chmod +x "$B/bin/git" "$B/bin/dotnet"
 BR="$WORK/b/root"
-# The upstream's module set, as the sync leaves it: Store's module under plugins' current generation.
+# The upstream's module set, as the sync leaves it: a real module bundle (a zip carrying
+# meshweaver/manifest.json and meshweaver/modules/<entry>.dll) under plugins' current generation.
+mkpkg() { # <dir> <entry> <out.nupkg>
+  rm -rf "$1"; mkdir -p "$1/meshweaver/modules"
+  printf '{"plugin":"Store","module":{"assemblyName":"%s","version":"1.0.0"}}' "$2" > "$1/meshweaver/manifest.json"
+  printf 'IL' > "$1/meshweaver/modules/$2.dll"; printf 'dep' > "$1/meshweaver/modules/Dep.dll"
+  (cd "$1" && zip -q -r "$3" meshweaver)
+}
 mkdir -p "$BR/c003e001/plugins/gen-u/modules"
 printf 'Store.zip\n' > "$BR/c003e001/plugins/gen-u/_complete"; printf z > "$BR/c003e001/plugins/gen-u/Store.zip"
 printf 'MeshWeaver.Store.module.nupkg\n' > "$BR/c003e001/plugins/gen-u/modules/_index"
-printf n > "$BR/c003e001/plugins/gen-u/modules/MeshWeaver.Store.module.nupkg"
+mkpkg "$WORK/pkg" MeshWeaver.Store "$BR/c003e001/plugins/gen-u/modules/MeshWeaver.Store.module.nupkg"
 printf 'gen-u\n' > "$BR/c003e001/plugins/_current"
 printf 'secret-token-value\n' > "$B/token"
+printf 'c003e001\n' > "$B/identity"
 build_run() {
   : > "$B/git.calls"; : > "$B/dotnet.calls"
   rm -rf "$B/work"; mkdir -p "$B/work"
+  env -i PATH="$PATH" MODULES_ROOT="$BR" MODULES_SOURCES="plugins" MODULES_IDENTITY_FILE="$B/identity" \
+    MODULES_OUT="$B/work/ext" sh "$MODULES" >"$WORK/out" 2>&1 || return 9
   env -i PATH="$B/bin:$PATH" BUILD_STUB="$B" BAKE_ID="${BAKE_ID:-c003e001}" \
     BUILD_SOURCE="fabrikam-models" BUILD_REPOSITORY="https://git.example.com/fabrikam/models.git" \
     BUILD_ROOT="$BR" BUILD_TESTER_APP="$B/tester" BUILD_PORTAL_APP="$B/portal" BUILD_WORK="$B/work" \
-    BUILD_UPSTREAM_SOURCES="plugins" BUILD_TOKEN_FILE="$B/token" \
-    bash "$BUILD" >"$WORK/out" 2>&1
+    BUILD_MODULES_DIR="$B/work/ext" BUILD_TOKEN_FILE="$B/token" \
+    bash "$BUILD" >>"$WORK/out" 2>&1
 }
-LG="local-abcdef012345"
+P="$BR/c003e001/fabrikam-models"
 
-cases=$((cases + 1))   # 14. a local source builds and publishes as `local-<commit>`, sealed, pointer last
+cases=$((cases + 1))   # 14. a local source builds and publishes as `local-<commit>-<inputs>`, sealed, pointer last
+LG=""
 if BAKE_ID=c003e001 build_run; then
-  P="$BR/c003e001/fabrikam-models"
-  [ "$(pointer "$P")" = "$LG" ] || fail "case 14: _current does not name $LG: $(cat "$WORK/out")"
+  LG=$(pointer "$P")
+  case "$LG" in local-abcdef012345-????????) ;; *) fail "case 14: _current names '$LG', not local-<commit>-<inputs>: $(cat "$WORK/out")" ;; esac
   [ "$(cat "$P/$LG/_complete" 2>/dev/null)" = "Fabrikam.Models.zip" ] || fail "case 14: _complete does not list the bundle"
   for m in source-commit.txt repository.txt architecture.txt modules/_index framework-mvid.txt; do
     [ -f "$P/$LG/$m" ] || fail "case 14: the publication carries no $m"
@@ -246,10 +272,11 @@ else
   fail "case 14: the build failed: $(cat "$WORK/out")"
 fi
 
-cases=$((cases + 1))   # 15. the compile ran on the COMPOSED host, against the portal's /app, with the store's module set
+cases=$((cases + 1))   # 15. the compile ran on the COMPOSED host, against the portal's /app, with the module's ENTRY ASSEMBLY
 grep -q "$B/work/host/mw-plugin-test.dll compile" "$B/dotnet.calls" || fail "case 15: the compile did not run from the composed host: $(cat "$B/dotnet.calls")"
 grep -q -- "--app $B/portal" "$B/dotnet.calls" || fail "case 15: the compile was not pointed at the portal's /app"
-grep -q -- "--module $BR/c003e001/plugins/gen-u/modules/MeshWeaver.Store.module.nupkg" "$B/dotnet.calls" || fail "case 15: the upstream's sealed module was not composed: $(cat "$B/dotnet.calls")"
+grep -q -- "--module $B/work/ext/modules/MeshWeaver.Store/MeshWeaver.Store.dll" "$B/dotnet.calls" || fail "case 15: the upstream module's entry assembly was not composed: $(cat "$B/dotnet.calls")"
+[ -f "$B/work/ext/modules/MeshWeaver.Store/Dep.dll" ] || fail "case 15: the module's closure was not laid beside its entry assembly"
 grep -q -- "--source-sha abcdef0123456789abcdef0123456789abcdef01" "$B/dotnet.calls" || fail "case 15: the commit was not recorded"
 
 cases=$((cases + 1))   # 16. the read token travels as a header, never in the URL or the log
@@ -257,14 +284,31 @@ grep -q 'secret-token-value' "$WORK/out" && fail "case 16: the token reached the
 grep -q 'https://[^ ]*@' "$B/git.calls" && fail "case 16: the token was put into the clone URL"
 grep -q 'http.extraHeader=Authorization: Basic' "$B/git.calls" || fail "case 16: the token was not sent as a header: $(cat "$B/git.calls")"
 
-cases=$((cases + 1))   # 17. an unchanged commit builds nothing
+cases=$((cases + 1))   # 17. unchanged inputs build nothing
 BAKE_ID=c003e001 build_run || fail "case 17: a no-op build failed: $(cat "$WORK/out")"
 [ -s "$B/dotnet.calls" ] && fail "case 17: an already-current commit was compiled again"
+
+cases=$((cases + 1))   # 21. a new upstream module set — same commit — names a NEW generation and rebuilds
+mkdir -p "$BR/c003e001/plugins/gen-v/modules"
+printf 'Store.zip\n' > "$BR/c003e001/plugins/gen-v/_complete"; printf z > "$BR/c003e001/plugins/gen-v/Store.zip"
+printf 'MeshWeaver.Store.module.nupkg\n' > "$BR/c003e001/plugins/gen-v/modules/_index"
+mkpkg "$WORK/pkg2" MeshWeaver.Store "$BR/c003e001/plugins/gen-v/modules/MeshWeaver.Store.module.nupkg"
+printf 'gen-v\n' > "$BR/c003e001/plugins/_current"
+BAKE_ID=c003e001 build_run || fail "case 21: the rebuild failed: $(cat "$WORK/out")"
+[ -s "$B/dotnet.calls" ] || fail "case 21: a changed module surface did not rebuild"
+LG2=$(pointer "$P")
+[ -n "$LG" ] && [ "$LG2" != "$LG" ] || fail "case 21: the generation name did not change with the module surface ($LG → $LG2)"
+case "$LG2" in local-abcdef012345-*) ;; *) fail "case 21: '$LG2' does not keep the commit" ;; esac
+
+cases=$((cases + 1))   # 22. the module surface fails CLOSED: a listed bundle the store lacks stops the build
+mv "$BR/c003e001/plugins/gen-v/modules/MeshWeaver.Store.module.nupkg" "$WORK/held.nupkg"
+if BAKE_ID=c003e001 build_run; then fail "case 22: a short module surface was compiled against"; fi
+mv "$WORK/held.nupkg" "$BR/c003e001/plugins/gen-v/modules/MeshWeaver.Store.module.nupkg"
 
 cases=$((cases + 1))   # 18. a bake keyed to ANOTHER identity is refused — inert bundles are never published
 rm -rf "$BR/c003e001/fabrikam-models"
 if BAKE_ID=c003e999 build_run; then fail "case 18: a bake under a foreign identity was published"; fi
-[ ! -e "$BR/c003e001/fabrikam-models/$LG" ] || fail "case 18: the foreign-identity bake became visible"
+[ ! -e "$BR/c003e001/fabrikam-models/_current" ] || fail "case 18: the foreign-identity bake became visible"
 [ ! -e "$BR/c003e999" ] || fail "case 18: the bake was published under its foreign identity"
 
 # ════════════════════════════ the chart's gate ════════════════════════════
@@ -290,9 +334,22 @@ if command -v helm >/dev/null 2>&1; then
   refuse "the portal image is pinned by digest" --set portal.image=cr.example.com/memex-portal-ai@sha256:abc --set artifactStore.claimName=c "${lb[@]}" --set 'artifactStore.localBuild.sources[0].source=x'
   refuse "the tester repository is missing" "${base[@]}" --set 'artifactStore.localBuild.sources[0].source=x' --set 'artifactStore.localBuild.sources[0].repository=https://git.example.com/x.git'
   refuse "the tester repository carries a tag" "${base[@]}" --set artifactStore.localBuild.testerImageRepository=cr.example.com/mw-plugin-test:3.1 --set 'artifactStore.localBuild.sources[0].source=x' --set 'artifactStore.localBuild.sources[0].repository=https://git.example.com/x.git'
+  refuse "upstream sources and a secret are stated with no registry" "${base[@]}" --set 'artifactStore.upstream.sources={plugins}' --set artifactStore.upstream.pullSecret=p
+  refuse "a module source is not a registry name" "${base[@]}" "${lb[@]}" --set 'artifactStore.localBuild.sources[0].source=x' --set 'artifactStore.localBuild.moduleSources={Bad/Name}'
   refuse "the repository is not https" "${base[@]}" --set artifactStore.localBuild.testerImageRepository=t --set 'artifactStore.localBuild.sources[0].source=x' --set 'artifactStore.localBuild.sources[0].repository=git@git.example.com:x.git'
 else
   fail "case 19: helm is not on PATH — the chart half cannot be checked"
+fi
+
+cases=$((cases + 1))   # 23. a control with NO upstream composes its build's modules from the DECLARED module sources
+if command -v helm >/dev/null 2>&1; then
+  out=$(helm template t "$CHART" --set portal.image=cr.example.com/memex-portal-ai:3.1.0-ci.100 --set artifactStore.claimName=c \
+    --set artifactStore.localBuild.testerImageRepository=cr.example.com/mw-plugin-test \
+    --set 'artifactStore.localBuild.sources[0].source=x' --set 'artifactStore.localBuild.sources[0].repository=https://git.example.com/x.git' \
+    --set 'artifactStore.localBuild.moduleSources={plugins,education}' 2>&1) || fail "case 23: render failed: $out"
+  printf '%s' "$out" | grep -A1 'name: "MODULES_SOURCES"' | grep -q 'value: "plugins education"' \
+    || fail "case 23: the declared module sources did not reach the modules init container"
+  printf '%s' "$out" | grep -q 'memex-artifact-store-sync' && fail "case 23: a control with no upstream rendered a sync job"
 fi
 
 # The copy of compose-gate-host.sh the build runs must BE the platform's — one implementation.

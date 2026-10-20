@@ -150,30 +150,41 @@ is rewritten in place.
 listing every file it seals. A record that takes part in the store renders
 `Modules__SharedRoot=<mount>/{rid}/modules` (`DeploymentPortalConfig.ArtifactStoreModuleRoot`, every
 role), and the OWNER also renders `Modules__PublishToShared=true`. The portal expands `{rid}` at boot
-(`BundleRootRuntimeIdentifier.ExpandConfiguredKey`) and sets the process-wide tier
-(`SharedModuleTier.Configure`) before the activation sidecar resolves a single directory.
+(`BundleRootRuntimeIdentifier.ExpandConfiguredKey`) and configures the tier OF ITS MODULE ROOT
+(`SharedModuleTier.Configure(moduleRoot, …)`) before the activation sidecar resolves a single
+directory. The setting is keyed by module root, never process-wide, so a second mesh in the same
+process (a test host, a dev portal beside a run) keeps its own and cannot clear or redirect the first.
 
 **The read.** `ModuleLandingService.ModuleDirectoryFor` — the ONE resolution rule boot, the pin, the
 serving side and the install-completeness check already share — resolves the instance's own
-`modules/<leaf>` first, then the SEALED shared copy, then the ordinary local miss
-(`SharedModuleTier.Resolve`). An unsealed shared directory is never resolved. A root still carrying an
+`modules/<leaf>` first, then the SEALED and WHOLE shared copy, then the ordinary local miss
+(`SharedModuleTier.Resolve`). A seal is a claim: it is honoured only while every file it lists is
+there, so an unsealed directory and a sealed one that lost a file (an incomplete restore) are both
+never resolved. A root still carrying an
 unexpanded `{rid}` is ignored. So a store that is unmounted, empty or mid-publication is exactly the
 pre-tier behaviour: nothing here can dead-page a portal (policy `platform-delivery-must-be-tolerant`).
 The boot pin (`ModuleGenerationPin`) copies a resolved generation to process-local storage as before,
 so a sweep of the store never pulls bytes out from under a running process.
 
-**The write.** A landing first computes its generation. If the store holds it sealed, a CONSUMER
-records the landing against it and writes nothing to its own volume. The OWNER publishes the generation
-into the store (`SharedModuleTier.Publish`: staged beside it, one rename, seal last; an existing sealed
-copy is the answer) instead of onto its own volume, and falls back to its own volume, logged, when the
-store write fails. A consumer that finds no sealed copy lands locally, exactly as before. The
+**The write.** A landing first computes its generation, then runs the shared half FIRST — whether or
+not the instance already holds the generation, so an owner whose generation predates the tier, or fell
+back to its own volume while the store was down, publishes it once the store is back. If the store holds
+it sealed and whole, a CONSUMER records the landing against it and writes nothing to its own volume. The
+OWNER publishes it (`SharedModuleTier.Publish`): staged beside the target with flushed, length-checked
+writes (`AtomicFileWrite`, so a full share that drops bytes on writeback is refused before anything is
+sealed), one rename, the seal last and listing the files it carries; a sealed-but-incomplete target has
+its missing files restored from the bytes in hand. A failed publication falls back to the owner's own
+volume, logged. A local copy that exists keeps its local repair path, because resolution takes it first.
+A consumer that finds no sealed copy lands locally, exactly as before. The
 per-instance modules GC walks only `<root>/modules`, so no portal ever deletes from the store.
 
-**Measured by:** core `test/MeshWeaver.Compiler.Pipeline.Test/SharedModuleTierTest` (7 cases: owner
+**Measured by:** core `test/MeshWeaver.Compiler.Pipeline.Test/SharedModuleTierTest` (11 cases: owner
 publishes sealed and keeps no local copy; consumer records against the sealed copy and writes nothing;
 consumer with no sealed copy lands locally and never writes the store; an owner that cannot write the
-store still lands; local-first then sealed-only resolution; only a generation is shared; the GC never
-deletes from the store) and `ArtifactStoreReplicationRecordTest` (the rendered keys per role). Each
+store still lands; local-first then sealed-and-whole-only resolution; only a generation is shared; the
+GC never deletes from the store; a sealed-but-incomplete copy is not used and the owner repairs it; an
+owner holding the generation locally still publishes it; the tier is per module root; a share that drops
+bytes seals nothing) and `ArtifactStoreReplicationRecordTest` (the rendered keys per role). Each
 was checked red against a reverted guard.
 
 #### The assembly cache is NOT shared — a finding, not a deferral
@@ -222,7 +233,7 @@ image, and `artifact-store-sync.sh` replicates that identity plus any declared `
 - **Pulled into `<root>/.artifact-store-staging/`** on the store's volume, never into a source
   directory.
 - **Handed to `artifact-store-publish.sh`.** It checks the staged publication whole (`_complete`
-  present, every listed file present), renames it into place as its own generation, and moves
+  present, every listed file present, every module bundle `modules/_index` lists present), renames it into place as its own generation, and moves
   `_current` LAST. This is the reader contract of [Sealed Publication Generations](../SealedPublicationGenerations),
   so a client portal never reads a half-copied publication.
 - **Outcomes.** An absent tag is "unsealed upstream": nothing is written and the run stays green. A
@@ -233,14 +244,16 @@ image, and `artifact-store-sync.sh` replicates that identity plus any declared `
 
 The record refuses an upstream on a CONSUMER, a registry that is not a host, an upstream with no
 sources, a source outside `[a-z0-9._-]`, a missing pull Secret and an identity outside `[A-Za-z0-9]`
-(`DeploymentPortalConfig.ArtifactStoreProblems`). The chart helper `memex.artifactStore` refuses the
-same shapes at `helm template`. Aspire refuses an upstream by name: it has no scheduler for the job.
+(`DeploymentPortalConfig.ArtifactStoreProblems`); ANY stated upstream field — identities or a schedule
+alone included — makes it an upstream that must be whole. The chart helper `memex.artifactStore` refuses
+the same shapes at `helm template`, and refuses sources, a pull Secret or identities stated without a
+registry. Aspire refuses an upstream by name: it has no scheduler for the job.
 
 **Retention on the client side** is the client control's own prune job over its own store. A
 replicated generation is protected while it is current or a local portal still uses it; whether
 upstream still advertises it is not yet an input to that job (see "What is not built").
 
-**Measured by:** core `deploy/aks/scripts/test-artifact-store-jobs.sh` (chart gate), cases 1–13
+**Measured by:** core `deploy/aks/scripts/test-artifact-store-jobs.sh` (chart gate), cases 1–13 and 20
 (publisher and sync, stub `oras`) and 19 (chart refusals), each checked red against a reverted guard.
 
 ### Increment 5 — local sources (built 2026-10-20)
@@ -254,6 +267,7 @@ declared on its control's record:
   "localSources": [ { "source": "fabrikam-models", "repository": "https://git.example.com/fabrikam/models.git",
                       "ref": "main", "credentialSecret": "fabrikam-git" } ],
   "testerImageRepository": "cr.example.com/mw-plugin-test",
+  "localBuildModuleSources": ["plugins"],
   "localBuildSchedule": "*/30 * * * *"
 }
 ```
@@ -264,17 +278,27 @@ tester's `/app` out of `<testerImageRepository>:<the portal image's tag>`, and `
 then:
 
 1. **clones** the repository at its ref. The read token (key `token` of `credentialSecret`) travels as
-   an HTTP header, never in a URL or a log line. The generation is named by the commit, `local-<12 hex>`,
-   and a commit already sealed and current builds nothing.
-2. **composes the gate host** with `compose-gate-host.sh`: the portal's `/app` with the tester CLI
+   an HTTP header, never in a URL or a log line.
+2. **names the generation by every compiler input**, not the commit alone:
+   `local-<12 hex of the commit>-<8 hex of a fingerprint>` over the portal's `meshweaver-surface.manifest`
+   (the platform build within the identity) and the composed module surface (each bundle's source,
+   generation and digest). A new platform build or a new upstream module set therefore names a NEW
+   generation and rebuilds; the same inputs already sealed and current build nothing.
+3. **composes the gate host** with `compose-gate-host.sh`: the portal's `/app` with the tester CLI
    beside it. The chart carries a byte-for-byte copy of the platform's script, and the chart gate pins
    the equality.
-3. **composes the module surface from the store itself**: every `modules/*.module.nupkg` that the
-   CURRENT generation of each upstream source lists for this identity. These are the modules the
-   environment's portals run. When two sources list a name, the first wins.
-4. **runs the tester's `compile` verb** against the portal's `/app` and its implementation
+4. **compiles against the module surface from the store itself.** An init container in the ORAS image
+   (`artifact-store-modules.sh`, busybox `unzip`) unpacks every `modules/*.module.nupkg` that the CURRENT
+   generation of each module source lists for this identity into `<Name>/` — the entry assembly, its
+   closure, its static assets and native payloads, the layout node-repo-publish-bake composes — and the
+   compile gets each ENTRY ASSEMBLY as `--module` (it loads an assembly, never the archive). When two
+   sources list a name, the first wins; a listed bundle the store lacks stops the build. The module
+   sources are `artifactStore.localBuildModuleSources`, else the upstream's sources. 🚨 On a control with
+   no upstream — ours, whose store the build server fills — name the build server's sources there
+   (e.g. `plugins`), or a local source that needs a module cannot compile.
+5. **runs the tester's `compile` verb** against the portal's `/app` and its implementation
    frameworks.
-5. **publishes or refuses.** A bake keyed to another identity is refused, because it would be inert.
+6. **publishes or refuses.** A bake keyed to another identity is refused, because it would be inert.
    Otherwise it seals a publication — the bundles, `source-commit.txt`, `repository.txt`,
    `architecture.txt`, an empty `modules/_index` (a local source owns no module), the platform surface
    when the bake wrote one, and `_complete` — and hands it to `artifact-store-publish.sh`.
@@ -284,10 +308,12 @@ CronJob. It may not be a name `upstream` replicates: one prefix, one producer. �
 (no upstream), it must not be a name the build server publishes either. The record cannot see that
 list, so it is the declaring maintainer's check.
 
-**Measured by:** `test-artifact-store-jobs.sh` cases 14–18 (stub `git` and `dotnet`, the real
-`compose-gate-host.sh`): the publication and its markers, the compile on the composed host against the
-portal's `/app` with the store's module set, the token never in a URL or a log, the no-op on an
-unchanged commit, and the refusal of a foreign-identity bake. 🚨 **Not measured:** a real compile in a
+**Measured by:** `test-artifact-store-jobs.sh` cases 14–18 and 21–23 (stub `git` and `dotnet` — which
+refuses an archive as `--module` — real module bundles, the real `compose-gate-host.sh`): the publication
+and its markers, the compile on the composed host against the portal's `/app` with each module's entry
+assembly and closure, the token never in a URL or a log, the no-op on unchanged inputs, a new generation
+when the module surface changes, a short module surface failing closed, the refusal of a foreign-identity
+bake, and the declared module sources reaching the job on a control with no upstream. 🚨 **Not measured:** a real compile in a
 real cluster. The tester image name on a client estate, the portal image's user and the store's file
 permissions are first exercised by the first scheduled run (maintainer step 9).
 
@@ -363,15 +389,20 @@ maintainer's act. In order:
    2. make its control the Owner of its own store (step 1, in that environment);
    3. add `artifactStore.upstream` (registry, sources, `pullSecret`) to the control's record.
 
-   The next roll renders `memex-artifact-store-sync`. Trigger one run with
-   `kubectl create job --from=cronjob/memex-artifact-store-sync sync-now -n <ns>`. Confirm
-   `<mount>/linux-x64/prebuilt-bundles/<identity>/<source>/_current` names an `upstream-…` generation.
-   Then point that environment's portals at the store as Consumers (step 4, in that environment).
+   The next roll renders `memex-artifact-store-sync`. Let its declared schedule run it (every 30
+   minutes unless the record says otherwise) — there is no routine manual trigger. Confirm the result
+   through that control's Hosting: a `StoragePrune` report of the store claim
+   (`hosting-storage-prune --namespace <ns> --claim <claim>`) lists the replicated identity and source
+   with a current `upstream-…` generation, and the CronJob's run log is in that estate's Loki. Then point
+   that environment's portals at the store as Consumers (step 4, in that environment). *Break-glass
+   only:* starting a run by hand (`kubectl create job --from=cronjob/…`) is a direct cluster write
+   outside the control plane; there is no governed trigger yet.
 9. **Build local sources** (increment 5). On the control that owns them: create the read-token Secret
-   (key `token`), then add `localSources` and `testerImageRepository` to the record. The tester image
-   must be pullable with the portal's pull secret at the portal's tag. Trigger one run with
-   `kubectl create job --from=cronjob/artifact-build-<source> build-now -n <ns>` and read its log end to
-   end: this is the first real compile on that cluster.
+   (key `token`), then add `localSources`, `testerImageRepository` and — on a control with no upstream —
+   `localBuildModuleSources` to the record. The tester image must be pullable with the portal's pull
+   secret at the portal's tag. Let the schedule run it, then read the first run's log end to end in that
+   estate's Loki: it is the first real compile on that cluster. The same `StoragePrune` report shows the
+   `local-…` generation. The break-glass note of step 8 applies to a manual run.
 
 ## Related
 

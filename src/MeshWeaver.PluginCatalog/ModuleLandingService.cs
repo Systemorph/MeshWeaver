@@ -112,13 +112,13 @@ public sealed class ModuleLandingService : IDisposable
     /// </summary>
     /// <remarks>
     /// 🚨 Shared-tier aware (Doc/Architecture/SharedArtifactStore, increment 3): a GENERATION this
-    /// instance does not hold itself resolves to the environment store's SEALED copy when the process
-    /// has a shared tier (<see cref="SharedModuleTier.Root"/>); the instance's own copy always wins,
-    /// and without a tier this is exactly the local path it always was.
+    /// instance does not hold itself resolves to the environment store's SEALED, whole copy when its
+    /// module root has a shared tier (<see cref="SharedModuleTier.For"/>); the instance's own copy always
+    /// wins, and without a tier this is exactly the local path it always was.
     /// </remarks>
     public static string ModuleDirectoryFor(
         string baseDirectory, string moduleName, ModuleActivationEntry? entry) =>
-        ModuleDirectoryInTier(baseDirectory, SharedModuleTier.Root, moduleName, entry);
+        ModuleDirectoryInTier(baseDirectory, SharedModuleTier.For(baseDirectory).Root, moduleName, entry);
 
     /// <summary>
     /// <see cref="ModuleDirectoryFor"/> with the shared tier's root stated — the pure form tests use,
@@ -1303,9 +1303,14 @@ public sealed class ModuleLandingService : IDisposable
         // store's owner publishes the generation there instead of here. Either is only ever a
         // saving — a store that is absent, read-only to the owner, full or mid-publication falls
         // through to the local landing below, exactly as before the tier existed.
-        var servedFromShared = !Directory.Exists(target)
-            && LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets);
-        if (!servedFromShared)
+        //
+        // 🚨 The shared half runs FIRST, whether or not this volume already holds the generation
+        // (review of MeshWeaver#7009): an owner whose generation predates the tier, or fell back to its
+        // own volume while the store was down, must still publish it once the store is back. The local
+        // half then runs whenever the local copy exists — resolution takes it first, so it keeps its
+        // repair path — or when the shared half did not serve the landing.
+        var servedFromShared = LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets);
+        if (!servedFromShared || Directory.Exists(target))
         {
             var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
             Directory.CreateDirectory(staging);
@@ -1684,12 +1689,12 @@ public sealed class ModuleLandingService : IDisposable
     }
 
     /// <summary>
-    /// The shared tier this service reads (and, on the owner, writes) — the process-wide
-    /// <see cref="SharedModuleTier.Root"/> unless a test states one.
+    /// The shared tier this service reads (and, on the owner, writes) — its module root's
+    /// <see cref="SharedModuleTier.For"/> setting unless a test states one.
     /// </summary>
     public string? SharedRoot
     {
-        get => sharedRootOverride ?? SharedModuleTier.Root;
+        get => sharedRootOverride ?? SharedModuleTier.For(baseDirectory).Root;
         init => sharedRootOverride = SharedModuleTier.Normalize(value);
     }
 
@@ -1698,7 +1703,7 @@ public sealed class ModuleLandingService : IDisposable
     /// <summary>Whether landings publish into <see cref="SharedRoot"/> — the store's owner only.</summary>
     public bool PublishesToShared
     {
-        get => publishesOverride ?? SharedModuleTier.Publishes;
+        get => publishesOverride ?? SharedModuleTier.For(baseDirectory).Publishes;
         init => publishesOverride = value;
     }
 

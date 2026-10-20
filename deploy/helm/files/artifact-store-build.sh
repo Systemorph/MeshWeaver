@@ -9,13 +9,17 @@
 #
 #   1. reads the portal image's framework identity (the file the build wrote beside /app);
 #   2. clones the repository at its ref (the read token, when declared, travels as an HTTP header,
-#      never in a URL or a log line) and names the generation by the commit: `local-<12 hex>`;
-#   3. a generation already sealed and current for that commit is the answer — nothing is built;
+#      never in a URL or a log line);
+#   3. names the generation by EVERY compiler input, not the commit alone: `local-<12 hex of the
+#      commit>-<8 hex of a fingerprint>` over the portal's surface manifest (the platform build within
+#      the identity) and the module surface the init container composed (artifact-store-modules.sh:
+#      each composed bundle's source, generation and digest). A new platform build or a new upstream
+#      module set therefore names a NEW generation; a generation already sealed and current for the
+#      same inputs is the answer — nothing is built;
 #   4. composes the GATE HOST — the portal's /app with the tester CLI beside it — with
 #      compose-gate-host.sh (a byte-for-byte copy of the platform's own, pinned by the chart gate);
-#   5. composes the module surface from the store itself: every `modules/*.module.nupkg` the CURRENT
-#      generation of each upstream source lists for this identity (the modules the environment's
-#      portals run), the first source listing a name winning;
+#   5. passes each composed module's ENTRY ASSEMBLY as `--module` (the compile loads an assembly,
+#      never the archive);
 #   6. runs the tester's `compile` verb against the portal's /app and its implementation frameworks;
 #   7. checks the bake is keyed to the portal's identity (a bake under another identity is inert),
 #      assembles a sealed publication — the bundles, source-commit.txt, repository.txt,
@@ -32,7 +36,7 @@
 #   BUILD_TOKEN_FILE        a file holding a read token                                   optional
 #   BUILD_ROOT              the store's per-architecture bundle root                      required
 #   BUILD_ARCHITECTURE      the runtime identifier the store subtree names     default: linux-x64
-#   BUILD_UPSTREAM_SOURCES  space-separated sources whose module sets are composed        optional
+#   BUILD_MODULES_DIR       what artifact-store-modules.sh wrote (modules.list, inputs)   required
 #   BUILD_TESTER_APP        the tester image's /app, copied out by an init container      required
 #   BUILD_PORTAL_APP        the portal's /app                                     default: /app
 #   BUILD_WORK              a writable scratch directory                         default: /work
@@ -49,7 +53,7 @@ ref="${BUILD_REF:-main}"
 token_file="${BUILD_TOKEN_FILE:-}"
 root="${BUILD_ROOT:-}"
 architecture="${BUILD_ARCHITECTURE:-linux-x64}"
-upstreams="${BUILD_UPSTREAM_SOURCES:-}"
+modules_dir="${BUILD_MODULES_DIR:-}"
 tester_app="${BUILD_TESTER_APP:-}"
 portal_app="${BUILD_PORTAL_APP:-/app}"
 work="${BUILD_WORK:-/work}"
@@ -70,6 +74,8 @@ case "$architecture" in *[!a-z0-9-]*|'') die "BUILD_ARCHITECTURE '$architecture'
 [ -r "$identity_file" ] || die "the portal image carries no identity file at '$identity_file' — a bake must be keyed to the identity the portals adopt"
 [ -r "$compose" ] || die "compose-gate-host.sh is not readable at '$compose'"
 [ -r "$publish" ] || die "artifact-store-publish.sh is not readable at '$publish'"
+[ -n "$modules_dir" ] && [ -f "$modules_dir/modules.list" ] && [ -f "$modules_dir/inputs" ] \
+  || die "BUILD_MODULES_DIR '$modules_dir' holds no modules.list/inputs — the artifact-store-modules init container composes them"
 
 identity=$(sed -n 's/^[[:space:]]*\([^[:space:]]\{1,\}\).*/\1/p' "$identity_file" | head -n 1)
 case "$identity" in *[!A-Za-z0-9]*|'') die "the identity file '$identity_file' holds no identity" ;; esac
@@ -88,8 +94,14 @@ fi
 git "${git_args[@]}" clone --quiet --depth 1 --branch "$ref" "$repository" "$repo" \
   || die "could not clone $repository at $ref"
 sha=$(git -C "$repo" rev-parse HEAD)
-generation="local-${sha:0:12}"
-log "'$source_name': $repository@$ref is $sha → generation $generation for identity $identity"
+# ── 3. the generation, named by every compiler input ────────────────────────────────────────────
+surface="$portal_app/meshweaver-surface.manifest"
+[ -r "$surface" ] || die "the portal image carries no $surface — the platform build the bundles bind to cannot be named"
+if command -v sha256sum >/dev/null 2>&1; then hash_of() { sha256sum | cut -d' ' -f1; }
+else hash_of() { shasum -a 256 | cut -d' ' -f1; }; fi
+fingerprint=$( { cat "$surface"; printf -- '--modules--\n'; cat "$modules_dir/inputs"; } | hash_of )
+generation="local-${sha:0:12}-${fingerprint:0:8}"
+log "'$source_name': $repository@$ref is $sha; compiler inputs ${fingerprint:0:8} → generation $generation for identity $identity"
 
 source_dir="$root/$identity/$source_name"
 if [ -f "$source_dir/$generation/_complete" ] \
@@ -103,27 +115,14 @@ host="$work/host"
 rm -rf "$host"
 bash "$compose" "$portal_app" "$tester_app" "$host"
 
-# ── 5. the module surface, from the store ───────────────────────────────────────────────────────
+# ── 5. the module surface, as the init container composed it from the store ──────────────────
 module_args=()
-seen=" "
-for upstream in $upstreams; do
-  dir="$root/$identity/$upstream"
-  [ -d "$dir" ] || { log "upstream '$upstream' holds no publication for $identity — no modules from it"; continue; }
-  pointer=$(sed -n 's/^[[:space:]]*\([^[:space:]]\{1,\}\).*/\1/p' "$dir/_current" 2>/dev/null | head -n 1 || true)
-  [ -n "$pointer" ] && dir="$dir/$pointer"
-  [ -f "$dir/_complete" ] || { log "upstream '$upstream' is not sealed for $identity — no modules from it"; continue; }
-  [ -f "$dir/modules/_index" ] || continue
-  while IFS= read -r name || [ -n "$name" ]; do
-    name=$(printf '%s' "$name" | tr -d '[:space:]')
-    [ -n "$name" ] || continue
-    key=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]')
-    case "$seen" in *" $key "*) continue ;; esac
-    [ -f "$dir/modules/$name" ] || die "'$upstream' lists module $name for $identity but the store does not hold it — the seal and the store disagree"
-    seen="$seen$key "
-    module_args+=(--module "$dir/modules/$name")
-  done < "$dir/modules/_index"
-done
-log "module surface: $(( ${#module_args[@]} / 2 )) module bundle(s) from [${upstreams:-none}]"
+while IFS= read -r dll || [ -n "$dll" ]; do
+  [ -n "$dll" ] || continue
+  [ -f "$dll" ] || die "the composed module $dll is not on disk"
+  module_args+=(--module "$dll")
+done < "$modules_dir/modules.list"
+log "module surface: $(( ${#module_args[@]} / 2 )) module(s)"
 
 # ── 6. the compile ──────────────────────────────────────────────────────────────────────────────
 bake="$work/bake"

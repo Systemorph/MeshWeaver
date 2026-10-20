@@ -706,6 +706,8 @@ artifactStore:
   localBuild:
     sources: []                   # [{source, repository, ref, credentialSecret}] — one CronJob each
     testerImageRepository: ""     # e.g. cr.example.com/mw-plugin-test — the tag follows portal.image
+    moduleSources: []             # sources whose sealed module sets the build compiles against;
+                                  # empty ⇒ the upstream sources (on our control: name the CI sources)
     schedule: "*/30 * * * *"
   # ORAS for the sync — the same pinned image the bundle fetch uses.
   image: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"

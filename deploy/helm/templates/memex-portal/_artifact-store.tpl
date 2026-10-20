@@ -16,6 +16,9 @@ Rendered ONLY when `artifactStore.upstream.registry` or `artifactStore.localBuil
 {{- $lb := ($a.localBuild | default dict) -}}
 {{- $registry := ($up.registry | default "") -}}
 {{- $locals := ($lb.sources | default list) -}}
+{{- if and (not $registry) (or $up.sources $up.pullSecret $up.identities) -}}
+{{- fail "artifactStore.upstream states sources, a pullSecret or identities but no registry — nothing would be replicated; state artifactStore.upstream.registry or drop the block" -}}
+{{- end -}}
 {{- if and (not $registry) (not $locals) -}}
 {{- toYaml (dict "enabled" false) -}}
 {{- else -}}
@@ -86,7 +89,16 @@ Rendered ONLY when `artifactStore.upstream.registry` or `artifactStore.localBuil
 {{- end -}}
 {{- $entries = append $entries (dict "source" $src "repository" $repo "ref" $ref "credentialSecret" (.credentialSecret | default "")) -}}
 {{- end -}}
-{{- $build = dict "enabled" true "sources" $entries "portalImage" $portalImage "testerImage" (printf "%s:%s" $testerRepo $tag) "schedule" ($lb.schedule | default "*/30 * * * *") "upstreams" ($sync.sources | default list) -}}
+{{- /* The module surface a local build compiles against: the declared module sources — on a control
+       whose store the build server fills, with no upstream, these name the CI-published sources —
+       else the replicated upstream sources. */ -}}
+{{- $moduleSources := ($lb.moduleSources | default ($sync.sources | default list)) -}}
+{{- range $moduleSources -}}
+{{- if not (regexMatch "^[a-z0-9._-]+$" .) -}}
+{{- fail (printf "artifactStore.localBuild.moduleSources entry %q is not a registry name component" .) -}}
+{{- end -}}
+{{- end -}}
+{{- $build = dict "enabled" true "sources" $entries "portalImage" $portalImage "testerImage" (printf "%s:%s" $testerRepo $tag) "schedule" ($lb.schedule | default "*/30 * * * *") "moduleSources" $moduleSources -}}
 {{- end -}}
 {{- $out := dict
       "enabled" true

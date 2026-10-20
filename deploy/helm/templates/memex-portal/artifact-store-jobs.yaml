@@ -20,6 +20,8 @@ data:
 {{ .Files.Get "files/artifact-store-sync.sh" | indent 4 }}
   artifact-store-build.sh: |
 {{ .Files.Get "files/artifact-store-build.sh" | indent 4 }}
+  artifact-store-modules.sh: |
+{{ .Files.Get "files/artifact-store-modules.sh" | indent 4 }}
   compose-gate-host.sh: |
 {{ .Files.Get "files/compose-gate-host.sh" | indent 4 }}
 {{- if $a.sync.enabled }}
@@ -144,7 +146,7 @@ metadata:
     app.kubernetes.io/instance: "{{ $.Release.Name }}"
     meshweaver.io/artifact-source: {{ $src.source | quote }}
   annotations:
-    checksum/scripts: {{ printf "%s%s%s" ($.Files.Get "files/artifact-store-build.sh") ($.Files.Get "files/artifact-store-publish.sh") ($.Files.Get "files/compose-gate-host.sh") | sha256sum | quote }}
+    checksum/scripts: {{ printf "%s%s%s%s" ($.Files.Get "files/artifact-store-build.sh") ($.Files.Get "files/artifact-store-modules.sh") ($.Files.Get "files/artifact-store-publish.sh") ($.Files.Get "files/compose-gate-host.sh") | sha256sum | quote }}
 spec:
   schedule: {{ $a.build.schedule | quote }}
   concurrencyPolicy: "Forbid"
@@ -181,6 +183,48 @@ spec:
               securityContext:
                 allowPrivilegeEscalation: false
                 capabilities: { drop: ["ALL"] }
+            # The portal image's framework identity, for the module composition below.
+            - name: "store-identity"
+              image: {{ $a.build.portalImage | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/sh", "-c", "cp /app/meshweaver-framework.identity /work/identity"]
+              volumeMounts:
+                - name: "work"
+                  mountPath: "/work"
+              resources:
+                {{- toYaml $a.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+            # The module surface, unpacked from the store's sealed module sets (busybox unzip), as the
+            # entry assemblies the compile loads. Read-only on the store.
+            - name: "modules"
+              image: {{ $a.image | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/sh", "/etc/artifact-store/artifact-store-modules.sh"]
+              env:
+                - name: "MODULES_ROOT"
+                  value: {{ $a.root | quote }}
+                - name: "MODULES_SOURCES"
+                  value: {{ join " " $a.build.moduleSources | quote }}
+                - name: "MODULES_IDENTITY_FILE"
+                  value: "/work/identity"
+                - name: "MODULES_OUT"
+                  value: "/work/ext"
+              volumeMounts:
+                - name: "store"
+                  mountPath: {{ $a.mountPath | quote }}
+                  readOnly: true
+                - name: "scripts"
+                  mountPath: "/etc/artifact-store"
+                  readOnly: true
+                - name: "work"
+                  mountPath: "/work"
+              resources:
+                {{- toYaml $a.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
           containers:
             - name: "build"
               image: {{ $a.build.portalImage | quote }}
@@ -201,8 +245,8 @@ spec:
                   value: {{ $a.root | quote }}
                 - name: "BUILD_ARCHITECTURE"
                   value: {{ $a.runtimeIdentifier | quote }}
-                - name: "BUILD_UPSTREAM_SOURCES"
-                  value: {{ join " " $a.build.upstreams | quote }}
+                - name: "BUILD_MODULES_DIR"
+                  value: "/work/ext"
                 - name: "BUILD_TESTER_APP"
                   value: "/work/tester"
                 - name: "BUILD_WORK"
