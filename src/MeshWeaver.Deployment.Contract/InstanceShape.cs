@@ -357,6 +357,43 @@ public sealed record ArtifactStoreSpec
     [Description("Consumer: the owner's claim")]
     public string? SourceClaim { get; init; }
 
+    /// <summary>
+    /// OWNER only — the upstream this environment's store REPLICATES FROM, one way, by pulling
+    /// (Doc/Architecture/SharedArtifactStore, increment 4). Set on a client environment's control,
+    /// whose store is then a consumer of the upstream control's publications and the owner for its
+    /// own fleet. Null → the store is filled only by its own producers. Never needs write access to
+    /// the upstream store: the sync pulls sealed publications from the upstream's registry with a
+    /// pull credential this environment holds.
+    /// </summary>
+    [Description("Owner: replicate sealed publications one way from an upstream registry")]
+    public ArtifactStoreUpstream? Upstream { get; init; }
+
+    /// <summary>
+    /// OWNER only — the sources this environment tracks ITSELF (repositories the upstream build
+    /// server does not build), built by this control at the platform its portals run and published
+    /// into its own store under their own source names (increment 5). Empty → none.
+    /// </summary>
+    [Description("Owner: local sources this control builds into its own store")]
+    public ImmutableList<ArtifactStoreLocalSource> LocalSources { get; init; } = ImmutableList<ArtifactStoreLocalSource>.Empty;
+
+    /// <summary>OWNER only — when the local-source build runs (a cron expression). Blank → <see cref="DefaultLocalBuildSchedule"/>.</summary>
+    [Description("Owner: cron schedule of the local-source build (blank: every 30 minutes)")]
+    public string? LocalBuildSchedule { get; init; }
+
+    /// <summary>
+    /// OWNER only — the image repository of the platform's TESTER (<c>mw-plugin-test</c>), whose
+    /// <c>compile</c> verb is the one bundle producer; its tag follows the portal image's tag, so the
+    /// compiler is always the platform the portals run. Required when <see cref="LocalSources"/> is set.
+    /// </summary>
+    [Description("Owner: tester image repository for the local-source build (tag follows the portal)")]
+    public string? TesterImageRepository { get; init; }
+
+    /// <summary>The default schedule of the upstream sync and the local-source build: every 30 minutes.</summary>
+    public const string DefaultLocalBuildSchedule = "*/30 * * * *";
+
+    /// <summary>The directory under a per-architecture store that holds the shared module tier (increment 3).</summary>
+    public const string ModuleDirectory = "modules";
+
     /// <summary>The owner role.</summary>
     public const string OwnerRole = "Owner";
 
@@ -372,6 +409,67 @@ public sealed record ArtifactStoreSpec
     /// keeps one bundle store per architecture and each portal expands this to its own at boot.
     /// </summary>
     public const string RuntimeIdentifierPlaceholder = "{rid}";
+}
+
+/// <summary>
+/// Where a client environment's control replicates its store FROM (Doc/Architecture/SharedArtifactStore,
+/// increment 4): an upstream registry, the sources to replicate, and the pull credential — by Secret
+/// NAME, never a value. The sync is pull-based and one-way: it reads sealed publications
+/// (<c>&lt;registry&gt;/plugins/&lt;source&gt;:&lt;identity&gt;</c>, the layout every bundle fetch already reads)
+/// and writes each into the local store as its own generation, moving <c>_current</c> last, so a
+/// local portal never reads a half-copied publication. It deletes nothing; retention is the owner's
+/// prune job.
+/// </summary>
+public sealed record ArtifactStoreUpstream
+{
+    /// <summary>The upstream registry host (e.g. <c>cr.example.com</c>). Blank → no sync.</summary>
+    [Description("Upstream registry host the sealed publications are pulled from")]
+    public string? Registry { get; init; }
+
+    /// <summary>The source names to replicate, as the publisher named them (e.g. <c>plugins</c>). Required with <see cref="Registry"/>.</summary>
+    [Description("Source names to replicate (e.g. plugins)")]
+    public ImmutableList<string> Sources { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// The <c>kubernetes.io/dockerconfigjson</c> Secret, in the owner's namespace, holding this
+    /// environment's pull credential for <see cref="Registry"/> — a reference, never the credential.
+    /// Required with <see cref="Registry"/>.
+    /// </summary>
+    [Description("Secret (dockerconfigjson) holding the upstream pull credential — a name, never a value")]
+    public string? PullSecret { get; init; }
+
+    /// <summary>Framework identities to replicate BESIDE the control image's own (which is always replicated) — e.g. a portal one build behind.</summary>
+    [Description("Extra framework identities to replicate besides the control image's own")]
+    public ImmutableList<string> Identities { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>When the sync runs (cron). Blank → every 30 minutes.</summary>
+    [Description("Cron schedule of the sync (blank: every 30 minutes)")]
+    public string? Schedule { get; init; }
+}
+
+/// <summary>
+/// One source a control builds ITSELF into its store (Doc/Architecture/SharedArtifactStore, increment
+/// 5): a git repository the upstream build server does not build. The build checks it out, compiles it
+/// with the platform's own tester at the portal image's tag, and publishes the bundles as a sealed
+/// generation of <see cref="Source"/>.
+/// </summary>
+public sealed record ArtifactStoreLocalSource
+{
+    /// <summary>The publication source name (a registry name component: lowercase letters, digits, <c>.</c>, <c>_</c>, <c>-</c>).</summary>
+    [Description("Publication source name")]
+    public string? Source { get; init; }
+
+    /// <summary>The repository's HTTPS clone URL.</summary>
+    [Description("HTTPS clone URL of the repository")]
+    public string? Repository { get; init; }
+
+    /// <summary>The branch or tag to build. Blank → <c>main</c>.</summary>
+    [Description("Branch or tag to build (blank: main)")]
+    public string? Ref { get; init; }
+
+    /// <summary>A Secret in the owner's namespace whose <c>token</c> key holds a read token for the repository — a name, never a value. Blank → anonymous clone.</summary>
+    [Description("Secret holding a read token (key: token) — a name, never a value")]
+    public string? CredentialSecret { get; init; }
 }
 
 /// <summary>

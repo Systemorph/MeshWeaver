@@ -1,0 +1,252 @@
+{{- $a := include "memex.artifactStore" . | fromYaml }}
+{{- if $a.enabled }}
+# The shared artifact store's OWNER jobs (Doc/Architecture/SharedArtifactStore): the scripts they run,
+# verbatim from deploy/helm/files (shellchecked and executed by deploy/aks/scripts/
+# test-artifact-store-jobs.sh), and one CronJob per job. Rendered only on a record that declares
+# artifactStore.upstream or artifactStore.localSources — the environment's control instance.
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-artifact-store-scripts"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "artifact-store"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  artifact-store-publish.sh: |
+{{ .Files.Get "files/artifact-store-publish.sh" | indent 4 }}
+  artifact-store-sync.sh: |
+{{ .Files.Get "files/artifact-store-sync.sh" | indent 4 }}
+  artifact-store-build.sh: |
+{{ .Files.Get "files/artifact-store-build.sh" | indent 4 }}
+  compose-gate-host.sh: |
+{{ .Files.Get "files/compose-gate-host.sh" | indent 4 }}
+{{- if $a.sync.enabled }}
+---
+# Increment 4 — ONE-WAY replication from the upstream registry. Pull-based: the credential is THIS
+# environment's own (artifactStore.upstream.pullSecret), and nothing here can write the upstream.
+# concurrencyPolicy Forbid: one writer per prefix, so a slow run is never overtaken by the next.
+apiVersion: "batch/v1"
+kind: "CronJob"
+metadata:
+  name: "memex-artifact-store-sync"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "artifact-store-sync"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+  annotations:
+    checksum/scripts: {{ printf "%s%s" (.Files.Get "files/artifact-store-sync.sh") (.Files.Get "files/artifact-store-publish.sh") | sha256sum | quote }}
+spec:
+  schedule: {{ $a.sync.schedule | quote }}
+  concurrencyPolicy: "Forbid"
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: "{{ .Chart.Name }}"
+            app.kubernetes.io/component: "artifact-store-sync"
+        spec:
+          restartPolicy: "Never"
+{{- if $a.imagePullSecret }}
+          imagePullSecrets:
+            - name: {{ $a.imagePullSecret | quote }}
+{{- end }}
+          initContainers:
+            # The control image's own framework identity, copied out of the portal image — the
+            # identity this environment's portals run is the one replicated first.
+            - name: "store-identity"
+              image: {{ $a.portalImage | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/sh", "-c", "cp /app/meshweaver-framework.identity /run/identity/identity"]
+              volumeMounts:
+                - name: "identity"
+                  mountPath: "/run/identity"
+              resources:
+                {{- toYaml $a.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+          containers:
+            - name: "sync"
+              image: {{ $a.image | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/sh", "/etc/artifact-store/artifact-store-sync.sh"]
+              env:
+                - name: "SYNC_REGISTRY"
+                  value: {{ $a.sync.registry | quote }}
+                - name: "SYNC_SOURCES"
+                  value: {{ join " " $a.sync.sources | quote }}
+                - name: "SYNC_IDENTITIES"
+                  value: {{ join " " $a.sync.identities | quote }}
+                - name: "SYNC_IDENTITY_FILE"
+                  value: "/run/identity/identity"
+                - name: "SYNC_ROOT"
+                  value: {{ $a.root | quote }}
+                - name: "SYNC_REGISTRY_CONFIG"
+                  value: "/run/secrets/upstream/config.json"
+                - name: "PUBLISH"
+                  value: "/etc/artifact-store/artifact-store-publish.sh"
+              volumeMounts:
+                - name: "store"
+                  mountPath: {{ $a.mountPath | quote }}
+                - name: "scripts"
+                  mountPath: "/etc/artifact-store"
+                  readOnly: true
+                - name: "identity"
+                  mountPath: "/run/identity"
+                  readOnly: true
+                - name: "upstream-pull-config"
+                  mountPath: "/run/secrets/upstream"
+                  readOnly: true
+              resources:
+                {{- toYaml $a.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+          volumes:
+            - name: "store"
+              persistentVolumeClaim:
+                claimName: {{ $a.claimName | quote }}
+            - name: "scripts"
+              configMap:
+                name: "memex-artifact-store-scripts"
+                defaultMode: 0444
+            - name: "identity"
+              emptyDir: {}
+            - name: "upstream-pull-config"
+              secret:
+                secretName: {{ $a.sync.pullSecret | quote }}
+                items:
+                  - key: ".dockerconfigjson"
+                    path: "config.json"
+{{- end }}
+{{- if $a.build.enabled }}
+{{- range $src := $a.build.sources }}
+---
+# Increment 5 — build the local source '{{ $src.source }}' in the PORTAL image (the compiler is the
+# platform the portals run) with the platform's tester at the portal's tag, and publish it into the
+# store as a `local-<commit>` generation. The init container copies the tester's /app out; the build
+# composes the gate host, the module surface from the store, compiles, and publishes.
+apiVersion: "batch/v1"
+kind: "CronJob"
+metadata:
+  name: "artifact-build-{{ $src.source }}"
+  labels:
+    app.kubernetes.io/name: "{{ $.Chart.Name }}"
+    app.kubernetes.io/component: "artifact-store-build"
+    app.kubernetes.io/instance: "{{ $.Release.Name }}"
+    meshweaver.io/artifact-source: {{ $src.source | quote }}
+  annotations:
+    checksum/scripts: {{ printf "%s%s%s" ($.Files.Get "files/artifact-store-build.sh") ($.Files.Get "files/artifact-store-publish.sh") ($.Files.Get "files/compose-gate-host.sh") | sha256sum | quote }}
+spec:
+  schedule: {{ $a.build.schedule | quote }}
+  concurrencyPolicy: "Forbid"
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 5400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: "{{ $.Chart.Name }}"
+            app.kubernetes.io/component: "artifact-store-build"
+            meshweaver.io/artifact-source: {{ $src.source | quote }}
+        spec:
+          restartPolicy: "Never"
+{{- if $a.imagePullSecret }}
+          imagePullSecrets:
+            - name: {{ $a.imagePullSecret | quote }}
+{{- end }}
+          initContainers:
+            - name: "tester-app"
+              image: {{ $a.build.testerImage | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/sh", "-c", "cp -a /app/. /work/tester/"]
+              volumeMounts:
+                - name: "work"
+                  mountPath: "/work/tester"
+                  subPath: "tester"
+              resources:
+                {{- toYaml $a.resources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+          containers:
+            - name: "build"
+              image: {{ $a.build.portalImage | quote }}
+              imagePullPolicy: "IfNotPresent"
+              command: ["/bin/bash", "/etc/artifact-store/artifact-store-build.sh"]
+              env:
+                - name: "BUILD_SOURCE"
+                  value: {{ $src.source | quote }}
+                - name: "BUILD_REPOSITORY"
+                  value: {{ $src.repository | quote }}
+                - name: "BUILD_REF"
+                  value: {{ $src.ref | quote }}
+{{- if $src.credentialSecret }}
+                - name: "BUILD_TOKEN_FILE"
+                  value: "/run/secrets/repository/token"
+{{- end }}
+                - name: "BUILD_ROOT"
+                  value: {{ $a.root | quote }}
+                - name: "BUILD_ARCHITECTURE"
+                  value: {{ $a.runtimeIdentifier | quote }}
+                - name: "BUILD_UPSTREAM_SOURCES"
+                  value: {{ join " " $a.build.upstreams | quote }}
+                - name: "BUILD_TESTER_APP"
+                  value: "/work/tester"
+                - name: "BUILD_WORK"
+                  value: "/work"
+                - name: "HOME"
+                  value: "/work"
+                - name: "DOTNET_CLI_HOME"
+                  value: "/work"
+              volumeMounts:
+                - name: "store"
+                  mountPath: {{ $a.mountPath | quote }}
+                - name: "scripts"
+                  mountPath: "/etc/artifact-store"
+                  readOnly: true
+                - name: "work"
+                  mountPath: "/work"
+{{- if $src.credentialSecret }}
+                - name: "repository-token"
+                  mountPath: "/run/secrets/repository"
+                  readOnly: true
+{{- end }}
+              resources:
+                {{- toYaml $a.buildResources | nindent 16 }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+          volumes:
+            - name: "store"
+              persistentVolumeClaim:
+                claimName: {{ $a.claimName | quote }}
+            - name: "scripts"
+              configMap:
+                name: "memex-artifact-store-scripts"
+                defaultMode: 0444
+            - name: "work"
+              emptyDir: {}
+{{- if $src.credentialSecret }}
+            - name: "repository-token"
+              secret:
+                secretName: {{ $src.credentialSecret | quote }}
+                items:
+                  - key: "token"
+                    path: "token"
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
