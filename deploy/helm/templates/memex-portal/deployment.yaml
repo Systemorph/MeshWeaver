@@ -460,6 +460,11 @@ spec:
 {{- if and $spec $spec.claimName $spec.mountPath (ne $name "data") (ne $name "users") (ne $name "dumps") }}
             - name: "memex-{{ $name }}"
               mountPath: "{{ $spec.mountPath }}"
+{{- /* persistence.<name>.readOnly: a CONSUMER of the shared artifact store mounts the owner's share
+       read-only (Doc/Architecture/SharedArtifactStore) — on the mount AND on the claim below. */}}
+{{- if $spec.readOnly }}
+              readOnly: true
+{{- end }}
 {{- end }}
 {{- end }}
 {{- /* The mount of the DECLARED Key Vault CSI volume (.Values.keyVaultSecrets). The mount is what
@@ -733,6 +738,9 @@ spec:
         - name: "memex-{{ $name }}"
           persistentVolumeClaim:
             claimName: "{{ $spec.claimName }}"
+{{- if $spec.readOnly }}
+            readOnly: true
+{{- end }}
 {{- end }}
 {{- end }}
 {{- /* The DECLARED Key Vault CSI volume (.Values.keyVaultSecrets) — the volume half of the

@@ -144,9 +144,14 @@ rules:
   # purge step fails by name ("could not list PersistentVolumes") — which is the designed
   # fail-loud shape, but it means a Teardown could never complete. Added 2026-09-09 when the
   # coverage check below was written; the script had been on main without its grant.
+  # `create` is for hosting-artifact-store-bind (Doc/Architecture/SharedArtifactStore): the STATIC,
+  # read-only PersistentVolume that binds the control-owned artifact share into a consumer namespace.
+  # It creates only a PV that does not exist yet, verifies an existing one and never rewrites it, and
+  # every PV it makes is Retain — removing a consumer's binding can never delete the share. No
+  # update/patch: a binding pointing elsewhere is a human's question, not this command's.
   - apiGroups: [""]
     resources: ["persistentvolumes"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "list", "create", "delete"]
   # For hosting-tls, the step that gives a new instance its certificate. cert-manager's own
   # controller does the issuing; the operator only declares the Certificate and reads it back to
   # learn whether it went Ready. Measured 2026-09-15 on fabrikam, step 15/18 of its Provision:

@@ -592,6 +592,15 @@ public record DeploymentContent
     [Description("Sealed NodeType bundles fetched from a registry before the portal starts")]
     public BundlesSpec? Bundles { get; init; }
 
+    /// <summary>
+    /// This record's part in the environment's shared artifact store — Owner (the control instance)
+    /// or Consumer (every other instance); see <see cref="ArtifactStoreSpec"/> and
+    /// Doc/Architecture/SharedArtifactStore. Null → the record keeps its bundles on its own volume, as
+    /// before.
+    /// </summary>
+    [Description("Shared artifact store (Owner on control, Consumer elsewhere)")]
+    public ArtifactStoreSpec? ArtifactStore { get; init; }
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }

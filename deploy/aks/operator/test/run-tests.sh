@@ -4382,6 +4382,68 @@ fi
 unset _da_out _da_rc _da_calls _da_manifest _da_json _da_fact _da_pod
 
 echo
+echo "── hosting-artifact-store-bind: the control-owned artifact store, bound READ-ONLY into a consumer namespace ──"
+# Doc/Architecture/SharedArtifactStore. Asserted here: the share is read off the OWNER's bound PV (never
+# a value from a record); the PV it creates is ReadOnlyMany, csi.readOnly, Retain, with a handle distinct
+# per binding; the claim binds to exactly that PV and is read back Bound; an existing binding is
+# VERIFIED and never overwritten — one pointing at another share, or writable, or bound to another claim,
+# is a refusal; and an owner claim that is not Bound, or not Azure Files, binds nothing.
+AB_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/artifact-store-bind" && pwd)"
+AB_FIX="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/artifact-store-bind" && pwd)"
+ab() {  # ab [env…] -- <args…>; sets $_ab_out $_ab_rc $_ab_calls $_ab_applied
+  local envs=() st
+  while [ "$1" != "--" ]; do envs+=("$1"); shift; done; shift
+  st="$(mktemp -d)"
+  _ab_out="$(env HOSTING_AB_SRC_PVC="$AB_FIX/owner-pvc.json" HOSTING_AB_SRC_PV="$AB_FIX/owner-pv.json" HOSTING_BIND_INTERVAL=0 \
+    "${envs[@]}" PATH="$AB_STUBS:$PATH" HOSTING_AB_STATE="$st" hosting-artifact-store-bind "$@" 2>&1)"; _ab_rc=$?
+  _ab_calls="$(cat "$st/kubectl.log" 2>/dev/null || true)"
+  _ab_applied="$(cat "$st/applied.json" 2>/dev/null || true)"
+  rm -rf "$st"
+}
+_ab_args=(--namespace acme --claim artifact-store --source-namespace control --source-claim control-artifacts)
+
+ab -- "${_ab_args[@]}"
+[ "$_ab_rc" -eq 0 ] && ok "binding the store into a consumer namespace succeeds" || bad "bind happy path" "exited ${_ab_rc}: ${_ab_out}"
+case "$_ab_out" in *"::hosting:: artifact_store_share=acmestore01/pvc-owner"*"::hosting:: artifact_store_created=1"*"::hosting:: artifact_store_bound=acme/artifact-store"*) ok "…reporting the share it read off the owner's PV, that it created the binding, and the claim read back Bound" ;; *) bad "bind facts" "out: ${_ab_out}" ;; esac
+_ab_pv="$(printf '%s\n' "$_ab_applied" | grep '"kind":"PersistentVolume"' | head -1)"
+[ "$(printf '%s' "$_ab_pv" | jq -r '.metadata.name, (.spec.accessModes | join(",")), .spec.csi.readOnly, .spec.persistentVolumeReclaimPolicy, .spec.storageClassName, .spec.capacity.storage' | tr '\n' ' ')" = "artifact-store-acme ReadOnlyMany true Retain  512Gi " ] \
+  && ok "the PV is READ-ONLY (ReadOnlyMany + csi.readOnly), Retain (unbinding never deletes the share), no class, the owner's capacity" || bad "pv shape" "pv: ${_ab_pv}"
+[ "$(printf '%s' "$_ab_pv" | jq -r '.spec.csi.volumeHandle, .spec.csi.volumeAttributes.storageAccount, .spec.csi.volumeAttributes.shareName, .spec.csi.nodeStageSecretRef.name, .spec.csi.nodeStageSecretRef.namespace, .spec.claimRef.namespace + "/" + .spec.claimRef.name' | tr '\n' ' ')" = "MC_example-rg_cluster_region#acmestore01#pvc-owner##artifact-store-acme#control acmestore01 pvc-owner azure-storage-account-acmestore01-secret control acme/artifact-store " ] \
+  && ok "…on the owner's account and share, with a handle distinct per binding and the provisioner's key Secret in the owner's namespace" || bad "pv target" "pv: ${_ab_pv}"
+[ "$(printf '%s\n' "$_ab_applied" | grep '"kind":"PersistentVolumeClaim"' | jq -r '.metadata.namespace, .metadata.name, (.spec.accessModes | join(",")), .spec.volumeName, .spec.storageClassName' | tr '\n' ' ')" = "acme artifact-store ReadOnlyMany artifact-store-acme  " ] \
+  && ok "…and the consumer's claim is ReadOnlyMany, bound by name to exactly that PV" || bad "pvc shape" "applied: ${_ab_applied}"
+
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-same.json" HOSTING_AB_PVC="$AB_FIX/existing-pvc-bound.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -eq 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"artifact_store_created=0"*) true ;; *) false ;; esac \
+  && ok "an existing binding to the same share, read-only, is verified and left alone (idempotent, nothing applied)" || bad "idempotent" "rc ${_ab_rc}; applied: ${_ab_applied}; out: ${_ab_out}"
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-other.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"points at acmestore01/pvc-elsewhere"*"refusing to rebind"*) true ;; *) false ;; esac \
+  && ok "an existing PV pointing at ANOTHER share is a refusal naming both — never rebound" || bad "other share refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-writable.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"NOT read-only"*) true ;; *) false ;; esac \
+  && ok "an existing WRITABLE binding is a refusal (a second writer)" || bad "writable refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_PVC="$AB_FIX/existing-pvc-other.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && case "$_ab_out" in *"bound to 'pvc-someone-else'"*) true ;; *) false ;; esac \
+  && ok "a consumer claim of that name bound to another volume is a refusal — never replaced under a portal" || bad "other claim refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_SRC_PVC="$AB_FIX/owner-pvc-pending.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"not Bound"*) true ;; *) false ;; esac \
+  && ok "an owner store that is not Bound binds nothing" || bad "pending owner" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_SRC_PVC=absent -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"created by the OWNER's record"*) true ;; *) false ;; esac \
+  && ok "an owner store that does not exist binds nothing and says who creates it" || bad "absent owner" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_SRC_PV="$AB_FIX/owner-pv-disk.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"not the Azure Files CSI driver"*) true ;; *) false ;; esac \
+  && ok "an owner store that is not on Azure Files binds nothing" || bad "non-azurefile owner" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_FORBID=1 -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && case "$_ab_out" in *"REFUSED, not absent"*) true ;; *) false ;; esac \
+  && ok "a Forbidden read is REFUSED, never 'absent'" || bad "forbidden" "rc ${_ab_rc}; out: ${_ab_out}"
+refuses_hard "bind refuses the owner's own namespace" "needs no read-only binding" hosting-artifact-store-bind --namespace control --claim c --source-namespace control --source-claim control-artifacts
+refuses_hard "bind refuses a claim that is not a plain name" "not a plain name" hosting-artifact-store-bind --namespace acme --claim 'c;id' --source-namespace control --source-claim s
+refuses_hard "bind refuses a missing --source-claim" "source-claim" hosting-artifact-store-bind --namespace acme --claim c --source-namespace control
+refuses_hard "bind refuses an unknown argument" "unknown argument" hosting-artifact-store-bind --namespace acme --claim c --source-namespace control --source-claim s --writable
+unset _ab_out _ab_rc _ab_calls _ab_applied _ab_pv _ab_args
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

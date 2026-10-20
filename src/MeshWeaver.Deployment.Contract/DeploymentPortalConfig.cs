@@ -339,8 +339,96 @@ public static class DeploymentPortalConfig
     /// reads come from one value (MeshWeaver#6825). Pure.
     /// </summary>
     public static string? BundleRoot(DeploymentContent d) =>
-        BundleRegistry(d) is null ? null
-        : string.IsNullOrWhiteSpace(d.Bundles!.Root) ? BundlesSpec.DefaultRoot : d.Bundles.Root!.Trim();
+        ArtifactStoreBundleRoot(d)
+        ?? (BundleRegistry(d) is null ? null
+            : string.IsNullOrWhiteSpace(d.Bundles!.Root) ? BundlesSpec.DefaultRoot : d.Bundles.Root!.Trim());
+
+    /// <summary>
+    /// The record's artifact-store role, canonical (<see cref="ArtifactStoreSpec.OwnerRole"/> /
+    /// <see cref="ArtifactStoreSpec.ConsumerRole"/>), or null when it states none — or one this
+    /// contract does not know, which <see cref="ArtifactStoreProblems"/> names. Pure.
+    /// </summary>
+    public static string? ArtifactStoreRole(DeploymentContent d)
+    {
+        var role = d.ArtifactStore?.Role?.Trim();
+        if (string.IsNullOrEmpty(role)) return null;
+        if (string.Equals(role, ArtifactStoreSpec.OwnerRole, StringComparison.OrdinalIgnoreCase)) return ArtifactStoreSpec.OwnerRole;
+        if (string.Equals(role, ArtifactStoreSpec.ConsumerRole, StringComparison.OrdinalIgnoreCase)) return ArtifactStoreSpec.ConsumerRole;
+        return null;
+    }
+
+    /// <summary>
+    /// The volume that carries the record's artifact store — the <see cref="DeploymentContent.Volumes"/>
+    /// entry <see cref="ArtifactStoreSpec.Volume"/> names — or null when the record takes no part or the
+    /// entry is missing. Pure.
+    /// </summary>
+    public static VolumeClaim? ArtifactStoreVolume(DeploymentContent d)
+    {
+        if (ArtifactStoreRole(d) is null) return null;
+        var name = d.ArtifactStore!.Volume?.Trim();
+        if (string.IsNullOrEmpty(name)) return null;
+        return d.Volumes.FirstOrDefault(v => string.Equals(v.Name?.Trim(), name, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// <c>&lt;store mount&gt;/prebuilt-bundles</c> for a record that takes part in the shared artifact
+    /// store, else null. Pure.
+    /// </summary>
+    public static string? ArtifactStoreBundleRoot(DeploymentContent d)
+    {
+        var mount = ArtifactStoreVolume(d)?.MountPath?.Trim().TrimEnd('/');
+        return string.IsNullOrEmpty(mount) ? null : $"{mount}/{ArtifactStoreSpec.BundleDirectory}";
+    }
+
+    /// <summary>
+    /// Why the record's <c>artifactStore</c> block cannot render a working store — named at plan time,
+    /// in the record's own words, rather than as a pod that reads nothing or a portal that can write a
+    /// store it does not own. Empty when the block is absent or sound. Pure.
+    /// </summary>
+    public static ImmutableList<string> ArtifactStoreProblems(DeploymentContent d)
+    {
+        var spec = d.ArtifactStore;
+        if (spec is null || (string.IsNullOrWhiteSpace(spec.Role) && string.IsNullOrWhiteSpace(spec.Volume)))
+            return ImmutableList<string>.Empty;
+        var problems = ImmutableList.CreateBuilder<string>();
+        var role = ArtifactStoreRole(d);
+        if (role is null)
+        {
+            problems.Add($"artifactStore.role '{spec.Role}' is neither {ArtifactStoreSpec.OwnerRole} (the control instance) nor {ArtifactStoreSpec.ConsumerRole} (every other instance)");
+            return problems.ToImmutable();
+        }
+        var volume = ArtifactStoreVolume(d);
+        if (volume is null)
+        {
+            problems.Add($"artifactStore.volume '{spec.Volume}' names no entry of volumes — the store must be one of the record's declared volumes");
+            return problems.ToImmutable();
+        }
+        if (string.IsNullOrWhiteSpace(volume.ClaimName))
+            problems.Add($"the artifact-store volume '{volume.Name}' names no claimName — it would render no volume at all");
+        if (string.IsNullOrWhiteSpace(volume.MountPath) || !volume.MountPath!.Trim().StartsWith('/'))
+            problems.Add($"the artifact-store volume '{volume.Name}' states no absolute mountPath — the bundle root renders under it");
+        else if (volume.MountPath.Trim().TrimEnd('/') is "/data" or "")
+            problems.Add($"the artifact-store volume '{volume.Name}' is mounted at /data — the store is its own share beside the instance's data volume, never the data volume itself");
+        if (BundleRegistry(d) is not null)
+            problems.Add("the record declares both bundles.registry and artifactStore — one bundle root, one source: a consumer of the shared store reads it, it does not also fetch from a registry");
+        if (role == ArtifactStoreSpec.OwnerRole)
+        {
+            if (volume.ReadOnly)
+                problems.Add($"the artifact-store OWNER mounts '{volume.Name}' read-only — the owner creates, resizes and prunes the store, so it mounts it writable");
+            if (!string.IsNullOrWhiteSpace(spec.SourceNamespace) || !string.IsNullOrWhiteSpace(spec.SourceClaim))
+                problems.Add("the artifact-store OWNER states sourceNamespace/sourceClaim — those name the owner's claim for a CONSUMER; drop them");
+        }
+        else
+        {
+            if (!volume.ReadOnly)
+                problems.Add($"the artifact-store CONSUMER mounts '{volume.Name}' writable — set readOnly: true; the store has one owner and one producer, and a portal that can write it is a second writer nobody sweeps");
+            if (volume.Create)
+                problems.Add($"the artifact-store CONSUMER sets create: true on '{volume.Name}' — a consumer's claim is the static read-only binding of the owner's share (hosting-artifact-store-bind), never a new empty volume");
+            if (string.IsNullOrWhiteSpace(spec.SourceNamespace) || string.IsNullOrWhiteSpace(spec.SourceClaim))
+                problems.Add("the artifact-store CONSUMER states no sourceNamespace and sourceClaim — the binding reads the OWNER's share from that claim");
+        }
+        return problems.ToImmutable();
+    }
 
     /// <summary>
     /// <c>SelfUpdate__PortalRepository</c> for a record: the repository its pods pull
@@ -909,6 +997,10 @@ public static class DeploymentPortalConfig
         // The bundle shelf (MeshWeaver#6825): rendered only for a record that fetches bundles, and
         // from the same value the chart's bundle-fetch init container fills — one source for both.
         Set("PreWarm__PrebuiltBundleRoot", BundleRoot(d));
+        // A CONSUMER of the shared artifact store reads a store it does not own, on a read-only mount:
+        // its per-portal bundle sweep must never be armed there (Doc/Architecture/SharedArtifactStore).
+        if (ArtifactStoreRole(d) == ArtifactStoreSpec.ConsumerRole)
+            Set("PreWarm__PrebuiltBundleRetention__Delete", "false");
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());
