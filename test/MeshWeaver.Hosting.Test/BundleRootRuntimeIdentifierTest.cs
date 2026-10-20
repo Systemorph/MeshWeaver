@@ -40,9 +40,13 @@ public class BundleRootRuntimeIdentifierTest
 
         Assert.Equal("/artifacts/linux-x64/prebuilt-bundles", BundleRootRuntimeIdentifier.ExpandConfigured(configuration, "linux-x64"));
         Assert.Equal("/artifacts/linux-x64/prebuilt-bundles", configuration[ShippedPrebuiltBundles.PublishedRootConfigKey]);
+        Assert.Equal("/artifacts/{rid}/prebuilt-bundles", configuration[BundleRootRuntimeIdentifier.TemplateConfigKey]);
+        Assert.Equal("/artifacts/osx-arm64/prebuilt-bundles",
+            BundleRootRuntimeIdentifier.Expand(configuration[BundleRootRuntimeIdentifier.TemplateConfigKey], "osx-arm64"));
 
         var untouched = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
         Assert.Null(BundleRootRuntimeIdentifier.ExpandConfigured(untouched, "linux-x64"));
         Assert.Null(untouched[ShippedPrebuiltBundles.PublishedRootConfigKey]);
+        Assert.Null(untouched[BundleRootRuntimeIdentifier.TemplateConfigKey]);
     }
 }

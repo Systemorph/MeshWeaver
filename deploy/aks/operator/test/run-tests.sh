@@ -4444,6 +4444,27 @@ refuses_hard "bind refuses an unknown argument" "unknown argument" hosting-artif
 unset _ab_out _ab_rc _ab_calls _ab_applied _ab_pv _ab_args
 
 echo
+echo "── hosting-pv-purge: a share another namespace still reads is NEVER deleted ──"
+# Doc/Architecture/SharedArtifactStore. A consumer's teardown leaves its read-only binding of the
+# control-owned artifact store Released and claimed by the consumer's namespace — exactly what
+# pv-purge purges. Asserted: the instance's OWN share is deleted (share first, then the PV), the
+# binding PV (label meshweaver.io/purpose=artifact-store) loses only its PV object, an unlabelled PV
+# whose share another namespace's PV references keeps its share too, and the facts count both.
+PP_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/pv-purge" && pwd)"
+PP_FIX="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/fixtures/pv-purge" && pwd)"
+_pp_st="$(mktemp -d)"
+_pp_out="$(env PATH="$PP_STUBS:$PATH" HOSTING_PP_STATE="$_pp_st" HOSTING_PP_PVS="$PP_FIX/pvs.json" hosting-pv-purge --namespace acme 2>&1)"; _pp_rc=$?
+_pp_calls="$(cat "$_pp_st/calls" 2>/dev/null)"
+[ "$_pp_rc" -eq 0 ] && ok "pv-purge of a consumer namespace runs to the end" || bad "pv-purge happy path" "rc ${_pp_rc}: ${_pp_out}"
+case "$_pp_calls" in *"az storage share-rm delete --storage-account acct01 --name pvc-own-data"*) ok "…the instance's OWN share is deleted" ;; *) bad "own share deleted" "calls: ${_pp_calls}" ;; esac
+case "$_pp_calls" in *"--name pvc-store"*) bad "the shared artifact store's share is NEVER deleted by a consumer's teardown" "calls: ${_pp_calls}" ;; *) ok "the shared artifact store's share is NEVER deleted by a consumer's teardown" ;; esac
+case "$_pp_calls" in *"--name pvc-common"*) bad "a share another namespace's PV references is kept, label or not" "calls: ${_pp_calls}" ;; *) ok "a share another namespace's PV references is kept, label or not" ;; esac
+case "$_pp_calls" in *"kubectl delete pv artifact-store-acme"*"kubectl delete pv pvc-shared-unlabelled"*) ok "…while both stale PV objects are still removed" ;; *) bad "pv objects removed" "calls: ${_pp_calls}" ;; esac
+case "$_pp_out" in *"::hosting:: pv_deleted=3"*"::hosting:: shares_deleted=1"*"::hosting:: shares_kept=2"*) ok "…and the facts count deleted and kept shares" ;; *) bad "pv-purge facts" "out: ${_pp_out}" ;; esac
+rm -rf "$_pp_st"
+unset _pp_st _pp_out _pp_rc _pp_calls
+
+echo
 echo "─────────────────────────────────────────────────────────────────"
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ] || exit 1

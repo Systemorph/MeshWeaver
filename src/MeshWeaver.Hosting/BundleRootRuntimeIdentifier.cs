@@ -57,7 +57,18 @@ public static class BundleRootRuntimeIdentifier
         var configured = configuration[ShippedPrebuiltBundles.PublishedRootConfigKey];
         var expanded = Expand(configured, rid ?? Current());
         if (expanded is not null && !string.Equals(expanded, configured, StringComparison.Ordinal))
+        {
+            // The template stays readable: a reader that serves OTHER runtimes (a registry answering a
+            // client of another architecture) must resolve the CLIENT's store, not this process's.
+            configuration[TemplateConfigKey] = configured;
             configuration[ShippedPrebuiltBundles.PublishedRootConfigKey] = expanded;
+        }
         return expanded;
     }
+
+    /// <summary>
+    /// Where <see cref="ExpandConfigured"/> keeps the unexpanded root, so a reader serving another runtime
+    /// can resolve that runtime's store with <see cref="Expand"/>. Absent on a root without the placeholder.
+    /// </summary>
+    public const string TemplateConfigKey = "PreWarm:PrebuiltBundleRootTemplate";
 }

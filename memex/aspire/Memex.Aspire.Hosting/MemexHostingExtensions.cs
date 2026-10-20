@@ -317,6 +317,15 @@ public static class MemexHostingExtensions
     /// </summary>
     private static void SyncVolumes(IResourceBuilder<MemexPortalResource> portal, DeploymentContent record)
     {
+        // A CONSUMER of the shared artifact store binds the OWNER's share read-only through a static PV
+        // (hosting-artifact-store-bind) — a Kubernetes binding Aspire has no equivalent for: here it
+        // would get its own empty Docker volume and read none of the owner's publications. Refused by
+        // name until a shared binding exists under Aspire (Doc/Architecture/SharedArtifactStore).
+        if (DeploymentPortalConfig.ArtifactStoreRole(record) == ArtifactStoreSpec.ConsumerRole)
+            throw new InvalidOperationException(
+                $"'{portal.Resource.Name}' declares artifactStore.role Consumer, which Aspire cannot render: a consumer binds the "
+                + "owner's share read-only through a Kubernetes static PersistentVolume, and a Docker volume of its own would hold none "
+                + "of the owner's publications. Run it as the Owner (or without artifactStore) under Aspire.");
         var prefix = $"{portal.Resource.Name}-";
         // A read-only volume (a consumer of the shared artifact store, Doc/Architecture/SharedArtifactStore)
         // is a read-only Docker mount too — and a change of the flag replaces the mount, like a change of source.

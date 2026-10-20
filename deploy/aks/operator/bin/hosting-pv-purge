@@ -66,7 +66,18 @@ if [ -n "$expect" ]; then
     || hosting::die "expected ${expect} volume(s) for namespace ${namespace} but found ${count} — refusing to purge a set that does not match the deployment record. Reconcile the record or the cluster before retrying."
 fi
 
-pv_deleted=0 shares_deleted=0
+# 🚨 A SHARE OTHER NAMESPACES STILL READ IS NEVER DELETED. The control-owned shared artifact store
+# (Doc/Architecture/SharedArtifactStore) is ONE Azure Files share bound into every consumer namespace
+# through a static, read-only PV (hosting-artifact-store-bind, label meshweaver.io/purpose=artifact-store).
+# Tearing a consumer down leaves that PV Released and claimed by the consumer's namespace — exactly
+# what the loop below purges — and deleting "its" share would delete the store every other portal
+# reads. So: a binding PV loses its PV object only, and any share another namespace's PV still
+# references is kept, whatever the label says. Both are read from ONE listing of every PV.
+command -v jq >/dev/null 2>&1 || hosting::die "jq is not installed in this image — the cross-namespace share check reads the PV listing as JSON, and without it no share can be shown to be unshared"
+all_pvs="$(hosting::read kubectl get pv -o json 2>/dev/null)" \
+  || hosting::die "could not list PersistentVolumes as JSON — without the full listing no share can be shown to be unshared, so nothing is deleted"
+
+pv_deleted=0 shares_deleted=0 shares_kept=0
 for pv in $pvs; do
   phase="$(hosting::read kubectl get pv "$pv" -o jsonpath='{.status.phase}' 2>/dev/null)"
   case "$phase" in
@@ -93,6 +104,21 @@ for pv in $pvs; do
     hosting::die "cannot resolve the Azure Files share for ${pv} (volumeHandle='${handle}') — refusing to delete the PV object, which would strand its share with no remaining reference to find it by."
   fi
 
+  purpose="$(printf '%s' "$all_pvs" | jq -r --arg pv "$pv" '.items[] | select(.metadata.name == $pv) | .metadata.labels["meshweaver.io/purpose"] // ""')"
+  readers="$(printf '%s' "$all_pvs" | jq -r --arg ns "$namespace" --arg a "$account" --arg s "$share" '
+    [ .items[] | select((.spec.claimRef.namespace // "") != $ns)
+      | ((.spec.csi.volumeHandle // "") | split("#")) as $h
+      | select(((.spec.csi.volumeAttributes.storageAccount // $h[1] // "") == $a) and ((.spec.csi.volumeAttributes.shareName // $h[2] // "") == $s))
+      | "\(.spec.claimRef.namespace // "?")/\(.metadata.name)" ] | join(", ")')" \
+    || hosting::die "could not read the PV listing for ${pv} (jq failed) — refusing to delete a share whose other readers are unknown"
+  if [ "$purpose" = "artifact-store" ] || [ -n "$readers" ]; then
+    hosting::log "keep    share ${share} on ${account} — $([ "$purpose" = "artifact-store" ] && echo "${pv} is a read-only binding of the shared artifact store" || echo "still referenced by ${readers}"); deleting the PV object ${pv} only"
+    hosting::do kubectl delete pv "$pv" --wait=true \
+      || hosting::die "could not delete PersistentVolume ${pv}"
+    pv_deleted=$((pv_deleted + 1)); shares_kept=$((shares_kept + 1))
+    continue
+  fi
+
   hosting::log "purge   ${pv}  ${size}  share=${share}  account=${account}  (reclaim=${policy}, phase=${phase})"
 
   # The share first, then the PV object. This order is deliberate: the PV is the only record that
@@ -109,6 +135,7 @@ for pv in $pvs; do
   pv_deleted=$((pv_deleted + 1))
 done
 
-hosting::log "namespace ${namespace}: ${pv_deleted} volume(s) and ${shares_deleted} share(s) deleted"
+hosting::log "namespace ${namespace}: ${pv_deleted} volume(s) and ${shares_deleted} share(s) deleted, ${shares_kept} share(s) kept (read by another namespace)"
 hosting::say pv_deleted "$pv_deleted"
 hosting::say shares_deleted "$shares_deleted"
+hosting::say shares_kept "$shares_kept"
