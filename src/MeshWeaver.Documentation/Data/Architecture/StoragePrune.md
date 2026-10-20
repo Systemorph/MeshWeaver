@@ -11,12 +11,13 @@ portal's `/data` share today, the control-owned shared artifact store once it ex
 ([Shared Artifact Store](../SharedArtifactStore)) — and classifies every byte on it against
 [Released Artifact Retention](../ReleasedArtifactRetention).
 
-**Status: the command ships; the schedule is wired and arms once both halves are live.** The
+**Status: the command ships with MeshWeaver#7000; the schedule is wired and arms once both halves are live.** The
 control instance's `StoragePrune` instance action and the standing job that enqueues one REPORT-ONLY
 action per artifact volume in the `ops` queue, recording each run as an ActivityLog, are merged in
 MeshWeaver.Plugins (#3993, `Hosting/StoragePrune`). A scheduled run succeeds only once the operator
 image carrying this command is on `hosting-operator:main` and control runs a Hosting build containing
-#3993; until then nothing measures the fleet on a schedule.
+#3993; until then nothing measures the fleet on a schedule, and the action stops at "command not
+found". Do not direct operators to the action before then.
 
 ## Why it exists — measured 2026-10-19
 
