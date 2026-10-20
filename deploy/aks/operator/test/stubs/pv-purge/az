@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+printf 'az %s\n' "$*" >> "${HOSTING_PP_STATE:?}/calls"
+exit 0

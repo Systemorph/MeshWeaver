@@ -1,0 +1,1 @@
+{"metadata":{"name":"control-artifacts","namespace":"control"},"spec":{"accessModes":["ReadWriteMany"]},"status":{"phase":"Pending"}}

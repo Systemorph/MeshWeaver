@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-pv-purge: answers the PV reads from ONE fixture listing
+# (HOSTING_PP_PVS, a `kubectl get pv -o json` document) and records every call in $HOSTING_PP_STATE/calls.
+set -uo pipefail
+printf 'kubectl %s\n' "$*" >> "${HOSTING_PP_STATE:?}/calls"
+pvs="${HOSTING_PP_PVS:?}"
+case "$*" in
+  "get pv -o json") cat "$pvs" ;;
+  "get pv -o jsonpath="*"claimRef.namespace=='"*)
+    ns="$(printf '%s' "$*" | sed -n "s/.*claimRef.namespace=='\([^']*\)'.*/\1/p")"
+    jq -r --arg ns "$ns" '.items[] | select(.spec.claimRef.namespace == $ns) | .metadata.name' "$pvs" ;;
+  "get pv "*" -o jsonpath="*)
+    pv="$(printf '%s' "$*" | cut -d' ' -f3)"
+    path="$(printf '%s' "$*" | sed -n 's/.*-o jsonpath={\(.*\)}$/\1/p')"
+    jq -r --arg pv "$pv" --arg p "$path" '.items[] | select(.metadata.name == $pv) | getpath($p | ltrimstr(".") | split(".")) // ""' "$pvs" ;;
+  "delete pv "*) echo "persistentvolume deleted" ;;
+  *) echo "kubectl stub: unexpected call: $*" >&2; exit 9 ;;
+esac

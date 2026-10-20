@@ -317,20 +317,31 @@ public static class MemexHostingExtensions
     /// </summary>
     private static void SyncVolumes(IResourceBuilder<MemexPortalResource> portal, DeploymentContent record)
     {
+        // A CONSUMER of the shared artifact store binds the OWNER's share read-only through a static PV
+        // (hosting-artifact-store-bind) — a Kubernetes binding Aspire has no equivalent for: here it
+        // would get its own empty Docker volume and read none of the owner's publications. Refused by
+        // name until a shared binding exists under Aspire (Doc/Architecture/SharedArtifactStore).
+        if (DeploymentPortalConfig.ArtifactStoreRole(record) == ArtifactStoreSpec.ConsumerRole)
+            throw new InvalidOperationException(
+                $"'{portal.Resource.Name}' declares artifactStore.role Consumer, which Aspire cannot render: a consumer binds the "
+                + "owner's share read-only through a Kubernetes static PersistentVolume, and a Docker volume of its own would hold none "
+                + "of the owner's publications. Run it as the Owner (or without artifactStore) under Aspire.");
         var prefix = $"{portal.Resource.Name}-";
+        // A read-only volume (a consumer of the shared artifact store, Doc/Architecture/SharedArtifactStore)
+        // is a read-only Docker mount too — and a change of the flag replaces the mount, like a change of source.
         var desired = record.Volumes
             .Where(v => !string.IsNullOrWhiteSpace(v.MountPath))
-            .ToDictionary(v => v.MountPath!, v => prefix + v.Name, StringComparer.Ordinal);
+            .ToDictionary(v => v.MountPath!, v => (Source: prefix + v.Name, v.ReadOnly), StringComparer.Ordinal);
 
         foreach (var stale in portal.Resource.Annotations.OfType<ContainerMountAnnotation>()
                      .Where(m => m.Type == ContainerMountType.Volume && m.Source is { } s && s.StartsWith(prefix, StringComparison.Ordinal))
-                     .Where(m => !desired.TryGetValue(m.Target, out var source) || source != m.Source)
+                     .Where(m => !desired.TryGetValue(m.Target, out var want) || want.Source != m.Source || want.ReadOnly != m.IsReadOnly)
                      .ToList())
             portal.Resource.Annotations.Remove(stale);
 
         var mounted = portal.Resource.Annotations.OfType<ContainerMountAnnotation>().Select(m => m.Target).ToHashSet(StringComparer.Ordinal);
-        foreach (var (mountPath, source) in desired)
+        foreach (var (mountPath, want) in desired)
             if (!mounted.Contains(mountPath))
-                ContainerResourceBuilderExtensions.WithVolume(portal, source, mountPath);
+                ContainerResourceBuilderExtensions.WithVolume(portal, want.Source, mountPath, want.ReadOnly);
     }
 }
