@@ -156,7 +156,13 @@ public static class ContentLayoutArea
                 // format — SVG included — travels as a data URI and is drawn as an <img>, so markup in
                 // an uploaded file runs no script, and a content picture is never put on the icon
                 // backplate that an inline-svg ICON gets.
-                return Controls.Image(new Icon(Icon.UrlProvider, $"data:{GetMimeType(extension)};base64,{Convert.ToBase64String(bytes)}"),
+                // An SVG image is parsed as a standalone XML document, which renders NOTHING without
+                // the namespace declarations inline HTML tolerated — AsSvgDocument adds the ones the
+                // author left out (the SVG namespace, the xlink prefix when it is used).
+                var payload = extension == ".svg"
+                    ? System.Text.Encoding.UTF8.GetBytes(ImageSources.AsSvgDocument(System.Text.Encoding.UTF8.GetString(bytes)))
+                    : bytes;
+                return Controls.Image(new Icon(Icon.UrlProvider, $"data:{GetMimeType(extension)};base64,{Convert.ToBase64String(payload)}"),
                         Path.GetFileName(filePath))
                     .WithMaxWidth("100%");
             })

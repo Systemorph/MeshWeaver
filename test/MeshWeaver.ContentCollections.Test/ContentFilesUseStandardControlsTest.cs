@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Reactive.Linq;
@@ -34,6 +35,10 @@ public class ContentFilesUseStandardControlsTest : HubTestBase
         File.WriteAllText(Path.Combine(_basePath, "diagram.svg"),
             "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><script>alert(1)</script><rect width='10' height='10'/></svg>");
         File.WriteAllBytes(Path.Combine(_basePath, "annual report.pdf"), "%PDF-1.4"u8.ToArray());
+        // Two SVGs as design tools and hand authors write them: no xmlns, and an undeclared xlink prefix.
+        File.WriteAllText(Path.Combine(_basePath, "bare.svg"), "<svg viewBox='0 0 10 10'><rect width='10' height='10'/></svg>");
+        File.WriteAllText(Path.Combine(_basePath, "xlink.svg"),
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><defs><rect id='r' width='10' height='10'/></defs><use xlink:href='#r'/></svg>");
     }
 
     /// <inheritdoc />
@@ -49,26 +54,26 @@ public class ContentFilesUseStandardControlsTest : HubTestBase
                 Name = "content",
                 SourceType = "FileSystem",
                 BasePath = _basePath,
-                Settings = new Dictionary<string, string> { ["BasePath"] = _basePath }
+                Settings = ImmutableDictionary<string, string>.Empty.Add("BasePath", _basePath)
             });
 
-    private async Task<List<UiControl>> Render(string id)
+    private async Task<ImmutableList<UiControl>> Render(string id)
     {
         // A hub cannot GetRemoteStream its own address — subscribe from the HOST hub.
         var stream = GetHost().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
             GetClient().Address, new LayoutAreaReference(ContentCollectionsExtensions.ContentAreaName) { Id = id });
         var ct = TestContext.Current.CancellationToken;
-        var controls = new List<UiControl>();
-        var queue = new Queue<string>([ContentCollectionsExtensions.ContentAreaName]);
-        while (queue.Count > 0)
+        var controls = ImmutableList<UiControl>.Empty;
+        var queue = ImmutableQueue.Create(ContentCollectionsExtensions.ContentAreaName);
+        while (!queue.IsEmpty)
         {
-            var area = queue.Dequeue();
+            queue = queue.Dequeue(out var area);
             var control = await stream.GetControlStream(area).Where(c => c is not null).Take(1)
                 .Timeout(TimeSpan.FromSeconds(30)).Await(ct);
-            controls.Add(control!);
+            controls = controls.Add(control!);
             if (control is IContainerControl container)
                 foreach (var child in container.Areas.Select(a => a.Area?.ToString()).OfType<string>())
-                    queue.Enqueue(child);
+                    queue = queue.Enqueue(child);
         }
         Output.WriteLine(string.Join(", ", controls.Select(c => c.GetType().Name)));
         return controls;
@@ -97,6 +102,23 @@ public class ContentFilesUseStandardControlsTest : HubTestBase
         ImageSources.Resolve(source).Kind.Should().Be(ImageSourceKind.Url,
             "an SVG content file is a picture — the inline-svg ICON form (and its backplate) is for icons");
         controls.OfType<HtmlControl>().Should().BeEmpty("no uploaded markup reaches the page as markup");
+    }
+
+    /// <summary>
+    /// 🚨 Review 4321372069: an image-loaded SVG is a standalone XML document, which renders nothing
+    /// without its namespace declarations — inline HTML tolerated both omissions. The drawn document
+    /// declares the SVG namespace, and the xlink prefix when the markup uses it.
+    /// </summary>
+    [Theory]
+    [InlineData("content/bare.svg", "xmlns=\"http://www.w3.org/2000/svg\"")]
+    [InlineData("content/xlink.svg", "xmlns:xlink=\"http://www.w3.org/1999/xlink\"")]
+    public async Task AnSvgMissingItsNamespaces_IsDrawnAsACompleteDocument(string id, string declaration)
+    {
+        var controls = await Render(id);
+        var source = controls.OfType<ImageControl>().Should().ContainSingle().Subject.Source.Should().BeOfType<Icon>().Subject;
+        var markup = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(source.Id["data:image/svg+xml;base64,".Length..]));
+        Output.WriteLine(markup);
+        markup.Should().Contain(declaration);
     }
 
     [Fact]
