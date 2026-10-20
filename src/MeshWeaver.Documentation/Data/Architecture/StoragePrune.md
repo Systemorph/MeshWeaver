@@ -8,8 +8,8 @@ Description: The standing measurement and prune of the volumes that hold built a
 
 `hosting-storage-prune` is the operator command that MEASURES a volume holding built artifacts — a
 portal's `/data` share today, the control-owned shared artifact store once it exists
-([Shared Artifact Store](SharedArtifactStore)) — and classifies every byte on it against
-[Released Artifact Retention](ReleasedArtifactRetention). The control instance runs it on a schedule
+([Shared Artifact Store]](../SharedArtifactStore)) — and classifies every byte on it against
+[Released Artifact Retention]](../ReleasedArtifactRetention). The control instance runs it on a schedule
 (MeshWeaver.Plugins `Hosting/InstanceAction`, kind `StoragePrune`, filed by the standing sweep) and
 records every run as an ActivityLog.
 
@@ -102,6 +102,6 @@ the operations lane's log tail).
 
 ## Related
 
-- [Released Artifact Retention](ReleasedArtifactRetention) — the contract every class above answers to
-- [Prebuilt Bundle Retention](PrebuiltBundleRetention) — the portal-side sweep and its inventory gate
-- [Shared Artifact Store](SharedArtifactStore) — the one control-owned store this command will sweep
+- [Released Artifact Retention]](../ReleasedArtifactRetention) — the contract every class above answers to
+- [Prebuilt Bundle Retention]](../PrebuiltBundleRetention) — the portal-side sweep and its inventory gate
+- [Shared Artifact Store]](../SharedArtifactStore) — the one control-owned store this command will sweep
