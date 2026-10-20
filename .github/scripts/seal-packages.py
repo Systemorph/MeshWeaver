@@ -716,13 +716,21 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
         elif not sealed_bundle and module not in listed_modules:
             bundleless.append(package)
 
+    # A module package is named lower-case (`shop.module.nupkg`) while its bundle keeps the package's
+    # case (`Shop.zip`). The package a module package belongs to is read off every bundle name this
+    # run knows — fresh in the bake AND previously sealed — before any hold deletes one, and the
+    # content checkout's folders (with --content) take precedence. Without --content the mapping
+    # used to be empty, so a mixed-case rider was held as `shop`: its module went, `Shop.zip` stayed
+    # fresh and no bundle carry was asked for.
+    by_lower = {name[:-len(".zip")].lower(): name[:-len(".zip")] for name in sorted(listed) if name.endswith(".zip")}
+    by_lower.update({b.stem.lower(): b.stem for b in sorted(bake.glob("*.zip"))})
+    if repo is not None and repo.is_dir():
+        by_lower.update({d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()})
     waiting = list(dict.fromkeys(withheld))
     for package in waiting:
         hold(package)
     sourced: dict[str, str] = {}  # package → why a source include made it wait
     source_notes: dict[tuple[str, str], str] = {}
-    by_lower = ({d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()}
-                if repo is not None and repo.is_dir() else {})
 
     def module_step() -> bool:
         """ONE BUILD PER NAME across the module set this publication seals.
@@ -740,6 +748,11 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
         result over the bytes actually sealed (module_build_violations)."""
         carried_names: dict[str, str] = {}
         for package in waiting:
+            # Only a module package that is actually CARRIED brings an old build back. A held package
+            # whose module was never sealed is deleted without replacement — there is no old build
+            # to conflict with, and it reaches its dependents through the requires closure instead.
+            if f"{package.lower()}.module.nupkg" not in listed_modules:
+                continue
             for name in sorted(held_names.get(package, ())):
                 carried_names.setdefault(name, package)
         if not carried_names or not (bake / MODULES_DIR).is_dir():
@@ -1273,6 +1286,37 @@ def module_rider_cases(expect) -> None:
         expect("a rider with no sealed build waits and stays OUT — never sealed fresh beside the carried name",
                "ai" in result["absent"] and not (bake / MODULES_DIR / "ai.module.nupkg").exists()
                and "ai.module.nupkg" not in _lines(state / STATE_CARRY_MODULES), str(result))
+
+        # A mixed-case rider WITHOUT --content: `Shop.zip` beside `shop.module.nupkg`. The package is
+        # read off the bundle names (fresh and sealed), so the hold carries its bundle too.
+        shape(everything + ["shop.module.nupkg"])
+        write_module_package(bake / MODULES_DIR / "shop.module.nupkg", {"MeshWeaver.Shop": "shop@new", collab: "collab@new"})
+        (state / STATE_BUNDLES).write_text("Essentials.zip\nShop.zip\n")
+        result = withhold(bake, ["Essentials"], state)  # no repo: no content checkout to name packages
+        expect("a mixed-case rider (Shop.zip / shop.module.nupkg) without --content is held as `Shop`, "
+               "its fresh bundle removed and named for the bundle carry",
+               "Shop" in result["riders"] and "shop" not in result["riders"] and not (bake / "Shop.zip").exists()
+               and "Shop" in result["carried"]
+               and "shop.module.nupkg" in _lines(state / STATE_CARRY_MODULES), str(result))
+
+        # A FIRST publication: nothing is sealed, so nothing is carried and no old build can conflict.
+        # Withholding alpha must not take beta — independently ready — with it for sharing an assembly.
+        for d in (bake, state):
+            shutil.rmtree(d, ignore_errors=True)
+            d.mkdir()
+        for p in ("Alpha", "Beta"):
+            (bake / f"{p}.zip").write_text(f"fresh {p}")
+        write_module_package(bake / MODULES_DIR / "alpha.module.nupkg",
+                             {"MeshWeaver.Alpha": "alpha@new", "MeshWeaver.Shared": "shared@new"})
+        write_module_package(bake / MODULES_DIR / "beta.module.nupkg",
+                             {"MeshWeaver.Beta": "beta@new", "MeshWeaver.Shared": "shared@new"})
+        (state / STATE_PUBLICATION).write_text("absent\n")
+        result = withhold(bake, ["Alpha"], state)
+        expect("first publication: withholding alpha leaves beta, which shares MeshWeaver.Shared, fresh — a "
+               "module never sealed brings no old build back",
+               not result["riders"] and (bake / "Beta.zip").exists()
+               and (bake / MODULES_DIR / "beta.module.nupkg").exists() and result["modulesCarried"] == [],
+               str(result))
 
         # Fail closed: a module package that is not an archive cannot be read as "carries nothing".
         shape(everything)
