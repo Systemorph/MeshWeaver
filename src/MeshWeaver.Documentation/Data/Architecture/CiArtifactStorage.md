@@ -32,6 +32,69 @@ behind it reddened for want of its input, and nothing published
 storage-quota refusal is therefore **a budget event, not a capacity event**, and deleting artifacts
 does not lift it until GitHub recalculates (every 6–12 h).
 
+## Where it stands (measured 2026-10-21, REST only)
+
+This section is the current reading. The sections after it are the history that led here, and
+their dated numbers stay as evidence.
+
+**Two private repositories are on the own store. The other four are not.**
+
+- The `gha` repository overrides were deleted on 2026-10-16 (~18:50Z), after the cross-pool proof
+  for Systemorph/Memex#420 passed. The organisation variable `MW_ARTIFACT_STORE=file:/ci-artifacts`
+  is still `visibility: selected`, and the selection is still exactly `MeshWeaver.Plugins` and
+  `MeshWeaver.SocialMedia`.
+- 🚨 **So deleting the overrides moved two repositories, not every one.** `MeshWeaver.Reinsurance`,
+  `.Manufacturing`, `.Crm`, `.Education` and `.FundReporting` have no variable at any scope. For them
+  `resolve` maps the empty value to the GitHub branch, so they still write GitHub artifacts.
+  Widening the selection does not move them by itself either: each repository also needs the
+  `artifact-store:` / `artifact-store-id:` wiring that the two pilots carry, resolved once by the
+  run's first producer (see the SocialMedia `preflight` job). Without that wiring a `file:` value
+  turns that repository's module lane red at `Select the affected bundles`. That is the cause of
+  SocialMedia's ~14 h red after the override was deleted.
+- **Plugins writes nothing to GitHub any more.** 100 of 100 completed `Plugin Catalog CI` runs
+  between 2026-10-19T22:55Z and 2026-10-20T21:50Z carry **zero** GitHub artifacts. A pre-switch
+  main run (`38820453666`, 2026-10-15) carried 76, most of them `module-bundle-*` at 7-day
+  retention. `core-candidate`, `examples-smoke` and `platform-canary` produced none either. The
+  last two still call `actions/upload-artifact` directly, but only for KB-sized handoffs, and in
+  the sampled runs those paths did not execute.
+- The repository "Artifact and log retention" setting is already **7 days** at the organisation
+  and on every repository (the repository maximum is 7). There is no retention left to cut.
+
+**The bill, per repository.** These are October GB-hours per full day from
+`organizations/Systemorph/settings/billing/usage?year=2026&month=10`, SKU `Actions storage`.
+Actions storage cost **$263.29** net from 1 to 20 October. Actions compute was **$0**.
+
+| repository | GB-h per day | what the artifact and cache APIs show |
+|---|--:|---|
+| MeshWeaver.Plugins | 40,173 (10-12) → 31,569 (10-19), falling | no new artifacts since 10-16; 11.9 GB of caches, last restored 10-16 |
+| MeshWeaver.Education | 1,190–1,660 | ~10 GB live: `bake-<sha>` 7.1 GB, `e2e-upstream` 2.8 GB; 1.2 GB of caches |
+| MeshWeaver.Reinsurance | **863, every full day since 09-22** | 7 MB of `gate-log-*`, no caches |
+| MeshWeaver.SocialMedia | ~550 | no live artifacts; 11.6 GB of caches, last restored 10-16 |
+| MeshWeaver.Crm | **514, every full day since 09-22** | 3 MB of `gate-log-*`, no caches |
+| MeshWeaver.Manufacturing | **48, every full day since 09-22** | 1.5 MB of `gate-log-*`, no caches |
+| MeshWeaver (public) | ~125,000 | not billed |
+
+What to expect, and what is not explained:
+
+- **Plugins and SocialMedia drain on their own.** The newest Plugins `module-bundle-*` was
+  created on 2026-10-16T18:04Z and expires around 10-23. The deletion lag described below follows
+  that. Their caches stop being restored, and cache is not billed anyway (see below). Re-read the
+  usage endpoint after **2026-10-30**. Plugins should then be near zero.
+- 🚨 **The nightly sweeper cannot help with Plugins.** `GET repos/Systemorph/MeshWeaver.Plugins/actions/artifacts`
+  answers **HTTP 500** on page 1, even at `per_page=1`. A `name=`-filtered listing answers 200.
+  Memex `actions-cleanup.yml` was therefore red every night from 2026-09-26 and deleted nothing in
+  Plugins. Memex#796 takes Plugins off its list, because Plugins no longer writes there. If Plugins
+  ever returns to `gha`, the walk must first stop using the unfiltered listing.
+- 🚨 **Reinsurance, Crm and Manufacturing are billed a constant that no API explains.** Their
+  meter is identical to the GB-hour on every full day for a month, while their visible artifacts
+  churn nightly and total a few MB. Nothing in this repository changes that number. It is a
+  question for GitHub billing support: what is metered for those three repositories? Moving them
+  to the own store would remove only their few MB of `gate-log-*`.
+- **Education is the one repository whose own bytes still matter.** Its e2e jobs read
+  `bake-<sha>` and `e2e-upstream` within the run. Moving it means wiring its own uploads and
+  downloads through `Systemorph/MeshWeaver/.github/actions/{upload,download}-artifact@main`, plus
+  the store wiring above, and *then* adding it to the selection. It is worth about $0.45/day.
+
 ## The measurement (2026-09-17, REST only)
 
 Org net Actions storage, 1–17 September: **$66.24**, rising — **$8.70 on 09-16 alone**, i.e. a
@@ -329,6 +392,9 @@ the move to `azblob:` this page already recommends.
 
 #### The stopgap that is in place, and what lifts it (measured 2026-09-20)
 
+> **Lifted on 2026-10-16.** All eight overrides were deleted after the Memex#420 proof run. What
+> that did and did not move is under [Where it stands](#where-it-stands-measured-2026-10-21-rest-only).
+
 **`MW_ARTIFACT_STORE=gha` is set as a REPOSITORY variable on eight repositories** — `MeshWeaver`,
 `.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Crm`, `.Feedback` —
 since 2026-09-19T05:35Z, on the maintainer's instruction, after ~9 h in which every
@@ -537,6 +603,10 @@ two-day handoff rule to every named artifact:
 | `runs/` | legacy handoffs from the earlier workflow implementation | legacy 2-day rule, never applied to `named/` |
 
 ## What the migration still needs (maintainer)
+
+Status as of 2026-10-21: items 1 and 4 are done for `MeshWeaver.Plugins` and
+`MeshWeaver.SocialMedia`. Item 5 is under way: the GitHub-side bytes are ageing out, and the
+sweeper cannot list Plugins (see [Where it stands](#where-it-stands-measured-2026-10-21-rest-only)).
 
 1. **One backing share, proved across pools.** A producer on one runner pool and a consumer on the
    other must report the same physical identity and read the same digest-verified bytes. Exercise
