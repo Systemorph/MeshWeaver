@@ -38,12 +38,14 @@ HOSTING_CMD="hosting-artifact-store-bind"
 
 namespace="" claim="" source_namespace="" source_claim=""
 attempts="${HOSTING_BIND_ATTEMPTS:-30}" interval="${HOSTING_BIND_INTERVAL:-5}"
+# A value flag with no value would make `shift 2` fail without shifting — an endless loop.
+needs_value() { [ $# -ge 2 ] || hosting::die "$1 needs a value"; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --namespace)        namespace="${2:-}";        shift 2 ;;
-    --claim)            claim="${2:-}";            shift 2 ;;
-    --source-namespace) source_namespace="${2:-}"; shift 2 ;;
-    --source-claim)     source_claim="${2:-}";     shift 2 ;;
+    --namespace)        needs_value "$@"; namespace="$2";        shift 2 ;;
+    --claim)            needs_value "$@"; claim="$2";            shift 2 ;;
+    --source-namespace) needs_value "$@"; source_namespace="$2"; shift 2 ;;
+    --source-claim)     needs_value "$@"; source_claim="$2";     shift 2 ;;
     *) hosting::die "unknown argument '$1'" ;;
   esac
 done
@@ -100,7 +102,14 @@ share="${h_account}/${h_share}"
 hosting::log "owner     ${source_namespace}/${source_claim} → ${src_volume} (share ${share}, ${capacity})"
 hosting::log "consumer  ${namespace}/${claim} via PersistentVolume ${pv_name}, READ-ONLY"
 
-secret_name="azure-storage-account-${h_account}-secret"
+# The key Secret the node stages the share with: the OWNER's PV's own nodeStageSecretRef when it names
+# one (a share provisioned with a custom Secret), else the provisioner's convention in its namespace.
+src_secret_name="$(printf '%s' "$src_pv" | jq -r '.spec.csi.nodeStageSecretRef.name // ""')"
+src_secret_ns="$(printf '%s' "$src_pv" | jq -r '.spec.csi.nodeStageSecretRef.namespace // ""')"
+secret_name="${src_secret_name:-azure-storage-account-${h_account}-secret}"
+secretns="${src_secret_ns:-$secretns}"
+hosting::safe_name secret "$secret_name"
+hosting::safe_name secret-namespace "$secretns"
 new_handle="${h_rg}#${h_account}#${h_share}##${pv_name}#${secretns}"
 
 # ── an existing binding is VERIFIED, never overwritten ──────────────────────────────────────────
@@ -112,12 +121,21 @@ case $? in
     have_share="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '"\(.spec.csi.volumeAttributes.storageAccount // "")/\(.spec.csi.volumeAttributes.shareName // "")"')"
     have_ro="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.csi.readOnly // false')"
     have_ref="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '"\(.spec.claimRef.namespace // "")/\(.spec.claimRef.name // "")"')"
+    have_policy="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.persistentVolumeReclaimPolicy // ""')"
+    have_label="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.metadata.labels["meshweaver.io/purpose"] // ""')"
     [ "$have_share" = "$share" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists and points at ${have_share}, not the owner's ${share} — refusing to rebind it. Whether the old binding is still read is a human's question; remove it deliberately, then re-run."
     [ "$have_ro" = "true" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists and is NOT read-only — a consumer binding that can write the store is a second writer; remove it deliberately, then re-run"
     [ "$have_ref" = "${namespace}/${claim}" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists for claim ${have_ref}, not ${namespace}/${claim} — refusing to rebind it"
+    # 🚨 A binding whose reclaim policy is not Retain would hand the SHARED share to the provisioner's
+    # delete the moment its claim goes, and one without the binding label is invisible to the teardown
+    # guard in hosting-pv-purge. Neither is accepted as "already bound".
+    [ "$have_policy" = "Retain" ] \
+      || hosting::die "PersistentVolume ${pv_name} already exists with reclaim policy '${have_policy:-unset}', not Retain — removing its claim could delete the shared store; remove it deliberately, then re-run"
+    [ "$have_label" = "artifact-store" ] \
+      || hosting::die "PersistentVolume ${pv_name} already exists without the label meshweaver.io/purpose=artifact-store — the teardown guard would not recognise it as a binding; remove it deliberately, then re-run"
     hosting::log "PersistentVolume ${pv_name} exists — same share, read-only, for ${namespace}/${claim}"
     ;;
   1)

@@ -1,1 +1,1 @@
-{"metadata":{"name":"artifact-store-acme"},"spec":{"claimRef":{"namespace":"acme","name":"artifact-store"},"csi":{"readOnly":true,"volumeAttributes":{"storageAccount":"acmestore01","shareName":"pvc-elsewhere"}}}}
+{"metadata": {"name": "artifact-store-acme", "labels": {"meshweaver.io/purpose": "artifact-store"}}, "spec": {"claimRef": {"namespace": "acme", "name": "artifact-store"}, "csi": {"readOnly": true, "volumeAttributes": {"storageAccount": "acmestore01", "shareName": "pvc-elsewhere"}}, "persistentVolumeReclaimPolicy": "Retain"}}

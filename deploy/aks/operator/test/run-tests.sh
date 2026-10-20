@@ -4441,6 +4441,16 @@ refuses_hard "bind refuses the owner's own namespace" "needs no read-only bindin
 refuses_hard "bind refuses a claim that is not a plain name" "not a plain name" hosting-artifact-store-bind --namespace acme --claim 'c;id' --source-namespace control --source-claim s
 refuses_hard "bind refuses a missing --source-claim" "source-claim" hosting-artifact-store-bind --namespace acme --claim c --source-namespace control
 refuses_hard "bind refuses an unknown argument" "unknown argument" hosting-artifact-store-bind --namespace acme --claim c --source-namespace control --source-claim s --writable
+refuses_hard "bind refuses a value flag with no value (never loops)" "needs a value" hosting-artifact-store-bind --namespace acme --claim
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-delete.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"not Retain"*) true ;; *) false ;; esac \
+  && ok "an existing binding that is not Retain is a refusal (its claim's removal could delete the store)" || bad "non-Retain binding refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_PV="$AB_FIX/existing-pv-unlabelled.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -ne 0 ] && [ -z "$_ab_applied" ] && case "$_ab_out" in *"without the label"*) true ;; *) false ;; esac \
+  && ok "an existing binding without the artifact-store label is a refusal (the teardown guard could not see it)" || bad "unlabelled binding refused" "rc ${_ab_rc}; out: ${_ab_out}"
+ab HOSTING_AB_SRC_PV="$AB_FIX/owner-pv-custom-secret.json" -- "${_ab_args[@]}"
+[ "$_ab_rc" -eq 0 ] && [ "$(printf '%s\n' "$_ab_applied" | grep '"kind":"PersistentVolume"' | jq -r '.spec.csi.nodeStageSecretRef | "\(.name)/\(.namespace)"')" = "custom-share-key/control" ] \
+  && ok "the owner PV's own nodeStageSecretRef is carried over (a share staged with a custom Secret)" || bad "custom secret" "rc ${_ab_rc}; applied: ${_ab_applied}"
 unset _ab_out _ab_rc _ab_calls _ab_applied _ab_pv _ab_args
 
 echo
