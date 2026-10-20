@@ -430,9 +430,58 @@ NodeTypes, runs the sweep's read and watches `HostedHubsCollection.HubAdded`: no
 The negative control runs the replaced `GetMeshNodeStream` read over the same types with the same
 instrument and sees twelve, one per type.
 
-**Not established:** that the 403 two-segment hubs on `8f2g5` were built by these two sweeps rather
-than by enrichment watches or by plugin-side code. A per-address census on the first replica of the
-next generation answers that. The same goes for whether boot-activated hubs retire once idle (§9).
+**Not established at the time of the slice:** that the 403 two-segment hubs on `8f2g5` were built by
+these two sweeps rather than by enrichment watches or by plugin-side code. The per-address census
+below is the reading that was owed.
+
+### 10.1 The per-address census after the slice (#6623)
+
+**Instrument:** a read-only Code node that walks the hosted-hub tree by field reads and prints every
+non-`sync` address grouped by shape, with examples (`rbuergi/Script/HubCensusByAddress-20261020`
+and `…/HubCensusSatellites-20261020` on the public instance, the per-address successors of
+`HubCensusByOwner-20261011`). It writes nothing and resolves nothing from DI. A script run lands on
+whichever replica hosts the kernel for that script node, so one node reads one replica.
+
+**Reading, 2026-10-20 ~17:32Z, public instance, one ReplicaSet generation (three replicas):**
+
+| replica | up | hubs | `sync` | node hubs | largest classes |
+|---|---|---|---|---|---|
+| `wt7pc` (oldest of the generation) | 46.6 min | 1,772 | 1,424 | **348** (was 1,059 on `8f2g5`) | 224 `DoublePendulum/_Entitlements/{viewer}`, 43 `{space}/_Issue/1785`, 28 depth-2, 18 + 17 deeper, 4 partition roots, 4 `_Policy`, 3 `_GitSync` |
+| `jrkxs` | 45.2 min | – | – | small | 43 `{space}/_Issue/3922`, 7 `_Policy`, 5 `_Entitlements`, 3 `_GitSync` |
+
+What the reading settles:
+
+- **The two-segment NodeType class is gone.** 28 depth-2 node hubs remain on the oldest replica, and
+  they are ordinary live addresses (`Doc/Architecture`, `Edu/Page`, `portal/*`, `Hosting/*`), not a
+  sweep over every NodeType.
+- **The partition-root, `_Policy` and `_GitSync` classes do not survive the boot window.** 4, 4–7 and
+  3 remain, against 128, 115 and 43 on `8f2g5`. Whatever activated them at boot
+  (`PackageInstaller.WarmInstalledRoots`, the Store's `PluginHubWarmer`, GitSync stamps) left no
+  standing population 45 minutes in, so the idle path does retire them.
+- **The largest remaining class is the Store's gating pass, not a boot step.** The 224
+  `DoublePendulum/_Entitlements/{viewer}` hubs were re-activated in one burst at 17:32:11Z, 45 minutes
+  after boot: a governed `Logs` read (`Ops/Actions/census6623-doublependulum-gating-logs` on the
+  control instance) shows another replica's stream cache (`sender=cache/…`) subscribing every viewer's
+  marker in sequence. The reader is `PluginGate.SeedGating` in MeshWeaver.Plugins
+  (`Store/Licensing/Source`): on a package whose plan shape is known, it queues a retraction check
+  for **every** legacy viewer grant, and each check first reads that viewer's eternal entitlement
+  marker through `MeshQueries.FindNode`, whose content leg is `GetMeshNodeStream(path).Take(1)` —
+  one activation per purchased viewer, per pass, to learn that a backed grant stays. The fix belongs
+  there, and is the `StandardPacks.PacksToVerify` rule: a marker the pass's own subtree listing
+  already shows is POSITIVE evidence that the grant is backed, so that viewer needs no targeted read
+  at all (a stale positive keeps a grant one pass longer; it can never retract one). Viewers whose
+  marker the listing does not show keep every targeted read.
+- **`{space}/_Issue/{n}` is a write fan-out, not a read.** One GitHub issue event is upserted by
+  `GitHubWebhookProcessor.UpsertFromWebhook` into **every** Space synced from that repository (43 on
+  the public instance), and each upsert is a `CreateOrUpdateNodeRequest` the issue node's own hub
+  owns, so every issue event builds 43 hubs. A write needs its owner, so no read conversion applies;
+  whether an issue belongs in every Space that maps a folder of the repository is a design question,
+  not a boot one.
+
+**Still not established:** a census taken within the first ten minutes of a generation, which is when
+the `[HEAPSTEP]` steps of #5555 print; this reading is from 45 minutes in, after the boot-time classes
+had already been retired. It also does not separate "never built" from "built and retired" for the
+classes that are gone.
 
 ## Related
 
