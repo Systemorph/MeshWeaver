@@ -382,6 +382,18 @@ public static class DeploymentPortalConfig
     }
 
     /// <summary>
+    /// Why a volume's <see cref="VolumeClaim.ReadOnly"/> cannot be honoured: the chart mounts <c>data</c>,
+    /// <c>users</c> and <c>dumps</c> at its own fixed paths, outside the generic persistence mount that
+    /// renders <c>readOnly</c>, so on those three the flag would be silently writable under Helm while
+    /// Aspire mounts it read-only. Refused by name instead. Empty when no such volume is declared. Pure.
+    /// </summary>
+    public static ImmutableList<string> ReadOnlyVolumeProblems(DeploymentContent d) =>
+        d.Volumes
+            .Where(v => v is { ReadOnly: true } && v.Name?.Trim() is "data" or "users" or "dumps")
+            .Select(v => $"volume '{v.Name.Trim()}' is declared readOnly, but the chart mounts data, users and dumps at fixed paths that are always writable — readOnly is honoured only on the other volumes (persistence.<name>.readOnly)")
+            .ToImmutableList();
+
+    /// <summary>
     /// Why the record's <c>artifactStore</c> block cannot render a working store — named at plan time,
     /// in the record's own words, rather than as a pod that reads nothing or a portal that can write a
     /// store it does not own. Empty when the block is absent or sound. Pure.

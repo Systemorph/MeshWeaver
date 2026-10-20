@@ -121,4 +121,14 @@ public class ArtifactStoreRecordTest
             Assert.Contains("give it a dedicated name", Problems(renamed));
         }
     }
+
+    [Fact]
+    public void ReadOnlyOnAFixedPathVolume_IsRefused_NotSilentlyWritable()
+    {
+        foreach (var name in new[] { "data", "users", "dumps" })
+            Assert.Contains("always writable", Assert.Single(DeploymentPortalConfig.ReadOnlyVolumeProblems(
+                new DeploymentContent().WithVolume(name, "/mnt/" + name, readOnly: true))));
+        Assert.Empty(DeploymentPortalConfig.ReadOnlyVolumeProblems(DeploymentRecordJson.Read(ConsumerJson)!));
+        Assert.Empty(DeploymentPortalConfig.ReadOnlyVolumeProblems(new DeploymentContent().WithVolume("data", "/data")));
+    }
 }
