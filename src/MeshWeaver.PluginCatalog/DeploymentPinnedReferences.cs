@@ -99,10 +99,14 @@ public static class DeploymentPinnedReferences
         var homeUrl = !string.IsNullOrWhiteSpace(options?.HomeUrl)
             ? options!.HomeUrl
             : configuration?["PluginCatalog:HomeUrl"];
+        var ops = configuration?[DeploymentReportService.OperationalSpaceKey]?.Trim();
         return new ConsumerScope(
             string.IsNullOrWhiteSpace(self) ? null : self,
             HostOf(homeUrl) is { } host ? [host] : [],
-            IsControlInstance(configuration));
+            IsControlInstance(configuration))
+        {
+            OperationalSpace = string.IsNullOrEmpty(ops) ? DeploymentReportService.DefaultOperationalSpace : ops,
+        };
     }
 
     /// <summary>
@@ -195,13 +199,35 @@ public static class DeploymentPinnedReferences
         // A report the trusted report sink filed carries no such stamp and is matched by the
         // deployment id it names. Mixing the two let an unrelated registry account whose id happens
         // to equal a record id satisfy a record that declared another registry identity.
+        //
+        // 🚨 #6989 — A REPORT IS WHERE THE PLATFORM FILES ONE, NOT ANY NODE OF THE TYPE. Inventories are
+        // read mesh-wide, and `Hosting/ModuleInventory` is a type anyone may create in a partition they
+        // own. A node outside the two filing locations is not a report: it is no evidence of what an
+        // instance runs, and above all it must never SATISFY a record — a fresh, complete body written
+        // by hand in a user's partition would complete the pass and authorise deleting what that
+        // instance actually runs. Measured on the registry: a leftover probe under a user's partition
+        // (`…/OpsProbe/Modules/memex`) was matched as the `memex` record's sink report and refused every
+        // pass ("adopted artifact inventory is incomplete or legacy"), standing in for the report that
+        // never arrived. Only the store's filing location carries the authenticated
+        // `registeredInstance`; only the sink's filing location is matched by the deployment it names.
+        var storeLocation = $"{scope.OperationalSpace}/{DeploymentReportService.StoreReportsSegment}";
+        var sinkLocation = $"{scope.OperationalSpace}/Modules";
+        var notReports = inventories
+            .Where(node => !IsIn(node, storeLocation) && !IsIn(node, sinkLocation))
+            .ToImmutableList();
+        if (!notReports.IsEmpty)
+            logger?.LogInformation(
+                "PrebuiltBundleRetention: {Count} {NodeType} node(s) outside {StoreLocation} and {SinkLocation} are not "
+                + "reports and are not read: {Paths}",
+                notReports.Count, DeploymentReportService.InventoryNodeType, storeLocation, sinkLocation,
+                string.Join(", ", notReports.Select(node => node.Path)));
         var storeReports = inventories
-            .Where(node => RegisteredInstanceOf(node, options) is not null)
-            .GroupBy(node => RegisteredInstanceOf(node, options)!, StringComparer.OrdinalIgnoreCase)
+            .Where(node => IsIn(node, storeLocation))
+            .GroupBy(node => RegisteredInstanceOf(node, options) ?? node.Id, StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(group => group.Key, group => group.ToImmutableList(),
                 StringComparer.OrdinalIgnoreCase);
         var sinkReports = inventories
-            .Where(node => RegisteredInstanceOf(node, options) is null)
+            .Where(node => IsIn(node, sinkLocation))
             .GroupBy(node => SinkReporterOf(node, options), StringComparer.OrdinalIgnoreCase)
             .ToImmutableDictionary(group => group.Key, group => group.ToImmutableList(),
                 StringComparer.OrdinalIgnoreCase);
@@ -415,6 +441,10 @@ public static class DeploymentPinnedReferences
             ? registered.Trim()
             : null;
 
+    /// <summary>Whether <paramref name="node"/> is filed directly under <paramref name="location"/>.</summary>
+    private static bool IsIn(MeshNode node, string location) =>
+        string.Equals(node.Namespace, location, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The deployment a sink-filed report names, else the node's own id.</summary>
     private static string SinkReporterOf(MeshNode node, JsonSerializerOptions options) =>
         Field(node, nameof(DeploymentReport.Deployment), options) is { } id && !string.IsNullOrWhiteSpace(id)
@@ -616,6 +646,14 @@ public sealed record ConsumerScope(
     ImmutableHashSet<string> StoreHosts,
     bool IsControlInstance)
 {
+    /// <summary>
+    /// The partition reports are FILED in on this host (<c>Hosting:OperationalSpace</c>): the sink
+    /// files under <c>{space}/Modules</c>, a store under <c>{space}/ConsumerReports</c>, and a
+    /// <c>Hosting/ModuleInventory</c> node anywhere else is not a report (#6989). An init property,
+    /// not a positional parameter, so the record's primary constructor keeps its shape.
+    /// </summary>
+    public string OperationalSpace { get; init; } = DeploymentReportService.DefaultOperationalSpace;
+
     /// <summary>A host that names no store and owns no fleet — an ordinary installation.</summary>
     public static ConsumerScope None { get; } = new(null, [], false);
 }

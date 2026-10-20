@@ -263,6 +263,18 @@ change, and the builds that instance is still served from here must not be colle
 report adds references but does not make the record an expected consumer, so it can never make a
 pass complete.
 
+**A report is where the platform files one, not any node of the type** (#6989). Inventories are
+read mesh-wide, and `Hosting/ModuleInventory` is a type anyone may create in a partition they own.
+Only two locations hold reports: `{Hosting:OperationalSpace}/ConsumerReports` (filed by a store,
+the only place `registeredInstance` is trusted) and `{Hosting:OperationalSpace}/Modules` (filed by
+the report sink, matched by the deployment it names). A node anywhere else is logged as "not a
+report" and read for nothing: it neither protects, nor refuses, nor — the dangerous direction —
+satisfies a record. A fresh, complete body written by hand in a user's partition would otherwise
+complete the pass and authorise deleting what that instance actually runs. The defect was found as
+the harmless half: on the registry, a leftover probe under a user's partition was matched as the
+`memex` record's sink report and refused every pass as "incomplete or legacy", standing in for the
+report that had never arrived.
+
 **What still refuses**, and must:
 
 - A declared consumer with no report, an unreadable one, or one older than `StaleAfter` (24 h). A
