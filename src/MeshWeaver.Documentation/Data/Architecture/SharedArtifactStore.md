@@ -162,7 +162,9 @@ maintainer's act. In order:
    variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD identity needs
    `Storage File Data Privileged Contributor` on the account (it already holds it on the same account
    today). The publisher writes `<identity>/<rid>/<source>/` into the store (increment 2).
-4. **Point each portal at it**, one instance at a time: merge its record change (volume `artifacts`
+4. **Point each portal at it** — only once the architecture-aware reader and publisher (increment 2)
+   are on the platform that portal runs, since a reader that does not look under `<rid>/` would find
+   nothing in the store. One instance at a time: merge its record change (volume `artifacts`
    `readOnly: true`, `artifactStore.role: Consumer`). Its next roll runs `hosting-artifact-store-bind`
    and renders `PreWarm__PrebuiltBundleRoot=/artifacts/prebuilt-bundles`. Verify it behaviourally: the
    portal's `/health` `nodetype_bake` names the shared root, and its pre-warm adopts.
