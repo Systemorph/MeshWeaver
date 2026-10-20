@@ -223,12 +223,12 @@ the control for a hand-built `<hr style=…>`. It is horizontal by default;
 `WithOrientation(Orientation.Vertical)` draws a full-height rule between side-by-side content.
 Spacing is the surrounding stack's gap, or a margin through `WithStyle`.
 
-```csharp
+```csharp --render DisplayDivider --show-code
 Controls.Stack
     .WithVerticalGap(16)
-    .WithView(header)
+    .WithView(Controls.Label("Quarterly Report 2026"))
     .WithView(Controls.Divider)
-    .WithView(body)
+    .WithView(Controls.Label("Revenue grew in every region."))
 ```
 
 ---
