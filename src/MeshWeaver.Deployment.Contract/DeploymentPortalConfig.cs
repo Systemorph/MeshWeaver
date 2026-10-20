@@ -409,6 +409,8 @@ public static class DeploymentPortalConfig
             problems.Add($"the artifact-store volume '{volume.Name}' states no absolute mountPath — the bundle root renders under it");
         else if (volume.MountPath.Trim().TrimEnd('/') is "/data" or "")
             problems.Add($"the artifact-store volume '{volume.Name}' is mounted at /data — the store is its own share beside the instance's data volume, never the data volume itself");
+        if (volume.Name.Trim() is "data" or "users" or "dumps")
+            problems.Add($"the artifact-store volume is named '{volume.Name.Trim()}' — data, users and dumps are mounted at the chart's own fixed paths and skipped by the generic mount, so the store would not be at its mountPath; give it a dedicated name (e.g. artifacts)");
         if (BundleRegistry(d) is not null)
             problems.Add("the record declares both bundles.registry and artifactStore — one bundle root, one source: a consumer of the shared store reads it, it does not also fetch from a registry");
         if (role == ArtifactStoreSpec.OwnerRole)
@@ -998,9 +1000,14 @@ public static class DeploymentPortalConfig
         // from the same value the chart's bundle-fetch init container fills — one source for both.
         Set("PreWarm__PrebuiltBundleRoot", BundleRoot(d));
         // A CONSUMER of the shared artifact store reads a store it does not own, on a read-only mount:
-        // its per-portal bundle sweep must never be armed there (Doc/Architecture/SharedArtifactStore).
+        // its per-portal bundle sweep is not scheduled at all — report-only would still append a ledger
+        // under the read-only root and rescan the shared store per consumer — and never armed
+        // (Doc/Architecture/SharedArtifactStore). The owner runs the one sweep.
         if (ArtifactStoreRole(d) == ArtifactStoreSpec.ConsumerRole)
+        {
+            Set("PreWarm__PrebuiltBundleRetention__Enabled", "false");
             Set("PreWarm__PrebuiltBundleRetention__Delete", "false");
+        }
 
         Set("Deployment__Orleans__Clustering", OrleansClustering(d));
         Set("SelfUpdate__MinRollInterval", string.IsNullOrWhiteSpace(d.MinRollInterval) ? DefaultMinRollInterval : d.MinRollInterval!.Trim());

@@ -62,6 +62,7 @@ public class ArtifactStoreRecordTest
             var config = DeploymentPortalConfig.PortalConfig(record, options);
             Assert.Equal("/artifacts/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
             Assert.Equal("false", config["PreWarm__PrebuiltBundleRetention__Delete"]);
+            Assert.Equal("false", config["PreWarm__PrebuiltBundleRetention__Enabled"]);
         }
     }
 
@@ -73,6 +74,7 @@ public class ArtifactStoreRecordTest
         Assert.Empty(DeploymentPortalConfig.ArtifactStoreProblems(Owner()));
         Assert.Equal("/artifacts/prebuilt-bundles", config["PreWarm__PrebuiltBundleRoot"]);
         Assert.False(config.ContainsKey("PreWarm__PrebuiltBundleRetention__Delete"));
+        Assert.False(config.ContainsKey("PreWarm__PrebuiltBundleRetention__Enabled"));
         Assert.Equal(ArtifactStoreSpec.OwnerRole, DeploymentPortalConfig.ArtifactStoreRole(Owner()));
     }
 
@@ -109,5 +111,14 @@ public class ArtifactStoreRecordTest
         Assert.Contains("mounted at /data", Problems(consumer with { Volumes = consumer.Volumes.SetItem(1, consumer.Volumes[1] with { MountPath = "/data" }) }));
         Assert.Contains("both bundles.registry and artifactStore", Problems(consumer.WithBundles("cr.example.test", ["plugins"])));
         Assert.Contains("drop them", Problems(Owner() with { ArtifactStore = Owner().ArtifactStore! with { SourceClaim = "x" } }));
+        foreach (var reserved in new[] { "data", "users", "dumps" })
+        {
+            var renamed = consumer with
+            {
+                Volumes = [consumer.Volumes[1] with { Name = reserved }],
+                ArtifactStore = consumer.ArtifactStore! with { Volume = reserved },
+            };
+            Assert.Contains("give it a dedicated name", Problems(renamed));
+        }
     }
 }

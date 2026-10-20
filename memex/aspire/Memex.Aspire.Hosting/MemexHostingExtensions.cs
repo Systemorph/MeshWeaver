@@ -318,19 +318,21 @@ public static class MemexHostingExtensions
     private static void SyncVolumes(IResourceBuilder<MemexPortalResource> portal, DeploymentContent record)
     {
         var prefix = $"{portal.Resource.Name}-";
+        // A read-only volume (a consumer of the shared artifact store, Doc/Architecture/SharedArtifactStore)
+        // is a read-only Docker mount too — and a change of the flag replaces the mount, like a change of source.
         var desired = record.Volumes
             .Where(v => !string.IsNullOrWhiteSpace(v.MountPath))
-            .ToDictionary(v => v.MountPath!, v => prefix + v.Name, StringComparer.Ordinal);
+            .ToDictionary(v => v.MountPath!, v => (Source: prefix + v.Name, v.ReadOnly), StringComparer.Ordinal);
 
         foreach (var stale in portal.Resource.Annotations.OfType<ContainerMountAnnotation>()
                      .Where(m => m.Type == ContainerMountType.Volume && m.Source is { } s && s.StartsWith(prefix, StringComparison.Ordinal))
-                     .Where(m => !desired.TryGetValue(m.Target, out var source) || source != m.Source)
+                     .Where(m => !desired.TryGetValue(m.Target, out var want) || want.Source != m.Source || want.ReadOnly != m.IsReadOnly)
                      .ToList())
             portal.Resource.Annotations.Remove(stale);
 
         var mounted = portal.Resource.Annotations.OfType<ContainerMountAnnotation>().Select(m => m.Target).ToHashSet(StringComparer.Ordinal);
-        foreach (var (mountPath, source) in desired)
+        foreach (var (mountPath, want) in desired)
             if (!mounted.Contains(mountPath))
-                ContainerResourceBuilderExtensions.WithVolume(portal, source, mountPath);
+                ContainerResourceBuilderExtensions.WithVolume(portal, want.Source, mountPath, want.ReadOnly);
     }
 }

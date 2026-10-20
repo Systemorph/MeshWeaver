@@ -17,7 +17,7 @@ immutable package version — yet every portal keeps its own copy on its own `/d
 publication uploads the same bytes once per volume (`BAKE_PUBLISH_TARGETS` lists one share per
 portal), every portal compiles what another already compiled, and each volume fills on its own
 schedule: on 2026-10-19 the public instance's share filled while the control instance held the same
-artifacts (see [Storage Prune](StoragePrune) for the measurement).
+artifacts (see [Storage Prune]](../StoragePrune) for the measurement).
 
 Per-instance state stays per instance: `dataprotection-keys/` (the instance's own keys) and dumps
 (which belong on the declared dump volume, never on `/data`).
@@ -118,7 +118,7 @@ order, not a policy a portal could forget.
 A client environment's control pulls from ours, never the reverse, and never writes our store. The
 unit of replication is a SEALED publication (an identity/rid/source generation with its `_complete`, a
 release marker); an unsealed generation is never copied. Replication writes the generation first and
-moves `_current` last — the reader contract of [Sealed Publication Generations](SealedPublicationGenerations)
+moves `_current` last — the reader contract of [Sealed Publication Generations]](../SealedPublicationGenerations)
 — so a client portal never reads a half-copied generation. Transport: the fleet registry's existing
 bundle surface (`cr.meshweaver.cloud`, the `bundles.registry` path a client estate already pulls
 from), authenticated with that environment's registry key — no storage-account credential crosses the
@@ -135,7 +135,7 @@ portals as the consumer inventory.
 ## Retention and the prune job
 
 The store has ONE owner, so it has ONE sweep and ONE inventory: control's standing `StoragePrune`
-job ([Storage Prune](StoragePrune)) — the classes, the 30-day minimum, the last sealed set per source,
+job ([Storage Prune]](../StoragePrune)) — the classes, the 30-day minimum, the last sealed set per source,
 major AND architecture, the consumer inventory of every portal that mounts the store, the
 protected-label set (core `.github/release-channels.json`, read through `release-channels.py`; a failed
 lookup aborts), and the publication lease shared with the publisher. Until the consumer inventory is complete it deletes
@@ -147,28 +147,33 @@ Every step below changes a live mount, rolls an instance or touches an estate, s
 maintainer's act. In order:
 
 1. **Create the store.** Merge the control record change (volume `artifacts`, `create: true`,
-   `artifactStore.role: Owner`) and let control's next roll — or a Reconcile filed on the control
-   instance — render it. Confirm `kubectl -n control get pvc control-artifacts` is `Bound`.
-2. **Seed it** from the newest complete copy (a data share whose bundle sweep and seals are healthy):
-   copy `prebuilt-bundles/<compatibility key>/` and `_releases/` with `azcopy` share-to-share, then run
-   `hosting-storage-prune --namespace control --claim control-artifacts` and compare the report against
-   the source share's.
-3. **Publish there.** Append control's share (`<account>/<share>` from `kubectl get pv` on the claim) to
-   the repository variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD
-   identity needs `Storage File Data Privileged Contributor` on the account (it already has it on the
-   same account today).
+   `artifactStore.role: Owner`) and let control's next roll render it, or file a `Reconcile` of
+   `Deployments/control` on the control instance. Confirm it with a `StoragePrune` instance action
+   naming the claim (`hosting-storage-prune --namespace control --claim control-artifacts`): it refuses
+   a claim that does not exist and reports the share's size from the mount.
+2. **Seed it** from the newest complete copy (a data share whose seals are healthy): copy
+   `prebuilt-bundles/<compatibility key>/` into `prebuilt-bundles/<compatibility key>/linux-x64/` and
+   `_releases/` with a share-to-share `azcopy`, then compare a `StoragePrune` report of the store
+   against one of the source share. *Break-glass:* there is no supported action for a share-to-share
+   copy yet; the copy is a maintainer's command, and the report pair is its record.
+3. **Publish there.** Append control's share (`<account>/<share>`, the value
+   `hosting-artifact-store-bind` reports as `artifact_store_share` on the first consumer binding — or,
+   before any consumer exists, read off the claim's PV as a recorded break-glass read) to the repository
+   variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD identity needs
+   `Storage File Data Privileged Contributor` on the account (it already holds it on the same account
+   today). The publisher writes `<identity>/<rid>/<source>/` into the store (increment 2).
 4. **Point each portal at it**, one instance at a time: merge its record change (volume `artifacts`
    `readOnly: true`, `artifactStore.role: Consumer`). Its next roll runs `hosting-artifact-store-bind`
-   and renders `PreWarm__PrebuiltBundleRoot=/artifacts/prebuilt-bundles`. Verify behaviourally: the
-   portal's `/health` `nodetype_bake` names the shared root and the pre-warm adopts.
+   and renders `PreWarm__PrebuiltBundleRoot=/artifacts/prebuilt-bundles`. Verify it behaviourally: the
+   portal's `/health` `nodetype_bake` names the shared root, and its pre-warm adopts.
 5. **Drop the instance's share from `BAKE_PUBLISH_TARGETS`** once it reads the store.
 6. **Drop the per-volume copies** (`/data/prebuilt-bundles` on that instance) only after a week of
-   adoption from the store — the prune job reports them as `bundle-legacy-identity` / superseded on the
-   old share; deleting them is a destructive step and a person's decision.
+   adoption from the store. The `StoragePrune` report classifies them as legacy or superseded on the old
+   share; deleting them is a destructive step and a person's decision.
 
 ## Related
 
-- [Storage Prune](StoragePrune) — the measurement and the prune of this store
-- [Released Artifact Retention](ReleasedArtifactRetention) — the contract
-- [Sealed Publication Generations](SealedPublicationGenerations) — the reader contract replication keeps
-- [Prebuilt Bundle Retention](PrebuiltBundleRetention) — the per-portal sweep this store retires
+- [Storage Prune]](../StoragePrune) — the measurement and the prune of this store
+- [Released Artifact Retention]](../ReleasedArtifactRetention) — the contract
+- [Sealed Publication Generations]](../SealedPublicationGenerations) — the reader contract replication keeps
+- [Prebuilt Bundle Retention]](../PrebuiltBundleRetention) — the per-portal sweep this store retires
