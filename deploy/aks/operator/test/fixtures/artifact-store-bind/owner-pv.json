@@ -1,0 +1,3 @@
+{"metadata":{"name":"pvc-owner"},"spec":{"capacity":{"storage":"512Gi"},"csi":{"driver":"file.csi.azure.com",
+ "volumeHandle":"MC_example-rg_cluster_region#acmestore01#pvc-owner###control",
+ "volumeAttributes":{"secretnamespace":"control","skuName":"Standard_LRS"}}}}

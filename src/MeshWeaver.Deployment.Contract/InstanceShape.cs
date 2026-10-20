@@ -308,6 +308,70 @@ public sealed record VolumeClaim
     /// </summary>
     [Description("Create the PersistentVolumeClaim — only on a record whose claims do not exist yet")]
     public bool Create { get; init; }
+
+    /// <summary>
+    /// Mount the volume read-only (<c>readOnly: true</c> on the container's mount and on the pod's
+    /// claim). Default false. A CONSUMER of the shared artifact store mounts it this way
+    /// (Doc/Architecture/SharedArtifactStore): the store has one owner and one producer, and a portal
+    /// that can write it is a second writer nobody sweeps.
+    /// </summary>
+    [Description("Mount read-only")]
+    public bool ReadOnly { get; init; }
+}
+
+/// <summary>
+/// The environment's shared artifact store as this record takes part in it
+/// (Doc/Architecture/SharedArtifactStore, maintainer 2026-10-19). The store holds the
+/// content-addressed build output every portal used to copy onto its own <c>/data</c> — prebuilt
+/// bundles first — on ONE share the environment's CONTROL instance owns.
+///
+/// <para><b>Owner</b> — the control record. <see cref="Volume"/> names one of the record's own
+/// <see cref="DeploymentContent.Volumes"/>, declared like any other (<c>create</c>, size, class), mounted
+/// writable. The owner's operator creates and resizes it; the owner's standing prune job sweeps it.</para>
+///
+/// <para><b>Consumer</b> — every other instance of the environment. <see cref="Volume"/> names a
+/// <c>readOnly</c> volume whose claim is the STATIC read-only binding of the owner's share in this
+/// namespace, created by the operator step <c>hosting-artifact-store-bind</c> from
+/// <see cref="SourceNamespace"/> / <see cref="SourceClaim"/> — the share itself is read off the owner's
+/// bound volume, never typed into a record.</para>
+///
+/// <para>Either role renders <c>PreWarm__PrebuiltBundleRoot</c> as <c>&lt;mount&gt;/{rid}/prebuilt-bundles</c>
+/// (<see cref="DeploymentPortalConfig.BundleRoot"/>), so every reader of the bundle root reads the store.
+/// Names only — no credential.</para>
+/// </summary>
+public sealed record ArtifactStoreSpec
+{
+    /// <summary><see cref="OwnerRole"/> or <see cref="ConsumerRole"/> (case-insensitive). Blank → the record takes no part.</summary>
+    [Description("Owner (the control instance) or Consumer (every other instance)")]
+    public string? Role { get; init; }
+
+    /// <summary>The name of the record's volume that carries the store (an entry of <c>volumes</c>).</summary>
+    [Description("The volume (by name) that carries the store")]
+    public string? Volume { get; init; }
+
+    /// <summary>Consumer only: the namespace of the OWNER's claim (the control instance's namespace).</summary>
+    [Description("Consumer: the owner's namespace")]
+    public string? SourceNamespace { get; init; }
+
+    /// <summary>Consumer only: the OWNER's claim name, whose bound share this namespace binds read-only.</summary>
+    [Description("Consumer: the owner's claim")]
+    public string? SourceClaim { get; init; }
+
+    /// <summary>The owner role.</summary>
+    public const string OwnerRole = "Owner";
+
+    /// <summary>The consumer role.</summary>
+    public const string ConsumerRole = "Consumer";
+
+    /// <summary>The directory under a per-architecture store that holds the prebuilt bundles — the layout every data volume carries today.</summary>
+    public const string BundleDirectory = "prebuilt-bundles";
+
+    /// <summary>
+    /// The placeholder for the runtime identifier in the rendered bundle root
+    /// (<c>&lt;mount&gt;/{rid}/prebuilt-bundles</c>): a compatibility key names no architecture, so the store
+    /// keeps one bundle store per architecture and each portal expands this to its own at boot.
+    /// </summary>
+    public const string RuntimeIdentifierPlaceholder = "{rid}";
 }
 
 /// <summary>

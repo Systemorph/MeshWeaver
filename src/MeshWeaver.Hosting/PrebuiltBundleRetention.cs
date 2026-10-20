@@ -43,6 +43,14 @@ public sealed record PrebuiltBundleRetention
     /// artifacts, and the share filling up is the outage. Set false to measure and report only.
     /// </summary>
     public bool Delete { get; init; } = true;
+
+    /// <summary>
+    /// Whether the pass is scheduled at all. <b>Default true.</b> False on a CONSUMER of the shared
+    /// artifact store (Doc/Architecture/SharedArtifactStore): its bundle root is the control-owned store
+    /// on a READ-ONLY mount — not its to prune, a report-only pass would still try to append its ledger
+    /// there, and every consumer would rescan the same shared store. The store's owner runs the one sweep.
+    /// </summary>
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>A platform version string placed on its line: <c>3.1.0-ci.8076</c> → line <c>3.1.0</c>, pre-release.</summary>

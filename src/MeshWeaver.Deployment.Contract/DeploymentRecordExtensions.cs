@@ -301,6 +301,26 @@ public static class DeploymentRecordExtensions
             },
         };
 
+    /// <summary>
+    /// Take part in the environment's shared artifact store (Doc/Architecture/SharedArtifactStore):
+    /// <paramref name="role"/> <see cref="ArtifactStoreSpec.OwnerRole"/> on the control instance,
+    /// <see cref="ArtifactStoreSpec.ConsumerRole"/> everywhere else. <paramref name="volume"/> names a
+    /// volume declared with <see cref="WithVolume"/> (read-only for a consumer); a consumer also names
+    /// the owner's namespace and claim, whose share its namespace binds read-only.
+    /// </summary>
+    public static DeploymentContent WithArtifactStore(
+        this DeploymentContent d, string role, string volume, string? sourceNamespace = null, string? sourceClaim = null) =>
+        d with
+        {
+            ArtifactStore = new ArtifactStoreSpec
+            {
+                Role = role,
+                Volume = volume,
+                SourceNamespace = sourceNamespace,
+                SourceClaim = sourceClaim,
+            },
+        };
+
     // ── modules ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -402,6 +422,26 @@ public static class DeploymentRecordExtensions
             StorageClass = storageClass ?? existing?.StorageClass,
             AccessMode = accessMode ?? existing?.AccessMode,
             Create = create || (existing?.Create ?? false),
+        };
+        var volumes = existing is null ? d.Volumes.Add(volume) : d.Volumes.Replace(existing, volume);
+        return d with { Volumes = volumes };
+    }
+
+    /// <summary>
+    /// A volume mounted READ-ONLY — how a consumer of the shared artifact store mounts the owner's share
+    /// (Doc/Architecture/SharedArtifactStore). A separate method rather than a new optional parameter on
+    /// <see cref="WithVolume"/>, whose CLR signature already-compiled callers bind to. The claim is never
+    /// created by the chart (a read-only volume binds a claim something else made).
+    /// </summary>
+    public static DeploymentContent WithReadOnlyVolume(this DeploymentContent d, string name, string mountPath, string claimName)
+    {
+        var existing = d.Volumes.FirstOrDefault(v => string.Equals(v.Name, name, StringComparison.OrdinalIgnoreCase));
+        var volume = (existing ?? new VolumeClaim { Name = name }) with
+        {
+            MountPath = mountPath,
+            ClaimName = claimName,
+            Create = false,
+            ReadOnly = true,
         };
         var volumes = existing is null ? d.Volumes.Add(volume) : d.Volumes.Replace(existing, volume);
         return d with { Volumes = volumes };

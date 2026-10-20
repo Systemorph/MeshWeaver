@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# A stand-in `kubectl` for hosting-artifact-store-bind's behaviour tests. What is tested is what the
+# SCRIPT does with the answers: where it reads the share from, which PV and claim it creates (read-only,
+# Retain, distinct handle), that it verifies instead of overwriting, and what it reports.
+#
+#   HOSTING_AB_STATE      directory: kubectl.log (one argv per call), applied.json (every `create -f -`, one per line)
+#   HOSTING_AB_SRC_PVC    the file `get pvc <owner claim>` answers with ("absent" → NotFound)
+#   HOSTING_AB_SRC_PV     the file `get pv <owner volume>` answers with
+#   HOSTING_AB_PV         the file `get pv artifact-store-<ns>` answers with (unset → NotFound until applied)
+#   HOSTING_AB_PVC        the file `get pvc <consumer claim>` answers with (unset → NotFound until applied, then Bound)
+#   HOSTING_AB_FORBID=1   every read answers Forbidden
+set -uo pipefail
+state="${HOSTING_AB_STATE:?the kubectl stub needs HOSTING_AB_STATE}"
+printf '%s\n' "$*" >> "$state/kubectl.log"
+if [ "${HOSTING_AB_FORBID:-0}" = 1 ]; then
+  echo 'Error from server (Forbidden): persistentvolumeclaims is forbidden: User "system:serviceaccount:memex-ops:hosting-operator" cannot get resource' >&2
+  exit 1
+fi
+notfound() { echo "Error from server (NotFound): $1 not found" >&2; exit 1; }
+case "$*" in
+  "-n control get pvc control-artifacts -o json")
+    [ "${HOSTING_AB_SRC_PVC:-}" = absent ] && notfound "persistentvolumeclaims \"control-artifacts\""
+    cat "${HOSTING_AB_SRC_PVC:?}" ;;
+  "get pv pvc-owner -o json")
+    cat "${HOSTING_AB_SRC_PV:?}" ;;
+  "get pv artifact-store-"*" -o json")
+    if [ -n "${HOSTING_AB_PV:-}" ]; then cat "$HOSTING_AB_PV"
+    elif grep -q '"kind":"PersistentVolume"' "$state/applied.json" 2>/dev/null; then grep '"kind":"PersistentVolume"' "$state/applied.json" | head -1
+    else notfound "persistentvolumes"; fi ;;
+  "-n "*" get pvc "*" -o json")
+    if [ -n "${HOSTING_AB_PVC:-}" ]; then cat "$HOSTING_AB_PVC"
+    elif grep -q '"kind":"PersistentVolumeClaim"' "$state/applied.json" 2>/dev/null; then
+      grep '"kind":"PersistentVolumeClaim"' "$state/applied.json" | head -1 | jq -c '. + {status: {phase: "Bound"}}'
+    else notfound "persistentvolumeclaims"; fi ;;
+  "create -f -")
+    jq -c . >> "$state/applied.json"
+    echo "applied" ;;
+  *)
+    echo "kubectl stub: unexpected call: $*" >&2
+    exit 9 ;;
+esac

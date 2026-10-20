@@ -77,6 +77,14 @@ public sealed class PrebuiltBundleRetentionHostedService(
     public Task StartAsync(CancellationToken cancellationToken)
     {
         var root = services.GetService<IConfiguration>()?[ShippedPrebuiltBundles.PublishedRootConfigKey];
+        if (!retention.Enabled)
+        {
+            logger.LogInformation(
+                "PrebuiltBundleRetention: disabled ({Key}=false) — this instance reads a bundle store it does not own "
+                + "(a consumer of the shared artifact store); the store's owner runs the one sweep",
+                PrebuiltBundleRetentionExtensions.EnabledConfigKey);
+            return Task.CompletedTask;
+        }
         if (string.IsNullOrWhiteSpace(root))
         {
             logger.LogDebug(
@@ -248,6 +256,12 @@ public static class PrebuiltBundleRetentionExtensions
     /// <summary>Config key disarming DELETION (<c>false</c> ⇒ report only). Default <c>true</c>.</summary>
     public const string DeleteConfigKey = "PreWarm:PrebuiltBundleRetention:Delete";
 
+    /// <summary>
+    /// Config key that turns the pass OFF entirely (<c>false</c> ⇒ never scheduled). Default <c>true</c>.
+    /// Rendered <c>false</c> on a consumer of the shared artifact store (Doc/Architecture/SharedArtifactStore).
+    /// </summary>
+    public const string EnabledConfigKey = "PreWarm:PrebuiltBundleRetention:Enabled";
+
     /// <summary>Legacy count key retained for caller compatibility; it no longer changes retention.</summary>
     public const string KeepNewestPerSourceConfigKey = "PreWarm:PrebuiltBundleRetention:KeepNewestPerSource";
 
@@ -282,6 +296,8 @@ public static class PrebuiltBundleRetentionExtensions
         var retention = PrebuiltBundleRetention.Default;
         if (bool.TryParse(configuration[DeleteConfigKey], out var delete))
             retention = retention with { Delete = delete };
+        if (bool.TryParse(configuration[EnabledConfigKey], out var enabled))
+            retention = retention with { Enabled = enabled };
         if (TimeSpan.TryParse(configuration[MinimumAgeConfigKey], out var age) && age >= TimeSpan.FromDays(30))
             retention = retention with { MinimumAge = age };
         if (TimeSpan.TryParse(configuration[UnsealedGraceConfigKey], out var grace) && grace > TimeSpan.Zero)
