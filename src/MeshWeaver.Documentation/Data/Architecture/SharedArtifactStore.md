@@ -124,7 +124,7 @@ read-only mount, and the store is not its to prune).
 | 3 | modules, assembly cache and NuGet cache: a read-only shared tier in front of the per-instance writable one — a portal resolves a content-addressed artifact from the store first and compiles only when the store has no build for its identity | core `FileSystemAssemblyStore`, module loader | design (below) |
 | 4 | one-way sync from our control's store to a client environment's control's store | control operator | design (below) |
 | 5 | local-module builds on each control | control build role | design (below) |
-| 6 | the standing prune job sweeps the one store | Plugins `StoragePrune` + core `hosting-storage-prune --claim` | command landed; sweep in the Plugins PR |
+| 6 | the standing prune job sweeps the one store | Plugins `StoragePrune` + core `hosting-storage-prune --claim` | Plugins half merged (#3993); the command ships with MeshWeaver#7000 and works once its operator image is on `hosting-operator:main` |
 | 7 | drop the per-volume copies on the portals' `/data` | per instance | maintainer step, last |
 
 ### Increment 3 — a read-only tier, never a second writer
