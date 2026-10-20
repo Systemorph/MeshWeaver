@@ -50,7 +50,7 @@ public class PrebuiltBundleRetentionStartupTest
         public void StopApplication() { }
     }
 
-    private static PrebuiltBundleRetentionStatus StartAndSignal(bool enabled)
+    private static async System.Threading.Tasks.Task<PrebuiltBundleRetentionStatus> StartAndSignal(bool enabled)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -65,24 +65,24 @@ public class PrebuiltBundleRetentionStartupTest
         var service = new PrebuiltBundleRetentionHostedService(provider, lifetime,
             PrebuiltBundleRetentionExtensions.FromConfiguration(configuration), status,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<PrebuiltBundleRetentionHostedService>.Instance);
-        service.StartAsync(System.Threading.CancellationToken.None).GetAwaiter().GetResult();
+        await service.StartAsync(System.Threading.CancellationToken.None);
         lifetime.Started.Cancel();
         // The pass is kicked from the ApplicationStarted callback; give an async hop a bounded chance.
         var deadline = System.DateTime.UtcNow.AddSeconds(5);
         while (enabled && status.LastFault is null && status.Last is null && System.DateTime.UtcNow < deadline)
-            System.Threading.Thread.Sleep(20);
+            await System.Threading.Tasks.Task.Delay(20);
         service.Dispose();
         return status;
     }
 
     [Fact]
-    public void AnEnabledPassIsScheduled_ADisabledOneNever()
+    public async System.Threading.Tasks.Task AnEnabledPassIsScheduled_ADisabledOneNever()
     {
-        var enabled = StartAndSignal(enabled: true);
+        var enabled = await StartAndSignal(enabled: true);
         Assert.True(enabled.LastFault is not null || enabled.Last is not null, "positive control: an enabled service ran its first pass once the application started");
 
-        var disabled = StartAndSignal(enabled: false);
-        System.Threading.Thread.Sleep(200);
+        var disabled = await StartAndSignal(enabled: false);
+        await System.Threading.Tasks.Task.Delay(200);
         Assert.Null(disabled.LastFault);
         Assert.Null(disabled.Last);
     }
