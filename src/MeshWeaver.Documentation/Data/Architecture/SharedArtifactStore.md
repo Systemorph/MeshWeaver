@@ -79,6 +79,16 @@ identifier, `<rid>/prebuilt-bundles/`, each in exactly the layout every reader a
   PER ARCHITECTURE the build server builds: `<account>/<share>/linux-x64`, and `…/osx-arm64` from the
   arm64 build. The publisher's existing refusal of a second architecture under one key now protects
   each per-architecture store instead of colliding in one.
+- **A reader that serves OTHER runtimes keeps the template.** The expansion writes the unexpanded root
+  to `PreWarm:PrebuiltBundleRootTemplate`, so a registry answering a client of another architecture
+  (the portal's prebuilt-bundle endpoints) can resolve the CLIENT's store. 🚨 Until those endpoints do,
+  the instance that serves the prebuilt surface to other architectures must not become a Consumer.
+- **Aspire refuses a Consumer.** A consumer's binding is a Kubernetes static PV; a Docker volume of its
+  own would hold none of the owner's publications, so the AppHost fails by name instead.
+- **A consumer's teardown never deletes the store.** `hosting-pv-purge` deletes a namespace's shares,
+  and a consumer's binding PV is claimed by the consumer's namespace — so it keeps every share that a
+  binding labels `meshweaver.io/purpose=artifact-store` or that any other namespace's PV references,
+  and removes only the stale PV object.
 - **The prune job walks every per-architecture store** (`hosting-storage-prune --claim`, identities
   reported as `<rid>/<identity>`).
 
