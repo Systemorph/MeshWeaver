@@ -425,7 +425,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-b", "plugins", DaysAgo(400));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("s-a", StringComparison.Ordinal))
@@ -436,6 +437,12 @@ public class PrebuiltBundleRetentionTest : IDisposable
         result.FailedDeletes.Should().Be(1);
         result.DeletedIdentities.Should().Be(1);
         Directory.Exists(Path.Combine(root, "s-b")).Should().BeFalse();
+        // #6991: a failed removal is itemized below Warning and COUNTED in the pass's one outcome.
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N failed removals must not become N shipped Warning lines")
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("could not remove"));
     }
 
     [Fact]
@@ -847,7 +854,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Generation(Live, "plugins", "gen-new", DaysAgo(1));
         Pointer(Live, "plugins", "gen-new");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("gen-a", StringComparison.Ordinal))
@@ -857,6 +865,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         result.FailedDeletes.Should().Be(1);
         result.DeletedGenerations.Should().Be(1);
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
         Directory.Exists(Path.Combine(root, Live, "plugins", "gen-b")).Should().BeFalse();
     }
 
@@ -979,6 +989,69 @@ public class PrebuiltBundleRetentionTest : IDisposable
         {
             try { Directory.Delete(emptyRoot, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    // ---- the pass outcome reaches Loki (#6991) -------------------------------------------------
+
+    /// <summary>
+    /// 🚨 The cluster ships only Warning+ to Loki, so a pass whose outcome logs at Information is a
+    /// pass nobody can see ran (#6991). Each pass — report-only and armed alike — emits exactly ONE
+    /// Warning outcome line carrying the denominator and the per-rule kept tally, and the itemized
+    /// lines (which scale with the store) stay below Warning.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "REPORT ONLY")]
+    [InlineData(true, "COLLECTED 1 identity(ies)")]
+    public void SweepCore_EmitsExactlyOneWarningOutcomePerPass(bool armed, string verdict)
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-old", "plugins", DaysAgo(500));
+        Sealed("s-recent", "plugins", DaysAgo(2));
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now, log);
+
+        var warnings = log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
+        warnings.Should().ContainSingle("one outcome line per pass is what keeps Warning+ affordable");
+        warnings[0].Message.Should().Contain("pass outcome").And.Contain(verdict)
+            .And.Contain("3 identity directory(ies)", "the line carries what the pass scanned")
+            .And.Contain("Kept 2 identity(ies) by rule:")
+            .And.Contain($"{PrebuiltRetentionKeepRule.Live}=1")
+            .And.Contain($"{PrebuiltRetentionKeepRule.RetentionWindow}=1");
+        warnings[0].Message.Should().NotContain("s-recent",
+            "the Warning line is bounded by the number of rules, never by the size of the store");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("s-recent"),
+            "the itemized kept list stays at Information");
+    }
+
+    /// <summary>
+    /// An aborted pass is already a Warning, and it is the ONLY Warning — no outcome line claims
+    /// the pass completed.
+    /// </summary>
+    [Fact]
+    public void SweepCore_AnAbortedPass_IsOneWarning()
+    {
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — ABORTED").And.Contain("nothing collected",
+                "every pass, an aborted one included, carries the one tag an operator queries for");
+    }
+
+    private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Enqueue((logLevel, formatter(state, exception)));
     }
 
     // ---- per-release surfaces (MeshWeaver#6990) -----------------------------------------------
@@ -1172,6 +1245,54 @@ public class PrebuiltBundleRetentionTest : IDisposable
             .Select(f => Path.GetFileName(f)!).OrderBy(n => n, StringComparer.Ordinal)
             .Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11300");
         SurfacesOnDisk().Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11295", "3.1.11300");
+    }
+
+    /// <summary>
+    /// #6991 over #6990: retired release surfaces are part of the pass's ONE Warning outcome, and a
+    /// surface that cannot be removed is itemized at Information and counted there — never a
+    /// Warning of its own.
+    /// </summary>
+    [Fact]
+    public void RetiredSurfaces_AreCountedOnTheOneWarningOutcome()
+    {
+        var pinned = SurfaceStore();
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — COLLECTED")
+            .And.Contain("and 2 release surface(s)")
+            .And.Contain("0 removal(s) failed")
+            .And.Contain("and 6 release surface(s)", "the kept surfaces are counted beside the kept generations");
+    }
+
+    [Fact]
+    public void AFailedSurfaceRemoval_IsCountedOnTheOneWarningOutcome()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the refusal below is a POSIX directory permission
+        var pinned = SurfaceStore();
+        var surfaces = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+            SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        var mode = File.GetUnixFileMode(surfaces);
+        File.SetUnixFileMode(surfaces, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var log = new OutcomeLogger();
+        try
+        {
+            var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+            result.DeletedSurfaces.Should().Be(0);
+        }
+        finally
+        {
+            File.SetUnixFileMode(surfaces, mode);
+        }
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N failed surface removals must not become N shipped Warning lines")
+            .Which.Message.Should().Contain("and 0 release surface(s)").And.Contain("2 removal(s) failed");
+        log.Entries.Count(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                               && e.Message.Contains("could not remove release surface")).Should().Be(2);
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Markdown;
@@ -151,18 +152,19 @@ public static class ContentLayoutArea
                 if (bytes is null)
                     return (UiControl?)new MarkdownControl($"Image not found: {filePath}");
 
-                if (extension == ".svg")
-                {
-                    // SVG can be embedded as text
-                    var svgContent = System.Text.Encoding.UTF8.GetString(bytes);
-                    return new HtmlControl($"<div class='embedded-svg'>{svgContent}</div>");
-                }
-
-                // For binary images, convert to base64 data URI
-                var base64 = Convert.ToBase64String(bytes);
-                var mimeType = GetMimeType(extension);
-                var imgHtml = $"<img src='data:{mimeType};base64,{base64}' alt='{Path.GetFileName(filePath)}' style='max-width: 100%;' />";
-                return new HtmlControl(imgHtml);
+                // A platform image, bounded to the content column with its natural aspect. Every
+                // format — SVG included — travels as a data URI and is drawn as an <img>, so markup in
+                // an uploaded file runs no script, and a content picture is never put on the icon
+                // backplate that an inline-svg ICON gets.
+                // An SVG image is parsed as a standalone XML document, which renders NOTHING without
+                // the namespace declarations inline HTML tolerated — AsSvgDocument adds the ones the
+                // author left out (the SVG namespace, the xlink prefix when it is used).
+                var payload = extension == ".svg"
+                    ? System.Text.Encoding.UTF8.GetBytes(ImageSources.AsSvgDocument(System.Text.Encoding.UTF8.GetString(bytes)))
+                    : bytes;
+                return Controls.Image(new Icon(Icon.UrlProvider, $"data:{GetMimeType(extension)};base64,{Convert.ToBase64String(payload)}"),
+                        Path.GetFileName(filePath))
+                    .WithMaxWidth("100%");
             })
             .Catch((Exception ex) => Observable.Return<UiControl?>(
                 new MarkdownControl($"Error loading image {filePath}: {ex.Message}")));
@@ -346,23 +348,20 @@ public static class ContentLayoutArea
 
     private static UiControl RenderPdf(LayoutAreaHost host, string collectionName, string filePath)
     {
-        // The file name/path is USER content (uploads) and HtmlControl renders as raw markup:
-        // URL-encode each path segment (malformed-link safety) and HTML-encode every value
-        // interpolated into an attribute so a crafted name cannot break out of it (XSS).
+        // The file name/path is USER content (uploads): URL-encode each path segment so a crafted
+        // name cannot alter the address. The frame and the link are platform controls, which encode
+        // every value they draw.
         var encodedPath = string.Join('/',
             filePath.Split('/').Select(Uri.EscapeDataString));
         // Access-controlled content route — NEVER /static (issue #587): a PDF in a private Space
         // must not be readable by URL alone.
         var contentUrl = ContentCollectionsExtensions.GetContentFileUrl(
             host.Hub.Address.ToString()!, collectionName, encodedPath);
-        var urlAttribute = System.Net.WebUtility.HtmlEncode(contentUrl);
-        var fileName = System.Net.WebUtility.HtmlEncode(Path.GetFileName(filePath));
-        return new HtmlControl(
-            $@"<div style=""width: 100%; min-height: 500px;"">
-                <iframe src=""{urlAttribute}"" style=""width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;"" title=""{fileName}""></iframe>
-                <div style=""margin-top: 8px;"">
-                    <a href=""{urlAttribute}?download"" download=""{fileName}"">Download PDF</a>
-                </div>
-            </div>");
+        var fileName = Path.GetFileName(filePath);
+        return Controls.Stack
+            .WithWidth("100%")
+            .WithVerticalGap(8)
+            .WithView(Controls.Embed(contentUrl, fileName))
+            .WithView(Controls.Link(host.Localize("content.downloadPdf"), contentUrl + "?download").WithDownload(fileName));
     }
 }
