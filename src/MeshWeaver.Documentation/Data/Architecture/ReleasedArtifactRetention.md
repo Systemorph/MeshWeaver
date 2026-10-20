@@ -61,7 +61,15 @@ for every represented major. An unresolved consumer version aborts the sweep.
 cannot shorten it. The legacy `KeepNewestPerSource` member and configuration-key
 constant remain for binary/source compatibility but no longer control cleanup.
 
-This is not yet proof of the complete publisher/consumer coordination below. A sealed
+This is not yet proof of the complete publisher/consumer coordination below.
+
+**Measured 2026-10-19: the sweep has collected nothing fleet-wide, correctly.** Every pass on the public
+and control instances aborted on an incomplete consumer inventory (five instances had never filed a
+`Hosting/ModuleInventory` report, the sixth a legacy one), and the public instance's share filled.
+The control instance now measures every artifact volume on a schedule and records the verdict —
+[Storage Prune](/Doc/Architecture/StoragePrune) — and the per-portal copies are being replaced by one
+control-owned store per environment with one sweep and one inventory —
+[Shared Artifact Store](/Doc/Architecture/SharedArtifactStore). A sealed
 bundle is a local publication signal; the registry's last-green advertised set and
 active builds must still participate in the common protection inventory.
 

@@ -1,0 +1,1 @@
+@@MW-STORE refused	the data root /store is EMPTY — the claim did not attach, or it is not the portal's data claim

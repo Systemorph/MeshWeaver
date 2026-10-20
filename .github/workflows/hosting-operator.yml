@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 42 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 42 (37 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 44 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 44 (38 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -236,6 +236,14 @@ jobs:
           # beside bin/). Behaviour-tested against test/stubs/manifest-apply. The plan half is the Plugins
           # ApplyClusterManifest action; the line moves up into the plan list once that has merged.
           hosting-manifest-apply     ApplyClusterManifest — ships and is behaviour-tested; the plan half is the Plugins ApplyClusterManifest action
+          #
+          # hosting-storage-prune is the governed measurement of a data volume or of the shared artifact
+          # store (Doc/Architecture/StoragePrune): a read-only walk by default; --execute deletes only
+          # abandoned assembly-cache temp files and dumps shadowed by a dump volume, never a bundle.
+          # Behaviour-tested against test/stubs/storage-prune, with the walker run for real on a fixture
+          # tree. Its plan half is the Plugins StoragePrune action and standing sweep, which merges after
+          # this image is on hosting-operator:main, for the same reason as hosting-migrate above.
+          hosting-storage-prune      StoragePrune — ships and is behaviour-tested; the plan half is the Plugins StoragePrune action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
