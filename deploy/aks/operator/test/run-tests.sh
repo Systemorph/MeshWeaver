@@ -4429,6 +4429,9 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
     echo b > "$pb/s0123abcd/plugins/b.zip"; : > "$pb/s0123abcd/plugins/_complete"
     _sp_at "$pb/s0123abcd/plugins/b.zip" 90; _sp_at "$pb/s0123abcd/plugins/_complete" 90; _sp_at "$pb/s0123abcd/plugins" 90; _sp_at "$pb/s0123abcd" 90
     echo b > "$pb/s4567ef/plugins/b.zip"; _sp_at "$pb/s4567ef/plugins/b.zip" 5; _sp_at "$pb/s4567ef/plugins" 5; _sp_at "$pb/s4567ef" 5
+    # A legacy identity that already used the generation layout: classified ONCE, as the identity.
+    mkdir -p "$pb/s89abcd/plugins/gen-a"; echo gen-a > "$pb/s89abcd/plugins/_current"; : > "$pb/s89abcd/plugins/gen-a/_complete"
+    _sp_at "$pb/s89abcd/plugins/gen-a/_complete" 90; _sp_at "$pb/s89abcd/plugins/gen-a" 90; _sp_at "$pb/s89abcd/plugins/_current" 90; _sp_at "$pb/s89abcd/plugins" 90; _sp_at "$pb/s89abcd" 90
     # The shared store's architecture level: <identity>/<rid>/<source>/… (Doc/Architecture/SharedArtifactStore).
     mkdir -p "$pb/c003e001/osx-arm64/plugins/gen-mac"
     echo gen-mac > "$pb/c003e001/osx-arm64/plugins/_current"; : > "$pb/c003e001/osx-arm64/plugins/gen-mac/_complete"
@@ -4472,8 +4475,8 @@ if stat -c %Y / >/dev/null 2>&1 && touch -d @1 "$(mktemp)" 2>/dev/null && comman
   sp -- --namespace memex-cloud
   [ "$_sp_rc" -eq 0 ] && ok "storage prune measures the data volume and reports" || bad "storage prune happy path" "exited ${_sp_rc}: ${_sp_out}"
   [ "$(printf '%s\n' "$_sp_out" | tail -1 | cut -c1-29)" = "::hosting:: storage_report=H4" ] && ok "…and the gzip+base64 report is the LAST line, inside the lane's log tail" || bad "report last" "last: $(printf '%s\n' "$_sp_out" | tail -1 | cut -c1-80)"
-  [ "$(printf '%s' "$_sp_json" | jq -r '[.bundles.classes[] | "\(.class)=\(.count)"] | sort | join(",")')" = "bundle-current=3,bundle-legacy-identity=1,bundle-superseded-generation=1,bundle-unsealed-generation=1,bundle-young=2" ] \
-    && ok "…every bundle item gets exactly one class: current (even when old), young, unsealed, superseded, legacy" || bad "classes" "json: ${_sp_json}"
+  [ "$(printf '%s' "$_sp_json" | jq -r '[.bundles.classes[] | "\(.class)=\(.count)"] | sort | join(",")')" = "bundle-current=3,bundle-legacy-identity=2,bundle-superseded-generation=1,bundle-unsealed-generation=1,bundle-young=2" ] \
+    && ok "…every bundle item gets exactly one class: current (even when old), young, unsealed, superseded, legacy — a legacy identity once, never again through its generations" || bad "classes" "json: ${_sp_json}"
   [ "$(printf '%s' "$_sp_json" | jq -r '.bundles.sources[0] | "\(.identity)/\(.source) current=\(.current) gens=\(.generations) unsealedOld=\(.unsealedOld) supersededOld=\(.supersededOld) young=\(.young) lease=\(.leaseFile)"')" = "c003e001/plugins current=gen-cur gens=4 unsealedOld=1 supersededOld=1 young=1 lease=true" ] \
     && ok "…per source: the generation _current names, the counts of each kind, and the lease file" || bad "per source" "json: ${_sp_json}"
   [ "$(printf '%s' "$_sp_json" | jq -r '.deletable.cacheTmp.count, .deletable.misplacedDumps.count, .deleted.count, .mode, .dumpsShadowed, .claim' | tr '\n' ' ')" = "1 1 0 report true memex-data " ] \

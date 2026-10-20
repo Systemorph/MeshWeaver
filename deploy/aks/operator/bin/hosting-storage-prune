@@ -251,7 +251,10 @@ condense='
 | ($begin[1] | tonumber) as $now
 | def age($t): ((($now - ($t | tonumber)) / 86400) | floor); .
 | ($rows | map(select(.[0] == "df")) | first // ["df","0","0","0"]) as $df
-| [ $rows[] | select(.[0] == "generation")
+| ([ $rows[] | select(.[0] == "identity" and .[2] == "legacy") | .[1] ] | map({key: ., value: true}) | from_entries) as $legacyIds
+# A legacy identity is classified WHOLE (one item, its measured size); the generations inside it are
+# reported for their state only, never classified a second time.
+| [ $rows[] | select(.[0] == "generation") | select($legacyIds[.[1]] | not)
     | {kind: "generation", identity: .[1], source: .[2], name: .[3], state: .[4], ageDays: age(.[5]), kib: (.[6] | tonumber), leaseFile: (.[7] == "1")} ] as $gens
 | [ $rows[] | select(.[0] == "flat")
     | {kind: "flat", identity: .[1], source: .[2], sealed: (.[3] == "1"), ageDays: age(.[4]), kib: (.[5] | tonumber), leaseFile: (.[6] == "1")} ] as $flats
