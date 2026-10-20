@@ -72,6 +72,18 @@ public record ImageControl(object Source, object Alt) : UiControl<ImageControl>(
     /// <summary>The box height, overriding <see cref="Size"/>.</summary>
     public object? Height { get; init; }
 
+    /// <summary>
+    /// The widest a PICTURE (a URL or SVG source) may be, as a CSS length. With <see cref="MaxWidth"/>
+    /// or <see cref="MaxHeight"/> set, a picture keeps its NATURAL aspect inside those bounds — a wide
+    /// banner logo and a square avatar both render whole — and <see cref="Size"/> no longer sizes it
+    /// (an explicit <see cref="Width"/> or <see cref="Height"/> still does). The glyph, icon and
+    /// initials forms have no natural size and keep using <see cref="Size"/>.
+    /// </summary>
+    public object? MaxWidth { get; init; }
+
+    /// <summary>The tallest a picture may be, as a CSS length — see <see cref="MaxWidth"/>.</summary>
+    public object? MaxHeight { get; init; }
+
     /// <summary>One of <see cref="ImageShape"/>; <see cref="ImageShape.Square"/> by default.</summary>
     public object? Shape { get; init; } = ImageShape.Square;
 
@@ -102,6 +114,14 @@ public record ImageControl(object Source, object Alt) : UiControl<ImageControl>(
     /// <summary>Sets the box height (overrides <see cref="Size"/>).</summary>
     /// <param name="height">CSS pixels, a CSS length, or a binding.</param>
     public ImageControl WithHeight(object height) => this with { Height = height };
+
+    /// <summary>Bounds a picture's width and keeps its natural aspect (<see cref="MaxWidth"/>).</summary>
+    /// <param name="maxWidth">A CSS length, or a binding.</param>
+    public ImageControl WithMaxWidth(object maxWidth) => this with { MaxWidth = maxWidth };
+
+    /// <summary>Bounds a picture's height and keeps its natural aspect (<see cref="MaxHeight"/>).</summary>
+    /// <param name="maxHeight">A CSS length, or a binding.</param>
+    public ImageControl WithMaxHeight(object maxHeight) => this with { MaxHeight = maxHeight };
 
     /// <summary>Sets the outline — one of <see cref="ImageShape"/>.</summary>
     /// <param name="shape">The shape, or a binding.</param>

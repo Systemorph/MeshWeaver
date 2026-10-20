@@ -66,6 +66,25 @@ public static class PlatformVersionLine
         return core;
     }
 
+    /// <summary>
+    /// 🚨 <b>True when <paramref name="version"/> names a deliberately CUT release</b> — the clean
+    /// <c>X.Y.Z</c> that <c>release.yml</c> promotes from an annotated <c>vX.Y.Z</c> tag — and false
+    /// for every CONTINUOUS build, in either notation. The ONE predicate the identity, marker and
+    /// surface retention rules share (MeshWeaver#6990).
+    ///
+    /// <para>"No hyphen" is NOT this question. Since policy <c>platform-semver-versioning</c> a
+    /// main-CD build is published as a plain <c>&lt;major&gt;.&lt;minor&gt;.&lt;run&gt;</c>
+    /// (<c>3.1.11217</c>), so a hyphen test reads every CD build as a cut release and keeps its
+    /// identity, marker and surface for ever. A version is a continuous build exactly when it
+    /// carries a publication lineage (<see cref="PlatformReleaseOrder.BuildOrdinal"/> is not null:
+    /// <c>3.0.0-ci.N</c>, <c>3.1.N</c>, <c>-edge</c>, a source build), and a cut release has none —
+    /// it is a retag of a sealed continuous set. Any other pre-release label (the retired
+    /// <c>3.0.0-rc8</c>) is not a cut release either. A version that parses as neither (garbage)
+    /// is treated as cut, so it is KEPT: an unreadable name licenses no deletion.</para>
+    /// </summary>
+    public static bool IsCutRelease(string? version) =>
+        !IsPrerelease(version) && PlatformReleaseOrder.BuildOrdinal(version) is null;
+
     /// <summary>True when the version carries a pre-release label (<c>-ci.&lt;n&gt;</c>, historically <c>-rc…</c>).</summary>
     public static bool IsPrerelease(string? version)
     {
@@ -214,6 +233,24 @@ public sealed record ReleaseMarkerEntry(
 
     /// <summary>True for a <c>-ci.&lt;n&gt;</c> (or any other pre-release) marker.</summary>
     public bool IsPrerelease => PlatformVersionLine.IsPrerelease(Version);
+
+    /// <summary>True for a deliberately cut release (<see cref="PlatformVersionLine.IsCutRelease"/>) — what retention keeps for ever.</summary>
+    public bool IsCutRelease => PlatformVersionLine.IsCutRelease(Version);
+}
+
+/// <summary>
+/// One <c>_releases/_surface/&lt;version&gt;</c> file: the portal type surface measured on THAT
+/// release's image (policy <c>exact-release-surface</c>). The file NAME is the platform version,
+/// spelled exactly as the release marker's; retention never reads the content.
+/// </summary>
+/// <param name="Version">The platform version (the file name).</param>
+/// <param name="Path">Full path of the surface file.</param>
+/// <param name="WrittenUtc">The file's last write.</param>
+/// <param name="Bytes">The file's size.</param>
+public sealed record ReleaseSurfaceEntry(string Version, string Path, DateTimeOffset WrittenUtc, long Bytes)
+{
+    /// <summary>True for a deliberately cut release (<see cref="PlatformVersionLine.IsCutRelease"/>) — what retention keeps for ever.</summary>
+    public bool IsCutRelease => PlatformVersionLine.IsCutRelease(Version);
 }
 
 /// <summary>What one scan of the store found.</summary>
@@ -221,7 +258,39 @@ public sealed record ReleaseMarkerEntry(
 /// <param name="Markers">Every release marker.</param>
 public sealed record PrebuiltStoreScan(
     ImmutableList<PrebuiltIdentityEntry> Identities,
-    ImmutableList<ReleaseMarkerEntry> Markers);
+    ImmutableList<ReleaseMarkerEntry> Markers)
+{
+    /// <summary>Every per-release surface file under <c>_releases/_surface</c> (MeshWeaver#6990).</summary>
+    public ImmutableList<ReleaseSurfaceEntry> Surfaces { get; init; } = ImmutableList<ReleaseSurfaceEntry>.Empty;
+}
+
+/// <summary>
+/// The KEEP rules of <see cref="PrebuiltBundleStore.Plan"/>, as the short names the once-per-pass
+/// summary tallies (<see cref="PrebuiltBundleSweepPlan.KeptTally"/>). An open vocabulary of string
+/// constants (policy <c>open-vocabulary-string-constants</c>): a reader must treat an unknown value
+/// as a rule it does not know, never as one of these.
+/// </summary>
+public static class PrebuiltRetentionKeepRule
+{
+    /// <summary>The framework identity this process runs.</summary>
+    public const string Live = "live";
+    /// <summary>A seal that could not be read — unreadable is never unreferenced.</summary>
+    public const string Unreadable = "unreadable";
+    /// <summary>A publication pointer that could not be followed.</summary>
+    public const string PointerUnknown = "pointer-unknown";
+    /// <summary>Named by a release (non-prerelease) marker.</summary>
+    public const string ReleaseMarker = "release-marker";
+    /// <summary>Pinned by a consumer outside this process.</summary>
+    public const string Pinned = "pinned";
+    /// <summary>Named by a NodeType record's adoption stamp.</summary>
+    public const string AdoptionStamp = "adoption-stamp";
+    /// <summary>The newest sealed publication of a source on a platform major.</summary>
+    public const string NewestSealed = "newest-sealed";
+    /// <summary>Within the minimum-age retention window.</summary>
+    public const string RetentionWindow = "window";
+    /// <summary>An unsealed source whose seal may still be in flight.</summary>
+    public const string SealInFlight = "seal-in-flight";
+}
 
 /// <summary>What a sweep decided, before any deletion.</summary>
 /// <param name="LiveIdentity">The framework identity this process runs.</param>
@@ -229,7 +298,7 @@ public sealed record PrebuiltStoreScan(
 /// <param name="Identities">Every identity found.</param>
 /// <param name="Collectable">The identities no rule protects, oldest first.</param>
 /// <param name="Protected">Why each surviving identity survived, keyed by identity.</param>
-/// <param name="CollectableMarkers">The pre-release markers whose identity goes with this plan, or is already gone.</param>
+/// <param name="CollectableMarkers">The continuous-build markers whose identity goes with this plan, or is already gone.</param>
 /// <param name="AbortReason">Why NOTHING may be collected, or null when the plan is sound.</param>
 /// <param name="UnresolvedPins">Pinned references whose version maps to no <c>_releases</c> marker and that name no identity — they abort cleanup because the consumer inventory is incomplete.</param>
 public sealed record PrebuiltBundleSweepPlan(
@@ -255,6 +324,38 @@ public sealed record PrebuiltBundleSweepPlan(
     /// <summary>Why each surviving generation survived, keyed by its full directory path.</summary>
     public ImmutableDictionary<string, string> ProtectedGenerations { get; init; } = ImmutableDictionary<string, string>.Empty;
 
+    /// <summary>
+    /// Which KEEP rule protected each surviving identity, keyed by identity — the bounded companion
+    /// of <see cref="Protected"/>, whose reasons are per-identity prose. Values are
+    /// <see cref="PrebuiltRetentionKeepRule"/> constants.
+    /// </summary>
+    public ImmutableDictionary<string, string> ProtectedRules { get; init; } = ImmutableDictionary<string, string>.Empty;
+
+    /// <summary>
+    /// The kept identities counted per rule (<c>window=612, release-marker=40, …</c>) — bounded by
+    /// the number of rules, never by the size of the store, so it can travel on the once-per-pass
+    /// Warning summary (#6991) where the itemized <see cref="Protected"/> list cannot.
+    /// </summary>
+    public string KeptTally =>
+        ProtectedRules.IsEmpty
+            ? "(nothing)"
+            : string.Join(", ", ProtectedRules.Values
+                .GroupBy(r => r, StringComparer.Ordinal)
+                .OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal)
+                .Select(g => $"{g.Key}={g.Count()}"));
+
+    /// <summary>
+    /// Per-release surface files (<c>_releases/_surface/&lt;version&gt;</c>) no reader can reach any
+    /// more, oldest first (MeshWeaver#6990): the surface of every marker in
+    /// <see cref="CollectableMarkers"/>, which goes AFTER its marker, and an orphan continuous-build
+    /// surface that no marker names, no consumer pins, and that is older than the retention window.
+    /// Empty whenever the plan aborted.
+    /// </summary>
+    public ImmutableList<ReleaseSurfaceEntry> CollectableSurfaces { get; init; } = ImmutableList<ReleaseSurfaceEntry>.Empty;
+
+    /// <summary>Why each surviving surface survived, keyed by version.</summary>
+    public ImmutableDictionary<string, string> ProtectedSurfaces { get; init; } = ImmutableDictionary<string, string>.Empty;
+
     /// <summary>Total bytes across every identity.</summary>
     public long TotalBytes => Identities.Sum(i => i.Bytes);
 
@@ -267,6 +368,7 @@ public sealed record PrebuiltBundleSweepPlan(
         + $" ({LivePlatformVersion ?? "version unknown"}), collectable={Collectable.Count} / {Mb(CollectableBytes)}"
         + (CollectableGenerations.IsEmpty ? "" : $", superseded generations={CollectableGenerations.Count}")
         + $", markers to retire={CollectableMarkers.Count}"
+        + (CollectableSurfaces.IsEmpty ? "" : $", release surfaces to retire={CollectableSurfaces.Count} / {Mb(CollectableSurfaces.Sum(f => f.Bytes))}")
         + (UnresolvedPins.IsEmpty ? "" : $", unresolved consumer references (cleanup blocked): {string.Join(", ", UnresolvedPins)}")
         + (AbortReason is null ? "" : $", ABORTED: {AbortReason}");
 
@@ -296,6 +398,9 @@ public sealed record PrebuiltBundleSweepResult(
     /// <summary>Superseded generation directories actually removed from inside retained identities.</summary>
     public int DeletedGenerations { get; init; }
 
+    /// <summary>Per-release surface files actually removed from <c>_releases/_surface</c> (MeshWeaver#6990).</summary>
+    public int DeletedSurfaces { get; init; }
+
     /// <summary>One ledger line.</summary>
     public string LedgerLine =>
         $"{AtUtc:O} " + (Plan is null
@@ -305,7 +410,7 @@ public sealed record PrebuiltBundleSweepResult(
                 : Deleted
                     ? $"removed {DeletedIdentities} identity(ies) / {PrebuiltBundleSweepPlan.Mb(DeletedBytes)}, "
                       + (DeletedGenerations == 0 ? "" : $"{DeletedGenerations} superseded generation(s), ")
-                      + $"{DeletedMarkers} marker(s){(FailedDeletes == 0 ? "" : $", {FailedDeletes} failed")} — {Plan.Summary}"
+                      + $"{DeletedMarkers} marker(s), {DeletedSurfaces} release surface(s){(FailedDeletes == 0 ? "" : $", {FailedDeletes} failed")} — {Plan.Summary}"
                     : $"report only — {Plan.Summary}");
 }
 
@@ -324,7 +429,8 @@ public sealed record PrebuiltBundleSweepResult(
 /// <para><b>What references an identity</b> (each is a KEEP; they are ORed):</para>
 /// <list type="number">
 /// <item>it is the framework identity <b>this process runs</b>;</item>
-/// <item>a <b>clean release marker</b> (<c>_releases/X.Y.Z</c>, no pre-release label) names it —
+/// <item>a <b>cut release marker</b> (<c>_releases/X.Y.Z</c> promoted by <c>release.yml</c>,
+/// <see cref="PlatformVersionLine.IsCutRelease"/> — never a continuous <c>3.1.&lt;run&gt;</c> build) names it —
 /// support has not been established as ended, so the release stays available;</item>
 /// <item>a <b>NodeType record's adoption stamp</b> (<c>CompiledFrameworkVersion</c>, written by
 /// <c>PrebuiltAssemblySeeder</c> and by every local compile) names it;</item>
@@ -338,11 +444,22 @@ public sealed record PrebuiltBundleSweepResult(
 /// </list>
 ///
 /// <para>Everything else is collected, oldest first, one identity at a time, each removal logged
-/// with the bytes reclaimed. The pre-release markers of a removed identity (and of an identity
+/// with the bytes reclaimed. The continuous-build markers of a removed identity (and of an identity
 /// already gone for longer than the age window) are removed with it, so <c>_releases/</c> does not grow
-/// forever; a clean release marker is never removed. A release marker that cannot be read, or a
+/// forever; a cut release marker is never removed. A release marker that cannot be read, or a
 /// store that cannot be listed, ABORTS the sweep with nothing collected: a partial picture licenses
 /// no deletion.</para>
+///
+/// <para><b>Per-release surfaces follow their marker</b> (MeshWeaver#6990). Every core CD run
+/// writes <c>_releases/_surface/&lt;version&gt;</c> (about 8.7 MB). Every reader reaches one THROUGH
+/// a release version — the release gate (<c>PublishedBundleCatalogue.ReleaseSurfaceOf</c>, for the
+/// version a roll targets) and <c>release.yml</c> (which copies the ci version's surface to the
+/// clean one). So a surface is retired exactly when its marker is, and only after that marker's
+/// removal succeeded: the publisher writes surface-then-marker, so a reader that finds the marker
+/// must find the surface. An ORPHAN surface, one no marker names, goes only when it is a
+/// continuous build, not the running version, not pinned by any consumer, and older than the retention
+/// window (a young one may precede its marker). A cut release's surface is never retired, like
+/// its marker. A surface directory that cannot be listed aborts the pass with everything else.</para>
 ///
 /// <para>🚨 <b>And the same rule one level down, for GENERATIONS</b> (MeshWeaver#3461,
 /// <c>Doc/Architecture/SealedPublicationGenerations</c> → "Retention"). Under the generation
@@ -401,7 +518,19 @@ public static class PrebuiltBundleStore
                 }
             }
 
-        return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable());
+        // Listed, never read: retention decides on a surface's NAME and age. A directory that
+        // cannot be listed throws, and the caller aborts the whole pass.
+        var surfaces = ImmutableList.CreateBuilder<ReleaseSurfaceEntry>();
+        var surfaceDirectory = Path.Combine(markerDirectory, SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        if (Directory.Exists(surfaceDirectory))
+            foreach (var file in Directory.EnumerateFiles(surfaceDirectory).OrderBy(f => f, StringComparer.Ordinal))
+            {
+                var info = new FileInfo(file);
+                surfaces.Add(new ReleaseSurfaceEntry(info.Name, file,
+                    new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero), info.Length));
+            }
+
+        return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable()) { Surfaces = surfaces.ToImmutable() };
     }
 
     private static PrebuiltIdentityEntry ReadIdentity(string identityDirectory, string identity, ILogger? logger)
@@ -625,15 +754,21 @@ public static class PrebuiltBundleStore
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => g.Select(m => m.Version).OrderByDescending(v => v, comparer).First(),
                 StringComparer.Ordinal);
+        // 🚨 CUT releases only (PlatformVersionLine.IsCutRelease), never "no hyphen": a main-CD
+        // build is a plain 3.1.<run>, and reading it as clean kept every CD identity for ever.
         var cleanMarkersOf = readable
-            .Where(m => !m.IsPrerelease)
+            .Where(m => m.IsCutRelease)
             .GroupBy(m => m.Identity!, StringComparer.Ordinal)
             .ToImmutableDictionary(g => g.Key, g => string.Join(", ", g.Select(m => m.Version)), StringComparer.Ordinal);
         var reasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
-        void Keep(string identity, string reason)
+        var rules = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        void Keep(string identity, string rule, string reason)
         {
             if (!reasons.ContainsKey(identity))
+            {
                 reasons[identity] = reason;
+                rules[identity] = rule;
+            }
         }
 
         var sources = scan.Identities.SelectMany(i => i.Sources.Where(s => s.IsSealed).Select(s => s.Name))
@@ -674,9 +809,9 @@ public static class PrebuiltBundleStore
         foreach (var identity in scan.Identities)
         {
             if (string.Equals(identity.Identity, liveIdentity, StringComparison.Ordinal))
-                Keep(identity.Identity, "the framework identity this process runs");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Live, "the framework identity this process runs");
             else if (identity.HasReadFault)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Unreadable,
                     $"its seal could not be read ({identity.Sources.First(s => s.ReadFault is not null).ReadFault}) — unreadable is never unreferenced");
             // 🚨 The same rule one field over, and phase 5 is what made it load-bearing at the
             // IDENTITY level (#3461). A source whose `_current` could not be followed reads as
@@ -685,15 +820,15 @@ public static class PrebuiltBundleStore
             // reading that established nothing. The generation rules already keep every generation
             // of such a source; this keeps the identity that holds them.
             else if (identity.Sources.FirstOrDefault(s => s.PointerFault is not null) is { } faulted)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.PointerUnknown,
                     $"which publication of '{faulted.Name}' applies is unknown ({faulted.PointerFault}) "
                     + "— an inventory that could not be read licenses no deletion");
             else if (cleanMarkersOf.TryGetValue(identity.Identity, out var releases))
-                Keep(identity.Identity, $"named by release marker {releases}");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.ReleaseMarker, $"named by release marker {releases}");
             else if (pinnedReasons.TryGetValue(identity.Identity, out var pinnedBy))
-                Keep(identity.Identity, pinnedBy);
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.Pinned, pinnedBy);
             else if (stampedIdentities.Contains(identity.Identity))
-                Keep(identity.Identity, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.AdoptionStamp, "a NodeType record's adoption stamp (CompiledFrameworkVersion) names it");
         }
 
         foreach (var source in sources)
@@ -710,7 +845,7 @@ public static class PrebuiltBundleStore
                          .Where(g => g.Key is not null))
             {
                 var latest = family.OrderByDescending(i => newestVersionOf[i.Identity], comparer).First();
-                Keep(latest.Identity,
+                Keep(latest.Identity, PrebuiltRetentionKeepRule.NewestSealed,
                     $"the newest sealed '{source}' publication on platform major {family.Key} ({newestVersionOf[latest.Identity]}) — what Family strictness adopts");
             }
         }
@@ -720,12 +855,12 @@ public static class PrebuiltBundleStore
         foreach (var identity in scan.Identities)
             if (nowUtc - identity.NewestWriteUtc < minimumAge
                 || readable.Any(m => m.Identity == identity.Identity && nowUtc - m.WrittenUtc < minimumAge))
-                Keep(identity.Identity, $"within the {minimumAge.TotalDays:N0}-day retention window");
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.RetentionWindow, $"within the {minimumAge.TotalDays:N0}-day retention window");
 
         // 7. a seal in flight.
         foreach (var identity in scan.Identities)
             if (identity.HasUnsealedSource && nowUtc - identity.NewestWriteUtc < retention.UnsealedGrace)
-                Keep(identity.Identity,
+                Keep(identity.Identity, PrebuiltRetentionKeepRule.SealInFlight,
                     $"a source is unsealed and its newest write is {(nowUtc - identity.NewestWriteUtc).TotalMinutes:N0} min old — a seal may be in flight (grace {retention.UnsealedGrace})");
 
         var collectable = scan.Identities
@@ -741,7 +876,7 @@ public static class PrebuiltBundleStore
             .Select(v => v!)
             .ToImmutableHashSet(StringComparer.Ordinal);
         var markers = readable
-            .Where(m => m.IsPrerelease)
+            .Where(m => !m.IsCutRelease)
             .Where(m => !string.Equals(m.Identity, liveIdentity, StringComparison.Ordinal))
             .Where(m => livePlatformVersion is null || !string.Equals(m.Version, livePlatformVersion, StringComparison.Ordinal))
             // A pinned version's marker is the ONLY way its pin reaches an identity — never retired,
@@ -751,6 +886,39 @@ public static class PrebuiltBundleStore
             .Where(m => collectableIdentities.Contains(m.Identity!)
                         || (!present.Contains(m.Identity!) && nowUtc - m.WrittenUtc >= minimumAge))
             .ToImmutableList();
+
+        // ══════════════ PER-RELEASE SURFACES (MeshWeaver#6990) ══════════════
+        //
+        // Every reader of `_releases/_surface/<v>` names a RELEASE VERSION first: the release gate
+        // reads the surface of the version a roll targets, release.yml copies the ci version's to
+        // the clean one. So a surface is referenced exactly as long as its version is. The marker
+        // rule above has already decided that, and the surface follows it rather than forming a
+        // second opinion. A surface no marker names (an orphan: the marker write failed after the
+        // surface landed, or the marker was retired before this rule existed) is judged on the
+        // marker rule's own terms for an absent identity: never a cut release, never the running
+        // one, never a pinned one, and only once it is older than the window.
+        var markerVersions = scan.Markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        var retiringVersions = markers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        var surfaceReasons = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+        var collectableSurfaces = ImmutableList.CreateBuilder<ReleaseSurfaceEntry>();
+        foreach (var surface in scan.Surfaces)
+        {
+            var normalized = PlatformVersionLine.Normalize(surface.Version) ?? surface.Version;
+            var keep =
+                retiringVersions.Contains(surface.Version) ? null
+                : markerVersions.Contains(surface.Version) ? "its release marker is kept"
+                : surface.IsCutRelease ? "a cut release's surface is never retired"
+                : livePlatformVersion is not null && string.Equals(normalized, livePlatformVersion, StringComparison.Ordinal)
+                    ? "the platform version this process runs"
+                : pinnedVersions.Contains(normalized) ? "a consumer pins this version"
+                : nowUtc - surface.WrittenUtc < minimumAge
+                    ? $"no marker names it, and it is within the {minimumAge.TotalDays:N0}-day retention window — its marker may be in flight"
+                : null;
+            if (keep is not null)
+                surfaceReasons[surface.Version] = keep;
+            else
+                collectableSurfaces.Add(surface);
+        }
 
         // ══════════════ GENERATIONS INSIDE A RETAINED IDENTITY (MeshWeaver#3461) ══════════════
         //
@@ -823,6 +991,10 @@ public static class PrebuiltBundleStore
             CollectableGenerations = collectableGenerations.ToImmutable().Sort(
                 (a, b) => a.NewestWriteUtc.CompareTo(b.NewestWriteUtc)),
             ProtectedGenerations = generationReasons.ToImmutable(),
+            ProtectedRules = rules.ToImmutable(),
+            CollectableSurfaces = collectableSurfaces.ToImmutable().Sort(
+                (a, b) => a.WrittenUtc.CompareTo(b.WrittenUtc)),
+            ProtectedSurfaces = surfaceReasons.ToImmutable(),
         };
     }
 
@@ -862,7 +1034,7 @@ public static class PrebuiltBundleStore
             {
                 var absent = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0,
                     $"the published bundle root '{root}' does not exist");
-                logger?.LogWarning("PrebuiltBundleRetention: {Reason} — nothing collected", absent.AbortReason);
+                logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Reason} — nothing collected", absent.AbortReason);
                 return absent;
             }
             scan = Scan(root, logger);
@@ -871,7 +1043,7 @@ public static class PrebuiltBundleStore
         {
             // 🚨 FAIL CLOSED: a partial listing is not a picture of the store, so it licenses nothing.
             logger?.LogWarning(ex,
-                "PrebuiltBundleRetention: could not read {Root} — NOTHING collected. A store that cannot be "
+                "PrebuiltBundleRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A store that cannot be "
                 + "enumerated completely can never be pruned safely", root);
             var failed = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0, $"store could not be read: {ex.Message}");
             AppendLedger(root, failed, logger);
@@ -881,7 +1053,7 @@ public static class PrebuiltBundleStore
         var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
-            logger?.LogWarning("PrebuiltBundleRetention: {Summary}. NOTHING collected", plan.Summary);
+            logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Summary}. NOTHING collected", plan.Summary);
             var aborted = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, plan.AbortReason);
             AppendLedger(root, aborted, logger);
             return aborted;
@@ -889,11 +1061,22 @@ public static class PrebuiltBundleStore
 
         if (!retention.Delete)
         {
+            // 🚨 #6991: the pass OUTCOME is the one line an operator needs, and the cluster ships
+            // only Warning+ to Loki — so it is a Warning, once per pass (boot + every Interval, per
+            // replica), carrying the denominator and the per-rule kept tally but never a per-identity
+            // list. The itemized lists below stay Information: they scale with the store.
+            logger?.LogWarning(
+                "PrebuiltBundleRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. {Summary}. "
+                + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and "
+                + "{KeptSurfaces} release surface(s)",
+                plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count,
+                plan.ProtectedSurfaces.Count);
             logger?.LogInformation(
-                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Kept: {Kept}",
+                "PrebuiltBundleRetention: {Summary}. DELETING NOTHING — collection is not armed. Would collect: {Collectable}. Would collect generations: {Generations}. Would retire release surfaces: {Surfaces}. Kept: {Kept}",
                 plan.Summary,
                 plan.Collectable.Count == 0 ? "(nothing)" : string.Join(", ", plan.Collectable.Select(i => $"{i.Identity} ({PrebuiltBundleSweepPlan.Mb(i.Bytes)})")),
                 plan.CollectableGenerations.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableGenerations.Select(g => $"{g.Directory} ({PrebuiltBundleSweepPlan.Mb(g.Bytes)})")),
+                plan.CollectableSurfaces.IsEmpty ? "(nothing)" : string.Join(", ", plan.CollectableSurfaces.Select(f => f.Version)),
                 Describe(plan.Protected));
             var report = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, null);
             AppendLedger(root, report, logger);
@@ -932,7 +1115,8 @@ public static class PrebuiltBundleStore
                 // Surfaced, not swallowed: the directory (or what is left of it) stays, and the next
                 // pass re-plans it — a half-removed identity reads as unsealed to every reader.
                 failedDeletes++;
-                logger?.LogWarning(ex,
+                // Information (#6991): itemized; the pass's one Warning outcome carries the count.
+                logger?.LogInformation(ex,
                     "PrebuiltBundleRetention: could not remove {Directory} — it stays, and the next pass considers it again",
                     identity.Directory);
             }
@@ -964,36 +1148,72 @@ public static class PrebuiltBundleStore
             catch (Exception ex)
             {
                 failedDeletes++;
-                logger?.LogWarning(ex,
+                logger?.LogInformation(ex,
                     "PrebuiltBundleRetention: could not remove superseded generation {Directory} — it stays, "
                     + "and the next pass considers it again", generation.Directory);
             }
         }
 
         var deletedMarkers = 0;
+        var retiredVersions = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         foreach (var marker in plan.CollectableMarkers)
         {
             try
             {
                 File.Delete(marker.Path);
                 deletedMarkers++;
+                retiredVersions.Add(marker.Version);
                 lines.Add($"{nowUtc:O}   retired marker {marker.Version} → {marker.Identity}");
             }
             catch (Exception ex)
             {
                 failedDeletes++;
-                logger?.LogWarning(ex, "PrebuiltBundleRetention: could not remove release marker {Path}", marker.Path);
+                logger?.LogInformation(ex, "PrebuiltBundleRetention: could not remove release marker {Path}", marker.Path);
             }
         }
 
+        // Per-release surfaces AFTER their markers (MeshWeaver#6990): the reverse of the publisher's
+        // surface-then-marker order, so no reader finds a marker whose surface is gone. A surface
+        // whose marker could not be removed stays with it, and the next pass re-plans both.
+        var deletedSurfaces = 0;
+        var markerRetiring = plan.CollectableMarkers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
+        foreach (var surface in plan.CollectableSurfaces)
+        {
+            if (markerRetiring.Contains(surface.Version) && !retiredVersions.Contains(surface.Version))
+                continue;
+            try
+            {
+                File.Delete(surface.Path);
+                deletedSurfaces++;
+                deletedBytes += surface.Bytes;
+                lines.Add($"{nowUtc:O}   retired release surface {surface.Version} {PrebuiltBundleSweepPlan.Mb(surface.Bytes)}");
+            }
+            catch (Exception ex)
+            {
+                failedDeletes++;
+                // Information (#6991): itemized; the pass's one Warning outcome carries the count.
+                logger?.LogInformation(ex,
+                    "PrebuiltBundleRetention: could not remove release surface {Path} — it stays, and the next pass considers it again",
+                    surface.Path);
+            }
+        }
+
+        // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why); the
+        // itemized kept list stays on the Information line after it.
+        logger?.LogWarning(
+            "PrebuiltBundleRetention: pass outcome — COLLECTED {Identities} identity(ies), {Generations} superseded "
+            + "generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s), {Failed} removal(s) failed. {Summary}. "
+            + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and {KeptSurfaces} release surface(s)",
+            deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers, failedDeletes,
+            plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count, plan.ProtectedSurfaces.Count);
         logger?.LogInformation(
-            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies) and {Generations} superseded generation(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
-            plan.Summary, deletedIdentities, deletedGenerations, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
+            "PrebuiltBundleRetention: {Summary}. COLLECTED {Identities} identity(ies), {Generations} superseded generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s){Failed}. Kept: {Kept}",
+            plan.Summary, deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers,
             failedDeletes == 0 ? "" : $" ({failedDeletes} removal(s) failed)",
             Describe(plan.Protected));
 
         var result = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes, deletedMarkers, failedDeletes, null)
-            { DeletedGenerations = deletedGenerations };
+            { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
         AppendLedger(root, result, logger, lines);
         return result;
     }

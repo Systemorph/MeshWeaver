@@ -1,7 +1,7 @@
 ---
 Name: Badges, Icons & Status
 Category: Documentation
-Description: Small display controls — badges, icons, images, progress bars, spacers, menu items, and card skins.
+Description: Small display controls — badges, icons, images, progress bars, spacers, dividers, embedded documents and apps, menu items, and card skins.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="6"/><path d="M15.5 13 17 22l-5-3-5 3 1.5-9"/></svg>
 ---
 
@@ -138,6 +138,7 @@ Controls.Stack
 |---|---|---|
 | `Size` | `32` | Side of the square box in pixels, or a CSS length (`2.5rem`, `100%`) |
 | `Width`, `Height` | — | Override `Size` for a box that is not square |
+| `MaxWidth`, `MaxHeight` | — | Bound a picture and keep its natural aspect — see below |
 | `Shape` | `ImageShape.Square` | `Square`, `Rounded` or `Circle` |
 | `Fit` | `ImageFit.Contain` | `Contain` (icons, logos) or `Cover` (photos, posters) |
 | `Fallback` | — | Drawn when the source is absent or refused; any source form |
@@ -163,6 +164,25 @@ Every renderer resolves the control through `ImageSources.Resolve`, the one rule
 - A `content:` reference without a `NodePath` is not drawn. It is never shown as text.
 - An unknown `Shape` or `Fit` gets no styling, and the renderer logs it. It is never mapped onto a
   known value.
+
+## Natural-aspect bounds
+
+A logo or a banner has no fixed box: a wide wordmark and a square avatar must both render whole.
+Set `MaxWidth` and/or `MaxHeight` and a PICTURE (a URL or SVG source) keeps its natural aspect inside
+those bounds; `Size` then no longer sizes it, while an explicit `Width` or `Height` still does. The
+glyph, icon and initials forms have no natural size and keep using `Size`. A plate behind the logo is
+plain style on the control:
+
+```csharp
+Controls.Image(space.Logo, "")
+    .WithMaxWidth("340px")
+    .WithMaxHeight("96px")
+    .WithShape(ImageShape.Rounded)
+    .WithInitials(ImageSources.InitialsOf(space.Name))
+    .WithStyle("padding: 6px; background: var(--neutral-layer-2);")
+```
+
+---
 
 ---
 
@@ -193,6 +213,63 @@ Controls.Stack
     .WithView(Controls.Spacer)
     .WithView(Controls.Badge("Final").WithAppearance("Accent"))
 ```
+
+---
+
+# Divider
+
+`Controls.Divider` is a thin rule in the theme's neutral stroke colour, with the `separator` role —
+the control for a hand-built `<hr style=…>`. It is horizontal by default;
+`WithOrientation(Orientation.Vertical)` draws a full-height rule between side-by-side content.
+Spacing is the surrounding stack's gap, or a margin through `WithStyle`.
+
+```csharp --render DisplayDivider --show-code
+Controls.Stack
+    .WithVerticalGap(16)
+    .WithView(Controls.Label("Quarterly Report 2026"))
+    .WithView(Controls.Divider)
+    .WithView(Controls.Label("Revenue grew in every region."))
+```
+
+---
+
+# Embed
+
+`Controls.Embed(src, title)` frames a document or another site's page — the control for a
+hand-built `<iframe>`. The title is required: it is the frame's accessible name, and the caller
+localizes it. Every renderer loads the frame lazily, draws a theme-aware border, and applies
+`EmbedSources`:
+
+| `Kind` | Accepted `Src` | Sandbox |
+|---|---|---|
+| `EmbedKind.Document` (default) | a RELATIVE address of this portal (`/api/content/…`) | none — browsers refuse to draw a PDF in a sandboxed frame |
+| `EmbedKind.App` | an `http`/`https` or scheme-relative `//host` address on ANOTHER host than the portal's | ALWAYS, with `Allow`'s tokens only; no referrer is sent |
+
+A refused address draws the title as text and no frame. `Allow` takes tokens from `EmbedSandbox`
+(`Scripts`, `SameOrigin`, `Forms`, `Popups`, `Downloads`; `Scripts` + `Forms` by default) and
+nothing else — `allow-top-navigation` and `allow-popups-to-escape-sandbox` are never written. An app
+on the portal's own host is refused outright however it is spelled (`https://portal…`, `//portal…`,
+or `https:/app`, which a browser resolves against the page), because script plus same-origin would
+let it lift its own sandbox. Renderers pass the origin they are served from to
+`EmbedSources.SafeSrc`, and a render with no page origin refuses an app.
+
+```csharp
+// A PDF from a node's content collection, with a download link beside it.
+Controls.Stack
+    .WithView(Controls.Embed(contentUrl, fileName))
+    .WithView(Controls.Link(downloadText, contentUrl).WithDownload(fileName))
+
+// An external app. Many sites refuse to be framed and the browser shows a blank box without
+// saying so — always offer the address in a new tab next to it.
+Controls.Stack
+    .WithView(Controls.Embed(appUrl, appTitle)
+        .WithKind(EmbedKind.App)
+        .WithHeight("78vh").WithMaxHeight("900px")
+        .WithAllow(EmbedSandbox.Scripts, EmbedSandbox.SameOrigin, EmbedSandbox.Forms))
+    .WithView(Controls.Link(openInNewTabText, appUrl).WithOpenInNewTab())
+```
+
+For a video use `Controls.Video`, which frames embed players itself.
 
 ---
 

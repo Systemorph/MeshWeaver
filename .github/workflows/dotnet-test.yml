@@ -2471,6 +2471,17 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/platform-version.py --self-test
 
+    # The declared release channels (policy `declared-release-channels`): every MOVING image label
+    # (`3-latest`, `3-mac`, `3-enterprise`, `main`) is declared once in .github/release-channels.json,
+    # and retention excludes each by name. `check` holds the line pointers CD moves to the
+    # declaration and makes the lock classify every declared label as floating.
+    - name: "The release-channel reader can fail (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/release-channels.py --self-test
+    - name: "Every moving image label is declared, and retention reads it as protected"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/release-channels.py check .
+
     # The seal-time floor gate node-repo-publish-bake.yml runs before every publication
     # (MeshWeaver.Manufacturing#84): a bundle floor above the portal the set names is refused, and
     # zero bundles, an unreadable bundle or an absent floor are RED rather than a vacuous pass.
@@ -4503,7 +4514,7 @@ jobs:
         exit 1
 
     - name: Publish Test Results
-      uses: EnricoMi/publish-unit-test-result-action@v2.24.0
+      uses: EnricoMi/publish-unit-test-result-action@v2.25.0
       if: always() && needs.precheck.outputs.skip != 'true'
       # Best-effort reporter ONLY (reporting, not gating) — the TRX-summarize step
       # above is the gate. action_fail removed + continue-on-error so a throttled

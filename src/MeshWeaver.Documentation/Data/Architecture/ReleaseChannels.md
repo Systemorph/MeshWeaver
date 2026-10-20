@@ -290,11 +290,23 @@ which evidence it used.
 about *how proven*, not a free-text label, and an unrecognised one must be refused rather than
 silently treated as a pin.
 
+### Every label is declared
+
+The closed set is a file. Every moving image label (the channel pointers above, the edition labels
+such as `3-mac` and `3-enterprise`, and the bare `main` and `latest`) is declared in
+`.github/release-channels.json` (policy `declared-release-channels`). Retention reads that file and
+excludes every declared label by name, so a label is protected before its writer first moves it.
+`release-channels.py check` refuses a label that the self-updater would select as a version. That
+refusal applies to the legacy-shaped `3.0.0-stable` above, so the stable pointer is declared as
+`{major}.{minor}-stable`. See [Release Editions and the Declared Labels](../ReleaseEditions).
+
 ## See also
 
 - [Candidate Release Protocol](/Doc/Architecture/CandidateReleaseProtocol) — the states a version
   moves through, and why the deploy boundary is where the framework's gate belongs.
 - [Module Adoption Policy](/Doc/Architecture/ModuleAdoptionPolicy) — what an installation runs, and
   why loadability is measured rather than declared.
+- [Release Editions and the Declared Labels](../ReleaseEditions) — the declaration file, who
+  writes each label, and the Mac host gap.
 - [Module Versioning](/Doc/Architecture/ModuleVersioning) — where a plugin's version comes from, and
   why a published version describes exactly one tree forever.
