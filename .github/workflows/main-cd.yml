@@ -3639,6 +3639,16 @@ jobs:
           SOURCE: meshweaver-content
         run: |
           set -euo pipefail
+          # 🚨 The fleet registry addresses a publication by IDENTITY only (`plugins/meshweaver-content:<identity>`),
+          # and its skip check and lease are not architecture-aware. Until they are, ONLY the linux-x64
+          # lane pushes there: an arm64 push would overwrite or be skipped against the linux-x64
+          # publication and report success either way. The arm64 lane's publication lands in its own
+          # store subtree (BAKE_PUBLISH_TARGETS_LINUX_ARM64) and stops here, SAYING so — never silently.
+          if [ "${{ matrix.arch }}" != "linux-x64" ]; then
+            echo "::notice::${{ matrix.arch }}: the fleet registry carries linux-x64 publications only (registry addressing per architecture is pending, Doc/Architecture/SharedArtifactStore) — this lane's publication is in its own store subtree; nothing pushed to ${{ env.REGISTRY }}."
+            echo "- fleet registry: not pushed — ${{ matrix.arch }} publications are not registry-addressed yet" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
           IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
           export IDENTITY

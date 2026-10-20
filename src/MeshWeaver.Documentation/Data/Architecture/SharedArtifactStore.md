@@ -81,7 +81,9 @@ identifier, `<rid>/prebuilt-bundles/`, each in exactly the layout every reader a
   `vars.BAKE_PUBLISH_TARGETS`, the arm64 lane reads `vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64` when it is
   provisioned (falling back to the shared list, unchanged, when it is not), and every step of the lane
   that names a target — the publish, the registry push's lease, the availability assert — reads the
-  same per-lane value, so the lease and the publication cannot disagree. Module repositories publish
+  same per-lane value, so the lease and the publication cannot disagree. The FLEET REGISTRY push is
+  linux-x64 only for now: it addresses a publication by identity alone and its skip check and lease
+  are not architecture-aware, so the arm64 lane stops before it and says so. Module repositories publish
   linux-x64 only and keep `BAKE_PUBLISH_TARGETS`. The existing arm64 lane is `linux-arm64` (the
   publisher accepts Linux runtimes only); an `osx-arm64` subtree waits for a macOS producer.
 - **A reader that serves OTHER runtimes keeps the template.** The expansion writes the unexpanded root
@@ -185,9 +187,11 @@ maintainer's act. In order:
    against one of the source share. *Break-glass:* there is no supported action for a share-to-share
    copy yet; the copy is a maintainer's command, and the report pair is its record.
 3. **Publish there.** Provision the repository variable `BAKE_PUBLISH_TARGETS_LINUX_ARM64` in core
-   (today's portal targets plus `<account>/<share>/linux-arm64`) BEFORE adding the store to the amd64
-   list — otherwise the arm64 lane falls back to the amd64 list and publishes into the linux-x64
-   subtree, where the publisher's architecture guard refuses it. Then append control's share (`<account>/<share>`, the value
+   with ONLY arm64-compatible destinations — `<account>/<share>/linux-arm64`, never a per-portal share
+   that already holds linux-x64 under the same key (the publisher refuses that target, and one failed
+   target fails the whole step) — BEFORE adding the store to the amd64 list; otherwise the arm64 lane
+   falls back to the amd64 list and publishes into the linux-x64 subtree, where the publisher's
+   architecture guard refuses it. Then append control's share (`<account>/<share>`, the value
    `hosting-artifact-store-bind` reports as `artifact_store_share` on the first consumer binding — or,
    before any consumer exists, read off the claim's PV as a recorded break-glass read) to the repository
    variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD identity needs
