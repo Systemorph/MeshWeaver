@@ -3207,10 +3207,21 @@ jobs:
       # `node-repo-publish-bake.yml`; this run merely READS that sealed publication in
       # `published-modules` below. Sealing it per package instead of per commit is in flight
       # (Systemorph/MeshWeaver.Plugins#3507). The checkout is this repository at the gate's sha.
+      # 🚨 ONE TARGET LIST PER ARCHITECTURE LANE (Doc/Architecture/SharedArtifactStore, increment 2).
+      # A compatibility key names no architecture and the publisher refuses a second architecture under
+      # one, so the control-owned shared artifact store keeps one subtree per runtime identifier
+      # (`<account>/<share>/linux-x64`, `…/linux-arm64`). Every lane used to receive the SAME list and
+      # publish to every entry, so a store subtree in it would receive both architectures. The arm64
+      # lane therefore reads `vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64` when it is provisioned, and the
+      # amd64 lane keeps `vars.BAKE_PUBLISH_TARGETS` — every step of this job that names a target list
+      # (publish, the registry push's lock, the availability assert) reads the SAME per-lane value. With
+      # the arm64 variable unset the arm64 lane falls back to today's list, unchanged.
       - name: "Preflight: the publish targets must be provisioned"
+        env:
+          LANE_TARGETS: ${{ matrix.arch == 'linux-arm64' && vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64 || vars.BAKE_PUBLISH_TARGETS }}
         run: |
           set -euo pipefail
-          if [ -z "${{ vars.BAKE_PUBLISH_TARGETS }}" ]; then
+          if [ -z "$LANE_TARGETS" ]; then
             echo "::error::Repo variable BAKE_PUBLISH_TARGETS is not provisioned — the CI bake can reach no portal. Set it to the portals' Azure Files targets, whitespace-separated <account>/<share>[/<base-path>] (on AKS: the account/share behind each portal's memex-data PVC — resolve with 'kubectl get pv -o jsonpath' on the claim; the CD identity needs the 'Storage File Data Privileged Contributor' role on those accounts)."
             exit 1
           fi
@@ -3551,7 +3562,7 @@ jobs:
 
       - name: "Publish bundles to every portal target"
         env:
-          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_PUBLISH_TARGETS: ${{ matrix.arch == 'linux-arm64' && vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64 || vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           # ExpectedDbVersion, published at _releases/_db/<version> beside the marker (#4764 (b3)).
@@ -3624,10 +3635,20 @@ jobs:
           # The prefix lock (MeshWeaver#6877) is taken around the registry push too: the publisher
           # reads the tag, decides, and moves it LAST, and two overlapping runs could otherwise each
           # read it before the other moved it — the older one then moves it back.
-          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_PUBLISH_TARGETS: ${{ matrix.arch == 'linux-arm64' && vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64 || vars.BAKE_PUBLISH_TARGETS }}
           SOURCE: meshweaver-content
         run: |
           set -euo pipefail
+          # 🚨 The fleet registry addresses a publication by IDENTITY only (`plugins/meshweaver-content:<identity>`),
+          # and its skip check and lease are not architecture-aware. Until they are, ONLY the linux-x64
+          # lane pushes there: an arm64 push would overwrite or be skipped against the linux-x64
+          # publication and report success either way. The arm64 lane's publication lands in its own
+          # store subtree (BAKE_PUBLISH_TARGETS_LINUX_ARM64) and stops here, SAYING so — never silently.
+          if [ "${{ matrix.arch }}" != "linux-x64" ]; then
+            echo "::notice::${{ matrix.arch }}: the fleet registry carries linux-x64 publications only (registry addressing per architecture is pending, Doc/Architecture/SharedArtifactStore) — this lane's publication is in its own store subtree; nothing pushed to ${{ env.REGISTRY }}."
+            echo "- fleet registry: not pushed — ${{ matrix.arch }} publications are not registry-addressed yet" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           [ -d "$BAKE_PUBLICATION_DIR" ] || { echo "::error::publish-bake-bundles.sh left no materialised publication at $BAKE_PUBLICATION_DIR — the share seal did not complete, so nothing is pushed to ${{ env.REGISTRY }}."; exit 1; }
           IDENTITY=$(cat "$BAKE_DIR/framework-mvid.txt")
           export IDENTITY
@@ -3652,7 +3673,7 @@ jobs:
       # rather than the state that was intended.
       - name: "Assert the armed release is one an environment can be rolled to"
         env:
-          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
+          BAKE_PUBLISH_TARGETS: ${{ matrix.arch == 'linux-arm64' && vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64 || vars.BAKE_PUBLISH_TARGETS }}
           BAKE_ARCHITECTURE: ${{ matrix.arch }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
         run: .github/scripts/check-release-availability.sh "$RELEASE_VERSION" meshweaver-content

@@ -74,16 +74,18 @@ identifier, `<rid>/prebuilt-bundles/`, each in exactly the layout every reader a
   value) before anything reads the key. Every reader below that key — the pre-warm, the seal arrival,
   the sync reconciler, the bundle endpoints — is unchanged. A missing `<rid>` store is a missing
   bundle root: nothing to adopt, compile as before.
-- **The producer needs per-lane target selection — increment 2, a rollout PREREQUISITE.** A
+- **The producer publishes each architecture lane to its own list** (increment 2). A
   `BAKE_PUBLISH_TARGETS` entry is `<account>/<share>[/<base-path>]` and the publisher writes
-  `<base-path>/prebuilt-bundles/…`, so the store's per-architecture subtree is a base path
-  (`<account>/<share>/linux-x64`). But every architecture lane receives the SAME target list
-  (`main-cd.yml`) and publishes to every entry, so listing both subtrees would send each lane to both
-  and trip the other architecture's collision refusal. Before the store is published to, each lane
-  must publish only to its own subtree — and the scripts that derive the publication lease's path
-  from the same targets (`bake-publication-lock.sh`, `rebind-bake-scope.sh`) must resolve the same
-  path. The existing arm64 lane produces `linux-arm64` (the publisher accepts Linux runtimes only);
-  an `osx-arm64` subtree waits for a macOS producer.
+  `<base-path>/prebuilt-bundles/…`, so a store subtree is a base path (`<account>/<share>/linux-x64`).
+  Core CD's platform bake runs one lane per architecture: the amd64 lane reads
+  `vars.BAKE_PUBLISH_TARGETS`, the arm64 lane reads `vars.BAKE_PUBLISH_TARGETS_LINUX_ARM64` when it is
+  provisioned (falling back to the shared list, unchanged, when it is not), and every step of the lane
+  that names a target — the publish, the registry push's lease, the availability assert — reads the
+  same per-lane value, so the lease and the publication cannot disagree. The FLEET REGISTRY push is
+  linux-x64 only for now: it addresses a publication by identity alone and its skip check and lease
+  are not architecture-aware, so the arm64 lane stops before it and says so. Module repositories publish
+  linux-x64 only and keep `BAKE_PUBLISH_TARGETS`. The existing arm64 lane is `linux-arm64` (the
+  publisher accepts Linux runtimes only); an `osx-arm64` subtree waits for a macOS producer.
 - **A reader that serves OTHER runtimes keeps the template.** The expansion writes the unexpanded root
   to `PreWarm:PrebuiltBundleRootTemplate`, so a registry answering a client of another architecture
   (the portal's prebuilt-bundle endpoints) can resolve the CLIENT's store. 🚨 Until those endpoints do,
@@ -125,7 +127,7 @@ read-only mount, and the store is not its to prune).
 | # | what | where | status |
 |---|---|---|---|
 | 1 | the store declared and created on control; the consumer binding command; the record fields; the read path for prebuilt bundles | core contract + chart + operator, Plugins plan, Memex records | **code: PRs open. Live: maintainer steps below** |
-| 2 | the bake publication writes ONCE, to control's store, each architecture lane to its own `<rid>` subtree | per-lane target selection in `publish-bake-bundles.sh` and the scripts that derive the lease path, then `BAKE_PUBLISH_TARGETS` | code: next PR. Variable: maintainer step |
+| 2 | the bake publication writes ONCE, to control's store, each architecture lane to its own `<rid>` subtree | per-lane target list in core CD's platform bake (`BAKE_PUBLISH_TARGETS_LINUX_ARM64`), then the variables | code: core CD. Variables: maintainer step |
 | 3 | modules, assembly cache and NuGet cache: a read-only shared tier in front of the per-instance writable one — a portal resolves a content-addressed artifact from the store first and compiles only when the store has no build for its identity | core `FileSystemAssemblyStore`, module loader | design (below) |
 | 4 | one-way sync from our control's store to a client environment's control's store | control operator | design (below) |
 | 5 | local-module builds on each control | control build role | design (below) |
@@ -184,8 +186,12 @@ maintainer's act. In order:
    `prebuilt-bundles/<compatibility key>/` and `_releases/` into `linux-x64/prebuilt-bundles/` with a share-to-share `azcopy`, then compare a `StoragePrune` report of the store
    against one of the source share. *Break-glass:* there is no supported action for a share-to-share
    copy yet; the copy is a maintainer's command, and the report pair is its record.
-3. **Publish there** — once increment 2 has landed (each lane publishes only to its own `<rid>`
-   subtree). Append control's share (`<account>/<share>`, the value
+3. **Publish there.** Provision the repository variable `BAKE_PUBLISH_TARGETS_LINUX_ARM64` in core
+   with ONLY arm64-compatible destinations — `<account>/<share>/linux-arm64`, never a per-portal share
+   that already holds linux-x64 under the same key (the publisher refuses that target, and one failed
+   target fails the whole step) — BEFORE adding the store to the amd64 list; otherwise the arm64 lane
+   falls back to the amd64 list and publishes into the linux-x64 subtree, where the publisher's
+   architecture guard refuses it. Then append control's share (`<account>/<share>`, the value
    `hosting-artifact-store-bind` reports as `artifact_store_share` on the first consumer binding — or,
    before any consumer exists, read off the claim's PV as a recorded break-glass read) to the repository
    variable `BAKE_PUBLISH_TARGETS` in core and in each module repository; the CD identity needs
