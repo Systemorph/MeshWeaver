@@ -37,7 +37,7 @@ does not lift it until GitHub recalculates (every 6–12 h).
 This section is the current reading. The sections after it are the history that led here, and
 their dated numbers stay as evidence.
 
-**Two private repositories are on the own store. The other four are not.**
+**Two private repositories are on the own store. Five others still write GitHub artifacts.**
 
 - The `gha` repository overrides were deleted on 2026-10-16 (~18:50Z), after the cross-pool proof
   for Systemorph/Memex#420 passed. The organisation variable `MW_ARTIFACT_STORE=file:/ci-artifacts`
@@ -57,8 +57,15 @@ their dated numbers stay as evidence.
   retention. `core-candidate`, `examples-smoke` and `platform-canary` produced none either. The
   last two still call `actions/upload-artifact` directly, but only for KB-sized handoffs, and in
   the sampled runs those paths did not execute.
-- The repository "Artifact and log retention" setting is already **7 days** at the organisation
-  and on every repository (the repository maximum is 7). There is no retention left to cut.
+- The repository "Artifact and log retention" setting is **7 days** at the organisation and on
+  every repository. That is a **cap**, not a floor: it clamps a longer declaration down to 7 days
+  and leaves a shorter one alone. The shared lane already declares less where its consumers allow
+  it, for example `retention-days: 1` on the same-run `module-pack-tool-*` handoff in
+  `node-repo-module-pack.yml`. So what each artifact needs is decided per declaration, by its
+  readers. Lowering the repository cap below 7 days would also clamp the cross-run
+  `module-bundle-*` copies, whose 7-day retention is a contract: publication reuse reads them
+  across runs (see [Supported backend and retention](#supported-backend-and-retention)). Any further
+  cut belongs in a declaration whose readers are all inside one run, not in the cap.
 
 **The bill, per repository.** These are October GB-hours per full day from
 `organizations/Systemorph/settings/billing/usage?year=2026&month=10`, SKU `Actions storage`.
