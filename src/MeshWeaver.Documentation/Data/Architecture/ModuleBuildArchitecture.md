@@ -621,7 +621,14 @@ keeps the supersede model in the next section.
    carried package it no longer matches waits too (carried, or, never sealed, out) — and `listing`
    REFUSES a seal that would introduce such a pair. A pair already split in the sealed publication,
    which no build it holds can repair, is a warning: refusing would keep exactly that publication
-   sealed. `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
+   sealed. **And a module package carried back brings its riding siblings at the OLD build:** a
+   fresh module package riding any assembly a carried one carries would seal that name twice
+   (MeshWeaver.Plugins run 39476483432: `essentials.module.nupkg` carried with
+   `MeshWeaver.Markdown.Collaboration` at the previous build, `ai.module.nupkg` fresh riding it — and
+   every satellite gate refused the set). So `withhold` carries every such rider too, transitively,
+   and `listing` refuses a module set carrying one `MeshWeaver.*` name at two builds — see
+   [Module-Owned Siblings Ride](../ModuleOwnedSiblingsRide).
+   `source-commit.txt` stays the run's commit, so rule 5's never-seal-backwards is
    unchanged; `bake-scope.sh` narrows from the OLDEST commit the listing names, so a carried package
    is rebuilt the run it becomes publishable. Before this, a seal was one listing for one commit and
    a caller could seal only a commit at which nothing waited — which, under steady merging, almost

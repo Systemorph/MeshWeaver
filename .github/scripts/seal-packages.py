@@ -42,12 +42,20 @@ THE TWO HALVES.
                bundle-less   it bakes neither a bundle nor a module package (a content-only package),
                              so this publication never seals it either way: a requirement on it is
                              not this listing's to check, exactly like another repository's package.
+             A carried module package brings every assembly it carries back at the OLD build — its
+             declared module and every module-owned sibling riding in it — so a fresh module package
+             carrying any of those names waits too and is carried from the same publication
+             (transitively); otherwise the publication seals one name at two builds, which every
+             consumer composing both refuses (MeshWeaver.Plugins run 39476483432).
              The effective waiting set and the never-sealed set are written to the state directory,
              and `listing` reads them — the listing and its floor check see what withhold decided.
              (Plugins run 38527548962: 26 waiting content-only packages, AI among them, were read as
              "never sealed", and every carried dependent's `requires AI@…` refused the seal.)
 
-  listing    runs after the carry-forward. It writes the per-package listing and REFUSES a seal in
+  listing    runs after the carry-forward. It first REFUSES a module set that would carry one
+             `MeshWeaver.*` assembly name at two builds — the set it is about to seal, after withhold
+             and the carry replaced fresh module packages, which the compose-time verdict never sees.
+             It then writes the per-package listing and REFUSES a seal in
              which a package's declared `requires` on another package of the SAME listing is not
              met by the version the listing seals for it — a carried dependency held at 1.21.1
              under a fresh dependent declaring `^1.23.0` is exactly the set Systemorph/MeshWeaver#6192
@@ -602,6 +610,64 @@ def _requires_in(repo: Path, package: str) -> list[str]:
     return _requires(_json(_read(repo / package / "index.json")))
 
 
+# ─── one build per assembly name across the sealed MODULE set (Doc/Architecture/ModuleOwnedSiblingsRide) ───
+MODULE_ASSEMBLY_FOLDER = "meshweaver/modules/"
+
+
+def module_assemblies(path: Path) -> dict[str, str]:
+    """{simple name: sha256} of every `MeshWeaver.*` assembly at the top of a module package's
+    `meshweaver/modules/` — exactly the files node-repo-gate.yml and node-repo-publish-bake.yml
+    compare when they refuse a set that carries one name at two builds (MeshWeaver#3732).
+
+    🚨 A module package that is not a readable archive is REFUSED, never read as "carries
+    nothing": an empty reading is the one answer under which no conflict can ever be found."""
+    import hashlib
+    try:
+        with zipfile.ZipFile(path) as archive:
+            found: dict[str, str] = {}
+            for entry in archive.namelist():
+                if not entry.startswith(MODULE_ASSEMBLY_FOLDER):
+                    continue
+                file = entry[len(MODULE_ASSEMBLY_FOLDER):]
+                if "/" in file or not file.endswith(".dll"):
+                    continue
+                name = file[:-len(".dll")]
+                if name == "MeshWeaver" or name.startswith("MeshWeaver."):
+                    found[name] = hashlib.sha256(archive.read(entry)).hexdigest()
+            return found
+    except (zipfile.BadZipFile, OSError) as error:
+        raise SystemExit(
+            f"✗ seal-packages: the module package {path.name} could not be read as an archive ({error}) — which "
+            "assemblies it carries, and so whether this publication seals one build per name, cannot be "
+            "established. Nothing is written, and the existing publication stays sealed and intact.")
+
+
+def module_build_violations(bake: Path) -> list[str]:
+    """Every assembly name the module set this run is about to SEAL carries at more than one build.
+
+    This is the producer's assertion over the set it actually publishes — AFTER withhold and the
+    carry have replaced fresh module packages by previously sealed ones. The compose step's verdict
+    in node-repo-publish-bake.yml runs before both, over the bake's own (fresh) bundles only, so it
+    cannot see a carried module package beside a fresh one that rides the same name: that is the
+    torn set MeshWeaver.Plugins run 39476483432 sealed (essentials.module.nupkg carried at
+    MeshWeaver.Markdown.Collaboration 1d59587d…, ai.module.nupkg fresh riding it at 4959162f…)
+    and every satellite gate then refused."""
+    directory = bake / MODULES_DIR
+    if not directory.is_dir():
+        return []
+    builds: dict[str, dict[str, list[str]]] = {}
+    for module in sorted(directory.glob("*.module.nupkg")):
+        for name, digest in module_assemblies(module).items():
+            builds.setdefault(name, {}).setdefault(digest, []).append(module.name)
+    problems = []
+    for name in sorted(builds):
+        if len(builds[name]) > 1:
+            where = "; ".join(f"{digest[:16]} in {', '.join(packages)}"
+                              for digest, packages in sorted(builds[name].items()))
+            problems.append(f"{name} is sealed at {len(builds[name])} builds — {where}")
+    return problems
+
+
 def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = None) -> dict:
     """Remove every withheld package's fresh bytes and say what the carry must fetch instead.
 
@@ -621,6 +687,8 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
     listed_modules = set(_lines(state / STATE_MODULES)) if status == "sealed" else set()
     carried, absent, bundleless, modules_carried = [], [], [], []
     pulled: dict[str, str] = {}  # package → the never-sealed dependency that made it wait
+    riders: dict[str, str] = {}  # package → why a held module package made it wait (one build per name)
+    held_names: dict[str, set[str]] = {}  # held package → the MeshWeaver.* assemblies its module package carries
 
     def hold(package: str) -> None:
         bundle = bake / f"{package}.zip"
@@ -631,6 +699,10 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
         fresh = bake / MODULES_DIR / module
         fresh_module = fresh.exists()
         if fresh_module:
+            # Read BEFORE the delete: the names this package's module package carries are the names
+            # whose sealed build the carry puts back — and every fresh module package riding one of
+            # them would then seal that name at a second build (module_step below).
+            held_names[package] = set(module_assemblies(fresh))
             fresh.unlink()
         if module in listed_modules:
             modules_carried.append(module)
@@ -649,8 +721,49 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
         hold(package)
     sourced: dict[str, str] = {}  # package → why a source include made it wait
     source_notes: dict[tuple[str, str], str] = {}
+    by_lower = ({d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()}
+                if repo is not None and repo.is_dir() else {})
+
+    def module_step() -> bool:
+        """ONE BUILD PER NAME across the module set this publication seals.
+
+        A held package's module package is carried at its PREVIOUSLY sealed build, and with it every
+        assembly it carries — its declared module and every module-owned sibling riding in it. A
+        fresh module package that carries one of those names (riding it, or declaring it) would seal
+        that name at THIS commit's build beside the carried one: the loader keeps whichever copy it
+        sees first and every satellite gate composing both refuses the set (MeshWeaver#3732). So such
+        a package waits too, and is carried from the same publication — the pair stays one build.
+
+        Decided on NAMES, before the carry fetches anything: the sealed copy's bytes are not on hand
+        here, so a fresh copy that happens to be byte-identical to the sealed one waits as well. That
+        is the conservative direction — a later publication seals it — and `listing` asserts the
+        result over the bytes actually sealed (module_build_violations)."""
+        carried_names: dict[str, str] = {}
+        for package in waiting:
+            for name in sorted(held_names.get(package, ())):
+                carried_names.setdefault(name, package)
+        if not carried_names or not (bake / MODULES_DIR).is_dir():
+            return False
+        held = set(waiting)
+        for module in sorted((bake / MODULES_DIR).glob("*.module.nupkg")):
+            stem = module.name[:-len(".module.nupkg")]
+            package = by_lower.get(stem, stem)
+            if package in held:
+                continue
+            shared = sorted(set(module_assemblies(module)) & set(carried_names))
+            if not shared:
+                continue
+            owners = sorted({carried_names[n] for n in shared})
+            riders[package] = (f"its module package carries {', '.join(shared)}, which "
+                               f"{', '.join(owners)} {'carries' if len(owners) == 1 else 'carry'} at the previously "
+                               "sealed build — one build per name, so it is carried from the same publication")
+            waiting.append(package)
+            hold(package)
+            return True
+        return False
+
+    steps = [module_step]
     if repo is not None:
-        by_lower = {d.name.lower(): d.name for d in repo.iterdir() if d.is_dir()} if repo.is_dir() else {}
         includes = SourceIncludes(repo)
         sealed_at = _sealed_commits(state, listed)
 
@@ -766,13 +879,15 @@ def withhold(bake: Path, withheld: list[str], state: Path, repo: Path | None = N
                         f"{dependent} adopts once it is sealed again")
             return False
 
-        while requires_step() or source_step():
-            pass
+        steps = [requires_step, source_step, module_step]
+    # One move at a time, to a fixpoint: every hold changes what the other steps read.
+    while any(step() for step in steps):
+        pass
     (state / STATE_CARRY_MODULES).write_text("".join(f"{m}\n" for m in modules_carried), encoding="utf-8")
     (state / STATE_WITHHELD).write_text("".join(f"{p}\n" for p in waiting), encoding="utf-8")
     (state / STATE_NEVER_SEALED).write_text("".join(f"{p}\n" for p in absent), encoding="utf-8")
     return {"carried": carried, "absent": absent, "bundleless": bundleless, "modulesCarried": modules_carried,
-            "status": status, "waiting": waiting, "pulled": pulled, "sourced": sourced,
+            "status": status, "waiting": waiting, "pulled": pulled, "sourced": sourced, "riders": riders,
             "sourceNotes": [source_notes[k] for k in sorted(source_notes)]}
 
 
@@ -801,6 +916,8 @@ def cmd_withhold(a: argparse.Namespace) -> int:
         print(f"  · {p}: waits too — it requires {dep}, which waits and has never been sealed for this identity")
     for p, why in result["sourced"].items():
         print(f"  · {p}: waits too — {why}")
+    for p, why in result["riders"].items():
+        print(f"  · {p}: waits too — {why}")
     for m in result["modulesCarried"]:
         print(f"  · module {m}: carried forward from the sealed module set")
     for note in result["sourceNotes"]:
@@ -808,7 +925,8 @@ def cmd_withhold(a: argparse.Namespace) -> int:
     print(f"::notice title=Sealed per package::{len(result['carried'])} waiting package(s) carried forward at their "
           f"previously sealed build, {len(result['absent'])} never sealed and left out, {len(result['bundleless'])} "
           f"bake no bundle, {len(result['pulled'])} wait because a dependency was never sealed, "
-          f"{len(result['sourced'])} wait so that the sources a carried build compiled travel with it; every other "
+          f"{len(result['sourced'])} wait so that the sources a carried build compiled travel with it, "
+          f"{len(result['riders'])} wait so that a carried module package's assemblies stay one build; every other "
           "package this run baked is sealed at this commit")
     if a.github_output:
         with open(a.github_output, "a", encoding="utf-8") as out:
@@ -1003,6 +1121,22 @@ def _short(sha) -> str:
 def cmd_listing(a: argparse.Namespace) -> int:
     bake, repo = Path(a.bake), Path(a.content)
     state = Path(a.state) if a.state else None
+    # 🚨 ONE BUILD PER NAME over the module set this run SEALS — read after withhold and the carry
+    # have replaced fresh module packages by sealed ones, which the compose-time verdict cannot see.
+    torn = module_build_violations(bake)
+    if torn:
+        print(f"::error title=Seal refused — the module set would carry one assembly at two builds::{len(torn)} "
+              "assembly name(s) reach this module set from module packages sealed at different builds — typically a "
+              "carried module package beside a fresh one riding the same module-owned sibling. Every consumer composing "
+              "both refuses the set, and a portal loading both runs whichever copy it saw first (MeshWeaver#3732, "
+              "Doc/Architecture/ModuleOwnedSiblingsRide). `withhold` carries every rider of a carried name; nothing is "
+              "written, and the existing publication stays sealed and intact.")
+        for p in torn:
+            print(f"::error::{p}")
+        return 1
+    module_count = len(list((bake / MODULES_DIR).glob("*.module.nupkg"))) if (bake / MODULES_DIR).is_dir() else 0
+    # The denominator, on every run: a check over an empty directory must not read as a clean one.
+    print(f"module set to seal: {module_count} module package(s), one build per MeshWeaver.* assembly name")
     withheld, never_sealed = settled_waiting(_words(a.withhold), state)
     listing = build_listing(bake, repo, a.commit, withheld, state)
     problems, notes = floor_violations(listing, repo, withheld, never_sealed)
@@ -1042,6 +1176,116 @@ def cmd_listing(a: argparse.Namespace) -> int:
 
 
 # ─── self-test ───────────────────────────────────────────────────────────────────────────────────
+def write_module_package(path: Path, assemblies: dict[str, str]) -> None:
+    """A module package as the lanes write it: each assembly at the top of meshweaver/modules/."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("meshweaver/manifest.json", "{}")
+        for name, content in assemblies.items():
+            archive.writestr(f"{MODULE_ASSEMBLY_FOLDER}{name}.dll", content)
+
+
+def own_assembly(module_file: str) -> str:
+    """A fixture module package's own entry assembly — one distinct name per package."""
+    return "MeshWeaver." + module_file[:-len(".module.nupkg")]
+
+
+def module_rider_cases(expect) -> None:
+    """MeshWeaver.Plugins run 39476483432, reduced: Essentials waits (its NodeTypes compile Store's
+    moved sources), so its module package — declaring MeshWeaver.Markdown.Collaboration — is carried
+    at the PREVIOUS build, while AI's module package, built fresh, rides the same assembly at THIS
+    commit's build. Sealed as it was, every satellite gate composing AI + Essentials refused the set
+    (MeshWeaver.SocialMedia#246, MeshWeaver.Manufacturing#84, MeshWeaver.Crm#172)."""
+    collab, ai, stripe = "MeshWeaver.Markdown.Collaboration", "MeshWeaver.AI", "MeshWeaver.Payments.Stripe"
+    print("a carried module package and a fresh one riding the same assembly (one build per name):")
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bake, state = root / "bake", root / "state"
+        me = str(Path(__file__).resolve())
+
+        def cli(*args: str) -> subprocess.CompletedProcess:
+            return subprocess.run([sys.executable, me, *args], capture_output=True, text=True)
+
+        def shape(sealed_modules: list[str]) -> None:
+            for d in (bake, state):
+                shutil.rmtree(d, ignore_errors=True)
+                d.mkdir()
+            (bake / "Essentials.zip").write_text("fresh Essentials")
+            (bake / "Shop.zip").write_text("fresh Shop")
+            write_module_package(bake / MODULES_DIR / "essentials.module.nupkg", {collab: "collab@new"})
+            write_module_package(bake / MODULES_DIR / "ai.module.nupkg", {ai: "ai@new", collab: "collab@new"})
+            write_module_package(bake / MODULES_DIR / "acp.module.nupkg", {"MeshWeaver.AI.Acp": "acp@new", ai: "ai@new"})
+            write_module_package(bake / MODULES_DIR / "stripe.module.nupkg", {stripe: "stripe@new"})
+            (state / STATE_PUBLICATION).write_text("sealed\n")
+            (state / STATE_BUNDLES).write_text("Essentials.zip\nShop.zip\n")
+            (state / STATE_MODULES).write_text("".join(f"{m}\n" for m in sealed_modules))
+            (state / STATE_COMMIT).write_text("e" * 40 + "\n")
+
+        def carry_sealed(modules: list[str]) -> None:
+            # What carry-forward-bundles.sh puts back: the PREVIOUS publication's bytes, which were one
+            # build with each other (collab@old in both Essentials and AI).
+            sealed = {"essentials.module.nupkg": {collab: "collab@old"},
+                      "ai.module.nupkg": {ai: "ai@old", collab: "collab@old"},
+                      "acp.module.nupkg": {"MeshWeaver.AI.Acp": "acp@old", ai: "ai@old"}}
+            for m in modules:
+                write_module_package(bake / MODULES_DIR / m, sealed[m])
+            if not (bake / "Essentials.zip").exists():
+                (bake / "Essentials.zip").write_text("sealed Essentials")
+
+        everything = ["acp.module.nupkg", "ai.module.nupkg", "essentials.module.nupkg", "stripe.module.nupkg"]
+
+        # The incident, as the pre-fix withhold left it: Essentials carried, AI fresh.
+        shape(everything)
+        (bake / MODULES_DIR / "essentials.module.nupkg").unlink()
+        carry_sealed(["essentials.module.nupkg"])
+        torn = module_build_violations(bake)
+        expect("NEGATIVE CONTROL: the set run 39476483432 sealed is named torn — Collaboration at two builds, "
+               "the carried Essentials and the fresh AI",
+               len(torn) == 1 and torn[0].startswith(collab) and "essentials.module.nupkg" in torn[0]
+               and "ai.module.nupkg" in torn[0], str(torn))
+        out = cli("listing", "--bake", str(bake), "--content", str(root), "--commit", "f" * 40,
+                  "--withhold", "Essentials", "--state", str(state))
+        expect("…and `listing` REFUSES to seal it, writing nothing",
+               out.returncode == 1 and "one assembly at two builds" in out.stdout and collab in out.stdout
+               and not (bake / LISTING).exists(), out.stdout + out.stderr)
+
+        # The fix: withhold holds every rider of a carried name, transitively, and carries it too.
+        shape(everything)
+        result = withhold(bake, ["Essentials"], state)
+        expect("withhold holds AI (it rides Collaboration, which Essentials' carried package seals at the old build)",
+               "ai" in result["riders"] and collab in result["riders"]["ai"], str(result["riders"]))
+        expect("…and Acp, which rides MeshWeaver.AI — the closure is transitive",
+               "acp" in result["riders"] and ai in result["riders"]["acp"], str(result["riders"]))
+        expect("…carrying all three module packages from the sealed set",
+               sorted(_lines(state / STATE_CARRY_MODULES))
+               == ["acp.module.nupkg", "ai.module.nupkg", "essentials.module.nupkg"],
+               _read(state / STATE_CARRY_MODULES) or "")
+        expect("NEGATIVE CONTROL: Stripe shares no assembly with anything carried and stays fresh",
+               (bake / MODULES_DIR / "stripe.module.nupkg").exists() and "stripe" not in result["riders"])
+        carry_sealed(["acp.module.nupkg", "ai.module.nupkg", "essentials.module.nupkg"])
+        expect("the sealed set is ONE build per name", module_build_violations(bake) == [],
+               str(module_build_violations(bake)))
+
+        # A rider the sealed publication never held cannot be carried: it stays out (never sealed),
+        # rather than being sealed fresh beside the carried name.
+        shape(["essentials.module.nupkg", "stripe.module.nupkg"])
+        result = withhold(bake, ["Essentials"], state)
+        expect("a rider with no sealed build waits and stays OUT — never sealed fresh beside the carried name",
+               "ai" in result["absent"] and not (bake / MODULES_DIR / "ai.module.nupkg").exists()
+               and "ai.module.nupkg" not in _lines(state / STATE_CARRY_MODULES), str(result))
+
+        # Fail closed: a module package that is not an archive cannot be read as "carries nothing".
+        shape(everything)
+        (bake / MODULES_DIR / "stripe.module.nupkg").write_text("not an archive")
+        try:
+            module_build_violations(bake)
+            refused = None
+        except SystemExit as stop:
+            refused = str(stop)
+        expect("an unreadable module package is REFUSED, never read as carrying nothing",
+               refused is not None and "stripe.module.nupkg" in refused, str(refused))
+
+
 def self_test() -> int:
     failures: list[str] = []
 
@@ -1111,7 +1355,7 @@ def self_test() -> int:
             if modules:
                 (bake / MODULES_DIR).mkdir()
                 for m in modules:
-                    (bake / MODULES_DIR / m).write_text(f"fresh {m}")
+                    write_module_package(bake / MODULES_DIR / m, {own_assembly(m): f"fresh {m}"})
 
         def seal_previous(listing: list[dict] | None, bundles: list[str], modules: list[str] = ()) -> None:
             shutil.rmtree(state)
@@ -1302,7 +1546,7 @@ def self_test() -> int:
             for p in ("Hosting", "Essentials", "Chess"):
                 (bake / f"{p}.zip").write_text(f"fresh {p}")
             (bake / MODULES_DIR).mkdir()
-            (bake / MODULES_DIR / "ai.module.nupkg").write_text("fresh ai")
+            write_module_package(bake / MODULES_DIR / "ai.module.nupkg", {"MeshWeaver.AI": "fresh ai"})
             (state / STATE_PUBLICATION).write_text("sealed\n")
             (state / STATE_BUNDLES).write_text("Hosting.zip\nEssentials.zip\nChess.zip\n")
             (state / STATE_MODULES).write_text("".join(f"{m}\n" for m in sealed_modules))
@@ -1320,7 +1564,7 @@ def self_test() -> int:
                 if not (bake / f"{p}.zip").exists():
                     (bake / f"{p}.zip").write_text(f"sealed {p}")
             for m in modules:
-                (bake / MODULES_DIR / m).write_text(f"sealed {m}")
+                write_module_package(bake / MODULES_DIR / m, {own_assembly(m): f"sealed {m}"})
 
         me = str(Path(__file__).resolve())
 
@@ -1396,7 +1640,7 @@ def self_test() -> int:
         for p in ("Hosting", "Essentials", "Chess", "Games"):
             (bake / f"{p}.zip").write_text(f"fresh {p}")
         (bake / MODULES_DIR).mkdir()
-        (bake / MODULES_DIR / "ai.module.nupkg").write_text("fresh ai")
+        write_module_package(bake / MODULES_DIR / "ai.module.nupkg", {"MeshWeaver.AI": "fresh ai"})
         (state / STATE_BUNDLES).write_text("".join(f"{b}\n" for b in shape_bundles))
         out = cli("withhold", "--bake", str(bake), "--withhold", "AI", "--state", str(state), "--content", str(repo))
         expect("Chess (never sealed) waits on AI and stays out; Games waits on Chess and stays out",
@@ -1404,6 +1648,7 @@ def self_test() -> int:
                and "Games: waits too — it requires Chess" in out.stdout
                and not (bake / "Chess.zip").exists() and not (bake / "Games.zip").exists(), out.stdout)
 
+    module_rider_cases(expect)
     source_include_cases(expect)
     source_include_reading_cases(expect)
 
