@@ -123,6 +123,7 @@ case $? in
     have_ref="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '"\(.spec.claimRef.namespace // "")/\(.spec.claimRef.name // "")"')"
     have_policy="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.persistentVolumeReclaimPolicy // ""')"
     have_label="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.metadata.labels["meshweaver.io/purpose"] // ""')"
+    have_handle="$(printf '%s' "$HOSTING_PROBE_OUT" | jq -r '.spec.csi.volumeHandle // ""')"
     [ "$have_share" = "$share" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists and points at ${have_share}, not the owner's ${share} — refusing to rebind it. Whether the old binding is still read is a human's question; remove it deliberately, then re-run."
     [ "$have_ro" = "true" ] \
@@ -134,6 +135,10 @@ case $? in
     # guard in hosting-pv-purge. Neither is accepted as "already bound".
     [ "$have_policy" = "Retain" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists with reclaim policy '${have_policy:-unset}', not Retain — removing its claim could delete the shared store; remove it deliberately, then re-run"
+    # The handle must be THIS binding's own (its 5th segment the PV name): two PVs sharing a handle
+    # collide in the kubelet's staging on one node.
+    [ "$have_handle" = "$new_handle" ] \
+      || hosting::die "PersistentVolume ${pv_name} already exists with volumeHandle '${have_handle}', not this binding's own '${new_handle}' — refusing to accept a binding whose handle may collide with another; remove it deliberately, then re-run"
     [ "$have_label" = "artifact-store" ] \
       || hosting::die "PersistentVolume ${pv_name} already exists without the label meshweaver.io/purpose=artifact-store — the teardown guard would not recognise it as a binding; remove it deliberately, then re-run"
     hosting::log "PersistentVolume ${pv_name} exists — same share, read-only, for ${namespace}/${claim}"
@@ -153,7 +158,9 @@ case $? in
           csi: { driver: "file.csi.azure.com", readOnly: true, volumeHandle: $handle,
             volumeAttributes: { resourceGroup: $rg, storageAccount: $account, shareName: $share, secretnamespace: $secretns },
             nodeStageSecretRef: { name: $secret, namespace: $secretns } } } }')"
-    hosting::do kubectl apply -f - <<< "$pv_manifest" >&2 \
+    # `create`, never `apply`: a PV that appeared since the read above must make this FAIL, not be
+    # patched into shape without the verification an existing binding gets.
+    hosting::do kubectl create -f - <<< "$pv_manifest" >&2 \
       || hosting::die "could not create PersistentVolume ${pv_name}"
     created=1
     ;;
@@ -174,7 +181,7 @@ case $? in
           labels: { "app.kubernetes.io/managed-by": "hosting-operator", "meshweaver.io/purpose": "artifact-store" } },
         spec: { accessModes: ["ReadOnlyMany"], storageClassName: "", volumeName: $pv,
           resources: { requests: { storage: $capacity } } } }')"
-    hosting::do kubectl apply -f - <<< "$pvc_manifest" >&2 \
+    hosting::do kubectl create -f - <<< "$pvc_manifest" >&2 \
       || hosting::die "could not create PersistentVolumeClaim ${namespace}/${claim}"
     created=1
     ;;

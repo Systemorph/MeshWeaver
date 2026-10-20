@@ -3,7 +3,7 @@
 # SCRIPT does with the answers: where it reads the share from, which PV and claim it creates (read-only,
 # Retain, distinct handle), that it verifies instead of overwriting, and what it reports.
 #
-#   HOSTING_AB_STATE      directory: kubectl.log (one argv per call), applied.json (every `apply -f -`, one per line)
+#   HOSTING_AB_STATE      directory: kubectl.log (one argv per call), applied.json (every `create -f -`, one per line)
 #   HOSTING_AB_SRC_PVC    the file `get pvc <owner claim>` answers with ("absent" → NotFound)
 #   HOSTING_AB_SRC_PV     the file `get pv <owner volume>` answers with
 #   HOSTING_AB_PV         the file `get pv artifact-store-<ns>` answers with (unset → NotFound until applied)
@@ -32,7 +32,7 @@ case "$*" in
     elif grep -q '"kind":"PersistentVolumeClaim"' "$state/applied.json" 2>/dev/null; then
       grep '"kind":"PersistentVolumeClaim"' "$state/applied.json" | head -1 | jq -c '. + {status: {phase: "Bound"}}'
     else notfound "persistentvolumeclaims"; fi ;;
-  "apply -f -")
+  "create -f -")
     jq -c . >> "$state/applied.json"
     echo "applied" ;;
   *)
