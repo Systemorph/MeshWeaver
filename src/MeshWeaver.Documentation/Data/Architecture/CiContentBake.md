@@ -888,6 +888,67 @@ less than `DataVolume:MinimumFreeBytes` free (default 1 GiB), naming the path, t
 bytes; Degraded too when a configured path cannot be measured; Healthy with nothing configured. The
 retention above is what keeps it green.
 
+### What fills it: the usage census
+
+The free-space signal says THAT the volume is full, never WHAT fills it. Four writers share it —
+`modules/`, `prebuilt-bundles/`, `assembly-cache/` and the CI publisher, which writes the share
+directly and logs nothing on any portal — and the retention passes reported at Information, which the
+cluster does not ship (see the outcome line below, #6991). On the public instance the 128 GiB share sat at 2–3 MiB free for 33 hours
+(#6983) and a fix aimed at one writer shipped without anyone being able to say whether it was the
+one.
+
+`/health` therefore also carries **`data_volume_usage`** (`DataVolumeUsageHealthCheck`, evaluated by
+`DataVolumeUsage` in `MeshWeaver.Hosting`): the last background walk of each configured data root —
+nested store roots fold into their parent, so `/data` is walked once — with every top-level
+directory's bytes, files, entry count and newest write, biggest first, and its five largest
+children (the identity directory, module generation or NodeType directory that holds the space).
+A directory that is another volume's mount point (`/data/dumps`) is named and not counted; a
+directory that cannot be enumerated is counted, and the numbers then say they are a floor.
+
+- **Read-only.** The walk enumerates and stats; it never writes or deletes.
+- **Off the probe.** It runs in `DataVolumeUsageHostedService` on the file-system `IIoPool`, behind
+  the bake, then every `DataVolume:UsageInterval` (6 h, floor 15 min); the check prints the last
+  reading.
+- **A census.** It carries the census tag, so it prints whatever its status. "NOT MEASURED YET" and
+  "no data volume configured" are their own sentences. It is Degraded only when a walk faulted or
+  could not read its root.
+- **Read it through the control instance**, never the cluster: a `Sample` action
+  (`{ "requestedAction": "Sample" }`) captures each replica's `/health` body on `Ops/Status/<id>`.
+
+### What each pass did: one Warning outcome line
+
+The census answers *what fills the volume*; it cannot answer *what the last sweep did*. The cluster
+ships only Warning and above to Loki, and every collector of the volume used to report its outcome
+at Information, so whether a pass ran, what it removed and whether it refused were all unreadable
+(#6991). Each collector now writes **exactly one Warning line per pass**, tagged `pass outcome`:
+
+| collector | runs | outcome line |
+|---|---|---|
+| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
+| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
+| modules GC | once per pod start | `Modules GC: pass outcome — completed / FAILED CLOSED / CANCELLED / FAULTED …` |
+
+Each carries the **denominator** (what was scanned and its bytes), what was removed or would be,
+and what was **kept, counted per KEEP rule** (`live=1, window=612, release-marker=40` —
+`PrebuiltRetentionKeepRule`, `AssemblyCacheKeepRule`). The tally is bounded by the number of rules,
+never by the size of the store, which is what makes Warning affordable: a pass is one line, a few
+hundred bytes. The itemized lists — every kept identity with its reason, every removed directory —
+stay at Information, because they scale with the store (811 identities on one share) — and so do
+the per-item FAILURES (a directory, file or set record that could not be removed or read): each is
+itemized at Information and COUNTED on the outcome line, so N failures never become N shipped lines.
+A pass that aborts or faults (`… ABORTED: … NOTHING collected`, `… FAULTED: … faulted — nothing was
+collected`) carries the same `pass outcome` tag and is then the pass's only Warning line. The one
+deliberate exception: a modules-GC reference record that cannot be READ stays an Error per file — a
+corrupt record is a defect to triage, not a retention outcome — and the outcome line says `FAILED
+CLOSED` with the count. Per-write eviction in the assembly store (`Assembly cache: evicted …`)
+is not a pass — it fires on every compile — and stays at Information.
+
+Read them through a governed `Logs` action on the control instance. Because aborts and faults carry
+the tag too, one query finds every pass, whatever its verdict: `{ "requestedAction": "Logs", "query":
+"pass outcome" }`. A host whose every pass aborts therefore still answers with one line per pass,
+never with silence; zero lines means no pass ran (or the query is wrong — check it against a host
+with a known pass).
+
 ## Node repos run the same lane — as reusable workflows
 
 Every satellite content repo (MeshWeaver.Plugins, MeshWeaver.Education, MeshWeaver.Reinsurance,
