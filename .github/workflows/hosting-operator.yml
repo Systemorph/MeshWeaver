@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 43 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 43 (38 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 45 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 45 (39 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -130,6 +130,7 @@ jobs:
           hosting-registry-register
           hosting-restore
           hosting-signin-app
+          hosting-storage-prune
           hosting-tls
           hosting-verify
           hosting-verify-backup
