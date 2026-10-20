@@ -108,6 +108,7 @@ jobs:
           # MeshWeaver.Plugins/Hosting/InstanceAction/Source/InstanceActionPlan.cs.
           cat > "$plan_src" <<'EOF'
           hosting-aks-upgrade
+          hosting-artifact-store-bind
           hosting-audit
           hosting-backup
           hosting-deploy
@@ -237,14 +238,6 @@ jobs:
           # beside bin/). Behaviour-tested against test/stubs/manifest-apply. The plan half is the Plugins
           # ApplyClusterManifest action; the line moves up into the plan list once that has merged.
           hosting-manifest-apply     ApplyClusterManifest — ships and is behaviour-tested; the plan half is the Plugins ApplyClusterManifest action
-          #
-          # hosting-artifact-store-bind binds the control-owned SHARED ARTIFACT STORE read-only into a
-          # consumer namespace (Doc/Architecture/SharedArtifactStore): a static Retain PV on the owner's
-          # share, read off the owner's bound PV, plus the consumer's claim. Behaviour-tested against
-          # test/stubs/artifact-store-bind. Its plan half is the Plugins Provision/Reconcile/Roll step for
-          # a record whose artifactStore.role is Consumer, which merges after this image is on
-          # hosting-operator:main, for the same reason as hosting-migrate above.
-          hosting-artifact-store-bind  SharedArtifactStore — ships and is behaviour-tested; the plan half is the Plugins consumer-binding step
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
