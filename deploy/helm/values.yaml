@@ -679,6 +679,44 @@ bundles:
   resources:
     requests: {cpu: "50m", memory: "64Mi"}
     limits: {memory: "256Mi"}
+# ---- The shared artifact store's OWNER jobs (Doc/Architecture/SharedArtifactStore) ----------------
+# Rendered on the environment's CONTROL instance only — the store's owner — and only when a record
+# declares them (Hosting's HelmValues renders this block from `artifactStore`). Off by default: with
+# no upstream registry and no local source nothing renders, so every other environment renders
+# byte-identically. Every key is asserted by templates/memex-portal/_artifact-store.tpl.
+#   upstream     increment 4 — ONE-WAY replication of sealed publications from an upstream registry
+#                into this store (a client environment's control replicating from ours). Pull-based:
+#                the job reads `<registry>/plugins/<source>:<identity>` with THIS environment's pull
+#                credential (pullSecret, a kubernetes.io/dockerconfigjson Secret, by name) and never
+#                needs access to the upstream's store. Each publication lands as its own generation
+#                (`upstream-<digest>`), `_current` moved last. Nothing is ever deleted.
+#   localBuild   increment 5 — the sources this environment tracks itself, built here at the portal
+#                image (the compiler is the platform the portals run) with the platform's tester at
+#                the portal's tag, and published as `local-<commit>` generations. One CronJob per source.
+artifactStore:
+  claimName: ""                   # the OWNER's store claim (writable), e.g. control-artifacts
+  mountPath: "/artifacts"
+  runtimeIdentifier: "linux-x64"  # the store subtree the jobs write (the registry publishes linux-x64)
+  upstream:
+    registry: ""                  # set ⇒ the sync CronJob renders
+    sources: []                   # e.g. [plugins]
+    pullSecret: ""                # dockerconfigjson Secret holding the upstream pull credential
+    identities: []                # extra framework identities beside the control image's own
+    schedule: "*/30 * * * *"
+  localBuild:
+    sources: []                   # [{source, repository, ref, credentialSecret}] — one CronJob each
+    testerImageRepository: ""     # e.g. cr.example.com/mw-plugin-test — the tag follows portal.image
+    moduleSources: []             # sources whose sealed module sets the build compiles against;
+                                  # empty ⇒ the upstream sources (on our control: name the CI sources)
+    schedule: "*/30 * * * *"
+  # ORAS for the sync — the same pinned image the bundle fetch uses.
+  image: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"
+  resources:
+    requests: {cpu: "100m", memory: "256Mi"}
+    limits: {memory: "1Gi"}
+  buildResources:
+    requests: {cpu: "1", memory: "2Gi"}
+    limits: {memory: "6Gi"}
 migration:
   image: "ghcr.io/systemorph/memex-migration:latest"
   # The migration run's wall-clock BUDGET in minutes — every versioned repair and every always-on
