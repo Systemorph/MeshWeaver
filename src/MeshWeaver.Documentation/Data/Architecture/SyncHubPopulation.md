@@ -454,10 +454,13 @@ What the reading settles:
 - **The two-segment NodeType class is gone.** 28 depth-2 node hubs remain on the oldest replica, and
   they are ordinary live addresses (`Doc/Architecture`, `Edu/Page`, `portal/*`, `Hosting/*`), not a
   sweep over every NodeType.
-- **The partition-root, `_Policy` and `_GitSync` classes do not survive the boot window.** 4, 4–7 and
-  3 remain, against 128, 115 and 43 on `8f2g5`. Whatever activated them at boot
-  (`PackageInstaller.WarmInstalledRoots`, the Store's `PluginHubWarmer`, GitSync stamps) left no
-  standing population 45 minutes in, so the idle path does retire them.
+- **The partition-root, `_Policy` and `_GitSync` standing populations are much smaller.** 4, 4–7 and
+  3 are live 45 minutes in, against 128, 115 and 43 on `8f2g5`. That compares two DIFFERENT
+  generations with no early reading from these replicas, so it does not establish that the idle path
+  retired boot activations (`PackageInstaller.WarmInstalledRoots`, the Store's `PluginHubWarmer`,
+  GitSync stamps) — they may never have been built on this generation. §9's lifetime question stays
+  OPEN: answering it needs same-process evidence, the activation and the disposal of the same
+  address on one replica.
 - **The largest remaining class is the Store's gating pass, not a boot step.** The 224
   `DoublePendulum/_Entitlements/{viewer}` hubs were re-activated in one burst at 17:32:11Z, 45 minutes
   after boot: a governed `Logs` read (`Ops/Actions/census6623-doublependulum-gating-logs` on the
@@ -470,7 +473,8 @@ What the reading settles:
   there, and is the `StandardPacks.PacksToVerify` rule: a marker the pass's own subtree listing
   already shows is POSITIVE evidence that the grant is backed, so that viewer needs no targeted read
   at all (a stale positive keeps a grant one pass longer; it can never retract one). Viewers whose
-  marker the listing does not show keep every targeted read.
+  marker the listing does not show keep every targeted read. That change is
+  Systemorph/MeshWeaver.Plugins#4015.
 - **`{space}/_Issue/{n}` is a write fan-out, not a read.** One GitHub issue event is upserted by
   `GitHubWebhookProcessor.UpsertFromWebhook` into **every** Space synced from that repository (43 on
   the public instance), and each upsert is a `CreateOrUpdateNodeRequest` the issue node's own hub
@@ -479,8 +483,8 @@ What the reading settles:
   not a boot one.
 
 **Still not established:** a census taken within the first ten minutes of a generation, which is when
-the `[HEAPSTEP]` steps of #5555 print; this reading is from 45 minutes in, after the boot-time classes
-had already been retired. It also does not separate "never built" from "built and retired" for the
+the `[HEAPSTEP]` steps of #5555 print; this reading is from 45 minutes in, when the standing populations
+were much smaller. It also does not separate "never built" from "built and retired" for the
 classes that are gone.
 
 ## Related
