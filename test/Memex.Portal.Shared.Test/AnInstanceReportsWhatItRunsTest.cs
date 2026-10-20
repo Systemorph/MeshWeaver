@@ -219,6 +219,45 @@ public class AnInstanceReportsWhatItRunsTest(ITestOutputHelper output) : Monolit
         landed.AdoptedFrameworkInventoryComplete.Should().Be(true);
     }
 
+    /// <summary>
+    /// #6989 — a STORE files the report a consumer delivered under the instance id the store
+    /// AUTHENTICATED, whatever the body says, and its retention then finds it for the record that
+    /// mounts the store.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task AStoreFilesAConsumersReport_UnderTheAuthenticatedInstance_NotTheOneTheBodyClaims()
+    {
+        var delivered = new DeploymentReport
+        {
+            Deployment = "someone-else",
+            RegisteredInstance = "someone-else",
+            PlatformVersion = "3.1.100",
+            FrameworkIdentity = "s-consumer",
+            AdoptedFrameworkIdentities = ["s-consumer-older"],
+            AdoptedFrameworkInventoryComplete = true,
+            SampledAt = DeploymentReportService.Stamp(DateTimeOffset.UtcNow),
+        };
+
+        var path = await DeploymentReportService.FileStoreReport(Mesh, "consumer", delivered)
+            .Timeout(Budget).Await(TestContext.Current.CancellationToken);
+
+        path.Should().Be($"{DeploymentReportService.DefaultOperationalSpace}/{DeploymentReportService.StoreReportsSegment}/consumer");
+        var node = await Read(path);
+        var filed = Assert.IsType<DeploymentReport>(node!.Content);
+        filed.RegisteredInstance.Should().Be("consumer", "the store stamps the identity it authenticated");
+        filed.Deployment.Should().Be("someone-else", "the body is kept as sent; it is not the key");
+
+        var record = new MeshNode("consumer", "Deployments")
+        {
+            NodeType = DeploymentPinnedReferences.DeploymentNodeType,
+            Content = System.Text.Json.Nodes.JsonNode.Parse(
+                """{ "host": "consumer.example", "pluginRepos": [ { "url": "https://store.example" } ] }"""),
+        };
+        DeploymentPinnedReferences.Resolve([record], [node!], Mesh.JsonSerializerOptions, DateTimeOffset.UtcNow,
+                DeploymentPinnedReferences.StaleAfter, new ConsumerScope("store", ["store.example"], false))
+            .Select(r => r.Identity).Should().Contain(["s-consumer", "s-consumer-older"]);
+    }
+
     [Fact]
     public void TheSignature_IsGitHubsWebhookShape()
     {

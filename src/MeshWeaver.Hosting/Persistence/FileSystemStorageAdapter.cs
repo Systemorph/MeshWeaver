@@ -321,8 +321,18 @@ public class FileSystemStorageAdapter : IStorageAdapter
         // when callers parallelize recursive deletes (e.g. FileSystemPersistenceService
         // descendant moves via Task.WhenAll), two threads can race to remove the same
         // newly-empty directory. Swallow the expected races so the delete remains idempotent.
-        var basePath = GetFilePath(path, ".json");
-        var directory = Path.GetDirectoryName(basePath);
+        //
+        // 🚨 Pruning starts at the node's OWN directory (`{path}/`), not at the parent of its file
+        // (#6951). That directory holds the node's children and, in the JSON + index.md split
+        // pattern, its `index.md` — removed just above, after a child-first delete has already
+        // removed the children — so it is empty now and must go too. Starting at the parent left
+        // it behind, and on a case-insensitive volume a later write of the same path at another
+        // casing (a case-only rename) reused the old-cased directory. A directory that still has
+        // entries stops the ascent, so a node deleted with its descendants kept is untouched.
+        var ownDirectory = Path.Combine(_baseDirectory, delRelativePath);
+        var directory = Directory.Exists(ownDirectory)
+            ? ownDirectory
+            : Path.GetDirectoryName(GetFilePath(path, ".json"));
         while (!string.IsNullOrEmpty(directory) &&
                directory != _baseDirectory &&
                Directory.Exists(directory))

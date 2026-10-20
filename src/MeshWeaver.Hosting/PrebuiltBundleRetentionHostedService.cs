@@ -106,7 +106,7 @@ public sealed class PrebuiltBundleRetentionHostedService(
             {
                 status.RecordFault(ex);
                 logger.LogWarning(ex,
-                    "PrebuiltBundleRetention: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
+                    "PrebuiltBundleRetention: pass outcome — FAULTED: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
                     root);
             }))
             .Concat()

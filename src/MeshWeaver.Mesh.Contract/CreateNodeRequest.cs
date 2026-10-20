@@ -1094,6 +1094,25 @@ public record CopyNodeResponse(MeshNode? Node)
     /// <summary>Number of satellite nodes copied.</summary>
     public int SatellitesCopied { get; init; }
 
+    /// <summary>
+    /// On a FAILED copy: every target path it changed before it gave up — each create that landed,
+    /// and each target it found already holding the same node relocated (#6310) and resumed onto. A
+    /// copy runs every create it issued to its own verdict before it answers, so this is the whole set
+    /// unless <see cref="WrittenUnsettled"/> says otherwise. Empty with <see cref="WrittenUnsettled"/>
+    /// false means the copy PROVABLY wrote nothing at the target — the one case in which a caller (the
+    /// case-only rename of a move, #6951) may treat the target as untouched. It is never a list to
+    /// delete: nothing establishes that a row there is still the one this copy wrote.
+    /// </summary>
+    public ImmutableList<string> Written { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
+    /// True when what the failed copy wrote is not fully known: it ran out of time with creates it had
+    /// issued still outstanding, or a create failed after it may have written (the create handler
+    /// writes the row before its post-creation steps, so it can answer a failure over a row that
+    /// stays). <see cref="Written"/> may then be incomplete and what the target holds is unknown.
+    /// </summary>
+    public bool WrittenUnsettled { get; init; }
+
     /// <summary>Creates a successful copy response.</summary>
     public static CopyNodeResponse Ok(MeshNode node, int descendantsCopied = 0, int satellitesCopied = 0)
         => new(node) { DescendantsCopied = descendantsCopied, SatellitesCopied = satellitesCopied };

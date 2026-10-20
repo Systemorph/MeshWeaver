@@ -2229,16 +2229,13 @@ public static class MeshNodeLayoutAreas
     {
         var contentUrl = $"/api/content/{host.Hub.Address}/{contentPath}";
         var fileName = Path.GetFileName(contentPath);
-        // The viewer itself is the browser's own PDF reader in an <iframe> — an embed, like a video
-        // player, for which the platform has no control yet (a PdfViewer is a candidate). Only the
-        // frame is markup: the download is a platform Link, with no hard-coded colours.
+        // The viewer is the browser's own PDF reader in a platform embed frame (a Document of this
+        // portal: never sandboxed, since a browser refuses a PDF in a sandboxed frame), with the
+        // download as a platform Link beside it.
         return Controls.Stack
             .WithWidth("100%")
             .WithVerticalGap(8)
-            .WithView(Controls.Html(
-                $"<iframe src=\"{System.Web.HttpUtility.HtmlAttributeEncode(contentUrl)}\" " +
-                $"title=\"{System.Web.HttpUtility.HtmlAttributeEncode(fileName)}\" " +
-                "style=\"width: 100%; height: 600px; border: 1px solid var(--neutral-stroke-rest); border-radius: 4px;\"></iframe>"))
+            .WithView(Controls.Embed(contentUrl, fileName))
             .WithView(Controls.Link(host.Localize(DownloadPdfKey), contentUrl).WithDownload(fileName));
     }
 

@@ -557,10 +557,108 @@ for c in cmd_up cmd_update; do
   esac
 done
 
+echo "── Mac host profiles (Doc/Architecture/ReleaseEditions G4) ───────"
+
+prof() { OUT="$(env "$@" MEMEX_LOCAL_HOME="$RHOME" "$CLI" profile 2>&1)"; RC=$?; }
+prof MEMEX_PROFILE=mac-studio
+case "$RC:$OUT" in 0:*"12 CPU / 32 GiB"*"qwen3.6"*) ok "mac-studio sizes a 12/32 VM with qwen3.6" ;;
+  *) bad "mac-studio sizes a 12/32 VM with qwen3.6" "exited $RC: $OUT" ;; esac
+prof MEMEX_PROFILE=mac-mini
+case "$RC:$OUT" in 0:*"6 CPU / 12 GiB"*"qwen3:8b"*) ok "mac-mini sizes a 6/12 VM with qwen3:8b" ;;
+  *) bad "mac-mini sizes a 6/12 VM with qwen3:8b" "exited $RC: $OUT" ;; esac
+prof MEMEX_PROFILE=
+case "$RC:$OUT" in 0:*"8 CPU / 16 GiB"*"qwen3.6"*) ok "no profile keeps the laptop defaults (8/16, qwen3.6)" ;;
+  *) bad "no profile keeps the laptop defaults (8/16, qwen3.6)" "exited $RC: $OUT" ;; esac
+prof MEMEX_PROFILE=mac-mini MEMEX_COLIMA_MEM=20 MEMEX_OLLAMA_MODEL=none
+case "$RC:$OUT" in 0:*"6 CPU / 20 GiB"*"model:     none"*) ok "an explicit MEMEX_COLIMA_MEM / MEMEX_OLLAMA_MODEL beats the profile" ;;
+  *) bad "an explicit MEMEX_COLIMA_MEM / MEMEX_OLLAMA_MODEL beats the profile" "exited $RC: $OUT" ;; esac
+prof MEMEX_PROFILE=mac-studo
+case "$RC:$OUT" in 0:*) bad "an unknown profile refuses (never read as the default)" "exited 0: $OUT" ;;
+  *"unknown MEMEX_PROFILE"*) ok "an unknown profile refuses (never read as the default)" ;;
+  *) bad "an unknown profile refuses (never read as the default)" "refused without saying why: $OUT" ;; esac
+
+echo "── release-channel labels: a seed, resolved to a VERSION (G1) ────"
+
+# docker / az stubs for the channel path ONLY (a separate dir, so no other test sees a docker).
+#   FAKE_LABEL_ENV    — the env lines `docker image inspect` reports for the label's image
+#   FAKE_LABEL_ID / FAKE_VERSION_ID — the image ids of the label and of the version tag
+#   FAKE_PULL_FAILS   — a pull of a ref containing this string fails
+CHSTUBS="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$CHSTUBS/az"
+cat > "$CHSTUBS/docker" <<'STUB'
+#!/usr/bin/env bash
+ref="${!#}"
+case "$1" in
+  pull)
+    if [ -n "${FAKE_PULL_FAILS:-}" ]; then case "$ref" in *"$FAKE_PULL_FAILS"*) exit 1 ;; esac; fi
+    exit 0 ;;
+  image)
+    case "$*" in
+      *".Config.Env"*) printf '%s\n' "${FAKE_LABEL_ENV:-}" ;;
+      *"{{.Id}}"*) case "$ref" in *:3-*|*:3.*-*) printf '%s\n' "${FAKE_LABEL_ID:-sha256:aaa}" ;;
+                                  *) printf '%s\n' "${FAKE_VERSION_ID:-sha256:aaa}" ;; esac ;;
+    esac
+    exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$CHSTUBS/az" "$CHSTUBS/docker"
+chan() { OUT="$(env PATH="$CHSTUBS:$PATH" MEMEX_LOCAL_HOME="$RHOME" "$@" 2>&1)"; RC=$?; }
+
+chan FAKE_LABEL_ENV="PATH=/usr/bin
+MESHWEAVER_PLATFORM_VERSION=3.1.10050" "$CLI" channel 3-mac
+case "$RC:$OUT" in 0:3.1.10050) ok "a label resolves to the version its image reports" ;;
+  *) bad "a label resolves to the version its image reports" "exited $RC: $OUT" ;; esac
+
+chan FAKE_LABEL_ENV="PATH=/usr/bin" "$CLI" channel 3-latest
+case "$RC:$OUT" in 0:*) bad "a label whose image reports NO version refuses" "exited 0: $OUT" ;;
+  *"reports no MESHWEAVER_PLATFORM_VERSION"*) ok "a label whose image reports NO version refuses" ;;
+  *) bad "a label whose image reports NO version refuses" "refused without saying why: $OUT" ;; esac
+
+chan FAKE_LABEL_ENV="MESHWEAVER_PLATFORM_VERSION=3.1.10050" FAKE_LABEL_ID=sha256:aaa FAKE_VERSION_ID=sha256:bbb "$CLI" channel 3-mac
+case "$RC:$OUT" in 0:*) bad "a label and a version tag naming DIFFERENT bytes refuse" "exited 0: $OUT" ;;
+  *"DIFFERENT images"*) ok "a label and a version tag naming DIFFERENT bytes refuse" ;;
+  *) bad "a label and a version tag naming DIFFERENT bytes refuse" "refused without saying why: $OUT" ;; esac
+
+chan FAKE_LABEL_ENV="MESHWEAVER_PLATFORM_VERSION=3.1.10050" FAKE_PULL_FAILS=":3-enterprise" "$CLI" channel 3-enterprise
+case "$RC:$OUT" in 0:*) bad "an unwritten (declared-only) label names its cause" "exited 0: $OUT" ;;
+  *"declared and written"*) ok "an unwritten (declared-only) label names its cause" ;;
+  *) bad "an unwritten (declared-only) label names its cause" "refused without saying why: $OUT" ;; esac
+
+for notlabel in 3.1.10050 3.1.0-mac staging-abc1234-12 abc1234 main 3-Mac; do
+  chan "$CLI" channel "$notlabel"
+  case "$RC:$OUT" in 0:*) bad "'$notlabel' is refused as a channel label" "exited 0: $OUT" ;;
+    *"not a channel label"*) ok "'$notlabel' is refused as a channel label" ;;
+    *) bad "'$notlabel' is refused as a channel label" "refused without saying why: $OUT" ;; esac
+done
+for label in 3-latest 3.1-latest 3.0.0-latest 3-mac 3-enterprise 3.1-stable; do
+  chan FAKE_LABEL_ENV="MESHWEAVER_PLATFORM_VERSION=3.1.10050" "$CLI" channel "$label"
+  case "$RC" in 0) ok "'$label' is accepted as a channel label" ;;
+    *) bad "'$label' is accepted as a channel label" "exited $RC: $OUT" ;; esac
+done
+rm -rf "$CHSTUBS"
+
+# Static: up/update hand the channel to the pull, and --tag (an explicit version) clears it.
+for c in cmd_up cmd_update; do
+  body="$(awk -v f="^${c}\\\\(\\\\)" '$0 ~ f { on=1 } on { print } on && /^}$/ { exit }' "$CLI")"
+  # shellcheck disable=SC2016  # the single-quoted text is the source being searched for
+  case "$body" in
+    *'--channel) shift; channel='*'--tag) shift; acr_tag='*'channel="" ;;'*'image_pull_acr "$acr_tag" "$channel"'*)
+      ok "${c} accepts --channel, lets --tag override it, and resolves it in the pull" ;;
+    *) bad "${c} accepts --channel, lets --tag override it, and resolves it in the pull" "not wired in ${c}()" ;;
+  esac
+done
+# Static: the autoroll launchd job carries the channel, or the watcher would silently follow `main`.
+# shellcheck disable=SC2016  # a literal '${CHANNEL}' is the text being searched for
+case "$(cat "$CLI")" in
+  *'<key>MEMEX_CHANNEL</key><string>${CHANNEL}</string>'*) ok "autoroll's launchd job carries MEMEX_CHANNEL" ;;
+  *) bad "autoroll's launchd job carries MEMEX_CHANNEL" "the plist never sets it — the watcher would follow main" ;;
+esac
+
 echo "── the CLI still knows every command it documents ────────────────"
 
 help_out="$("$CLI" help 2>&1)"
-for cmd in up down status setup logs update registry verify port-forward observability doctor; do
+for cmd in up down status setup logs update registry verify port-forward observability doctor profile channel; do
   case "$help_out" in
     *"$cmd"*) ;;
     *) bad "help documents '$cmd'" "not in the usage text"; continue ;;

@@ -425,7 +425,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-b", "plugins", DaysAgo(400));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("s-a", StringComparison.Ordinal))
@@ -436,6 +437,12 @@ public class PrebuiltBundleRetentionTest : IDisposable
         result.FailedDeletes.Should().Be(1);
         result.DeletedIdentities.Should().Be(1);
         Directory.Exists(Path.Combine(root, "s-b")).Should().BeFalse();
+        // #6991: a failed removal is itemized below Warning and COUNTED in the pass's one outcome.
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N failed removals must not become N shipped Warning lines")
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("could not remove"));
     }
 
     [Fact]
@@ -847,7 +854,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Generation(Live, "plugins", "gen-new", DaysAgo(1));
         Pointer(Live, "plugins", "gen-new");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now,
+        var log = new OutcomeLogger();
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("gen-a", StringComparison.Ordinal))
@@ -857,6 +865,8 @@ public class PrebuiltBundleRetentionTest : IDisposable
 
         result.FailedDeletes.Should().Be(1);
         result.DeletedGenerations.Should().Be(1);
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome").And.Contain("1 removal(s) failed");
         Directory.Exists(Path.Combine(root, Live, "plugins", "gen-b")).Should().BeFalse();
     }
 
@@ -979,5 +989,324 @@ public class PrebuiltBundleRetentionTest : IDisposable
         {
             try { Directory.Delete(emptyRoot, recursive: true); } catch { /* best effort */ }
         }
+    }
+
+    // ---- the pass outcome reaches Loki (#6991) -------------------------------------------------
+
+    /// <summary>
+    /// 🚨 The cluster ships only Warning+ to Loki, so a pass whose outcome logs at Information is a
+    /// pass nobody can see ran (#6991). Each pass — report-only and armed alike — emits exactly ONE
+    /// Warning outcome line carrying the denominator and the per-rule kept tally, and the itemized
+    /// lines (which scale with the store) stay below Warning.
+    /// </summary>
+    [Theory]
+    [InlineData(false, "REPORT ONLY")]
+    [InlineData(true, "COLLECTED 1 identity(ies)")]
+    public void SweepCore_EmitsExactlyOneWarningOutcomePerPass(bool armed, string verdict)
+    {
+        Sealed(Live, "plugins", DaysAgo(1));
+        Sealed("s-old", "plugins", DaysAgo(500));
+        Sealed("s-recent", "plugins", DaysAgo(2));
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now, log);
+
+        var warnings = log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
+        warnings.Should().ContainSingle("one outcome line per pass is what keeps Warning+ affordable");
+        warnings[0].Message.Should().Contain("pass outcome").And.Contain(verdict)
+            .And.Contain("3 identity directory(ies)", "the line carries what the pass scanned")
+            .And.Contain("Kept 2 identity(ies) by rule:")
+            .And.Contain($"{PrebuiltRetentionKeepRule.Live}=1")
+            .And.Contain($"{PrebuiltRetentionKeepRule.RetentionWindow}=1");
+        warnings[0].Message.Should().NotContain("s-recent",
+            "the Warning line is bounded by the number of rules, never by the size of the store");
+        log.Entries.Should().Contain(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                                          && e.Message.Contains("s-recent"),
+            "the itemized kept list stays at Information");
+    }
+
+    /// <summary>
+    /// An aborted pass is already a Warning, and it is the ONLY Warning — no outcome line claims
+    /// the pass completed.
+    /// </summary>
+    [Fact]
+    public void SweepCore_AnAbortedPass_IsOneWarning()
+    {
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — ABORTED").And.Contain("nothing collected",
+                "every pass, an aborted one included, carries the one tag an operator queries for");
+    }
+
+    private sealed class OutcomeLogger : Microsoft.Extensions.Logging.ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(Microsoft.Extensions.Logging.LogLevel Level, string Message)> Entries { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Enqueue((logLevel, formatter(state, exception)));
+    }
+
+    // ---- per-release surfaces (MeshWeaver#6990) -----------------------------------------------
+
+    private string Surface(string version, DateTimeOffset? writtenAt = null, int bytes = 512)
+    {
+        var dir = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+            SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, version);
+        File.WriteAllBytes(path, new byte[bytes]);
+        File.SetLastWriteTimeUtc(path, (writtenAt ?? Now - TimeSpan.FromDays(100)).UtcDateTime);
+        return path;
+    }
+
+    private string[] SurfacesOnDisk() =>
+        Directory.GetFiles(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+                SealedPublicationIndex.ReleaseSurfaceDirectoryName))
+            .Select(f => Path.GetFileName(f)!).OrderBy(n => n, StringComparer.Ordinal).ToArray();
+
+    /// <summary>
+    /// The store every surface test builds: one surface per reader-visible case. What a reader can
+    /// still name keeps its surface; what nothing can name any more loses it.
+    /// </summary>
+    private ImmutableList<PinnedPlatformReference> SurfaceStore()
+    {
+        Marker("3.1.0-ci.9000", Live); Surface("3.1.0-ci.9000");
+        Sealed(Live, "plugins", DaysAgo(1));
+        // A clean release: marker and surface are kept, however old.
+        Marker("3.0.0", "s-rel"); Surface("3.0.0", DaysAgo(300)); Sealed("s-rel", "plugins", DaysAgo(200));
+        // A ci build nothing references: its identity, marker AND surface go together.
+        Marker("3.0.0-ci.1", "s-c1"); Surface("3.0.0-ci.1", DaysAgo(230)); Sealed("s-c1", "plugins", DaysAgo(230));
+        // A ci build a Deployment pins: kept with its marker.
+        Marker("3.0.0-ci.2", "s-c2"); Surface("3.0.0-ci.2", DaysAgo(220)); Sealed("s-c2", "plugins", DaysAgo(220));
+        // Orphans — no marker names them.
+        Surface("3.0.0-ci.0", DaysAgo(240));                 // old pre-release: unreachable, goes
+        Surface("3.1.0-ci.9001", MinutesAgo(2));             // its marker is in flight: kept
+        Surface("2.9.0", DaysAgo(400));                      // a clean version: never retired
+        Surface("3.0.0-ci.3", DaysAgo(240));                 // pinned by version: kept
+        return [
+            new PinnedPlatformReference("Deployment Deployments/fabrikam", "memex-portal-ai:3.0.0-ci.2", null),
+            new PinnedPlatformReference("instance report Deployments/Modules/initech", "3.0.0-ci.3", "s-c2"),
+        ];
+    }
+
+    [Fact]
+    public void AReleaseSurface_IsRetiredWithItsMarker_AndOnlyWhatNoReaderCanNameGoes()
+    {
+        var pinned = SurfaceStore();
+
+        var plan = PlanNow(liveVersion: "3.1.0-ci.9000", pinned: pinned);
+
+        plan.AbortReason.Should().BeNull();
+        plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.0.0-ci.1");
+        plan.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.0.0-ci.0", "3.0.0-ci.1");
+        plan.ProtectedSurfaces["3.1.0-ci.9000"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.0.0"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.0.0-ci.2"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.1.0-ci.9001"].Should().Contain("may be in flight");
+        plan.ProtectedSurfaces["2.9.0"].Should().Contain("cut release");
+        plan.ProtectedSurfaces["3.0.0-ci.3"].Should().Contain("pins");
+        plan.Summary.Should().Contain("release surfaces to retire=2");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.Deleted.Should().BeTrue();
+        result.DeletedSurfaces.Should().Be(2);
+        SurfacesOnDisk().Should().Equal("2.9.0", "3.0.0", "3.0.0-ci.2", "3.0.0-ci.3", "3.1.0-ci.9000", "3.1.0-ci.9001");
+        File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root))
+            .Should().Contain("retired release surface 3.0.0-ci.1").And.Contain("retired release surface 3.0.0-ci.0");
+    }
+
+    [Fact]
+    public void AnIncompleteConsumerInventory_RetiresNoSurface()
+    {
+        SurfaceStore();
+        // A consumer names a version no marker resolves: who reads which surface is unknown.
+        var pinned = ImmutableList.Create(new PinnedPlatformReference("Deployment Deployments/ghost", "3.0.0-ci.77", null));
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.AbortReason.Should().Contain("inventory is incomplete");
+        result.Plan!.CollectableSurfaces.Should().BeEmpty();
+        result.DeletedSurfaces.Should().Be(0);
+        SurfacesOnDisk().Should().HaveCount(8);
+    }
+
+    [Fact]
+    public void AnUnreadableReleaseMarker_RetiresNoSurface()
+    {
+        var pinned = SurfaceStore();
+        var marker = Marker("3.0.0-ci.5", "s-c5");
+        File.WriteAllText(marker, "");
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+
+        result.AbortReason.Should().Contain("3.0.0-ci.5");
+        result.Plan!.CollectableSurfaces.Should().BeEmpty();
+        SurfacesOnDisk().Should().HaveCount(8);
+    }
+
+    [Fact]
+    public void ReportOnly_NamesTheSurfacesItWouldRetire_AndRemovesNone()
+    {
+        var pinned = SurfaceStore();
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
+
+        result.Deleted.Should().BeFalse();
+        result.Plan!.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.0.0-ci.0", "3.0.0-ci.1");
+        SurfacesOnDisk().Should().HaveCount(8);
+        File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root)).Should().Contain("report only")
+            .And.Contain("release surfaces to retire=2");
+    }
+
+    // ---- continuous builds vs cut releases (MeshWeaver#6990 review) ---------------------------
+
+    /// <summary>
+    /// A CUT release is exactly what <c>release.yml</c> promotes: the tag must match
+    /// <c>^[0-9]+\.[0-9]+\.[0-9]+$</c> AND equal <c>PlatformVersion</c>, which on the SemVer line is
+    /// <c>X.Y.0</c>. A main-CD build is <c>X.Y.&lt;run&gt;</c> (<c>main-cd.yml</c>, policy
+    /// <c>platform-semver-versioning</c>) — no hyphen, and still a continuous build.
+    /// </summary>
+    [Theory]
+    [InlineData("3.0.0", true)]
+    [InlineData("3.1.0", true)]
+    [InlineData("4.0.0", true)]
+    [InlineData("2.5.3", true)]
+    [InlineData("3.1.0+abc123", true)]
+    [InlineData("garbage", true)]
+    [InlineData("3.1.11217", false)]
+    [InlineData("3.1.11217-edge", false)]
+    [InlineData("3.0.0-ci.8080", false)]
+    [InlineData("3.0.0-rc9.ci.7824", false)]
+    [InlineData("3.0.0-rc8", false)]
+    [InlineData("3.1.0-dev", false)]
+    public void ACutRelease_IsTheCleanVersionReleaseYmlPromotes_NeverAContinuousBuild(string version, bool cut)
+    {
+        PlatformVersionLine.IsCutRelease(version).Should().Be(cut);
+    }
+
+    private ImmutableList<PinnedPlatformReference> SemVerStore()
+    {
+        Marker("3.1.11300", Live); Surface("3.1.11300", DaysAgo(1)); Sealed(Live, "plugins", DaysAgo(1));
+        // A deliberately cut release: kept for ever, with its surface.
+        Marker("3.1.0", "s-cut"); Surface("3.1.0", DaysAgo(200)); Sealed("s-cut", "plugins", DaysAgo(200));
+        // A continuous CD build past the window, nothing references it: identity, marker AND surface go.
+        Marker("3.1.11000", "s-cd"); Surface("3.1.11000", DaysAgo(60)); Sealed("s-cd", "plugins", DaysAgo(60));
+        // A CD build a Deployment pins: kept however old.
+        Marker("3.1.11100", "s-pin"); Surface("3.1.11100", DaysAgo(50)); Sealed("s-pin", "plugins", DaysAgo(50));
+        // A recent CD build: inside the window.
+        Marker("3.1.11290", "s-recent"); Surface("3.1.11290", DaysAgo(5)); Sealed("s-recent", "plugins", DaysAgo(5));
+        // Orphan CD surfaces: the old one goes, the recent one stays.
+        Surface("3.1.10900", DaysAgo(90));
+        Surface("3.1.11295", DaysAgo(2));
+        return [new PinnedPlatformReference("Deployment Deployments/fabrikam", "memex-portal-ai:3.1.11100", null)];
+    }
+
+    [Fact]
+    public void ContinuousSemVerBuilds_PastTheWindow_AreCollected_WithTheirMarkersAndSurfaces()
+    {
+        var pinned = SemVerStore();
+
+        var plan = PlanNow(liveVersion: "3.1.11300", pinned: pinned);
+
+        plan.AbortReason.Should().BeNull();
+        Ids(plan).Should().Equal("s-cd");
+        plan.CollectableMarkers.Select(m => m.Version).Should().Equal("3.1.11000");
+        plan.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.1.10900", "3.1.11000");
+        plan.Protected[Live].Should().Contain("runs");
+        plan.Protected["s-cut"].Should().Contain("release marker 3.1.0");
+        plan.Protected["s-pin"].Should().Contain("pinned by Deployment Deployments/fabrikam");
+        plan.Protected["s-recent"].Should().Contain("retention window");
+        plan.ProtectedSurfaces["3.1.0"].Should().Contain("marker is kept");
+        plan.ProtectedSurfaces["3.1.11295"].Should().Contain("may be in flight");
+    }
+
+    [Fact]
+    public void ContinuousSemVerBuilds_AreActuallyRemoved_AndCutReleasesStay()
+    {
+        var pinned = SemVerStore();
+
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.11300", [], pinned, retention, Now);
+
+        result.Deleted.Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-cd")).Should().BeFalse();
+        Directory.Exists(Path.Combine(root, "s-cut")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-pin")).Should().BeTrue();
+        Directory.Exists(Path.Combine(root, "s-recent")).Should().BeTrue();
+        Directory.GetFiles(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName))
+            .Select(f => Path.GetFileName(f)!).OrderBy(n => n, StringComparer.Ordinal)
+            .Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11300");
+        SurfacesOnDisk().Should().Equal("3.1.0", "3.1.11100", "3.1.11290", "3.1.11295", "3.1.11300");
+    }
+
+    /// <summary>
+    /// #6991 over #6990: retired release surfaces are part of the pass's ONE Warning outcome, and a
+    /// surface that cannot be removed is itemized at Information and counted there — never a
+    /// Warning of its own.
+    /// </summary>
+    [Fact]
+    public void RetiredSurfaces_AreCountedOnTheOneWarningOutcome()
+    {
+        var pinned = SurfaceStore();
+        var log = new OutcomeLogger();
+
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
+            .Which.Message.Should().Contain("pass outcome — COLLECTED")
+            .And.Contain("and 2 release surface(s)")
+            .And.Contain("0 removal(s) failed")
+            .And.Contain("and 6 release surface(s)", "the kept surfaces are counted beside the kept generations");
+    }
+
+    [Fact]
+    public void AFailedSurfaceRemoval_IsCountedOnTheOneWarningOutcome()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // the refusal below is a POSIX directory permission
+        var pinned = SurfaceStore();
+        var surfaces = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName,
+            SealedPublicationIndex.ReleaseSurfaceDirectoryName);
+        var mode = File.GetUnixFileMode(surfaces);
+        File.SetUnixFileMode(surfaces, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        var log = new OutcomeLogger();
+        try
+        {
+            var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+            result.DeletedSurfaces.Should().Be(0);
+        }
+        finally
+        {
+            File.SetUnixFileMode(surfaces, mode);
+        }
+
+        log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle(
+                "N failed surface removals must not become N shipped Warning lines")
+            .Which.Message.Should().Contain("and 0 release surface(s)").And.Contain("2 removal(s) failed");
+        log.Entries.Count(e => e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                               && e.Message.Contains("could not remove release surface")).Should().Be(2);
+    }
+
+    [Fact]
+    public void ASurfaceIsNeverMistakenForAReleaseMarker()
+    {
+        // `_surface` lives UNDER `_releases`; a scan that read it as a marker would abort every
+        // pass on a ~8.7 MB "identity" — or worse, take it for one.
+        Marker("3.1.0-ci.9000", Live); Surface("3.1.0-ci.9000");
+        Sealed(Live, "plugins", DaysAgo(1));
+
+        var scan = PrebuiltBundleStore.Scan(root);
+
+        scan.Markers.Select(m => m.Version).Should().Equal("3.1.0-ci.9000");
+        scan.Surfaces.Select(s => s.Version).Should().Equal("3.1.0-ci.9000");
+        scan.Surfaces[0].Bytes.Should().Be(512);
     }
 }

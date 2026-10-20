@@ -445,6 +445,14 @@ internal sealed class MonotonicWriteGuardStorageAdapter(
         });
 
     /// <inheritdoc />
+    public IObservable<bool> DeleteIfIncarnationAtMost(
+        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
+        => inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options).Do(removed =>
+        {
+            if (removed) Forget(path);
+        });
+
+    /// <inheritdoc />
     /// <remarks>Every path the batch removed is forgotten, exactly as the single-path
     /// <see cref="Delete"/> does — a mark left behind would refuse the next write to that path.</remarks>
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)

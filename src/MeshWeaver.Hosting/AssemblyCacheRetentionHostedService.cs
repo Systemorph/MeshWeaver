@@ -92,7 +92,7 @@ public sealed class AssemblyCacheRetentionHostedService(
             .Subscribe(
                 _ => { },
                 ex => logger.LogWarning(ex,
-                    "AssemblyCacheRetention: the sweep of {Root} faulted — nothing was collected, and "
+                    "AssemblyCacheRetention: pass outcome — FAULTED: the sweep of {Root} faulted — nothing was collected, and "
                     + "the next pod start plans it again", root));
     }
 

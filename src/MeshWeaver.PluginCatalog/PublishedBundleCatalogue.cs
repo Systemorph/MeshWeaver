@@ -87,7 +87,7 @@ public static class PublishedBundleCatalogue
     /// identity markers. Mirrored in <c>publish-bake-bundles.sh</c> (<c>RELEASE_SURFACE_DIR</c>)
     /// and carried to the clean version by <c>release.yml</c>.</para>
     /// </summary>
-    public const string ReleaseSurfaceDirectoryName = "_surface";
+    public const string ReleaseSurfaceDirectoryName = SealedPublicationIndex.ReleaseSurfaceDirectoryName;
 
     /// <summary>
     /// Reads the catalogue for one target release. Synchronous and total — every failure becomes a

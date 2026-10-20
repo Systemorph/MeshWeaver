@@ -94,6 +94,13 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
     public const string DefaultOperationalSpace = "Ops";
     public const string EventName = "module-inventory";
     public const string InboxRoute = "/api/hooks/Hosting/Modules";
+    /// <summary>
+    /// The route on a plugin REGISTRY a consumer delivers its report to (#6989) — the store whose
+    /// prebuilt bundles it is served from, beside the report sink at <see cref="InboxRoute"/>.
+    /// </summary>
+    public const string StoreInboxRoute = "/api/instances/inventory";
+    /// <summary>Where, under the operational space, a store files the reports its consumers delivered.</summary>
+    public const string StoreReportsSegment = "ConsumerReports";
     public const string SignatureHeader = "X-Hub-Signature-256";
     public const string InventoryNodeType = "Hosting/ModuleInventory";
     /// <summary>
@@ -236,7 +243,127 @@ public sealed class DeploymentReportService : IHostedService, IDisposable
             })
             .Zip(ReadServed(), (report, served) => (report, served))
             .Zip(ReadLatestArmed(hub, ReadBudget, logger), (pair, armed) => WithTarget(pair.report, pair.served, armed))
-            .SelectMany(report => Deliver(settings, report));
+            // The stores first, and never instead of the sink: a store that cannot be reached is
+            // logged at Warning per store and its retention then names this instance as silent
+            // (fail closed there), while the sink's outcome stays this report's outcome.
+            .SelectMany(report => DeliverToStores(report).SelectMany(_ => Deliver(settings, report)));
+    }
+
+    /// <summary>
+    /// 🚨 #6989 — A STORE MUST HEAR FROM ITS CONSUMERS. A registry serves this instance bundles keyed
+    /// on the framework identity this instance runs and adopts, out of the registry's OWN prebuilt
+    /// store, and that store's retention may not delete an identity a consumer still uses. The
+    /// report sink (<see cref="ReportToKey"/>, the control instance) is a different host, so before
+    /// this the registry never saw a single report and its retention refused on every pass, for
+    /// ever. Every registry this instance mounts (<see cref="PluginCatalogOptions.EffectiveRegistries"/>)
+    /// therefore receives the same report at <see cref="StoreInboxRoute"/>, presented with the same
+    /// credential this instance pulls with — so the registry files it under the instance id it
+    /// AUTHENTICATED, never under one the body claims.
+    ///
+    /// <para>Never faults: one registry's refusal is logged at Warning with the store and the status
+    /// and does not keep the report from the sink or from the other stores. Its consequence is not
+    /// hidden — that store's retention names this instance as having no fresh report and collects
+    /// nothing.</para>
+    /// </summary>
+    private IObservable<Unit> DeliverToStores(DeploymentReport report)
+    {
+        var options = hub.ServiceProvider.GetService<PluginCatalogOptions>();
+        var resolver = hub.ServiceProvider.GetService<RegistryTokenResolver>();
+        if (options is null || resolver is null)
+            return Observable.Return(Unit.Default);
+        var stores = RegistryTokenResolver.WithLegacyTokens(options, options.EffectiveRegistries)
+            .Where(registry => Uri.TryCreate(registry.Url?.Trim(), UriKind.Absolute, out var uri)
+                && (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp))
+            .ToImmutableList();
+        if (stores.IsEmpty)
+            return Observable.Return(Unit.Default);
+        // A sender never names its registry identity: the store stamps the one it authenticated.
+        var body = JsonSerializer.Serialize(report with { RegisteredInstance = null }, Json);
+        return stores
+            .Select(store => DeliverToStore(store, resolver, body, report.Deployment))
+            .Merge()
+            .ToList()
+            .Select(_ => Unit.Default);
+    }
+
+    private IObservable<Unit> DeliverToStore(
+        PluginRegistryReference store, RegistryTokenResolver resolver, string body, string deployment)
+    {
+        var url = store.Url.Trim().TrimEnd('/') + StoreInboxRoute;
+        return resolver.ResolveToken(store)
+            .Take(1)
+            .SelectMany(token =>
+            {
+                if (token.Length == 0)
+                {
+                    logger.LogWarning(
+                        "[DeploymentReport] {Deployment} holds no credential for the registry {Url}, so its "
+                        + "report was NOT delivered there; that store's retention will count this instance as "
+                        + "silent and collect nothing.", deployment, store.Url);
+                    return Observable.Return(Unit.Default);
+                }
+                return httpPool.Invoke(async ct =>
+                    {
+                        using var request = new HttpRequestMessage(HttpMethod.Post, url)
+                        {
+                            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                        };
+                        request.Headers.TryAddWithoutValidation("Authorization", $"{InstanceKeys.Scheme} {token}");
+                        using var response = await http.SendAsync(request, ct).ConfigureAwait(false);
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            var text = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                            throw new DeploymentReportRejectedException(
+                                $"the report for {deployment} was REJECTED by the store {url}: "
+                                + $"{(int)response.StatusCode} {response.ReasonPhrase} {text}".TrimEnd());
+                        }
+                        return Unit.Default;
+                    })
+                    .Do(_ => logger.LogInformation(
+                        "[DeploymentReport] {Deployment}: delivered to the store {Url}", deployment, url));
+            })
+            .Catch((Exception exception) =>
+            {
+                logger.LogWarning(exception,
+                    "[DeploymentReport] the report for {Deployment} did not reach the store {Url}; that store's "
+                    + "retention will count this instance as silent and collect nothing until a report arrives.",
+                    deployment, url);
+                return Observable.Return(Unit.Default);
+            });
+    }
+
+    /// <summary>
+    /// The registry half of <see cref="DeliverToStores"/>: files a consumer's report on THIS store as a
+    /// <see cref="InventoryNodeType"/> node at <c>{Hosting:OperationalSpace}/ConsumerReports/{instance}</c>,
+    /// with <see cref="DeploymentReport.RegisteredInstance"/> set to the instance id the caller
+    /// AUTHENTICATED as — whatever the body said. Executed as System: the authorization is the
+    /// caller's registry credential, checked before this is called.
+    /// </summary>
+    /// <param name="hub">The registry's mesh hub.</param>
+    /// <param name="registeredInstance">The authenticated caller's registry instance id.</param>
+    /// <param name="report">The report as received.</param>
+    /// <returns>The path the report was filed at. Cold.</returns>
+    public static IObservable<string> FileStoreReport(IMessageHub hub, string registeredInstance, DeploymentReport report)
+    {
+        var config = hub.ServiceProvider.GetService<IConfiguration>();
+        var ops = config?[OperationalSpaceKey]?.Trim();
+        var stamped = report with { RegisteredInstance = registeredInstance };
+        var payload = JsonNode.Parse(JsonSerializer.Serialize(stamped, Json))!.AsObject();
+        payload["$type"] = InventoryContentType;
+        var node = new MeshNode(registeredInstance, $"{(string.IsNullOrEmpty(ops) ? DefaultOperationalSpace : ops)}/{StoreReportsSegment}")
+        {
+            Name = $"{registeredInstance} — consumer report ({stamped.Modules.Count} module(s))",
+            NodeType = InventoryNodeType,
+            State = MeshNodeState.Active,
+            Content = payload,
+        };
+        var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
+        var accessService = hub.ServiceProvider.GetRequiredService<AccessService>();
+        return accessService
+            .RunAsSystem(() => meshService.CreateOrUpdateNode(node))
+            .Take(1)
+            .Timeout(DeliveryBudget)
+            .Select(written => written.Path);
     }
 
     /// <summary>
@@ -688,6 +815,14 @@ public sealed record DeploymentReport
     public string? TargetPlatform { get; init; }
     /// <summary>The newest ARMED platform this instance's self-updater sees (<c>latestAvailableTag</c>).</summary>
     public string? LatestArmedPlatform { get; init; }
+    /// <summary>
+    /// The registry instance id a STORE authenticated the sender as, stamped by the store that filed
+    /// the report (<see cref="DeploymentReportService.FileStoreReport"/>) and never by the sender —
+    /// a sender's value is discarded. Null on a report the control instance's inbox filed. It is the
+    /// key the store's retention files the report under, so one instance's key can never make
+    /// another instance's record read as reported (#6989).
+    /// </summary>
+    public string? RegisteredInstance { get; init; }
 }
 
 public sealed record ModuleReport
