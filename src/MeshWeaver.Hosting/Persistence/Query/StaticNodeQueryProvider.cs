@@ -421,10 +421,17 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// The declared nodes served to every caller without a per-row verdict: DEFINITIONS — a bare
-    /// registration that carries no node type (a type's hub registration), a
+    /// The declared nodes served to every caller without a per-row verdict: DEFINITIONS — a type's
+    /// hub registration (no node type of its own, and a <see cref="MeshNode.HubConfiguration"/>: it
+    /// configures the hub of every instance of the type it names), a
     /// <see cref="MeshNode.NodeTypePath">NodeType</see> definition, a <c>Role</c> definition and a
-    /// <c>Partition</c> definition. They are the mesh's vocabulary: every caller resolves types,
+    /// <c>Partition</c> definition.
+    ///
+    /// <para>🚨 A missing node type ALONE identifies nothing: content may be declared untyped (a body,
+    /// a name, no hub configuration), and treating that as vocabulary served it — name, path and
+    /// content — to a viewer with no grant on its partition. Only a positively identified
+    /// registration is exempt; an untyped node without a hub configuration is decided by the row
+    /// filter like any other declared row.</para> They are the mesh's vocabulary: every caller resolves types,
     /// roles and partitions by them, and no access grant is written on them — on a mesh with no
     /// public grants a viewer holds Read on almost none of them, so filtering them would empty every type
     /// picker and role list for everyone but an admin. A declared node of ANY other type — content, configuration, a grant — is decided
@@ -436,7 +443,12 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// <param name="node">The declared node.</param>
     internal static bool IsDeclaredVocabulary(MeshNode node)
         => !SatelliteTableMapping.IsSatellitePath(node.Path)
-           && (string.IsNullOrEmpty(node.NodeType) || DefinitionNodeTypes.Contains(node.NodeType));
+           && (IsTypeRegistration(node) || (node.NodeType is { } type && DefinitionNodeTypes.Contains(type)));
+
+    /// <summary>A type's hub registration: untyped itself, and carrying the hub configuration of the
+    /// type it names. See <see cref="IsDeclaredVocabulary"/>.</summary>
+    private static bool IsTypeRegistration(MeshNode node)
+        => string.IsNullOrEmpty(node.NodeType) && node.HubConfiguration is not null;
 
     private static bool RequiresRowFilter(MeshNode node) => !IsDeclaredVocabulary(node);
 

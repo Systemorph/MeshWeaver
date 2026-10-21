@@ -4,6 +4,7 @@ using System.Reactive.Linq;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -31,6 +32,10 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
     private const string Partition = "declaredrls-private";
     private const string SecretId = "declaredrls-secret";
     private const string SecretPath = Partition + "/" + SecretId;
+    // Declared WITHOUT a node type and without a hub configuration — ordinary content, not a type
+    // registration. A missing node type alone must not make a declared node vocabulary.
+    private const string UntypedId = "declaredrls-untyped";
+    private const string UntypedPath = Partition + "/" + UntypedId;
     private const string Reader = "declaredrls-reader";
     private const string Stranger = "declaredrls-stranger";
 
@@ -42,6 +47,7 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
         => ConfigureMeshBase(builder)
             .AddMeshNodes(
                 new MeshNode(SecretId, Partition) { NodeType = "Markdown", Name = SecretId },
+                new MeshNode(UntypedId, Partition) { Name = UntypedId, Content = "<p>untyped secret body</p>" },
                 AssignmentNodeFactory.UserRole(Reader, "Viewer", Partition));
 
     private Task<IReadOnlyList<string>> QueryAs(string viewer, string query)
@@ -76,6 +82,46 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
 
         rows.Should().Contain(SecretPath,
             "the reader holds Viewer on the partition — if this fails, the stranger's empty answer proves nothing");
+    }
+
+    /// <summary>
+    /// An UNTYPED declared node with no hub configuration is content, not a type registration: the
+    /// stranger gets it neither from a query nor from an autocomplete drill-down; the reader gets both.
+    /// </summary>
+    [Theory]
+    [InlineData("path:" + UntypedPath)]
+    [InlineData("namespace:" + Partition)]
+    public async Task AnUntypedDeclaredNode_IsFilteredInAQuery(string query)
+    {
+        var stranger = await QueryAs(Stranger, query);
+        var reader = await QueryAs(Reader, query);
+        Output.WriteLine($"[{query}] stranger: {string.Join(", ", stranger)} | reader: {string.Join(", ", reader)}");
+
+        stranger.Should().NotContain(UntypedPath, "a missing node type does not make declared content vocabulary");
+        reader.Should().Contain(UntypedPath, "the reader may read the partition — the control");
+    }
+
+    [Fact]
+    public async Task AnUntypedDeclaredNode_IsFilteredInAutocomplete()
+    {
+        var stranger = await AutocompleteAs(Stranger);
+        var reader = await AutocompleteAs(Reader);
+        Output.WriteLine($"stranger: {string.Join(", ", stranger)} | reader: {string.Join(", ", reader)}");
+
+        stranger.Should().NotContain(UntypedPath, "an autocomplete drill-down is the same read as a query");
+        reader.Should().Contain(UntypedPath, "the reader may read the partition — the control");
+    }
+
+    /// <summary>The paths the declared-node provider suggests to <paramref name="viewer"/> under the partition.</summary>
+    private Task<IReadOnlyList<string>> AutocompleteAs(string viewer)
+    {
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        access.SetContext(new AccessContext { ObjectId = viewer, Name = viewer });
+        return Mesh.ServiceProvider.GetRequiredService<StaticNodeQueryProvider>()
+            .Autocomplete(Partition, "", Mesh.JsonSerializerOptions, limit: 50)
+            .Select(rows => (IReadOnlyList<string>)rows.Select(r => r.Path).ToList())
+            .Timeout(Budget)
+            .Await(TestContext.Current.CancellationToken);
     }
 
     /// <summary>
