@@ -195,8 +195,12 @@ public class CatalogAppTest
 
         var second = Collect(search.Section(NothingTyped, "Reply needed"));
 
-        Assert.Single(first);
-        var resumed = Assert.IsType<MeshSearchControl>(Assert.Single(second));
+        // Loading until the filter answered, then the search — and the rebuilt section resumes from the
+        // retained filter at once, so its loading frame is immediately replaced.
+        Assert.Equal(2, first.Count);
+        Assert.IsType<ProgressControl>(first[0]);
+        Assert.Equal(2, second.Count);
+        var resumed = Assert.IsType<MeshSearchControl>(second[1]);
         Assert.StartsWith("nodeType:Crm/Counterparty id:fabrikam", resumed.HiddenQuery?.ToString());
     }
 
@@ -282,12 +286,33 @@ public class CatalogAppTest
         typed.OnNext("globex");
         typed.OnNext("globex");
 
-        Assert.Equal(3, seen.Count);
+        Assert.Equal(4, seen.Count);
+        Assert.IsType<ProgressControl>(seen[0]);
         // A plain label: localised text with _ or * is shown as written, never read as markup.
-        Assert.Equal("Nothing is waiting on us.", ((LabelControl)seen[0]).Data);
+        Assert.Equal("Nothing is waiting on us.", ((LabelControl)seen[1]).Data);
         Assert.Equal("nodeType:Crm/Counterparty id:fabrikam partitions:all sort:subtreeLastModified-desc",
-            ((MeshSearchControl)seen[1]).HiddenQuery);
-        Assert.Equal("globex", ((MeshSearchControl)seen[2]).VisibleQuery);
+            ((MeshSearchControl)seen[2]).HiddenQuery);
+        Assert.Equal("globex", ((MeshSearchControl)seen[3]).VisibleQuery);
+    }
+
+    [Fact]
+    public void AComputedSection_IsLoading_NeverAbsent_UntilItsFilterAnswers()
+    {
+        // A filter backed by a live read that has not answered yet. Before, the section emitted
+        // NOTHING here, so its area never existed: an empty tab to the reader, and "missing" to a
+        // one-shot read of the page (Crm Incidents, 2026-10-21).
+        var silent = new Subject<string?>();
+
+        var plain = Collect(CatalogSearch.Computed(silent, "Reply needed", "Card").Section(NothingTyped, "Reply needed"));
+        var worded = Collect(CatalogSearch.Computed(silent, "Reply needed", "Card", null, null, "Reading the journeys…")
+            .Section(NothingTyped, "Reply needed"));
+
+        var indicator = Assert.IsType<ProgressControl>(Assert.Single(plain));
+        Assert.Equal("", indicator.Message);   // no literal English from the platform (i18n)
+        Assert.Equal("Reading the journeys…", Assert.IsType<ProgressControl>(Assert.Single(worded)).Message);
+
+        // A FIXED search answers at once and never shows the indicator.
+        Assert.IsType<MeshSearchControl>(Assert.Single(Collect(CatalogSearch.Of(Clients).Section(NothingTyped, "Clients"))));
     }
 
     [Fact]
