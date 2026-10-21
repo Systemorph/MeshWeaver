@@ -487,6 +487,13 @@ public static class JsonSynchronizationStream
                 config => config
                     .WithClientId(config.Stream.StreamId)
             );
+        // The identity every RE-subscribe of this mirror runs under — the one resolved above for the
+        // initial subscribe, null for an infrastructure mirror (which re-subscribes as System, as it
+        // subscribed). See SynchronizationStream.SubscriberContext.
+        reduced.SubscriberContext = ambient;
+        // …and a mirror opened AS ITS HUB keeps the hub's credential on every re-subscribe, exactly as
+        // the initial subscribe and Resubscribe below apply it (review of #7016, thread 4340459051).
+        reduced.SubscribeAsHub = impersonateAsHub ? hub.Address : null;
 
 
         if (typeof(TReduced) == typeof(JsonElement))
@@ -782,7 +789,7 @@ public static class JsonSynchronizationStream
         // actually COMPLETED (OwnerTeardownSettled — never racing the dying instance), it goes
         // through Resubscribe's in-flight guard, it arms ExpectResubscribeFull (the fresh snapshot
         // may carry a frame version below our cached one after the owner's clock reset), it runs
-        // as System, and it is bounded. Semantically identical, too: the owner has told us in one
+        // as the stream's own subscriber, and it is bounded. Semantically identical, too: the owner has told us in one
         // breath both that it is gone and that the address will reactivate.
         //
         // NOT a watchdog — no timer, no poll, no backoff. One re-ask per real end event, and a
@@ -897,27 +904,27 @@ public static class JsonSynchronizationStream
                 // BEFORE the SubscribeRequest so the response Full (which can arrive fast) finds it set.
                 reduced.ExpectResubscribeFull();
 
-                // Resubscribe is INFRASTRUCTURE (cache refresh after owner restart).
-                // The triggering event lands on the workspace's emission scheduler
-                // where AsyncLocal AccessContext is whatever was set when the
-                // upstream change was published — often a `sync/<streamId>` hub
-                // address from the inner sync hub's own startup impersonation.
-                // Stamping a sync hub as principal on the owner-side RLS check
-                // produces "Access denied: user 'sync/…' lacks Read" because no
-                // AccessAssignment exists for sync hub addresses. Same rule as
-                // the MeshNodeStreamCache and the stale-patch refresh in
-                // SynchronizationStream: resubscribes run as System; per-user
-                // enforcement happens at the consumer layer (cache.GetStream,
-                // application handlers), not at the sync-stream seam.
-                using (accessService?.ImpersonateAsSystem())
-                {
+                // 🚨 The re-subscribe runs under the SAME identity as the initial subscribe — the
+                // subscriber captured when this stream was opened — never as System for a person's
+                // stream. A re-subscribe is a FRESH admission on the owner and its gate admits
+                // System: re-asking as System re-opened the stream for nobody in particular, so a
+                // reader whose Read was revoked while the stream was open was served again on the
+                // owner's next recycle or announced write (RecoveryResubscribesAsTheSubscriberTest).
+                // Applied EXPLICITLY (RunAs), never read from the ambient context: the triggering
+                // event lands on the workspace's emission scheduler, whose AsyncLocal is often a
+                // `sync/<streamId>` hub address the owner would refuse ("user 'sync/…' lacks
+                // Read") — the reason this used to fall back to System. An infrastructure mirror
+                // (no resolved user) re-subscribes as System, exactly as it subscribed.
+                IObservable<IMessageDelivery> ReAsk() =>
                     // Use register-before-post overload to avoid the race where the owner
                     // responds before the subject is registered in responseSubjects.
                     hub.Observe(
-                            MintSubscribeRequest(reduced.StreamId, reference, SystemUserId),
-                            o => impersonateAsHub
-                                ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
-                                : o.WithTarget(owner))
+                        MintSubscribeRequest(reduced.StreamId, reference, identityForSubscribe),
+                        o => impersonateAsHub
+                            ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                            : o.WithTarget(owner));
+                {
+                    (isRealUser ? accessService.RunAs(ambient, ReAsk) : accessService.RunAsSystem(ReAsk))
                         .Subscribe(
                             _ =>
                             {
@@ -1051,7 +1058,7 @@ public static class JsonSynchronizationStream
             //
             // It reuses Resubscribe, so it inherits the in-flight guard, ExpectResubscribeFull
             // (the mirror must accept a re-snapshot stamped below its cached frame version) and
-            // the System impersonation. The re-ask asks for the CURRENT snapshot — it never
+            // the subscriber's identity. The re-ask asks for the CURRENT snapshot — it never
             // re-asserts a cached frame, which is the #945 shape and the opposite of what this
             // does. Bounded so that an owner stuck in a recycle LOOP degrades to the pre-existing
             // "orphaned" behaviour instead of trading a stalled stream for a storm.
@@ -1806,6 +1813,39 @@ public static class JsonSynchronizationStream
             // The failure arm REFUSES rather than acks, for the same reason: nothing was sent, so
             // an ack there would feed an OWNER-side failure into the mirror's
             // acknowledged-and-unanswered count. The subscriber still gets a verdict either way.
+            // 🚨 A FOLLOWED subscription forwards a revision only once its read verdict admits it
+            // (RevisionAdmission), so the re-assert Full may still be waiting for that verdict when
+            // `applied` runs — or be refused. Its answer therefore rides the next Full actually
+            // POSTED to the subscriber (review of #7016, thread 4336475680): an ack posted from
+            // `applied` would overtake a snapshot not yet on the wire, the #3058 miscount again.
+            // The stream ending first (a refused read disposes it) answers as torn down; the
+            // subscriber's StreamErrorEvent carries the refusal itself.
+            if (registry.GetClientSubscriptionFullsPosted(request.Subscriber, request.StreamId) is { } fullsPostedOnThis)
+            {
+                var parentHub = hub.Configuration.ParentHub;
+                // No per-request disposal registration (review of #7016, thread 4336694741): the
+                // signal completes with the stream, and its completion arm already refuses an answer
+                // still pending — a registration here would be retained by a long-lived stream for
+                // every re-subscribe it ever answered. A subject that has already completed answers a
+                // late subscriber at once.
+                var pendingAnswer = fullsPostedOnThis.Take(1).Subscribe(
+                    _ => Ack(),
+                    Refuse,
+                    () => RefuseAsTornDown(parentHub, "its read ended, or its stream was disposed, before the answering snapshot was forwarded"));
+                alreadyServing.Update(
+                    _ => BuildReassertFrame(alreadyServing),
+                    ex =>
+                    {
+                        logger.LogWarning(ex,
+                            "Stream {StreamId}: could not re-assert snapshot for resubscribing subscriber {Subscriber}",
+                            alreadyServing.StreamId, request.Subscriber);
+                        pendingAnswer.Dispose();
+                        Refuse(ex);
+                    },
+                    () => { });
+                return alreadyServing;
+            }
+
             var reasserted = 0;
             alreadyServing.Update(
                 _ =>
@@ -1873,6 +1913,28 @@ public static class JsonSynchronizationStream
             );
 
 
+        // 🚨 THE SUBSCRIPTION ENDS WITH THE READ (MeshWeaver#4306, follow-up 2). The delivery gate
+        // decided this subscribe ONCE; everything below forwards every later revision for the
+        // subscription's whole life. When the hub's access layer follows this subscription
+        // (ClientSubscriptionReadAdmission — a declared point read, whose admission a revocation or
+        // an expiry ends), each revision is forwarded only once ITS OWN verdict admits it, and the
+        // first refused revision ends the subscription: a StreamErrorEvent carrying the refusal
+        // (the error arm below), then the server-side stream is disposed. A revision that revokes
+        // the read is therefore never sent. Not followed (null) ⇒ the stream's own items, as before.
+        var followed = FollowReadAdmission(hub, delivery, reduced, logger);
+        // Set once the subscriber's read is REFUSED, before the server-side stream is disposed: the
+        // end of a refused read is never announced as a StreamEndedEvent, whose handler on the
+        // subscriber re-subscribes (as System) — that would re-open, unfollowed, the very read the
+        // refusal ended (review of #7016, thread 4340066051). The StreamErrorEvent is the answer.
+        var refusedRead = 0;
+        // A followed subscription can hold a Full behind its verdict, or refuse it — so the answer
+        // to a re-assert on it rides the Full actually POSTED, never the frame merely being set
+        // (review of #7016, thread 4336475680). Completed with the stream, which answers a re-ask
+        // still waiting as torn down.
+        var fullsPosted = followed is null ? null : new System.Reactive.Subjects.Subject<Unit>();
+        if (fullsPosted is not null)
+            reduced.RegisterForDisposal(new AnonymousDisposable(fullsPosted.OnCompleted));
+
         // Use single synchronized subscription for both initial data and ongoing changes.
         // SubscribeAck is sent by HandleSubscribeRequest to close the hub.Observe(subscribeRequest)
         // pending callback immediately — DataChangedEvents always use WithTarget so they
@@ -1890,7 +1952,8 @@ public static class JsonSynchronizationStream
                 // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
                 .ToDataChanged<TReduced, DataChangedEvent>(
                     c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy),
-                    request.AcceptsStringSplice)
+                    request.AcceptsStringSplice,
+                    followed)
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -1913,6 +1976,8 @@ public static class JsonSynchronizationStream
                             ? opt.WithAccessContext(delivery.AccessContext)
                             : opt;
                     });
+                    if (e.ChangeType == ChangeType.Full)
+                        fullsPosted?.OnNext(Unit.Default);
                 },
                 ex =>
                 {
@@ -1924,6 +1989,14 @@ public static class JsonSynchronizationStream
                     // StreamMessage — the subscriber would stay live forever.
                     hub.Post(new StreamErrorEvent(request.StreamId, ex.Message),
                         o => o.WithTarget(request.Subscriber));
+                    // A refused read also ends the server-side stream: nothing may be forwarded
+                    // on it again, and a resubscribe must pass the delivery gate afresh rather than
+                    // be re-asserted onto this stream.
+                    if (ex is UnauthorizedAccessException)
+                    {
+                        Interlocked.Exchange(ref refusedRead, 1);
+                        EndRefusedSubscription(workspace, request, reduced, logger);
+                    }
                 })
         );
 
@@ -2005,6 +2078,18 @@ public static class JsonSynchronizationStream
             // re-subscribe, a late echo could land on the NEXT incarnation and read as an
             // owner-side end. The announcement stays for the ends it was built for: an idle
             // release or an explicit disposal on a healthy owner.
+            // 🚨 …AND NEVER FOR A REFUSED READ (review of #7016, thread 4340066051). The subscriber
+            // already has its answer (the StreamErrorEvent), and an end announcement is what its
+            // recovery re-subscribes on — as System, which the read follow exempts and the gate
+            // admits — re-opening, unfollowed, the read the refusal just ended.
+            if (Volatile.Read(ref refusedRead) == 1)
+            {
+                logger.LogDebug(
+                    "Stream {StreamId} on {Owner} ended because {Subscriber}'s read was refused; "
+                    + "not announcing an end the subscriber would recover from", request.StreamId,
+                    hub.Address, request.Subscriber);
+                return;
+            }
             if (reduced is SynchronizationStream<TReduced> { SubscriberEnded: true })
             {
                 logger.LogTrace(
@@ -2054,7 +2139,7 @@ public static class JsonSynchronizationStream
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
             request.Subscriber, request.StreamId, request.Reference, reduced,
-            request.AcceptsCoalescedStreamEnd);
+            request.AcceptsCoalescedStreamEnd, fullsPosted);
 
         // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
         // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built
@@ -2069,10 +2154,66 @@ public static class JsonSynchronizationStream
 
         return reduced;
     }
+    /// <summary>
+    /// The stream's items gated per revision by the hub's <see cref="ClientSubscriptionReadAdmission"/>
+    /// (MeshWeaver#4306, follow-up 2), or null when the hub registers none or does not follow this
+    /// subscription. A FAULT while deciding whether to follow is a refusal: the subscription then ends
+    /// on its first revision rather than being served unfollowed (fail closed).
+    /// </summary>
+    private static IObservable<ChangeItem<TReduced>>? FollowReadAdmission<TReduced>(
+        IMessageHub hub, IMessageDelivery<SubscribeRequest> delivery, ISynchronizationStream<TReduced> reduced, ILogger logger)
+    {
+        if (hub.Configuration.Get<ClientSubscriptionReadAdmission>() is not { } admission)
+            return null;
+        // 🚨 The platform's access-denied BANNER, naming the node path (review of #7016, thread
+        // 4336475725): the subscriber receives this as a StreamErrorEvent, whose exception TYPE does
+        // not survive the wire, so the client recognises a denial — the localized presentation, the
+        // denied-path redirect — only by "permission on '<path>'" (AreaErrorClassifier).
+        var path = string.Join("/", hub.Address.Segments);
+        var refusal = () => new UnauthorizedAccessException(
+            $"Access denied: user '{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' lacks Read permission on '{path}' "
+            + $"— the read stream {delivery.Message.StreamId} served has ended (revoked, expired, or no longer admitted)");
+        ClientReadFollow? follow;
+        try
+        {
+            follow = admission(hub, delivery);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Owner {Owner} could not decide whether to follow the read of stream {StreamId} for {Subscriber} — refusing it",
+                hub.Address, delivery.Message.StreamId, delivery.Sender);
+            follow = new ClientReadFollow(_ => Observable.Return(false), TimeSpan.Zero);
+        }
+        if (follow is null)
+            return null;
+        var followed = reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal);
+        // What the follow holds for this subscription ends with it — on a refusal, on completion and
+        // on unsubscribe alike (review of #7016, thread 4338167103).
+        return follow.Lifetime is { } lifetime ? followed.Finally(lifetime.Dispose) : followed;
+    }
+
+    /// <summary>Ends a server-side stream whose subscriber's read was refused: unregistered first, then disposed through its own sync hub.</summary>
+    private static void EndRefusedSubscription<TReduced>(
+        IWorkspace workspace, SubscribeRequest request, ISynchronizationStream<TReduced> reduced, ILogger logger)
+    {
+        (workspace as Workspace)?.UnregisterClientSubscription(request.Subscriber, request.StreamId, reduced);
+        try
+        {
+            reduced.Hub?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not dispose the refused stream {StreamId} for {Subscriber}",
+                request.StreamId, request.Subscriber);
+        }
+    }
+
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
         this ISynchronizationStream<TReduced> stream,
         Func<ChangeItem<TReduced>, bool> predicate,
-        bool acceptsStringSplice = false) where TChange : JsonChange
+        bool acceptsStringSplice = false,
+        IObservable<ChangeItem<TReduced>>? source = null) where TChange : JsonChange
     {
         // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
         // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
@@ -2084,7 +2225,10 @@ public static class JsonSynchronizationStream
         // are SKIPPED here (value-equal, no updates) never enter the chain, so legitimate version
         // gaps from skipped frames do not false-trigger a resync.
         var lastSentVersion = -1L;
-        return stream
+        // `source` is the stream's own items gated per revision (RevisionAdmission) for a followed
+        // client subscription: the same items, in the same order, none dropped — so the JSON cursor
+        // below stays in lockstep with what the subscriber holds.
+        return (source ?? stream)
             .Synchronize()
             .Where(predicate)
             .Select(x =>

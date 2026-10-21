@@ -6,6 +6,7 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -710,7 +711,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // gets its own memory-stream subscription. See
         // Doc/Architecture/OrleansTestRoutingPattern.md.
         var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        var cacheAddress = new Address("cache", meshHub.Address.Id);
+        var cacheAddress = new Address(MeshNodeCacheIdentity.HubAddressType, meshHub.Address.Id);
         cacheHub = meshHub.GetHostedHub(
             cacheAddress,
             config => config
@@ -2311,25 +2312,28 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// removal from the audience; the live verdict is therefore followed for the whole subscription,
     /// and the stream faults with the read gate's own refusal when it turns false. The FIRST verdict
     /// is bounded by the permission-establishment budget; a stalled one is a refusal.
+    ///
+    /// <para>🚨 <b>Each revision is decided before it is forwarded</b> (MeshWeaver#4306, follow-up 1).
+    /// A switch on one live verdict forwarded <c>shared</c> while the verdict was true, so the revision
+    /// that ENDS the admission — a revocation stamp, a narrowed audience — reached the caller before
+    /// the verdict could turn: for a stored type the declaration is looked up asynchronously, and the
+    /// verdict only follows the node after the revision exists. Now every revision waits for its own
+    /// verdict (<see cref="RevisionAdmission.AdmitEachRevision{T}"/>): the declaration decided on that
+    /// revision's content (<see cref="DeclaredPointRead.AdmitsRevision"/>) AND the live verdict from the
+    /// owner's current state (<see cref="DeclaredPointRead.Admits"/>), so neither a lagging mirror nor
+    /// a revoking revision is delivered. Nothing is dropped or reordered; a refused revision ends the
+    /// stream.</para>
     /// </summary>
     private IObservable<MeshNode> AdmittedThroughDeclaration(string path, AccessContext captured, IObservable<MeshNode> shared)
         => Observable.Defer(() =>
         {
             var budget = (meshHub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
                 .PermissionEstablishmentBudget;
-            var refusal = new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'");
-            // ONE subscription to the live verdict, no multicast: each verdict switches the caller
-            // between the shared stream (admitted) and the refusal (not admitted), so a verdict that
-            // turns false disposes the shared stream and faults the caller in the same step. Only the
-            // FIRST verdict is bounded — a stalled one is a refusal; after it the verdict may stay
-            // quiet for as long as the admission holds.
-            return DeclaredPointRead.Admits(meshHub, path, captured)
-                .DistinctUntilChanged()
-                .Timeout(Observable.Timer(budget), _ => Observable.Never<long>())
-                .Catch((TimeoutException _) => Observable.Return(false))
-                .DefaultIfEmpty(false)
-                .Select(admitted => admitted ? shared : Observable.Throw<MeshNode>(refusal))
-                .Switch();
+            return shared.AdmitEachRevision(
+                revision => DeclaredPointRead.AdmitsRevision(meshHub, revision, captured)
+                    .CombineLatest(DeclaredPointRead.Admits(meshHub, path, captured), (thisRevision, ownerCurrent) => thisRevision && ownerCurrent),
+                budget,
+                () => new UnauthorizedAccessException($"User '{captured.ObjectId}' lacks Read permission on '{path}'"));
         });
 
     private static IObservable<MeshNode> GateOnRead(
