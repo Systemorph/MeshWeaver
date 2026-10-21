@@ -425,25 +425,45 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     /// hub registration (no node type of its own, and a <see cref="MeshNode.HubConfiguration"/>: it
     /// configures the hub of every instance of the type it names), a
     /// <see cref="MeshNode.NodeTypePath">NodeType</see> definition, a <c>Role</c> definition and a
-    /// <c>Partition</c> definition.
+    /// <c>Partition</c> definition. They are the mesh's vocabulary: every caller resolves types,
+    /// roles and partitions by them, and no access grant is written on them — on a mesh with no
+    /// public grants a viewer holds Read on almost none of them, so filtering them would empty every
+    /// type picker and role list for everyone but an admin. A declared node of ANY other type —
+    /// content, configuration, a grant — is decided by the row filter, so declaring it is no longer a
+    /// way to publish it.
     ///
     /// <para>🚨 A missing node type ALONE identifies nothing: content may be declared untyped (a body,
     /// a name, no hub configuration), and treating that as vocabulary served it — name, path and
     /// content — to a viewer with no grant on its partition. Only a positively identified
     /// registration is exempt; an untyped node without a hub configuration is decided by the row
-    /// filter like any other declared row.</para> They are the mesh's vocabulary: every caller resolves types,
-    /// roles and partitions by them, and no access grant is written on them — on a mesh with no
-    /// public grants a viewer holds Read on almost none of them, so filtering them would empty every type
-    /// picker and role list for everyone but an admin. A declared node of ANY other type — content, configuration, a grant — is decided
-    /// by the row filter, so declaring it is no longer a way to publish it.
+    /// filter like any other declared row.</para>
     ///
-    /// <para>A satellite path is never vocabulary, whatever its type: <c>_Access</c>, <c>_Policy</c>,
-    /// <c>_Thread</c>, … are per-user rows by construction.</para>
+    /// <para>🚨 METADATA is never vocabulary, whatever its shape (<see cref="IsMetadataPath"/>):
+    /// a satellite-table path (<c>_Access</c>, <c>_Thread</c>, …), a SIBLING metadata node
+    /// (<c>{ns}/_Policy</c> — a regular row, so <see cref="SatelliteTableMapping.IsSatellitePath"/>
+    /// does not see it), and anything filed beneath one.</para>
     /// </summary>
     /// <param name="node">The declared node.</param>
     internal static bool IsDeclaredVocabulary(MeshNode node)
-        => !SatelliteTableMapping.IsSatellitePath(node.Path)
+        => !IsMetadataPath(node)
            && (IsTypeRegistration(node) || (node.NodeType is { } type && DefinitionNodeTypes.Contains(type)));
+
+    /// <summary>
+    /// A declared node that is metadata of another node rather than a definition: on a satellite-table
+    /// path, itself a sibling satellite (<see cref="SatelliteTableMapping.IsSiblingSatellite"/>), or
+    /// filed under an underscore metadata segment below its partition root. The root segment itself is
+    /// skipped — a partition may be NAMED with a leading underscore (<c>_Setting</c>).
+    /// </summary>
+    private static bool IsMetadataPath(MeshNode node)
+    {
+        if (SatelliteTableMapping.IsSatellitePath(node.Path) || SatelliteTableMapping.IsSiblingSatellite(node))
+            return true;
+        var segments = (node.Namespace ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 1; i < segments.Length; i++)
+            if (SatelliteTableMapping.IsSatelliteId(segments[i]))
+                return true;
+        return false;
+    }
 
     /// <summary>A type's hub registration: untyped itself, and carrying the hub configuration of the
     /// type it names. See <see cref="IsDeclaredVocabulary"/>.</summary>

@@ -36,6 +36,12 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
     // registration. A missing node type alone must not make a declared node vocabulary.
     private const string UntypedId = "declaredrls-untyped";
     private const string UntypedPath = Partition + "/" + UntypedId;
+    // Untyped AND carrying a hub configuration (the shape of a type registration), but filed as
+    // SIBLING metadata of the partition: _Policy is a regular mesh_nodes row, not a satellite
+    // table, so IsSatellitePath does not see it. Also one level below it. Neither is vocabulary.
+    private const string SiblingPath = Partition + "/_Policy";
+    private const string NestedId = "declaredrls-nested";
+    private const string NestedPath = SiblingPath + "/" + NestedId;
     private const string Reader = "declaredrls-reader";
     private const string Stranger = "declaredrls-stranger";
 
@@ -48,6 +54,8 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
             .AddMeshNodes(
                 new MeshNode(SecretId, Partition) { NodeType = "Markdown", Name = SecretId },
                 new MeshNode(UntypedId, Partition) { Name = UntypedId, Content = "<p>untyped secret body</p>" },
+                new MeshNode("_Policy", Partition) { Name = "declaredrls-sibling", HubConfiguration = config => config },
+                new MeshNode(NestedId, SiblingPath) { Name = NestedId, HubConfiguration = config => config },
                 AssignmentNodeFactory.UserRole(Reader, "Viewer", Partition));
 
     private Task<IReadOnlyList<string>> QueryAs(string viewer, string query)
@@ -131,6 +139,39 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
             "WhatsNew declares PublicRead on its partition — release notes are readable by every viewer");
         privateRows.Should().NotContain(UntypedPath,
             "the WhatsNew policy opens its own partition only; untyped private content is still row-filtered");
+    }
+
+    /// <summary>
+    /// A registration-SHAPED node (untyped, with a hub configuration) filed under a sibling
+    /// metadata segment such as <c>_Policy</c> is still not vocabulary: the stranger gets it from
+    /// neither a query nor an autocomplete drill-down; the reader gets both.
+    /// </summary>
+    [Theory]
+    [InlineData("path:" + SiblingPath, SiblingPath)]
+    [InlineData("path:" + NestedPath, NestedPath)]
+    [InlineData("namespace:" + Partition + " scope:descendants", SiblingPath)]
+    [InlineData("namespace:" + Partition + " scope:descendants", NestedPath)]
+    public async Task ARegistrationShapedNodeUnderASiblingSegment_IsFilteredInAQuery(string query, string path)
+    {
+        var stranger = await QueryAs(Stranger, query);
+        var reader = await QueryAs(Reader, query);
+        Output.WriteLine($"[{query}] stranger: {string.Join(", ", stranger)} | reader: {string.Join(", ", reader)}");
+
+        stranger.Should().NotContain(path, "an underscore metadata segment is never vocabulary, whatever the node's shape");
+        reader.Should().Contain(path, "the reader may read the partition - the control");
+    }
+
+    [Fact]
+    public async Task ARegistrationShapedNodeUnderASiblingSegment_IsFilteredInAutocomplete()
+    {
+        var stranger = await AutocompleteAs(Stranger);
+        var reader = await AutocompleteAs(Reader);
+        Output.WriteLine($"stranger: {string.Join(", ", stranger)} | reader: {string.Join(", ", reader)}");
+
+        stranger.Should().NotContain(SiblingPath, "a sibling metadata node is never vocabulary");
+        stranger.Should().NotContain(NestedPath, "nor is anything under one");
+        reader.Should().Contain(SiblingPath, "the reader may read the partition - the control");
+        reader.Should().Contain(NestedPath, "the reader may read the partition - the control");
     }
 
     /// <summary>The paths the declared-node provider suggests to <paramref name="viewer"/> under the partition.</summary>
