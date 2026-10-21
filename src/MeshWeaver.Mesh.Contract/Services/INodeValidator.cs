@@ -40,6 +40,19 @@ public interface IOwnerEnforcedNodeValidator
 }
 
 /// <summary>
+/// Marker for an Update-capable <see cref="INodeValidator"/> whose rule turns on the node's TYPE, so
+/// a write that RETYPES a node must be judged by it on every update route. The upsert
+/// (<c>CreateOrUpdateNodeRequest</c>) runs no validator chain on its update branch. When that
+/// branch changes a node's NodeType, it runs the validators carrying this marker, with an
+/// <see cref="NodeOperation.Update"/> context, before it writes. Otherwise a node created as
+/// one type and retyped there would skip a rule its create would have met.
+/// <c>PolicyPlacementValidator</c> is the first such rule.
+/// </summary>
+public interface INodeTypeTransitionValidator
+{
+}
+
+/// <summary>
 /// Marker for a Read-capable <see cref="INodeValidator"/> that admits a read by
 /// <see cref="MeshWeaver.Mesh.Security.WellKnownUsers.System"/> UNCONDITIONALLY — whatever the node
 /// and whatever any other node in the mesh holds. Row-level security is the one in the platform

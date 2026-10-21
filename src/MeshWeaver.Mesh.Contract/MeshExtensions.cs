@@ -8881,7 +8881,7 @@ public static class MeshExtensions
                     + "(the import ordering escape hatch). If '{NodeType}' never lands, this node "
                     + "is stranded: it will read as Unavailable. See Doc/Architecture/DanglingNodeTypes.",
                     node.Path, node.NodeType, node.NodeType);
-                WriteThroughStream(existing);
+                WriteUnlessATransitionRuleRefuses(existing);
                 return;
             }
 
@@ -8898,7 +8898,7 @@ public static class MeshExtensions
                     {
                         if (outcome is { HasValue: true, Value.Resolves: true })
                         {
-                            WriteThroughStream(existing);
+                            WriteUnlessATransitionRuleRefuses(existing);
                             return;
                         }
                         if (outcome.Error is { } probeError)
@@ -8953,6 +8953,71 @@ public static class MeshExtensions
                     // PostFail / WriteThroughStream.
                     ex => logger.LogWarning(ex,
                         "[CreateOrUpdate] the NodeType gate for {Path} threw while acting on its outcome",
+                        node.Path));
+        }
+
+        // A RETYPE is judged by the validators whose rule turns on the type
+        // (INodeTypeTransitionValidator), because this branch runs no validator chain of its own.
+        // Without this, a node created as one type and retyped here skips a rule its create would
+        // have met: a Markdown node at `{p}/_Storage/_Policy` retyped to PartitionAccessPolicy is
+        // stored where the permission fold never reads it (PolicyPlacementValidator). Only reached
+        // when the NodeType CHANGES, so an unchanged node is never re-judged.
+        void WriteUnlessATransitionRuleRefuses(MeshNode existing)
+        {
+            var transitionValidators = hub.ServiceProvider.GetServices<INodeValidator>()
+                .Where(v => v is INodeTypeTransitionValidator
+                            && (v.SupportedOperations.Count == 0
+                                || v.SupportedOperations.Contains(NodeOperation.Update)))
+                .ToList();
+            if (transitionValidators.Count == 0)
+            {
+                WriteThroughStream(existing);
+                return;
+            }
+
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Update,
+                Node = node,
+                ExistingNode = existing,
+                AccessContext = inboundCtx,
+            };
+            DetachedReplyOutcome.Of(transitionValidators
+                    .Select(v => v.Validate(context))
+                    .Concat()
+                    .Where(r => !r.IsValid)
+                    .Take(1)
+                    .Select(r => (NodeValidationResult?)r)
+                    .DefaultIfEmpty(null))
+                .Subscribe(
+                    outcome =>
+                    {
+                        if (outcome is { HasValue: true, Value: null })
+                        {
+                            WriteThroughStream(existing);
+                            return;
+                        }
+                        if (outcome is { HasValue: true, Value: { } refused })
+                        {
+                            logger.LogWarning("[CreateOrUpdate] REFUSED {Path}: {Refusal}",
+                                node.Path, refused.ErrorMessage);
+                            // Already rendered in the caller's locale by the validator.
+                            PostFail(
+                                LocalizableText.Verbatim(refused.ErrorMessage ?? $"Update rejected for: {node.Path}"),
+                                NodeUpsertRejectionReason.ValidationFailed);
+                            return;
+                        }
+                        // A validator that faulted or answered nothing reached no verdict: refuse,
+                        // and say it was not judged rather than that it was invalid.
+                        var why = outcome.Error?.Message ?? "the validator completed without a verdict";
+                        logger.LogWarning(outcome.Error,
+                            "[CreateOrUpdate] {Path}: a NodeType transition validator reached no verdict; refusing.",
+                            node.Path);
+                        PostFail(LocalizableText.Verbatim($"Update of '{node.Path}' was not judged: {why}"),
+                            NodeUpsertRejectionReason.Unknown);
+                    },
+                    ex => logger.LogWarning(ex,
+                        "[CreateOrUpdate] the NodeType transition gate for {Path} threw while acting on its outcome",
                         node.Path));
         }
 
