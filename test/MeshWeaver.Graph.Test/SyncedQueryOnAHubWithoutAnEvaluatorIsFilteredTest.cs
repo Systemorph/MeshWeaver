@@ -94,6 +94,32 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
         await FirstWith(client, Keeper, SecretName);
     }
 
+    /// <summary>
+    /// 🚨 A node type's own READ rule holds in the filter exactly as in a query: <c>UserAccessRule</c>
+    /// opens every root User profile to any signed-in reader, with no scope grant. The scope fold
+    /// alone would hide the keeper's profile from the stranger; the read-validator chain shows it.
+    /// </summary>
+    [Fact]
+    public async Task ATypeRulesReadGrantHoldsInASyncedQueryOnAClientHub()
+    {
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        var premise = await Mesh.GetEffectivePermissions(Keeper, Stranger)
+            .Should().Within(TestTimeouts.Convergence).Emit("the fold answers for the stranger on the keeper's profile");
+        premise.HasFlag(Permission.Read).Should().BeFalse(
+            "the premise: no scope grant gives the stranger Read on the keeper's profile — only the type rule does");
+
+        IObservable<IEnumerable<MeshNode>> query;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = Stranger, Name = Stranger }))
+            query = client.GetQuery($"synced-type-rule-{Guid.NewGuid():N}", $"path:{Keeper}");
+
+        await query
+            .Do(nodes => Output.WriteLine($"{Stranger}: [{string.Join(", ", nodes.Select(n => n.Path))}]"))
+            .Where(nodes => nodes.Any(n => n.Path == Keeper))
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "UserAccessRule grants every signed-in reader the root User profiles, and the synced query honours it");
+    }
+
     private async Task Seed()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();

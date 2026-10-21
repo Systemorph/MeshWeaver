@@ -272,15 +272,52 @@ public static class SyncedQueryDataSourceExtensions
             var meshHub = workspace.Hub.GetMeshHub();
             if (meshHub.Configuration.Get<EffectivePermissionsDelegate>() is null)
                 return upstream;
-            // Per-user filter: for each emission, filter to nodes the user
-            // has Read on. PermissionEvaluator caches per-scope via the
-            // process-wide IMeshNodeStreamCache so repeated checks for the
-            // same user are cheap.
+            // Per-user filter: for each emission, keep the nodes the reader may READ — decided by
+            // the SAME read-validator chain a mesh query applies per row (RlsNodeValidator: hub
+            // rule → the node type's INodeTypeAccessRule → the permission fold), so a type rule's
+            // grant or refusal holds here exactly as it does in a query, and never only the scope
+            // fold (which hides, for instance, the User root profiles UserAccessRule opens to every
+            // signed-in reader). Resolved here, at subscribe — see the SecurityService cycle above.
+            var validators = meshHub.ServiceProvider.GetServices<INodeValidator>()
+                .Where(v => v.SupportedOperations.Count == 0
+                            || v.SupportedOperations.Contains(NodeOperation.Read))
+                .ToList();
+            var reader = captured!;
             return FilterByReadPermission(
                 upstream,
-                node => meshHub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
+                node => CanRead(meshHub, accessService, reader, validators, node));
         });
     }
+
+    /// <summary>
+    /// Whether <paramref name="reader"/> may read <paramref name="node"/>: every read validator
+    /// admits it (or, on a mesh that registers none, the permission fold grants Read).
+    ///
+    /// <para>🚨 Evaluated with the reader's WHOLE context installed — <c>accessService.RunAs</c>
+    /// around the call and the subscribe — never only its id. The fold also reads the ambient
+    /// context's <c>IsVirtual</c> (<c>Access:DenyAnonymous</c>) and <c>IsApiToken</c> (the API
+    /// permission restriction), and this runs on the thread of whichever turn emitted the snapshot,
+    /// which for a System-loaded synced query is the platform's.</para>
+    /// </summary>
+    private static IObservable<bool> CanRead(
+        IMessageHub meshHub, AccessService accessService, AccessContext reader,
+        IReadOnlyList<INodeValidator> validators, MeshNode node)
+        => accessService.RunAs(reader, () =>
+        {
+            if (validators.Count == 0)
+                return meshHub.CheckPermission(node.Path ?? string.Empty, reader.ObjectId, Permission.Read);
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node,
+                AccessContext = reader,
+            };
+            return validators
+                .Select(v => v.Validate(context).Take(1))
+                .ToInlineObservable()
+                .Concat()
+                .All(result => result.IsValid);
+        });
 
     /// <summary>
     /// The RLS filter itself, with the permission probe as a parameter so it can be exercised
