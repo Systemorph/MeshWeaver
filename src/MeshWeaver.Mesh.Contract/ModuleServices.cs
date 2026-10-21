@@ -756,11 +756,13 @@ public sealed class ModuleServices : IDisposable
         var registration = Registrations[index];
         var descriptor = registration.Descriptor;
         var container = Scope(root);
-        var resolveIn = descriptor.Lifetime == ServiceLifetime.Singleton
-            ? container
-            : ModuleServiceProvider.InCallerScope(container, caller);
-        return resolveIn.GetRequiredKeyedService(
-            descriptor.ServiceType, descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key);
+        var key = descriptor.IsKeyedService ? descriptor.ServiceKey : registration.Key;
+        if (descriptor.Lifetime == ServiceLifetime.Singleton)
+            return container.GetRequiredKeyedService(descriptor.ServiceType, key);
+        var instance = ModuleServiceProvider.InCallerScope(container, caller).GetRequiredKeyedService(descriptor.ServiceType, key);
+        // MeshWeaver#6584: a scoped instance handed to a caller that does not own its module scope says so.
+        ModuleServiceProvider.ReportIfServedAcrossCallers(container, instance, caller);
+        return instance;
     }
 
     /// <summary>

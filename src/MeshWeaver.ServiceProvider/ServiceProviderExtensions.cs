@@ -43,13 +43,16 @@ public static class ServiceProviderExtensions
             var lifetimeScope = parent.GetService<ILifetimeScope>();
             if (lifetimeScope == null)
                 throw new NotSupportedException("Mesh Weaver has not been properly configured.");
-            else if (tag != null)
+            // The parent's registry of module-owned instances (MeshWeaver#6588): a hub scope's own
+            // registrations are watched against the same owners as the root's.
+            var owners = parent.GetService<ModuleInstanceOwners>();
+            if (tag != null)
                 ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(tag, c => c.PopulateMeshWeaver(services))
+                    lifetimeScope.BeginLifetimeScope(tag, c => c.PopulateMeshWeaverWithOwners(services, owners))
                 );
             else
                 ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(c => c.PopulateMeshWeaver(services))
+                    lifetimeScope.BeginLifetimeScope(c => c.PopulateMeshWeaverWithOwners(services, owners))
                 );
         }
         else
@@ -67,6 +70,9 @@ public static class ServiceProviderExtensions
                 containerBuilder.RegisterSource(source);
 
             var root = new AutofacServiceProvider(containerBuilder.Build());
+            // The ownership diagnostics write through the root's own logging (MeshWeaver#6584, #6588).
+            if (root.GetService<ModuleInstanceOwners>() is { } owners)
+                owners.UseLoggerFactory(root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>());
             // Then every build callback registered as an instance, on THIS thread, before the provider
             // is handed to anyone — how a mesh's module registry builds its modules' shared instances
             // before they can be reached (MeshWeaver#6542). Not an Autofac build callback on purpose:

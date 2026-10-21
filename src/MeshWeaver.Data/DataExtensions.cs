@@ -2602,6 +2602,21 @@ public static class DataExtensions
     /// action-block turn (which wedged SubscribeRequest). The merge lambda is a PURE, bounded
     /// transform — no IO, no nested re-entrant subscribe.</para>
     /// </summary>
+    /// <summary>
+    /// The first <see cref="MeshWeaver.Mesh.IEntityCommitGuard"/> refusal for committing
+    /// <paramref name="after"/> in place of <paramref name="before"/>, or null. Synchronous: it runs
+    /// on the commit turn.
+    /// </summary>
+    internal static string? FirstCommitRefusal(
+        IReadOnlyList<MeshWeaver.Mesh.IEntityCommitGuard> guards, string collection, object? before,
+        object after, string ownerPath, AccessContext? writer, System.Text.Json.JsonSerializerOptions options)
+    {
+        foreach (var guard in guards)
+            if (guard.Refusal(collection, before, after, ownerPath, writer, options) is { } refusal)
+                return refusal;
+        return null;
+    }
+
     private static void ApplyMeshNodePatchInTurn<T>(
         ISynchronizationStream<T> stream,
         ISynchronizationStream<EntityStore> primary,
@@ -2627,6 +2642,9 @@ public static class DataExtensions
         // The deletion (and move) scopes the storage guard enforces — asked in the merge turn so a
         // patch under one is refused before it commits (#6953). Resolved here for the same reason.
         var deletionScopes = hub.ServiceProvider.GetService<MeshWeaver.Mesh.IActiveDeletionScopes>();
+        // The rules judged at the commit point (IEntityCommitGuard), asked in the merge turn against
+        // the merged entity and the live one it replaces. Resolved here for the same reason.
+        var commitGuards = hub.ServiceProvider.GetServices<MeshWeaver.Mesh.IEntityCommitGuard>().ToArray();
         // The writes on this store that are waiting for it to load, in arrival order (#6594).
         // Resolved on the handler's turn for the same reason as the two services above.
         var coldLane = hub.ServiceProvider.GetRequiredService<ColdStoreWriteLanes>().For(primary);
@@ -3040,6 +3058,18 @@ public static class DataExtensions
                         .Deserialize<T>(currentNode.ToJsonString(jsonOpts), jsonOpts);
                     if (merged is null)
                         throw new System.Text.Json.JsonException("Merged value deserialised to null");
+
+                    // 🚨 THE COMMIT POINT (IEntityCommitGuard): the merged entity against the live one
+                    // it replaces, in THIS turn — after every earlier queued write has merged, and
+                    // after the owner's own merge semantics (splices, stale-base three-way merges)
+                    // produced the value that would commit. Refused here, nothing commits.
+                    if (FirstCommitRefusal(commitGuards, collectionName, liveEntity, merged,
+                            hub.Address.Path, request.AccessContext, jsonOpts) is { } commitRefusal)
+                    {
+                        hub.NoteRequestStage(request.Id, "PATCH_COMMIT_REFUSED");
+                        AckOnce(false, new MeshNodeError(MeshNodeErrorCode.Validation, hubPath, commitRefusal));
+                        return null;
+                    }
 
                     // Stamp BEFORE the commit (id first, then the version that opens the
                     // gate) — the ack watcher only accepts an emission at-or-past this

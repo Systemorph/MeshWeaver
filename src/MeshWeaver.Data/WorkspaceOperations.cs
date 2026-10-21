@@ -371,6 +371,44 @@ public static class WorkspaceOperations
                                 {
                                     GetKey = g.Key.TypeSource!.TypeDefinition.GetKey
                                 });
+                            // 🚨 THE COMMIT POINT (IEntityCommitGuard), the data-change half: each
+                            // entity exactly as it is about to commit, against the one this store
+                            // holds under its key, in the apply turn. A refused entity commits
+                            // nothing and is reported; the rest of the change still applies.
+                            var guards = stream.Host.ServiceProvider
+                                .GetServices<MeshWeaver.Mesh.IEntityCommitGuard>().ToArray();
+                            if (guards.Length > 0)
+                            {
+                                // The writer's identity only carries the refusal's locale here; a
+                                // data change does not carry its sender's context.
+                                var access = stream.Host.ServiceProvider.GetService<AccessService>();
+                                var writer = access?.Context ?? access?.CircuitContext;
+                                var refused = ImmutableList<object>.Empty;
+                                foreach (var (key, candidate) in instances.Instances)
+                                {
+                                    var before = current?.Instances.GetValueOrDefault(key);
+                                    if (DataExtensions.FirstCommitRefusal(guards, g.Key.TypeSource!.CollectionName,
+                                            before, candidate, stream.Host.Address.Path, writer,
+                                            stream.Host.JsonSerializerOptions) is not { } refusal)
+                                        continue;
+                                    refused = refused.Add(key);
+                                    logger.LogWarning("Commit of {Collection}/{Key} on {Stream} refused: {Refusal}",
+                                        g.Key.TypeSource!.CollectionName, key, stream.StreamIdentity, refusal);
+                                    messages = messages.Add(new LogMessage(
+                                            $"Change of '{key}' was refused: {refusal}", LogLevel.Error)
+                                        .WithKey("activity.dataUpdate.commitRefused",
+                                            ("key", key), ("reason", refusal)));
+                                }
+                                // 🚨 A SNAPSHOT replaces the whole collection, so dropping a refused
+                                // candidate would also delete the entity it was meant to replace (its
+                                // predecessor's key may differ, for an identity-changing delta). A
+                                // snapshot with any refused candidate therefore leaves this collection
+                                // exactly as it is: nothing of it commits.
+                                if (!refused.IsEmpty && change.Options?.Snapshot == true)
+                                    return storeAndUpdates;
+                                if (!refused.IsEmpty)
+                                    instances = instances with { Instances = instances.Instances.RemoveRange(refused) };
+                            }
                             var updated = change.Options?.Snapshot == true
                                 ? instances
                                 : (current ?? new()).Merge(instances);

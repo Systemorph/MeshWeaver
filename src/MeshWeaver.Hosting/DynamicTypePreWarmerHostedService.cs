@@ -970,4 +970,11 @@ internal sealed class PrebuiltAssemblyConsumer(
         => ShippedPrebuiltBundles.SeedForTypes(
             mesh, typePaths, logger, imageDirectory: null, publishedRoot: null,
             onCovered: null, onMatched: onOffered);
+
+    /// <inheritdoc />
+    public IObservable<int> SeedForTypes(
+        IReadOnlyCollection<string> typePaths, Action<string> onOffered, Action<string> onIncomplete)
+        => ShippedPrebuiltBundles.SeedForTypes(
+            mesh, typePaths, logger, imageDirectory: null, publishedRoot: null,
+            onCovered: null, onMatched: onOffered, onIncomplete: onIncomplete);
 }

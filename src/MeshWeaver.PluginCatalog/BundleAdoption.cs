@@ -111,21 +111,11 @@ public static class BundleOffering
     /// </summary>
     /// <param name="manifest">The bundle's manifest, or null from an unreadable bundle.</param>
     public static BundleAdoptionKind ClassifyEmpty(BundleReader.Manifest? manifest)
-    {
-        if (manifest?.Misses is { Count: > 0 })
-            return BundleAdoptionKind.NoAssemblies;
-
-        // The manifest promised NodeType bytes. Zero of them arrived. That is a miss however the
-        // package describes the rest of itself.
-        if (manifest?.Assemblies is { Count: > 0 })
-            return BundleAdoptionKind.NoAssemblies;
-
-        var declaresModule = manifest?.Module?.AssemblyName is { Length: > 0 };
-        var declaresContent = manifest?.Content is { Count: > 0 };
-        return declaresModule || declaresContent
+        // The rule itself lives beside the manifest (BundleReader.DeclaresNothingToAdopt), so the
+        // shipped-bundle discovery in MeshWeaver.Hosting reads the SAME rule (#7015 review).
+        => BundleReader.DeclaresNothingToAdopt(manifest)
             ? BundleAdoptionKind.NothingToAdopt
             : BundleAdoptionKind.NoAssemblies;
-    }
 
     /// <summary>What an empty-but-complete bundle offered instead of NodeTypes, for the log.</summary>
     public static string OfferingOf(BundleReader.Manifest? manifest) =>

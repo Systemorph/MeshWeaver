@@ -64,7 +64,25 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             Name = HostDeclaredType,
             Content = new NodeTypeDefinition { PointRead = Declaration },
             HubConfiguration = config => config.WithContentType<TicketContent>().AddDefaultLayoutAreas(),
-        });
+        }, new MeshNode("Faulty", "Kiosk")
+        {
+            NodeType = "NodeType",
+            Name = FaultyType,
+            Content = new NodeTypeDefinition { PointRead = Declaration },
+            HubConfiguration = config => config.WithContentType<TicketContent>().AddDefaultLayoutAreas(),
+        })
+        // A declared type whose OWN Read rule faults: every standard Read of it is UNDETERMINED.
+        .ConfigureServices(services => services.AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType)));
+
+    private const string FaultyType = "Kiosk/Faulty";
+
+    private sealed class FaultingReadRule(string nodeType) : INodeTypeAccessRule
+    {
+        public string NodeType => nodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
+            => Observable.Throw<bool>(new InvalidOperationException("the type's read rule cannot answer"));
+    }
 
     /// <summary>
     /// 🚨 Follow-up 1: an open node stream of a STORED declared type never receives the revision that
@@ -135,6 +153,9 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         Assert.False(end.Kind == NotificationKind.OnNext, "the owner must never forward the revision that revokes the read");
         Assert.Equal(NotificationKind.OnError, end.Kind);
         Assert.Contains("Access denied", end.Exception!.Message);
+        // The exception TYPE does not survive the wire: the client recognises the denial — its
+        // localized presentation, the denied-path redirect — only by the banner naming the path.
+        Assert.Equal(revokedLink, MeshWeaver.Layout.AreaErrorClassifier.TryGetAccessDeniedPath(end.Exception));
 
         // NEGATIVE CONTROL: a non-revoking revision of a link that is not revoked is forwarded.
         await AsSystemUpdate(keptLink, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(2).ToString("O") }, ct);
@@ -147,6 +168,7 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends at the link's expiry", cancellationToken: ct);
         Assert.Equal(NotificationKind.OnError, expired.Kind);
         Assert.Contains("Access denied", expired.Exception!.Message);
+        Assert.Equal(expiringLink, MeshWeaver.Layout.AreaErrorClassifier.TryGetAccessDeniedPath(expired.Exception));
 
         // …and the kept link is STILL served afterwards (the negative control holds past the expiry).
         await AsSystemUpdate(keptLink, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(3).ToString("O") }, ct);
@@ -154,6 +176,80 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             .Match(n => n.Kind == NotificationKind.OnNext && ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(2.5)),
                 "the kept link's subscription is still open", cancellationToken: ct);
     }
+
+    /// <summary>
+    /// 🚨 Review of #7016, thread 4336475542: the follow's standing Read is TRI-STATE. A type whose
+    /// own Read rule faults decides every standard Read UNDETERMINED; that is never a "no standing
+    /// Read" for the declaration to re-decide. The followed verdict refuses a revision the
+    /// declaration alone would admit. Pre-fix the undetermined check became <c>false</c>, the
+    /// declaration was consulted, and the revision was admitted.
+    /// </summary>
+    [HubFact]
+    public async Task AnUndeterminedStandingRead_IsNeverReDecidedThroughTheDeclaration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("faulty-link", FaultyType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        var (follow, node) = await FollowAs(link, ct);
+
+        var declared = await DeclaredPointRead.AdmitsRevision(OwnerOf(link), node, Visitor).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        Assert.True(declared, "CONTROL: the declaration alone admits this revision, so only the tri-state can refuse it");
+        await follow.VerdictOf(node).Take(1).Should().Within(TestTimeouts.Convergence)
+            .Match(admitted => !admitted,
+                "an undetermined standing Read refuses — although the declaration names the visitor", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7016, thread 4336475780: a node-read revision is decided on ITSELF whatever CLR
+    /// shape it arrives in. The owner's current node admits the visitor; the revision handed to the
+    /// verdict is a REVOKED one, as untyped JSON. Pre-fix a revision that was not a
+    /// <see cref="MeshNode"/> instance skipped the per-revision check and was decided on the owner's
+    /// current state alone — admitted. NEGATIVE CONTROL: the same revision unrevoked is admitted.
+    /// </summary>
+    [HubFact]
+    public async Task AnUntypedRevision_IsStillDecidedOnItself()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("untyped-link", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        var (follow, node) = await FollowAs(link, ct);
+        var options = Mesh.JsonSerializerOptions;
+        var revoked = node with
+        {
+            Content = node.ContentAs<TicketContent>(options)! with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") },
+        };
+
+        await follow.VerdictOf(System.Text.Json.JsonSerializer.SerializeToElement(node, options)).Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(admitted => admitted, "NEGATIVE CONTROL: the unrevoked revision, untyped, is admitted", cancellationToken: ct);
+        await follow.VerdictOf(System.Text.Json.JsonSerializer.SerializeToElement(revoked, options)).Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Match(admitted => !admitted,
+                "a REVOKED revision is refused although it arrived untyped and the owner's current node still admits", cancellationToken: ct);
+    }
+
+    /// <summary>The follow a direct visitor subscription to <paramref name="path"/> gets on its owner, and the stored node.</summary>
+    private async Task<(MeshWeaver.Data.Serialization.ClientReadFollow follow, MeshNode node)> FollowAs(string path, CancellationToken ct)
+    {
+        // As System: activates the per-node hub and reads the node, without asking the visitor's read.
+        var node = (await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(path)).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct))!;
+        var owner = OwnerOf(path);
+        var delivery = new MessageDelivery<SubscribeRequest>(
+            new Address("client", "visitor"), owner.Address, new SubscribeRequest("follow-probe", new MeshNodeReference()), Mesh.JsonSerializerOptions)
+        {
+            AccessContext = Visitor,
+        };
+        var follow = MeshWeaver.Hosting.Security.DeclaredReadSubscriptionFollow.Follow(owner, delivery);
+        Assert.NotNull(follow);
+        return (follow!, node);
+    }
+
+    private IMessageHub OwnerOf(string path)
+        => Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never)
+           ?? throw new InvalidOperationException($"the per-node hub of '{path}' is not active");
 
     // ───────────────────────────── helpers ─────────────────────────────
 

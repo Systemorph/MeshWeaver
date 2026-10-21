@@ -1775,6 +1775,39 @@ public static class JsonSynchronizationStream
             // The failure arm REFUSES rather than acks, for the same reason: nothing was sent, so
             // an ack there would feed an OWNER-side failure into the mirror's
             // acknowledged-and-unanswered count. The subscriber still gets a verdict either way.
+            // 🚨 A FOLLOWED subscription forwards a revision only once its read verdict admits it
+            // (RevisionAdmission), so the re-assert Full may still be waiting for that verdict when
+            // `applied` runs — or be refused. Its answer therefore rides the next Full actually
+            // POSTED to the subscriber (review of #7016, thread 4336475680): an ack posted from
+            // `applied` would overtake a snapshot not yet on the wire, the #3058 miscount again.
+            // The stream ending first (a refused read disposes it) answers as torn down; the
+            // subscriber's StreamErrorEvent carries the refusal itself.
+            if (registry.GetClientSubscriptionFullsPosted(request.Subscriber, request.StreamId) is { } fullsPostedOnThis)
+            {
+                var parentHub = hub.Configuration.ParentHub;
+                var pendingAnswer = fullsPostedOnThis.Take(1).Subscribe(
+                    _ => Ack(),
+                    Refuse,
+                    () => RefuseAsTornDown(parentHub, "its read ended before the answering snapshot was forwarded"));
+                alreadyServing.RegisterForDisposal(new AnonymousDisposable(() =>
+                {
+                    pendingAnswer.Dispose();
+                    RefuseAsTornDown(parentHub, "its stream was disposed before the answering snapshot was forwarded");
+                }));
+                alreadyServing.Update(
+                    _ => BuildReassertFrame(alreadyServing),
+                    ex =>
+                    {
+                        logger.LogWarning(ex,
+                            "Stream {StreamId}: could not re-assert snapshot for resubscribing subscriber {Subscriber}",
+                            alreadyServing.StreamId, request.Subscriber);
+                        pendingAnswer.Dispose();
+                        Refuse(ex);
+                    },
+                    () => { });
+                return alreadyServing;
+            }
+
             var reasserted = 0;
             alreadyServing.Update(
                 _ =>
@@ -1851,6 +1884,13 @@ public static class JsonSynchronizationStream
         // (the error arm below), then the server-side stream is disposed. A revision that revokes
         // the read is therefore never sent. Not followed (null) ⇒ the stream's own items, as before.
         var followed = FollowReadAdmission(hub, delivery, reduced, logger);
+        // A followed subscription can hold a Full behind its verdict, or refuse it — so the answer
+        // to a re-assert on it rides the Full actually POSTED, never the frame merely being set
+        // (review of #7016, thread 4336475680). Completed with the stream, which answers a re-ask
+        // still waiting as torn down.
+        var fullsPosted = followed is null ? null : new System.Reactive.Subjects.Subject<Unit>();
+        if (fullsPosted is not null)
+            reduced.RegisterForDisposal(new AnonymousDisposable(fullsPosted.OnCompleted));
 
         // Use single synchronized subscription for both initial data and ongoing changes.
         // SubscribeAck is sent by HandleSubscribeRequest to close the hub.Observe(subscribeRequest)
@@ -1893,6 +1933,8 @@ public static class JsonSynchronizationStream
                             ? opt.WithAccessContext(delivery.AccessContext)
                             : opt;
                     });
+                    if (e.ChangeType == ChangeType.Full)
+                        fullsPosted?.OnNext(Unit.Default);
                 },
                 ex =>
                 {
@@ -2039,7 +2081,7 @@ public static class JsonSynchronizationStream
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
             request.Subscriber, request.StreamId, request.Reference, reduced,
-            request.AcceptsCoalescedStreamEnd);
+            request.AcceptsCoalescedStreamEnd, fullsPosted);
 
         // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
         // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built
@@ -2065,9 +2107,14 @@ public static class JsonSynchronizationStream
     {
         if (hub.Configuration.Get<ClientSubscriptionReadAdmission>() is not { } admission)
             return null;
+        // 🚨 The platform's access-denied BANNER, naming the node path (review of #7016, thread
+        // 4336475725): the subscriber receives this as a StreamErrorEvent, whose exception TYPE does
+        // not survive the wire, so the client recognises a denial — the localized presentation, the
+        // denied-path redirect — only by "permission on '<path>'" (AreaErrorClassifier).
+        var path = string.Join("/", hub.Address.Segments);
         var refusal = () => new UnauthorizedAccessException(
-            $"Access denied: the read of '{hub.Address}' that stream {delivery.Message.StreamId} serves for "
-            + $"'{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' has ended (revoked, expired, or no longer admitted)");
+            $"Access denied: user '{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' lacks Read permission on '{path}' "
+            + $"— the read stream {delivery.Message.StreamId} served has ended (revoked, expired, or no longer admitted)");
         ClientReadFollow? follow;
         try
         {

@@ -88,23 +88,47 @@ public static class RevisionAdmission
         ArgumentNullException.ThrowIfNull(refusal);
         return Observable.Defer(() =>
         {
-            // The index of the newest revision that has ARRIVED. A revision's verdict stops being
-            // followed once a newer one exists — the newer revision's own verdict takes over — but
-            // only after its first verdict has been decided, so it is never dropped.
-            var newest = new BehaviorSubject<long>(-1);
+            // The index of the newest ADMITTED revision. A revision's live verdict is followed until a
+            // NEWER revision has been admitted — never merely until one has arrived — so there is no
+            // hand-over gap while the newer revision's first verdict is still being decided (review
+            // of #7016, thread 4336475629): an expiry or a withdrawn audience inside that window ends
+            // the sequence at once instead of when the pending verdict answers or its budget runs out.
+            var admitted = new BehaviorSubject<long>(-1);
             return revisions
-                .Select((revision, index) => (Revision: revision, Index: (long)index))
-                .Do(item => newest.OnNext(item.Index))
-                .Select(item => Admit(item.Revision, item.Index, newest, verdictOf, firstVerdictBudget, refusal))
-                .Concat()
-                .Finally(newest.Dispose);
+                // Each revision's verdict is subscribed the moment the revision ARRIVES, so it is
+                // decided while the previous one is still followed.
+                .Select((revision, index) => Prepare(revision, index, verdictOf, firstVerdictBudget))
+                .Publish(prepared => Observable.Merge(
+                    // Ordered admission: one revision at a time, each forwarded only once its own
+                    // first verdict admits it.
+                    prepared
+                        .Select(item => item.Verdict.Take(1)
+                            .SelectMany(ok => ok
+                                ? Observable.Return(item)
+                                : Observable.Throw<Prepared<T>>(refusal())))
+                        .Concat()
+                        .Do(item => admitted.OnNext(item.Index))
+                        .Select(item => item.Revision),
+                    // Live refusal: from its admission until a newer revision is admitted, a
+                    // revision's verdict turning false ends the sequence. Its verdict subscription
+                    // is released when its follow ends, however it ends.
+                    prepared.SelectMany(item => admitted
+                        .Where(n => n >= item.Index)
+                        .Take(1)
+                        .SelectMany(_ => item.Verdict.Where(ok => !ok).Take(1))
+                        .TakeUntil(admitted.Where(n => n > item.Index))
+                        .SelectMany(_ => Observable.Throw<T>(refusal()))
+                        .Finally(item.Connection.Dispose))))
+                .Finally(admitted.Dispose);
         });
     }
 
-    private static IObservable<T> Admit<T>(
-        T revision, long index, IObservable<long> newest,
-        Func<T, IObservable<bool>> verdictOf, TimeSpan firstVerdictBudget, Func<Exception> refusal)
-        => Observable.Defer(() => verdictOf(revision))
+    private sealed record Prepared<T>(T Revision, long Index, IObservable<bool> Verdict, System.Reactive.Disposables.CompositeDisposable Connection);
+
+    private static Prepared<T> Prepare<T>(
+        T revision, int index, Func<T, IObservable<bool>> verdictOf, TimeSpan firstVerdictBudget)
+    {
+        var verdict = Observable.Defer(() => verdictOf(revision))
             .DistinctUntilChanged()
             // Only the FIRST verdict is bounded; after it the verdict may stay quiet for as long as
             // the admission holds.
@@ -112,13 +136,10 @@ public static class RevisionAdmission
             .Catch((Exception _) => Observable.Return(false))
             // A verdict that completes without ever answering admits nothing.
             .DefaultIfEmpty(false)
-            // ONE subscription to the verdict: the first answer decides the revision, every later
-            // answer can only withdraw it.
-            .Publish(verdict => verdict.Take(1)
-                .SelectMany(admitted => admitted ? Observable.Return(revision) : Observable.Throw<T>(refusal()))
-                .Concat(verdict
-                    .Where(admitted => !admitted)
-                    .Take(1)
-                    .SelectMany(_ => Observable.Throw<T>(refusal()))
-                    .TakeUntil(newest.Where(n => n > index))));
+            // ONE subscription to the verdict per revision, shared by its admission and its follow.
+            .Replay(1);
+        var connection = new System.Reactive.Disposables.CompositeDisposable();
+        verdict.ConnectOwnedBy(connection);
+        return new Prepared<T>(revision, index, verdict, connection);
+    }
 }

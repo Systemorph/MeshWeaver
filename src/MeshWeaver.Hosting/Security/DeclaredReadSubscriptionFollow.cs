@@ -81,37 +81,54 @@ public static class DeclaredReadSubscriptionFollow
 
         // The standing Read — the type's rule, else the fold, AS the caller — decided ONCE through the
         // platform's standard-read path (DeclaredPointRead.ObserveStandardRead, its first outcome),
-        // shared by every revision of this subscription. Undetermined is not a standing Read: the
-        // declaration is then the only thing that can still admit the caller.
+        // shared by every revision of this subscription.
+        //
+        // 🚨 TRI-STATE, as every point-read seam decides it (review of #7016, thread 4336475542): a
+        // GRANT admits; only a DEFINITIVE denial may consult the declaration; an UNDETERMINED outcome
+        // — a fault, a timeout, an empty answer — refuses outright. Folding undetermined into "no
+        // standing Read" handed the decision to the declaration, which could then admit a caller
+        // whose check had failed: the one re-decision no seam may make.
         var standing = DeclaredPointRead.ObserveStandardRead(owner, hubPath, caller)
             .Take(1)
-            .Select(outcome => outcome.IsGranted)
             .Catch((Exception ex) =>
             {
-                logger?.LogWarning(ex, "The standing Read of {Path} for {User} could not be decided — following the declaration", hubPath, caller.ObjectId);
-                return Observable.Return(false);
+                logger?.LogWarning(ex, "The standing Read of {Path} for {User} could not be decided — undetermined, refused", hubPath, caller.ObjectId);
+                return Observable.Return(PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' failed ({ex.GetType().Name})"));
             })
-            .DefaultIfEmpty(false)
+            .DefaultIfEmpty(PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' answered nothing"))
             .Replay(1)
             .AutoConnectOwnedBy(owner, nameof(DeclaredReadSubscriptionFollow));
 
         return new ClientReadFollow(
             revision => standing
-                .Select(granted => granted
+                .Select(outcome => outcome.IsGranted
                     ? Observable.Return(true)
-                    : DeclaredRead(owner, hubPath, caller, shape, revision))
+                    : outcome.IsUndetermined
+                        ? Observable.Return(false)
+                        : DeclaredRead(owner, hubPath, caller, shape, revision, logger))
                 .Switch(),
             budget);
     }
 
-    /// <summary>The declaration's live verdict for one served revision: decided on the node revision itself when the subscription serves the node, and always from the owner's current state.</summary>
+    /// <summary>
+    /// The declaration's live verdict for one served revision: decided on the node revision itself
+    /// when the subscription serves the node, and always from the owner's current state.
+    ///
+    /// <para>🚨 The branch is the REQUEST SHAPE, never the revision's CLR type (review of #7016,
+    /// thread 4336475780). A node-read revision is converted with <see cref="ObjectAsExtensions.As{T}"/>;
+    /// one that is absent or cannot be read as a node is refused, never decided on the owner's
+    /// current state alone — that would let a revision the declaration refuses (a revoked one)
+    /// through whenever it arrived untyped.</para>
+    /// </summary>
     private static IObservable<bool> DeclaredRead(
-        IMessageHub owner, string hubPath, AccessContext caller, PointReadRequest shape, object? revision)
+        IMessageHub owner, string hubPath, AccessContext caller, PointReadRequest shape, object? revision, ILogger? logger)
     {
         var ownerCurrent = DeclaredPointRead.Admits(owner, hubPath, caller, shape.Area);
-        return shape.Area is null && revision is MeshNode node
+        if (shape.Area is not null)
+            return ownerCurrent;
+        return revision.As<MeshNode>(owner.JsonSerializerOptions, logger, hubPath) is { } node
             ? DeclaredPointRead.AdmitsRevision(owner, node, caller)
                 .CombineLatest(ownerCurrent, (thisRevision, current) => thisRevision && current)
-            : ownerCurrent;
+            : Observable.Return(false);
     }
 }

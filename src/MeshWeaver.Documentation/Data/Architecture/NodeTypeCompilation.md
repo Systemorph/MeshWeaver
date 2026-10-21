@@ -1336,6 +1336,84 @@ clears it. Read it first when a type serves an old build after a release request
 names this gate, recycling again changes nothing — publish a bundle of the current source for this
 framework identity, or add a sync source for the partition. Pinned by `AHeldReleaseRequestSaysWhyTest`.
 
+**The boot sweep's batch compile asks the same question first** (#6930). The batch drives Roslyn
+directly — no activation, no compile watcher — so for a long time it never reached `DispatchOrPark`
+at all. Measured on memex.systemorph.com between 2026-10-17 18:55Z and 2026-10-18 07:56Z, the
+leftover `SocialMedia/SocialTests` (a module's content, in a partition with no sync source) logged
+`BatchBake: … → CompileError` on 51 pod boots and `Compile watcher: … PARKING … (offered by a
+bundle: True)` exactly twice — and both parks came on pods whose own boot had batch-compiled it
+minutes earlier, with the same bundle in place. The verdict depended on which route reached the
+type first; the bundle offer never flapped. The batch now asks
+`NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate` before it compiles. That check uses the
+watcher's own witnesses: one tracking vote per partition, the record's adoption provenance, and the
+offer from the same `SeedForTypes(paths, onOffered)` pass, asked only for types in untracked
+partitions. Every type it names leaves the batch: the sweep flips it `Pending` and waits for the
+watcher, whose gate holds or parks it as on any other trigger. A host with no tracking seam names
+nothing, and its batch is unchanged. These properties keep the verdict intact across that hand-off:
+- **A type the gate's own offer pass ADOPTED on this process is reported baked, not handed off.**
+  It is classified from this process's adoption ledger and re-probed against this replica's store.
+  On a readiness-gated replica the shared stamp is held, so the watcher would otherwise park a
+  type this process can serve.
+- **A forced flip on an untracked partition still runs the watcher's adoption pass.** A force
+  skips adoption only where a live-source build is legal, that is, on a tracked partition. The
+  adoption pass is the watcher's only source of the offer witness, so skipping it would let an
+  offered-only type read as authored content and be compiled. This covers a record the hand-off
+  flips and one a previous process left persisted at `Pending`.
+- **An incomplete offer pass fails closed.** The pass is incomplete when its budget runs out, or
+  when it returns normally without having read every bundle. That covers a bundle it could not
+  read, a manifest it could not read, and a published source it skipped. The consumer reports this
+  through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`. A consumer
+  written before this overload reports nothing, as it did before. A bundle without a manifest, or
+  with a manifest that states no framework identity, counts as unreadable (hollow), not as a
+  framework decline. A bundle that names a different framework identity is still declined. A
+  bundle that lists no NodeType assemblies but declares a module or content, and records no
+  producer misses, is a complete delivery (`BundleReader.DeclaresNothingToAdopt`, the one rule the
+  registry lane's `BundleOffering.ClassifyEmpty` also reads): it names no NodeType, so it leaves
+  the pass complete. A producer miss (`"<node path>: <reason>"`) names the type the bundle is
+  short of, whatever else the bundle carries: that type is witnessed as offered, exactly like a
+  present entry, so only it is held or parked, and the bundle's other entries still adopt. The
+  plugin-bundle endpoint writes that format, and also reports a module-file divergence as
+  `"module '<name>': …"`, which names no NodeType and is ignored here. A bundle with no assemblies
+  whose every miss is attributed in this way still counts as hollow for the delivery report, but
+  its membership is known, so it does not make the pass incomplete. A miss that names no node path
+  does. A
+  publication pointer the walk will not follow (it names a generation that is not on disk, or it is
+  empty, unreadable or escaping) also makes the pass incomplete, even when the sealed flat
+  publication behind it is read: the publication the pointer names was never asked about. A type the pass did not ask about has
+  unknown membership, so every candidate in an untracked partition goes through the watcher.
+- **The watcher parks only a type of unknown membership with nothing else to go on** (owner
+  decision on #7015). When its own offer discovery is incomplete, it parks a type only if the type
+  has no adoption history and its partition has no sync source. The park reason is
+  `PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason`, which names why discovery was
+  incomplete. Every other type keeps its verdict: a type in a partition with a sync source
+  compiles, and a type with adoption history goes to the untracked-module gate as before. The park
+  lifts like any other: repair the bundle or add a sync source, then request a release. If such a
+  type still names a usable build, that build keeps serving (`Ok`, with the reason in
+  `DeliveryHoldReason`). Its provenance stays `Compiled` (`BuildDeliveryHold.SettleUnknownMembership`).
+  A delivery provenance such as `StaleAdopted` would itself count as module-content evidence and
+  outlive the incomplete pass. The authored source would then never compile again, even after a
+  complete pass that found no bundle naming the type.
+- **Verifying this process's own adoptions is bounded.** An adoption that cannot be verified in
+  time is reported as not evaluated. It is still refused a compile, and it is not handed to the
+  watcher. The same applies when the store lookup itself faults. The bake probe folds that fault
+  into a `BytesMissing` entry flagged `ProbeFailed`, and the verification reads the flag, so the
+  adoption counts as not evaluated rather than as a confirmed miss.
+- **An adoption the WATCHER makes counts for this replica too.** The preflight pass can stop short
+  of a type's bundle, so the type is handed to the watcher with no local adoption, and the
+  watcher's own per-type pass then adopts it. On a readiness-gated replica the shared stamp is
+  held, so the watcher reads no usable build. When the hand-off does not end in a usable build,
+  the sweep re-reads this process's adoption ledger
+  (`DynamicTypePreWarmer.ReclassifyIfAdoptedHere`). A type adopted here, and re-probed baked, is
+  reported baked; one whose adoption cannot be verified in time is reported not evaluated.
+- **The watcher's answer is the first terminal record whose version is above the hand-off write.**
+  It never depends on seeing a `Pending` frame, and a stale terminal replay is never taken for the
+  answer. A hand-off write that fails is reported as a fault at once.
+- **An `Ok` answer is re-probed on this replica before it counts as baked.** The hold judges the
+  record, not the store, so a held build whose bytes are gone is reported as a fault. One
+  per-type budget covers both the hand-off and this re-probe. Pinned by `TheBootBakeAsksTheUntrackedModuleGateTest`: two
+identical records, one reached by the watcher and one by the batch, must end word for word the
+same, with no Roslyn pass on either.
+
 Whether the answer could be read is never a verdict: a fault or a timeout while asking the tracking
 seam compiles, as the mesh did before the gate existed — a stranded type is worse than a redundant
 compile, and the refusal is only ever formed from a positive *false*.
