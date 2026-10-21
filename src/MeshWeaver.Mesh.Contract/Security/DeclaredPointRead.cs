@@ -257,7 +257,8 @@ public static class DeclaredPointRead
     ///     (<c>SatelliteAccessRule</c>), on the PARTITION ROOT of each (<c>StorageBindingAccessRule</c>
     ///     reads Update on the root; a descendant's <c>_Policy</c> can break inheritance so the node's
     ///     own fold never moves) and on <c>Admin</c> (<c>IsGlobalAdmin</c>: <c>SpaceAccessRule</c>,
-    ///     <c>GitHubSyncConfigAccessRule</c>) — each subscribed AS the viewer;</description></item>
+    ///     <c>GitHubSyncConfigAccessRule</c>) — each subscribed AS the viewer, and re-subscribed on
+    ///     every role-catalog value so its mask is computed under the CURRENT role definitions;</description></item>
     ///   <item><description>the custom-role catalog's own emissions — the fold resolves a role from ONE
     ///     catalog value and does not re-emit on a role change or deletion;</description></item>
     ///   <item><description>access-input commits on the invalidation feed that can reach this node
@@ -273,10 +274,22 @@ public static class DeclaredPointRead
     private static IObservable<bool> ReadInputsChanged(
         IMessageHub hub, AccessService? access, MeshNode node, AccessContext viewer, string userId)
     {
-        var folds = FoldScopes(node)
-            .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p, userId))
-                .DistinctUntilChanged()
-                .Select((_, index) => index > 0));
+        var catalog = PermissionEvaluator.ObserveRoleCatalog(hub);
+        // 🚨 The watched folds are RE-SUBSCRIBED on every role-catalog value. A fold resolves a custom
+        // role from ONE catalog value and never recomputes when a definition changes, so a watcher
+        // kept across a role change holds a mask computed under the OLD definition. A later
+        // convergence of its assignments then lands as a non-change (e.g. None → None after a
+        // promotion and a revocation) and is suppressed — the one signal that should have corrected
+        // a re-check that read the assignments from before their commit. A fold re-subscribed under
+        // the current catalog makes that convergence a change (Read → None). The first generation's
+        // initial values establish the verdict; a later generation's withdraw it like any signal.
+        var folds = catalog
+            .Select((_, generation) => FoldScopes(node)
+                .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p, userId))
+                    .DistinctUntilChanged()
+                    .Select((_, index) => generation > 0 || index > 0))
+                .Merge())
+            .Switch();
         var scopes = ReadScopes(node);
         var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         var commits = feed is null
@@ -292,9 +305,8 @@ public static class DeclaredPointRead
         var gaps = feed is null
             ? Observable.Never<bool>()
             : feed.Gaps.Select(_ => true);
-        var roles = PermissionEvaluator.ObserveRoleCatalog(hub)
-            .Select((_, index) => index > 0);
-        return folds.Append(commits).Append(gaps).Append(roles).Merge();
+        var roles = catalog.Select((_, index) => index > 0);
+        return Observable.Merge(folds, commits, gaps, roles);
     }
 
     /// <summary>

@@ -1114,6 +1114,10 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
                 sp.GetRequiredService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()))
             .AddSingleton(sp => new LossyFeed(sp.GetRequiredService<MeshWeaver.Hosting.InProcessMeshChangeFeed>()))
             .AddSingleton<IMeshInvalidationFeed>(sp => sp.GetRequiredService<LossyFeed>())
+            // The node-stream cache, able to HOLD one security query's refresh (see HoldableQueryCache).
+            .AddSingleton(sp => new HoldableQueryCache(
+                sp.GetRequiredService<MeshWeaver.Hosting.MeshNodeStreamCache>(), SecurityQueries.PartitionAssignmentsQueryId(HeldPartition)))
+            .AddSingleton<IMeshNodeStreamCache>(sp => sp.GetRequiredService<HoldableQueryCache>())
             .AddSingleton<INodeTypeAccessRule>(sp => new OneVerdict(
                 new MeshWeaver.Graph.Security.SatelliteAccessRule(SatType, sp.GetRequiredService<IMessageHub>()))));
 
@@ -1148,6 +1152,167 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
             }, filter);
 
         public IObservable<ChangeFeedGap> Gaps => inner.Gaps.Merge(gaps);
+    }
+
+    /// <summary>The partition whose assignment query the test can hold.</summary>
+    private const string HeldPartition = "hr";
+    private static readonly AccessContext Lena = new() { ObjectId = "lena", Name = "lena" };
+
+    /// <summary>
+    /// 🚨 The test's CONTROLLED SWITCH for "the security-query cache has not refreshed yet". It wraps
+    /// the mesh's real <see cref="IMeshNodeStreamCache"/> and gates ONE cached security query (by its
+    /// process-wide id): every subscriber of that id — a long-lived permission watcher and a fresh
+    /// re-check alike — is served from one shared value that follows the real query while the switch
+    /// is open. While it is HELD the real query keeps refreshing underneath, but every subscriber, a
+    /// new one included, keeps seeing the value from before the hold; on release the refreshed value
+    /// is served. That is exactly the window in which a commit's re-check reads the assignments from
+    /// before the commit. A mesh-scoped instance, with no sleep and no wait primitive: the test flips it.
+    /// </summary>
+    private sealed class HoldableQueryCache(IMeshNodeStreamCache inner, string heldId) : IMeshNodeStreamCache, IDisposable
+    {
+        private HeldQuery? held;
+
+        public void Hold() => Held().Hold();
+        public void Release() => Held().Release();
+
+        private HeldQuery Held() => Volatile.Read(ref held)
+            ?? throw new InvalidOperationException($"nothing has subscribed '{heldId}' yet — there is no value to hold");
+
+        public IObservable<MeshNode> GetStream(string path, JsonSerializerOptions options) => inner.GetStream(path, options);
+        public IObservable<MeshNode> Update(string path, Func<MeshNode, MeshNode> update, JsonSerializerOptions options) => inner.Update(path, update, options);
+        public IObservable<MeshNode> Overwrite(string path, MeshNode node, JsonSerializerOptions options) => inner.Overwrite(path, node, options);
+        public void Invalidate(string path) => inner.Invalidate(path);
+        public bool ReleaseIfUnwatched(string path) => inner.ReleaseIfUnwatched(path);
+        void IMeshNodeStreamCache.InvalidatePartition(string partition) => inner.InvalidatePartition(partition);
+
+        IObservable<IEnumerable<MeshNode>>? IMeshNodeStreamCache.GetQuery(object id)
+            => Equals(id, heldId) && Volatile.Read(ref held) is { } h ? h.Stream : inner.GetQuery(id);
+
+        IObservable<IEnumerable<MeshNode>> IMeshNodeStreamCache.GetQuery(object id, JsonSerializerOptions options, params string[] queries)
+        {
+            if (!Equals(id, heldId))
+                return inner.GetQuery(id, options, queries);
+            if (Volatile.Read(ref held) is null)
+            {
+                var created = new HeldQuery(inner.GetQuery(id, options, queries));
+                if (Interlocked.CompareExchange(ref held, created, null) is not null)
+                    created.Dispose();
+            }
+            return Volatile.Read(ref held)!.Stream;
+        }
+
+        public void Dispose() => Volatile.Read(ref held)?.Dispose();
+
+        private sealed class HeldQuery : IDisposable
+        {
+            private readonly BehaviorSubject<IEnumerable<MeshNode>?> served = new(null);
+            private readonly object sync = new();
+            private bool isHeld;
+            private IEnumerable<MeshNode>? latest;
+            private readonly IDisposable source;
+
+            public HeldQuery(IObservable<IEnumerable<MeshNode>> live)
+                => source = live.Subscribe(value =>
+                {
+                    bool forward;
+                    lock (sync)
+                    {
+                        latest = value;
+                        forward = !isHeld;
+                    }
+                    if (forward)
+                        served.OnNext(value);
+                }, served.OnError);
+
+            public IObservable<IEnumerable<MeshNode>> Stream => served.Where(v => v is not null).Select(v => v!);
+
+            public void Hold()
+            {
+                lock (sync)
+                    isHeld = true;
+            }
+
+            public void Release()
+            {
+                IEnumerable<MeshNode>? value;
+                lock (sync)
+                {
+                    isHeld = false;
+                    value = latest;
+                }
+                if (value is not null)
+                    served.OnNext(value);
+            }
+
+            public void Dispose() => source.Dispose();
+        }
+    }
+
+    private HoldableQueryCache Cache => Mesh.ServiceProvider.GetRequiredService<HoldableQueryCache>();
+
+    /// <summary>
+    /// 🚨 Thread 4335537984: a permission watcher whose mask was computed under a role's OLD definition
+    /// cannot see a revocation of that role's assignment. lena's custom role grants nothing, so her
+    /// watchers hold <c>None</c>. The role gains Read and the role catalog's signal re-decides the
+    /// verdict to Granted, but the watchers are not recomputed. Her assignment is then revoked while the
+    /// assignment query has NOT refreshed (held): the commit's re-check reads the old assignment and
+    /// grants again. When the query converges the watchers compute <c>None</c> once more, a non-change,
+    /// so nothing re-decides and the open verdict stays Granted although a fresh check denies. The
+    /// watchers must follow role definitions, so that convergence is a CHANGE (Read → None) that re-decides.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARevocationReadStale_AfterARolePromotion_IsCorrectedWhenTheQueryConverges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Same(Cache, Mesh.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>());
+        await SeedTopLevel(new MeshNode(HeldPartition) { NodeType = "Markdown", Name = HeldPartition });
+        await SeedTopLevel(new MeshNode("hrroles") { NodeType = "Markdown", Name = "hrroles" });
+        var role = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("Grow", "hrroles")
+        {
+            NodeType = SecurityQueries.RoleNodeType,
+            Name = "Grow",
+            Content = new Role { Id = "Grow", Permissions = Permission.None },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+        var page = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("page", HeldPartition) { NodeType = "Markdown", Name = "page" }))
+            .Should().Emit(cancellationToken: ct))!.Path;
+        var grant = (await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(Lena.ObjectId, "Grow", HeldPartition)))
+            .Should().Emit(cancellationToken: ct))!.Path;
+
+        // Every outcome, in order. Each wait reads only what was emitted AFTER its step (Since), so an
+        // earlier outcome can never satisfy a later assertion.
+        var tri = DeclaredPointRead.ObserveStandardRead(Mesh, page, Lena).Replay();
+        using var triConnection = tri.Connect();
+        var seen = 0;
+        using var counter = tri.Subscribe(_ => Interlocked.Increment(ref seen), _ => { });
+        IObservable<PermissionCheckOutcome> Since() => tri.Skip(Volatile.Read(ref seen));
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "PRECONDITION: the role grants nothing, so lena is denied", cancellationToken: ct);
+
+        var afterPromotion = Since();
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(role).Update(node => node with
+            {
+                Content = node.ContentAs<Role>(Mesh.JsonSerializerOptions)! with { Permissions = Permission.Read },
+            }))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit("the role gains Read — acknowledged", cancellationToken: ct);
+        await afterPromotion.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted,
+            "POSITIVE CONTROL: the role catalog's signal re-decides the verdict to Granted", cancellationToken: ct);
+
+        Cache.Hold();
+        var afterRevocation = Since();
+        await Delete(grant, ct);
+        await Mesh.GetEffectivePermissions(page, Lena.ObjectId).Take(1).Should().Within(TimeSpan.FromSeconds(20))
+            .Match(p => p.HasFlag(Permission.Read), "PRECONDITION: while held, a fresh fold still reads the revoked assignment — the hold is real", cancellationToken: ct);
+        await afterRevocation.SkipWhile(o => !PointReadProbe.IsPending(o)).Where(o => o.IsGranted)
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(
+                "PRECONDITION: the revocation's re-check ran and read the assignment from before the commit", cancellationToken: ct);
+
+        var afterConvergence = Since();
+        Cache.Release();
+        await Mesh.GetEffectivePermissions(page, Lena.ObjectId).Take(1).Should().Within(TimeSpan.FromSeconds(20))
+            .Match(p => !p.HasFlag(Permission.Read), "PRECONDITION: once released, a fresh fold sees the revocation", cancellationToken: ct);
+        await afterConvergence.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the assignment query's convergence re-decides the open verdict — a DEFINITIVE denial on the SAME subscription, not a grant read stale and never corrected", cancellationToken: ct);
     }
 
     private const string StoreId = "files";
