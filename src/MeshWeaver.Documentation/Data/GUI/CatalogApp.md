@@ -82,6 +82,12 @@ The menu's area ids are the category ids. `Render(host, selected)` opens on `sel
 area reference's id without its URL query (`…/area/{App}/{categoryId}?x=1` → `categoryId`), else on the first category; an unknown id falls
 back to the first. The selection is carried as the tabs' `ActiveTabId`.
 
+`CatalogApp.CategoryIdOf` (the reference id without its URL query) is applied only inside
+`Render(host)`: a caller that composes the app itself with `Compose(typed, selected)` must call
+`CategoryIdOf` on its own reference id before passing `selected`. In an AppTabs page a pack tab id
+and a category id share the ONE reference id, so the host decides which wins — the Plugins host
+gives the pack tab precedence, compared case-insensitively (MeshWeaver.Plugins#4056).
+
 ## What is NOT in yet
 
 - **Counts and icons in the menu.** The tab skin carries a label only. A count must stay LAZY (never
