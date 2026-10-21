@@ -1074,8 +1074,18 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
         var written = await writer.Should().Within(TimeSpan.FromSeconds(20)).Emit("the writer's commits, each acknowledged", cancellationToken: ct);
         Assert.Equal(commits, written.Count);
 
-        var seen = await outcomes.TakeUntil(Observable.Return(0L, System.Reactive.Concurrency.Scheduler.Default)).ToList()
-            .Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
+        // The withdrawal must have reached THIS recording before it is read — waited on, not assumed.
+        await outcomes.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsPending,
+            "the recording holds the withdrawal (pending) the storm caused", cancellationToken: ct);
+
+        // 🚨 Snapshot the recording SYNCHRONOUSLY. A ReplaySubject replays its buffer inside Subscribe,
+        // on the subscribing thread, so subscribe-then-dispose reads exactly what it holds. The former
+        // `outcomes.TakeUntil(Observable.Return(0L, Scheduler.Default)).ToList()` raced: TakeUntil
+        // subscribes to its trigger FIRST, and a trigger on the thread pool can fire before the source
+        // has replayed a single item — an empty snapshot, read as "nothing after the withdrawal"
+        // (CI run 39624484764: Assert.NotEmpty failed on an empty collection).
+        var seen = ImmutableList<PermissionCheckOutcome>.Empty;
+        outcomes.Subscribe(o => seen = seen.Add(o)).Dispose();
         var afterWithdrawal = seen.SkipWhile(o => !PointReadProbe.IsPending(o)).ToList();
         Assert.NotEmpty(afterWithdrawal);
         Assert.DoesNotContain(afterWithdrawal, o => o.IsGranted);

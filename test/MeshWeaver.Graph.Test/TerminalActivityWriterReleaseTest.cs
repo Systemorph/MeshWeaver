@@ -138,7 +138,7 @@ public class TerminalActivityWriterReleaseTest(ITestOutputHelper output) : Monol
         var (released, connection) = ArmRelease(path);
         using var _ = connection;
 
-        CodeNodeType.FailActivity(Mesh, path, "no worker connected — release probe");
+        CodeNodeType.FailActivity(Mesh, path, CodeNodeType.NoWorkerConnected("python", "py/release-probe"));
 
         var eviction = await released.FirstAsync().Timeout(60.Seconds()).Await();
 
