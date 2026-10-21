@@ -751,18 +751,25 @@ advances a generation — the partition's for a partition-anchored read, the glo
 and a verdict is stamped with the generation current when its evaluation *started*. A hit whose
 stamp no longer matches is re-evaluated.
 
-- **The order is load-bearing.** The generation advances only after the new snapshot is in the
-  query's replay buffer (`FoldInputReplay`), so an evaluation that starts after the bump reads the
-  new snapshot. Bumping first would let a read starting in between stamp an old-snapshot verdict
-  with the new generation, which nothing would ever invalidate.
+- **The commit is two-phase, around the delivery.** A new snapshot is committed as *begin*
+  (in-flight +1, generation +1) → buffer the snapshot and notify the subscribers → *end*
+  (generation +1, in-flight -1) (`FoldInputReplay`). A verdict reads the generations *before* the
+  in-flight counts and is cached only when nothing was in flight. Either the read sees the commit
+  in flight, and the verdict is answered but not cached, or the commit begins later and moves the
+  generation past the stamp. Both single-phase orders are wrong. Advancing only *after* delivery let
+  a read opened from a subscriber's own change callback (which runs inside the delivery) take the
+  verdict cached under the previous snapshot. Advancing only *before* buffering would let a read in
+  between stamp an old-snapshot verdict with the new generation.
 - **Not a timer, not a re-subscribe.** The bump is a counter increment on the emitting thread; the
   next natural read re-evaluates. The TTL still bounds what the fold's queries do not carry — a node
   type's own read rule, re-decided only on a fold denial.
 - **The delivery gate was never affected.** `AccessControlPipeline` asks the fold on every delivery
   and caches nothing; this applies to the stream cache's read gate only.
 
-Pinned by `APolicyLandingAfterAProbeIsSeenTest` (`test/MeshWeaver.Graph.Test/`), both directions;
-on the unfixed build both fail on a single read taken right after the fold converged.
+Pinned by `APolicyLandingAfterAProbeIsSeenTest` (`test/MeshWeaver.Graph.Test/`): both directions
+fail on the unfixed build, on a single read taken right after the fold converged. A third test opens
+the read from inside the fold's own change callback; it fails when the generation advances only
+after delivery.
 
 ## Closest-wins semantics
 

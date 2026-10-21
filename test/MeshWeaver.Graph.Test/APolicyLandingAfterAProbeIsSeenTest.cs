@@ -1,8 +1,11 @@
 using System;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.AI;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -120,5 +123,51 @@ public class APolicyLandingAfterAProbeIsSeenTest(ITestOutputHelper output) : Mon
         (await Get(page, ct)).Should().StartWith("Not found",
             "the policy that granted the read is gone and the fold says so — a cached grant must not "
             + "outlive it");
+    }
+
+    /// <summary>
+    /// 🚨 <b>The read taken INSIDE the fold's own change callback</b> (review of #7046). A fold
+    /// subscriber is notified while the policy query is still delivering its new snapshot, so a
+    /// read it opens from that callback runs before the query has finished committing. It must
+    /// not be answered from the verdict cached under the previous snapshot. Measured: with the
+    /// generation advanced only after delivery, this read was refused from the cached denial.
+    /// </summary>
+    [Fact(Timeout = 90_000)]
+    public async Task AReadOpenedFromTheFoldCallback_SeesTheChangeThatFiredIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var partition = NewPartition("CallbackPolicy");
+        var page = $"{partition}/Page";
+        await CreateAsSystem(new MeshNode(partition) { Name = partition, NodeType = "Markdown" }, ct);
+        await CreateAsSystem(new MeshNode("Page", partition) { Name = "Page", NodeType = "Markdown" }, ct);
+
+        // The denial is cached for (page, Reader) before the policy exists.
+        (await Get(page, ct)).Should().StartWith("Not found", "the control: no policy grants anything yet");
+
+        var readFromCallback = new ReplaySubject<string>(1);
+        using var callbackReads = new CompositeDisposable();
+        using var fold = Mesh.CheckPermission(page, Reader, Permission.Read)
+            .Where(granted => granted)
+            .Take(1)
+            .Subscribe(_ =>
+            {
+                // Synchronously, on the fold's delivery: the read gate decides at subscribe time.
+                using (Access.SwitchAccessContext(Identity(Reader)))
+                    callbackReads.Add(Mesh.GetWorkspace().GetMeshNodeStream(page)
+                        .Where(n => n is not null)
+                        .Take(1)
+                        .Select(n => "read:" + n!.Path)
+                        .Catch((UnauthorizedAccessException ex) => Observable.Return("denied:" + ex.Message))
+                        .Subscribe(readFromCallback));
+            });
+
+        await CreateAsSystem(AssignmentNodeFactory.Policy(partition, new PartitionAccessPolicy { PublicRead = true }), ct);
+
+        var outcome = await readFromCallback.Should().Within(TestTimeouts.Convergence)
+            .Emit("the read opened from the fold callback must answer", ct);
+        Output.WriteLine($"read from the fold callback: {outcome}");
+        outcome.Should().Be("read:" + page,
+            "the fold that fired this callback already grants Read, so the read must not be answered "
+            + "from the denial cached under the previous snapshot");
     }
 }
