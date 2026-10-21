@@ -13,6 +13,10 @@ public partial class QueryParser
         "partitions", BasePathQualifier
     };
 
+    /// <summary>The reserved (single-slot) qualifier names — what a query may state only once. Read by
+    /// the catalog app's typed-text guard (<c>CatalogQuery.Anchoring</c>), which pins itself to this.</summary>
+    public static IReadOnlySet<string> ReservedQualifierNames => ReservedQualifiers;
+
     /// <summary>
     /// <c>basePath:X</c> — the query-text spelling of the search tools' <c>basePath</c> argument:
     /// everything UNDER <c>X</c>, i.e. <c>namespace:X scope:descendants</c> unless the query states

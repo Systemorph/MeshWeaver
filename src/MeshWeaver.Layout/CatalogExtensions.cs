@@ -13,7 +13,7 @@ namespace MeshWeaver.Layout;
 ///     .WithMeshSearch("Last Edited", query: "sort:LastModified-desc")
 /// </code>
 /// Both the Blazor and native MAUI view packs render the resulting <see cref="TabsControl"/>.
-/// <para>⚠️ SUPERSEDED by <see cref="CatalogApp"/> — categories of <see cref="CatalogSearch"/>es with ONE shared
+/// <para>⚠️ SUPERSEDED by <c>CatalogApp</c> (MeshWeaver.Mesh.Contract) — categories of <c>CatalogSearch</c>es with ONE shared
 /// query bar (Doc/GUI/CatalogApp). New code uses that; existing callers migrate onto it. It is not yet
 /// <c>[Obsolete]</c> only because consumers build with TreatWarningsAsErrors, where the attribute would
 /// break them on the day they take this platform; it becomes so once they have moved.</para>

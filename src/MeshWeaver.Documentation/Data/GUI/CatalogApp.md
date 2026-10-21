@@ -30,14 +30,15 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 |---|---|
 | `CatalogApp(title)` | A `PageTitle` (when a title is given), the shared bar, and the menu. `Render(host)` renders it into the host's area. |
 | **Category** — `WithCategory(id, label, params CatalogSearch[])` | One menu entry. `id` is stable and URL-safe: it is the menu AREA id and what a deep link names; `label` is the visible text (localise it before passing it). A category shows its searches one under the other. |
-| `CatalogCategory { When = IObservable<bool> }` | A conditional category: in the menu only while `When` emits true (the AI catalogs' "This space" tab). |
+| `CatalogCategory { When = IObservable<bool> }` | A conditional category: in the menu only while `When` emits true (the AI catalogs' "This space" tab). Until it first answers it counts as false, so it never holds back the other categories. |
+| `CatalogCategory { Header = control }` | A control above the category's searches — e.g. the legend of what the hits' badges mean. |
 | **Search** — `CatalogSearch.Of(filter, title?, itemArea?, sort?)` | One hidden query: a filter WITHOUT `sort:` plus its default `CatalogSort` (Last activity unless stated; `CatalogSort.Name` is cheaper over `partitions:all`, because last activity costs a read per hit). Rendered as `Controls.Catalog` with the search box hidden. |
-| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller) instead of running a query. |
-| `.WithCreate(nodeType, namespace, when?)` | The section's "+" (`CreateNodeType` / `CreateNamespace`). Always state the namespace for a subtree query. `when` (an `IObservable<bool>`) hides it while false — e.g. "only once the set has a member". |
+| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller, shown as a plain label — never parsed as markup) instead of running a query. |
+| `.WithCreate(nodeType, namespace, when?)` | The section's "+" (`CreateNodeType` / `CreateNamespace`). Always state the namespace for a subtree query. `when` (an `IObservable<bool>`) hides it while false — e.g. "only once the set has a member"; until it answers, the results render without the "+". |
 | `.WithMaxColumns(n)` · `.WithPageSize(n)` | A card grid instead of one hit per row; hits per page before "Load more". |
 | `.WithConfigure(c => …)` | The last-mile hook over the composed `MeshSearchControl` — grouping (`WithGroupBy(…).WithSectionCounts(true)`), render mode, anything. Applied last. |
 | `WithoutQueryBar()` | No shared bar — an embedded start tab carries none. |
-| `WithPlaceholder(text)` | The bar's placeholder (localise before passing); otherwise derived from the title by `CatalogSort.Placeholder`. |
+| `WithPlaceholder(text)` | The bar's placeholder (localise before passing); otherwise a language-neutral `🔍 sort:name, sort:lastModified-desc`. |
 
 ### The shared query bar
 
@@ -45,20 +46,29 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
   the reader types. Each search's section is its OWN area, re-emitted with the typed text as the
   catalog's `VisibleQuery` — so the existing MeshSearch view re-queries; **no view change is
   involved**, and a section whose inputs did not change is not re-rendered.
+- The bar is seeded once per area host, so an area that re-renders the app keeps what was typed.
+  A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
-- 🚨 **Typing can only NARROW.** A positive `namespace:`, `path:`, `scope:`, `partitions:`,
-  `basePath:`, `source:`, `context:` or `select:` term would REPLACE the hidden query's own (the
-  parser keeps one of each), so `CatalogQuery.Typed` drops them before they reach a query. Free text,
-  field filters (`content.offering:…`), negations (`-path:…`) and `sort:` pass.
+- 🚨 **Typing can only NARROW — as the production parser reads it.** `CatalogQuery.Narrowing`
+  removes every reserved single-slot qualifier but `sort:` (`namespace:`, `path:`, `scope:`,
+  `partitions:`, `basePath:`, `source:`, `context:`, `select:`, `is:`, `limit:` — derived from
+  `QueryParser.ReservedQualifierNames`) whatever its sign or grouping, then PARSES
+  `hidden + " " + typed` and keeps the typed text only if the result is the hidden query and
+  something more: the same anchor, scope, limit, source, projection and context, and every conjunct
+  of the hidden filter still a conjunct. An `OR` that would reach past the hidden filter
+  (`content.status:Open OR content.status:Won`, a leading `OR nodeType:Other`) fails that and keeps
+  only its free text and `sort:`; a grouped `(a OR b)` passes. This is why the type lives in
+  `MeshWeaver.Mesh.Contract`: it must use the real parser.
 - 🚨 **Every hidden query is anchored.** A filter that names no positive `namespace:`, `path:`,
-  `basePath:` or `partitions:all` is not run; the section shows the missing anchors and the query
-  instead (`CatalogQuery.IsAnchored`, MeshWeaver#4274). `partitions:all` queries are accepted unchanged.
+  `basePath:` or `partitions:all` is not run; the section shows THAT it was refused (the anchors it
+  lacks — never the hidden query, which goes to the log as a warning). The rule is the production
+  one, `ParsedQuery.IsSufficientlySpecified` (MeshWeaver#4274): `path:*` is not an anchor. `partitions:all` queries are accepted unchanged.
 
 ### Deep links
 
 The menu's area ids are the category ids. `Render(host, selected)` opens on `selected`, else on the
-area reference's id (`…/area/{App}/{categoryId}`), else on the first category; an unknown id falls
+area reference's id without its URL query (`…/area/{App}/{categoryId}?x=1` → `categoryId`), else on the first category; an unknown id falls
 back to the first. The selection is carried as the tabs' `ActiveTabId`.
 
 ## What is NOT in yet

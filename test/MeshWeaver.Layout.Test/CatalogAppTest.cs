@@ -1,5 +1,6 @@
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Mesh;
 using Xunit;
 
 namespace MeshWeaver.Layout.Test;
@@ -40,6 +41,19 @@ public class CatalogAppTest
     }
 
     [Fact]
+    public void ACategoryHeader_SitsAboveItsSearches()
+    {
+        var category = new CatalogCategory("deals", "Deals", [CatalogSearch.Of(Deals, "Open"), CatalogSearch.Of(Deals, "Won")])
+        {
+            Header = Controls.Markdown("legend"),
+        };
+
+        var body = CatalogApp.Body(category, NothingTyped);
+
+        Assert.Equal(["Header", "Search0", "Search1"], body.Areas.Select(a => a.Id?.ToString()));
+    }
+
+    [Fact]
     public void ASearch_IsTheCatalog_WithTheBarHidden_AndTheTypedTextAsVisibleQuery()
     {
         var section = (MeshSearchControl)CatalogSearch.Of(Clients, itemArea: "Card", sort: CatalogSort.Name)
@@ -70,26 +84,103 @@ public class CatalogAppTest
         Assert.Null(hidden.CreateNodeType);
     }
 
+    private const string Hidden = Deals + " sort:subtreeLastModified-desc";
+
     [Fact]
-    public void TypedText_CanOnlyNarrow_AnchoringTermsAreDropped()
+    public void TypedText_CanOnlyNarrow_ReservedQualifiersAreDropped_WhateverTheirSign()
     {
-        Assert.Equal("fabrikam sort:name content.offering:X -path:Fabrikam/Old",
-            CatalogQuery.Typed("fabrikam namespace:Globex sort:name partitions:all content.offering:X scope:descendants -path:Fabrikam/Old"));
-        Assert.Equal("\"a namespace:b\"", CatalogQuery.Typed("\"a namespace:b\" path:X"));
-        Assert.Equal("", CatalogQuery.Typed(null));
-        Assert.Equal("", CatalogQuery.Typed("  select:path  "));
+        Assert.Equal("fabrikam sort:name content.offering:X",
+            CatalogQuery.Narrowing(Hidden, "fabrikam namespace:Globex sort:name partitions:all content.offering:X scope:descendants"));
+        // A negated shaping qualifier is APPLIED, not excluded (-scope:subtree widens a children scope).
+        Assert.Equal("fabrikam", CatalogQuery.Narrowing(Hidden, "fabrikam -scope:subtree -source:all"));
+        // is: and limit: are single-slot too: a typed one would replace the hidden is:main / limit:.
+        Assert.Equal("fabrikam", CatalogQuery.Narrowing(Hidden + " is:main limit:5", "fabrikam is:content limit:1000"));
+        Assert.Equal("", CatalogQuery.Narrowing(Hidden, null));
+        Assert.Equal("", CatalogQuery.Narrowing(Hidden, "  select:path  "));
     }
 
     [Fact]
-    public void AHiddenQuery_MustBeAnchored_OrItIsRefusedVisibly()
+    public void AGroupedReservedQualifier_IsDroppedToo()
+    {
+        var typed = CatalogQuery.Narrowing("namespace:Fabrikam nodeType:Crm/Offer sort:name", "(namespace:Globex)");
+        var parsed = new QueryParser().Parse("namespace:Fabrikam nodeType:Crm/Offer sort:name " + typed);
+
+        Assert.DoesNotContain("Globex", typed);
+        Assert.Equal(new QueryParser().Parse("namespace:Fabrikam nodeType:Crm/Offer").Path, parsed.Path);
+    }
+
+    [Fact]
+    public void AnOrThatWouldReachPastTheHiddenFilter_KeepsOnlyFreeTextAndSort()
+    {
+        // (hidden AND status:Open) OR status:Won would admit Won nodes of ANY type.
+        Assert.Equal("", CatalogQuery.Narrowing(Hidden, "content.status:Open OR content.status:Won"));
+        Assert.Equal("", CatalogQuery.Narrowing(Hidden, "OR nodeType:Other"));
+        Assert.Equal("fabrikam sort:name", CatalogQuery.Narrowing(Hidden, "fabrikam sort:name OR nodeType:Other"));
+        // A grouped OR stays inside the conjunction and is kept.
+        var grouped = CatalogQuery.Narrowing(Hidden, "(content.status:Open OR content.status:Won)");
+        Assert.True(CatalogQuery.Narrows(Hidden, grouped));
+        Assert.Contains("content.status:Won", grouped);
+    }
+
+    [Fact]
+    public void TheDropSet_IsTheParsersReservedQualifiers_ExceptSort()
+    {
+        var expected = QueryParser.ReservedQualifierNames.Where(q => !q.Equals("sort", StringComparison.OrdinalIgnoreCase))
+            .Select(q => q.ToLowerInvariant()).Order();
+        Assert.Equal(expected, CatalogQuery.Removed.Select(q => q.ToLowerInvariant()).Order());
+        Assert.True(CatalogQuery.Removed.Contains("is"));
+        Assert.True(CatalogQuery.Removed.Contains("limit"));
+    }
+
+    [Fact]
+    public void AHiddenQuery_MustBeAnchored_ByTheProductionRule_OrItIsRefusedVisibly()
     {
         Assert.True(CatalogQuery.IsAnchored(Clients));
         Assert.True(CatalogQuery.IsAnchored("namespace:Fabrikam nodeType:Crm/Offer"));
         Assert.False(CatalogQuery.IsAnchored("nodeType:Crm/Offer scope:subtree"));
-        Assert.False(CatalogQuery.IsAnchored("nodeType:Crm/Offer -namespace:Fabrikam partitions:some"));
+        Assert.False(CatalogQuery.IsAnchored("path:* nodeType:Crm/Offer"));
+        Assert.False(CatalogQuery.IsAnchored("nodeType:Crm/Offer -namespace:Fabrikam"));
 
-        var refused = CatalogSearch.Of("nodeType:Crm/Offer").Render("nodeType:Crm/Offer", "", true, "Offers");
-        Assert.IsType<MarkdownControl>(refused);
+        var logged = new List<string>();
+        var refused = CatalogSearch.Of("nodeType:Crm/Offer").Render("nodeType:Crm/Offer", "", true, "Offers", logged.Add);
+        // The viewer sees THAT it was refused, never the hidden query; the log gets the details.
+        var label = Assert.IsType<LabelControl>(refused);
+        Assert.Equal(CatalogSearch.RefusedLabel, label.Data);
+        Assert.DoesNotContain("nodeType", label.Data?.ToString());
+        Assert.Contains("nodeType:Crm/Offer", Assert.Single(logged));
+    }
+
+    [Fact]
+    public void ASilentCreateCondition_HidesThePlus_ButNeverHoldsBackTheResults()
+    {
+        var when = new Subject<bool>();
+        var seen = Collect(CatalogSearch.Of(Deals, "Open").WithCreate("Crm/Opportunity", "Fabrikam", when).Section(NothingTyped, "Deals"));
+
+        Assert.Single(seen);
+        Assert.Null(((MeshSearchControl)seen[0]).CreateNodeType);
+        when.OnNext(true);
+        Assert.Equal("Crm/Opportunity", ((MeshSearchControl)seen[^1]).CreateNodeType);
+    }
+
+    [Fact]
+    public void ASilentCategoryCondition_NeverHoldsBackTheOtherCategories()
+    {
+        var app = new CatalogApp()
+            .WithCategory("clients", "Clients", CatalogSearch.Of(Clients))
+            .WithCategory(new CatalogCategory("space", "This space", [CatalogSearch.Of(Deals)]) { When = new Subject<bool>() });
+        var sets = new List<string[]>();
+        app.VisibleCategories().Subscribe(cs => sets.Add([.. cs.Select(c => c.Id)]));
+
+        Assert.Equal([["clients"]], sets);
+    }
+
+    [Fact]
+    public void TheDeepLink_IsTheReferenceId_WithoutItsUrlQuery()
+    {
+        Assert.Equal("deals", CatalogApp.CategoryIdOf("deals?x=1"));
+        Assert.Equal("deals", CatalogApp.CategoryIdOf("deals"));
+        Assert.Null(CatalogApp.CategoryIdOf(null));
+        Assert.Null(CatalogApp.CategoryIdOf("?x=1"));
     }
 
     [Fact]
@@ -108,7 +199,8 @@ public class CatalogAppTest
         typed.OnNext("globex");
 
         Assert.Equal(3, seen.Count);
-        Assert.Contains("Nothing is waiting on us.", ((MarkdownControl)seen[0]).Markdown?.ToString());
+        // A plain label: localised text with _ or * is shown as written, never read as markup.
+        Assert.Equal("Nothing is waiting on us.", ((LabelControl)seen[0]).Data);
         Assert.Equal("nodeType:Crm/Counterparty id:fabrikam partitions:all sort:subtreeLastModified-desc",
             ((MeshSearchControl)seen[1]).HiddenQuery);
         Assert.Equal("globex", ((MeshSearchControl)seen[2]).VisibleQuery);
