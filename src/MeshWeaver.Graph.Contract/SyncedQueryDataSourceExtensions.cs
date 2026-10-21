@@ -273,8 +273,15 @@ public static class SyncedQueryDataSourceExtensions
             // has Read on. PermissionEvaluator caches per-scope via the
             // process-wide IMeshNodeStreamCache so repeated checks for the
             // same user are cheap.
+            //
+            // 🚨 The filter itself runs under the READER, not only the callback after it. The
+            // permission check takes the user's id explicitly, but the evaluator ALSO reads the
+            // ambient context: IsVirtual (a logged-out visitor is anonymous under
+            // Access:DenyAnonymous) and IsApiToken (a token's API-permission restriction). Upstream
+            // snapshots arrive on the query pool or on the turn that changed the result set, so
+            // filtered there, a virtual guest's id was evaluated as a signed-in user.
             return FilterByReadPermission(
-                upstream,
+                upstream.CarryAccessContext(sp, reader),
                 node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
         }).CarryAccessContext(sp, reader);
     }
