@@ -2085,6 +2085,105 @@ stream keeps following the verdict and faults an admitted subscription with the 
 refusal the moment the admission ends (revocation, expiry, a changed audience, a removed
 declaration). Later revisions are therefore never delivered to a caller who lost the read.
 
+**An open subscription ends with the read, and the revision that ends it is never sent.** Two
+windows used to let an open subscription briefly outlive a revoked or expired admission (#4306,
+follow-ups 1 and 2). Both are now closed by one rule: every revision is decided before it is
+forwarded (`RevisionAdmission.AdmitEachRevision`, `MeshWeaver.Data`).
+
+- **The node-stream read gate.** It used to switch on ONE live verdict. The revision that revokes
+  the read therefore reached the caller before the verdict could turn, because the verdict only
+  follows the node after that revision exists, and for a stored type the declaration is looked up
+  asynchronously. Now each revision waits for its own verdict: the declaration decided on that
+  revision's content (`DeclaredPointRead.AdmitsRevision`) and the live verdict from the owner's
+  current state (`DeclaredPointRead.Admits`). The first refused revision ends the stream.
+- **A direct owner-side subscription.** A `SubscribeRequest` to the node's own hub is admitted by
+  the delivery gate on its first verdict. The owner's synchronization stream then forwarded every
+  later revision for the subscription's life, after a revocation and after an expiry alike. Every
+  per-node hub now registers a `ClientSubscriptionReadAdmission`
+  (`DeclaredReadSubscriptionFollow`) beside its gate. A subscription the gate can have admitted
+  through the declaration is followed per revision: a point-read shape, a trusted caller context,
+  and no standing Read through the fold or the type's rule (the first outcome of
+  `DeclaredPointRead.ObserveStandardRead`, as the caller). The
+  first refusal posts a `StreamErrorEvent` ("Access denied: …"), and the server-side stream is
+  unregistered and disposed. A resubscribe then meets the gate afresh.
+
+Nothing is dropped or reordered: a revision waits behind an earlier one whose verdict is pending,
+so a patch chain stays contiguous. A verdict that stalls past the permission-establishment budget,
+faults or answers nothing is a refusal. The expiry ends the subscription at its instant with
+nothing else emitting. A standing GRANT on an open direct subscription is not followed by this
+mechanism. Withdrawing it live belongs to `ObserveStandardRead`, not to the declaration's signal,
+and an owner-side subscription does not yet follow it (still open on #4306).
+Tests: `test/MeshWeaver.Graph.Test/OpenSubscriptionEndsWithTheReadTest.cs` (the revoking revision
+never delivered, on the node stream of a stored type and on a direct subscription; a direct
+subscription ended at the expiry; a link that is not revoked still streaming, as the negative
+control).
+
+**What a follow holds belongs to its subscription, never to the node hub.** The follow's standing
+Read is decided once and replayed to every later revision of the same subscription. Its connection
+is released when the followed sequence ends (`ClientReadFollow.Lifetime`), on a refusal, a
+completion or an unsubscribe. It used to be registered on the node hub, and a hub registration
+lives until the hub shuts down, so every open-and-close of a direct subscription on a long-lived
+node hub retained one. Measured: 20 closed followed subscriptions grew the owner's disposal
+registry by exactly 20 before, and by 0 after
+(`OpenSubscriptionEndsWithTheReadTest.ClosedFollowedSubscriptions_DoNotGrowTheOwnerHubsDisposalRegistry`).
+
+**The cache exemption covers the INTERNAL cache only.** A participant ingress re-stamps a
+delivery's identity but keeps the participant's own `Sender`, and `SubscribeRequest` is
+participant-postable. A `cache/…` sender on an ingress-stamped delivery is therefore a claim, and
+that subscription is followed like any other
+(`OpenSubscriptionEndsWithTheReadTest.AParticipantDeliveryClaimingTheCacheSender_IsStillFollowed`).
+
+**A refused subscription stays ended.** Both sides end it.
+- **Owner:** it does not announce a `StreamEndedEvent` for a refused read, because that event is
+  what the subscriber's recovery re-subscribes on.
+- **Subscriber:** on a `StreamErrorEvent` it disposes its sync stream instead of only faulting
+  it, which releases the change-feed staleness latch and the end/recycle re-arm.
+
+Those recovery paths used to re-subscribe as System, which the follow exempts. Before this fix
+they re-opened the revoked read, unfollowed, about two seconds after the refusal. The test
+measures the owner's registry: it serves neither the refused stream nor a new one
+(`ARefusedDirectSubscription_LeavesNoOwnerSubscriptionBehind`).
+
+**Recovery re-subscribes as the subscriber.** A client stream recovers by itself. It posts a
+fresh `SubscribeRequest` when the owner announces the end of the server-side half
+(`StreamEndedEvent`, a recycle or deactivation), when the change feed proves the mirror is
+behind, and when a frame is lost (`RequestFreshSnapshot`). Each of these is a NEW admission on
+the owner. All three used to run as System, and the gate admits System. So when an owner was
+recycled after a reader's grant was deleted, the reader's stream re-opened and received the
+next revision. Now every re-subscribe runs under the identity the stream was opened for. That
+identity is captured once, when the client stream is created
+(`SynchronizationStream.SubscriberContext`), and applied explicitly with `RunAs`, never read
+from the ambient context of the turn that triggers the recovery. A revoked reader's re-subscribe
+is refused and the stream ends with the denial. An infrastructure mirror keeps its own identity:
+one opened with no user (System, a hub address) re-subscribes as System, and the node-stream
+cache re-subscribes as `cache/mesh-node-cache`. A mirror opened as its hub (`GetRemoteStreamAsHub`)
+re-subscribes as that hub on every path, the frame-loss re-ask included. This holds even when a
+user was ambient when the mirror opened (`FrameLossResubscribeKeepsTheHubCredentialTest`). Pinned by `RecoveryResubscribesAsTheSubscriberTest`.
+A revoked reader is not served after a recycle, and the reader who keeps the grant recovers
+(negative control). A reader who never had Read is never served by recovery; that case already
+held before the fix.
+
+What this does NOT cover, measured on the same fixture: an OPEN subscription does not follow a
+revoked standard grant. The owner decides a `SubscribeRequest` once, at admission, and the
+node-stream cache's read gate is likewise decided once per `GetStream`. Its 30-second
+`AccessTtl` only bounds new reads. A revoked reader's open direct subscription, or open cache
+read, therefore keeps receiving revisions until it ends or a recovery re-subscribes it. Declared
+point reads are followed (above); standard grants are not yet.
+
+**A stored type's ownership is followed live.** A stored type's declaration counts only while
+its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
+`DeclarationOf` re-reads that config on every commit to it and on every feed gap. Turning the
+sync two-way, emptying it or deleting it therefore ends an open admission without any write to
+the node itself (`AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned`, with a
+config change that keeps ownership as the negative control).
+
+**The follow runs as the subscriber, and only the follow does.** The owner hub's own work never
+takes the subscriber's identity: a watcher on the node reacts to each write as its writer (or as
+System, or a hub credential), with a direct subscriber followed or not
+(`FollowedSubscriptionOwnerIdentityTest`). Two seeded leaks did not turn that test red, so it pins
+the outcome for a direct subscriber and does not reproduce the shape measured in MeshWeaver.Plugins
+for a stream the node-stream cache opened (that shape is excluded from the follow).
+
 | Seam | Point read? | Consults the declaration |
 |---|---|---|
 | The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
