@@ -1366,6 +1366,23 @@ public static class DynamicTypePreWarmer
                             new PreWarmOutcome(p, outcome, $"blocked by {named}") { BlockedBy = named });
                     }
 
+                    // 🚨 MeshWeaver#6930 — a type the untracked-module gate refuses a local compile
+                    // is NEVER compiled by the batch. The batch drives Roslyn directly and never
+                    // reached the gate, so the same leftover type compiled (and failed) on every
+                    // boot here and was PARKED only when a later Pending flip reached the watcher —
+                    // on the same pod, with the same bundle in place. It is handed to the compile
+                    // watcher instead, whose gate is then the only thing that decides it.
+                    if (refusedByGate.Contains(p))
+                    {
+                        progress?.Invoke(
+                            $"building {pending.IndexOf(p) + 1} of {pending.Count} pending NodeType(s) "
+                            + $"through the compile watcher's untracked-module gate: waiting on {p}, "
+                            + $"for up to {budget}");
+                        return DriveThroughCompileWatcher(workspace, accessService, p, budget, logger)
+                            .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
+                            .Do(o => FileForDependents(p, o));
+                    }
+
                     // Batch mode drives the ONE compiler directly with the pre-resolved source
                     // set — no activation, no watcher settle. It also subsumes the missing-bytes
                     // case: a direct compile re-emits, re-uploads and re-stamps regardless of
@@ -1386,23 +1403,6 @@ public static class DynamicTypePreWarmer
                     // It is warmed by activation — ONE type leaves the batch, never all of them, and
                     // it is never compiled against an empty set (that would be #1216's fabricated
                     // verdict).
-                    // 🚨 MeshWeaver#6930 — a type the untracked-module gate refuses a local compile
-                    // is NEVER compiled by the batch. The batch drives Roslyn directly and never
-                    // reached the gate, so the same leftover type compiled (and failed) on every
-                    // boot here and was PARKED only when a later Pending flip reached the watcher —
-                    // on the same pod, with the same bundle in place. It is handed to the compile
-                    // watcher instead, whose gate is then the only thing that decides it.
-                    if (refusedByGate.Contains(p))
-                    {
-                        progress?.Invoke(
-                            $"building {pending.IndexOf(p) + 1} of {pending.Count} pending NodeType(s) "
-                            + $"through the compile watcher's untracked-module gate: waiting on {p}, "
-                            + $"for up to {budget}");
-                        return DriveThroughCompileWatcher(workspace, accessService, p, budget, logger)
-                            .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
-                            .Do(o => FileForDependents(p, o));
-                    }
-
                     IReadOnlyList<MeshNode>? batchSet = null;
                     MeshNode? typeNode = null;
                     var inBatch = batchSources is not null
