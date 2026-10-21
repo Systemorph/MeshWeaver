@@ -173,17 +173,37 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
             registration.PipelineBuilding += (_, pipeline) =>
                 pipeline.Use(PipelinePhase.Activation, MiddlewareInsertionMode.StartOfPhase, (context, next) =>
                 {
+                    // Reported as the activation is ATTEMPTED (review of #7027): the defect's throwing shape —
+                    // DialogService over an uninitialised NavigationManager — never returns an instance.
+                    ReportIfBuiltForNoCaller(context.Registration, context.Service, context.ActivationScope);
                     next(context);
                     if (context.NewInstanceActivated && context.Instance is { } instance)
-                        Built(context.Registration, context.Service, instance, context.ActivationScope);
+                        Built(context.Registration, instance, context.ActivationScope);
                 });
         };
+
+    // The defect's own shape: a SCOPED registration built in the module container's ROOT scope is one
+    // instance per generation, shared by every circuit, request and hub, and built against no caller.
+    private void ReportIfBuiltForNoCaller(IComponentRegistration registration, Service service, ILifetimeScope scope)
+    {
+        if (registration.Lifetime is not CurrentScopeLifetime
+            || scope is not ISharingLifetimeScope sharing || !ReferenceEquals(sharing.RootLifetimeScope, sharing)
+            || ModuleServiceProvider.CallerOfModuleScope(scope) is not null
+            || !FirstReport($"root|{registration.Id}"))
+            return;
+        logger.LogWarning(
+            "{Marker} Module scoped service {Service} ({Implementation}) is being built in the module container's "
+            + "root scope, which no caller owns — every circuit, request and hub resolving it there shares one "
+            + "instance, built against no caller's NavigationManager or IJSRuntime (MeshWeaver#6584). "
+            + "Reported once per registration.",
+            ModuleScopeOwnership.Marker, service.Description, registration.Activator.LimitType.FullName);
+    }
 
     private static bool IsInfrastructure(Type type) =>
         type.Assembly == typeof(ModuleScopeDiagnostics).Assembly
         || type.Assembly.GetName().Name?.StartsWith("Autofac", StringComparison.Ordinal) == true;
 
-    private void Built(IComponentRegistration registration, Service service, object instance, ILifetimeScope scope)
+    private void Built(IComponentRegistration registration, object instance, ILifetimeScope scope)
     {
         var caller = ModuleServiceProvider.CallerOfModuleScope(scope);
         if (instance is IDisposable or IAsyncDisposable)
@@ -193,16 +213,6 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
         // FIRST record wins (review of #7027): a scoped factory answering one shared object to callers A then
         // B must keep A as the owner, so B being served it is reported rather than silently re-owned.
         scoped.TryAdd(instance, new ScopedOwner(caller is null ? null : new WeakReference<ILifetimeScope>(caller), caller?.Tag?.ToString()));
-        // The defect's own shape: a SCOPED registration built in the module container's ROOT scope is one
-        // instance per generation, shared by every circuit, request and hub, and built against no caller.
-        if (caller is null && scope is ISharingLifetimeScope sharing && ReferenceEquals(sharing.RootLifetimeScope, sharing)
-            && FirstReport($"root|{registration.Id}"))
-            logger.LogWarning(
-                "{Marker} Module scoped service {Service} ({Instance}) was built in the module container's root "
-                + "scope, which no caller owns — every circuit, request and hub resolving it there shares this one "
-                + "instance, built against no caller's NavigationManager or IJSRuntime (MeshWeaver#6584). "
-                + "Reported once per registration.",
-                ModuleScopeOwnership.Marker, service.Description, instance.GetType().FullName);
     }
 
     /// <summary>Reports <paramref name="instance"/>, a module's scoped instance, when it is handed to

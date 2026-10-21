@@ -45,6 +45,15 @@ internal sealed class CapturedLogs : ILoggerFactory, ILoggerProvider
 /// the aliasing shape the review of #7027 named.</summary>
 public interface IDiagnosedAlias;
 
+/// <summary>A scoped service whose constructor throws when built for no caller — the shape of Radzen's
+/// <c>DialogService</c> over an uninitialised <c>RemoteNavigationManager</c> (MeshWeaver#6584).</summary>
+public sealed class ThrowsWithoutACaller
+{
+    /// <summary>Always throws, as the uninitialised navigation manager did.</summary>
+    public ThrowsWithoutACaller() =>
+        throw new InvalidOperationException("'RemoteNavigationManager' has not been initialized.");
+}
+
 /// <summary>A platform class a module registers as a SINGLETON — the generation owns it.</summary>
 public sealed class DiagnosedSingleton : IDisposable, IDiagnosedAlias
 {
@@ -266,6 +275,27 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
 
         mesh.Logs.Ownership.Should().HaveCount(2,
             "once per registration: A's end — another caller, another caller tag — adds nothing");
+    }
+
+    /// <summary>Review of #7027: the defect's THROWING shape — a scoped service whose construction fails for
+    /// want of a caller — must write the line too; it is reported as the activation is attempted.</summary>
+    [Fact]
+    public void AScopedServiceThatThrowsWhenBuiltForNoCaller_StillWarns()
+    {
+        var logs = new CapturedLogs();
+        IServiceCollection root = new ServiceCollection();
+        root.AddSingleton<ILoggerFactory>(logs);
+        root.AddSingleton(new ModuleInstanceOwners());
+        var rootProvider = root.CreateMeshWeaverServiceProvider();
+        IServiceCollection services = new ServiceCollection();
+        services.AddScoped<ThrowsWithoutACaller>();
+        var module = ModuleServiceProvider.CreateForCallers(services, rootProvider, _ => false, [],
+            _ => Array.Empty<Func<ILifetimeScope?, object>>());
+
+        // The control: the construction really fails.
+        Assert.ThrowsAny<Exception>(() => ModuleServiceProvider.ResolveAt(module, typeof(ThrowsWithoutACaller), 0));
+        logs.Ownership.Should().ContainSingle(w => w.Message.Contains("MeshWeaver#6584") && w.Message.Contains(nameof(ThrowsWithoutACaller)),
+            "the throwing shape is the one #6584 described, and it must not be invisible to the query");
     }
 
     /// <summary>The happy path through the REAL wiring — a generic host, the mesh's module registry, a
