@@ -153,6 +153,22 @@ internal sealed class ActivityLogLogger(IMessageHub hub, string activityLogPath)
     }
 
     /// <summary>
+    /// Appends a prepared transcript entry — one the kernel writes itself, keyed
+    /// (<c>LogMessage.WithKey</c>) so it renders in the viewer's language — and publishes it on the
+    /// same throttle as every other line.
+    /// </summary>
+    /// <param name="entry">The entry to append.</param>
+    public void Append(LogMessage entry)
+    {
+        lock (_lock)
+        {
+            _messages = _messages.Add(entry);
+            if (entry.LogLevel > _maxSeverity && entry.LogLevel != LogLevel.None) _maxSeverity = entry.LogLevel;
+        }
+        ScheduleThrottledPublish();
+    }
+
+    /// <summary>
     /// Emits a running-state snapshot at most once every <see cref="ThrottleMs"/>.
     /// Coalesces bursts of log calls into a single DataChangeRequest so the
     /// activity hub's stream isn't flooded with concurrent patches.

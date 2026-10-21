@@ -71,6 +71,38 @@ public class KernelIdleDisconnectWhileRunningTest(ITestOutputHelper output) : Hu
         Assert.True(kernel.IsDisposing, "a finished hub is still reclaimed one full window after its run (#1324/#1435)");
     }
 
+    /// <summary>
+    /// The container's wait for the executor's reply is bounded by <c>RequestTimeout</c>; a quiet
+    /// script outlives it. That timeout must not release the claim — otherwise the NEXT idle tick
+    /// disposes the hub and its executor mid-run, the pump stops, and the Activity stays Running for
+    /// ever. The claim now lasts until the run settles.
+    /// </summary>
+    [Fact]
+    public async Task AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles()
+    {
+        var (kernel, executor, idle, clock) = await ArrangeAsync();
+        var settled = new Subject<Unit>();
+        idle.Track(claim =>
+            {
+                claim.Bind(executor);
+                // The reply wait crosses its budget first …
+                return KernelContainer.ReplyOrSettlement(
+                    Observable.Throw<object>(new TimeoutException("the reply budget elapsed while the script ran")),
+                    () => settled);
+            })
+            .Subscribe(_ => { }, _ => { });
+
+        // … then the idle window.
+        clock.Advance(Window);
+        Assert.False(kernel.IsDisposing, "the run is still executing after its reply wait timed out, so its hub stays");
+        Assert.Equal(1, idle.InFlight);
+
+        settled.OnNext(Unit.Default);
+        Assert.Equal(0, idle.InFlight);
+        clock.Advance(Window);
+        Assert.True(kernel.IsDisposing, "once the run settled, the finished hub is reclaimed one window later");
+    }
+
     [Fact]
     public async Task ADeadExecutor_CannotKeepTheHubAliveForever()
     {
