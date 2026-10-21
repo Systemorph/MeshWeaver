@@ -82,6 +82,26 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
+    /// The NAMED refusal the compile watcher parks a NodeType of UNKNOWN module membership with
+    /// (MeshWeaver#6930): it never adopted a bundle, its partition tracks no source, and the
+    /// prebuilt-bundle discovery did not complete (<paramref name="incompleteDiscovery"/> says why), so
+    /// nobody can tell whether a module's bundle names it. Pure.
+    /// </summary>
+    public static string UnknownModuleMembershipParkReason(string nodeTypePath, string incompleteDiscovery)
+    {
+        var slash = nodeTypePath.IndexOf('/');
+        var partition = slash > 0 ? nodeTypePath[..slash] : nodeTypePath;
+        return $"Unknown module membership: NodeType '{nodeTypePath}' has never adopted a prebuilt "
+            + $"bundle and partition '{partition}' tracks no source on this mesh (no configured sync "
+            + $"source), and the prebuilt-bundle discovery for framework {LiveFrameworkMvid}/"
+            + $"{ReleaseArchitecture.Live} did not complete ({incompleteDiscovery}) — so whether a "
+            + "module's bundle names this type is unknown, and a module's content must never be "
+            + "compiled here as if it were authored. Fix: repair or remove the unreadable bundle or "
+            + $"publication, or add a sync source for '{partition}' (Partition Sync administration); "
+            + "then request a release to retry (MeshWeaver#6930).";
+    }
+
+    /// <summary>
     /// The NAMED refusal the compile watcher parks a MODULE's NodeType with when its partition
     /// tracks no source on this mesh and no prebuilt build for it landed (MeshWeaver#3583) — the
     /// sibling of <see cref="RequiredParkReason"/> for a mesh that CAN compile but must not compile
