@@ -87,6 +87,14 @@ public class AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest(ITestO
     /// </summary>
     private readonly Subject<Unit> platformTurn = new();
 
+    /// <summary>
+    /// Completed once the view's subscription to <see cref="platformTurn"/> is ATTACHED. The
+    /// placeholder alone cannot say so: <c>StartWith</c> emits it before the subject is subscribed,
+    /// and it reaches the test through another hub, so the platform could fire into a subject
+    /// nobody listens to yet and the case would time out on a correct implementation.
+    /// </summary>
+    private readonly AsyncSubject<Unit> platformTurnListening = new();
+
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => ConfigureMeshBase(builder)
@@ -142,7 +150,14 @@ public class AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest(ITestO
             .Select(_ => Unit.Default),
         // A source the framework does not own carries no reader: the VIEW restores its viewer, the
         // one obligation left to a view author (LayoutAreaHost.ViewerContext).
-        "subject" => platformTurn.CarryAccessContext(host.Hub.ServiceProvider, host.ViewerContext),
+        "subject" => Observable.Create<Unit>(observer =>
+            {
+                var listening = platformTurn.Subscribe(observer);
+                platformTurnListening.OnNext(Unit.Default);
+                platformTurnListening.OnCompleted();
+                return listening;
+            })
+            .CarryAccessContext(host.Hub.ServiceProvider, host.ViewerContext),
         _ => throw new ArgumentOutOfRangeException(nameof(trigger), trigger, null),
     };
 
@@ -244,6 +259,8 @@ public class AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest(ITestO
             // Only once the view LISTENS for the install — its placeholder is on screen — does the
             // platform install; otherwise the trigger could land before anyone waits for it.
             await texts.FirstAsync(text => text == WaitingText).Timeout(TestTimeouts.Convergence).Await(ct);
+            if (area == AfterInstallArea + "subject")
+                await platformTurnListening.Timeout(TestTimeouts.Convergence).Await(ct);
             install();
         }
 
@@ -308,6 +325,51 @@ public class AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest(ITestO
         reading.Should().Be(NothingShown,
             "the install ran as the platform, but the reads it released belong to the area's viewer, "
             + "who holds no grant on " + SecretPath);
+    }
+
+    /// <summary>
+    /// The other side of the reader rule: ONLY a person is restored. The shared mesh-node cache
+    /// hydrates every path under its own read-only identity (<c>cache/mesh-node-cache</c>). Before
+    /// this case existed, that subscription counted as a "reader", so every emission of the shared
+    /// upstream ran its callbacks as the cache. An infrastructure subscriber with no identity of
+    /// its own then wrote as the cache and was refused: "user 'cache/mesh-node-cache' lacks Update
+    /// permission". That broke prebuilt adoption in CI (#7038, run 39633454490). An
+    /// identity-less read must never inherit the cache's identity.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnInfrastructureRead_NeverRunsItsCallbackAsTheCachesOwnIdentity()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var path = Space + "/Page";
+        var seen = new ReplaySubject<(string? Name, string? Identity)>();
+
+        // A background reader: no request identity, no circuit, no host identity.
+        access.SetHostIdentity(null);
+        IDisposable subscription;
+        try
+        {
+            using (access.SwitchAccessContext(null))
+                subscription = Mesh.GetWorkspace().GetMeshNodeStream(path)
+                    .Subscribe(n => seen.OnNext((n?.Name, access.Context?.ObjectId)), seen.OnError);
+        }
+        finally
+        {
+            TestUsers.DevLogin(Mesh, Login(Keeper));
+        }
+        using var _ = subscription;
+        await seen.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        // The platform writes the page; the shared upstream emits the change.
+        using (access.ImpersonateAsSystem())
+            Mesh.GetWorkspace().GetMeshNodeStream(path).Update(node => node with { Name = InstalledName })
+                .Subscribe(_ => { }, ex => Output.WriteLine($"write failed: {ex}"));
+
+        var changed = await seen.FirstAsync(s => s.Name == InstalledName).Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"[infrastructure read] change delivered as {changed.Identity ?? "(none)"}");
+        changed.Identity.Should().NotBe("cache/mesh-node-cache",
+            "the cache's hydration identity is not a reader: restoring it would make every identity-less "
+            + "subscriber of the shared upstream act as the cache");
     }
 
     /// <summary>

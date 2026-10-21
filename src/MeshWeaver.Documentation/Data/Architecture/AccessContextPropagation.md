@@ -714,12 +714,13 @@ Each framework read surface now restores its reader around `OnNext`, `OnError` a
 
 | Surface | Reader captured | Where |
 |---|---|---|
-| `IMeshService.Query` (both overloads) | the ambient context the viewer was stamped from | `MeshService.ReaderIdentity` |
+| `IMeshService.Query` (both overloads), the anonymous refusal's empty answer included | the ambient context the viewer was stamped from | `MeshService.ReaderIdentity` |
 | `hub.GetQuery` / `workspace.GetQuery` | the context the per-user RLS filter was built for | `SyncedQueryDataSourceExtensions.WrapWithPerUserRls` |
-| `GetMeshNodeStream(path)` for another node | the caller's context | `MeshNodeStreamCache.GetStreamRaw` (already did) |
-| `GetMeshNodeStream()` for the hub's own node | the subscriber's `Context` | `MeshNodeStreamHandle.Subscribe` |
+| `GetMeshNodeStream`, own node and other nodes alike, including the late re-type a content-type registration triggers | the subscriber's `Context ?? CircuitContext` | `MeshNodeStreamHandle.Subscribe`, at the final observer |
 
-A hub-shaped principal (`sync/`, `mesh/`, `node/`, `activity/`, `portal/`) is not a reader and is never restored, and no ambient context leaves the stream unchanged. Infrastructure that subscribes with nothing ambient keeps the behaviour it had.
+The late re-type matters on its own. A NodeType compile registers its content type as the platform, and the registry announces it on the task pool from the registrant's execution context. A view that waited for typed content would otherwise make its next read as `system-security`. `LateContentTypeRegistrationTest.TheLateRetype_IsDeliveredUnderTheReadersIdentity_NotTheRegistrants` pins this. `DenyAnonymousSwitchTest.TheRefusalsEmptyAnswer_IsDeliveredToTheAnonymousReader_NotToTheSubscribingTurn` pins the refusal's empty answer.
+
+🚨 **Only a person is a reader** (`AccessService.ReaderOf`): a signed-in user, an API token, or a logged-out visitor. The platform (`system-security`), a hub, and every address-shaped infrastructure identity (`cache/…`, `sync/…`, `portal/…`, …) are never restored. No ambient context leaves the stream unchanged as well. Infrastructure therefore keeps exactly the behaviour it had. The rule is load-bearing. The shared mesh-node cache hydrates every path through `MeshNodeStreamHandle` under its own read-only identity, `cache/mesh-node-cache`. When that subscription counted as a reader, every emission of the shared upstream ran its callbacks as the cache, and an identity-less subscriber that wrote inside one was refused with "user 'cache/mesh-node-cache' lacks Update permission". Prebuilt adoption broke that way in CI. The guard case `AnInfrastructureRead_NeverRunsItsCallbackAsTheCachesOwnIdentity` pins it.
 
 🚨 **A source the framework does not own carries no reader.** That includes a view's own `Subject`, a timer, or a `Task` it converts. A view that reads inside such an emission restores its viewer itself: `source.CarryAccessContext(host.Hub.ServiceProvider, host.ViewerContext)`, or stamp the read (`MeshQueryRequest.ForViewer`). The guard's `subject` case pins that form.
 

@@ -898,8 +898,55 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
     /// content over a real one) is the bug class behind the CheckInbox /
     /// AppendUserInput silent-Status-reset failure mode. Round-trip is no-op
     /// when Content is already typed.
+    ///
+    /// <para>🚨 Every notification reaches <paramref name="observer"/> under the READER's identity
+    /// — the caller's context when it subscribed — on both the own-node and the cross-hub path,
+    /// and including the late re-type that <see cref="TypedContentObserver"/> emits from a content
+    /// type REGISTRATION (which arrives on the registrant's turn, typically a NodeType compile running
+    /// as the platform). A view that reads again inside its callback must read for its viewer, never
+    /// for whichever turn produced the notification. See Doc/Architecture/AccessContextPropagation →
+    /// "Emissions arrive as the reader".</para>
     /// </remarks>
     public IDisposable Subscribe(IObserver<MeshNode> observer)
+    {
+        AccessContext? reader;
+        IServiceProvider? services;
+        try
+        {
+            services = _workspace.Hub.ServiceProvider;
+            var access = services.GetService<AccessService>();
+            // Only a PERSON is restored (AccessService.ReaderOf). The shared cache hydrates every
+            // path through this handle under its own read-only identity, and restoring THAT would
+            // make every identity-less subscriber of the shared upstream act as the cache.
+            reader = AccessService.ReaderOf(access?.Context ?? access?.CircuitContext);
+        }
+        catch (ObjectDisposedException)
+        {
+            // A hub whose scope is already gone has no reader to restore; SubscribeCore reports the
+            // disposal to the observer exactly as before.
+            services = null;
+            reader = null;
+        }
+
+        return services is null || reader is null
+            ? SubscribeCore(observer)
+            // NOT Observable.Create: its auto-detaching observer disposes the subscription on the
+            // first OnError, which would drop this read's lease the instant the upstream faults and
+            // change who releases a faulted path's upstream (the cache's eviction does, #3110).
+            // A bare pass-through keeps the lifetime exactly as SubscribeCore defines it.
+            : new PassThrough(SubscribeCore)
+                .CarryAccessContext(services, reader)
+                .Subscribe(observer);
+    }
+
+    /// <summary>An observable that IS its subscribe function — no auto-detach, no safeguards added.</summary>
+    private sealed class PassThrough(Func<IObserver<MeshNode>, IDisposable> subscribe) : IObservable<MeshNode>
+    {
+        public IDisposable Subscribe(IObserver<MeshNode> observer) => subscribe(observer);
+    }
+
+    /// <summary>The subscription itself; <see cref="Subscribe"/> wraps it in the reader's scope.</summary>
+    private IDisposable SubscribeCore(IObserver<MeshNode> observer)
     {
         try
         {
@@ -957,20 +1004,12 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var (stream, lease) = AcquireStream();
             try
             {
-                // 🚨 Delivered under the SUBSCRIBER's identity, as the cross-hub path above already is
-                // (MeshNodeStreamCache.GetStreamRaw carries the reader's context). The own node emits
-                // on the turn that wrote it — a platform install as system-security, another person's
-                // edit as that person — and a view that reads again inside its callback must read for
-                // its viewer, never for the writer. See Doc/Architecture/AccessContextPropagation →
-                // "Emissions arrive as the reader".
-                var access = _workspace.Hub.ServiceProvider.GetService<AccessService>();
-                var reader = access?.Context;
-                if (reader is not null && AccessService.LooksLikeHubPrincipal(reader.ObjectId))
-                    reader = null;
+                // The own node emits on the turn that wrote it (a platform install as
+                // system-security, another person's edit as that person); Subscribe restores the
+                // reader around everything this delivers.
                 var subscription = stream
                     .Where(change => change.Value != null)
                     .Select(change => change.Value!)
-                    .CarryAccessContext(_workspace.Hub.ServiceProvider, reader)
                     .Subscribe(typedObserver);
                 return new CompositeDisposable(subscription, lease, typedObserver);
             }

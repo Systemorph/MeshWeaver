@@ -258,7 +258,7 @@ public static class SyncedQueryDataSourceExtensions
         // that changed the result set (a platform install, another person's edit). A view that reads
         // again inside this callback would otherwise read for the writer — see
         // Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".
-        var reader = captured is null || AccessService.LooksLikeHubPrincipal(captured.ObjectId) ? null : captured;
+        var reader = AccessService.ReaderOf(captured);
         if (accessService is null
             || string.IsNullOrEmpty(userId)
             || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))

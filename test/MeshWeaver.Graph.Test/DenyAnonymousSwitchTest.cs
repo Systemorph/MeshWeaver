@@ -306,6 +306,38 @@ public class DenyAnonymousSwitchTest(ITestOutputHelper output) : DenyAnonymousSw
         (await Mesh.GetPublicPreview("AnonOpen").FirstAsync().Timeout(TestTimeouts.Quick).Await(ct))
             .Should().BeFalse();
     }
+
+    /// <summary>
+    /// The refusal's empty answer is delivered under its READER, like every other query answer
+    /// (Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader"). The query is
+    /// built for the anonymous caller and subscribed on a platform turn: <c>Observable.Return</c>
+    /// answers on the SUBSCRIBING thread, so without the reader scope the callback ran as
+    /// <c>system-security</c>, and any read it issued would have run with the platform's grants.
+    /// </summary>
+    [Fact(Timeout = 60_000)]
+    public async Task TheRefusalsEmptyAnswer_IsDeliveredToTheAnonymousReader_NotToTheSubscribingTurn()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+
+        IObservable<QueryResultChange<MeshNode>> query;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous }))
+            query = mesh.Query<MeshNode>(MeshQueryRequest.FromQuery("path:AnonOpen/Page"));
+
+        var answeredAs = new System.Reactive.Subjects.ReplaySubject<(int Count, string? Identity)>(1);
+        IDisposable subscription;
+        using (access.ImpersonateAsSystem())
+            subscription = query.Take(1).Subscribe(
+                change => answeredAs.OnNext((change.Items.Count(), access.Context?.ObjectId)),
+                answeredAs.OnError);
+        using var _ = subscription;
+
+        var answer = await answeredAs.FirstAsync().Timeout(TestTimeouts.Quick).Await(ct);
+        answer.Count.Should().Be(0, "the anonymous caller is refused: one empty Initial");
+        answer.Identity.Should().Be(WellKnownUsers.Anonymous,
+            "the answer belongs to the anonymous reader the query was built for, not to the platform turn that subscribed it");
+    }
 }
 
 /// <summary>

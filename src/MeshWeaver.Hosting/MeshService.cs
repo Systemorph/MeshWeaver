@@ -356,7 +356,9 @@ internal sealed class MeshService(
     public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
-        return RefusesAnonymousViewer(ViewerOf(request, stamped))
+        // The reader scope covers BOTH answers: the refusal's empty Initial is delivered on the
+        // SUBSCRIBING turn, which need not be the reader's.
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped))
             // One definitive, empty Initial read from NO partition — an answer, not silence, so a
             // consumer waiting on the Initial is released rather than parked.
             ? Observable.Return(new QueryResultChange<T>
@@ -365,7 +367,7 @@ internal sealed class MeshService(
                 Items = [],
                 Partitions = [],
             })
-            : _query.Query<T>(stamped).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
+            : _query.Query<T>(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     public IObservable<T?> Select<T>(string path, string property)
@@ -376,9 +378,9 @@ internal sealed class MeshService(
     public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request)
     {
         var stamped = StampViewer(request);
-        return RefusesAnonymousViewer(ViewerOf(request, stamped))
+        return (RefusesAnonymousViewer(ViewerOf(request, stamped))
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : _query.Query(stamped).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
+            : _query.Query(stamped)).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     /// <summary>
@@ -391,15 +393,12 @@ internal sealed class MeshService(
     /// (<c>query.SelectMany(_ => mesh.Query(…))</c>, the shape of every view that waits for content)
     /// then resolves that read for the WRITER, and shows the viewer what only the writer may read.
     /// Restoring the reader's identity around each emission keeps the callback, and every read and
-    /// write it issues, on the reader's own grants. A hub-shaped principal is not a reader and is
-    /// not restored; no ambient context passes the stream through unchanged.
+    /// write it issues, on the reader's own grants. Only a person is a reader
+    /// (<see cref="AccessService.ReaderOf"/>): the platform and infrastructure identities pass the
+    /// stream through unchanged, as does no ambient context.
     /// See Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".</para>
     /// </summary>
-    private AccessContext? ReaderIdentity()
-    {
-        var context = CaptureContext();
-        return context is null || AccessService.LooksLikeHubPrincipal(context.ObjectId) ? null : context;
-    }
+    private AccessContext? ReaderIdentity() => AccessService.ReaderOf(CaptureContext());
 
     /// <summary>
     /// 🚨 The READ half of the instance-level anonymous switch (<c>Access:DenyAnonymous</c> —
