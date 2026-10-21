@@ -653,6 +653,129 @@ rm -rf "$_kve_state"
 refuses_hard "kv-ensure refuses a values-half release with a metacharacter" "is not a plain name" \
   hosting-kv-ensure --vault V --namespace n --values-half 'acme;id'
 unset _kve_half _kve_cs
+echo "── hosting-kv-values-set: change named keys in the values half, keep the rest, never show a value ──"
+# The governed key-level writer of helm-values-<release> (Memex#647 follow-up). Before it, nothing
+# could change the value of a key already in the half, so a rotated connection string kept its stale
+# copy there. Asserted: only the named, DECLARED keys change; every other leaf, half and family —
+# a multi-line PEM included — is byte-identical; values travel in HOSTING_SECRETS and reach az through
+# --file; no value is printed or put on an argv; and each refusal writes nothing. Every positive case
+# has a negative control beside it.
+KVV_STUBS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/stubs/kv-values-set" && pwd)"
+kvv_fixture() { # <state dir> — the captured-half shape: a family, both halves, a PEM block scalar
+  printf 'pgbackrest:\n  azure:\n    accountKey: PGB-NEVER-PRINTED\n  retention: 7\nsecrets:\n  memex_portal:\n    ConnectionStrings__memex: OLD-CS-NEVER-PRINTED\n    Apple__PrivateKey: |\n      -----BEGIN-----\n      PEM-NEVER-PRINTED\n      -----END-----\n    memex_postgres_password: OLD-PW-NEVER-PRINTED\n  memex_migration:\n    ConnectionStrings__memex: OLD-CS-NEVER-PRINTED\n    memex_postgres_password: OLD-PW-NEVER-PRINTED\n' > "$1/half"
+  echo 1 > "$1/version"
+}
+kvv() { # <env…> -- <args…>
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+  shift
+  _kvv_state="$(mktemp -d)"; kvv_fixture "$_kvv_state"
+  _kvv_out="$(env "${envs[@]}" PATH="$KVV_STUBS:$PATH" HOSTING_KVV_STATE="$_kvv_state" hosting-kv-values-set "$@" 2>&1)"; _kvv_rc=$?
+  _kvv_log="$(cat "$_kvv_state/az.log" 2>/dev/null || true)"
+}
+kvv_secrets() { printf '%s' "$1" | base64 | tr -d '\n'; }
+KVV_DECL=(--vault Systemorph --release acme --declared ConnectionStrings__memex,ConnectionStrings__orleans,MEMEX_PASSWORD,Apple__PrivateKey)
+KVV_NEW_CS="Host=new.example.invalid;Password=NEW-CS-NEVER-PRINTED"
+
+kvv HOSTING_SECRETS="$(kvv_secrets "{\"values-half:ConnectionStrings__memex\":\"${KVV_NEW_CS}\",\"acme-db-connection\":\"OTHER-STEP-NEVER-PRINTED\"}")" \
+  -- "${KVV_DECL[@]}" --key ConnectionStrings__memex --set-by admin@example.com
+_kvv_half="$_kvv_state/half"
+if [ "$_kvv_rc" -eq 0 ] \
+   && [ "$(jq -r '.secrets.memex_portal.ConnectionStrings__memex' "$_kvv_half")" = "$KVV_NEW_CS" ] \
+   && [ "$(jq -r '.secrets.memex_migration.ConnectionStrings__memex' "$_kvv_half")" = "$KVV_NEW_CS" ]; then
+  ok "kv-values-set changes a declared key in EVERY half that carries it"
+else
+  bad "kv-values-set changes the key in both halves" "rc=${_kvv_rc} out: ${_kvv_out} half: $(cat "$_kvv_half")"
+fi
+if [ "$(jq -r '.secrets.memex_portal.Apple__PrivateKey' "$_kvv_half" 2>/dev/null)" = "$(printf -- '-----BEGIN-----\nPEM-NEVER-PRINTED\n-----END-----\n')" ] \
+   && [ "$(jq -r '.secrets.memex_portal.memex_postgres_password' "$_kvv_half" 2>/dev/null)" = "OLD-PW-NEVER-PRINTED" ] \
+   && [ "$(jq -r '.pgbackrest.azure.accountKey' "$_kvv_half" 2>/dev/null)" = "PGB-NEVER-PRINTED" ] \
+   && [ "$(jq -r '.pgbackrest.retention | type' "$_kvv_half" 2>/dev/null)" = "number" ]; then
+  ok "…every other leaf, family and the multi-line PEM are byte-identical (types kept)"
+else
+  bad "the rest of the half is kept" "half: $(cat "$_kvv_half")"
+fi
+case "$_kvv_out$_kvv_log" in *NEVER-PRINTED*) bad "…and no value is printed or put on an argv" "out: ${_kvv_out} az: ${_kvv_log}" ;; *) ok "…and no value is printed or put on an argv" ;; esac
+case "$_kvv_log" in *"secret set --vault-name Systemorph --name helm-values-acme --file "*) ok "…the half reaches az through --file" ;; *) bad "the half reaches az through --file" "az saw: ${_kvv_log}" ;; esac
+case "$(cat "$_kvv_state/tags.2" 2>/dev/null)" in *"mw-set-by=admin@example.com"*"mw-source=values-set"*) ok "…tagged with who asked and the values-set source" ;; *) bad "tags" "set: $(cat "$_kvv_state/tags.2" 2>/dev/null)" ;; esac
+case "$_kvv_out" in *"::hosting:: kv_values_set=ConnectionStrings__memex:"*"::hosting:: kv_values_half=updated"*"::hosting:: kv_values_set_count=1"*) ok "…reported by NAME with a fingerprint, the verdict and the count" ;; *) bad "facts" "said: ${_kvv_out}" ;; esac
+case "$_kvv_out" in *"next Reconcile or Roll"*) ok "…and says the pods read it only at the next Reconcile or Roll" ;; *) bad "names when the pods read it" "said: ${_kvv_out}" ;; esac
+case "$_kvv_out" in *"still-undeclared: pgbackrest"*) ok "…naming (not fixing) drift it did not cause" ;; *) bad "names pre-existing drift" "said: ${_kvv_out}" ;; esac
+rm -rf "$_kvv_state"
+
+# A multi-line VALUE is stored intact, and a declared key no half carries yet lands in memex_portal only
+# (the migration reads only the mesh string and the password).
+kvv HOSTING_SECRETS="$(kvv_secrets '{"values-half:Apple__PrivateKey":"-----BEGIN-----\nNEW-PEM-NEVER-PRINTED\n-----END-----\n"}')" \
+  -- "${KVV_DECL[@]}" --key Apple__PrivateKey
+[ "$_kvv_rc" -eq 0 ] && [ "$(jq -r '.secrets.memex_portal.Apple__PrivateKey' "$_kvv_state/half")" = "$(printf -- '-----BEGIN-----\nNEW-PEM-NEVER-PRINTED\n-----END-----\n')" ] \
+  && ok "a multi-line value is stored intact" || bad "a multi-line value is stored intact" "rc=${_kvv_rc} out: ${_kvv_out}"
+[ "$(jq -r '.secrets.memex_migration | has("Apple__PrivateKey")' "$_kvv_state/half")" = "false" ] \
+  && ok "…and only where the half carries the leaf (the migration's half is untouched)" || bad "the migration half is untouched" "half: $(cat "$_kvv_state/half")"
+rm -rf "$_kvv_state"
+
+# 🚨 NEGATIVE CONTROL: an UNDECLARED key is refused and nothing is read or written.
+kvv HOSTING_SECRETS="$(kvv_secrets '{"values-half:Stripe__ApiKey":"S-NEVER-PRINTED"}')" -- "${KVV_DECL[@]}" --key Stripe__ApiKey
+if [ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] && printf '%s' "$_kvv_out" | grep -q 'not declared in the record'; then
+  ok "an undeclared key is refused, naming it, and nothing is written"
+else
+  bad "an undeclared key is refused" "rc=${_kvv_rc} out: ${_kvv_out}"
+fi
+case "$_kvv_log" in *download*|*"secret set"*) bad "…before anything is read" "az saw: ${_kvv_log}" ;; *) ok "…before anything is read" ;; esac
+rm -rf "$_kvv_state"
+
+# A key with no value handed over: refused, nothing written (the other-key value does not count).
+kvv HOSTING_SECRETS="$(kvv_secrets '{"values-half:MEMEX_PASSWORD":"P-NEVER-PRINTED"}')" -- "${KVV_DECL[@]}" --key ConnectionStrings__memex --key MEMEX_PASSWORD
+[ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] && printf '%s' "$_kvv_out" | grep -q 'no value was handed over for ConnectionStrings__memex' \
+  && ok "a named key with no handed-over value refuses the whole write" || bad "missing value refuses" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+# The vault-object entry of the same name is NOT a values-half value (prefix keeps them apart).
+kvv HOSTING_SECRETS="$(kvv_secrets '{"ConnectionStrings__memex":"X-NEVER-PRINTED"}')" -- "${KVV_DECL[@]}" --key ConnectionStrings__memex
+[ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] \
+  && ok "…and an unprefixed entry is never read as a values-half value" || bad "unprefixed entry ignored" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+
+# The derived orleans string is refused while no half carries it — writing a first copy would freeze
+# the chart's derivation from ConnectionStrings__memex.
+kvv HOSTING_SECRETS="$(kvv_secrets '{"values-half:ConnectionStrings__orleans":"O-NEVER-PRINTED"}')" -- "${KVV_DECL[@]}" --key ConnectionStrings__orleans
+[ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] && printf '%s' "$_kvv_out" | grep -q 'derived by the chart from ConnectionStrings__memex' \
+  && ok "a derived key no half carries is refused, naming its source" || bad "derived key refused" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+
+# An ABSENT half is refused — composing one is the Provision's job. (Control: the present case above.)
+kvv HOSTING_KVV_ABSENT=1 HOSTING_SECRETS="$(kvv_secrets "{\"values-half:ConnectionStrings__memex\":\"${KVV_NEW_CS}\"}")" -- "${KVV_DECL[@]}" --key ConnectionStrings__memex
+[ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] && printf '%s' "$_kvv_out" | grep -q 'hosting-kv-ensure --values-half' \
+  && ok "an absent half is refused, naming the step that composes one" || bad "absent half refused" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+
+# LOST UPDATE: another writer stores a version between the read and the write → refused, nothing written.
+kvv HOSTING_KVV_RACE=2 HOSTING_SECRETS="$(kvv_secrets "{\"values-half:ConnectionStrings__memex\":\"${KVV_NEW_CS}\"}")" -- "${KVV_DECL[@]}" --key ConnectionStrings__memex
+[ "$_kvv_rc" -ne 0 ] && [ ! -f "$_kvv_state/sets" ] && printf '%s' "$_kvv_out" | grep -q 'another writer stored a version' \
+  && ok "a version stored by another writer mid-run refuses the write" || bad "lost-update guard" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+
+# READ-BACK: a write the vault acknowledges but does not keep is a failure, not a success.
+kvv HOSTING_KVV_LOSE=1 HOSTING_SECRETS="$(kvv_secrets "{\"values-half:ConnectionStrings__memex\":\"${KVV_NEW_CS}\"}")" -- "${KVV_DECL[@]}" --key ConnectionStrings__memex
+[ "$_kvv_rc" -ne 0 ] && printf '%s' "$_kvv_out" | grep -q 'read-back does not carry the handed-over value for: ConnectionStrings__memex' \
+  && ! printf '%s' "$_kvv_out" | grep -q 'kv_values_half=updated' \
+  && ok "a write the read-back does not show is a named failure, never reported updated" || bad "read-back failure" "rc=${_kvv_rc} out: ${_kvv_out}"
+rm -rf "$_kvv_state"
+
+# A dry run reads no value and writes nothing.
+kvv HOSTING_DRY_RUN=true -- "${KVV_DECL[@]}" --key ConnectionStrings__memex
+[ "$_kvv_rc" -eq 0 ] && [ -z "$_kvv_log" ] && printf '%s' "$_kvv_out" | grep -q 'would change ConnectionStrings__memex in helm-values-acme' \
+  && ok "a dry run narrates the change and calls nothing" || bad "dry run" "rc=${_kvv_rc} out: ${_kvv_out} az: ${_kvv_log}"
+rm -rf "$_kvv_state"
+
+refuses_hard "kv-values-set needs --vault"     "missing required flag --vault"    hosting-kv-values-set --release acme --declared A --key A
+refuses_hard "kv-values-set needs --release"   "missing required flag --release"  hosting-kv-values-set --vault V --declared A --key A
+refuses_hard "kv-values-set needs --declared"  "missing required flag --declared" hosting-kv-values-set --vault V --release acme --key A
+refuses_hard "kv-values-set needs --key"       "missing required flag --key"      hosting-kv-values-set --vault V --release acme --declared A
+refuses_hard "kv-values-set refuses a release with a metacharacter" "is not a plain name" hosting-kv-values-set --vault V --release 'acme;id' --declared A --key A
+refuses_hard "kv-values-set refuses a key that is not an env-key name" "is not an env-key name" hosting-kv-values-set --vault V --release acme --declared A --key 'A;id'
+refuses_hard "kv-values-set refuses a --set-by that is not a principal" "is not a principal name" hosting-kv-values-set --vault V --release acme --declared A --key A --set-by 'a b'
+refuses_hard "kv-values-set needs HOSTING_SECRETS" "HOSTING_SECRETS is empty" env -u HOSTING_SECRETS hosting-kv-values-set --vault V --release acme --declared A --key A
+refuses_hard "kv-values-set rejects unknown flags" "unknown argument" hosting-kv-values-set --vault V --release acme --declared A --key A --nope 1
+unset _kvv_out _kvv_rc _kvv_log _kvv_state _kvv_half
 echo "── hosting-registry-register: issue the instance key once, prove it, never show it ──"
 # MeshWeaver.Plugins#1720 — hosting-kv-ensure REQUIRES <prefix>PluginCatalog-RegistryToken and
 # nothing issued it: runbook step 2 was a hand curl + az. The registry stub answers

@@ -89,6 +89,20 @@ The verbs are `hosting-kv-set` (set, `--generate`), `hosting-kv-status` (status 
 already soft-deleted). Their behaviour tests run against a stub `az` that plays the writer: it **refuses**
 `secret show`, so a verb that reads a value is red in CI.
 
+### The one write that has to read: a key inside the values half
+
+`helm-values-<release>` is ONE vault object holding many values (the chart's own Secret, see
+[Deployment env layers](../DeploymentEnvLayers) → *Changing a key in the half*). Changing one key in it
+means reading the others, so `hosting-kv-values-set` cannot run as the writer identity: it is a
+read-modify-write and runs as `hosting-operator`, listed **TRANSITIONAL** in
+`.github/manual-keyvault.allow` beside the half's two other readers (`hosting-kv-ensure`,
+`hosting-deploy`), and it retires with the half. Everything else on this page still holds for it:
+the value arrives encrypted on a governed `SetSecrets` action, parks for a second administrator's
+approval, reaches the Job only in its environment (`HOSTING_SECRETS`, entries keyed
+`values-half:<key>`), is written through `--file`, is never printed, and is scrubbed off the node.
+Only keys the record declares in `vaultValuesKeys` are accepted. A `SetSecrets` that carries such a
+key states on its node that its Job ran as the operator identity, and why.
+
 ### Where the writer Job runs, and what fences it
 
 The writer Job runs in a namespace of its own, `memex-secrets`, as the ServiceAccount
