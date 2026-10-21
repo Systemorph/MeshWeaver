@@ -2118,6 +2118,22 @@ never delivered, on the node stream of a stored type and on a direct subscriptio
 subscription ended at the expiry; a link that is not revoked still streaming, as the negative
 control).
 
+**What a follow holds belongs to its subscription, never to the node hub.** The follow's standing
+Read is decided once and replayed to every later revision of the same subscription. Its connection
+is released when the followed sequence ends (`ClientReadFollow.Lifetime`), on a refusal, a
+completion or an unsubscribe. It used to be registered on the node hub, and a hub registration
+lives until the hub shuts down, so every open-and-close of a direct subscription on a long-lived
+node hub retained one. Measured: 20 closed followed subscriptions grew the owner's disposal
+registry by exactly 20 before, and by 0 after
+(`OpenSubscriptionEndsWithTheReadTest.ClosedFollowedSubscriptions_DoNotGrowTheOwnerHubsDisposalRegistry`).
+
+**The follow runs as the subscriber, and only the follow does.** The owner hub's own work never
+takes the subscriber's identity: a watcher on the node reacts to each write as its writer (or as
+System, or a hub credential), with a direct subscriber followed or not
+(`FollowedSubscriptionOwnerIdentityTest`). Two seeded leaks did not turn that test red, so it pins
+the outcome for a direct subscriber and does not reproduce the shape measured in MeshWeaver.Plugins
+for a stream the node-stream cache opened (that shape is excluded from the follow).
+
 | Seam | Point read? | Consults the declaration |
 |---|---|---|
 | The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |

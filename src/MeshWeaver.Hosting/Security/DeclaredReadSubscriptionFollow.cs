@@ -100,6 +100,7 @@ public static class DeclaredReadSubscriptionFollow
         // — a fault, a timeout, an empty answer — refuses outright. Folding undetermined into "no
         // standing Read" handed the decision to the declaration, which could then admit a caller
         // whose check had failed: the one re-decision no seam may make.
+        var lifetime = new System.Reactive.Disposables.CompositeDisposable();
         var standing = DeclaredPointRead.ObserveStandardRead(owner, hubPath, caller)
             .Take(1)
             .Catch((Exception ex) =>
@@ -109,7 +110,13 @@ public static class DeclaredReadSubscriptionFollow
             })
             .DefaultIfEmpty(PermissionCheckOutcome.Undetermined($"the standing Read on '{hubPath}' answered nothing"))
             .Replay(1)
-            .AutoConnectOwnedBy(owner, nameof(DeclaredReadSubscriptionFollow));
+            // 🚨 Owned by THIS subscription, never by the owner hub (review of #7016, thread
+            // 4338167103): the hub overload registers a fresh composite on the hub for every follow,
+            // and a hub registration is never removed before the hub shuts down — so every
+            // subscribe/unsubscribe cycle on a long-lived node hub retained one. The connection is
+            // released when the followed sequence ends (ClientReadFollow.Lifetime); the settled
+            // verdict still replays to every later revision of the same subscription.
+            .AutoConnectOwnedBy(lifetime, owner.ServiceProvider.GetRequiredService<ReleaseLane>(), nameof(DeclaredReadSubscriptionFollow));
 
         return new ClientReadFollow(
             revision => standing
@@ -119,7 +126,8 @@ public static class DeclaredReadSubscriptionFollow
                         ? Observable.Return(false)
                         : DeclaredRead(owner, hubPath, caller, shape, revision, logger))
                 .Switch(),
-            budget);
+            budget,
+            lifetime);
     }
 
     /// <summary>

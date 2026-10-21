@@ -258,6 +258,56 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         Assert.Null(MeshWeaver.Hosting.Security.DeclaredReadSubscriptionFollow.Follow(owner, fromTheCache));
     }
 
+    /// <summary>
+    /// 🚨 Review of #7016, thread 4338167103: the follow's shared standing-Read verdict is owned by
+    /// the SUBSCRIPTION, never by the owner hub. Its connection used to be registered on the node hub
+    /// through the hub overload of <c>AutoConnectOwnedBy</c> — one composite per followed subscribe,
+    /// removed only when the hub shut down — so every open/close cycle of a direct subscription on a
+    /// long-lived node hub retained one registrant. Measured here: a run of closed followed
+    /// subscriptions leaves the owner's disposal registry where it was.
+    /// </summary>
+    [HubFact]
+    public async Task ClosedFollowedSubscriptions_DoNotGrowTheOwnerHubsDisposalRegistry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("cycled-link", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        var visitor = ClientAs(Visitor);
+        // One cycle first, so whatever the owner registers once per hub (not per subscription) exists.
+        await OpenAndClose(visitor, link, ct);
+        var owner = (MessageHub)OwnerOf(link);
+        var before = owner.DisposalRegistrantCount;
+
+        const int cycles = 20;
+        for (var i = 0; i < cycles; i++)
+            await OpenAndClose(visitor, link, ct);
+
+        var grown = owner.DisposalRegistrantCount - before;
+        Output.WriteLine($"owner disposal registrants: {before} before, {owner.DisposalRegistrantCount} after {cycles} closed followed subscriptions");
+        // Other services may register with the same hub meanwhile, so the bound is loose — but far
+        // below one registrant per closed subscription.
+        Assert.True(grown < cycles / 2,
+            $"{cycles} closed followed subscriptions must not each leave a registrant on the owner hub — the registry grew by {grown}");
+    }
+
+    /// <summary>Opens a direct visitor subscription to <paramref name="path"/>, waits for the node, closes it, and waits until the owner no longer serves it.</summary>
+    private async Task OpenAndClose(IMessageHub client, string path, CancellationToken ct)
+    {
+        var stream = ((Workspace)client.GetWorkspace()).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(new Address(path), new MeshNodeReference());
+        var streamId = stream.StreamId;
+        await stream.Select(change => change.Value).Where(node => node is not null).Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var ownerWorkspace = (Workspace)OwnerOf(path).GetWorkspace();
+        Assert.True(ownerWorkspace.ServesClientSubscription(client.Address, streamId),
+            "PRECONDITION: the owner serves the direct subscription while it is open");
+        stream.Dispose();
+        await Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
+            .Select(_ => ownerWorkspace.ServesClientSubscription(client.Address, streamId))
+            .Where(serves => !serves)
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+    }
+
     /// <summary>The follow a direct visitor subscription to <paramref name="path"/> gets on its owner, and the stored node.</summary>
     private async Task<(MeshWeaver.Data.Serialization.ClientReadFollow follow, MeshNode node)> FollowAs(string path, CancellationToken ct)
     {

@@ -2129,7 +2129,10 @@ public static class JsonSynchronizationStream
         }
         if (follow is null)
             return null;
-        return reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal);
+        var followed = reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal);
+        // What the follow holds for this subscription ends with it — on a refusal, on completion and
+        // on unsubscribe alike (review of #7016, thread 4338167103).
+        return follow.Lifetime is { } lifetime ? followed.Finally(lifetime.Dispose) : followed;
     }
 
     /// <summary>Ends a server-side stream whose subscriber's read was refused: unregistered first, then disposed through its own sync hub.</summary>

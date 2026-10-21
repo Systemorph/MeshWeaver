@@ -26,7 +26,11 @@ public delegate ClientReadFollow? ClientSubscriptionReadAdmission(
 /// <summary>How a followed client subscription decides each revision it serves.</summary>
 /// <param name="VerdictOf">The live verdict for one served revision (the reduced value, e.g. the node itself).</param>
 /// <param name="FirstVerdictBudget">How long a revision's first verdict may take; a stalled one is a refusal.</param>
-public sealed record ClientReadFollow(Func<object?, IObservable<bool>> VerdictOf, TimeSpan FirstVerdictBudget);
+/// <param name="Lifetime">What the follow holds for THIS subscription (a shared verdict's connection), released
+/// when the followed sequence ends, however it ends — never registered on the owning hub, whose
+/// registrations live as long as the hub does (review of #7016, thread 4338167103). Null when it holds nothing.</param>
+public sealed record ClientReadFollow(
+    Func<object?, IObservable<bool>> VerdictOf, TimeSpan FirstVerdictBudget, IDisposable? Lifetime = null);
 
 /// <summary>Registers the <see cref="ClientSubscriptionReadAdmission"/> a hub's owner-side subscriptions follow.</summary>
 public static class ClientSubscriptionReadAdmissionExtensions
