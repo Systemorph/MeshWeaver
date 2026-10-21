@@ -696,6 +696,36 @@ When this fires:
 
 ---
 
+## Emissions arrive as the reader
+
+**A mesh read delivers every emission under the identity of the caller who opened it, never under the identity of the turn that produced the change.** A stream emits on whatever turn wrote: a platform install running as `system-security`, a migration, another person's edit. That turn's identity is ambient while the subscriber's callback runs. A callback that reads again therefore reads for the WRITER unless the source restores its reader first.
+
+The shape this bites is the commonest one a layout area has: wait for content, then read.
+
+```csharp
+mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{course} scope:children"))
+    .Where(change => change.Items.Any(n => n.Id == "Intro"))
+    .SelectMany(_ => mesh.Query<MeshNode>(...))   // runs inside the install's emission
+```
+
+The first read is issued while the area renders, under its viewer (`LayoutAreaHost` restores the subscriber's identity for the render). The second is issued inside the emission. Before the fix that emission arrived as `system-security` when the platform installed the course on demand, so the second read, and every read after it, ran as the platform. The person saw nodes they hold no grant on. `AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest` (MeshWeaver.Graph.Test) measured it through all three read surfaces at once.
+
+Each framework read surface now restores its reader around `OnNext`, `OnError` and `OnCompleted` (`CarryAccessContext` with the identity captured with the read):
+
+| Surface | Reader captured | Where |
+|---|---|---|
+| `IMeshService.Query` (both overloads), the anonymous refusal's empty answer included | the ambient context the viewer was stamped from | `MeshService.ReaderIdentity` |
+| `hub.GetQuery` / `workspace.GetQuery` (the per-user RLS filter itself runs under the reader too, because the evaluator reads the ambient `IsVirtual` / `IsApiToken`) | the context the per-user RLS filter was built for | `SyncedQueryDataSourceExtensions.WrapWithPerUserRls` |
+| `GetMeshNodeStream`, own node and other nodes alike, including the late re-type a content-type registration triggers | the subscriber's `Context ?? CircuitContext` | `MeshNodeStreamHandle.Subscribe`, at the final observer |
+
+The late re-type matters on its own. A NodeType compile registers its content type as the platform, and the registry announces it on the task pool from the registrant's execution context. A view that waited for typed content would otherwise make its next read as `system-security`. `LateContentTypeRegistrationTest.TheLateRetype_IsDeliveredUnderTheReadersIdentity_NotTheRegistrants` pins this. `DenyAnonymousSwitchTest.TheRefusalsEmptyAnswer_IsDeliveredToTheAnonymousReader_NotToTheSubscribingTurn` pins the refusal's empty answer.
+
+🚨 **Only a person is a reader** (`AccessService.ReaderOf`): a signed-in user, an API token, or a logged-out visitor. A context with an EMPTY `ObjectId` counts too, because it is the anonymous visitor. The platform (`system-security`), a hub, and every address-shaped infrastructure identity (`cache/…`, `sync/…`, `portal/…`, …) are never restored. No ambient context leaves the stream unchanged as well. Infrastructure therefore keeps exactly the behaviour it had. The rule is load-bearing. The shared mesh-node cache hydrates every path through `MeshNodeStreamHandle` under its own read-only identity, `cache/mesh-node-cache`. When that subscription counted as a reader, every emission of the shared upstream ran its callbacks as the cache, and an identity-less subscriber that wrote inside one was refused with "user 'cache/mesh-node-cache' lacks Update permission". Prebuilt adoption broke that way in CI. The guard case `AnInfrastructureRead_NeverRunsItsCallbackAsTheCachesOwnIdentity` pins it.
+
+🚨 **A source the framework does not own carries no reader.** That includes a view's own `Subject`, a timer, or a `Task` it converts. A view that reads inside such an emission restores its viewer itself: `source.CarryAccessContext(host.Hub.ServiceProvider, host.ViewerContext)`, or stamp the read (`MeshQueryRequest.ForViewer`). The guard's `subject` case pins that form.
+
+Opening an area under the wrong ambient identity is a different case, and it is safe. On a portal circuit the `SubscribeRequest` carries the circuit user, because `PortalApplication.DefaultPortalConfig`'s outermost post step stamps it. The owner renders for the identity on the subscribe, not for the identity on the thread that opened the area. The guard's instrument check removes that step and shows that the render then runs as the platform, so the step is load-bearing.
+
 ## `IMeshNodeStreamCache.GetStream` is access-checked
 
 Beyond ensuring writes preserve user identity, reads through the process-wide `IMeshNodeStreamCache` are also gated by the caller's effective Read permission on the path.
