@@ -82,11 +82,16 @@ public static class DefaultNodeNavigation
         var root = IndexRoot(currentPath);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
+        // The reader, captured NOW: the tie legs and the probes are opened later, inside live
+        // emissions that run off the reader's delivery with no ambient identity, so every read is
+        // stamped with this viewer explicitly (LayoutAreaHost.ViewerContext).
+        var viewer = host.ViewerContext;
         // 🚨 NEVER the whole partition (policy explorer-navigation). One DIRECT-CHILDREN read per
         // level on the reader's path — the root's children, each ancestor's children, the page's
         // own children — so the cost grows with the page's DEPTH, never with the size of the
-        // space. A folder off the path is listed but not opened; the reader drills into it by
-        // opening it, and its level loads on that page.
+        // space. A folder off the path is listed but not opened: one bounded probe per such line
+        // (ChildProbeQuery, one row) decides whether it offers an expander, and its level loads
+        // only when the reader opens it (SuppliedNavigationRail.FolderArea) or the page.
         // A level SHOWS at most LevelCap entries; "Load more" raises ONE level's cap by MoreStep
         // through the page's own ?more={level}:{n} parameter, "Show all" opens the level in the
         // mesh search, and ?sort={level}:{mode} re-sorts ONE level (the dropdown on its heading).
@@ -107,29 +112,7 @@ public static class DefaultNodeNavigation
         // window. A two-key order is several legs whose union holds the first Cap + 1 rows of the
         // combined order — see LevelQueries and TieLegQuery for why each leg is there.
         IObservable<(string Level, LevelRows Rows)> Level(string ns)
-        {
-            var levelSort = SortOf(ns);
-            var cap = CapOf(ns);
-            IObservable<ImmutableDictionary<string, MeshNode>> Read(string query) =>
-                meshService
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
-                    .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
-                    // Each leg paints on its own: a slow leg never holds the others back.
-                    .StartWith(ImmutableDictionary<string, MeshNode>.Empty);
-            var legs = LevelQueries(ns, levelSort, cap).Select(Read).ToImmutableList();
-            // The Order leg is clipped by Order ALONE, so rows sharing the Order value at its cut
-            // are cut by path, not by recency. The tie leg re-reads exactly that value newest
-            // first, once the Order leg says which value it is.
-            if (IsDefaultOrder(levelSort))
-                legs = legs.Add(legs[0]
-                    .Select(rows => TieOrder(rows.Values, cap))
-                    .DistinctUntilChanged()
-                    .Select(tie => tie is { } order
-                        ? Read(TieLegQuery(ns, order, cap))
-                        : Observable.Return(ImmutableDictionary<string, MeshNode>.Empty))
-                    .Switch());
-            return legs.CombineLatest().Select(read => (ns, LevelRows.Of(levelSort, read)));
-        }
+            => ReadLevel(meshService, ns, SortOf(ns), CapOf(ns), viewer).Select(rows => (ns, rows));
         var pathLevels = PathLevels(root, currentPath);
         var levels = pathLevels.Select(Level).ToImmutableList();
         // The reader's own branch: every node on the path below the root, read BY PATH (one light
@@ -138,8 +121,8 @@ public static class DefaultNodeNavigation
         // or the branch the reader is on would vanish and its children would have no parent.
         IObservable<MeshNode?> Anchor(string path) =>
             meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{path} select:{SelectFields}"))
+                .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(
+                    $"path:{path} select:{SelectFields}"), viewer))
                 .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
                 .Select(rows => rows.TryGetValue(path, out var row) ? row : null)
                 .StartWith((MeshNode?)null);
@@ -201,11 +184,214 @@ public static class DefaultNodeNavigation
                     var nodes = RenderedRows(
                         shown.Select(l => (l.Visible, l.Cap)),
                         onPath.OfType<MeshNode>().Concat(rootRow is null ? [] : [rootRow]));
-                    return Build(root, nodes, currentPath, views, labels);
-                })),
+                    return (Nodes: nodes, Views: views);
+                })
+                // A folder OFF the reader's path is listed but not opened — yet whether it has
+                // children decides whether its line offers an expander. One bounded probe per such
+                // line (FolderProbes), re-subscribed only when the set of lines changes; shared, so
+                // the levels are read once for both halves.
+                .Publish(tree => tree.CombineLatest(
+                    FolderProbes(meshService, tree.Select(t => UnloadedFolders(t.Nodes, root, pathLevels)), viewer, logger),
+                    (t, withChildren) => Build(root, t.Nodes, currentPath, t.Views, labels, withChildren)))),
             ex => logger?.LogWarning(ex,
                 "The default index query for {Root} faulted — the page renders without its index",
                 root));
+    }
+
+    /// <summary>
+    /// ONE level of the index, read as <see cref="LevelQueries"/> says: every leg bounded to
+    /// <paramref name="cap"/> + 1 rows, ordered by the store, each painting on its own — plus, for
+    /// the default order, the TIE leg once the Order leg names its cut value.
+    /// </summary>
+    private static IObservable<LevelRows> ReadLevel(
+        IMeshService meshService, string ns, string levelSort, int cap, AccessContext? viewer)
+    {
+        IObservable<ImmutableDictionary<string, MeshNode>> Read(string query) =>
+            meshService
+                .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(query), viewer))
+                .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+                // Each leg paints on its own: a slow leg never holds the others back.
+                .StartWith(ImmutableDictionary<string, MeshNode>.Empty);
+        var legs = LevelQueries(ns, levelSort, cap).Select(Read).ToImmutableList();
+        // The Order leg is clipped by Order ALONE, so rows sharing the Order value at its cut
+        // are cut by path, not by recency. The tie leg re-reads exactly that value newest
+        // first, once the Order leg says which value it is.
+        if (IsDefaultOrder(levelSort))
+            legs = legs.Add(legs[0]
+                .Select(rows => TieOrder(rows.Values, cap))
+                .DistinctUntilChanged()
+                .Select(tie => tie is { } order
+                    ? Read(TieLegQuery(ns, order, cap))
+                    : Observable.Return(ImmutableDictionary<string, MeshNode>.Empty))
+                .Switch());
+        return legs.CombineLatest().Select(read => LevelRows.Of(levelSort, read));
+    }
+
+    /// <summary>
+    /// The query that tells whether <paramref name="folder"/> has a visible child — at most ONE
+    /// light row, internal <c>_</c> entries excluded as in a level read. Pure.
+    /// </summary>
+    /// <param name="folder">The node whose children are probed.</param>
+    public static string ChildProbeQuery(string folder)
+        => $"namespace:{folder} is:main -id:_* select:path limit:1";
+
+    /// <summary>
+    /// The rendered rows whose children the index has NOT loaded — every row that is neither the
+    /// root nor a level on the reader's path (<see cref="PathLevels"/>), in path order. Their
+    /// lines need a probe to know whether to offer an expander. Pure.
+    /// </summary>
+    /// <param name="nodes">The rows the rail renders.</param>
+    /// <param name="root">The index root.</param>
+    /// <param name="loadedLevels">The levels whose children ARE loaded.</param>
+    public static ImmutableSortedSet<string> UnloadedFolders(
+        IEnumerable<MeshNode> nodes, string root, IEnumerable<string> loadedLevels)
+    {
+        var loaded = loadedLevels.ToImmutableHashSet(StringComparer.Ordinal);
+        return nodes
+            .Select(n => n.Path)
+            .Where(p => !string.IsNullOrEmpty(p)
+                        && !string.Equals(p, root, StringComparison.Ordinal)
+                        && !loaded.Contains(p)
+                        && !LastSegment(p).StartsWith('_'))
+            .ToImmutableSortedSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// <paramref name="request"/> read as <paramref name="viewer"/> — a read opened inside a live
+    /// emission has no ambient identity, so it names its reader. An EMPTY object id is an explicit
+    /// anonymous reader and is stamped as such, never left to whatever identity is ambient.
+    /// Unchanged only when the host carried no viewer at all (the ambient context is then all there is).
+    /// </summary>
+    private static MeshQueryRequest Stamped(MeshQueryRequest request, AccessContext? viewer)
+        => viewer is not null ? request.ForViewer(viewer.ObjectId) : request;
+
+    /// <summary>
+    /// The folders among <paramref name="folders"/> that have a visible child, live: one
+    /// <see cref="ChildProbeQuery"/> per folder, opened when the folder JOINS the set and closed
+    /// when it LEAVES — a folder that stays keeps its probe and its answer while its siblings
+    /// come and go, so an open folder is never re-rendered as a link while a new sibling's probe
+    /// is pending. Emits as soon as the set does (an unanswered probe = no expander yet), so the
+    /// rail never waits; a probe that faults is logged and reads as "no children".
+    /// </summary>
+    private static IObservable<ImmutableHashSet<string>> FolderProbes(
+        IMeshService meshService, IObservable<ImmutableSortedSet<string>> folders,
+        AccessContext? viewer, ILogger? logger)
+        => folders
+            .DistinctUntilChanged(FolderSetComparer.Instance)
+            .Publish(sets =>
+            {
+                // Each folder once per stay in the set: the paths each set adds to the one before.
+                var joined = sets
+                    .StartWith(ImmutableSortedSet<string>.Empty)
+                    .Zip(sets, (before, now) => now.Except(before))
+                    .SelectMany(added => added);
+                // A probe lives until its folder leaves the set, then says so (null = gone). The
+                // probe itself never completes first: a completed fallback must not read as "gone".
+                var answers = joined.SelectMany(folder => Probe(meshService, folder, viewer, logger)
+                    .Concat(Observable.Never<bool>())
+                    .TakeUntil(sets.Where(set => !set.Contains(folder)))
+                    .Select(has => (Folder: folder, Has: (bool?)has))
+                    .Concat(Observable.Return((Folder: folder, Has: (bool?)null))));
+                var known = answers
+                    .Scan(ImmutableDictionary<string, bool>.Empty, (map, a) => a.Has is { } has
+                        ? map.SetItem(a.Folder, has)
+                        : map.Remove(a.Folder))
+                    .StartWith(ImmutableDictionary<string, bool>.Empty);
+                return sets.CombineLatest(known, (set, map) => set
+                    .Where(folder => map.TryGetValue(folder, out var has) && has)
+                    .ToImmutableHashSet(StringComparer.Ordinal));
+            })
+            .StartWith(ImmutableHashSet<string>.Empty)
+            .DistinctUntilChanged(FolderSetComparer.Instance);
+
+    /// <summary>Whether <paramref name="folder"/> has a visible child, live, read as <paramref name="viewer"/>.</summary>
+    private static IObservable<bool> Probe(IMeshService meshService, string folder, AccessContext? viewer, ILogger? logger)
+        => meshService
+            .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(ChildProbeQuery(folder)), viewer))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+            .Select(rows => !rows.IsEmpty)
+            .DistinctUntilChanged()
+            // A probe that faults costs its expander, never the index — and says why.
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "The index probe for {Folder} faulted — the line shows no expander", folder);
+                return Observable.Return(false);
+            });
+
+    private sealed class FolderSetComparer : IEqualityComparer<IReadOnlySet<string>>,
+        IEqualityComparer<ImmutableSortedSet<string>>, IEqualityComparer<ImmutableHashSet<string>>
+    {
+        public static readonly FolderSetComparer Instance = new();
+        public bool Equals(IReadOnlySet<string>? x, IReadOnlySet<string>? y)
+            => ReferenceEquals(x, y) || (x is not null && y is not null && x.SetEquals(y));
+        public bool Equals(ImmutableSortedSet<string>? x, ImmutableSortedSet<string>? y) => Equals((IReadOnlySet<string>?)x, y);
+        public bool Equals(ImmutableHashSet<string>? x, ImmutableHashSet<string>? y) => Equals((IReadOnlySet<string>?)x, y);
+        public int GetHashCode(IReadOnlySet<string> obj) => obj.Count;
+        public int GetHashCode(ImmutableSortedSet<string> obj) => obj.Count;
+        public int GetHashCode(ImmutableHashSet<string> obj) => obj.Count;
+    }
+
+    /// <summary>
+    /// The lines of ONE folder of the index, opened on demand (<see cref="SuppliedNavigationRail.FolderArea"/>):
+    /// its first <see cref="LevelCap"/> children in the default order, each probed for children of
+    /// its own, then "Show all" when it holds more. Emits an empty list at once, and a fault reads
+    /// as an empty folder after <paramref name="logger"/> has seen it.
+    /// </summary>
+    /// <param name="meshService">The unified mesh service.</param>
+    /// <param name="folder">The folder whose children are listed.</param>
+    /// <param name="currentPath">The page being read — marks the current line.</param>
+    /// <param name="showAllLabel">The viewer's label for the show-all line.</param>
+    /// <param name="viewer">The reader every read is stamped with (<c>LayoutAreaHost.ViewerContext</c>).</param>
+    /// <param name="logger">Sees a fault before it is swallowed.</param>
+    public static IObservable<IReadOnlyList<NodeNavigationEntry>> ObserveFolder(
+        IMeshService meshService, string folder, string currentPath, string showAllLabel,
+        AccessContext? viewer, ILogger? logger = null)
+    {
+        ArgumentNullException.ThrowIfNull(meshService);
+        return ReadLevel(meshService, folder, IndexSort.Order, LevelCap, viewer)
+            .Select(rows => VisibleInOrder(rows.Nodes.Values))
+            .Publish(level => level.CombineLatest(
+                FolderProbes(meshService, level.Select(v => v.Take(LevelCap).Select(n => n.Path)
+                    .ToImmutableSortedSet(StringComparer.Ordinal)), viewer, logger),
+                (visible, withChildren) => FolderEntries(folder, visible, currentPath, withChildren, showAllLabel)))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "The index folder query for {Folder} faulted — the folder renders empty", folder);
+                return Observable.Return<IReadOnlyList<NodeNavigationEntry>>([]);
+            })
+            .StartWith((IReadOnlyList<NodeNavigationEntry>)[]);
+    }
+
+    /// <summary>
+    /// The entries of one folder opened on demand: the first <see cref="LevelCap"/> of
+    /// <paramref name="visible"/> (already in rail order), a line with children marked
+    /// <see cref="NodeNavigationEntry.HasUnloadedChildren"/>, then "Show all" when there are more. Pure.
+    /// </summary>
+    /// <param name="folder">The folder.</param>
+    /// <param name="visible">Its visible children, in rail order.</param>
+    /// <param name="currentPath">The page being read.</param>
+    /// <param name="withChildren">The children known to have children of their own.</param>
+    /// <param name="showAllLabel">The viewer's label for the show-all line.</param>
+    public static IReadOnlyList<NodeNavigationEntry> FolderEntries(
+        string folder, IReadOnlyList<MeshNode> visible, string currentPath,
+        IReadOnlySet<string> withChildren, string showAllLabel)
+    {
+        var entries = visible.Take(LevelCap)
+            .Select(n => new NodeNavigationEntry(
+                n.Name ?? n.Id,
+                n.Path,
+                string.Equals(n.Path, currentPath, StringComparison.Ordinal),
+                MeshNodeImageHelper.ResolveNodeIcon(n))
+            {
+                HasUnloadedChildren = withChildren.Contains(n.Path),
+            })
+            .ToImmutableList();
+        if (visible.Count > LevelCap)
+        {
+            var all = ShowAllHref(folder, IndexSort.Order);
+            entries = entries.Add(new NodeNavigationEntry(showAllLabel, all.TrimStart('/')) { Href = all });
+        }
+        return entries;
     }
 
     /// <summary>The light row every index read selects — no content, just what a rail line shows
@@ -579,11 +765,29 @@ public static class DefaultNodeNavigation
     public static NodeNavigation? Build(
         string root, IReadOnlyCollection<MeshNode> subtree, string currentPath,
         IReadOnlyDictionary<string, IndexLevel> levels, IndexLabels labels)
+        => Build(root, subtree, currentPath, levels, labels, ImmutableHashSet<string>.Empty);
+
+    /// <summary>
+    /// <see cref="Build(string, IReadOnlyCollection{MeshNode}, string, IReadOnlyDictionary{string, IndexLevel}, IndexLabels)"/>
+    /// knowing which loaded rows have children that are NOT loaded (<paramref name="withChildren"/>,
+    /// from the probes): such a line is marked <see cref="NodeNavigationEntry.HasUnloadedChildren"/>,
+    /// so it renders as a group that offers its expander and loads its children when opened. Pure.
+    /// </summary>
+    /// <param name="root">The index root (<see cref="IndexRoot"/>).</param>
+    /// <param name="subtree">The loaded nodes — the root itself included when it exists.</param>
+    /// <param name="currentPath">The page being read.</param>
+    /// <param name="levels">Per loaded level (by namespace): how it renders.</param>
+    /// <param name="labels">The viewer's labels.</param>
+    /// <param name="withChildren">The rows known to have children that the subtree does not hold.</param>
+    public static NodeNavigation? Build(
+        string root, IReadOnlyCollection<MeshNode> subtree, string currentPath,
+        IReadOnlyDictionary<string, IndexLevel> levels, IndexLabels labels, IReadOnlySet<string> withChildren)
     {
         ArgumentNullException.ThrowIfNull(subtree);
         ArgumentNullException.ThrowIfNull(levels);
         ArgumentNullException.ThrowIfNull(labels);
-        var entries = ChildrenOf(root, subtree, currentPath, levels, labels);
+        ArgumentNullException.ThrowIfNull(withChildren);
+        var entries = ChildrenOf(root, subtree, currentPath, levels, labels, withChildren);
         if (entries.Count == 0)
             return null;
 
@@ -599,7 +803,7 @@ public static class DefaultNodeNavigation
 
     private static IReadOnlyList<NodeNavigationEntry> ChildrenOf(
         string parent, IReadOnlyCollection<MeshNode> subtree, string currentPath,
-        IReadOnlyDictionary<string, IndexLevel> levels, IndexLabels labels)
+        IReadOnlyDictionary<string, IndexLevel> levels, IndexLabels labels, IReadOnlySet<string> withChildren)
     {
         var level = levels.TryGetValue(parent, out var named) ? named : null;
         var children = VisibleInOrder(
@@ -610,9 +814,12 @@ public static class DefaultNodeNavigation
                 string.Equals(n.Path, currentPath, StringComparison.Ordinal),
                 MeshNodeImageHelper.ResolveNodeIcon(n))
             {
-                Children = ChildrenOf(n.Path, subtree, currentPath, levels, labels),
+                Children = ChildrenOf(n.Path, subtree, currentPath, levels, labels, withChildren),
+                // A folder whose level is not loaded still offers its expander when the probe found
+                // a child; its children load when the reader opens it.
+                HasUnloadedChildren = withChildren.Contains(n.Path),
                 // The dropdown sorts the entry's children, so it is offered only where they are
-                // loaded — a folder off the reader's path is a plain link.
+                // loaded — a folder off the reader's path opens in the default order.
                 SortOptions = levels.TryGetValue(n.Path, out var own) ? own.SortOptions : [],
             })
             .ToImmutableList();
