@@ -298,7 +298,7 @@ public sealed class PolicyCommitGuard : IEntityCommitGuard
             || !PolicyPlacementValidator.IsPolicyType(next.NodeType))
             return null;
 
-        if (!string.Equals(next.Path, ownerPath, StringComparison.OrdinalIgnoreCase))
+        if (!IsOwnPath(next.Path, ownerPath))
             return LocalizationCatalog.Get("policy.placement.foreignWrite", writer?.Locale, next.Path, ownerPath);
 
         var previous = before?.As<MeshNode>(options);
@@ -306,6 +306,26 @@ public sealed class PolicyCommitGuard : IEntityCommitGuard
             return null;
 
         return LocalizationCatalog.Get("policy.placement.createOnly", writer?.Locale, next.Path);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is the committing hub's own node. The namespace matches
+    /// case-insensitively, as hub addresses do, but the TERMINAL segment ordinally: the fold reads a
+    /// policy only under the exact id <c>_Policy</c>, so an identity change to <c>_policy</c> is a
+    /// different node, and one the fold never reads.
+    /// </summary>
+    /// <param name="path">The path of the entity about to commit.</param>
+    /// <param name="ownerPath">The committing hub's path.</param>
+    /// <returns>True when it is the hub's own node.</returns>
+    internal static bool IsOwnPath(string? path, string ownerPath)
+    {
+        if (path is null)
+            return false;
+        var cut = path.LastIndexOf('/');
+        var ownerCut = ownerPath.LastIndexOf('/');
+        return string.Equals(path[(cut + 1)..], ownerPath[(ownerCut + 1)..], StringComparison.Ordinal)
+               && string.Equals(cut < 0 ? string.Empty : path[..cut],
+                   ownerCut < 0 ? string.Empty : ownerPath[..ownerCut], StringComparison.OrdinalIgnoreCase);
     }
 }
 

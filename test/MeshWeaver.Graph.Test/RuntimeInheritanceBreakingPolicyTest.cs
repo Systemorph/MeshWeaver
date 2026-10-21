@@ -544,8 +544,10 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
     /// the permission fold never reads. At the commit point it is a policy committed to a hub that is
     /// not its own node's, so it is refused, and nothing appears at the destination.
     /// </summary>
-    [Fact(Timeout = 120000)]
-    public async Task AnIdentityChangingPolicyDelta_IsRefused_AndLeavesNoDestination()
+    [Theory(Timeout = 120000)]
+    [InlineData("ignored-policy")]
+    [InlineData("_policy")]
+    public async Task AnIdentityChangingPolicyDelta_IsRefused_AndLeavesNoDestination(string newId)
     {
         var ct = TestContext.Current.CancellationToken;
         Access.SetCircuitContext(TestUsers.Admin);
@@ -555,7 +557,7 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         var path = $"{area}/_Policy";
         var policy = await Mesh.GetWorkspace().GetMeshNodeStream(path)
             .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        var moved = policy! with { Id = "ignored-policy" };
+        var moved = policy! with { Id = newId };
 
         var response = await RequestHub
             .Observe<DataChangeResponse>(
@@ -569,7 +571,68 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{area} scope:children"))
             .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
-        listed.Items.Should().NotContain(n => n.Id == "ignored-policy", "the refused delta must leave no destination row");
+        listed.Items.Should().NotContain(n => n.Id == newId, "the refused delta must leave no destination row");
+    }
+
+    /// <summary>
+    /// A SNAPSHOT data change replaces the whole collection. A refused candidate must not take its
+    /// predecessor with it: neither a retype of the existing node (same identity) nor an
+    /// identity-changing delta of an existing policy may delete the node it was meant to replace.
+    /// </summary>
+    [Theory(Timeout = 120000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ARefusedSnapshot_LeavesTheExistingNodeInPlace(bool changeIdentity)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var area = await CreateMarkdown($"area-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        string path;
+        object entity;
+        string expectedType;
+        if (changeIdentity)
+        {
+            await NodeFactory.CreateNode(AssignmentNodeFactory.Policy(area, new PartitionAccessPolicy { Read = true }))
+                .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+            path = $"{area}/_Policy";
+            var policy = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            entity = EntityDelta.Compute(nameof(MeshNode), policy!.Id, null, policy, policy with { Id = "moved-policy" }, Mesh.JsonSerializerOptions);
+            expectedType = PartitionAccessPolicyNodeType.NodeType;
+        }
+        else
+        {
+            path = await CreateMarkdown($"{area[(TestPartition.Length + 1)..]}/_Policy", ct);
+            var current = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+            entity = current! with
+            {
+                NodeType = PartitionAccessPolicyNodeType.NodeType,
+                Content = new PartitionAccessPolicy { BreaksInheritance = true },
+            };
+            expectedType = "Markdown";
+        }
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([entity]) with { Options = new UpdateOptions { Snapshot = true } },
+                o => o.WithTarget(new Address(path)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"snapshot ({(changeIdentity ? "identity change" : "retype")}): {response.Message.Status}");
+
+        response.Message.Status.Should().NotBe(DataChangeStatus.Committed);
+
+        // The OWNER must still hold the node. A benign patch is the instrument: its merge turn answers
+        // NotFound when the owner no longer holds the entity, and lands only when it does.
+        var renamed = $"still-here-{Guid.NewGuid().ToString("N")[..6]}";
+        (await Refused(RequestHub.Observe<PatchDataResponse>(
+                new PatchDataRequest(new MeshNodeReference(), new RawJson($"{{\"name\":\"{renamed}\"}}")),
+                o => o.WithTarget(new Address(path))), ct))
+            .Should().BeFalse("a refused snapshot candidate must not delete the node it was meant to replace");
+        var after = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is { } node && node.Name == renamed)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        after!.NodeType.Should().Be(expectedType);
     }
 
     /// <summary>

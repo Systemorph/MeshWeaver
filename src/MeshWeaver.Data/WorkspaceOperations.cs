@@ -399,6 +399,13 @@ public static class WorkspaceOperations
                                         .WithKey("activity.dataUpdate.commitRefused",
                                             ("key", key), ("reason", refusal)));
                                 }
+                                // 🚨 A SNAPSHOT replaces the whole collection, so dropping a refused
+                                // candidate would also delete the entity it was meant to replace (its
+                                // predecessor's key may differ, for an identity-changing delta). A
+                                // snapshot with any refused candidate therefore leaves this collection
+                                // exactly as it is: nothing of it commits.
+                                if (!refused.IsEmpty && change.Options?.Snapshot == true)
+                                    return storeAndUpdates;
                                 if (!refused.IsEmpty)
                                     instances = instances with { Instances = instances.Instances.RemoveRange(refused) };
                             }
