@@ -1722,13 +1722,14 @@ public static class DynamicTypePreWarmer
     /// module's content in an untracked partition that answer is the untracked-module gate's — a
     /// HOLD (the last build keeps serving) or a named PARK — and never a Roslyn pass.
     ///
-    /// <para>🚨 <b>The hand-off clears <see cref="NodeTypeDefinition.RequestedReleaseForce"/></b>
-    /// (#7015 review). A force makes the watcher skip its adoption pass (#2818), and that pass is
-    /// the watcher's only source of the bundle-offer witness: a type the batch refused BECAUSE a
-    /// bundle named it would reach the gate with the witness false and, with no adoption
-    /// provenance on its record, be compiled after all. A force means "build the live source";
-    /// on an untracked module partition the gate refuses exactly that, so the flag can buy nothing
-    /// here except losing the verdict the batch just formed.</para>
+    /// <para>🚨 <b>A pending <see cref="NodeTypeDefinition.RequestedReleaseForce"/> cannot lose the
+    /// verdict</b> (#7015 review). A force makes the watcher skip its adoption pass (#2818) — the
+    /// pass that is its only source of the bundle-offer witness — but only on a partition that
+    /// TRACKS a source. On an untracked partition the watcher runs the pass for a forced flip too
+    /// (<c>NodeTypeCompilationHelpers</c>, the forced branch), because the gate refuses the
+    /// live-source build the force asks for. That holds for a record this hand-off flips AND for one
+    /// a previous process left persisted at <c>Pending</c>, which the watcher dispatches the moment
+    /// the type's hub activates — before any write from here could land.</para>
     ///
     /// <para>The answer and its outcome: see <see cref="SettleAfterHandOff"/> and
     /// <see cref="OutcomeOfHandOff"/>.</para>
@@ -1755,25 +1756,46 @@ public static class DynamicTypePreWarmer
                             return node;
                         return node with
                         {
-                            Content = NodeTypeCompilationHelpers.DispatchPending(def, workspace.Hub)
-                                with { RequestedReleaseForce = false },
+                            Content = NodeTypeCompilationHelpers.DispatchPending(def, workspace.Hub),
                         };
                     });
-                    return SettleAfterHandOff(stream, handOff, options)
-                        .Timeout(budget)
-                        .SelectMany(settled => OutcomeOfHandOff(
-                            typePath, settled, defs => ProbeOnThisReplica(mesh, defs, logger)));
+                    return ReadHandOff(typePath, stream, handOff, options,
+                        defs => ProbeOnThisReplica(mesh, defs, logger), budget);
                 })
             .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
-                ex is TimeoutException
-                    ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut,
-                        "the compile watcher did not answer within the per-type budget")
-                    : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
+                new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
             .Do(o => logger?.LogInformation(
                 "DynamicTypePreWarmer: {TypePath} → {Status}{Detail} (through the compile watcher, "
                 + "MeshWeaver#6930)",
                 o.TypePath, o.Status,
                 string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})"));
+
+    /// <summary>
+    /// The watcher's answer to one hand-off, classified: <see cref="SettleAfterHandOff"/> then
+    /// <see cref="OutcomeOfHandOff"/>, under ONE per-type <paramref name="budget"/>.
+    ///
+    /// <para>🚨 The budget covers the hand-off AND the store verification (#7015 review). Bounding
+    /// only the settle let a stalled store probe after an <c>Ok</c> hold the type — and the
+    /// sequential sweep behind it — past the budget. Elapsed is <see cref="PreWarmStatus.TimedOut"/>
+    /// ("not evaluated"); a failed hand-off write or probe is <see cref="PreWarmStatus.Faulted"/>.</para>
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> ReadHandOff(
+        string typePath,
+        IObservable<MeshNode?> frames,
+        IObservable<MeshNode> handOff,
+        System.Text.Json.JsonSerializerOptions options,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan budget)
+        => SettleAfterHandOff(frames, handOff, options)
+            .SelectMany(settled => OutcomeOfHandOff(typePath, settled, probe))
+            .Take(1)
+            .Timeout(budget)
+            .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
+                ex is TimeoutException
+                    ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut,
+                        "the compile watcher's answer and its store verification did not complete "
+                        + "within the per-type budget")
+                    : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)));
 
     /// <summary>
     /// The watcher's answer to ONE hand-off: the first terminal record

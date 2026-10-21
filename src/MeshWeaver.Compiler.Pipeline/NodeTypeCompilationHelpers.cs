@@ -529,50 +529,86 @@ internal static class NodeTypeCompilationHelpers
                     // it) and is consumed by the terminal stamp of the compile it dispatches —
                     // ApplyCompileSuccess / ApplyCompileFailure / ApplyGateSettle — so a stale force
                     // can never suppress adoption for a later, unforced trigger.
-                    if (pendingNode!.Content is NodeTypeDefinition { RequestedReleaseForce: true })
+                    //
+                    // 🚨 #6930 / #7015 review — …but ONLY where a live-source build is legal. On a
+                    // partition that tracks no source the untracked-module gate refuses exactly that
+                    // build, force or not, and the adoption pass is the gate's ONLY source of the
+                    // bundle-offer witness: skipping it read a type a bundle NAMES (declined, never
+                    // adopted, no provenance on the record) as authored content and compiled it.
+                    // So a force skips adoption only on a TRACKED partition; on an untracked one it
+                    // runs the same pass an unforced flip runs, and the gate decides. The question is
+                    // read the gate's way: an unreadable answer reads TRACKED (the force is honoured).
+                    if (pendingNode!.ContentAs<NodeTypeDefinition>(hub.JsonSerializerOptions, logger)
+                        is { RequestedReleaseForce: true })
                     {
-                        logger?.LogInformation(
-                            "Compile watcher: {HubPath} was flipped Pending by a FORCED release — "
-                            + "skipping on-demand prebuilt adoption and compiling the live source.",
-                            hubPath);
-                        DispatchOrPark();
-                        return;
-                    }
-
-                    var attempt = new SingleAssignmentDisposable();
-                    onDemandAdoptionSubs.Add(attempt);
-                    attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath], OnOffered)
-                        .Take(1)
-                        .Timeout(OnDemandAdoptionBudget)
-                        .SelectMany(AdoptionLanded)
-                        .Catch<bool, Exception>(ex =>
-                        {
-                            logger?.LogWarning(ex,
-                                "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
-                                + "compiling instead.", hubPath);
-                            return Observable.Return(false);
-                        })
-                        .Finally(() => onDemandAdoptionSubs.Remove(attempt))
-                        .Subscribe(
-                            landed =>
+                        var forced = new SingleAssignmentDisposable();
+                        onDemandAdoptionSubs.Add(forced);
+                        forced.Disposable = PartitionTracksSources(hub, hubPath)
+                            .Timeout(OnDemandAdoptionBudget)
+                            .Catch<bool, Exception>(_ => Observable.Return(true))
+                            .DefaultIfEmpty(true)
+                            .Finally(() => onDemandAdoptionSubs.Remove(forced))
+                            .Subscribe(tracked =>
                             {
-                                if (!landed)
+                                if (!tracked)
                                 {
-                                    DispatchOrPark();
+                                    logger?.LogInformation(
+                                        "Compile watcher: {HubPath} was flipped Pending by a FORCED release, "
+                                        + "but its partition tracks no source, so a live-source build is "
+                                        + "refused here anyway — running the on-demand adoption pass for the "
+                                        + "untracked-module gate's offer witness (MeshWeaver#6930).",
+                                        hubPath);
+                                    AdoptThenDispatch();
                                     return;
                                 }
                                 logger?.LogInformation(
-                                    "Compile watcher: {HubPath} adopted a prebuilt assembly on demand — "
-                                    + "settling without a Roslyn pass.", hubPath);
-                            },
-                            ex =>
-                            {
-                                logger?.LogWarning(ex,
-                                    "Compile watcher: on-demand prebuilt adoption for {HubPath} faulted — "
-                                    + "compiling instead.", hubPath);
+                                    "Compile watcher: {HubPath} was flipped Pending by a FORCED release — "
+                                    + "skipping on-demand prebuilt adoption and compiling the live source.",
+                                    hubPath);
                                 DispatchOrPark();
                             });
+                        return;
+                    }
+
+                    AdoptThenDispatch();
                     return;
+
+                    void AdoptThenDispatch()
+                    {
+                        var attempt = new SingleAssignmentDisposable();
+                        onDemandAdoptionSubs.Add(attempt);
+                        attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath], OnOffered)
+                            .Take(1)
+                            .Timeout(OnDemandAdoptionBudget)
+                            .SelectMany(AdoptionLanded)
+                            .Catch<bool, Exception>(ex =>
+                            {
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
+                                    + "compiling instead.", hubPath);
+                                return Observable.Return(false);
+                            })
+                            .Finally(() => onDemandAdoptionSubs.Remove(attempt))
+                            .Subscribe(
+                                landed =>
+                                {
+                                    if (!landed)
+                                    {
+                                        DispatchOrPark();
+                                        return;
+                                    }
+                                    logger?.LogInformation(
+                                        "Compile watcher: {HubPath} adopted a prebuilt assembly on demand — "
+                                        + "settling without a Roslyn pass.", hubPath);
+                                },
+                                ex =>
+                                {
+                                    logger?.LogWarning(ex,
+                                        "Compile watcher: on-demand prebuilt adoption for {HubPath} faulted — "
+                                        + "compiling instead.", hubPath);
+                                    DispatchOrPark();
+                                });
+                    }
 
                     // 🚨 Trust the STAMP, never the reported count. A consumer that reports an
                     // adoption it never wrote back would leave this type at Pending for ever, and
@@ -3621,6 +3657,26 @@ internal static class NodeTypeCompilationHelpers
         IMessageHub hub,
         IReadOnlyDictionary<string, NodeTypeDefinition?> candidates,
         ILogger? logger)
+        => RefusedByUntrackedModuleGate(hub, candidates, logger, OnDemandAdoptionBudget);
+
+    /// <summary>
+    /// <see cref="RefusedByUntrackedModuleGate(IMessageHub, IReadOnlyDictionary{string, NodeTypeDefinition}, ILogger)"/>
+    /// with the offer pass's budget explicit (the test seam for an exhausted budget).
+    ///
+    /// <para>🚨 <b>An incomplete offer pass FAILS CLOSED</b> (#7015 review). The pass walks bundles
+    /// sequentially and witnesses an offer only when it REACHES the bundle that names a type, so a
+    /// pass cut short by its budget — or faulted — has not asked about the types behind the cut:
+    /// "not witnessed" there means "unknown", never "authored". Then every candidate in an untracked
+    /// partition goes to the compile watcher, whose own per-type pass answers the membership
+    /// question before its gate decides. A candidate that is in fact authored content costs an
+    /// activation instead of a batch compile; a module's content can never reach Roslyn by being
+    /// late in the walk.</para>
+    /// </summary>
+    internal static IObservable<ImmutableHashSet<string>> RefusedByUntrackedModuleGate(
+        IMessageHub hub,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> candidates,
+        ILogger? logger,
+        TimeSpan offerBudget)
     {
         var none = ImmutableHashSet<string>.Empty
             .WithComparer(StringComparer.OrdinalIgnoreCase);
@@ -3666,26 +3722,29 @@ internal static class NodeTypeCompilationHelpers
                 var offered = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(
                     StringComparer.OrdinalIgnoreCase);
                 var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
-                var offers = consumer is null
-                    ? Observable.Return(0)
+                // Emits whether the pass COMPLETED — the only condition under which "no offer
+                // witnessed" may be read as "no bundle names this type".
+                var completed = consumer is null
+                    ? Observable.Return(true)
                     : consumer.SeedForTypes(
                             inUntracked.Select(c => c.Key).ToArray(),
                             path => offered.TryAdd(path, 0))
                         .Take(1)
-                        .Timeout(OnDemandAdoptionBudget)
-                        .Catch<int, Exception>(ex =>
+                        .Select(_ => true)
+                        .DefaultIfEmpty(true)
+                        .Timeout(offerBudget)
+                        .Catch<bool, Exception>(ex =>
                         {
                             logger?.LogWarning(ex,
                                 "Untracked-module gate: the bundle-offer pass for {Count} type(s) in untracked "
-                                + "partitions did not complete — the offers it witnessed before it stopped "
-                                + "still count, exactly as in the compile watcher.",
+                                + "partitions did not complete — membership is UNKNOWN for every type it did not "
+                                + "reach, so all of them go through the compile watcher (fail closed, #7015).",
                                 inUntracked.Length);
-                            return Observable.Return(0);
-                        })
-                        .DefaultIfEmpty(0);
+                            return Observable.Return(false);
+                        });
 
-                return offers.Select(_ => inUntracked
-                    .Where(c => IsModuleContent(c.Value!, offered.ContainsKey(c.Key)))
+                return completed.Select(complete => inUntracked
+                    .Where(c => !complete || IsModuleContent(c.Value!, offered.ContainsKey(c.Key)))
                     .Select(c => c.Key)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
             })

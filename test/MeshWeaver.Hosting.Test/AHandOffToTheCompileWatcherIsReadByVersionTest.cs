@@ -108,6 +108,22 @@ public class AHandOffToTheCompileWatcherIsReadByVersionTest
             ImmutableList.Create(new NodeTypeBakeEntry(TypePath, state, state.ToString())), "fw"));
 
     [Fact]
+    public async Task AStalledStoreVerification_EndsAtTheBudget_AsAClassifiedOutcome()
+    {
+        var frames = new BehaviorSubject<MeshNode?>(Node(6, CompilationStatus.Ok));
+        var handOff = Observable.Return(Node(6, CompilationStatus.Ok));
+        var budget = TimeSpan.FromMilliseconds(500);
+
+        var outcome = await DynamicTypePreWarmer.ReadHandOff(
+                TypePath, frames, handOff, Options,
+                _ => Observable.Never<NodeTypeBakeReport>(), budget)
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("the per-type budget covers the store verification too — a stalled probe must not hold "
+                  + "the type, and the sequential sweep behind it", TestContext.Current.CancellationToken);
+        outcome.Status.Should().Be(PreWarmStatus.TimedOut, "an elapsed budget is 'not evaluated'");
+    }
+
+    [Fact]
     public async Task AHeldBuildWhoseBytesAreGone_IsAFault_NotBaked()
     {
         var held = new NodeTypeDefinition

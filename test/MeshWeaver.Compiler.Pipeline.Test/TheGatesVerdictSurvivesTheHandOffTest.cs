@@ -105,7 +105,8 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
 
     /// <summary>Authored-looking record: no adoption provenance, nothing to serve.</summary>
     protected async Task CreateType(
-        string path, bool force, IReadOnlyList<string>? sources = null, bool moduleContent = false)
+        string path, bool force, IReadOnlyList<string>? sources = null, bool moduleContent = false,
+        CompilationStatus status = CompilationStatus.Ok)
     {
         var node = MeshNode.FromPath(path) with
         {
@@ -115,7 +116,7 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
             Content = new NodeTypeDefinition
             {
                 Configuration = "config => config",
-                CompilationStatus = CompilationStatus.Ok,
+                CompilationStatus = status,
                 LatestAssemblyMvid = SeededMvid,
                 Sources = sources,
                 AdoptedSourceFingerprint = moduleContent ? "bundlefingerprint0000000" : null,
@@ -162,14 +163,73 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
 public class OfferedOnly(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
 {
     private const string TypePath = "untracked/Offered";
+    private const string PersistedPending = "untracked/PersistedPending";
+    private const string LateInTheWalk = "untracked/LateInTheWalk";
 
     /// <summary>Declined on its dependency record exactly as in production: a module minimum this
     /// environment cannot compare ("NotChecked") — so the bundle NAMES the type and adopts nothing.</summary>
     protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
     [
-        new BundleWriter.AssemblyEntry(TypePath, () => new MemoryStream(AssemblyBytes()),
-            Dependencies: new Dictionary<string, string> { ["MeshWeaver.Leftover"] = "min:1.4.1" }),
+        .. new[] { TypePath, PersistedPending, LateInTheWalk }.Select(path =>
+            new BundleWriter.AssemblyEntry(path, () => new MemoryStream(AssemblyBytes()),
+                Dependencies: new Dictionary<string, string> { ["MeshWeaver.Leftover"] = "min:1.4.1" })),
     ];
+
+    private async Task AssertParkedWithoutRoslyn(string path)
+    {
+        var settled = await Mesh.GetMeshNodeStream(path)
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(d => d is not null
+                        && (d.CompilationStatus == CompilationStatus.Error
+                            || (d.CompilationStatus == CompilationStatus.Ok
+                                && !string.Equals(d.LatestAssemblyMvid, SeededMvid, StringComparison.Ordinal))),
+                "the type settles", TestContext.Current.CancellationToken);
+        settled!.CompilationStatus.Should().Be(CompilationStatus.Error,
+            $"a bundle names the type, so the gate refuses a local compile; error: {settled.CompilationError}");
+        settled.CompilationError.Should().Contain("tracks no source").And.Contain("DECLINED");
+        settled.LatestAssemblyMvid.Should().Be(SeededMvid, "no Roslyn pass ran");
+        Parks.GetCompileAttemptCount(path).Should().Be(0);
+    }
+
+    /// <summary>
+    /// #7015 review — a record a previous process left PERSISTED at <c>Pending</c> with a force: the
+    /// watcher dispatches it the moment the type's hub activates, before any hand-off write can land,
+    /// so the offer witness must come from the watcher's own pass even on a forced flip.
+    /// </summary>
+    [Fact]
+    public async Task APersistedPendingForcedOfferedOnlyType_IsParked_NeverCompiled()
+    {
+        await CreateType(PersistedPending, force: true, status: CompilationStatus.Pending);
+        await AssertParkedWithoutRoslyn(PersistedPending);
+
+        var outcomes = await Sweep();
+        outcomes.Where(o => string.Equals(o.TypePath, PersistedPending, StringComparison.OrdinalIgnoreCase))
+            .Should().NotContain(o => o.Status == PreWarmStatus.Compiled);
+        await AssertParkedWithoutRoslyn(PersistedPending);
+    }
+
+    /// <summary>
+    /// #7015 review — the offer pass's budget runs out before it reaches the bundle naming a type:
+    /// that type's membership is UNKNOWN, so it must still be refused a batch compile (fail closed).
+    /// </summary>
+    [Fact]
+    public async Task AnOfferPassCutShortByItsBudget_FailsClosed()
+    {
+        var refused = await NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(
+                Mesh,
+                new Dictionary<string, NodeTypeDefinition?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [LateInTheWalk] = new NodeTypeDefinition { Configuration = "config => config" },
+                },
+                null,
+                offerBudget: TimeSpan.Zero)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the question answers once", cancellationToken: TestContext.Current.CancellationToken);
+        refused.Should().Contain(LateInTheWalk,
+            "a pass that did not reach the bundle has not established that no bundle names the type — "
+            + "reading 'not witnessed' as 'authored' sends a module's content to Roslyn");
+    }
 
     [Fact]
     public async Task AnOfferedOnlyForcedType_IsParkedByTheGate_NeverCompiled()
