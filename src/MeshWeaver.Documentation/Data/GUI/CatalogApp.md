@@ -33,7 +33,7 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 | `CatalogCategory { When = IObservable<bool> }` | A conditional category: in the menu only while `When` emits true (the AI catalogs' "This space" tab). Until it first answers it counts as false, so it never holds back the other categories. |
 | `CatalogCategory { Header = control }` | A control above the category's searches — e.g. the legend of what the hits' badges mean. |
 | **Search** — `CatalogSearch.Of(filter, title?, itemArea?, sort?)` | One hidden query: a filter WITHOUT `sort:` plus its default `CatalogSort` (Last activity unless stated; `CatalogSort.Name` is cheaper over `partitions:all`, because last activity costs a read per hit). Rendered as `Controls.Catalog` with the search box hidden. |
-| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller, shown as a plain label — never parsed as markup) instead of running a query. |
+| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller, shown as a plain label — never parsed as markup) instead of running a query. Until the filter FIRST answers, the section shows the platform's indeterminate progress bar — never nothing — carrying `whileLoading` when the six-parameter overload passes one (localised by the caller). |
 | `.WithCreate(nodeType, namespace, when?)` | The section's "+" (`CreateNodeType` / `CreateNamespace`). Always state the namespace for a subtree query. `when` (an `IObservable<bool>`) hides it while false — e.g. "only once the set has a member"; until it answers, the results render without the "+". |
 | `.WithMaxColumns(n)` · `.WithPageSize(n)` | A card grid instead of one hit per row; hits per page before "Load more". |
 | `.WithConfigure(c => …)` | The last-mile hook over the composed `MeshSearchControl` — grouping (`WithGroupBy(…).WithSectionCounts(true)`), render mode, anything. Applied last. |
@@ -51,9 +51,22 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 - Computed filters and conditions are kept for the life of the area host (`CatalogApp.Retained`, latest
   value replayed, connections owned by the host): a menu rebuilt because one category's `When`
   changed does not blank another category's computed section.
+- 🚨 **A computed section is LOADING, never absent, until its filter first answers** (2026-10-21). It
+  used to emit nothing until then, so its area did not exist — and a one-shot read of the page (the MCP
+  `get …/area/…` route returns the first frame in which the requested area ITSELF has landed, not its
+  later sub-areas) reported the CRM board's attention tabs as "never rendering" while a live
+  subscription had them within a quarter of a second. A filter that never answers now reads as an
+  endless progress bar: still a defect to chase, but a visible one.
 - A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
+- 🚨 **A union is ordered by its FIRST line, so every line carries the order.** A hidden query may
+  be a union — one sub-query per line. The MeshSearch view sends the lines as one
+  `MeshQueryRequest.FromQueries`, each followed by the typed text, and the engine takes sort and
+  limit from the FIRST. `CatalogSort.Sorted` therefore appends the default order to EVERY line (a
+  line that already names its own `sort:` keeps it), and a typed `sort:` still wins because it
+  follows each line. Before this, the order rode only on the LAST line and a union catalog came back
+  unsorted (MeshWeaver.Plugins#4055).
 - 🚨 **Typing can only NARROW — as the production parser reads it.** `CatalogQuery.Narrowing`
   removes every reserved single-slot qualifier but `sort:` (`namespace:`, `path:`, `scope:`,
   `partitions:`, `basePath:`, `source:`, `context:`, `select:`, `is:`, `limit:` — derived from
@@ -74,6 +87,12 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 The menu's area ids are the category ids. `Render(host, selected)` opens on `selected`, else on the
 area reference's id without its URL query (`…/area/{App}/{categoryId}?x=1` → `categoryId`), else on the first category; an unknown id falls
 back to the first. The selection is carried as the tabs' `ActiveTabId`.
+
+`CatalogApp.CategoryIdOf` (the reference id without its URL query) is applied only inside
+`Render(host)`: a caller that composes the app itself with `Compose(typed, selected)` must call
+`CategoryIdOf` on its own reference id before passing `selected`. In an AppTabs page a pack tab id
+and a category id share the ONE reference id, so the host decides which wins — the Plugins host
+gives the pack tab precedence, compared case-insensitively (MeshWeaver.Plugins#4056).
 
 ## What is NOT in yet
 
