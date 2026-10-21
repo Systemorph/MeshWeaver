@@ -7568,6 +7568,19 @@ public static class MeshExtensions
     /// stops at the first failure), emits the first failure as a tuple or <c>null</c>
     /// if all pass. Consumers compose via <c>SelectMany</c>; no <c>await</c>.
     /// </summary>
+    /// <summary>
+    /// The carrier for a refusal an <see cref="INodeValidator"/> supplied, or null when it supplied
+    /// none. Shared by every runner, so validator-supplied text has ONE unkeyed site.
+    /// </summary>
+    /// <param name="message">The validator's <see cref="NodeValidationResult.ErrorMessage"/>.</param>
+    /// <returns>The carrier, or null.</returns>
+    internal static LocalizableText? ValidatorRefusalText(string? message)
+        // 🚨 Verbatim, and that is the honest classification. INodeValidator hands back a plain
+        // string, and its implementers are RLS, the app-integrity validators and plugin-contributed
+        // ones outside this repo — so the runner knows the sentence but never the key. A validator
+        // that localizes renders it in the writer's locale before handing it back.
+        => message is { Length: > 0 } ? LocalizableText.Verbatim(message) : null;
+
     private static IObservable<(LocalizableText? Refusal, NodeCreationRejectionReason Reason)?> RunCreationValidatorsObs(
         IMessageHub hub,
         MeshNode node,
@@ -7656,9 +7669,7 @@ public static class MeshExtensions
                 // nothing; keying a validator's refusal is that validator's change to make, and
                 // this carrier is ready for it the day it does.
                 return ((LocalizableText?, NodeCreationRejectionReason)?)(
-                    result.ErrorMessage is { Length: > 0 } message
-                        ? LocalizableText.Verbatim(message)
-                        : null,
+                    ValidatorRefusalText(result.ErrorMessage),
                     reason);
             })
             .Take(1)
@@ -8518,9 +8529,9 @@ public static class MeshExtensions
                             // holds it. Same rule as the existing-node branch: the precondition is
                             // only evaluated for a caller established to hold write access.
                             if (inboundRequest.SnapshotVersion is not null)
-                                WhenWriteAccessIsEstablished(() => ApplyUpdateViaStream(node, existingNodeType: null));
+                                WhenWriteAccessIsEstablished(() => ApplyUpdateViaStream(node, existingNodeType: null, existingIsStored: false));
                             else
-                                ApplyUpdateViaStream(node, existingNodeType: null);
+                                ApplyUpdateViaStream(node, existingNodeType: null, existingIsStored: false);
                         }
                         // 🚨 AN OwnerDisposing NACK IS NOT RE-DRIVEN HERE, AND THE REASON IS
                         // STRUCTURAL (#3510). The obvious symmetry with the patch leg — re-enqueue
@@ -8865,7 +8876,7 @@ public static class MeshExtensions
         // The ONE bypass is CreateOrUpdateNodeRequest.AllowUnresolvableNodeType — the import
         // ordering escape hatch, documented on the property and pinned to its single caller by
         // UnresolvableNodeTypeBypassGuard. It is never silent: taking it logs a warning here.
-        void ApplyUpdateViaStream(MeshNode existing, string? existingNodeType)
+        void ApplyUpdateViaStream(MeshNode existing, string? existingNodeType, bool existingIsStored = true)
         {
             if (!NodeTypeResolution.ChangesNodeType(node.NodeType, existingNodeType))
             {
@@ -8881,7 +8892,7 @@ public static class MeshExtensions
                     + "(the import ordering escape hatch). If '{NodeType}' never lands, this node "
                     + "is stranded: it will read as Unavailable. See Doc/Architecture/DanglingNodeTypes.",
                     node.Path, node.NodeType, node.NodeType);
-                WriteUnlessATransitionRuleRefuses(existing);
+                WriteUnlessATransitionRuleRefuses(existing, existingIsStored);
                 return;
             }
 
@@ -8898,7 +8909,7 @@ public static class MeshExtensions
                     {
                         if (outcome is { HasValue: true, Value.Resolves: true })
                         {
-                            WriteUnlessATransitionRuleRefuses(existing);
+                            WriteUnlessATransitionRuleRefuses(existing, existingIsStored);
                             return;
                         }
                         if (outcome.Error is { } probeError)
@@ -8962,33 +8973,13 @@ public static class MeshExtensions
         // have met: a Markdown node at `{p}/_Storage/_Policy` retyped to PartitionAccessPolicy is
         // stored where the permission fold never reads it (PolicyPlacementValidator). Only reached
         // when the NodeType CHANGES, so an unchanged node is never re-judged.
-        void WriteUnlessATransitionRuleRefuses(MeshNode existing)
+        //
+        // `existingIsStored: false` is the lost-create-race branch, which never read the node that
+        // won: the gate then reads it itself, so the winner's real type is what the rule judges.
+        void WriteUnlessATransitionRuleRefuses(MeshNode existing, bool existingIsStored)
         {
-            var transitionValidators = hub.ServiceProvider.GetServices<INodeValidator>()
-                .Where(v => v is INodeTypeTransitionValidator
-                            && (v.SupportedOperations.Count == 0
-                                || v.SupportedOperations.Contains(NodeOperation.Update)))
-                .ToList();
-            if (transitionValidators.Count == 0)
-            {
-                WriteThroughStream(existing);
-                return;
-            }
-
-            var context = new NodeValidationContext
-            {
-                Operation = NodeOperation.Update,
-                Node = node,
-                ExistingNode = existing,
-                AccessContext = inboundCtx,
-            };
-            DetachedReplyOutcome.Of(transitionValidators
-                    .Select(v => v.Validate(context))
-                    .Concat()
-                    .Where(r => !r.IsValid)
-                    .Take(1)
-                    .Select(r => (NodeValidationResult?)r)
-                    .DefaultIfEmpty(null))
+            DetachedReplyOutcome.Of(NodeTypeTransitionGate.FirstRefusal(
+                    hub, node, existingIsStored ? existing : null, inboundCtx))
                 .Subscribe(
                     outcome =>
                     {
@@ -9000,20 +8991,23 @@ public static class MeshExtensions
                         if (outcome is { HasValue: true, Value: { } refused })
                         {
                             logger.LogWarning("[CreateOrUpdate] REFUSED {Path}: {Refusal}",
-                                node.Path, refused.ErrorMessage);
-                            // Already rendered in the caller's locale by the validator.
-                            PostFail(
-                                LocalizableText.Verbatim(refused.ErrorMessage ?? $"Update rejected for: {node.Path}"),
-                                NodeUpsertRejectionReason.ValidationFailed);
+                                node.Path, refused.Refusal.English);
+                            PostFail(refused.Refusal, refused.Reason == NodeRejectionReason.Unavailable
+                                ? NodeUpsertRejectionReason.Unknown
+                                : NodeUpsertRejectionReason.ValidationFailed);
                             return;
                         }
-                        // A validator that faulted or answered nothing reached no verdict: refuse,
-                        // and say it was not judged rather than that it was invalid.
-                        var why = outcome.Error?.Message ?? "the validator completed without a verdict";
+                        // The gate faulted or answered nothing: no verdict, so refuse — and say
+                        // it was not judged rather than that it was invalid.
                         logger.LogWarning(outcome.Error,
-                            "[CreateOrUpdate] {Path}: a NodeType transition validator reached no verdict; refusing.",
+                            "[CreateOrUpdate] {Path}: the NodeType transition gate reached no verdict; refusing.",
                             node.Path);
-                        PostFail(LocalizableText.Verbatim($"Update of '{node.Path}' was not judged: {why}"),
+                        PostFail(
+                            LocalizableText.Keyed(
+                                $"Updating '{node.Path}' was refused: whether it may change the node's type "
+                                + "could not be decided, so nothing was written. This is NOT a statement "
+                                + "about the request; retry shortly.",
+                                "activity.node.update.transitionNotJudged", ("path", node.Path)),
                             NodeUpsertRejectionReason.Unknown);
                     },
                     ex => logger.LogWarning(ex,

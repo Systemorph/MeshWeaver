@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
 using System.Threading;
@@ -45,7 +46,25 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
                 new MeshNode(StaticStorage) { Name = StaticStorage, NodeType = "Markdown" },
                 AssignmentNodeFactory.UserRole(SubjectId, Role.Editor.Id, StaticStorage),
                 AssignmentNodeFactory.Policy($"{StaticStorage}/_Storage",
-                    new PartitionAccessPolicy { BreaksInheritance = true }));
+                    new PartitionAccessPolicy { BreaksInheritance = true }),
+                new MeshNode(CustomPartition) { Name = CustomPartition, NodeType = "Markdown" },
+                CustomPartitionRecord());
+
+    private const string CustomPartition = "LedgerSpace";
+
+    /// <summary>The <c>Admin/Partition</c> record of a partition that maps a CUSTOM satellite segment.</summary>
+    private static MeshNode CustomPartitionRecord()
+    {
+        var record = PartitionOwnership.PartitionDefinitionNode(new MeshNode(CustomPartition) { Name = CustomPartition }, "custom layout");
+        var definition = (PartitionDefinition)record.Content!;
+        return record with
+        {
+            Content = definition with
+            {
+                TableMappings = new(PartitionDefinition.DefaultSegmentTableMappings()) { ["_Ledger"] = "ledgers" },
+            },
+        };
+    }
 
     [Fact]
     public void AddGraph_RegistersTheValidator()
@@ -188,6 +207,108 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         (await TypeOf(path, ct)).Should().Be("Markdown", "the refused retype must leave the node as it was");
     }
 
+    /// <summary>
+    /// The canonical write API: a <c>GetMeshNodeStream(path).Update</c> from another hub reaches the
+    /// owner as a merge patch, and a retype into a policy is judged there against the node it holds.
+    /// </summary>
+    [Theory(Timeout = 120000)]
+    [InlineData("_Storage/_Policy")]
+    [InlineData("restrict")]
+    public async Task RetypingIntoAPolicy_ThroughTheStreamUpdate_IsRefused(string relative)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var path = await CreateMarkdown(relative.Replace("restrict", $"restrict-{Guid.NewGuid().ToString("N")[..8]}"), ct);
+
+        var failure = await Record.ExceptionAsync(() =>
+            Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(current => current with
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Content = new PartitionAccessPolicy { BreaksInheritance = true },
+                })
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("the owner must judge a retype into a policy that arrives as a patch");
+        failure!.Message.Should().Contain(path);
+        (await TypeOf(path, ct)).Should().Be("Markdown", "the refused retype must leave the node as it was");
+    }
+
+    /// <summary>
+    /// The policy type matches the way NodeType resolution matches it: case-insensitively. A
+    /// differently cased type must not skip the rule, on create or on retype.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ADifferentlyCasedPolicyType_IsJudged_OnCreateAndRetype()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        const string lower = "partitionaccesspolicy";
+
+        var createFailure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(AssignmentNodeFactory.Policy($"{TestPartition}/_Storage",
+                    new PartitionAccessPolicy { BreaksInheritance = true }) with { NodeType = lower })
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+        createFailure.Should().NotBeNull("`partitionaccesspolicy` resolves to the policy type");
+        createFailure!.Message.Should().Contain($"{TestPartition}/_Storage/_Policy");
+
+        var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var retypeFailure = await Record.ExceptionAsync(() =>
+            MeshService.UpdateNode(MeshNode.FromPath(path) with
+                {
+                    Name = path,
+                    NodeType = lower,
+                    State = MeshNodeState.Active,
+                    Content = new PartitionAccessPolicy { BreaksInheritance = true },
+                })
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+        retypeFailure.Should().NotBeNull("a retype naming the policy type in another casing is still a retype into it");
+        (await TypeOf(path, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>
+    /// The EFFECTIVE layout is read from the partition's own record: its custom `_Ledger` segment
+    /// routes to a satellite table, so a policy under it is refused end to end.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APolicyUnderASegmentOnlyThePartitionRecordMaps_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var scope = $"{CustomPartition}/area/_Ledger";
+
+        var failure = await Record.ExceptionAsync(() =>
+            MeshService.CreateNode(AssignmentNodeFactory.Policy(scope, new PartitionAccessPolicy { BreaksInheritance = true }))
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("the partition record maps `_Ledger` to its own table");
+        failure!.Message.Should().Contain($"'{CustomPartition}/area/_Policy'");
+    }
+
+    /// <summary>
+    /// The upsert that LOST its create race never read the node that won. The gate reads it, so a
+    /// Markdown winner is judged as the node being retyped, not the incoming policy as its own
+    /// predecessor.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheTransitionGate_ReadsTheStoredNode_WhenTheCallerDidNotReadIt()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var path = await CreateMarkdown("_Storage/_Policy", ct);
+        var incoming = AssignmentNodeFactory.Policy($"{TestPartition}/_Storage", new PartitionAccessPolicy { BreaksInheritance = true });
+
+        var unread = await NodeTypeTransitionGate.FirstRefusal(Mesh, incoming, stored: null, TestUsers.Admin)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        unread.Should().NotBeNull("the stored winner is Markdown, so this write retypes it into a misplaced policy");
+        unread!.Value.Refusal.English.Should().Contain(path);
+
+        // Control: the incoming node passed as its own predecessor (the shape of the defect) checks nothing.
+        var self = await NodeTypeTransitionGate.FirstRefusal(Mesh, incoming, stored: incoming, TestUsers.Admin)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        self.Should().BeNull();
+    }
+
     /// <summary>The fold reads a policy only under the id <c>_Policy</c>; any other id is refused.</summary>
     [Fact]
     public void APolicyUnderAnotherId_IsRefused()
@@ -295,4 +416,36 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         Mesh.GetEffectivePermissions(path, SubjectId)
             .Do(p => Output.WriteLine($"{path}: {p}"))
             .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+}
+
+/// <summary>
+/// The transition gate holds every validator to ONE verdict: an empty completion is a refusal, never
+/// consent. Pinned with a transition validator that completes without emitting.
+/// </summary>
+public class NodeTypeTransitionGateVerdictTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private sealed class SilentTransitionValidator : INodeValidator, INodeTypeTransitionValidator
+    {
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Update];
+        public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+            => Observable.Empty<NodeValidationResult>();
+    }
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder).ConfigureServices(services =>
+            services.AddScoped<INodeValidator, SilentTransitionValidator>());
+
+    [Fact(Timeout = 120000)]
+    public async Task AnEmptyCompletion_IsARefusal_NotConsent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var node = new MeshNode("doc", TestPartition) { NodeType = "Markdown", Name = "doc" };
+        var refusal = await NodeTypeTransitionGate
+            .FirstRefusal(Mesh, node, stored: node with { NodeType = "Group" }, TestUsers.Admin)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        refusal.Should().NotBeNull("a validator that gave no verdict did not consent");
+        refusal!.Value.Reason.Should().Be(NodeRejectionReason.Unavailable);
+        refusal.Value.Refusal.Key.Should().Be(NodeTypeTransitionGate.GaveNoVerdictKey);
+    }
 }

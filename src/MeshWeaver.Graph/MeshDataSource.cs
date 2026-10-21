@@ -244,6 +244,10 @@ public static class MeshDataSourceExtensions
             // this hub alone: a client write that would change one is refused here, naming it, before
             // the merge runs. Doc/Architecture/StampedFields.
             .AddStampedFieldGuard()
+            // A client patch or synced write-back that RETYPES this node into a PartitionAccessPolicy
+            // is judged for placement against the node this hub holds: the one write route that
+            // reaches the owner without a validator chain. See PolicyPlacementValidator.
+            .AddPolicyPlacementGuard()
             // InitializeHubRequest, HeartBeatEvent, ShutdownRequest, DisposeRequest,
             // and DeliveryFailure are bypassed by the framework — see MessageService.cs.
             .WithInitializationGate(MeshNodeExtensions.MeshNodeInitGateName, d => d.Message is CreateNodeRequest)
