@@ -1367,8 +1367,12 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   with a manifest that states no framework identity, counts as unreadable (hollow), not as a
   framework decline. A bundle that names a different framework identity is still declined. A
   bundle that lists no NodeType assemblies but declares a module or content, and records no
-  producer misses, is a complete delivery (the `BundleOffering.ClassifyEmpty` rule): it names no
-  NodeType, so it leaves the pass complete. A
+  producer misses, is a complete delivery (`BundleReader.DeclaresNothingToAdopt`, the one rule the
+  registry lane's `BundleOffering.ClassifyEmpty` also reads): it names no NodeType, so it leaves
+  the pass complete. A producer miss (`"<node path>: <reason>"`) names the type the bundle is
+  short of, whatever else the bundle carries: that type is witnessed as offered, exactly like a
+  present entry, so only it is held or parked, and the bundle's other entries still adopt. A miss
+  that names no node path makes the pass incomplete. A
   publication pointer the walk will not follow (it names a generation that is not on disk, or it is
   empty, unreadable or escaping) also makes the pass incomplete, even when the sealed flat
   publication behind it is read: the publication the pointer names was never asked about. A type the pass did not ask about has

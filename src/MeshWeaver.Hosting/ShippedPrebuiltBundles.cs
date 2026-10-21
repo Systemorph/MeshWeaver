@@ -974,6 +974,8 @@ public static class ShippedPrebuiltBundles
         if (unknownHollow > 0)
             reasons.Add($"{unknownHollow} bundle(s) had no readable manifest, stated no framework "
                 + "identity, or carried no assemblies without declaring why");
+        if (tally.BundlesWithUnattributedMisses > 0)
+            reasons.Add($"{tally.BundlesWithUnattributedMisses} producer miss(es) named no node path");
         if (skippedSources > 0)
             reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn, or their publication pointer was not followed)");
         if (tally.Leaving > 0)
@@ -1112,6 +1114,11 @@ public static class ShippedPrebuiltBundles
         /// no producer misses — complete deliveries that name no NodeType (#7015 review).</summary>
         public int BundlesDeclaredEmpty { get; init; }
 
+        /// <summary>Producer misses (<c>Manifest.Misses</c>) that name no node path, so which types
+        /// their bundle is short of is unknown (#7015 review). Attributable misses are witnessed
+        /// per path instead and never counted here.</summary>
+        public int BundlesWithUnattributedMisses { get; init; }
+
         /// <summary>Bundles that could not be read, plus whole sources that faulted.</summary>
         public int Faulted { get; init; }
 
@@ -1128,6 +1135,7 @@ public static class ShippedPrebuiltBundles
                 BundlesDeclined = left.BundlesDeclined + right.BundlesDeclined,
                 BundlesHollow = left.BundlesHollow + right.BundlesHollow,
                 BundlesDeclaredEmpty = left.BundlesDeclaredEmpty + right.BundlesDeclaredEmpty,
+                BundlesWithUnattributedMisses = left.BundlesWithUnattributedMisses + right.BundlesWithUnattributedMisses,
                 Faulted = left.Faulted + right.Faulted,
                 Leaving = left.Leaving + right.Leaving,
             };
@@ -1416,6 +1424,32 @@ public static class ShippedPrebuiltBundles
                         + "the sweep compiles instead", Path.GetFileName(bundlePath), decision.Reason);
                     return Observable.Return(default(SeedTally) with { BundlesDeclined = 1 });
                 }
+
+                // 🚨 #7015 review — a producer MISS names a type the bundle is FOR but carries no
+                // bytes for, whatever else the bundle carries. That type is a module's content as
+                // surely as one whose entry is present, so it is witnessed exactly like a matched
+                // entry (and, never covered, shows in the shortfall). Only that type is affected: the
+                // rest of the bundle adopts as before. A miss this reader cannot attribute to a node
+                // path leaves membership unknown, and the pass says so.
+                var unattributedMisses = 0;
+                foreach (var miss in manifest!.Misses ?? [])
+                {
+                    if (Plugin.Packaging.BundleReader.MissedNodePath(miss) is not { } missed)
+                        unattributedMisses++;
+                    else if (snapshot.Paths.Contains(missed))
+                        onMatched?.Invoke(missed);
+                }
+                if (unattributedMisses > 0)
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: bundle {Bundle} records {Count} producer miss(es) that "
+                        + "name no node path — which types it is short of is unknown; offer discovery "
+                        + "is INCOMPLETE", Path.GetFileName(bundlePath), unattributedMisses);
+                return Admitted().Select(t => unattributedMisses == 0
+                    ? t
+                    : t with { BundlesWithUnattributedMisses = t.BundlesWithUnattributedMisses + unattributedMisses });
+
+                IObservable<SeedTally> Admitted()
+                {
                 // A tolerant adoption stamps LIVE dependency ids (the assembly the bytes bind to
                 // here), so "already current" and the stamp agree — see PrebuiltAdoptionPolicy.LiveStampOf.
                 IReadOnlyDictionary<string, string>? DependenciesToStamp(IReadOnlyDictionary<string, string>? recorded)
@@ -1428,9 +1462,7 @@ public static class ShippedPrebuiltBundles
                     // a valid, COMPLETE delivery (the rule BundleOffering.ClassifyEmpty states for
                     // the registry lane): it names no NodeType, so it leaves no membership unknown.
                     // It still counts hollow for the shortfall report, exactly as before.
-                    var declaredEmpty = manifest.Misses is not { Count: > 0 }
-                        && (manifest.Module?.AssemblyName is { Length: > 0 }
-                            || manifest.Content is { Count: > 0 });
+                    var declaredEmpty = Plugin.Packaging.BundleReader.DeclaresNothingToAdopt(manifest);
                     // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
                     // types it should have covered will not compile here (that is the flag's whole
                     // point), so "nothing to adopt" is not a degraded-but-fine state — it is the
@@ -1530,6 +1562,7 @@ public static class ShippedPrebuiltBundles
                                 // producer stated them; the seeder declines outside it, loudly.
                                 manifest.ProducerPlatformVersion, manifest.PlatformCeiling));
                     });
+                }
             })
             .Catch<SeedTally, Exception>(ex =>
             {

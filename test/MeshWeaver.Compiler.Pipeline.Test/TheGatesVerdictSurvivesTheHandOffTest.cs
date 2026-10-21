@@ -579,6 +579,67 @@ public class IdentityLessBundle(ITestOutputHelper output) : TheGatesVerdictSurvi
 }
 
 /// <summary>
+/// #7015 review — ONE bundle that carries an assembly for <c>untracked/Sibling</c> and records a
+/// producer MISS for <c>untracked/Widget</c>. The miss names Widget as this bundle's content as
+/// surely as an entry would, so the never-adopted Widget is a module's content in an untracked
+/// partition: parked, never compiled. Sibling's adoption from the same bundle is kept.
+/// </summary>
+public class MixedSuccessAndMissBundle(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string Sibling = "untracked/Sibling";
+    private const string Widget = "untracked/Widget";
+
+    private static byte[] MixedZip()
+    {
+        using var buffer = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(
+                   buffer, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using (var writer = new StreamWriter(archive.CreateEntry(NuGetPackageWriter.ManifestEntry).Open()))
+                writer.Write(
+                    "{\"plugin\":\"Mixed\",\"version\":\"1.0.0\","
+                    + $"\"frameworkMvid\":\"{PrebuiltAssemblySeeder.LiveFrameworkMvid}\","
+                    + $"\"assemblies\":[{{\"nodePath\":\"{Sibling}\",\"assembly\":\"Sibling.dll\"}}],"
+                    + $"\"misses\":[\"{Widget}: no artifact for this lane\"]}}");
+            using var dll = archive.CreateEntry($"{NuGetPackageWriter.AssemblyFolder}/Sibling.dll").Open();
+            dll.Write(AssemblyBytes());
+        }
+        return buffer.ToArray();
+    }
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-mixed.zip"] = MixedZip() };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task AMissInABundleThatAlsoAdopts_ParksTheMissedType_AndKeepsTheSibling()
+    {
+        await CreateType(Sibling, force: false);
+        await CreateType(Widget, force: false);
+
+        var outcomes = await Sweep();
+        outcomes.Where(o => string.Equals(o.TypePath, Widget, StringComparison.OrdinalIgnoreCase))
+            .Should().NotContain(o => o.Status == PreWarmStatus.Compiled, "the batch never compiles it");
+
+        var widget = await Settled(Widget, "the missed type settles");
+        widget.CompilationStatus.Should().Be(CompilationStatus.Error,
+            $"the bundle's miss names Widget — a module's content in a partition that tracks no source; "
+            + $"error: {widget.CompilationError}");
+        widget.LatestAssemblyMvid.Should().Be(SeededMvid, "no Roslyn pass ran");
+        Parks.GetCompileAttemptCount(Widget).Should().Be(0, "no compile was dispatched");
+
+        var sibling = await Settled(Sibling, "the sibling settles");
+        sibling.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"the same bundle's successful entry still adopts; error: {sibling.CompilationError}");
+        sibling.LatestAssemblyMvid.Should().NotBe(SeededMvid, "the bundle's build was stamped");
+    }
+}
+
+/// <summary>
 /// #7015 review — a module-only bundle (a manifest that DECLARES a module, lists no NodeType
 /// assemblies and records no producer misses) is a valid, COMPLETE delivery: it names no NodeType,
 /// so it leaves no membership unknown. Beside it, an authored type in an untracked partition is
