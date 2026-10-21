@@ -229,6 +229,35 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
                 "a REVOKED revision is refused although it arrived untyped and the owner's current node still admits", cancellationToken: ct);
     }
 
+    /// <summary>
+    /// 🚨 A stream the NODE-STREAM CACHE opened is never followed, although it carries the context of
+    /// the user whose write or read opened it. The cache is the shared reader every per-user read
+    /// goes through, and it applies the per-user admission at its own read gate; following its stream
+    /// decided that shared stream as one user, ran that user's standing Read on the owner hub, and
+    /// delivered the owner's revisions to the cache through the follow's verdict chain. Measured in
+    /// MeshWeaver.Plugins (<c>OperationRequestOnControlTest</c>): the request hub's control plane then
+    /// composed its next read as the approver rather than as System, and the DSL prelude it reads
+    /// was invisible to him. NEGATIVE CONTROL: the same delivery from a client address is followed.
+    /// </summary>
+    [HubFact]
+    public async Task AStreamTheNodeStreamCacheOpened_IsNeverFollowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("cache-link", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        await FollowAs(link, ct); // NEGATIVE CONTROL inside: a client's delivery IS followed
+
+        var owner = OwnerOf(link);
+        var fromTheCache = new MessageDelivery<SubscribeRequest>(
+            new Address(MeshWeaver.Hosting.MeshNodeCacheIdentity.HubAddressType, "mesh-under-test"), owner.Address,
+            new SubscribeRequest("cache-stream", new MeshNodeReference()), Mesh.JsonSerializerOptions)
+        {
+            AccessContext = Visitor,
+        };
+
+        Assert.Null(MeshWeaver.Hosting.Security.DeclaredReadSubscriptionFollow.Follow(owner, fromTheCache));
+    }
+
     /// <summary>The follow a direct visitor subscription to <paramref name="path"/> gets on its owner, and the stored node.</summary>
     private async Task<(MeshWeaver.Data.Serialization.ClientReadFollow follow, MeshNode node)> FollowAs(string path, CancellationToken ct)
     {

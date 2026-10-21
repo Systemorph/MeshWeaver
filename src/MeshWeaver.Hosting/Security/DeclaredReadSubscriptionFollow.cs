@@ -57,6 +57,18 @@ public static class DeclaredReadSubscriptionFollow
         // through a declaration. Any other shape was admitted by a standing grant or not at all.
         if (DeclaredPointRead.RequestShape(delivery.Message, hubPath) is not { } shape)
             return null;
+        // 🚨 A stream the NODE-STREAM CACHE opened is never followed here, whichever identity it
+        // carries. The cache is the shared reader every per-user read goes through, and it applies
+        // the per-user admission — the declaration included, revision by revision — at its OWN read
+        // gate (MeshNodeStreamCache.AdmittedThroughDeclaration). A cache stream opened for a user's
+        // write carries that user's context, but it is not that user's subscription: following it
+        // decided the shared stream as that one user, ran their standing Read on the owner hub, and
+        // delivered the owner's revisions to the cache through the follow's verdict chain
+        // (measured in MeshWeaver.Plugins' OperationRequestOnControlTest: the request hub's control
+        // plane then composed its next read as the approver instead of as System, and the DSL
+        // prelude it reads was invisible to him).
+        if (string.Equals(delivery.Sender?.Type, MeshNodeCacheIdentity.HubAddressType, StringComparison.Ordinal))
+            return null;
         var access = owner.ServiceProvider.GetRequiredService<AccessService>();
         // The gate consults a declaration only for a TRUSTED context; without one it admitted nothing
         // through a declaration.

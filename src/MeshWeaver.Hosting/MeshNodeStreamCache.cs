@@ -711,7 +711,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // gets its own memory-stream subscription. See
         // Doc/Architecture/OrleansTestRoutingPattern.md.
         var routingService = meshHub.ServiceProvider.GetRequiredService<IRoutingService>();
-        var cacheAddress = new Address("cache", meshHub.Address.Id);
+        var cacheAddress = new Address(MeshNodeCacheIdentity.HubAddressType, meshHub.Address.Id);
         cacheHub = meshHub.GetHostedHub(
             cacheAddress,
             config => config
