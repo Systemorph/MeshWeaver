@@ -96,6 +96,99 @@ held by a script waiting for a compile that needs a slot). A lane leaf does noth
 pool call, no mesh read, no wait on another leaf, so it cannot nest by construction. Keep it that way —
 a leaf that needs IO splits it off, as the three diagnostics arms do.
 
+### A kernel script holds no `Compile` slot (the `KernelScript` lane)
+
+The paragraph above kept the EMIT out of the `Compile` pool, but the script's EXECUTION — and the
+session warm-up wait in front of it (`KernelScriptReferences.GetReferencesAsync`, which awaits the
+process-wide `SharedWarmup`) — were still async leaves of that same pool, holding one of its async
+slots (default: one per processor, so two to four on a CI runner) for the cell's whole run. That is the
+same nested-gate deadlock one level up: a running script can wait on another of the pool's ASYNC
+leaves — another kernel session's warm-up or execution (a cell that runs a cell and waits for it), a
+language-service workspace compile (`MeshNodeLanguageService`). With every slot held by a script waiting
+on such a leaf, none is ever admitted and no script ever finishes. Every Activity involved then stays
+`Running` for ever, and — because nothing faults — nothing is logged. Below saturation the same hold
+still capped the process at one running cell per processor and queued the language service behind
+user scripts.
+
+Measured while pinning it: the pool's BLOCKING leaves (`InvokeBlocking` — prebuilt adoption's MVID read
+in `PrebuiltAssemblySeeder.StandingBytesResolve`, the cell-surface loads in `CellSurfaceAssemblyProvider`)
+are admitted by a separate limited-concurrency scheduler, not by the async gate, so a script holding an
+async slot does NOT starve them. A script waiting on a NodeType activation is therefore not, by itself,
+this deadlock; a script waiting on another cell is.
+
+Both waits now run on their own lane, `IoPoolNames.KernelScript` (`IoPoolOptions.KernelScript`, 256 —
+a drain hook and a runaway stop, not a throttle; the CPU half of a cell is bounded by `CompileCpu`).
+**Rule:** a leaf that WAITS — on the mesh, on another leaf, on user code — never holds a `Compile` slot;
+`Compile` leaves are short file/PE reads and Roslyn workspace IO.
+
+`KernelScriptHoldsNoCompileSlotTest` (Graph.Test) pins it on a real mesh whose `Compile` pool has ONE
+slot: a cell that runs another cell and waits for it completes, and a plain cell completes while the
+pool's only async slot is held by other work. Both stay `Running` on the code before the change.
+
+**The lane REFUSES, it does not queue.** Moving the waits off `Compile` alone only moves the cycle onto
+the new lane: a parent cell holds its `KernelScript` slot while it waits, and the child needs a slot of
+the same lane to warm up and execute — so with every slot held by a waiting parent a queued child is
+never admitted, at any cap. The kernel therefore admits both leaves with `IoPool.InvokeOrRefuse`: a
+free slot runs the leaf, a full lane fails it at once with `IoPoolSaturatedException`, and the refused
+run's Activity reads `Failed` naming the refusal — which its parent sees and reports. Saturation becomes
+a visible terminal instead of a silent queue. `KernelScriptLaneRefusesInsteadOfQueuingTest` pins it with
+a ONE-slot lane: the child is refused and the parent completes with `inner Failed`; with a queue both
+stay `Running`.
+
+Still open (not the cause found here, recorded so it is not re-investigated blind): the cell-surface
+resolution's store lookup (`IAssemblyStore.TryGetBuildPath` in `CellSurfaceAssemblyProvider.ResolveOne`)
+carries no bound of its own. The file-system store answers synchronously, so it cannot park there; a
+remote store that never answers would stall the submission before it runs.
+
+### A C# run that the kernel did not settle is failed, not left `Running`
+
+The dispatcher (`CodeNodeType`) used to post a C# cell's `SubmitCodeRequest` fire-and-forget, on the
+assumption that the Roslyn kernel always settles the ActivityLog. It does — when it runs the script.
+Every failure before that point (the kernel container's dispatch faulting and answering
+`Success = false`, a `DeliveryFailure`, a routing `NotFound`) left the run `Running` for ever, silently.
+The C# branch now observes the kernel's answer through `hub.Observe` exactly as the Python/JS branch
+does, and writes any non-success onto the Activity as `Failed` with the reason (a keyed, localized
+transcript entry, `activity.codeRun.failed`). The reconcile never overwrites a status the kernel
+already settled. It adds no timeout: a kernel that never answers is a defect of its own, to be fixed
+where it stalls — the deadlock above is one such stall, fixed at its root. Pinned by
+`CSharpCellKernelFaultFailsTheActivityTest` (a kernel plug-in that faults) and its control
+`CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`).
+
+🚨 **A request timeout is not a verdict on the run.** The kernel's reply is the END of the execution,
+and each wait for it — the dispatcher's on the Code hub, the kernel container's on the Activity hub —
+is bounded by its hub's `RequestTimeout` of silence. A healthy cell computing past that budget is still
+running. So neither hop turns its own timeout into a failure: the dispatcher writes `Failed` only for a
+delivery fault or a failed reply, and the container no longer answers `Success = false` when its own
+wait expires. The Activity stays the authority and the kernel settles it when the script ends.
+`LongCellOutlivesThe{Dispatchers,KernelContainers}RequestBudgetTest` pin each hop with a two-second
+budget and a six-second cell; both read `Failed` while the script was still running before the change.
+
+Three more holes the same review found, each of which could again leave a run wrong or `Running`:
+
+- **A reconcile from a lagging copy.** The dispatcher's terminal guard reads ITS copy of the Activity,
+  which can still say `Running` when a cancelled kernel's reply arrives — and since `Running` is the
+  enum's zero value the merge patch carries no base value for `status`, so the owner accepted `Failed`
+  over `Cancelled`. The reply now says whether the kernel already settled the run
+  (`SubmitCodeResponse.ActivitySettled`, set on every executor reply after `Complete`); the dispatcher
+  reconciles only a failed reply WITHOUT it, i.e. a run nobody will settle.
+  `ARunTheKernelCancelledAndSettled_IsNotOverwrittenWithFailed` delays the kernel's terminal write
+  behind its reply.
+- **The idle claim ended with the reply wait.** The kernel host's idle-disconnect claim (#4422) was
+  released when its bounded wait for the executor's reply ended, timeout included — so a quiet script
+  that outlived both the request budget and the idle window had its hub and executor disposed mid-run,
+  the submission pump stopped, and the Activity stayed `Running`. A timed-out reply wait now hands over
+  to THAT SUBMISSION's own settlement signal (`KernelContainer.ReplyOrSettlement` over
+  `KernelExecutor.ExpectSettlement`, keyed by the forwarded delivery's id and registered before the
+  post), and the claim lasts until the executor has settled it. Never the Activity's status: one
+  Activity carries many submissions (a markdown view's blocks, an `ExecutionManager` queue), and an
+  earlier block's terminal status released a later, still-running block's claim at once.
+  `AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles` (Compiler.Pipeline.Test) crosses both
+  budgets on the injected idle clock; `KernelIdleClaimIsPerSubmissionTest` (Graph.Test) does it end
+  to end for sequential and queued blocks sharing one Activity.
+- **An English-only refusal.** The lane's refusal is platform text, so the kernel records it as a keyed
+  transcript entry (`activity.codeRun.kernelSaturated`, with the slot count) at its own failure boundary;
+  the exception text stays for the host's diagnostics.
+
 Tests, each with a negative control that fails on the unfixed code:
 
 - `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at
