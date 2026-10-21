@@ -2105,11 +2105,30 @@ stays live in every input:
   the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
   or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
 - **A rule is re-asked.** Its contract is one verdict: the lease takes the first, and so does
-  `SpaceAccessRule`. So the path asks it again in three cases: on every revision, whenever the
-  viewer's live fold on the node or its `MainNode` re-emits, and whenever an access input
-  (`AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `Role`) commits on the
-  `IMeshInvalidationFeed`. A revoked grant therefore withdraws a rule's earlier grant on the same
-  subscription, with no timer or poll.
+  `SpaceAccessRule`. So the path asks it again on every revision and whenever the viewer's live
+  fold on the node or its `MainNode` emits, including the fold's first value. A revocation committed
+  while the watches were being set up is already in that first value, and no later commit reports
+  it. The rule is also asked again whenever the `IMeshInvalidationFeed` reports an access input
+  that can reach this node:
+  - a grant (`{scope}/_Access/…`), a partition policy (`{scope}/_Policy`) or a sync config
+    (`{scope}/_GitSync`) on an ancestor-or-self of the node or its `MainNode`, on the root, or on
+    `Admin`. These are matched by namespace and id, so a deletion that carries no node type still
+    counts. A one-way `_GitSync` is what admits a platform admin to a system-owned Space.
+  - any group membership or role definition.
+
+  A revoked grant therefore withdraws a rule's earlier grant on the same subscription, with no
+  timer or poll.
+- **Each evaluation is bounded.** It is one verdict, held to the permission-establishment budget.
+  A re-evaluation that never answers turns undetermined (refused). The idle live subscription
+  itself is never timed out.
+- **Off every source gate.** Each signal (revision, fold emission, feed commit) is re-emitted as
+  its own pool work item, in order, before anything is evaluated. This is the `HopOffGate` shape,
+  never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs inside
+  the gate that signalled it, and no thread is held per open subscription.
+- **Fan-out cost.** Each open subscription holds the folds on the node and on its `MainNode`, plus
+  one feed handler. On every commit anywhere in the mesh, that handler runs a string match against
+  the node's scope set (a few entries). Only a commit that can reach the node costs a re-evaluation:
+  one rule call, and an in-flight evaluation is superseded by the next (`Switch`).
 - **Every evaluation is re-established as the viewer** at the moment it subscribes. A
   re-evaluation triggered on another thread never inherits that thread's context.
 
