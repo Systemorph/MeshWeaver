@@ -36,6 +36,11 @@ using Microsoft.Extensions.Logging;
 // observation point that proves the router's TargetUnserved NACK actually reached the owner
 // and disposed the leaked server-side stream, rather than merely that some log line appeared.
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Test")]
+// The open-subscription security tests (#4306, follow-up 2) open a DIRECT owner-side node
+// subscription — the shape that bypasses the node-stream cache's read gate — to prove the owner
+// ends it when a delegated read is revoked or expires. That shape is exactly the raw single-node
+// subscribe, so it needs the sanctioned escape hatch.
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
 
 namespace MeshWeaver.Data;
 
@@ -1739,6 +1744,22 @@ public class Workspace : IWorkspace
                 && ReferenceEquals(current.Stream, stream))
                 _clientSubscriptions.TryRemove(key, out _);
         }));
+    }
+
+    /// <summary>
+    /// Removes <paramref name="stream"/>'s registry entry for (<paramref name="subscriber"/>,
+    /// <paramref name="streamId"/>) — only when it is still the registered one (reference identity) —
+    /// BEFORE the caller disposes it, so a resubscribe in the disposal window builds a fresh stream
+    /// through the delivery gate instead of being re-asserted onto the ending one (the same ordering
+    /// <see cref="EvictClientSubscriptions"/> keeps).
+    /// </summary>
+    internal void UnregisterClientSubscription(Address? subscriber, string? streamId, ISynchronizationStream stream)
+    {
+        if (subscriber is null || string.IsNullOrEmpty(streamId))
+            return;
+        var key = (subscriber.ToString(), streamId);
+        if (_clientSubscriptions.TryGetValue(key, out var current) && ReferenceEquals(current.Stream, stream))
+            _clientSubscriptions.TryRemove(new KeyValuePair<(string, string), ClientSubscription>(key, current));
     }
 
     /// <summary>

@@ -1842,6 +1842,16 @@ public static class JsonSynchronizationStream
             );
 
 
+        // 🚨 THE SUBSCRIPTION ENDS WITH THE READ (MeshWeaver#4306, follow-up 2). The delivery gate
+        // decided this subscribe ONCE; everything below forwards every later revision for the
+        // subscription's whole life. When the hub's access layer follows this subscription
+        // (ClientSubscriptionReadAdmission — a declared point read, whose admission a revocation or
+        // an expiry ends), each revision is forwarded only once ITS OWN verdict admits it, and the
+        // first refused revision ends the subscription: a StreamErrorEvent carrying the refusal
+        // (the error arm below), then the server-side stream is disposed. A revision that revokes
+        // the read is therefore never sent. Not followed (null) ⇒ the stream's own items, as before.
+        var followed = FollowReadAdmission(hub, delivery, reduced, logger);
+
         // Use single synchronized subscription for both initial data and ongoing changes.
         // SubscribeAck is sent by HandleSubscribeRequest to close the hub.Observe(subscribeRequest)
         // pending callback immediately — DataChangedEvents always use WithTarget so they
@@ -1859,7 +1869,8 @@ public static class JsonSynchronizationStream
                 // monotonicity guard is PATCHES-ONLY; this mirrors that contract on the owner.)
                 .ToDataChanged<TReduced, DataChangedEvent>(
                     c => c.ChangeType == ChangeType.Full || !reduced.ClientId.Equals(c.ChangedBy),
-                    request.AcceptsStringSplice)
+                    request.AcceptsStringSplice,
+                    followed)
                 .Synchronize()
                 .Where(x => x is not null)
                 .Select(x => x!)
@@ -1893,6 +1904,11 @@ public static class JsonSynchronizationStream
                     // StreamMessage — the subscriber would stay live forever.
                     hub.Post(new StreamErrorEvent(request.StreamId, ex.Message),
                         o => o.WithTarget(request.Subscriber));
+                    // A refused read also ends the server-side stream: nothing may be forwarded
+                    // on it again, and a resubscribe must pass the delivery gate afresh rather than
+                    // be re-asserted onto this stream.
+                    if (ex is UnauthorizedAccessException)
+                        EndRefusedSubscription(workspace, request, reduced, logger);
                 })
         );
 
@@ -2038,10 +2054,58 @@ public static class JsonSynchronizationStream
 
         return reduced;
     }
+    /// <summary>
+    /// The stream's items gated per revision by the hub's <see cref="ClientSubscriptionReadAdmission"/>
+    /// (MeshWeaver#4306, follow-up 2), or null when the hub registers none or does not follow this
+    /// subscription. A FAULT while deciding whether to follow is a refusal: the subscription then ends
+    /// on its first revision rather than being served unfollowed (fail closed).
+    /// </summary>
+    private static IObservable<ChangeItem<TReduced>>? FollowReadAdmission<TReduced>(
+        IMessageHub hub, IMessageDelivery<SubscribeRequest> delivery, ISynchronizationStream<TReduced> reduced, ILogger logger)
+    {
+        if (hub.Configuration.Get<ClientSubscriptionReadAdmission>() is not { } admission)
+            return null;
+        var refusal = () => new UnauthorizedAccessException(
+            $"Access denied: the read of '{hub.Address}' that stream {delivery.Message.StreamId} serves for "
+            + $"'{delivery.AccessContext?.ObjectId ?? "(anonymous)"}' has ended (revoked, expired, or no longer admitted)");
+        ClientReadFollow? follow;
+        try
+        {
+            follow = admission(hub, delivery);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Owner {Owner} could not decide whether to follow the read of stream {StreamId} for {Subscriber} — refusing it",
+                hub.Address, delivery.Message.StreamId, delivery.Sender);
+            follow = new ClientReadFollow(_ => Observable.Return(false), TimeSpan.Zero);
+        }
+        if (follow is null)
+            return null;
+        return reduced.AdmitEachRevision(item => follow.VerdictOf(item.Value), follow.FirstVerdictBudget, refusal);
+    }
+
+    /// <summary>Ends a server-side stream whose subscriber's read was refused: unregistered first, then disposed through its own sync hub.</summary>
+    private static void EndRefusedSubscription<TReduced>(
+        IWorkspace workspace, SubscribeRequest request, ISynchronizationStream<TReduced> reduced, ILogger logger)
+    {
+        (workspace as Workspace)?.UnregisterClientSubscription(request.Subscriber, request.StreamId, reduced);
+        try
+        {
+            reduced.Hub?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Could not dispose the refused stream {StreamId} for {Subscriber}",
+                request.StreamId, request.Subscriber);
+        }
+    }
+
     private static IObservable<TChange?> ToDataChanged<TReduced, TChange>(
         this ISynchronizationStream<TReduced> stream,
         Func<ChangeItem<TReduced>, bool> predicate,
-        bool acceptsStringSplice = false) where TChange : JsonChange
+        bool acceptsStringSplice = false,
+        IObservable<ChangeItem<TReduced>>? source = null) where TChange : JsonChange
     {
         // Loss-detection chain (issue #1081): every emitted frame carries the Version of the frame
         // emitted immediately BEFORE it on this same forwarding subscription (-1 for the first).
@@ -2053,7 +2117,10 @@ public static class JsonSynchronizationStream
         // are SKIPPED here (value-equal, no updates) never enter the chain, so legitimate version
         // gaps from skipped frames do not false-trigger a resync.
         var lastSentVersion = -1L;
-        return stream
+        // `source` is the stream's own items gated per revision (RevisionAdmission) for a followed
+        // client subscription: the same items, in the same order, none dropped — so the JSON cursor
+        // below stays in lockstep with what the subscriber holds.
+        return (source ?? stream)
             .Synchronize()
             .Where(predicate)
             .Select(x =>

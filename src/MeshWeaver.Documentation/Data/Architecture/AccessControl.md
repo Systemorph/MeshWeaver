@@ -2069,6 +2069,39 @@ stream keeps following the verdict and faults an admitted subscription with the 
 refusal the moment the admission ends (revocation, expiry, a changed audience, a removed
 declaration). Later revisions are therefore never delivered to a caller who lost the read.
 
+**An open subscription ends with the read, and the revision that ends it is never sent.** Two
+windows used to let an open subscription briefly outlive a revoked or expired admission (#4306,
+follow-ups 1 and 2). Both are now closed by one rule: every revision is decided before it is
+forwarded (`RevisionAdmission.AdmitEachRevision`, `MeshWeaver.Data`).
+
+- **The node-stream read gate.** It used to switch on ONE live verdict. The revision that revokes
+  the read therefore reached the caller before the verdict could turn, because the verdict only
+  follows the node after that revision exists, and for a stored type the declaration is looked up
+  asynchronously. Now each revision waits for its own verdict: the declaration decided on that
+  revision's content (`DeclaredPointRead.AdmitsRevision`) and the live verdict from the owner's
+  current state (`DeclaredPointRead.Admits`). The first refused revision ends the stream.
+- **A direct owner-side subscription.** A `SubscribeRequest` to the node's own hub is admitted by
+  the delivery gate on its first verdict. The owner's synchronization stream then forwarded every
+  later revision for the subscription's life, after a revocation and after an expiry alike. Every
+  per-node hub now registers a `ClientSubscriptionReadAdmission`
+  (`DeclaredReadSubscriptionFollow`) beside its gate. A subscription the gate can have admitted
+  through the declaration is followed per revision: a point-read shape, a trusted caller context,
+  and no standing Read through the fold or the type's rule (the first outcome of
+  `DeclaredPointRead.ObserveStandardRead`, as the caller). The
+  first refusal posts a `StreamErrorEvent` ("Access denied: …"), and the server-side stream is
+  unregistered and disposed. A resubscribe then meets the gate afresh.
+
+Nothing is dropped or reordered: a revision waits behind an earlier one whose verdict is pending,
+so a patch chain stays contiguous. A verdict that stalls past the permission-establishment budget,
+faults or answers nothing is a refusal. The expiry ends the subscription at its instant with
+nothing else emitting. A standing GRANT on an open direct subscription is not followed by this
+mechanism. Withdrawing it live belongs to `ObserveStandardRead`, not to the declaration's signal,
+and an owner-side subscription does not yet follow it (still open on #4306).
+Tests: `test/MeshWeaver.Graph.Test/OpenSubscriptionEndsWithTheReadTest.cs` (the revoking revision
+never delivered, on the node stream of a stored type and on a direct subscription; a direct
+subscription ended at the expiry; a link that is not revoked still streaming, as the negative
+control).
+
 | Seam | Point read? | Consults the declaration |
 |---|---|---|
 | The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
