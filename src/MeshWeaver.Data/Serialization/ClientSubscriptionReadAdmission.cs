@@ -103,9 +103,13 @@ public static class RevisionAdmission
                 .Select((revision, index) => Prepare(revision, index, verdictOf, firstVerdictBudget, owned))
                 .Publish(prepared => Observable.Merge(
                     // Ordered admission: one revision at a time, each forwarded only once its own
-                    // FIRST decision admits it.
+                    // FIRST decision admits it AND no refusal has been latched for it (review of
+                    // #7016, thread 4336840192). The latch is consulted first: a verdict that
+                    // answered true and then false while it was being set up has both latched by
+                    // the time the revision gets here, and must be refused, never forwarded ahead of
+                    // the follow branch that would have ended the sequence.
                     prepared
-                        .Select(item => item.First
+                        .Select(item => item.Refused.Select(_ => false).Merge(item.First).Take(1)
                             .SelectMany(ok => ok
                                 ? Observable.Return(item)
                                 : Observable.Throw<Prepared<T>>(refusal())))

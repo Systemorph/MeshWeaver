@@ -204,6 +204,37 @@ public class RevisionAdmissionHandOverTest
         Assert.Equal(0, Volatile.Read(ref active));
     }
 
+    /// <summary>
+    /// Review of #7016, thread 4336840192: a verdict that answers true and then false SYNCHRONOUSLY,
+    /// while it is being set up, has both its first decision and its refusal latched before the
+    /// revision reaches admission. The revision must be refused, never forwarded. Pre-fix admission
+    /// read only the first decision and forwarded the revision ahead of the refusal.
+    /// </summary>
+    [Fact]
+    public void ASynchronousTrueThenFalse_IsRefusedBeforeTheRevisionIsForwarded()
+    {
+        var revisions = new Subject<int>();
+        var forwarded = ImmutableList<int>.Empty;
+        Exception? ended = null;
+
+        using var _ = revisions
+            .AdmitEachRevision(
+                _ => Observable.Create<bool>(o =>
+                {
+                    o.OnNext(true);
+                    o.OnNext(false);
+                    return System.Reactive.Disposables.Disposable.Empty;
+                }),
+                TimeSpan.FromHours(1),
+                () => new UnauthorizedAccessException("refused"))
+            .Subscribe(r => forwarded = forwarded.Add(r), ex => ended = ex);
+
+        revisions.OnNext(0);
+
+        Assert.Empty(forwarded);
+        Assert.IsType<UnauthorizedAccessException>(ended);
+    }
+
     [Fact]
     public void ARevisionAdmittedInTurn_HandsTheFollowOver()
     {
