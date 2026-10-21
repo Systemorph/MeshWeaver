@@ -238,7 +238,8 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         ? null
                         : JsonSerializer.SerializeToElement(returnValue, hub.JsonSerializerOptions);
                     activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
-                    hub.Post(new SubmitCodeResponse(msg.Id, true), o => o.ResponseFor(request));
+                    hub.Post(new SubmitCodeResponse(msg.Id, true) { ActivitySettled = true },
+                        o => o.ResponseFor(request));
                 }
                 catch (Exception settleEx)
                 {
@@ -254,7 +255,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         "Failed to record script result: {Reason}", settleEx.Message);
                     activityLogger.Complete(ActivityStatus.Failed);
                     hub.Post(
-                        new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message },
+                        new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message, ActivitySettled = true },
                         o => o.ResponseFor(request));
                 }
             },
@@ -268,6 +269,20 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     activityLogger.LogWarning("Script execution cancelled by user");
                     activityLogger.Complete(ActivityStatus.Cancelled);
                 }
+                else if (ex is IoPoolSaturatedException saturated)
+                {
+                    // A platform-owned refusal, not script output: it is recorded KEYED so the
+                    // Output pane renders it in the viewer's language; the exception text stays for
+                    // the host's diagnostics only.
+                    Logger.LogWarning(ex, "Submission {ViewId} refused: the kernel script lane is full", msg.Id);
+                    activityLogger.Append(new LogMessage(
+                            $"The cell was not run: all {saturated.MaxConcurrency} kernel slot(s) of this "
+                            + "process are busy, and a cell that waits on another cell may not queue behind it. "
+                            + "Run it again once other cells have finished.",
+                            LogLevel.Error)
+                        .WithKey("activity.codeRun.kernelSaturated", ("max", saturated.MaxConcurrency)));
+                    activityLogger.Complete(ActivityStatus.Failed);
+                }
                 else
                 {
                     // Surface the full exception detail on the activity log (LogError on the
@@ -277,7 +292,11 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     activityLogger.Complete(ActivityStatus.Failed);
                 }
                 hub.Post(
-                    new SubmitCodeResponse(msg.Id, false) { Error = canceled ? "Cancelled" : ex.Message },
+                    new SubmitCodeResponse(msg.Id, false)
+                    {
+                        Error = canceled ? "Cancelled" : ex.Message,
+                        ActivitySettled = true,
+                    },
                     o => o.ResponseFor(request));
             });
 

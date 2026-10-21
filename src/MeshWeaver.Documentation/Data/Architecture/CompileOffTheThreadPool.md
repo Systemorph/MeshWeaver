@@ -163,6 +163,27 @@ wait expires. The Activity stays the authority and the kernel settles it when th
 `LongCellOutlivesThe{Dispatchers,KernelContainers}RequestBudgetTest` pin each hop with a two-second
 budget and a six-second cell; both read `Failed` while the script was still running before the change.
 
+Three more holes the same review found, each of which could again leave a run wrong or `Running`:
+
+- **A reconcile from a lagging copy.** The dispatcher's terminal guard reads ITS copy of the Activity,
+  which can still say `Running` when a cancelled kernel's reply arrives — and since `Running` is the
+  enum's zero value the merge patch carries no base value for `status`, so the owner accepted `Failed`
+  over `Cancelled`. The reply now says whether the kernel already settled the run
+  (`SubmitCodeResponse.ActivitySettled`, set on every executor reply after `Complete`); the dispatcher
+  reconciles only a failed reply WITHOUT it, i.e. a run nobody will settle.
+  `ARunTheKernelCancelledAndSettled_IsNotOverwrittenWithFailed` delays the kernel's terminal write
+  behind its reply.
+- **The idle claim ended with the reply wait.** The kernel host's idle-disconnect claim (#4422) was
+  released when its bounded wait for the executor's reply ended, timeout included — so a quiet script
+  that outlived both the request budget and the idle window had its hub and executor disposed mid-run,
+  the submission pump stopped, and the Activity stayed `Running`. A timed-out reply wait now hands over
+  to the Activity itself (`KernelContainer.ReplyOrSettlement`; the host owns that node) and the claim
+  lasts until its status is terminal. `AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles`
+  (Compiler.Pipeline.Test) crosses both budgets on the injected idle clock.
+- **An English-only refusal.** The lane's refusal is platform text, so the kernel records it as a keyed
+  transcript entry (`activity.codeRun.kernelSaturated`, with the slot count) at its own failure boundary;
+  the exception text stays for the host's diagnostics.
+
 Tests, each with a negative control that fails on the unfixed code:
 
 - `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at

@@ -392,29 +392,59 @@ public class KernelContainer(IServiceProvider serviceProvider)
         // not dispose this hub under a running script (MeshWeaver#4422). The executor setup AND the
         // post run inside the tracked observable: Observe posts before it returns and rethrows a
         // synchronous post failure, so outside it a throw would skip Finally and leak the claim.
+        //
+        // 🚨 The claim lasts until the RUN ends, not until this hub's bounded wait for the reply
+        // does. The executor answers when the script ends, and Observe gives up after RequestTimeout
+        // of silence — a healthy cell computing past it is still running. Ending the tracked
+        // observable there released the claim, and a quiet script that then also outlived the idle
+        // window had this hub and its executor disposed mid-run: the pump stopped and the Activity
+        // stayed Running for ever. So a timed-out wait hands over to the Activity itself (this hub
+        // OWNS it) and the claim is released when its status turns terminal.
+        var activityPath = !string.IsNullOrEmpty(request.Message.ActivityLogPath)
+            ? request.Message.ActivityLogPath!
+            : hub.Address.ToString();
+        IObservable<IMessageDelivery<SubmitCodeResponse>?> Run(IdleState.Claim? claim) =>
+            ReplyOrSettlement(Dispatch(hub, request.Message, claim), () => ActivitySettles(hub, activityPath));
         var submission = idle is { } state
-            ? state.Track(claim => Dispatch(hub, request.Message, claim))
-            : Observable.Defer(() => Dispatch(hub, request.Message, null));
+            ? state.Track(Run)
+            : Observable.Defer(() => Run(null));
         submission
             .Take(1)
             .Subscribe(
-                resp => hub.Post(resp.Message, o => o.ResponseFor(request)),
-                ex =>
+                resp =>
                 {
-                    // 🚨 A timeout of THIS wait is not a verdict on the script. The executor answers
-                    // when the script ENDS, and this wait is bounded by RequestTimeout of silence —
-                    // so a healthy cell computing past it used to be reported Success=false while it
-                    // was still running, and the caller then failed a live run. The executor still
-                    // owns the run and settles its Activity; say nothing rather than something false.
-                    if (ex is TimeoutException)
-                        return;
-                    hub.Post(
-                        new SubmitCodeResponse(request.Message.Id, false) { Error = ex.Message },
-                        o => o.ResponseFor(request));
-                });
+                    // Null: the wait timed out and the run then settled on its own — the timeout is
+                    // not a verdict, so nothing false is answered (the caller's own wait has the
+                    // same bound and has given up; the Activity is what it follows).
+                    if (resp is not null)
+                        hub.Post(resp.Message, o => o.ResponseFor(request));
+                },
+                ex => hub.Post(
+                    new SubmitCodeResponse(request.Message.Id, false) { Error = ex.Message },
+                    o => o.ResponseFor(request)));
 
         return request.Processed();
     }
+
+    /// <summary>
+    /// The executor's reply — or, when the bounded wait for it TIMES OUT (a healthy run computing past
+    /// <c>RequestTimeout</c>), the moment <paramref name="settled"/> reports the run ended, as a
+    /// <c>null</c>. Any other fault propagates. Tracked by the idle state, this is what keeps the hub
+    /// claimed for the run's whole life rather than for the reply wait's budget.
+    /// </summary>
+    internal static IObservable<T?> ReplyOrSettlement<T>(IObservable<T> reply, Func<IObservable<Unit>> settled)
+        where T : class
+        => reply
+            .Select(r => (T?)r)
+            .Catch<T?, TimeoutException>(_ => settled().Take(1).Select(_ => (T?)null));
+
+    /// <summary>Emits once the Activity at <paramref name="activityPath"/> — owned by
+    /// <paramref name="hub"/> — reaches a terminal status.</summary>
+    private static IObservable<Unit> ActivitySettles(IMessageHub hub, string activityPath)
+        => hub.GetWorkspace().GetMeshNodeStream(activityPath)
+            .Select(node => node?.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.Status)
+            .Where(status => status is { } s && s.IsTerminal())
+            .Select(_ => Unit.Default);
 
     /// <summary>Sets up (or reuses) the executor, binds the claim to it, and posts the submission.</summary>
     private IObservable<IMessageDelivery<SubmitCodeResponse>> Dispatch(

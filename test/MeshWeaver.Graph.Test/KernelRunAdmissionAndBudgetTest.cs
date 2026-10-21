@@ -61,8 +61,10 @@ public class KernelScriptLaneRefusesInsteadOfQueuingTest(ITestOutputHelper outpu
             .Timeout(Bound)
             .Await(ct);
         var innerLog = await Terminal(innerActivity!, "the refused child", ct);
-        innerLog.Messages.Should().Contain(m => m.Message.Contains("Refused"),
-            "the refused run names WHY it failed, so a reader is not left guessing");
+        innerLog.Messages.Should().Contain(
+            m => m.MessageKey == "activity.codeRun.kernelSaturated"
+                 && m.MessageArgs != null && m.MessageArgs["max"].ToString() == "1",
+            "the refused run names WHY it failed, keyed so it renders in the viewer's language, with the slot count");
     }
 }
 

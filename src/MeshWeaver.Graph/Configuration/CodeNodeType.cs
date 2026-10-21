@@ -395,7 +395,12 @@ public static class CodeNodeType
                                     .Subscribe(
                                         response =>
                                         {
-                                            if (!response.Message.Success)
+                                            // A failed reply the kernel ALREADY recorded (a script
+                                            // error, a cancellation) is left alone: this hub's copy
+                                            // of the Activity can lag that terminal write, and a
+                                            // reconcile computed from it would turn Cancelled into
+                                            // Failed. Only a run nobody settled is failed here.
+                                            if (!response.Message.Success && !response.Message.ActivitySettled)
                                                 FailActivity(hub, activityPath,
                                                     RunFailed("C#", response.Message.Error));
                                         },
@@ -631,9 +636,10 @@ public static class CodeNodeType
                 // Content can be a degraded JsonElement, and a plain type test is then null — the
                 // lambda no-ops, no patch is sent, and the run this method exists to FAIL is left
                 // Running for ever. Exactly the trap ActivityLogAppender.Append's own lambda names.
-                // A status already settled is never overwritten: a C# kernel that ran the script
-                // has written Succeeded / Failed / Cancelled itself before it answers, and a late
-                // reconcile must not turn a cancelled run into a failed one.
+                // A status already settled in THIS mirror is never overwritten. The mirror can lag
+                // the owner, so this is not what protects a kernel-settled run — callers never issue
+                // the reconcile for one (SubmitCodeResponse.ActivitySettled); this only skips a write
+                // that is visibly redundant.
                 curr.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger) is { } log
                 && !log.Status.IsTerminal()
                     ? curr with

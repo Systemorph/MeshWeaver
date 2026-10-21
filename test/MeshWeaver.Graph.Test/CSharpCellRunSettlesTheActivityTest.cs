@@ -126,6 +126,10 @@ public class CSharpCellKernelFaultFailsTheActivityTest(ITestOutputHelper output)
 {
     private const string AnswerFailure = "// answer-failure";
     private const string Throw = "// throw";
+    private const string SettledCancelled = "// settled-cancelled";
+
+    /// <summary>How long the plug-in holds back its own terminal write behind its reply.</summary>
+    private static readonly TimeSpan TerminalWriteDelay = TimeSpan.FromSeconds(1);
 
     /// <summary>A kernel that faults before running anything and never touches the ActivityLog.</summary>
     private sealed class FaultingKernel : IKernelHubConfigurator
@@ -136,6 +140,24 @@ public class CSharpCellKernelFaultFailsTheActivityTest(ITestOutputHelper output)
             config.TypeRegistry.WithType(typeof(SubmitCodeResponse), nameof(SubmitCodeResponse));
             return config.WithHandler<SubmitCodeRequest>((hub, request) =>
             {
+                if (request.Message.Code.Contains(SettledCancelled, StringComparison.Ordinal))
+                {
+                    // A kernel that cancelled the run and SAYS it settled the Activity — but whose
+                    // terminal write reaches the Activity only AFTER its reply: the dispatcher's copy
+                    // still reads Running when the reply arrives.
+                    hub.Post(
+                        new SubmitCodeResponse(request.Message.Id, false) { Error = "Cancelled", ActivitySettled = true },
+                        o => o.ResponseFor(request));
+                    var path = request.Message.ActivityLogPath!;
+                    var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+                    Observable.Timer(TerminalWriteDelay)
+                        .SelectMany(_ => access.RunAsSystem(() => hub.GetWorkspace().GetMeshNodeStream(path)
+                            .Update(curr => curr.ContentAs<ActivityLog>(hub.JsonSerializerOptions) is { } log
+                                ? curr with { Content = log with { Status = ActivityStatus.Cancelled, End = DateTime.UtcNow } }
+                                : curr)))
+                        .Subscribe(_ => { }, _ => { });
+                    return request.Processed();
+                }
                 if (request.Message.Code.Contains(Throw, StringComparison.Ordinal))
                     throw new InvalidOperationException("faulting kernel: the submission handler threw");
                 // The KernelContainer's own dispatch-fault shape: Success=false, log untouched.
@@ -176,6 +198,25 @@ public class CSharpCellKernelFaultFailsTheActivityTest(ITestOutputHelper output)
             "the reader of the Output pane must see WHY the run failed, not a bare red status");
         log.Messages.Should().Contain(m => m.MessageKey == "activity.codeRun.failed",
             "the entry is keyed so the Output pane renders it in the viewer's language");
+    }
+
+    /// <summary>
+    /// A run the kernel CANCELLED and settled itself, whose terminal write reaches the Activity after
+    /// the reply: the dispatcher must not reconcile it from its lagging copy. Without
+    /// <c>ActivitySettled</c> the dispatcher read Running there and wrote Failed first, which the owner
+    /// accepted over the coming Cancelled.
+    /// </summary>
+    [Fact(Timeout = 180_000)]
+    public async Task ARunTheKernelCancelledAndSettled_IsNotOverwrittenWithFailed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var cell = await CreateCell($"{SettledCancelled}\n1 + 1", ct);
+        var activity = await Run(cell, ct);
+
+        var log = await Terminal(activity, "the kernel's cancelled verdict, written behind its reply", ct);
+
+        log.Status.Should().Be(ActivityStatus.Cancelled,
+            "the kernel settled this run as Cancelled; the dispatcher's lagging copy is no basis for Failed");
     }
 
     /// <summary>
