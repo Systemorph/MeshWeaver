@@ -1349,7 +1349,19 @@ watcher's own witnesses: one tracking vote per partition, the record's adoption 
 offer from the same `SeedForTypes(paths, onOffered)` pass, asked only for types in untracked
 partitions. Every type it names leaves the batch: the sweep flips it `Pending` and waits for the
 watcher, whose gate holds or parks it as on any other trigger. A host with no tracking seam names
-nothing, and its batch is unchanged. Pinned by `TheBootBakeAsksTheUntrackedModuleGateTest`: two
+nothing, and its batch is unchanged. Four properties keep the verdict intact across that hand-off:
+- **A type the gate's own offer pass ADOPTED on this process is reported baked, not handed off.**
+  It is classified from this process's adoption ledger and re-probed against this replica's store.
+  On a readiness-gated replica the shared stamp is held, so the watcher would otherwise park a
+  type this process can serve.
+- **The hand-off clears `RequestedReleaseForce`.** A force makes the watcher skip its adoption
+  pass, which is its only source of the offer witness. An offered-only type would then read as
+  authored content and be compiled.
+- **The watcher's answer is the first terminal record whose version is above the hand-off write.**
+  It never depends on seeing a `Pending` frame, and a stale terminal replay is never taken for the
+  answer. A hand-off write that fails is reported as a fault at once.
+- **An `Ok` answer is re-probed on this replica before it counts as baked.** The hold judges the
+  record, not the store, so a held build whose bytes are gone is reported as a fault. Pinned by `TheBootBakeAsksTheUntrackedModuleGateTest`: two
 identical records, one reached by the watcher and one by the batch, must end word for word the
 same, with no Roslyn pass on either.
 

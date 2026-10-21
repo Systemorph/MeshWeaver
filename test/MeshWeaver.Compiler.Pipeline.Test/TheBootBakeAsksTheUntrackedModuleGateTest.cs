@@ -111,13 +111,16 @@ public class TheBootBakeAsksTheUntrackedModuleGateTest(ITestOutputHelper output)
     /// Ok whose MVID is no longer the seeded one (a Roslyn pass).</summary>
     private async Task<NodeTypeDefinition> Settled(string path, string because)
     {
-        var node = await Mesh.GetMeshNodeStream(path).Should().Within(TestTimeouts.CrossSilo)
-            .Match(n => n?.Content is NodeTypeDefinition d
+        // Converted, never type-tested or cast: content that arrived as JSON is the same record.
+        var definition = await Mesh.GetMeshNodeStream(path)
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(d => d is not null
                         && (d.CompilationStatus == CompilationStatus.Error
                             || (d.CompilationStatus == CompilationStatus.Ok
                                 && !string.Equals(d.LatestAssemblyMvid, SeededMvid, StringComparison.Ordinal))),
                 because, cancellationToken: TestContext.Current.CancellationToken);
-        return (NodeTypeDefinition)node.Content!;
+        return definition!;
     }
 
     [Fact]
