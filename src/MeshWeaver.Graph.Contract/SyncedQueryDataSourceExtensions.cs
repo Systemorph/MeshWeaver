@@ -261,8 +261,16 @@ public static class SyncedQueryDataSourceExtensions
 
         return Observable.Defer(() =>
         {
-            var hub = workspace.Hub;
-            if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
+            // 🚨 The MESH hub judges the read, never the calling workspace's own hub. A hub's
+            // configuration starts empty and the permission evaluator is not inherited: a portal /
+            // circuit hub carries no EffectivePermissionsDelegate, and asking IT whether to filter
+            // answered "no RLS here" — so every synced query a Blazor view opened on the portal hub
+            // handed the System-loaded snapshot to whoever was viewing, unfiltered, whatever their
+            // identity. The mesh hub carries the evaluator the owner's RLS check runs; a mesh built
+            // WITHOUT row-level security has none there either, and stays unfiltered as before.
+            // See Doc/Architecture/AccessContextPropagation → "A render reads as its viewer".
+            var meshHub = workspace.Hub.GetMeshHub();
+            if (meshHub.Configuration.Get<EffectivePermissionsDelegate>() is null)
                 return upstream;
             // Per-user filter: for each emission, filter to nodes the user
             // has Read on. PermissionEvaluator caches per-scope via the
@@ -270,7 +278,7 @@ public static class SyncedQueryDataSourceExtensions
             // same user are cheap.
             return FilterByReadPermission(
                 upstream,
-                node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
+                node => meshHub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
         });
     }
 

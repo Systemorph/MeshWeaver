@@ -708,6 +708,28 @@ The caller's captured `AccessContext` is restored around the *synchronous* evalu
 
 Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). Revocation surfaces within at most that window; the cache is not invalidated reactively. The shared upstream is unchanged — only the returned subscriber-side observable is gated.
 
+## A render reads as its viewer
+
+🚨 **Every mesh read a Blazor view makes while it renders runs as the circuit's VIEWER — never as the identity that happens to be ambient on the rendering thread.**
+
+A render can run on somebody else's turn. When the platform installs a package on demand while a person is on the page, or another person's edit re-renders a shared area, the renderer runs with THAT turn's `AccessService.Context` ambient. The mesh resolves a read's viewer from `Context ?? CircuitContext` (`IMeshService.Query`, `hub.GetQuery`, `GetMeshNodeStream`), so a read issued from `OnParametersSet` ran as `system-security` — which skips row-level security — and the person was shown nodes they hold no grant on. Re-renders driven by framework emissions — a read issued inside an emission another identity produced — are a separate half (MeshWeaver#7038); this section is about the render itself.
+
+**The rule, by construction (MeshWeaver.Plugins, `MeshWeaver.Blazor`):**
+
+| Where | What carries the viewer |
+|---|---|
+| Every `BlazorView` | `SetParametersAsync` (and `BindDataAfterParameterReset`) runs the whole parameter cycle — `OnInitialized`, `OnParametersSet`, `BindData` — under `CircuitViewer` on the hub's `AccessService`. No view has to remember it. |
+| A read a view issues LATER (a debounce, an emission callback, a timer) | `ReadAsCircuitViewer(() => read)` (composes AND subscribes the read in the viewer's scope — `GetQuery` and `GetMeshNodeStream` capture their reader when CALLED), or `ForCircuitViewer(request)` to stamp the viewer on a `MeshQueryRequest`. |
+| A component that is not a `BlazorView` (a routable page, a chip) | `CircuitUser.ResolveViewer(services, access)` and `MeshQueryRequest.FromQuery(query, viewer.ObjectId)`, or `CircuitUser.ReadAsViewer(hub, services, () => read)`. |
+
+**Who the viewer is** (`CircuitUser.ResolveViewer`): the circuit's DURABLE user (`ICircuitContextAccessor.UserContext`), then `CircuitContext`, then `Context` — skipping `system-security` and every hub-shaped principal — and otherwise the **explicit Anonymous viewer**. The anonymous fallback is load-bearing: an UNSET identity is not "anonymous" to the mesh, it is "whoever is ambient", and on a platform turn that is the platform.
+
+**A System read is never shown to a viewer on the strength of a parent read.** The chat views used to read message and delegation nodes under `ImpersonateAsSystem` because the circuit's identity was unreliable in a sync-emission scope; that showed every path a thread NAMED to anybody who could open it. They now read as the viewer, and the stream cache's gate — node-type access rules included — decides.
+
+**And the synced-query filter is judged by the MESH hub.** `WrapWithPerUserRls` asked the CALLING hub whether row-level security was on. A portal / circuit hub carries no `EffectivePermissionsDelegate` of its own (a hub's configuration starts empty; nothing is inherited), so every `hub.GetQuery` a view opened on the portal hub returned the System-loaded snapshot UNFILTERED, whatever the reader's identity. The filter now resolves the mesh hub (`GetMeshHub()`), which carries the evaluator the owner's RLS check runs; a mesh built without RLS has none there either and stays unfiltered.
+
+**Guarded by** `SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest` (core, `test/MeshWeaver.Graph.Test`) and `RenderOnPlatformTurnShowsOnlyTheViewersDataTest` (MeshWeaver.Plugins, `MeshWeaver.Blazor.Graph.Test`): a view rendered inside `ImpersonateAsSystem` for a stranger shows the lobby and never the vault, through the base-class probe (all three read shapes), `MeshNodeCollectionView` and `CatalogPage`; a keeper with Read sees the vault through the same render, and a logged-out circuit sees neither.
+
 ## `GetPermissionRequest` contract
 
 `GetPermissionRequest` still exists as a message — it is how a *caller* asks a specific per-node hub what it grants (the test helper `PermissionTestExtensions`, and the request-time pipeline). It is simply no longer what the stream cache uses.
