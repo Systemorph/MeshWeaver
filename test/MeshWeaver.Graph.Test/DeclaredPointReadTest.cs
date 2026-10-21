@@ -902,10 +902,10 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
     private static readonly AccessContext Dave = new() { ObjectId = "dave", Name = "dave" };
 
     /// <summary>
-    /// The initial signals of a rule-governed node with no MainNode: the first evaluation, and the
-    /// first value of the node fold, the Admin fold and the role catalog.
+    /// The initial evaluations of ONE subscription: the first check, the first value of each watched
+    /// fold (<see cref="DeclaredPointRead.FoldScopes"/>) and the first value of the role catalog.
     /// </summary>
-    private const int InitialEvaluations = 4;
+    private static int InitialEvaluations(MeshNode node) => 1 + DeclaredPointRead.FoldScopes(node).Count + 1;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
         .WithMeshType(typeof(TicketContent), nameof(TicketContent))
@@ -921,21 +921,29 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
             .AddSingleton<INodeTypeAccessRule>(sp => sp.GetRequiredService<ControlledRule>())
             .AddSingleton(new MeshOperationOptions { Timeout = TimeSpan.FromSeconds(6) }));
 
-    /// <summary>Grants until <see cref="Stall"/>; afterwards never answers. Counts its evaluations.</summary>
+    /// <summary>
+    /// Grants until <see cref="Stall"/>; afterwards never answers. Records each verdict it has
+    /// DELIVERED, correlated to the subscription that asked by its viewer context — each subscription
+    /// in these tests is given its own <see cref="AccessContext"/> instance, which the live read
+    /// hands every evaluation it makes as <see cref="NodeValidationContext.AccessContext"/>.
+    /// </summary>
     private sealed class ControlledRule : INodeTypeAccessRule
     {
         private int stalled;
-        private int calls;
-        private readonly BehaviorSubject<int> evaluations = new(0);
+        private readonly ReplaySubject<AccessContext?> delivered = new();
         public string NodeType => StallType;
         public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
-        public IObservable<int> Evaluations => evaluations;
         public void Stall() => Volatile.Write(ref stalled, 1);
+
+        /// <summary>The number of verdicts delivered to the subscription whose viewer is <paramref name="viewer"/> (by reference), live.</summary>
+        public IObservable<int> DeliveredTo(AccessContext viewer)
+            => delivered.Where(v => ReferenceEquals(v, viewer)).Select((_, index) => index + 1).StartWith(0);
+
         public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
-        {
-            evaluations.OnNext(Interlocked.Increment(ref calls));
-            return Volatile.Read(ref stalled) == 1 ? Observable.Never<bool>() : Observable.Return(true);
-        }
+            => Volatile.Read(ref stalled) == 1
+                ? Observable.Never<bool>()
+                // Counted when the verdict is DELIVERED, never when the evaluation merely starts.
+                : Observable.Return(true).Do(_ => delivered.OnNext(context.AccessContext));
     }
 
     private ControlledRule Rule => Mesh.ServiceProvider.GetRequiredService<ControlledRule>();
@@ -946,14 +954,21 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
         string partition, CancellationToken ct)
     {
         await SeedTopLevel(new MeshNode(partition) { NodeType = "Markdown", Name = partition });
-        var stall = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", partition) { NodeType = StallType, Name = "stall" }))
-            .Should().Emit(cancellationToken: ct))!.Path;
-        var open = DeclaredPointRead.ObservePointRead(Mesh, stall, Dave).Replay(1);
-        var tri = PointReadProbe.Open(Mesh, stall, Dave);
+        var node = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", partition) { NodeType = StallType, Name = "stall" }))
+            .Should().Emit(cancellationToken: ct))!;
+        // One viewer INSTANCE per subscription: the rule's delivered verdicts are correlated by it.
+        var openViewer = new AccessContext { ObjectId = Dave.ObjectId, Name = Dave.Name };
+        var triViewer = new AccessContext { ObjectId = Dave.ObjectId, Name = Dave.Name };
+        var initial = InitialEvaluations(node);
+        var open = DeclaredPointRead.ObservePointRead(Mesh, node.Path, openViewer).Replay(1);
+        var tri = PointReadProbe.Open(Mesh, node.Path, triViewer);
         var connections = new System.Reactive.Disposables.CompositeDisposable(open.Connect(), tri.Connect());
-        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule grants while initialising", cancellationToken: ct);
-        await Rule.Evaluations.Should().Within(TimeSpan.FromSeconds(20)).Match(n => n >= InitialEvaluations,
-            "every initial signal has been answered (granted) before the stalled phase begins", cancellationToken: ct);
+        // ESTABLISHED, per subscription: every one of ITS initial evaluations has delivered its verdict.
+        await Rule.DeliveredTo(openViewer).Should().Within(TimeSpan.FromSeconds(20)).Match(n => n >= initial,
+            $"the page subscription's {initial} initial evaluations have all delivered their grants", cancellationToken: ct);
+        await Rule.DeliveredTo(triViewer).Should().Within(TimeSpan.FromSeconds(20)).Match(n => n >= initial,
+            $"the tri-state subscription's {initial} initial evaluations have all delivered their grants", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "established: the page grants", cancellationToken: ct);
         await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "established: granted", cancellationToken: ct);
         Rule.Stall();
         return (open, tri, connections);
