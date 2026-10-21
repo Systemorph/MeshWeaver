@@ -76,6 +76,10 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             TypeNode(SealedDeclaredType, Declaration),
             TypeNode(OpenType, declaration: null),
             TypeNode(SatType, declaration: null),
+            TypeNode(StaleType, declaration: null),
+            // erin is a PLATFORM admin: the Admin role in the Admin partition — no data grant anywhere.
+            new MeshNode(PermissionEvaluator.AdminScope) { NodeType = "Markdown", Name = "Admin" },
+            AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope),
             // carol holds Viewer on the rule partition — the fold grants her every node there.
             AssignmentNodeFactory.UserRole(Carol.ObjectId, "Viewer", RulePartition),
             // Readable by anyone in a browser, NOT through the API: the shape that makes the
@@ -91,10 +95,27 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             // The real satellite rule (Read delegates to the MainNode), held to the rule contract's
             // ONE verdict exactly as the lease does — a rule's own stream never makes a verdict live.
             .AddSingleton<INodeTypeAccessRule>(sp => new FirstVerdictRule(
-                new MeshWeaver.Graph.Security.SatelliteAccessRule(SatType, sp.GetRequiredService<IMessageHub>()))));
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(SatType, sp.GetRequiredService<IMessageHub>())))
+            // A rule whose FIRST answer was decided before a revocation landed (it answers true once),
+            // then the real satellite rule — the subscription-establishment race, made deterministic.
+            .AddSingleton<INodeTypeAccessRule>(sp => new FirstCallGrantsRule(
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(StaleType, sp.GetRequiredService<IMessageHub>()))))
+        .AddSpaceType();
 
     /// <summary>A satellite type: Read is Read on the node's MainNode.</summary>
     private const string SatType = "Kiosk/Sat";
+    /// <summary>A satellite type whose first evaluation predates a revocation.</summary>
+    private const string StaleType = "Kiosk/Stale";
+    private static readonly AccessContext Erin = new() { ObjectId = "erin", Name = "erin" };
+
+    private sealed class FirstCallGrantsRule(INodeTypeAccessRule inner) : INodeTypeAccessRule
+    {
+        private int calls;
+        public string NodeType => inner.NodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
+            => Interlocked.Increment(ref calls) == 1 ? Observable.Return(true) : inner.HasAccess(context, userId).Take(1);
+    }
 
     private sealed class FirstVerdictRule(INodeTypeAccessRule inner) : INodeTypeAccessRule
     {
@@ -473,6 +494,85 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             "revoking the grant withdraws the rule's earlier verdict on the SAME subscription", cancellationToken: ct);
     }
 
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333751923): a fold's INITIAL value is a re-evaluation signal. The
+    /// rule's first answer was decided before a revocation landed (it grants once); dave holds nothing,
+    /// and the fold's first value already says so. Skipping that value left the open verdict granted
+    /// with no later change to correct it.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARevocationDuringSubscription_IsNotMissed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode("s") { NodeType = "Markdown", Name = "s" });
+        await AsSystem(new MeshNode("doc", "s") { NodeType = "Markdown", Name = "doc" }, ct);
+        var stale = (await AsSystem(new MeshNode("stale", "s") { NodeType = StaleType, Name = "stale", MainNode = "s/doc" }, ct)).Path;
+
+        var open = DeclaredPointRead.ObservePointRead(Mesh, stale, Dave).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "the fold's first value (dave holds nothing) re-decides the rule's stale first answer", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333751987): <c>SpaceAccessRule</c> admits a platform admin to a
+    /// Space while its <c>_GitSync</c> is one-way. Deleting that config withdraws the admission — the
+    /// Space's revision and the admin's fold are unchanged, so only the config commit can say so — on
+    /// the SAME subscription.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task APlatformAdminsSpaceRead_EndsWhenTheOneWaySyncGoes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode("owned") { NodeType = "Space", Name = "owned", Content = new MeshWeaver.Graph.Space() });
+        var sync = (await AsSystem(new MeshNode(AccessAssignmentGuard.SyncConfigId, "owned")
+        {
+            NodeType = "Markdown",
+            Content = new JsonObject { ["repositoryUrl"] = "https://github.com/example/owned" },
+        }, ct)).Path;
+
+        var open = DeclaredPointRead.ObservePointRead(Mesh, "owned", Erin).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v,
+            "POSITIVE CONTROL: a platform admin reads a system-owned Space", cancellationToken: ct);
+        Assert.False(await Verdict("owned", Dave, ct), "NEGATIVE CONTROL: a non-admin does not");
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => NodeFactory.DeleteNode(sync))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "removing the one-way sync withdraws the admin's read on the SAME subscription", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333751951): every re-evaluation signal leaves its source gate as its
+    /// OWN pool work item, in order, on a scheduler that pins no thread per subscription — never
+    /// inline on the emitting call, never a long-lived <c>ObserveOn(TaskPoolScheduler.Default)</c>.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ReEvaluationSignals_LeaveTheSourceGate_AsPoolWorkItems()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var source = new System.Reactive.Subjects.Subject<int>();
+        var seen = DeclaredPointRead.OffTheGate(source)
+            .Select(value => (value, pooled: Thread.CurrentThread.IsThreadPoolThread))
+            .Take(3).ToList().Replay(1);
+        using var connection = seen.Connect();
+        // The source emits on a DEDICATED (non-pool) thread, so a delivery inline on the emitting
+        // call would report IsThreadPoolThread = false.
+        new Thread(() =>
+        {
+            source.OnNext(1);
+            source.OnNext(2);
+            source.OnNext(3);
+        }) { IsBackground = true }.Start();
+        var delivered = await seen.Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
+        Assert.Equal([1, 2, 3], delivered.Select(d => d.value));
+        Assert.All(delivered, d => Assert.True(d.pooled, "each signal is delivered as a pool work item, never inline on the emitting call"));
+    }
+
     private Task<bool> Verdict(string path, AccessContext viewer, CancellationToken ct)
         => DeclaredPointRead.ObservePointRead(Mesh, path, viewer).Take(1)
             .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
@@ -770,6 +870,61 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
         var refused = await DeclaredPointReadTest.DirectSubscribe(client, new Address(node.Path))
             .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
         Assert.Equal(System.Reactive.NotificationKind.OnError, refused.Kind);
+    }
+}
+
+/// <summary>
+/// 🚨 Review of #7013 (thread 4333751887): each re-evaluation of a rule is bounded by the
+/// permission-establishment budget. A rule that grants, then never answers its re-evaluation, turns
+/// the open verdict false (undetermined) once the budget runs out — never leaves the earlier grant in
+/// force. A short mesh timeout keeps the budget small; the idle subscription is not timed out.
+/// </summary>
+public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string StallType = "Kiosk/Stall";
+    private static readonly AccessContext Dave = new() { ObjectId = "dave", Name = "dave" };
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
+        .WithMeshType(typeof(TicketContent), nameof(TicketContent))
+        .AddMeshNodes(new MeshNode("Stall", "Kiosk")
+        {
+            NodeType = "NodeType",
+            Name = StallType,
+            Content = new NodeTypeDefinition(),
+            HubConfiguration = config => config.WithContentType<TicketContent>(),
+        })
+        .ConfigureServices(services => services
+            .AddSingleton<INodeTypeAccessRule>(new GrantsOnceThenStallsRule(StallType))
+            .AddSingleton(new MeshOperationOptions { Timeout = TimeSpan.FromSeconds(6) }));
+
+    private sealed class GrantsOnceThenStallsRule(string nodeType) : INodeTypeAccessRule
+    {
+        private int calls;
+        public string NodeType => nodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
+            => Interlocked.Increment(ref calls) == 1 ? Observable.Return(true) : Observable.Never<bool>();
+    }
+
+    [Fact(Timeout = 60000)]
+    public async Task AStalledReEvaluation_EndsTheGrant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await SeedTopLevel(new MeshNode("k") { NodeType = "Markdown", Name = "k" });
+        var stall = (await access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", "k") { NodeType = StallType, Name = "stall" }))
+            .Should().Emit(cancellationToken: ct))!.Path;
+
+        var open = DeclaredPointRead.ObservePointRead(Mesh, stall, Dave).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule's first answer grants", cancellationToken: ct);
+
+        // An access input on the node's scope commits: the rule is re-asked, and never answers.
+        await access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole("someone", "Viewer", "k")))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+
+        await open.Should().Within(TimeSpan.FromSeconds(30)).Match(v => !v,
+            "a re-evaluation that never answers is undetermined once the budget runs out — refused", cancellationToken: ct);
     }
 }
 

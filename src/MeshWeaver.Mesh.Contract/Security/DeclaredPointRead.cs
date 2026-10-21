@@ -191,8 +191,9 @@ public static class DeclaredPointRead
                 .DefaultIfEmpty(null)
                 .SelectMany(stored => stored is null
                     ? Observable.Return(PermissionCheckOutcome.Denied)
-                    : OwnerCurrent(hub, access, path)
-                        .DistinctUntilChanged(node => node?.Version ?? long.MinValue)
+                    // Off the mirror's gate, in order, before a revision subscribes a rule or a fold.
+                    : OffTheGate(OwnerCurrent(hub, access, path)
+                            .DistinctUntilChanged(node => node?.Version ?? long.MinValue))
                         .Select(node => node is null
                             ? Observable.Return(PermissionCheckOutcome.Denied)
                             : StandardRead(hub, access, path, node, identity, userId, logger))
@@ -219,10 +220,16 @@ public static class DeclaredPointRead
             AccessContext = viewer,
             IsPointRead = true,
         };
-        return RuleInputsChanged(hub, access, node, viewer, userId)
-            .StartWith(System.Reactive.Unit.Default)
+        // 🚨 Each evaluation is ONE verdict, bounded by the same budget the RLS validator holds a
+        // check to: a re-evaluation that never answers times out INTO Classified and is undetermined
+        // — refused — instead of leaving the previous grant in force. The idle live subscription
+        // itself is never timed out; only each evaluation is.
+        var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
+            .PermissionEstablishmentBudget;
+        return OffTheGate(RuleInputsChanged(hub, access, node, viewer, userId)
+                .StartWith(System.Reactive.Unit.Default))
             .Select(_ => Classified(
-                access.RunAs(viewer, () => Observable.Defer(() => rule.HasAccess(context, userId)).Take(1)),
+                access.RunAs(viewer, () => Observable.Defer(() => rule.HasAccess(context, userId)).Take(1).Timeout(budget)),
                 path, userId, logger))
             .Switch();
     }
@@ -230,8 +237,13 @@ public static class DeclaredPointRead
     /// <summary>
     /// Every input a Read rule's verdict can rest on, as a signal: the viewer's live permission fold
     /// on the node and on its <see cref="MeshNode.MainNode"/> (each subscribed AS the viewer), and every
-    /// access-input commit the mesh's invalidation feed reports. A fold that faults faults this signal,
-    /// which the caller reports as undetermined — never a silent stop.
+    /// access-input commit the mesh's invalidation feed reports that can reach THIS node
+    /// (<see cref="AffectsRead"/>). A fold that faults faults this signal, which the caller reports as
+    /// undetermined — never a silent stop.
+    ///
+    /// <para>🚨 A fold's INITIAL value is a signal too, never skipped: a revocation committed while
+    /// these watches were being established is already in that first value, and no commit will
+    /// arrive for it later.</para>
     /// </summary>
     private static IObservable<System.Reactive.Unit> RuleInputsChanged(
         IMessageHub hub, AccessService? access, MeshNode node, AccessContext viewer, string userId)
@@ -241,31 +253,92 @@ public static class DeclaredPointRead
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p!, userId))
                 .DistinctUntilChanged()
-                .Skip(1)
                 .Select(_ => System.Reactive.Unit.Default));
+        var scopes = ReadScopes(node);
         var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         var commits = feed is null
             ? Observable.Never<System.Reactive.Unit>()
             : Observable.Create<System.Reactive.Unit>(observer => feed.Subscribe(change =>
-                {
-                    if (IsAccessInput(change))
-                        observer.OnNext(System.Reactive.Unit.Default);
-                }))
-                // Off the feed's delivery: the re-ask subscribes folds, which must not run inside it.
-                .ObserveOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+            {
+                if (AffectsRead(change, scopes))
+                    observer.OnNext(System.Reactive.Unit.Default);
+            }));
         return folds.Append(commits).Merge();
     }
 
-    /// <summary>Whether a committed change is an input of access decisions.</summary>
-    private static bool IsAccessInput(MeshChangeEvent change)
-        => change.NodeType is { } type
-           && (string.Equals(type, AccessAssignmentNodeType, StringComparison.Ordinal)
-               || string.Equals(type, SecurityQueries.GroupMembershipNodeType, StringComparison.Ordinal)
-               || string.Equals(type, PartitionAccessPolicyNodeType, StringComparison.Ordinal)
-               || string.Equals(type, SecurityQueries.RoleNodeType, StringComparison.Ordinal));
+    /// <summary>
+    /// Re-emits each notification of <paramref name="source"/> as its OWN pool work item, in order —
+    /// off every source gate (the permission fold's <c>CombineLatest</c>, the node-stream mirror, the
+    /// invalidation feed's delivery) before the caller re-evaluates, so a re-evaluation that enters
+    /// another fold never runs inside the gate that signalled it (the #899 lock-order hazard
+    /// <c>HubPermissionExtensions.TakeDecisionOutsideGate</c> documents). Per notification, never a
+    /// long-lived <c>ObserveOn</c>: each notification is an <c>Observable.Return(value, Scheduler.Default)</c>
+    /// that completes after one pool work item (the <c>HopOffGate</c> shape in
+    /// <c>HubPermissionExtensions</c>), so no scheduled loop — and no thread — is held per open
+    /// subscription. The identity is NOT carried across the hop — the
+    /// caller re-establishes it (<c>RunAs(viewer)</c>) for each evaluation.
+    /// </summary>
+    internal static IObservable<T> OffTheGate<T>(IObservable<T> source)
+        => source.Select(value => Observable.Return(value, ReEvaluationScheduler)).Concat();
+
+    /// <summary>The scheduler <see cref="OffTheGate{T}"/> hops through — a pool work item per notification.</summary>
+    internal static System.Reactive.Concurrency.IScheduler ReEvaluationScheduler => System.Reactive.Concurrency.Scheduler.Default;
+
+    /// <summary>
+    /// The scopes whose access inputs can change a Read decision about <paramref name="node"/>: every
+    /// ancestor-or-self of its path and of its <see cref="MeshNode.MainNode"/>, the root, and the
+    /// <c>Admin</c> partition (where the platform-admin predicate lives).
+    /// </summary>
+    private static System.Collections.Immutable.ImmutableHashSet<string> ReadScopes(MeshNode node)
+    {
+        var scopes = System.Collections.Immutable.ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
+        scopes.Add("");
+        scopes.Add(PermissionEvaluator.AdminScope);
+        foreach (var path in new[] { node.Path, node.MainNode })
+        {
+            var segments = (path ?? "").Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            for (var i = 1; i <= segments.Length; i++)
+                scopes.Add(string.Join('/', segments.Take(i)));
+        }
+        return scopes.ToImmutable();
+    }
+
+    /// <summary>
+    /// Whether a committed change can move a Read decision about a node whose scopes are
+    /// <paramref name="scopes"/>: a grant (<c>{scope}/_Access/…</c>), a partition policy
+    /// (<c>{scope}/_Policy</c>) or a sync config (<c>{scope}/_GitSync</c> — a one-way sync is what
+    /// admits a platform admin to a system-owned Space) ON one of those scopes, matched by namespace
+    /// and id so a deletion that carries no node type still counts; and any group membership or role
+    /// definition, which can widen or narrow a principal anywhere.
+    /// </summary>
+    private static bool AffectsRead(MeshChangeEvent change, System.Collections.Immutable.ImmutableHashSet<string> scopes)
+    {
+        if (string.Equals(change.NodeType, SecurityQueries.GroupMembershipNodeType, StringComparison.Ordinal)
+            || string.Equals(change.NodeType, SecurityQueries.RoleNodeType, StringComparison.Ordinal))
+            return true;
+        var ns = (change.Namespace ?? "").Trim('/');
+        const string accessSegment = "_Access";
+        if (string.Equals(change.NodeType, AccessAssignmentNodeType, StringComparison.Ordinal)
+            || string.Equals(ns, accessSegment, StringComparison.OrdinalIgnoreCase)
+            || ns.EndsWith("/" + accessSegment, StringComparison.OrdinalIgnoreCase))
+        {
+            var scope = string.Equals(ns, accessSegment, StringComparison.OrdinalIgnoreCase)
+                ? ""
+                : ns.EndsWith("/" + accessSegment, StringComparison.OrdinalIgnoreCase)
+                    ? ns[..^(accessSegment.Length + 1)]
+                    : ns;
+            return scopes.Contains(scope);
+        }
+        if (string.Equals(change.NodeType, PartitionAccessPolicyNodeType, StringComparison.Ordinal)
+            || string.Equals(change.Id, PartitionPolicyId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase))
+            return scopes.Contains(ns);
+        return false;
+    }
 
     private const string AccessAssignmentNodeType = "AccessAssignment";
     private const string PartitionAccessPolicyNodeType = "PartitionAccessPolicy";
+    private const string PartitionPolicyId = "_Policy";
 
     /// <summary>A verdict stream with all three terminals represented: a fault or an empty completion is undetermined.</summary>
     private static IObservable<PermissionCheckOutcome> Classified(IObservable<bool> verdicts, string path, string userId, ILogger? logger)
