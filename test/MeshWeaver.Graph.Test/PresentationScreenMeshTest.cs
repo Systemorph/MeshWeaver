@@ -37,7 +37,12 @@ public class PresentationScreenMeshTest(ITestOutputHelper output) : MonolithMesh
             .AddMeshNodes(
                 new MeshNode(Space) { Name = "Acme", NodeType = "Space" },
                 new MeshNode("Q3Renewal") { Namespace = Space, Name = "Q3 Renewal", NodeType = "Markdown" },
-                new MeshNode(Other) { Name = "Northwind", NodeType = "Space" });
+                new MeshNode(Other) { Name = "Northwind", NodeType = "Space" },
+                // Alice may READ Acme: "searchable for the viewer" is only a claim about a node the
+                // viewer can read. A declared node is row-filtered like a stored one, so without this
+                // grant the search below would be empty for a reason that has nothing to do with the
+                // screen — and the permission comparison would be None == None, proving nothing.
+                AssignmentNodeFactory.UserRole(Alice, "Viewer", Space));
 
     private IMessageHub Hub => Mesh.ServiceProvider.GetRequiredService<IMessageHub>();
 
