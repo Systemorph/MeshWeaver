@@ -40,14 +40,30 @@ public class CatalogPresetTest
         var hidden = Controls.Catalog("Clients", $"{first}\n{second}\n{own}").HiddenQuery!.ToString()!;
         var lines = hidden.Split('\n');
 
-        Assert.Equal(
-            [$"{first} sort:subtreeLastModified-desc", $"{second} sort:subtreeLastModified-desc", own],
-            lines);
+        Assert.Equal(3, lines.Length);
+        Assert.Equal($"{first} sort:subtreeLastModified-desc", lines[0]);
+        Assert.Equal($"{second} sort:subtreeLastModified-desc", lines[1]);
 
-        // The view's combination of the line that orders the union: the line, then the typed text.
+        // As the production parser reads each line: the default on the first two, the own order kept.
         var parser = new MeshWeaver.Mesh.QueryParser();
-        Assert.Equal("subtreeLastModified", parser.Parse(lines[0]).OrderBy?.Property);
+        Assert.Equal(["subtreeLastModified", "subtreeLastModified", "name"], lines.Select(l => parser.Parse(l).OrderBy?.Property));
+        // The view's combination of the line that orders the union: the line, then the typed text.
         Assert.Equal("name", parser.Parse($"{lines[0]} sort:name").OrderBy?.Property);
+        Assert.Equal("lastModified", parser.Parse($"{lines[2]} sort:lastModified-desc").OrderBy?.Property);
+    }
+
+    /// <summary>Whether a line "has its own order" is decided the way the PARSER reads it, not by a
+    /// text match: <c>sort:</c> inside a quoted value is no order (the default still applies), and a
+    /// grouped <c>(sort:name)</c> is one (it is kept, not overridden by the default).</summary>
+    [Theory]
+    [InlineData("namespace:Acme content.note:\"use sort:name\"", "subtreeLastModified")]
+    [InlineData("namespace:Acme (sort:name)", "name")]
+    [InlineData("namespace:Acme SORT:name", "name")]
+    public void AnOwnOrder_IsWhatTheParserReads_NotATextMatch(string line, string expected)
+    {
+        var parser = new MeshWeaver.Mesh.QueryParser();
+        Assert.Equal(expected, parser.Parse(CatalogSort.Sorted(line, CatalogSort.LastActivity.Sort)).OrderBy?.Property);
+        Assert.Equal(expected, parser.Parse(CatalogSort.Sorted($"namespace:Globex\n{line}", CatalogSort.LastActivity.Sort).Split('\n')[1]).OrderBy?.Property);
     }
 
     [Fact]
