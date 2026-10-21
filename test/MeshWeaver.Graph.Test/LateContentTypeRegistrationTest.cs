@@ -196,6 +196,75 @@ public class LateContentTypeRegistrationTest(ITestOutputHelper output) : Monolit
     }
 
     /// <summary>
+    /// The late re-type is delivered under the READER's identity, not under the turn that
+    /// registered the type. A NodeType compile registers as the platform, and a registration is
+    /// announced on the task pool from the registrant's execution context, so before the fix
+    /// <see cref="TypedContentObserver"/>'s late emission bypassed the reader scope and reached
+    /// the subscriber as <c>system-security</c>. A view that waits for typed content then issued
+    /// its next read under the platform's grants (Doc/Architecture/AccessContextPropagation →
+    /// "Emissions arrive as the reader").
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task TheLateRetype_IsDeliveredUnderTheReadersIdentity_NotTheRegistrants()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var registry = Mesh.ServiceProvider.GetRequiredService<IMeshContentTypeRegistry>();
+        var meshService = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var reader = new AccessContext { ObjectId = "late-reader", Name = "Late Reader" };
+
+        var contentType = EmitCollectibleType("ReaderScopedGadget", "Label");
+        var partition = "lci" + Guid.NewGuid().ToString("N")[..9];
+        var typePath = $"{partition}/Gadget";
+        var instancePath = $"{partition}/Live";
+
+        await meshService.CreateNode(new MeshNode("Gadget", partition)
+        {
+            Name = "Gadget",
+            NodeType = MeshNode.NodeTypePath,
+            State = MeshNodeState.Active,
+            Content = new NodeTypeDefinition { Description = "A NodeType with no compile lifecycle" }
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        var instance = Activator.CreateInstance(contentType)!;
+        contentType.GetProperty("Label")!.SetValue(instance, "read as the reader");
+        var stored = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(instance, contentType, Mesh.JsonSerializerOptions));
+        await meshService.CreateNode(new MeshNode("Live", partition)
+        {
+            Name = "Live frame",
+            NodeType = typePath,
+            State = MeshNodeState.Active,
+            Content = stored
+        }).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+
+        // ONE live subscription opened by the reader, recording the identity each notification
+        // arrives under.
+        var seen = new System.Reactive.Subjects.ReplaySubject<(bool Typed, string? Identity)>();
+        IDisposable subscription;
+        using (access.SwitchAccessContext(reader))
+            subscription = Mesh.GetWorkspace().GetMeshNodeStream(instancePath)
+                .Where(n => n is not null)
+                .Subscribe(n => seen.OnNext((n.Content is not JsonElement, access.Context?.ObjectId)), seen.OnError);
+        using var _ = subscription;
+
+        var first = await seen.FirstAsync().Should().Within(TestTimeouts.Convergence)
+            .Emit("the reader reads the node while its type is unknown", cancellationToken: ct);
+        first.Typed.Should().BeFalse("PRECONDITION: nothing resolves the discriminator yet");
+        degradations.AssertReportedFor(instancePath,
+            "the losing side of #2952 is this test's precondition: the type registers only later, as the platform");
+
+        // The compile finishing, as the platform does it.
+        using (access.ImpersonateAsSystem())
+            registry.Register(contentType, typePath);
+
+        var retyped = await seen.Where(s => s.Typed).FirstAsync().Should().Within(TestTimeouts.Convergence)
+            .Emit("the same subscription is handed the content typed once the type registers", cancellationToken: ct);
+        retyped.Identity.Should().Be(reader.ObjectId,
+            "the late re-type belongs to the reader who opened the read, never to the turn that registered the type");
+    }
+
+    /// <summary>
     /// The complement that keeps the wait honest: a registration for an UNRELATED type must not
     /// make a genuinely unresolvable node look typed. Without this, "re-emit on any registration"
     /// could pass the test above by simply re-emitting whatever it had.
