@@ -1,0 +1,183 @@
+name: Read store artifacts into the job log
+
+# ♻️ REUSABLE (workflow_call) — print what a run left in the shared CI artifact store.
+#
+# WHY. A lane on our runners uploads its failure evidence to the shared store
+# (`file:/ci-artifacts`, a share mounted ONLY on the in-cluster runner pods), not to GitHub. Nothing
+# outside that runner pool can read it: not a workstation, not a GitHub-hosted runner, not the
+# GitHub UI. So when a job is cut and its log does not carry the per-test error texts, the evidence
+# exists and nobody can open it. This lane is the reader: it downloads the named artifacts of one
+# run, verified against the store identity, and prints the Playwright failures and the mesh
+# diagnostics summaries into its own job log.
+#
+# WHY A CALLER IS NEEDED. This repository is PUBLIC, and the org runner group does not admit public
+# repositories, so a `workflow_dispatch` here could never reach a runner that has the share mounted.
+# A PRIVATE repository calls this lane from its own dispatchable workflow; the job then resolves
+# `vars.MW_RUNNER_DOCKER` (the in-cluster pool) and `vars.MW_ARTIFACT_STORE` from the CALLER:
+#
+#     on:
+#       workflow_dispatch:
+#         inputs:
+#           run-id: { required: true, type: string }
+#           pattern: { required: false, type: string, default: '*' }
+#     jobs:
+#       read:
+#         uses: Systemorph/MeshWeaver/.github/workflows/read-store-artifact.yml@main
+#         with:
+#           repository: ${{ github.repository }}
+#           run-id: ${{ inputs.run-id }}
+#           pattern: ${{ inputs.pattern }}
+#
+# No secrets, no token: the own store is a mounted filesystem. The download verifies the archive
+# size, inventory and the store identity before anything is extracted. An empty selection is RED
+# (expired, swept, wrong run, or a different share behind the same path), never a quiet success.
+#
+# Doc: Doc/Architecture/CiArtifactStorage, "Reading a run's artifacts when you are not on the runner pool".
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: The repository whose run uploaded the artifacts (owner/name).
+        required: true
+        type: string
+      run-id:
+        description: The run that uploaded the artifacts.
+        required: true
+        type: string
+      pattern:
+        description: Artifact name glob, e.g. e2e-journeys-report-shard*.
+        required: false
+        type: string
+        default: '*'
+      store:
+        description: The store to read. Empty means the caller's vars.MW_ARTIFACT_STORE.
+        required: false
+        type: string
+        default: ''
+      expected-store-id:
+        description: >-
+          The identity the uploading job printed beside its `store: wrote` line. Empty means "the
+          share this runner mounts", which is resolved and printed so the reader can compare it.
+        required: false
+        type: string
+        default: ''
+      log-pattern:
+        description: Python regular expression selecting the lines printed from each *.log file.
+        required: false
+        type: string
+        default: '(?i)(\bfail|\berror|exception|\bcrit|timed? ?out|\bwarn)'
+      max-lines:
+        description: Upper bound on the lines printed per file.
+        required: false
+        type: string
+        default: '400'
+
+jobs:
+  read:
+    name: Read store artifacts
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - name: Resolve the store this runner mounts
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.store || vars.MW_ARTIFACT_STORE }}
+          expected-store-id: ${{ inputs.expected-store-id }}
+
+      - name: Download the selected artifacts
+        id: download
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
+          repository: ${{ inputs.repository }}
+          run-id: ${{ inputs.run-id }}
+          pattern: ${{ inputs.pattern }}
+          path: ${{ runner.temp }}/store-artifacts
+
+      - name: Print the failures and diagnostics
+        env:
+          READ_ROOT: ${{ runner.temp }}/store-artifacts
+          READ_STORE_ID: ${{ steps.store.outputs.store-id }}
+          READ_REPOSITORY: ${{ inputs.repository }}
+          READ_RUN_ID: ${{ inputs.run-id }}
+          READ_PATTERN: ${{ inputs.pattern }}
+          READ_LOG_PATTERN: ${{ inputs.log-pattern }}
+          READ_MAX_LINES: ${{ inputs.max-lines }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, io, json, os, re, sys, zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["READ_ROOT"])
+          limit = int(os.environ["READ_MAX_LINES"])
+          log_re = re.compile(os.environ["READ_LOG_PATTERN"])
+          ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+          print(f"store-id: {os.environ['READ_STORE_ID']}")
+          print(f"source:   {os.environ['READ_REPOSITORY']} run {os.environ['READ_RUN_ID']}, pattern {os.environ['READ_PATTERN']!r}")
+          files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+          if not files:
+              print("::error::no artifact matched this repository, run and pattern on this store — "
+                    "expired, swept, a different run, or a different share behind the same path")
+              sys.exit(1)
+          print(f"{len(files)} file(s) downloaded:")
+          for f in files:
+              print(f"  {f.relative_to(root)}  {f.stat().st_size} B")
+
+          def capped(lines, title):
+              print(f"::group::{title}")
+              for i, line in enumerate(lines):
+                  if i >= limit:
+                      print(f"… cut at {limit} lines")
+                      break
+                  # Indented: a line the artifact carries can never start a workflow command.
+                  print("  " + ansi.sub("", line.rstrip()))
+              print("::endgroup::")
+
+          def report_entries(html):
+              text = html.read_text(errors="replace")
+              m = re.search(r'playwrightReportBase64\s*=\s*"data:application/zip;base64,([^"]+)"', text)
+              if not m:
+                  return None
+              archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+              return {n: json.loads(archive.read(n)) for n in archive.namelist() if n.endswith(".json")}
+
+          for html in sorted(root.rglob("playwright-report/index.html")):
+              entries = report_entries(html)
+              if entries is None:
+                  print(f"::warning::{html.relative_to(root)} carries no embedded report data")
+                  continue
+              summary = entries.get("report.json", {})
+              print(f"=== {html.relative_to(root)}: stats {json.dumps(summary.get('stats', {}))}")
+              for name, doc in sorted(entries.items()):
+                  if name == "report.json":
+                      continue
+                  for test in doc.get("tests", []):
+                      if test.get("outcome") in ("expected", "skipped"):
+                          continue
+                      title = " › ".join(test.get("path", []) + [test.get("title", "")])
+                      lines = [f"{doc.get('fileName', name)}:{test.get('location', {}).get('line', '?')}  outcome={test.get('outcome')}"]
+                      for result in test.get("results", []):
+                          lines.append(f"-- attempt {result.get('retry', 0) + 1}: {result.get('status')} after {result.get('duration', 0) / 1000:.1f} s")
+                          for error in result.get("errors", []):
+                              # Older reporters store a plain string, newer ones {message, codeframe}.
+                              text = error if isinstance(error, str) else (error.get("message") or json.dumps(error))
+                              lines.extend(text.splitlines())
+                      capped(lines, f"{test.get('outcome', '?').upper()}  {title}")
+
+          for f in files:
+              rel = f.relative_to(root)
+              if "playwright-report" in rel.parts:
+                  if f.suffix == ".md":
+                      capped(f.read_text(errors="replace").splitlines(), f"error context {rel}")
+                  continue
+              if f.suffix == ".log":
+                  lines = f.read_text(errors="replace").splitlines()
+                  hits = [l for l in lines if log_re.search(l)]
+                  capped(hits, f"{rel}: {len(hits)} of {len(lines)} lines match the log pattern")
+              elif f.suffix in (".txt", ".csv"):
+                  capped(f.read_text(errors="replace").splitlines(), str(rel))
+          PY
