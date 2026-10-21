@@ -54,6 +54,13 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 - A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
+- 🚨 **A union is ordered by its FIRST line, so every line carries the order.** A hidden query may
+  be a union — one sub-query per line. The MeshSearch view sends the lines as one
+  `MeshQueryRequest.FromQueries`, each followed by the typed text, and the engine takes sort and
+  limit from the FIRST. `CatalogSort.Sorted` therefore appends the default order to EVERY line (a
+  line that already names its own `sort:` keeps it), and a typed `sort:` still wins because it
+  follows each line. Before this, the order rode only on the LAST line and a union catalog came back
+  unsorted (MeshWeaver.Plugins#4055).
 - 🚨 **Typing can only NARROW — as the production parser reads it.** `CatalogQuery.Narrowing`
   removes every reserved single-slot qualifier but `sort:` (`namespace:`, `path:`, `scope:`,
   `partitions:`, `basePath:`, `source:`, `context:`, `select:`, `is:`, `limit:` — derived from
@@ -74,6 +81,12 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 The menu's area ids are the category ids. `Render(host, selected)` opens on `selected`, else on the
 area reference's id without its URL query (`…/area/{App}/{categoryId}?x=1` → `categoryId`), else on the first category; an unknown id falls
 back to the first. The selection is carried as the tabs' `ActiveTabId`.
+
+`CatalogApp.CategoryIdOf` (the reference id without its URL query) is applied only inside
+`Render(host)`: a caller that composes the app itself with `Compose(typed, selected)` must call
+`CategoryIdOf` on its own reference id before passing `selected`. In an AppTabs page a pack tab id
+and a category id share the ONE reference id, so the host decides which wins — the Plugins host
+gives the pack tab precedence, compared case-insensitively (MeshWeaver.Plugins#4056).
 
 ## What is NOT in yet
 
