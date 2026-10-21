@@ -203,7 +203,7 @@ public static class UserNodeType
             [NodeOperation.Read],
             (context, userId) =>
             {
-                if (!WellKnownUsers.IsAuthenticated(userId)) return false;
+                if (!WellKnownUsers.IsSignedIn(context.AccessContext, userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
                 // Root-level user node ("Alice") with no namespace separator: public.
@@ -250,17 +250,17 @@ public static class UserNodeType
                 // profile without any grant. A visitor still reads a profile an explicit grant opens
                 // to Anonymous, through the permission fold.
                 if (!nodePath.Contains('/'))
-                    return WellKnownUsers.IsAuthenticated(userId)
+                    return WellKnownUsers.IsSignedIn(context.AccessContext, userId)
                         ? Observable.Return(true)
-                        : hub.CheckPermission(nodePath, userId ?? WellKnownUsers.Anonymous, Permission.Read);
+                        : hub.CheckPermission(nodePath, WellKnownUsers.FallbackSubject(context.AccessContext, userId), Permission.Read);
                 // Legacy "User" namespace passthrough (transitional).
                 if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
                     return Observable.Return(true);
                 if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                     && !nodePath["User/".Length..].Contains('/'))
-                    return WellKnownUsers.IsAuthenticated(userId)
+                    return WellKnownUsers.IsSignedIn(context.AccessContext, userId)
                         ? Observable.Return(true)
-                        : hub.CheckPermission(nodePath, userId ?? WellKnownUsers.Anonymous, Permission.Read);
+                        : hub.CheckPermission(nodePath, WellKnownUsers.FallbackSubject(context.AccessContext, userId), Permission.Read);
                 if (string.IsNullOrEmpty(userId))
                     return Observable.Return(false);
                 return hub.CheckPermission(nodePath, userId, Permission.Read);

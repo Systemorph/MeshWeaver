@@ -62,7 +62,13 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
                 AssignmentNodeFactory.Policy(Keeper, new PartitionAccessPolicy { Api = false }),
                 // An uncapped profile, explicitly opened to the anonymous visitor.
                 Person(PublicPerson, "Synced Public"),
-                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", PublicPerson))
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", PublicPerson),
+                // Legacy User/{id} profiles: one opened to Anonymous, one not.
+                LegacyProfile(LegacyOpen), LegacyProfile(LegacyClosed),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", $"User/{LegacyOpen}"),
+                // Partition records: one opened to Anonymous, one not.
+                PartitionRecord(PartitionOpen), PartitionRecord(PartitionClosed),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", $"{PartitionNodeType.Namespace}/{PartitionOpen}"))
             .ConfigureServices(services => services.AddSingleton<INodeValidator>(new SilentOnShadowValidator()));
 
     private const string ShadowName = "VAULT-SHADOW-77d4";
@@ -102,6 +108,64 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
 
         paths.Should().Contain(PublicPerson, "an explicit Read grant to Anonymous opens that profile to the visitor");
         paths.Should().NotContain(Keeper, "no grant opens the keeper's profile to a visitor, and the visitor is not signed in");
+    }
+
+    private const string LegacyOpen = "legacy-open";
+    private const string LegacyClosed = "legacy-closed";
+    private const string PartitionOpen = "SyncedOpenPartition";
+    private const string PartitionClosed = "SyncedClosedPartition";
+
+    private static MeshNode LegacyProfile(string id) => new(id, "User")
+    {
+        NodeType = UserNodeType.NodeType,
+        Name = id,
+        State = MeshNodeState.Active,
+        Content = new User { FullName = id, Email = $"{id}@meshweaver.io" },
+    };
+
+    private static MeshNode PartitionRecord(string id) => new(id, PartitionNodeType.Namespace)
+    {
+        NodeType = PartitionNodeType.NodeType,
+        Name = id,
+        Content = new PartitionDefinition { Namespace = id },
+    };
+
+    /// <summary>
+    /// 🚨 A logged-out visitor with a per-visitor VIRTUAL id (not literally "Anonymous") is no
+    /// signed-in reader either: it reads a root or legacy <c>User/{id}</c> profile only through a
+    /// grant made to Anonymous. Granted and denied controls of both shapes share one snapshot.
+    /// </summary>
+    [Fact]
+    public async Task AVirtualVisitorReadsOnlyTheProfilesAGrantOpensToAnonymous()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = "guest-7f3a", Name = "Guest", IsVirtual = true }, $"User/{LegacyOpen}",
+            $"path:{PublicPerson}", $"path:{Keeper}", $"path:User/{LegacyOpen}", $"path:User/{LegacyClosed}");
+
+        paths.Should().Contain([PublicPerson, $"User/{LegacyOpen}"], "a grant to Anonymous opens these to every visitor");
+        paths.Should().NotContain(Keeper, "a virtual visitor is not signed in, whatever id it carries");
+        paths.Should().NotContain($"User/{LegacyClosed}", "the legacy profile shape follows the same rule");
+    }
+
+    /// <summary>
+    /// 🚨 Partition records are not open to a logged-out visitor: the Partition type's Read rule
+    /// admits signed-in readers, and a visitor only the record a grant to Anonymous opens.
+    /// </summary>
+    [Fact]
+    public async Task TheAnonymousVisitorReadsOnlyThePartitionRecordAGrantOpensToIt()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous, IsVirtual = true },
+            $"{PartitionNodeType.Namespace}/{PartitionOpen}",
+            $"path:{PartitionNodeType.Namespace}/{PartitionOpen}", $"path:{PartitionNodeType.Namespace}/{PartitionClosed}");
+
+        paths.Should().NotContain($"{PartitionNodeType.Namespace}/{PartitionClosed}",
+            "no grant opens that partition record to a visitor");
+
+        var asSignedIn = await SnapshotAs(new AccessContext { ObjectId = Stranger, Name = Stranger },
+            $"{PartitionNodeType.Namespace}/{PartitionClosed}",
+            $"path:{PartitionNodeType.Namespace}/{PartitionOpen}", $"path:{PartitionNodeType.Namespace}/{PartitionClosed}");
+        asSignedIn.Should().Contain($"{PartitionNodeType.Namespace}/{PartitionOpen}", "a signed-in reader still reads partition records");
     }
 
     /// <summary>

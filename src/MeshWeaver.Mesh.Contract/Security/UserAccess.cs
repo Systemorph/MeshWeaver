@@ -70,4 +70,28 @@ public static class WellKnownUsers
         !string.IsNullOrWhiteSpace(userId)
         && !string.Equals(userId, Anonymous, StringComparison.OrdinalIgnoreCase)
         && !string.Equals(userId, Public, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether the caller of a node-type access rule is a SIGNED-IN person: an authenticated id
+    /// (<see cref="IsAuthenticated"/>) on a context that is not VIRTUAL. A logged-out visitor can
+    /// carry any id — <see cref="Anonymous"/>, or a per-visitor one such as <c>guest-7f3a</c> — so
+    /// the id alone never decides it; <see cref="AccessContext.IsVirtual"/> marks the visitor
+    /// whatever it is called. Use it for every "any signed-in reader" shortcut in a type rule.
+    /// </summary>
+    /// <param name="context">The validated operation's access context, or null.</param>
+    /// <param name="userId">The id the rule was handed.</param>
+    /// <returns><c>true</c> only for a real, signed-in person.</returns>
+    public static bool IsSignedIn(AccessContext? context, string? userId) =>
+        IsAuthenticated(userId) && context?.IsVirtual != true;
+
+    /// <summary>
+    /// The subject a type rule's FALLBACK permission check evaluates when the caller is not
+    /// signed in: <see cref="Anonymous"/> for a virtual (logged-out) context or a missing id, the id
+    /// itself otherwise — so a visitor is judged by exactly the grants made to Anonymous.
+    /// </summary>
+    /// <param name="context">The validated operation's access context, or null.</param>
+    /// <param name="userId">The id the rule was handed.</param>
+    /// <returns>The subject to evaluate.</returns>
+    public static string FallbackSubject(AccessContext? context, string? userId) =>
+        context?.IsVirtual == true || string.IsNullOrEmpty(userId) ? Anonymous : userId;
 }
