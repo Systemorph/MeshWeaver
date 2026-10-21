@@ -612,14 +612,18 @@ header). The lane:
   `vars.MW_RUNNER_DOCKER` pool;
 - downloads `pattern` from `repository`/`run-id` through the shared download action, which verifies
   the store identity, archive size and inventory before extraction;
-- prints, into its job log, every non-passing test of each `playwright-report/index.html` with
-  each attempt's status, duration and error text, the report's `.md` error contexts, every `.txt`
-  and `.csv` file, and the lines of each `.log` file that match `log-pattern`;
+- prints, into its job log, every non-passing test of each Playwright HTML report with each
+  attempt's status, duration and error text, the report's `.md` error contexts, every `.txt` and
+  `.csv` file, and the lines of each `.log` file that match `log-pattern`. A report is recognised
+  by the data embedded in its `index.html`, not by a `playwright-report` directory name: an upload
+  whose only path is that directory strips it, and the report then sits at `<artifact>/index.html`;
 - goes RED when nothing matched, because an expired, swept or wrong-store selection must not read
   as "no failures".
 
-It uses no secret and no token. The printed lines are indented so that no line an artifact carries
-can start a workflow command.
+It uses no secret and no token. Everything derived from an artifact or an input is printed with
+workflow commands suspended (`::stop-commands::` under a random token, resumed afterwards), so a
+test title or log line cannot raise an annotation, add a mask or end the suspension. Indenting the
+lines is not a guard the runner promises to honour, so the lane does not rely on it.
 
 `retention-days: 0` on an upload to the own store means the 7-day default
 (`ci-run-artifacts.py upload`), not "delete immediately".

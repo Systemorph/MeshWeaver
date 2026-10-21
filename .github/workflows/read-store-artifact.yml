@@ -31,6 +31,10 @@ name: Read store artifacts into the job log
 # No secrets, no token: the own store is a mounted filesystem. The download verifies the archive
 # size, inventory and the store identity before anything is extracted. An empty selection is RED
 # (expired, swept, wrong run, or a different share behind the same path), never a quiet success.
+# Everything printed from an artifact is printed with workflow commands SUSPENDED
+# (`::stop-commands::` under a random token): a test title or log line cannot raise an annotation,
+# mask a value or end the suspension early. Reports are found by their embedded Playwright data,
+# not by a `playwright-report` directory name, which an upload may strip.
 #
 # Doc: Doc/Architecture/CiArtifactStorage, "Reading a run's artifacts when you are not on the runner pool".
 
@@ -109,49 +113,62 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import base64, io, json, os, re, sys, zipfile
+          import base64, io, json, os, re, secrets, sys, zipfile
           from pathlib import Path
 
           root = Path(os.environ["READ_ROOT"])
           limit = int(os.environ["READ_MAX_LINES"])
           log_re = re.compile(os.environ["READ_LOG_PATTERN"])
           ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-          print(f"store-id: {os.environ['READ_STORE_ID']}")
-          print(f"source:   {os.environ['READ_REPOSITORY']} run {os.environ['READ_RUN_ID']}, pattern {os.environ['READ_PATTERN']!r}")
+          signature = re.compile(r'playwrightReportBase64\s*=\s*"data:application/zip;base64,([^"]+)"')
           files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
           if not files:
               print("::error::no artifact matched this repository, run and pattern on this store — "
                     "expired, swept, a different run, or a different share behind the same path")
               sys.exit(1)
+
+          # 🚨 Everything below is derived from the artifact or from caller inputs: test titles, file
+          # names, log lines. A line of it can carry `::error::`, `::add-mask::` or `::stop-commands::`
+          # anywhere on the line, and indenting it does not stop the runner. So workflow-command
+          # processing is SUSPENDED for the whole print, under a token nobody can predict, and resumed
+          # only after it. No `::group::` headers inside: a title is artifact-derived too.
+          token = secrets.token_hex(32)
+          print(f"::stop-commands::{token}")
+          print(f"store-id: {os.environ['READ_STORE_ID']}")
+          print(f"source:   {os.environ['READ_REPOSITORY']} run {os.environ['READ_RUN_ID']}, pattern {os.environ['READ_PATTERN']!r}")
           print(f"{len(files)} file(s) downloaded:")
           for f in files:
               print(f"  {f.relative_to(root)}  {f.stat().st_size} B")
 
+          def clean(line):
+              return ansi.sub("", line.rstrip())
+
           def capped(lines, title):
-              print(f"::group::{title}")
+              print("\n===== " + clean(" ".join(title.split())))
               for i, line in enumerate(lines):
                   if i >= limit:
-                      print(f"… cut at {limit} lines")
+                      print(f"  … cut at {limit} lines")
                       break
-                  # Indented: a line the artifact carries can never start a workflow command.
-                  print("  " + ansi.sub("", line.rstrip()))
-              print("::endgroup::")
+                  print("  " + clean(line))
 
           def report_entries(html):
-              text = html.read_text(errors="replace")
-              m = re.search(r'playwrightReportBase64\s*=\s*"data:application/zip;base64,([^"]+)"', text)
+              # A Playwright HTML report is recognised by its embedded data, never by a directory
+              # name: an upload of `path: e2e/playwright-report` alone strips that directory, so the
+              # report lands at `<artifact>/index.html`.
+              m = signature.search(html.read_text(errors="replace"))
               if not m:
                   return None
               archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
               return {n: json.loads(archive.read(n)) for n in archive.namelist() if n.endswith(".json")}
 
-          for html in sorted(root.rglob("playwright-report/index.html")):
+          report_roots = []
+          for html in (f for f in files if f.name == "index.html"):
               entries = report_entries(html)
               if entries is None:
-                  print(f"::warning::{html.relative_to(root)} carries no embedded report data")
                   continue
+              report_roots.append(html.parent)
               summary = entries.get("report.json", {})
-              print(f"=== {html.relative_to(root)}: stats {json.dumps(summary.get('stats', {}))}")
+              print(f"\n##### Playwright report {html.relative_to(root)}: stats {json.dumps(summary.get('stats', {}))}")
               for name, doc in sorted(entries.items()):
                   if name == "report.json":
                       continue
@@ -168,16 +185,21 @@ jobs:
                               lines.extend(text.splitlines())
                       capped(lines, f"{test.get('outcome', '?').upper()}  {title}")
 
+          def in_report(f):
+              return any(r in f.parents for r in report_roots)
+
           for f in files:
               rel = f.relative_to(root)
-              if "playwright-report" in rel.parts:
-                  if f.suffix == ".md":
-                      capped(f.read_text(errors="replace").splitlines(), f"error context {rel}")
-                  continue
-              if f.suffix == ".log":
+              if f.suffix == ".md" and in_report(f):
+                  capped(f.read_text(errors="replace").splitlines(), f"error context {rel}")
+              elif f.suffix == ".log":
                   lines = f.read_text(errors="replace").splitlines()
                   hits = [l for l in lines if log_re.search(l)]
                   capped(hits, f"{rel}: {len(hits)} of {len(lines)} lines match the log pattern")
               elif f.suffix in (".txt", ".csv"):
                   capped(f.read_text(errors="replace").splitlines(), str(rel))
+
+          print(f"::{token}::")
+          if not report_roots:
+              print("::warning::no Playwright HTML report was found among the downloaded files")
           PY
