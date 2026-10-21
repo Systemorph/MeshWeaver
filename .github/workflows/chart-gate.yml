@@ -36,9 +36,10 @@ name: Chart Gate
 # It cannot tell you whether the CLUSTER runs what the chart describes — the live memex-cloud
 # PodDisruptionBudget was a hand-applied `minAvailable: 2` the chart never produced, and its
 # ScaledObject carried `autoscaling.keda.sh/paused-replicas: "1"`, an annotation no chart has heard
-# of. That is deploy/aks/scripts/check-chart-drift.sh, which needs cluster credentials and the
-# private per-env values and so cannot be a pull-request gate; see chart-drift.yml for how it is
-# scheduled, and DeploymentAKS.md for running it by hand.
+# of. That is deploy/aks/scripts/check-chart-drift.sh, which needs cluster read and the private
+# per-env values and so cannot be a pull-request gate. It runs inside the governed Audit
+# InstanceAction (operator verb hosting-chart-drift, on the estate's aks-ops lane as
+# hosting-operator — Systemorph/Memex#647); see ChartDriftSemantics.md.
 
 on:
   pull_request:
