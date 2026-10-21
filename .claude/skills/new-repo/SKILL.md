@@ -433,7 +433,7 @@ A real caller, verbatim from it:
       image-digest: ${{ needs.preflight.outputs.bake-image-digest }}
       bake-publish-targets: ${{ vars.BAKE_PUBLISH_TARGETS }}
       stage-repo: Systemorph/MeshWeaver.Plugins       # only if a package `requires` a module from there
-      stage-modules: Store
+      stage-modules: Store                            # only what you USE; the lane stages their `requires` closure
 ```
 
 **The digest that the BAKE uses is not the digest the GATES use, and conflating them is the bug.**
