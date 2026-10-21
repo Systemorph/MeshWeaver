@@ -254,10 +254,15 @@ public static class SyncedQueryDataSourceExtensions
         var accessService = sp.GetService<AccessService>();
         var captured = accessService?.Context ?? accessService?.CircuitContext;
         var userId = captured?.ObjectId;
+        // 🚨 Every snapshot is delivered under the SUBSCRIBER's identity, not the identity of the turn
+        // that changed the result set (a platform install, another person's edit). A view that reads
+        // again inside this callback would otherwise read for the writer — see
+        // Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".
+        var reader = AccessService.ReaderOf(captured);
         if (accessService is null
             || string.IsNullOrEmpty(userId)
             || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
-            return upstream;
+            return upstream.CarryAccessContext(sp, reader);
 
         return Observable.Defer(() =>
         {
@@ -268,10 +273,17 @@ public static class SyncedQueryDataSourceExtensions
             // has Read on. PermissionEvaluator caches per-scope via the
             // process-wide IMeshNodeStreamCache so repeated checks for the
             // same user are cheap.
+            //
+            // 🚨 The filter itself runs under the READER, not only the callback after it. The
+            // permission check takes the user's id explicitly, but the evaluator ALSO reads the
+            // ambient context: IsVirtual (a logged-out visitor is anonymous under
+            // Access:DenyAnonymous) and IsApiToken (a token's API-permission restriction). Upstream
+            // snapshots arrive on the query pool or on the turn that changed the result set, so
+            // filtered there, a virtual guest's id was evaluated as a signed-in user.
             return FilterByReadPermission(
-                upstream,
+                upstream.CarryAccessContext(sp, reader),
                 node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
-        });
+        }).CarryAccessContext(sp, reader);
     }
 
     /// <summary>
