@@ -62,6 +62,16 @@ public record SubmitCodeResponse(string SubmissionId, bool Success)
     /// Failure message when <c>Success</c> is <c>false</c>; null on success.
     /// </summary>
     public string? Error { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the kernel itself has already written this run's terminal status onto its
+    /// ActivityLog (Succeeded, Failed or Cancelled) before answering. A failed reply WITHOUT it — the
+    /// kernel host could not dispatch the run at all — is a run nobody will settle, which the caller
+    /// must reconcile; a failed reply WITH it must be left alone, because the caller's copy of the
+    /// Activity can lag the kernel's terminal write and a reconcile computed from that copy would
+    /// overwrite <c>Cancelled</c> with <c>Failed</c>.
+    /// </summary>
+    public bool ActivitySettled { get; init; }
 }
 
 /// <summary>

@@ -512,9 +512,25 @@ public sealed class IoPool : IIoPool, IDisposable
     /// <param name="io">The cancellable async work to run once the gate grants a slot.</param>
     /// <returns>A cold observable that, on subscribe, runs the work and emits its single result.</returns>
     public IObservable<T> Invoke<T>(Func<CancellationToken, Task<T>> io)
-        => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io);
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io, refuseWhenFull: false);
 
-    private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io)
+    /// <summary>
+    /// <see cref="Invoke{T}"/> WITHOUT a queue: the leaf runs when a slot is free at the moment it is
+    /// admitted, and otherwise terminates at once with <see cref="IoPoolSaturatedException"/>.
+    ///
+    /// <para>For a lane whose leaves WAIT on other leaves of the same lane — a kernel cell that runs a
+    /// cell and waits for it. Queued admission there is a deadlock as soon as every slot is held by a
+    /// waiting parent (the child it waits for can never be admitted); refused admission turns that same
+    /// state into a terminal failure the caller can see and report.</para>
+    /// </summary>
+    /// <typeparam name="T">Result type produced by the operation.</typeparam>
+    /// <param name="io">The cancellable async work to run if a slot is free.</param>
+    /// <returns>A cold observable that runs the work and emits its single result, or faults with
+    /// <see cref="IoPoolSaturatedException"/> when every slot is taken.</returns>
+    public IObservable<T> InvokeOrRefuse<T>(Func<CancellationToken, Task<T>> io)
+        => (_disposed || _draining) ? Cancelled<T>() : InvokeCore(io, refuseWhenFull: true);
+
+    private IObservable<T> InvokeCore<T>(Func<CancellationToken, Task<T>> io, bool refuseWhenFull)
         // Two halves, deliberately on two threads. The ADMISSION is synchronous, on the subscriber's
         // thread (#4555, below). The WORK is not: SubscribeOn moves the inner subscribe — the gate
         // wait and the synchronous prologue of `io` — onto a ThreadPool thread, so nothing of the
@@ -599,7 +615,13 @@ public sealed class IoPool : IIoPool, IDisposable
                     // At the gate from here until WaitAsync returns (#5057): what is NOT counted here but
                     // is waiting has not yet been given a thread to reach the gate at all.
                     Interlocked.Increment(ref _atGate);
-                    try { await _gate.WaitAsync(ct).ConfigureAwait(false); }
+                    try
+                    {
+                        if (!refuseWhenFull)
+                            await _gate.WaitAsync(ct).ConfigureAwait(false);
+                        else if (!_gate.Wait(0, ct))
+                            throw new IoPoolSaturatedException(_maxConcurrency);
+                    }
                     catch { Interlocked.Decrement(ref _atGate); LeaveWaitOnce(); throw; }
                     Interlocked.Decrement(ref _atGate);
                     LeaveWaitOnce();

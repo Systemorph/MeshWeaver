@@ -231,6 +231,7 @@ one, which is often *not* "how much parallelism can this resource take".
 | `Routing` | 256 | Isolation boundary — see below |
 | `Compile` | `Environment.ProcessorCount` | CPU-bound |
 | `CompileCpu` | `Environment.ProcessorCount` | The CPU LANE: its `InvokeBlocking` leaves run on DEDICATED threads, never ThreadPool workers — Roslyn binds and emits only, and a leaf may not call a pool or read the mesh. Separate from `Compile` so an emit can never queue behind a kernel script waiting for it. See [Compiling Off the ThreadPool](../CompileOffTheThreadPool) |
+| `KernelScript` | 256 | A kernel cell's EXECUTION and its session warm-up wait — user code that awaits. A drain hook, not a throttle. Never `Compile`: a script waiting on another async `Compile` leaf (another cell's kernel, a language-service compile) would otherwise hold a slot across the wait (the nested-gate deadlock). See [Compiling Off the ThreadPool](../CompileOffTheThreadPool) |
 | `Process` | 4 | Heavy external processes |
 | `pg:{provider}` / `sf:{provider}` (writes) | **1** | Half a connection BUDGET, not a mirror of one connection — see the pairing note below |
 | `pg-read:{provider}` / `sf-read:{provider}` | 16 | The other half: keeps read fan-out below the shared connection pool's `MaxPoolSize` so reads can't starve writes |
