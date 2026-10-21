@@ -5,6 +5,7 @@ using System.Reactive.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Graph.Security;
@@ -310,10 +311,9 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
     }
 
     /// <summary>
-    /// A merge patch is decided on the owner's turn, never after a read: a patch that turns a node into
-    /// a policy is refused even where the placement would be valid, so no later patch from the same
-    /// sender can overtake it. (UpdateNode and the upsert reach the owner as this same patch, so they
-    /// are refused too; a policy is created as one.)
+    /// A policy is create-only: a merge patch that turns a node into one is refused at the commit
+    /// point even where the placement would be valid. (UpdateNode and the upsert reach the owner as
+    /// this same patch, so they are refused too; a policy is created as one.)
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task APatchIntoAPolicy_IsRefusedOnTheOwnersTurn_EvenAtAValidPlacement()
@@ -358,14 +358,12 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
             .Where(n => n is { Name: "renamed" })
             .Should().Within(TestTimeouts.Convergence).Emit("control: the entity-reference route lands a write", ct);
 
-        var failure = await Record.ExceptionAsync(() => RequestHub
+        (await Refused(RequestHub
             .Observe<PatchDataResponse>(
                 new PatchDataRequest(new EntityReference(nameof(MeshNode), path.Split('/')[^1]),
                     new RawJson("{\"nodeType\":\"PartitionAccessPolicy\"}")),
-                o => o.WithTarget(owner))
-            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
-
-        failure.Should().NotBeNull("the guard reads the patch at every depth for a reference it cannot map");
+                o => o.WithTarget(owner)), ct))
+            .Should().BeTrue("the commit point judges the node the entity reference commits, whatever the reference");
         (await TypeOf(path, ct)).Should().Be("Markdown");
     }
 
@@ -392,41 +390,88 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
             .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
         (await TypeOf(path, ct)).Should().Be("Group", "control: the owner applies a spliced nodeType");
 
-        var failure = await Record.ExceptionAsync(() => RequestHub
+        (await Refused(RequestHub
             .Observe<PatchDataResponse>(
                 new PatchDataRequest(new MeshNodeReference(),
                     new RawJson("{\"nodeType\":{\"$sd\":[0,5,\"PartitionAccessPolicy\"]}}"))
                 {
                     BaseValues = new RawJson("{\"nodeType\":\"Group\"}"),
                 },
-                o => o.WithTarget(owner))
-            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
-
-        failure.Should().NotBeNull("a spliced nodeType is judged on the value the owner would produce");
+                o => o.WithTarget(owner)), ct))
+            .Should().BeTrue("the commit point judges the value the splice produces");
         (await TypeOf(path, ct)).Should().Be("Group", "the refused splice must leave the node as it was");
     }
 
     /// <summary>
-    /// A LITERAL with a stale base is three-way merged by the owner: disjoint edits of
-    /// <c>Parition</c> (base) to <c>Partition</c> (live) and to <c>ParitionAccessPolicy</c> (patch)
-    /// produce <c>PartitionAccessPolicy</c>. The guard must judge what the merge produces, not the literal.
+    /// A LITERAL with a stale base is three-way merged by the owner. With live <c>Group</c>, base
+    /// <c>XGroup</c> and patch <c>XPartitionAccessPolicy</c>, the owner's disjoint edits produce
+    /// <c>PartitionAccessPolicy</c>, although the literal names no policy. The commit point judges
+    /// the merged result, so the retype is refused.
     /// </summary>
-    [Fact]
-    public void AStaleBaseLiteral_ThatTheOwnerMergesIntoAPolicy_IsRefused()
+    [Fact(Timeout = 120000)]
+    public async Task AStaleBaseLiteral_ThatTheOwnerMergesIntoAPolicy_IsRefused()
     {
-        var options = Mesh.JsonSerializerOptions;
-        var patch = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"ParitionAccessPolicy\"}");
-        var baseValues = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"Parition\"}");
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
 
         // The hole, measured on the owner's own merge.
-        var live = new System.Text.Json.Nodes.JsonObject { ["nodeType"] = "Partition" };
+        var live = new System.Text.Json.Nodes.JsonObject { ["nodeType"] = "Group" };
         MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply(live,
-            (System.Text.Json.Nodes.JsonObject)patch!.DeepClone(), (System.Text.Json.Nodes.JsonObject)baseValues!.DeepClone());
+            new System.Text.Json.Nodes.JsonObject { ["nodeType"] = "XPartitionAccessPolicy" },
+            new System.Text.Json.Nodes.JsonObject { ["nodeType"] = "XGroup" });
         ((string?)live["nodeType"]).Should().Be("PartitionAccessPolicy", "precondition: the owner merges the disjoint edits");
 
-        var node = new MeshNode("restrict", TestPartition) { NodeType = "Partition" };
-        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, node, options, baseValues)
-            .Should().Be(PolicyPlacementGuard.PatchRetype.IntoAPolicy);
+        var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var owner = new Address(path);
+        await RequestHub
+            .Observe<PatchDataResponse>(new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":\"Group\"}")),
+                o => o.WithTarget(owner))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        (await TypeOf(path, ct)).Should().Be("Group", "control: a literal retype between non-policy types lands");
+
+        (await Refused(RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":\"XPartitionAccessPolicy\"}"))
+                {
+                    BaseValues = new RawJson("{\"nodeType\":\"XGroup\"}"),
+                },
+                o => o.WithTarget(owner)), ct))
+            .Should().BeTrue("the commit point judges what the merge produces, not the literal");
+        (await TypeOf(path, ct)).Should().Be("Group");
+    }
+
+    /// <summary>
+    /// QUEUED patches: an existing policy is retyped away by one patch and back by the next, sent
+    /// back to back. Judged at delivery, the second saw a node that was still a policy and passed.
+    /// At the commit point it is judged against the node the first patch left, so it is a retype
+    /// into a policy and is refused.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AQueuedPatchBackIntoAPolicy_IsJudgedAgainstTheNodeTheEarlierPatchLeft()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var area = await CreateMarkdown($"area-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.Policy(area, new PartitionAccessPolicy { Read = true }))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var path = $"{area}/_Policy";
+        (await TypeOf(path, ct)).Should().Be(PartitionAccessPolicyNodeType.NodeType, "precondition: a valid policy was created");
+        var owner = new Address(path);
+
+        var away = RequestHub
+            .Observe<PatchDataResponse>(new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":\"Markdown\"}")),
+                o => o.WithTarget(owner))
+            .Take(1).Replay();
+        var back = RequestHub
+            .Observe<PatchDataResponse>(new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":\"PartitionAccessPolicy\"}")),
+                o => o.WithTarget(owner))
+            .Take(1).Replay();
+        using var awayConnection = away.Connect();
+        using var backConnection = back.Connect();
+
+        (await Refused(away, ct)).Should().BeFalse("retyping a policy AWAY is not a retype into one");
+        (await Refused(back, ct)).Should().BeTrue("the second patch meets the Markdown node the first one left");
+        (await TypeOf(path, ct)).Should().Be("Markdown");
     }
 
     /// <summary>
@@ -460,20 +505,134 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         (await TypeOf(target, ct)).Should().Be("Markdown");
     }
 
-    /// <summary>A cold owner is not permission: a patch naming the policy type is refused as not loaded.</summary>
+    /// <summary>
+    /// A synced write-back (a <c>DataChangeRequest</c> to the node's OWN hub) retyping a node into a
+    /// policy at a VALID placement, as a full entity and as a delta. Policies are create-only, so both
+    /// are refused at the commit point.
+    /// </summary>
+    [Theory(Timeout = 120000)]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ASyncedWriteBack_RetypingIntoAPolicy_AtAValidPlacement_IsRefused(bool asDelta)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var area = await CreateMarkdown($"area-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var path = await CreateMarkdown($"{area[(TestPartition.Length + 1)..]}/_Policy", ct);
+        var current = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var retyped = current! with
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Content = new PartitionAccessPolicy { BreaksInheritance = true },
+        };
+        object entity = asDelta
+            ? EntityDelta.Compute(nameof(MeshNode), current.Id, null, current, retyped, Mesh.JsonSerializerOptions)
+            : retyped;
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(DataChangeRequest.Update([entity]), o => o.WithTarget(new Address(path)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"write-back ({(asDelta ? "delta" : "full")}): {response.Message.Status}");
+
+        response.Message.Status.Should().NotBe(DataChangeStatus.Committed, "a policy is create-only on every route");
+        (await TypeOf(path, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>
+    /// A delta that changes a policy's IDENTITY: committed, it would land as a new entry at a path
+    /// the permission fold never reads. At the commit point it is a policy committed to a hub that is
+    /// not its own node's, so it is refused, and nothing appears at the destination.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AnIdentityChangingPolicyDelta_IsRefused_AndLeavesNoDestination()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var area = await CreateMarkdown($"area-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        await NodeFactory.CreateNode(AssignmentNodeFactory.Policy(area, new PartitionAccessPolicy { Read = true }))
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        var path = $"{area}/_Policy";
+        var policy = await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        var moved = policy! with { Id = "ignored-policy" };
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([EntityDelta.Compute(nameof(MeshNode), policy.Id, null, policy, moved, Mesh.JsonSerializerOptions)]),
+                o => o.WithTarget(new Address(path)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"identity-changing delta: {response.Message.Status}");
+
+        response.Message.Status.Should().NotBe(DataChangeStatus.Committed);
+        var listed = await MeshService
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{area} scope:children"))
+            .Where(c => c.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        listed.Items.Should().NotContain(n => n.Id == "ignored-policy", "the refused delta must leave no destination row");
+    }
+
+    /// <summary>
+    /// A DELTA retyping a foreign node the carrier hub has accepted into its collection: the commit
+    /// point resolves the delta to the entity it would commit, a policy that is not the hub's own
+    /// node, and refuses it.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AForeignDeltaIntoAPolicy_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var target = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var carrier = await CreateMarkdown($"carrier-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var targetNode = await Mesh.GetWorkspace().GetMeshNodeStream(target)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var accepted = await RequestHub
+            .Observe<DataChangeResponse>(DataChangeRequest.Update([targetNode!]), o => o.WithTarget(new Address(carrier)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"carried Markdown: {accepted.Message.Status}");
+
+        var retyped = targetNode! with
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Content = new PartitionAccessPolicy { BreaksInheritance = true },
+        };
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([EntityDelta.Compute(nameof(MeshNode), targetNode.Id, null, targetNode, retyped, Mesh.JsonSerializerOptions)]),
+                o => o.WithTarget(new Address(carrier)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"carried delta: {response.Message.Status}");
+
+        response.Message.Status.Should().NotBe(DataChangeStatus.Committed);
+        (await TypeOf(target, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>
+    /// The commit guard's decisions, one per shape: a retype into a policy and a policy committed to a
+    /// foreign hub are refused; a legacy policy edit, a first commit (the create path's) and a
+    /// non-policy write commit. (This replaces the delivery-time patch interpretation the guard
+    /// used to run: a cold owner never reaches the commit point, because its merge turn waits for
+    /// the loaded store.)
+    /// </summary>
     [Fact]
-    public void APatchNamingThePolicyType_OnAnOwnerThatHasNotLoaded_IsNotLetThrough()
+    public void TheCommitGuard_RefusesRetypesAndForeignPolicies_AndKeepsLegacyEdits()
     {
         var options = Mesh.JsonSerializerOptions;
-        var patch = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"PartitionAccessPolicy\"}");
-        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, live: null, options)
-            .Should().Be(PolicyPlacementGuard.PatchRetype.OwnerNotLoaded);
+        var guard = new PolicyCommitGuard();
+        var policy = AssignmentNodeFactory.Policy("TestData/area", new PartitionAccessPolicy());
+        var markdown = policy with { NodeType = "Markdown", Content = null };
 
-        var legacy = AssignmentNodeFactory.Policy("TestData/_Storage", new PartitionAccessPolicy());
-        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, live: legacy, options)
-            .Should().Be(PolicyPlacementGuard.PatchRetype.None, "a policy that already is one stays editable");
-        PolicyPlacementGuard.PatchVerdict(System.Text.Json.Nodes.JsonNode.Parse("{\"name\":\"x\"}"), true, null, options)
-            .Should().Be(PolicyPlacementGuard.PatchRetype.None, "a patch that names no type is not judged");
+        guard.Refusal("MeshNode", markdown, policy, policy.Path, null, options)
+            .Should().Contain(policy.Path, "a retype into a policy is refused: policies are create-only");
+        guard.Refusal("MeshNode", null, policy, "TestData/carrier", null, options)
+            .Should().Contain(policy.Path).And.Contain("TestData/carrier", "a policy committed to a foreign hub is refused");
+        guard.Refusal("MeshNode", policy, policy with { Content = new PartitionAccessPolicy { Read = false } }, policy.Path, null, options)
+            .Should().BeNull("a policy that already is one stays editable");
+        guard.Refusal("MeshNode", null, policy, policy.Path, null, options)
+            .Should().BeNull("a first commit of the hub's own node is the create path's, judged at create");
+        guard.Refusal("MeshNode", policy, markdown, policy.Path, null, options)
+            .Should().BeNull("retyping a policy away is not a retype into one");
     }
 
     /// <summary>
@@ -594,6 +753,23 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
             Operation = NodeOperation.Create,
             Node = AssignmentNodeFactory.Policy(scope, new PartitionAccessPolicy { BreaksInheritance = true }),
         }, null).IsValid.Should().BeTrue();
+
+    /// <summary>
+    /// Whether a raw <see cref="PatchDataRequest"/> was refused. The owner answers a refusal either
+    /// as a delivery failure (an exception here) or as an unsuccessful <see cref="PatchDataResponse"/>.
+    /// </summary>
+    private static async Task<bool> Refused(IObservable<IMessageDelivery<PatchDataResponse>> response, CancellationToken ct)
+    {
+        try
+        {
+            var answer = await response.Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+            return !answer.Message.Success;
+        }
+        catch (Exception ex) when (ex is not TimeoutException)
+        {
+            return true;
+        }
+    }
 
     private async Task<string> CreateMarkdown(string relative, CancellationToken ct)
     {

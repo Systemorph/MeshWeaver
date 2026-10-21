@@ -438,6 +438,10 @@ public static class GraphConfigurationExtensions
                 // as BreaksInheritance was silently ignored. Stateless. See PolicyPlacementValidator.
                 services.AddScoped<INodeValidator, Security.PolicyPlacementValidator>();
 
+                // A PartitionAccessPolicy is CREATE-ONLY: the one check every write that commits into
+                // an owner meets, at the commit point (IEntityCommitGuard). Stateless. See PolicyCommitGuard.
+                services.AddSingleton<MeshWeaver.Mesh.IEntityCommitGuard, Security.PolicyCommitGuard>();
+
                 // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
                 // NodeType's whitelist was honoured by the Create FORM alone and the write boundary
                 // asked nothing about it — so a direct CreateNodeRequest, an agent tool call, or a

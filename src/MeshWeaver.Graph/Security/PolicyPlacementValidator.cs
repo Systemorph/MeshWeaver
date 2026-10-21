@@ -1,5 +1,5 @@
 using System.Reactive.Linq;
-using System.Text.Json.Nodes;
+using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
 using MeshWeaver.Data.Validation;
@@ -47,9 +47,9 @@ namespace MeshWeaver.Graph.Security;
 /// <item><c>IMeshService.UpdateNode</c> runs it in its update chain when the update retypes a node
 /// INTO a policy.</item>
 /// <item>The upsert runs it through <see cref="INodeTypeTransitionValidator"/>.</item>
-/// <item>A client merge patch of the node (<c>GetMeshNodeStream(path).Update</c> from another hub) and a
-/// synced write-back reach the owning hub, which runs it in <see cref="PolicyPlacementGuard.AddPolicyPlacementGuard"/>,
-/// against the node it holds.</item>
+/// <item>Every write that COMMITS into an owner (a merge patch, a data change) meets
+/// <see cref="PolicyCommitGuard"/> at the commit point, which refuses a retype into a policy outright:
+/// a policy is create-only.</item>
 /// </list>
 /// An update of a node that is ALREADY a policy is never judged, so a legacy policy stays editable. The
 /// type name matches case-insensitively, the way NodeType resolution matches it.</para>
@@ -244,201 +244,82 @@ public sealed class PolicyPlacementValidator(IMessageHub hub) : INodeValidator, 
     internal static string PartitionOfPath(string? path) => PartitionOf(path);
 }
 
-/// <summary>Installs <see cref="PolicyPlacementValidator"/> at the owning hub's write boundary.</summary>
+/// <summary>
+/// Installs the policy rule at the OWNING hub's write boundary: <see cref="PolicyCommitGuard"/>, judged
+/// at the commit point, plus <see cref="PolicyPlacementDataValidator"/> for the one case the commit
+/// point cannot see: a data change to an owner that has not loaded its node yet.
+/// </summary>
 public static class PolicyPlacementGuard
 {
     /// <summary>
-    /// The rule at the OWNING hub's write boundary, for the two routes that reach a node's hub
-    /// without passing a validator chain: a client merge patch of the node (<see cref="PatchDataRequest"/>,
-    /// which is every <c>GetMeshNodeStream(path).Update</c> from another hub), and a synced
-    /// write-back (<see cref="DataChangeRequest"/>, through <see cref="PolicyPlacementDataValidator"/>).
-    /// Both are judged against the node this hub HOLDS, so an update of a node that is already a
-    /// policy passes, and only a retype into one is checked. A patch that is not a retype into a
-    /// policy continues on the same turn. Only the rare retype waits for the layout read, the way the
-    /// access gate continues after its fold.
+    /// Registers the cold-owner data validator on a node hub. The commit guard itself is registered
+    /// once for the mesh (<c>AddGraph</c>), where every committing hub resolves it.
     /// </summary>
     /// <param name="config">The node hub's configuration.</param>
     /// <returns>The configuration with the guard installed.</returns>
     public static MessageHubConfiguration AddPolicyPlacementGuard(this MessageHubConfiguration config)
-        => config
-            .WithServices(services => services.AddScoped<IDataValidator, PolicyPlacementDataValidator>())
-            .AddDeliveryPipeline(pipeline =>
-            {
-                var hub = pipeline.Hub;
-                return pipeline.AddPipeline((delivery, ct, next) =>
-                {
-                    if (!IsClientPatchOfThisHub(hub, delivery))
-                        return next.Invoke(delivery, ct);
-                    var patchRequest = (PatchDataRequest)delivery.Message;
-                    var verdict = PatchVerdict(
-                        JsonNode.Parse(patchRequest.Patch.Content ?? "{}"),
-                        patchRequest.Reference is MeshNodeReference,
-                        StampedFields.LiveOwnNode(hub),
-                        hub.JsonSerializerOptions,
-                        patchRequest.BaseValues is { Content: { } baseContent } ? JsonNode.Parse(baseContent) : null);
-                    if (verdict == PatchRetype.None)
-                        return next.Invoke(delivery, ct);
+        => config.WithServices(services => services
+            .AddScoped<IDataValidator, PolicyPlacementDataValidator>());
+}
 
-                    var locale = delivery.AccessContext?.Locale;
-                    var message = verdict == PatchRetype.OwnerNotLoaded
-                        ? LocalizationCatalog.Get("policy.placement.ownerNotLoaded", locale, hub.Address.Path)
-                        : LocalizationCatalog.Get("policy.placement.patchRetype", locale, hub.Address.Path);
-                    hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.PolicyPlacement")
-                        .LogWarning("PolicyPlacement: refused a patch of {Path} from {Sender}: {Message}",
-                            hub.Address.Path, delivery.Sender, message);
-                    hub.Post(new DeliveryFailure(delivery)
-                    {
-                        ErrorType = verdict == PatchRetype.OwnerNotLoaded ? ErrorType.Unavailable : ErrorType.Rejected,
-                        Message = message,
-                    }, o => o.ResponseFor(delivery));
-                    return Observable.Return(delivery.Forwarded());
-                });
-            });
-
-    /// <summary>What a client merge patch does to the hub's node type, as far as placement is concerned.</summary>
-    public enum PatchRetype
+/// <summary>
+/// 🚨 <b>A <c>PartitionAccessPolicy</c> is CREATE-ONLY</b> (owner decision, #7017), and this is the ONE
+/// check that enforces it for every write that commits into an owner. It is judged at the COMMIT
+/// point (<see cref="IEntityCommitGuard"/>), in the turn that applies the write, against the entity
+/// exactly as it would commit and the entity it replaces.
+///
+/// <para><b>Refused:</b>
+/// <list type="bullet">
+/// <item>A node that the owner holds as another type and that would commit as a policy: a retype,
+/// whatever route or encoding produced it. That covers a literal, a string splice, a stale-base
+/// three-way merge, <c>UpdateNode</c>, the upsert, a synced write-back, an entity-reference patch,
+/// and a patch queued behind another that changed the type first.</item>
+/// <item>A policy committed to a hub that is not its own node's. A data change can carry another
+/// node, and that node's owner would never see it.</item>
+/// </list>
+/// A policy that already is one commits, so a legacy policy stays editable. A first commit of the
+/// hub's own node, with nothing held under its key, is the create path's, whose placement
+/// <see cref="PolicyPlacementValidator"/> judges.</para>
+///
+/// <para>Before this, the rule was interpreted at DELIVERY: the patch text was parsed, splices were
+/// applied and the owner's merge was replayed, against the node held when the patch arrived. Each
+/// review round found another shape that interpretation missed, and a queued patch could still be
+/// judged against a predecessor that was gone by the time it merged. At the commit point there is
+/// nothing to interpret.</para>
+/// </summary>
+public sealed class PolicyCommitGuard : IEntityCommitGuard
+{
+    /// <inheritdoc />
+    public string? Refusal(string collection, object? before, object after, string ownerPath,
+        AccessContext? writer, JsonSerializerOptions options)
     {
-        /// <summary>The patch does not turn the node into a policy: it continues on this turn.</summary>
-        None,
-        /// <summary>The patch turns a node of another type into a policy: refused.</summary>
-        IntoAPolicy,
-        /// <summary>The patch names the policy type, and the hub has not loaded its node, so it cannot tell.</summary>
-        OwnerNotLoaded,
-    }
+        if (!string.Equals(collection, nameof(MeshNode), StringComparison.Ordinal)
+            || after.As<MeshNode>(options) is not { } next
+            || !PolicyPlacementValidator.IsPolicyType(next.NodeType))
+            return null;
 
-    /// <summary>
-    /// The verdict on a client merge patch, decided SYNCHRONOUSLY on the hub's turn. Pure.
-    ///
-    /// <para><b>Why a patch is refused rather than judged.</b> Placement needs the partition's layout,
-    /// which is a read. Waiting for it here would let a later patch from the same sender pass ahead of
-    /// this one. So a patch that turns a node INTO a policy is refused, and a policy is created as one
-    /// (<c>{scope}/_Policy</c>). <c>IMeshService.UpdateNode</c> and the upsert reach the owner as this
-    /// same patch, so a retype into a policy is refused on those routes too, even where its placement
-    /// is valid (#7017 review; tracked in triage). A patch of a node that already IS a policy is not a
-    /// retype and passes, so legacy policies stay editable.</para>
-    ///
-    /// <para><b>The owner's merge semantics, not the literal.</b> A string leaf can also arrive as a
-    /// SPLICE (<c>{"$sd":[start,removed,inserted]}</c>, <see cref="MeshWeaver.Data.Serialization.PatchStringSplice"/>),
-    /// which the owner applies to the live value. A spliced <c>nodeType</c> is judged on the value the
-    /// splice produces from the live type. A splice whose base value differs from the live type, which the
-    /// owner would rebase, and any other non-string <c>nodeType</c> cannot be judged here. Both count as
-    /// naming the policy type.</para>
-    ///
-    /// <para><b>Every reference shape.</b> A <see cref="MeshNodeReference"/> patch is the node itself, so
-    /// only its top-level <c>nodeType</c> counts. Any other reference (an
-    /// <see cref="EntityReference"/> to the <c>MeshNode</c> collection, a JSON pointer, …) is searched at
-    /// every depth, because its shape says nothing this guard can map field by field.</para>
-    ///
-    /// <para><b>A cold owner is not permission.</b> When the hub has not loaded its node, a patch that
-    /// names the policy type is refused as Unavailable, never let through.</para>
-    /// </summary>
-    /// <param name="patch">The parsed patch.</param>
-    /// <param name="isNodeReference">Whether the patch addresses the node itself.</param>
-    /// <param name="live">The node as the hub holds it; null before it has loaded.</param>
-    /// <param name="options">The hub's serializer options.</param>
-    /// <param name="baseValues">The patch's <c>BaseValues</c>, the writer's old values, when it carries them.</param>
-    /// <returns>The verdict.</returns>
-    public static PatchRetype PatchVerdict(
-        JsonNode? patch, bool isNodeReference, MeshNode? live, System.Text.Json.JsonSerializerOptions options,
-        JsonNode? baseValues = null)
-    {
-        var key = options.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.NodeType)) ?? nameof(MeshNode.NodeType);
-        var baseType = baseValues is JsonObject baseObject
-            ? baseObject.FirstOrDefault(kvp => IsNodeTypeKey(kvp.Key, key)).Value
-            : null;
-        var namesPolicy = isNodeReference
-            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && MergesIntoPolicy(kvp.Key, kvp.Value, live, baseType))
-            : NamesPolicyAnywhere(patch, key);
-        if (!namesPolicy)
-            return PatchRetype.None;
-        if (live is null)
-            return PatchRetype.OwnerNotLoaded;
-        return PolicyPlacementValidator.IsPolicyType(live.NodeType) ? PatchRetype.None : PatchRetype.IntoAPolicy;
-    }
+        if (!string.Equals(next.Path, ownerPath, StringComparison.OrdinalIgnoreCase))
+            return LocalizationCatalog.Get("policy.placement.foreignWrite", writer?.Locale, next.Path, ownerPath);
 
-    private static bool IsNodeTypeKey(string candidate, string key)
-        => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase);
+        var previous = before?.As<MeshNode>(options);
+        if (previous is null || PolicyPlacementValidator.IsPolicyType(previous.NodeType))
+            return null;
 
-    /// <summary>
-    /// Whether a <c>nodeType</c> patch value would leave the node as a policy, under the owner's merge
-    /// semantics, or cannot be judged (which counts as yes).
-    /// </summary>
-    private static bool NamesPolicy(JsonNode? value, MeshNode? live, JsonNode? baseValue)
-    {
-        switch (value)
-        {
-            case null:
-                return false;
-            case JsonValue v when v.TryGetValue<string>(out var literal):
-                return PolicyPlacementValidator.IsPolicyType(literal);
-        }
-        if (MeshWeaver.Data.Serialization.PatchStringSplice.TryDecode(value, out var splice))
-        {
-            if (live?.NodeType is not { } current)
-                return true;
-            if (baseValue is JsonValue b && b.TryGetValue<string>(out var baseString)
-                && !string.Equals(baseString, current, StringComparison.Ordinal))
-                return true;
-            return PolicyPlacementValidator.IsPolicyType(splice.Apply(current));
-        }
-        return true;
-    }
-
-    /// <summary>
-    /// Whether the owner's own merge (<see cref="MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply"/>)
-    /// of this <c>nodeType</c> leaf onto the live type leaves a policy type. The merge is RUN, not
-    /// re-implemented: a literal with a stale base is three-way merged by the owner (disjoint edits of
-    /// <c>Parition</c>→<c>Partition</c> and →<c>ParitionAccessPolicy</c> produce
-    /// <c>PartitionAccessPolicy</c>), and a splice is applied to the live value. A cold owner
-    /// (<paramref name="live"/> null) or a non-string merge result that is not plainly another type
-    /// cannot be judged and counts as yes.
-    /// </summary>
-    private static bool MergesIntoPolicy(string patchKey, JsonNode? value, MeshNode? live, JsonNode? baseValue)
-    {
-        if (value is null)
-            return false;
-        if (live is null)
-            return NamesPolicy(value, null, null);
-        var simulated = new JsonObject { [patchKey] = live.NodeType is { } current ? JsonValue.Create(current) : null };
-        var patchLeaf = new JsonObject { [patchKey] = value.DeepClone() };
-        var baseLeaf = baseValue is null ? null : new JsonObject { [patchKey] = baseValue.DeepClone() };
-        MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply(simulated, patchLeaf, baseLeaf);
-        return simulated[patchKey] switch
-        {
-            null => false,
-            JsonValue v when v.TryGetValue<string>(out var merged) => PolicyPlacementValidator.IsPolicyType(merged),
-            _ => true,
-        };
-    }
-
-    private static bool NamesPolicyAnywhere(JsonNode? node, string key) => node switch
-    {
-        JsonObject obj => obj.Any(kvp => (IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value, null, null))
-                                         || NamesPolicyAnywhere(kvp.Value, key)),
-        JsonArray array => array.Any(item => NamesPolicyAnywhere(item, key)),
-        _ => false,
-    };
-
-    /// <summary>
-    /// A merge patch ADDRESSED to this hub's own node that came from anywhere but this hub. The owning
-    /// hub's own writes never arrive as a message, so the sender test is exact.
-    /// </summary>
-    private static bool IsClientPatchOfThisHub(IMessageHub hub, IMessageDelivery delivery)
-    {
-        if (delivery.Message is not PatchDataRequest)
-            return false;
-        var ownPath = hub.Address.Path;
-        if (delivery.Target is { } target && !string.Equals(target.Path, ownPath, StringComparison.OrdinalIgnoreCase))
-            return false;
-        return delivery.Sender is null
-            || !string.Equals(delivery.Sender.Path, ownPath, StringComparison.OrdinalIgnoreCase);
+        return LocalizationCatalog.Get("policy.placement.createOnly", writer?.Locale, next.Path);
     }
 }
 
 /// <summary>
-/// The synced write-back half of <see cref="PolicyPlacementGuard.AddPolicyPlacementGuard"/>: a
-/// <see cref="DataChangeRequest"/> update of the hub's own node that turns it into a policy is
-/// judged against the node the hub holds.
+/// The case <see cref="PolicyCommitGuard"/> cannot see: a <see cref="DataChangeRequest"/> carrying
+/// this hub's own node, as a policy, while the hub has not loaded its node. The commit point then
+/// holds nothing under the key and cannot tell a create from a retype. So the node is established
+/// from storage first:
+/// <list type="bullet">
+/// <item>absent there, the write is a create and the creation chain judges it;</item>
+/// <item>stored as another type, it is a retype and is refused, because a policy is create-only;</item>
+/// <item>a read that answers nothing refuses as not loaded.</item>
+/// </list>
+/// Once the node is loaded, the commit guard decides and this validator stands aside.
 /// </summary>
 internal sealed class PolicyPlacementDataValidator(IMessageHub hub) : IDataValidator
 {
@@ -449,87 +330,29 @@ internal sealed class PolicyPlacementDataValidator(IMessageHub hub) : IDataValid
     public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         var options = hub.JsonSerializerOptions;
+        if (StampedFields.LiveOwnNode(hub) is not null
+            || context.Entity is EntityDeltaUpdate
+            || context.Entity.As<MeshNode>(options) is not { Path.Length: > 0 } incoming
+            || !PolicyPlacementValidator.IsPolicyType(incoming.NodeType)
+            || !string.Equals(incoming.Path, hub.Address.Path, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(DataValidationResult.Valid());
 
-        // 🚨 A policy written through ANOTHER node's hub (#7017 review). A DataChangeRequest may carry
-        // a MeshNode whose path is not this hub's; the change pipeline adds it to this hub's collection
-        // and the type source persists it, so the target's own owner never sees it. Such a write of a
-        // policy cannot be judged against the target's predecessor here: refuse it.
-        if (context.Entity is not EntityDeltaUpdate
-            && context.Entity.As<MeshNode>(options) is { Path.Length: > 0 } carried
-            && PolicyPlacementValidator.IsPolicyType(carried.NodeType)
-            && !string.Equals(carried.Path, hub.Address.Path, StringComparison.OrdinalIgnoreCase))
-            return Observable.Return(DataValidationResult.Invalid(
-                LocalizationCatalog.Get("policy.placement.foreignWrite", context.AccessContext?.Locale,
-                    carried.Path, hub.Address.Path),
-                DataValidationRejectionReason.ValidationFailed));
-
-        var held = StampedFields.LiveOwnNode(hub);
-        if (held is not null)
-            return Judge(context, held, options);
-
-        // 🚨 A cold owner is not permission (#7017 review). Establish the node from storage: absent
-        // there, the write is a create and the creation chain judges it
-        // (MeshNodeCreationDataValidator); present, it is judged against the stored node. A read that
-        // answers nothing refuses as Unavailable.
-        if (context.Entity.As<MeshNode>(options) is not { Path.Length: > 0 } incoming
-            || !PolicyPlacementValidator.IsPolicyType(incoming.NodeType))
-            return Observable.Return(context.Entity is EntityDeltaUpdate
-                ? DataValidationResult.Invalid(
-                    LocalizationCatalog.Get("policy.placement.ownerNotLoaded", context.AccessContext?.Locale, hub.Address.Path),
-                    DataValidationRejectionReason.Unknown)
-                : DataValidationResult.Valid());
         var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
             return Observable.Return(DataValidationResult.Valid());
+        var locale = context.AccessContext?.Locale;
         return Observable.Defer(() => storage.Read(incoming.Path, options))
             .Take(1)
             .Select(stored => (Answered: true, Stored: stored))
             .DefaultIfEmpty((Answered: false, Stored: null))
-            .SelectMany(read => !read.Answered
-                ? Observable.Return(DataValidationResult.Invalid(
-                    LocalizationCatalog.Get("policy.placement.ownerNotLoaded", context.AccessContext?.Locale, hub.Address.Path),
-                    DataValidationRejectionReason.Unknown))
-                : read.Stored is null
-                    ? Observable.Return(DataValidationResult.Valid())
-                    : Judge(context, read.Stored, options));
-    }
-
-    private IObservable<DataValidationResult> Judge(
-        DataValidationContext context, MeshNode live, System.Text.Json.JsonSerializerOptions options)
-    {
-        if (PolicyPlacementValidator.IsPolicyType(live.NodeType))
-            return Observable.Return(DataValidationResult.Valid());
-
-        var after = context.Entity switch
-        {
-            EntityDeltaUpdate delta when delta.Collection == nameof(MeshNode)
-                && (delta.Id == live.Id || string.Equals(delta.Id, live.Path, StringComparison.OrdinalIgnoreCase))
-                => EntityDelta.Apply(live, delta, options) as MeshNode,
-            EntityDeltaUpdate => null,
-            { } entity when entity.As<MeshNode>(options) is { } node
-                && string.Equals(node.Path, live.Path, StringComparison.OrdinalIgnoreCase) => node,
-            _ => null,
-        };
-        if (after is null || !PolicyPlacementValidator.IsPolicyType(after.NodeType))
-            return Observable.Return(DataValidationResult.Valid());
-
-        return new PolicyPlacementValidator(hub).Validate(new NodeValidationContext
-            {
-                Operation = NodeOperation.Update,
-                Node = after,
-                ExistingNode = live,
-                AccessContext = context.AccessContext,
-            })
-            .Take(1)
-            .DefaultIfEmpty(NodeValidationResult.Invalid(
-                LocalizationCatalog.Get("policy.placement.unestablished", context.AccessContext?.Locale,
-                    after.Path, after.Path.Split('/')[0]),
-                NodeRejectionReason.Unavailable))
-            .Select(result => result.IsValid
-                ? DataValidationResult.Valid()
-                : DataValidationResult.Invalid(result.ErrorMessage ?? live.Path,
-                    result.Reason == NodeRejectionReason.Unavailable
-                        ? DataValidationRejectionReason.Unknown
-                        : DataValidationRejectionReason.ValidationFailed));
+            .Select(read => !read.Answered
+                ? DataValidationResult.Invalid(
+                    LocalizationCatalog.Get("policy.placement.ownerNotLoaded", locale, hub.Address.Path),
+                    DataValidationRejectionReason.Unknown)
+                : read.Stored is { } stored && !PolicyPlacementValidator.IsPolicyType(stored.NodeType)
+                    ? DataValidationResult.Invalid(
+                        LocalizationCatalog.Get("policy.placement.createOnly", locale, incoming.Path),
+                        DataValidationRejectionReason.ValidationFailed)
+                    : DataValidationResult.Valid());
     }
 }
