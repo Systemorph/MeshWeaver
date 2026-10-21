@@ -91,7 +91,11 @@ public static class BroadGrantGuard
         // Public links (MeshWeaver#4306): link.publish grants its audience (Anonymous, Public or an
         // org group) Viewer on the LINK node only — never on the target; link.revoke removes that
         // grant; group.org-create writes the org group and its proposer's Admin on that group alone.
-        "link.publish", "link.revoke", "group.org-create");
+        "link.publish", "link.revoke", "group.org-create",
+        // group.scoped-create (MeshWeaver.Plugins Governance): a group holding ONE non-Admin role at
+        // ONE path — its one grant names the group and is written as System, and its proposer gets
+        // Admin on the group node alone; the executor re-checks proposer and signer as the caller.
+        "group.scoped-create");
 
     /// <summary>The allowlist in effect: <see cref="StandardsKey"/> when set, else the default.</summary>
     public static ImmutableHashSet<string> GovernedStandards(IConfiguration? configuration)
