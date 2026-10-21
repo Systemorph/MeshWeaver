@@ -2486,9 +2486,9 @@ case "$_vh_out" in *"::hosting:: vault_values_bytes="*) ok "only the half's SIZE
 rm -f "$_vh_dir/vault/helm-values-memex"; : > "$_vh_log"
 _vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
 if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'helm-values-memex' \
-   && printf '%s' "$_vh_out" | grep -q 'capture' && printf '%s' "$_vh_out" | grep -q '3780' \
+   && printf '%s' "$_vh_out" | grep -q 'hosting-kv-ensure --values-half' && printf '%s' "$_vh_out" | grep -q '3780' \
    && ! grep -q '^helm ' "$_vh_log"; then
-  ok "a declared half the vault does not hold is refused before helm, naming capture and #3780"
+  ok "a declared half the vault does not hold is refused before helm, naming the governed remedy and #3780"
 else
   bad "a declared half the vault does not hold is refused before helm" "rc=${_vh_rc} out: ${_vh_out} log: $(cat "$_vh_log")"
 fi
@@ -2516,8 +2516,8 @@ printf 'extraVolumes:\n- name: kv-secrets\n  csi:\n    driver: secrets-store.csi
 : > "$_vh_log"
 _vh_out="$(_vh_run --vault kv-test)"; _vh_rc=$?
 if [ "$_vh_rc" -ne 0 ] && printf '%s' "$_vh_out" | grep -q 'STRUCTURE' && printf '%s' "$_vh_out" | grep -q ' extraVolumes' \
-   && printf '%s' "$_vh_out" | grep -q 'helmAction: capture' && ! grep -q '^helm ' "$_vh_log"; then
-  ok "a half carrying a structural key is refused before helm, naming the key and the capture remedy (Memex#295)"
+   && printf '%s' "$_vh_out" | grep -q 'hosting-kv-ensure --values-half' && ! grep -q '^helm ' "$_vh_log"; then
+  ok "a half carrying a structural key is refused before helm, naming the key and the governed remedy (Memex#295)"
 else
   bad "a structural half is refused before helm" "rc=${_vh_rc} out: ${_vh_out} log: $(cat "$_vh_log")"
 fi
@@ -4690,6 +4690,77 @@ else
   echo "  note  storage walker not run here (needs GNU stat/touch); CI runs it"
 fi
 unset _sp_out _sp_rc _sp_calls _sp_manifest _sp_json _sp_log
+
+# ── hosting-chart-drift: the Chart Drift comparison inside the governed Audit (Memex#647) ────────
+# The comparison itself (check-chart-drift.sh + chart-drift-*.py) is tested by chart-gate.yml. What is
+# THIS command's own and asserted here: the inputs it resolves from the estate checkout, that it
+# compares IN-CLUSTER (never the aks-invoke transport it retires), and the verdict contract — drift is
+# a finding (exit 0, verdict=drift), a comparison that never happened is red with NO verdict line.
+# The drift scripts are replaced by stubs through HOSTING_DRIFT_SCRIPTS, built here so nothing new
+# has to be tracked executable.
+echo
+echo "── hosting-chart-drift: chart vs cluster, inside the Audit ──────"
+_cd="$(mktemp -d)"
+mkdir -p "$_cd/scripts" "$_cd/chart" "$_cd/estate/deployments/aks/memex" "$_cd/estate/mesh/Deployments"
+printf 'replicas: {}\n' > "$_cd/chart/values.yaml"
+printf 'config: {}\n' > "$_cd/estate/deployments/aks/memex/values.memex.public.yaml"
+cat > "$_cd/scripts/chart-drift-record.py" <<'PYEOF'
+import os, sys
+out = sys.argv[sys.argv.index("--out") + 1]
+if os.environ.get("CD_STUB_RECORD") == "none":
+    print("::error::no Deployment record owns memex/memex")
+    sys.exit(1)
+open(out, "w").write("{}")
+PYEOF
+cat > "$_cd/scripts/check-chart-drift.sh" <<'SHEOF'
+printf '%s\n' "$*" > "$CD_STUB_ARGS"
+case "$CD_STUB_MODE" in
+  clean) echo "No drift: 41 fields compared, the cluster matches the rendered chart."; exit 0 ;;
+  drift) echo "::error::SHADOWS      inline env Foo__Bar"; echo; echo "3 divergence(s) across 41 compared fields: 1 SHADOWS, 2 DIFFERS"; exit 1 ;;
+  unreadable) echo "::error::could not read configmap/memex-portal-config from namespace 'memex' via --via kubectl. This is a FAILURE, not an absence of drift."; exit 1 ;;
+esac
+SHEOF
+_cd_run() { # _cd_run <mode> [extra env...] -- [extra args...]
+  local mode="$1"; shift
+  local envs=()
+  while [ $# -gt 0 ] && [ "$1" != "--" ]; do envs+=("$1"); shift; done
+  [ "${1:-}" = "--" ] && shift
+  _cd_out="$(cd "$_cd/estate" && env ${envs[@]+"${envs[@]}"} HOSTING_DRIFT_SCRIPTS="$_cd/scripts" HOSTING_CHART="$_cd/chart" \
+    CD_STUB_MODE="$mode" CD_STUB_ARGS="$_cd/args" hosting-chart-drift --namespace memex --release memex "$@" 2>&1)"; _cd_rc=$?
+}
+: > "$_cd/args"
+_cd_run clean
+[ "$_cd_rc" -eq 0 ] && case "$_cd_out" in *"::hosting:: chart_drift_verdict=clean"*"::hosting:: chart_drift_divergences=0"*"::hosting:: chart_drift_compared=41"*) true ;; *) false ;; esac \
+  && ok "a clean comparison reports verdict=clean with the compared count" || bad "clean comparison" "rc ${_cd_rc}; out: ${_cd_out}"
+case "$(cat "$_cd/args")" in
+  *"--via kubectl"*"-f $_cd/chart/values.yaml -f ./deployments/aks/memex/values.memex.public.yaml"*) ok "it compares in-cluster against the chart + the estate's committed overlay" ;;
+  *) bad "it compares in-cluster against the chart + the estate's committed overlay" "args: $(cat "$_cd/args")" ;; esac
+case "$(cat "$_cd/args")" in *aks-invoke*) bad "it never uses the aks-invoke transport" "args: $(cat "$_cd/args")" ;;
+  *) ok "it never uses the aks-invoke transport (the cluster-admin path it retires)" ;; esac
+_cd_run drift
+[ "$_cd_rc" -eq 0 ] && case "$_cd_out" in *"::hosting:: chart_drift_verdict=drift"*"::hosting:: chart_drift_divergences=3"*"::hosting:: chart_drift_compared=41"*) true ;; *) false ;; esac \
+  && ok "drift is a FINDING: exit 0, verdict=drift, divergences counted" || bad "drift is a finding" "rc ${_cd_rc}; out: ${_cd_out}"
+_cd_run unreadable
+[ "$_cd_rc" -ne 0 ] && case "$_cd_out" in *"chart_drift_verdict"*) false ;; *"produced no verdict"*) true ;; *) false ;; esac \
+  && ok "an unreadable cluster is RED with no verdict line — never 'no drift'" || bad "unreadable cluster" "rc ${_cd_rc}; out: ${_cd_out}"
+_cd_run clean CD_STUB_RECORD=none
+[ "$_cd_rc" -ne 0 ] && case "$_cd_out" in *"chart_drift_verdict"*) false ;; *"no single Deployment record owns"*) true ;; *) false ;; esac \
+  && ok "no owning record is RED, never compared" || bad "no owning record" "rc ${_cd_rc}; out: ${_cd_out}"
+_cd_run clean HOSTING_DRY_RUN=true
+[ "$_cd_rc" -eq 0 ] && case "$_cd_out" in *"::hosting:: chart_drift_verdict=clean"*) true ;; *) false ;; esac \
+  && ok "a dry run compares for real (read-only)" || bad "dry run" "rc ${_cd_rc}; out: ${_cd_out}"
+_cd_run clean -- --overlay "$_cd/estate/nope.yaml"
+[ "$_cd_rc" -ne 0 ] && case "$_cd_out" in *"committed overlay"*) true ;; *) false ;; esac \
+  && ok "a missing overlay is refused by name (a defaults render is not a measurement)" || bad "missing overlay" "rc ${_cd_rc}; out: ${_cd_out}"
+_cd_run clean -- --records "$_cd/estate/nope"
+[ "$_cd_rc" -ne 0 ] && case "$_cd_out" in *"Deployment records folder"*) true ;; *) false ;; esac \
+  && ok "a missing records folder is refused by name" || bad "missing records" "rc ${_cd_rc}; out: ${_cd_out}"
+refuses "chart drift needs --namespace" "missing required flag --namespace" hosting-chart-drift --release r
+refuses "chart drift needs --release"   "missing required flag --release"   hosting-chart-drift --namespace n
+refuses "chart drift rejects unknown flags" "unknown argument" hosting-chart-drift --namespace n --release r --via aks-invoke
+refuses_hard "chart drift namespace with a metacharacter" "is not a plain name" \
+  hosting-chart-drift --namespace 'n; kubectl delete ns --all' --release r
+rm -rf "$_cd"; unset _cd _cd_out _cd_rc
 
 echo
 echo "─────────────────────────────────────────────────────────────────"

@@ -52,6 +52,13 @@ RUN tdnf install -y --refresh postgresql tar shadow-utils ca-certificates jq pyt
 COPY aks/operator/bin/ /opt/hosting/bin/
 RUN chmod +x /opt/hosting/bin/* && ln -s /opt/hosting/bin/hosting-* /usr/local/bin/
 
+# The Chart Drift comparison (hosting-chart-drift, the second step of an Audit — Systemorph/Memex#647):
+# core's drift scripts, at the same commit as the chart they render. They stay in deploy/aks/scripts,
+# where chart-gate.yml tests them on every pull request; this is where the command finds them in the
+# image (the aks-ops lane finds them in its MeshWeaver checkout instead, bin/../../scripts).
+COPY aks/scripts/check-chart-drift.sh aks/scripts/chart-drift-compare.py \
+     aks/scripts/chart-drift-record.py aks/scripts/chart-drift-render.py /opt/hosting/drift/
+
 # 🚨 THE CHART IS BAKED IN, and the build context is `deploy/` for exactly this reason.
 #
 # hosting-deploy runs `helm upgrade` against /opt/hosting/chart, so THE OPERATOR IMAGE VERSION IS
