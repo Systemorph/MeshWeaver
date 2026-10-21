@@ -487,6 +487,10 @@ public static class JsonSynchronizationStream
                 config => config
                     .WithClientId(config.Stream.StreamId)
             );
+        // The identity every RE-subscribe of this mirror runs under — the one resolved above for the
+        // initial subscribe, null for an infrastructure mirror (which re-subscribes as System, as it
+        // subscribed). See SynchronizationStream.SubscriberContext.
+        reduced.SubscriberContext = ambient;
 
 
         if (typeof(TReduced) == typeof(JsonElement))
@@ -782,7 +786,7 @@ public static class JsonSynchronizationStream
         // actually COMPLETED (OwnerTeardownSettled — never racing the dying instance), it goes
         // through Resubscribe's in-flight guard, it arms ExpectResubscribeFull (the fresh snapshot
         // may carry a frame version below our cached one after the owner's clock reset), it runs
-        // as System, and it is bounded. Semantically identical, too: the owner has told us in one
+        // as the stream's own subscriber, and it is bounded. Semantically identical, too: the owner has told us in one
         // breath both that it is gone and that the address will reactivate.
         //
         // NOT a watchdog — no timer, no poll, no backoff. One re-ask per real end event, and a
@@ -897,27 +901,27 @@ public static class JsonSynchronizationStream
                 // BEFORE the SubscribeRequest so the response Full (which can arrive fast) finds it set.
                 reduced.ExpectResubscribeFull();
 
-                // Resubscribe is INFRASTRUCTURE (cache refresh after owner restart).
-                // The triggering event lands on the workspace's emission scheduler
-                // where AsyncLocal AccessContext is whatever was set when the
-                // upstream change was published — often a `sync/<streamId>` hub
-                // address from the inner sync hub's own startup impersonation.
-                // Stamping a sync hub as principal on the owner-side RLS check
-                // produces "Access denied: user 'sync/…' lacks Read" because no
-                // AccessAssignment exists for sync hub addresses. Same rule as
-                // the MeshNodeStreamCache and the stale-patch refresh in
-                // SynchronizationStream: resubscribes run as System; per-user
-                // enforcement happens at the consumer layer (cache.GetStream,
-                // application handlers), not at the sync-stream seam.
-                using (accessService?.ImpersonateAsSystem())
-                {
+                // 🚨 The re-subscribe runs under the SAME identity as the initial subscribe — the
+                // subscriber captured when this stream was opened — never as System for a person's
+                // stream. A re-subscribe is a FRESH admission on the owner and its gate admits
+                // System: re-asking as System re-opened the stream for nobody in particular, so a
+                // reader whose Read was revoked while the stream was open was served again on the
+                // owner's next recycle or announced write (RecoveryResubscribesAsTheSubscriberTest).
+                // Applied EXPLICITLY (RunAs), never read from the ambient context: the triggering
+                // event lands on the workspace's emission scheduler, whose AsyncLocal is often a
+                // `sync/<streamId>` hub address the owner would refuse ("user 'sync/…' lacks
+                // Read") — the reason this used to fall back to System. An infrastructure mirror
+                // (no resolved user) re-subscribes as System, exactly as it subscribed.
+                IObservable<IMessageDelivery> ReAsk() =>
                     // Use register-before-post overload to avoid the race where the owner
                     // responds before the subject is registered in responseSubjects.
                     hub.Observe(
-                            MintSubscribeRequest(reduced.StreamId, reference, SystemUserId),
-                            o => impersonateAsHub
-                                ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
-                                : o.WithTarget(owner))
+                        MintSubscribeRequest(reduced.StreamId, reference, identityForSubscribe),
+                        o => impersonateAsHub
+                            ? o.WithTarget(owner).ImpersonateAsHub(hub.Address)
+                            : o.WithTarget(owner));
+                {
+                    (isRealUser ? accessService.RunAs(ambient, ReAsk) : accessService.RunAsSystem(ReAsk))
                         .Subscribe(
                             _ =>
                             {
@@ -1051,7 +1055,7 @@ public static class JsonSynchronizationStream
             //
             // It reuses Resubscribe, so it inherits the in-flight guard, ExpectResubscribeFull
             // (the mirror must accept a re-snapshot stamped below its cached frame version) and
-            // the System impersonation. The re-ask asks for the CURRENT snapshot — it never
+            // the subscriber's identity. The re-ask asks for the CURRENT snapshot — it never
             // re-asserts a cached frame, which is the #945 shape and the opposite of what this
             // does. Bounded so that an owner stuck in a recycle LOOP degrades to the pre-existing
             // "orphaned" behaviour instead of trading a stalled stream for a storm.

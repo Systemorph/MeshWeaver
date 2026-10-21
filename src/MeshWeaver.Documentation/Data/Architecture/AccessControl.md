@@ -2139,10 +2139,34 @@ that subscription is followed like any other
 - **Subscriber:** on a `StreamErrorEvent` it disposes its sync stream instead of only faulting
   it, which releases the change-feed staleness latch and the end/recycle re-arm.
 
-Those recovery paths re-subscribe as System, which the follow exempts. Before this fix they
-re-opened the revoked read, unfollowed, about two seconds after the refusal. The test measures
-the owner's registry: it serves neither the refused stream nor a new one
+Those recovery paths used to re-subscribe as System, which the follow exempts. Before this fix
+they re-opened the revoked read, unfollowed, about two seconds after the refusal. The test
+measures the owner's registry: it serves neither the refused stream nor a new one
 (`ARefusedDirectSubscription_LeavesNoOwnerSubscriptionBehind`).
+
+**Recovery re-subscribes as the subscriber.** A client stream recovers by itself. It posts a
+fresh `SubscribeRequest` when the owner announces the end of the server-side half
+(`StreamEndedEvent`, a recycle or deactivation), when the change feed proves the mirror is
+behind, and when a frame is lost (`RequestFreshSnapshot`). Each of these is a NEW admission on
+the owner. All three used to run as System, and the gate admits System. So when an owner was
+recycled after a reader's grant was deleted, the reader's stream re-opened and received the
+next revision. Now every re-subscribe runs under the identity the stream was opened for. That
+identity is captured once, when the client stream is created
+(`SynchronizationStream.SubscriberContext`), and applied explicitly with `RunAs`, never read
+from the ambient context of the turn that triggers the recovery. A revoked reader's re-subscribe
+is refused and the stream ends with the denial. An infrastructure mirror keeps its own identity:
+one opened with no user (System, a hub address) re-subscribes as System, and the node-stream
+cache re-subscribes as `cache/mesh-node-cache`. Pinned by `RecoveryResubscribesAsTheSubscriberTest`.
+A revoked reader is not served after a recycle, and the reader who keeps the grant recovers
+(negative control). A reader who never had Read is never served by recovery; that case already
+held before the fix.
+
+What this does NOT cover, measured on the same fixture: an OPEN subscription does not follow a
+revoked standard grant. The owner decides a `SubscribeRequest` once, at admission, and the
+node-stream cache's read gate is likewise decided once per `GetStream`. Its 30-second
+`AccessTtl` only bounds new reads. A revoked reader's open direct subscription, or open cache
+read, therefore keeps receiving revisions until it ends or a recovery re-subscribes it. Declared
+point reads are followed (above); standard grants are not yet.
 
 **A stored type's ownership is followed live.** A stored type's declaration counts only while
 its partition is system-owned, meaning a one-way `_GitSync` that names a repository.

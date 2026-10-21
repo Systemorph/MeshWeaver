@@ -442,6 +442,20 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     private AccessContext? _creationContext;
 
     /// <summary>
+    /// The identity this MIRROR's subscription was opened for, captured once when the client stream
+    /// is created (<c>JsonSynchronizationStream.CreateExternalClient</c>), or <c>null</c> for an
+    /// infrastructure mirror that subscribed as System. Every RE-subscribe this stream posts — the
+    /// frame-loss re-ask here, the end/recycle and change-feed re-asks in
+    /// <c>CreateExternalClient</c> — runs under it, so the owner decides each one for the same
+    /// subscriber it decided the first one for.
+    /// <para>🚨 Never System for a person's subscription. A re-subscribe is a FRESH admission: the
+    /// owner's gate admits System, so a re-ask posted as System re-opened, for nobody in
+    /// particular, a stream whose reader may have lost the Read in the meantime — and delivered the
+    /// node to them (<c>MeshWeaver.Graph.Test/RecoveryResubscribesAsTheSubscriberTest</c>).</para>
+    /// </summary>
+    internal AccessContext? SubscriberContext { get; set; }
+
+    /// <summary>
     /// The most recently applied change item (the current state snapshot), or <c>null</c> before any value
     /// has been set.
     /// </summary>
@@ -2198,10 +2212,11 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// Called both when a Patch can't be applied onto the current snapshot
     /// (<see cref="StaleStreamStateException"/>) and when a Patch races ahead of
     /// the initial Full during the subscribe handshake (Current still null).
-    /// The resubscribe is INFRASTRUCTURE (cache refresh) — stamped System so the
-    /// owner's RLS doesn't deny on whatever ambient identity is set on the
-    /// emission thread (often a <c>sync/&lt;id&gt;</c> hub address); user-level
-    /// access enforcement happens at the consumer layer, not this seam.
+    /// The re-subscribe runs under <see cref="SubscriberContext"/> — the identity the mirror was
+    /// opened for, applied explicitly so the ambient identity of the emission thread (often a
+    /// <c>sync/&lt;id&gt;</c> hub address) never reaches the owner — and as System only for an
+    /// infrastructure mirror that has no subscriber. It is a fresh admission on the owner, so it
+    /// must be decided for the same reader as the first one.
     /// </summary>
     // Guards against a resync STORM. RequestFreshSnapshot nulls the cached JSON,
     // so every subsequent Patch (until the fresh Full lands) re-enters the
@@ -2425,7 +2440,13 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         Set<JsonElement?>(null);
         var accessService = Host.ServiceProvider
             .GetService(typeof(AccessService)) as AccessService;
-        using (accessService?.ImpersonateAsSystem())
+        // 🚨 AS THE SUBSCRIBER, never as System for a person's mirror. A re-subscribe is a fresh
+        // admission on the owner, and its gate admits System — so a re-ask posted as System
+        // re-opened this stream for nobody in particular, whatever its reader may read now. The
+        // identity is the one captured when the mirror was opened (SubscriberContext), applied
+        // explicitly: the ambient one on this turn is the emission thread's, often a sync/… hub
+        // address the owner would refuse. An infrastructure mirror (no subscriber) keeps System.
+        var subscriber = SubscriberContext;
         {
             // 🚨 Minted, never constructed inline: a re-subscribe declares the SAME negotiated
             // wire capabilities as the initial subscribe. When the owner cannot match this
@@ -2449,12 +2470,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             // the gate already set and the cached JSON already dropped: the exact permanent wedge
             // this change exists to remove, recreated on the failure path. Inside Defer the throw
             // reaches ResyncRefused like any other verdict, which always releases the gate. The
-            // factory still runs inside the impersonation scope, because Subscribe is called here.
-            resyncSubscription.Disposable = Observable
+            // factory runs inside the identity scope RunAs / RunAsSystem opens around Subscribe.
+            IObservable<IMessageDelivery> ReAsk() => Observable
                 .Defer(() => Host.Observe(
-                    JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: null)
+                    JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: subscriber?.ObjectId)
                         with { Subscriber = Configuration.Subscriber! },
-                    o => o.WithTarget(StreamIdentity.Owner)))
+                    o => o.WithTarget(StreamIdentity.Owner)));
+            resyncSubscription.Disposable = (subscriber is not null
+                    ? accessService.RunAs(subscriber, ReAsk)
+                    : accessService.RunAsSystem(ReAsk))
                 .Take(1)
                 .Subscribe(
                     _ =>
