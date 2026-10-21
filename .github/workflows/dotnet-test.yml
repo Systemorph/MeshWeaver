@@ -2329,6 +2329,16 @@ jobs:
     - name: "The fresh merge tests head + CURRENT main, and refuses a conflict (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/ci-fresh-merge.py --self-test
+    # ONE CANDIDATE per run: a job that SELECTS what a lane tests (the affected closure) applies the
+    # same fresh merge its shards test, and the shards merge onto that job's tip. A planner that only
+    # resolved the tip selected on GitHub's stale merge ref and staged a set missing a `requires`
+    # edge main had gained (MeshWeaver.Plugins#4043). Self-test first, then the lanes themselves.
+    - name: "A lane selects on the same fresh merge its shards test (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-fresh-merge-candidate.py --self-test
+    - name: "A lane selects on the same fresh merge its shards test"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/check-fresh-merge-candidate.py --root .
     # The issue-taxonomy check (daily lane issue-taxonomy.yml) and the stamp every sentinel calls: an issue
     # without a severity, sev:B/H on a non-bug, two types, an unknown sev:, a violation past page one, an unreadable repository
     # (never clean), and a person's classification left untouched by a reopened sentinel.
