@@ -468,6 +468,57 @@ a version without that field fails loudly at the first caller rather than silent
 deadlock back. `CallerAndModuleScopedServicesBuildInOneLockTest` forces the overlap; its negative
 control gives the same module scope its own lock back and deadlocks.
 
+**Ownership diagnostics: the line each defect would write (MeshWeaver#6584, MeshWeaver#6588).** Neither
+defect wrote a log line while it was live. A shared `ThemeService` throws nothing, and a disposed
+singleton fails only in whichever circuit next touches it. So a production log that is quiet after the
+fixes cannot tell "fixed" from "never logs". The production log readings on both issues found exactly
+that. The diagnostics below make each defect visible. Every line is a **Warning** under the category
+`MeshWeaver.ServiceProvider.ModuleScopeOwnership`, starts with the marker `[ModuleScopeOwnership]`,
+names its issue, and is written **once per registration**, so a defect that repeats on every circuit
+cannot flood the log. The correct route writes nothing, so a line in production is a defect and never
+noise. No existing log level changed.
+
+| Line | Written when | Where |
+|---|---|---|
+| `… was built in the module container's root scope, which no caller owns … (MeshWeaver#6584)` | a module's SCOPED registration is activated in the module container's own root. That is the defect's shape: one instance per generation, shared by every caller and built against none. | `ModuleScopeDiagnostics`, a middleware on every shared registration of a module container (`ModuleServiceProvider.CreateForCallers`) |
+| `… built in the module scope owned by A was served to B … (MeshWeaver#6584)` | a serving point hands a module's scoped instance to a caller that does not own the module scope it was built in | `ModuleServiceProvider.ReportIfServedAcrossCallers`, called by `ResolveAt(…, caller)` and `ModuleServices.Resolve(…, caller)` |
+| `Scope S is ending and will dispose T, which X owns … (MeshWeaver#6588)` | a registration owned by the resolving scope, activated by a factory, returned an instance a module owns. The line is written as that scope begins to end, just before its disposer runs. | `ModuleScopeOwnership.WatchOwnershipTransfers`, attached by `PopulateMeshWeaver` to every MeshWeaver container and hub scope |
+
+Who owns what is recorded in ONE registry per mesh, `ModuleInstanceOwners`. `MeshBuilder` registers it
+in the root as an instance. Its entries are weak (a `ConditionalWeakTable`), so it never pins a retired
+generation. A module container records every disposable shared instance it builds, together with the
+scope that owns it. A `ModuleServiceProxy` over a disposable interface is recorded as the module's, so a
+scope disposing it is reported too. The diagnostics never RESOLVE anything while a resolve is running.
+The registry is captured when a container is built, and its logger is bound once the root exists
+(`SetupModules`). A first draft resolved the registry through the resolve context. Inside a module
+container that resolve went through the module's fallback into `RootResolutionScope`, the registration
+being checked, and Autofac reported a circular dependency on the first module service resolved. Only
+factory-activated registrations owned by the resolving scope are watched, because only a factory can
+return an instance something else built. Reflection-activated and provided-instance registrations
+cannot transfer ownership.
+
+`ModuleScopeOwnershipDiagnosticsTest` re-introduces each defect deliberately and shows that its line
+fires (the negative control):
+- for #6584, the scoped registration is resolved off the module container with no caller, the route
+  before #6586;
+- for #6584, circuit A's instance is handed to circuit B;
+- for #6588, the root forwarders are ordinary owned factories, the route before #6591. The test asserts
+  that the singleton really was disposed and the scoped instance disposed twice, so the control is live.
+
+The same test shows that the correct route writes nothing, both on real Autofac containers and through
+the full wiring of a generic host with a module installed in its own load context.
+
+**Reading it in production.** Use governed `Logs` InstanceActions on the control instance, over each
+portal that runs the image, with the query `|= "[ModuleScopeOwnership]"`. A zero is evidence only when
+two things hold in the same window and with the same selector:
+1. the running image is shown to carry this change (`Sample`, or `/api/version`);
+2. a **positive control** returns lines, for example the `[ModuleLoad]` lines of the same pods. That
+   shows the query reads that portal's logs and was not cut.
+
+A zero over a window in which a chart or pivot page was rendered by two sessions is the closing reading
+for #6584. For #6588 the window must contain one session ending while another works on a module
+service.
+
 **A withdrawn module is absent from the installed-module set (MeshWeaver#6557).** A container's
 registrations are fixed once it is built; the module set is not. Each held module used to get its own
 transient `InstalledModuleAssembly` registration, and a module withdrawn after the container was built
