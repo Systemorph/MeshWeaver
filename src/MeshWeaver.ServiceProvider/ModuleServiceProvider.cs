@@ -91,7 +91,14 @@ public static class ModuleServiceProvider
         Func<Type, IReadOnlyList<Func<ILifetimeScope?, object>>> registrationsElsewhere)
     {
         var builder = new ContainerBuilder();
-        builder.PopulateMeshWeaver(services);
+        // MeshWeaver#6584/#6588: who owns each shared instance this container builds, and the warning a
+        // scoped instance built for no caller — or served to a caller that does not own it — writes.
+        var diagnostics = new ModuleScopeDiagnostics(
+            ModuleScopeOwnership.LoggerFrom(root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()),
+            root.GetService<ModuleInstanceOwners>());
+        diagnostics.Watch(builder);
+        builder.RegisterInstance(diagnostics).AsSelf().ExternallyOwned();
+        builder.PopulateMeshWeaverWithOwners(services, root.GetService<ModuleInstanceOwners>());
         var callers = new ModuleCallerScopes();
         builder.RegisterInstance(callers).AsSelf().ExternallyOwned();
         if (root.GetService<ILifetimeScope>() is { } rootScope)
@@ -334,8 +341,29 @@ public static class ModuleServiceProvider
         if (registration.Registration is null)
             throw new InvalidOperationException(
                 $"{serviceType} has no registration at position {position} in this module container.");
-        var resolveIn = ScopedDependencyWalk.IsSingleton(registration.Registration) ? scope : InCallerScope(scope, caller);
-        return resolveIn.ResolveComponent(new ResolveRequest(service, registration, []));
+        if (ScopedDependencyWalk.IsSingleton(registration.Registration))
+            return scope.ResolveComponent(new ResolveRequest(service, registration, []));
+        var instance = InCallerScope(scope, caller).ResolveComponent(new ResolveRequest(service, registration, []));
+        ReportIfServedAcrossCallers(provider, instance, caller);
+        return instance;
+    }
+
+    /// <summary>
+    /// MeshWeaver#6584's diagnostic at a SERVING point: writes a <see cref="ModuleScopeOwnership.Marker"/>
+    /// warning when <paramref name="instance"/> — a scoped instance <paramref name="moduleContainer"/> built —
+    /// is handed to <paramref name="caller"/> although the module scope it was built in is owned by another
+    /// caller, or by none. Nothing happens for any other instance, or when there is no caller.
+    /// </summary>
+    /// <param name="moduleContainer">A provider <see cref="CreateForCallers"/> built.</param>
+    /// <param name="instance">The instance being handed out.</param>
+    /// <param name="caller">The root-side scope it is handed to, or null.</param>
+    public static void ReportIfServedAcrossCallers(IServiceProvider moduleContainer, object instance, ILifetimeScope? caller)
+    {
+        ArgumentNullException.ThrowIfNull(moduleContainer);
+        ArgumentNullException.ThrowIfNull(instance);
+        if (caller is not null
+            && moduleContainer.GetService<ILifetimeScope>()?.ResolveOptional<ModuleScopeDiagnostics>() is { } diagnostics)
+            diagnostics.ServedTo(instance, caller);
     }
 
     /// <summary>

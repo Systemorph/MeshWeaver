@@ -97,6 +97,10 @@ public partial record MeshBuilder
                 services.AddSingleton<Autofac.Core.IRegistrationSource>(new ModuleOwnedRootSource(modules));
             // Built before published (MeshWeaver#6542): every held module's shared instances are built
             // once the root container exists and before the provider is handed out.
+            // Who owns each instance a module container builds — read by the ownership diagnostics
+            // (MeshWeaver#6584, #6588; MeshWeaver.ServiceProvider.ModuleScopeOwnership). Mesh-scoped, never static.
+            if (!services.Any(d => d.ImplementationInstance is MeshWeaver.ServiceProvider.ModuleInstanceOwners))
+                services.AddSingleton(new MeshWeaver.ServiceProvider.ModuleInstanceOwners());
             if (!services.Any(d => d.ImplementationInstance is ModulesBuiltBeforePublished))
                 services.AddSingleton<MeshWeaver.ServiceProvider.IRootContainerBuilt>(new ModulesBuiltBeforePublished(modules));
             return services;

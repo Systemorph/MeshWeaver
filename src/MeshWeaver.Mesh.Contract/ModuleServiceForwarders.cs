@@ -51,6 +51,12 @@ public class ModuleServiceProxy : DispatchProxy
         proxy.service = serviceType.Name;
         proxy.serviceType = serviceType;
         proxy.caller = caller;
+        // A proxy over a disposable interface forwards Dispose to the module's instance, so only the module
+        // may end it: a scope that disposes the proxy it was forwarded is the defect of MeshWeaver#6588, and
+        // the ownership diagnostics name it (MeshWeaver.ServiceProvider.ModuleScopeOwnership).
+        if (typeof(IDisposable).IsAssignableFrom(serviceType) || typeof(IAsyncDisposable).IsAssignableFrom(serviceType))
+            contexts.RootService<MeshWeaver.ServiceProvider.ModuleInstanceOwners>()?.Record(proxy, null,
+                $"module {module} (the proxy forwards Dispose to the module's {serviceType.Name})");
         return proxy;
     }
 
