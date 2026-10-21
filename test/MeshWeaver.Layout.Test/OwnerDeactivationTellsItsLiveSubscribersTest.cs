@@ -3,6 +3,7 @@ using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Data;
 using MeshWeaver.Data.Serialization;
@@ -82,6 +83,24 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
     /// <summary>Completed by the layout area's own click action — the proof the action RAN.</summary>
     private readonly AsyncSubject<Unit> clicked = new();
 
+    /// <summary>
+    /// How many activations have rendered <see cref="Area"/>. The FIRST renders at once; every later
+    /// one — the re-activation after the owner deactivated — renders only when
+    /// <see cref="reActivationRenders"/> completes.
+    /// </summary>
+    private int renders;
+
+    /// <summary>
+    /// 🚨 Releases the re-activation's render. A layout area's base frame (an empty Areas shell
+    /// plus the "Building layout…" marker) is the stream's first Full and its content arrives
+    /// AFTER, through the stream's update queue, from a render subscribed off the hub — so between
+    /// the two there is a window in which a subscriber's mirror has re-hydrated and the button is
+    /// on NEITHER side. On CI that window is a few milliseconds and the test lost the race once
+    /// (PR #7013, run 39565386466: refused 31 ms in). Holding the render open makes the window
+    /// deterministic instead of a matter of a machine's speed.
+    /// </summary>
+    private readonly AsyncSubject<Unit> reActivationRenders = new();
+
     /// <inheritdoc />
     public OwnerDeactivationTellsItsLiveSubscribersTest(ITestOutputHelper output)
         : base(output)
@@ -132,7 +151,10 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureHost(MessageHubConfiguration configuration)
         => base.ConfigureHost(configuration)
-            .AddLayout(layout => layout.WithView(Area, ClickArea()));
+            .AddLayout(layout => layout.WithView<UiControl>(Area, (_, _) =>
+                Interlocked.Increment(ref renders) == 1
+                    ? Observable.Return(ClickArea())
+                    : reActivationRenders.Select(_ => ClickArea())));
 
     /// <summary>
     /// How long THIS host holds a stream message whose <c>sync/{id}</c> is not registered before
@@ -202,9 +224,23 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
             + "the change-feed latch needs a WRITE and a deactivation is not one, and the recycle "
             + "re-arm needs a SubscribeRequest to be NACKed — nothing re-asks, so nothing is NACKed");
 
-        await reHydrated.Should().Within(TestTimeouts.Convergence).Emit(
-            "and being told has to end in a mirror bound to the NEW activation — a re-ask that "
-            + "never lands leaves the same stale snapshot the person was already looking at");
+        // 🚨 THE RE-HYDRATION IS THE BASE FRAME, NOT THE PAGE. The new activation's first Full is
+        // the empty Areas shell; the button follows as a patch once its render lands. Clicking on
+        // this emission is clicking a button that is on neither side — the owner refuses it, and
+        // rightly ("no control is rendered at that area"): the person's own mirror no longer
+        // shows it either. That is the race this test lost on CI.
+        await reHydrated.Should().Within(TestTimeouts.Convergence).Match(
+            item => !Renders(item.Value, ButtonArea),
+            "being told has to end in a mirror bound to the NEW activation — and that activation's "
+            + "first frame is its base shell, which holds no button until the render lands");
+
+        reActivationRenders.OnNext(Unit.Default);
+        reActivationRenders.OnCompleted();
+
+        await stream.GetControlStream(ButtonArea).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is not null,
+                "the person clicks what the re-hydrated page SHOWS — the button the new "
+                + "activation rendered, never the stale one the old snapshot carried");
 
         // The person is still on the page, and clicks.
         stream.SubmitUserAction(new ClickedEvent(ButtonArea, streamId));
@@ -258,6 +294,14 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
                 + "exists to prevent");
     }
 
+    /// <summary>Whether the layout snapshot <paramref name="store"/> carries a control at <paramref name="area"/>.</summary>
+    private static bool Renders(JsonElement store, string area)
+        => store.ValueKind == JsonValueKind.Object
+           && store.TryGetProperty(LayoutAreaReference.Areas, out var areas)
+           && areas.ValueKind == JsonValueKind.Object
+           && areas.TryGetProperty(area, out var control)
+           && control.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
+
     /// <summary>Every <c>REFUSING …</c> line the owner wrote about <paramref name="streamId"/>.</summary>
     private IObservable<string> Refusals(string streamId)
         => logRecords
@@ -294,6 +338,7 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
         finally
         {
             clicked.Dispose();
+            reActivationRenders.Dispose();
             logRecords.Dispose();
         }
     }

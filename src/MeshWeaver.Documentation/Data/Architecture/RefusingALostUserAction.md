@@ -720,6 +720,22 @@ handed the record. The sink saw nothing whatever the framework did. The fix is a
 sink keeps the tree's floor, and no src-tree level moves. A sibling test in this family
 (`RefusalNamesWhichEndTheStreamMetTest`) never hit it because every line it reads is `Error`.
 
+### 🚨 A second trap: the re-hydration is the BASE FRAME, not the page
+
+The test first waited for "the mirror's next emission" after the re-subscribe and clicked on it. Once
+on CI (PR #7013's run, refused 31 ms into the test) that click was refused with *"no control is rendered
+at that area"*, and the refusal was correct. A layout area's first Full is its **base frame**: an
+empty Areas shell plus the "Building layout…" marker (`LayoutAreaHost.BuildInitialization`). The
+content follows as a patch through the stream's update queue, from a render subscribed off the hub. So
+the re-hydrated mirror REPLACES the stale snapshot with a shell that holds no button, and the button is
+on neither side until the new activation's render lands. Clicking in that window clicks something the
+page no longer shows. The rule above, that the owner is never behind the client, still holds.
+
+The test now holds the re-activation's render open, asserts that the re-hydrated frame carries no
+button, releases the render and clicks only once the mirror shows the button again. With the render
+held, clicking on the base frame reproduces the CI refusal line every time. That is the negative
+control: the race was in the test's wait, not in the product.
+
 ### What this still does not do
 
 It does not make a click that ALREADY missed its `sync/{id}` run — the refusal above is still the answer
