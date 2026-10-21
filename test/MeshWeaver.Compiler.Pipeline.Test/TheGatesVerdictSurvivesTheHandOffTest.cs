@@ -577,3 +577,68 @@ public class IdentityLessBundle(ITestOutputHelper output) : TheGatesVerdictSurvi
             + "for this mesh is unknown — its membership is not established, so it is not authored");
     }
 }
+
+/// <summary>
+/// #7015 review — a module-only bundle (a manifest that DECLARES a module, lists no NodeType
+/// assemblies and records no producer misses) is a valid, COMPLETE delivery: it names no NodeType,
+/// so it leaves no membership unknown. Beside it, an authored type in an untracked partition is
+/// neither refused by the gate nor parked — it compiles, as it did before the gate existed.
+/// </summary>
+public class ModuleOnlyBundle(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string TypePath = "untracked/AuthoredBesideAModule";
+
+    private static byte[] ModuleOnlyZip()
+    {
+        using var buffer = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(
+                   buffer, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var manifest = archive.CreateEntry(NuGetPackageWriter.ManifestEntry);
+            using var writer = new StreamWriter(manifest.Open());
+            writer.Write(
+                "{\"plugin\":\"ModuleOnly\",\"version\":\"1.0.0\","
+                + $"\"frameworkMvid\":\"{PrebuiltAssemblySeeder.LiveFrameworkMvid}\","
+                + "\"assemblies\":[],\"module\":{\"assemblyName\":\"ModuleOnly.Module\",\"assemblies\":[]}}");
+        }
+        return buffer.ToArray();
+    }
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-module-only.zip"] = ModuleOnlyZip() };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task AModuleOnlyBundle_IsCompleteDiscovery_AndTheAuthoredTypeIsNotRefused()
+    {
+        var refused = await NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(
+                Mesh,
+                new Dictionary<string, NodeTypeDefinition?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [TypePath] = new NodeTypeDefinition { Configuration = "config => config" },
+                },
+                null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the question answers once", cancellationToken: TestContext.Current.CancellationToken);
+        refused.Should().NotContain(TypePath,
+            "a bundle that declares it ships only a module names no NodeType — the pass is complete, "
+            + "and an authored type no bundle names is authored content");
+    }
+
+    [Fact]
+    public async Task ThroughTheSweep_TheAuthoredTypeCompiles()
+    {
+        await CreateType(TypePath, force: false);
+
+        await Sweep();
+
+        var settled = await Settled(TypePath, "the authored type settles");
+        settled.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"authored content beside a complete module-only bundle compiles; error: {settled.CompilationError}");
+        settled.LatestAssemblyMvid.Should().NotBe(SeededMvid, "a real Roslyn pass wrote real coordinates");
+    }
+}

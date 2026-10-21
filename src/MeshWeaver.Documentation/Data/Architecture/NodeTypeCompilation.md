@@ -1366,6 +1366,9 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   written before this overload reports nothing, as it did before. A bundle without a manifest, or
   with a manifest that states no framework identity, counts as unreadable (hollow), not as a
   framework decline. A bundle that names a different framework identity is still declined. A
+  bundle that lists no NodeType assemblies but declares a module or content, and records no
+  producer misses, is a complete delivery (the `BundleOffering.ClassifyEmpty` rule): it names no
+  NodeType, so it leaves the pass complete. A
   publication pointer the walk will not follow (it names a generation that is not on disk, or it is
   empty, unreadable or escaping) also makes the pass incomplete, even when the sealed flat
   publication behind it is read: the publication the pointer names was never asked about. A type the pass did not ask about has

@@ -967,8 +967,13 @@ public static class ShippedPrebuiltBundles
         var reasons = new List<string>();
         if (tally.Faulted > 0)
             reasons.Add($"{tally.Faulted} bundle source(s) faulted mid-pass");
-        if (tally.BundlesHollow > 0)
-            reasons.Add($"{tally.BundlesHollow} bundle(s) had no readable manifest");
+        // A bundle that DECLARES it ships only a module or content, with no producer misses, is a
+        // complete delivery that names no NodeType (BundleOffering.ClassifyEmpty's rule): asking it
+        // was complete. Only the hollow bundles beyond those leave membership unknown.
+        var unknownHollow = tally.BundlesHollow - tally.BundlesDeclaredEmpty;
+        if (unknownHollow > 0)
+            reasons.Add($"{unknownHollow} bundle(s) had no readable manifest, stated no framework "
+                + "identity, or carried no assemblies without declaring why");
         if (skippedSources > 0)
             reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn, or their publication pointer was not followed)");
         if (tally.Leaving > 0)
@@ -1103,6 +1108,10 @@ public static class ShippedPrebuiltBundles
         /// <summary>Bundles carrying no assemblies (or no readable manifest).</summary>
         public int BundlesHollow { get; init; }
 
+        /// <summary>…of those, the ones whose manifest DECLARES a module or content and records
+        /// no producer misses — complete deliveries that name no NodeType (#7015 review).</summary>
+        public int BundlesDeclaredEmpty { get; init; }
+
         /// <summary>Bundles that could not be read, plus whole sources that faulted.</summary>
         public int Faulted { get; init; }
 
@@ -1118,6 +1127,7 @@ public static class ShippedPrebuiltBundles
                 BundlesSeen = left.BundlesSeen + right.BundlesSeen,
                 BundlesDeclined = left.BundlesDeclined + right.BundlesDeclined,
                 BundlesHollow = left.BundlesHollow + right.BundlesHollow,
+                BundlesDeclaredEmpty = left.BundlesDeclaredEmpty + right.BundlesDeclaredEmpty,
                 Faulted = left.Faulted + right.Faulted,
                 Leaving = left.Leaving + right.Leaving,
             };
@@ -1414,6 +1424,13 @@ public static class ShippedPrebuiltBundles
                         : recorded;
                 if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
+                    // #7015 review — a module-only or content-only bundle with no producer misses is
+                    // a valid, COMPLETE delivery (the rule BundleOffering.ClassifyEmpty states for
+                    // the registry lane): it names no NodeType, so it leaves no membership unknown.
+                    // It still counts hollow for the shortfall report, exactly as before.
+                    var declaredEmpty = manifest.Misses is not { Count: > 0 }
+                        && (manifest.Module?.AssemblyName is { Length: > 0 }
+                            || manifest.Content is { Count: > 0 });
                     // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
                     // types it should have covered will not compile here (that is the flag's whole
                     // point), so "nothing to adopt" is not a degraded-but-fine state — it is the
@@ -1434,7 +1451,11 @@ public static class ShippedPrebuiltBundles
                         logger?.LogWarning(
                             "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
                             + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
-                    return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
+                    return Observable.Return(default(SeedTally) with
+                    {
+                        BundlesHollow = 1,
+                        BundlesDeclaredEmpty = declaredEmpty ? 1 : 0,
+                    });
                 }
 
                 var present = assemblies
