@@ -1290,6 +1290,18 @@ public static class DynamicTypePreWarmer
                         return Observable.Return(new PreWarmOutcome(
                             p, PreWarmStatus.AlreadyBaked, "assembly store already holds this build"));
 
+                    // …and so is a type the untracked-module gate's own offer pass ADOPTED on this
+                    // process (#7015 review), re-probed baked on this replica's store. It takes the
+                    // SAME fast path, ahead of the dependency walk: it compiles nothing, so an
+                    // upstream that failed (one whose sources it shares, parked by the same gate)
+                    // cannot block it — and reporting it UpstreamFailed would hand that false
+                    // failure on to its own dependents and to readiness. Flipping it Pending
+                    // instead would hand the watcher the OLD shared record (a readiness-gated
+                    // replica HOLDS the adoption stamp), which it would park.
+                    if (gate.AdoptedHere.Contains(p))
+                        return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.AlreadyBaked,
+                            "adopted on this process by the untracked-module gate's offer pass"));
+
                     // 🚨 ITS PARTITION IS GONE, so there is nothing to warm and nothing to wait
                     // for (#5073). Asked BEFORE the work, never after it: warming such a type can
                     // only end one of two ways, and both were measured in production —
@@ -1372,16 +1384,6 @@ public static class DynamicTypePreWarmer
                     // boot here and was PARKED only when a later Pending flip reached the watcher —
                     // on the same pod, with the same bundle in place. It is handed to the compile
                     // watcher instead, whose gate is then the only thing that decides it.
-                    // A type the gate's own offer pass just ADOPTED on this process (#7015 review): its
-                    // build is usable here — the store holds the bytes for the record this process
-                    // wrote — even when a readiness-gated replica holds the shared stamp. It is
-                    // baked; flipping it Pending would hand the watcher the OLD shared record, which
-                    // it would park as a module type with nothing to serve.
-                    if (gate.AdoptedHere.Contains(p))
-                        return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.AlreadyBaked,
-                                "adopted on this process by the untracked-module gate's offer pass"))
-                            .Do(o => FileForDependents(p, o));
-
                     if (gate.Refused.Contains(p))
                     {
                         progress?.Invoke(

@@ -104,7 +104,8 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
         Mesh.ServiceProvider.GetRequiredService<NodeTypeCompileParkRegistry>();
 
     /// <summary>Authored-looking record: no adoption provenance, nothing to serve.</summary>
-    protected async Task CreateType(string path, bool force)
+    protected async Task CreateType(
+        string path, bool force, IReadOnlyList<string>? sources = null, bool moduleContent = false)
     {
         var node = MeshNode.FromPath(path) with
         {
@@ -116,7 +117,9 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
                 Configuration = "config => config",
                 CompilationStatus = CompilationStatus.Ok,
                 LatestAssemblyMvid = SeededMvid,
-                BuildProvenance = BuildProvenance.Compiled,
+                Sources = sources,
+                AdoptedSourceFingerprint = moduleContent ? "bundlefingerprint0000000" : null,
+                BuildProvenance = moduleContent ? BuildProvenance.AdoptedVerified : BuildProvenance.Compiled,
                 RequestedReleaseForce = force,
             },
         };
@@ -125,9 +128,23 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
                 .Emit(cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    /// <summary>A real Code node — the source a type owns, or shares with another.</summary>
+    protected async Task CreateCode(string ns, string id, string code)
+    {
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().ImpersonateAsSystem())
+            await MeshService.CreateNode(new MeshNode(id, ns)
+                {
+                    NodeType = "Code",
+                    State = MeshNodeState.Active,
+                    Content = new CodeConfiguration { Language = "csharp", Code = code },
+                })
+                .Should().Within(TestTimeouts.Convergence)
+                .Emit(cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     protected async Task<IList<PreWarmOutcome>> Sweep()
         => await DynamicTypePreWarmer
-            .WarmDynamicTypes(Mesh, batchBake: true, betweenTypes: TimeSpan.Zero)
+            .WarmDynamicTypes(Mesh, perTypeBudget: TimeSpan.FromSeconds(30), batchBake: true, betweenTypes: TimeSpan.Zero)
             .ToList()
             .Should().Within(TestTimeouts.CrossSilo * 3)
             .Emit("the sweep completes", cancellationToken: TestContext.Current.CancellationToken);
@@ -218,6 +235,62 @@ public class AdoptedHere(ITestOutputHelper output) : TheGatesVerdictSurvivesTheH
         Parks.IsParked(TypePath).Should().BeFalse("a type this process can serve is never parked");
         (await Current(TypePath))!.CompilationStatus.Should().NotBe(CompilationStatus.Error,
             "the shared record must not be parked over a build this process adopted");
+    }
+
+    private sealed class StillMeasuring : IMeshAdmissionAuthority
+    {
+        public MeshAdmission Admission => MeshAdmission.Provisional;
+
+        public string AdmissionReason => "test: the bake is still measuring";
+    }
+}
+
+/// <summary>
+/// #7015 review — a type the gate's own pass ADOPTED on this process is baked, and a failed upstream
+/// whose sources it shares cannot block it: <c>untracked/UpstreamA</c> is module content with
+/// nothing to serve and no bundle (parked by the gate), <c>untracked/AdoptedB</c> compiles A's
+/// shared source into itself and adopts a bundle in the gate's pass, and <c>untracked/DependentC</c>
+/// shares B's source. B must be reported baked — never <c>UpstreamFailed</c> by A — and C must not
+/// inherit a failure through B.
+/// </summary>
+public class AdoptedBehindAParkedUpstream(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string UpstreamA = "untracked/UpstreamA";
+    private const string AdoptedB = "untracked/AdoptedB";
+    private const string DependentC = "untracked/DependentC";
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry(AdoptedB, () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    /// <summary>A readiness-gated process whose bake is still measuring: adoption stamps are HELD.</summary>
+    protected override void AddServices(IServiceCollection services)
+        => services.AddSingleton<IMeshAdmissionAuthority>(new StillMeasuring());
+
+    [Fact]
+    public async Task AnAdoptedTypeBehindAParkedUpstream_IsBaked_AndItsDependentsAreNotBlocked()
+    {
+        await CreateCode($"{UpstreamA}/Source", "Lib", "public static class LibA { public static int A() => 1; }");
+        await CreateCode($"{AdoptedB}/Source", "Lib", "public static class LibB { public static int B() => 2; }");
+        await CreateType(UpstreamA, force: false, moduleContent: true);
+        await CreateType(AdoptedB, force: false,
+            sources: ["namespace:Source scope:subtree", $"shared=@{UpstreamA}/Source/Lib"]);
+        await CreateType(DependentC, force: false,
+            sources: ["namespace:Source scope:subtree", $"shared=@{AdoptedB}/Source/Lib"]);
+
+        var outcomes = await Sweep();
+        PreWarmOutcome Of(string path) => outcomes.Single(o =>
+            string.Equals(o.TypePath, path, StringComparison.OrdinalIgnoreCase));
+
+        Of(UpstreamA).ReachedUsableBuild.Should().BeFalse(
+            $"precondition: the upstream is parked by the gate; status {Of(UpstreamA).Status}");
+        Of(AdoptedB).Status.Should().Be(PreWarmStatus.AlreadyBaked,
+            $"B adopted a usable bundle on this process and compiles nothing — a failed upstream "
+            + $"cannot block it; status {Of(AdoptedB).Status}, detail: {Of(AdoptedB).Detail}");
+        Of(DependentC).Status.Should().NotBe(PreWarmStatus.UpstreamFailed,
+            $"C's upstream B is baked, so no failure reaches C through it; detail: {Of(DependentC).Detail}");
+        Of(DependentC).BlockedBy.Should().BeNull("nothing upstream of C failed");
     }
 
     private sealed class StillMeasuring : IMeshAdmissionAuthority
