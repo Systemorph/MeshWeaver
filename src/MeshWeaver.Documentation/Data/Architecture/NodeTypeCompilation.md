@@ -1371,8 +1371,12 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   registry lane's `BundleOffering.ClassifyEmpty` also reads): it names no NodeType, so it leaves
   the pass complete. A producer miss (`"<node path>: <reason>"`) names the type the bundle is
   short of, whatever else the bundle carries: that type is witnessed as offered, exactly like a
-  present entry, so only it is held or parked, and the bundle's other entries still adopt. A miss
-  that names no node path makes the pass incomplete. A
+  present entry, so only it is held or parked, and the bundle's other entries still adopt. The
+  plugin-bundle endpoint writes that format, and also reports a module-file divergence as
+  `"module '<name>': …"`, which names no NodeType and is ignored here. A bundle with no assemblies
+  whose every miss is attributed in this way still counts as hollow for the delivery report, but
+  its membership is known, so it does not make the pass incomplete. A miss that names no node path
+  does. A
   publication pointer the walk will not follow (it names a generation that is not on disk, or it is
   empty, unreadable or escaping) also makes the pass incomplete, even when the sealed flat
   publication behind it is read: the publication the pointer names was never asked about. A type the pass did not ask about has

@@ -640,6 +640,65 @@ public class MixedSuccessAndMissBundle(ITestOutputHelper output) : TheGatesVerdi
 }
 
 /// <summary>
+/// #7015 review — a bundle with NO successful assemblies whose every producer miss is attributable:
+/// a NodeType miss for <c>untracked/Widget</c> in the plugin-bundle endpoint's own format, and a
+/// module-file divergence (<c>"module '…': …"</c>), which names no NodeType. Its membership is known,
+/// so Widget alone parks and an unrelated authored type in the same untracked partition compiles.
+/// </summary>
+public class MissOnlyBundle(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string Widget = "untracked/Widget";
+    private const string Authored = "untracked/Authored";
+
+    private static byte[] MissOnlyZip()
+    {
+        using var buffer = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(
+                   buffer, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            using var writer = new StreamWriter(archive.CreateEntry(NuGetPackageWriter.ManifestEntry).Open());
+            writer.Write(
+                "{\"plugin\":\"MissOnly\",\"version\":\"1.0.0\","
+                + $"\"frameworkMvid\":\"{PrebuiltAssemblySeeder.LiveFrameworkMvid}\","
+                + "\"assemblies\":[],"
+                + $"\"misses\":[\"{Widget}: no artifact for framework x on linux-x64\","
+                + "\"module 'MissOnly.Module': the served module build diverges from the bytes\"]}");
+        }
+        return buffer.ToArray();
+    }
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-miss-only.zip"] = MissOnlyZip() };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task AMissOnlyBundle_ParksTheMissedType_AndAnUnrelatedAuthoredTypeCompiles()
+    {
+        await CreateType(Widget, force: false);
+        await CreateType(Authored, force: false);
+
+        await Sweep();
+
+        var widget = await Settled(Widget, "the missed type settles");
+        widget.CompilationStatus.Should().Be(CompilationStatus.Error,
+            $"the bundle's miss names Widget — a module's content in a partition that tracks no source; "
+            + $"error: {widget.CompilationError}");
+        widget.LatestAssemblyMvid.Should().Be(SeededMvid, "no Roslyn pass ran");
+        Parks.GetCompileAttemptCount(Widget).Should().Be(0, "no compile was dispatched");
+
+        var authored = await Settled(Authored, "the unrelated authored type settles");
+        authored.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"every miss of that bundle is attributable, so its membership is known and an authored type "
+            + $"no bundle names compiles; error: {authored.CompilationError}");
+        authored.LatestAssemblyMvid.Should().NotBe(SeededMvid, "a real Roslyn pass wrote real coordinates");
+    }
+}
+
+/// <summary>
 /// #7015 review — a module-only bundle (a manifest that DECLARES a module, lists no NodeType
 /// assemblies and records no producer misses) is a valid, COMPLETE delivery: it names no NodeType,
 /// so it leaves no membership unknown. Beside it, an authored type in an untracked partition is

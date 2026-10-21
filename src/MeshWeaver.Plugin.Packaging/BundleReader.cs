@@ -386,8 +386,18 @@ public static class BundleReader
     }
 
     /// <summary>
+    /// Whether one producer <see cref="Manifest.Misses"/> entry is the registry's MODULE-file
+    /// divergence (<c>"module '&lt;name&gt;': &lt;divergence&gt;"</c>, written by the plugin-bundle
+    /// endpoint) rather than a NodeType miss. It names no NodeType. Pure.
+    /// </summary>
+    /// <param name="miss">One <see cref="Manifest.Misses"/> entry.</param>
+    public static bool IsModuleMiss(string? miss)
+        => miss is not null && miss.TrimStart().StartsWith("module '", StringComparison.Ordinal);
+
+    /// <summary>
     /// The NodeType path one producer <see cref="Manifest.Misses"/> entry names, or null when the
-    /// entry does not read as one. An entry is <c>"&lt;node path&gt;: &lt;reason&gt;"</c> (#1751);
+    /// entry does not read as one. The plugin-bundle endpoint writes a NodeType miss as
+    /// <c>"&lt;node path&gt;: &lt;reason&gt;"</c> (#1751);
     /// a bare path with no reason is accepted too. A node path carries no whitespace, so an entry
     /// whose leading token does is not one this reader can attribute. Pure.
     /// </summary>

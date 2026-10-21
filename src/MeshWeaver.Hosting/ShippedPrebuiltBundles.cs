@@ -967,10 +967,11 @@ public static class ShippedPrebuiltBundles
         var reasons = new List<string>();
         if (tally.Faulted > 0)
             reasons.Add($"{tally.Faulted} bundle source(s) faulted mid-pass");
-        // A bundle that DECLARES it ships only a module or content, with no producer misses, is a
-        // complete delivery that names no NodeType (BundleOffering.ClassifyEmpty's rule): asking it
-        // was complete. Only the hollow bundles beyond those leave membership unknown.
-        var unknownHollow = tally.BundlesHollow - tally.BundlesDeclaredEmpty;
+        // A hollow bundle whose membership is nonetheless KNOWN — one that declares it ships only a
+        // module or content (BundleReader.DeclaresNothingToAdopt), or one whose every producer miss
+        // names its node path (each witnessed per path) — left nothing unasked. Only the hollow
+        // bundles beyond those leave membership unknown. The hollow-delivery report is unaffected.
+        var unknownHollow = tally.BundlesHollow - tally.BundlesHollowWithKnownMembership;
         if (unknownHollow > 0)
             reasons.Add($"{unknownHollow} bundle(s) had no readable manifest, stated no framework "
                 + "identity, or carried no assemblies without declaring why");
@@ -1110,9 +1111,11 @@ public static class ShippedPrebuiltBundles
         /// <summary>Bundles carrying no assemblies (or no readable manifest).</summary>
         public int BundlesHollow { get; init; }
 
-        /// <summary>…of those, the ones whose manifest DECLARES a module or content and records
-        /// no producer misses — complete deliveries that name no NodeType (#7015 review).</summary>
-        public int BundlesDeclaredEmpty { get; init; }
+        /// <summary>…of those, the ones whose MEMBERSHIP is nonetheless known (#7015 review): the
+        /// manifest declares a module or content and records no misses, or every producer miss it
+        /// records names its node path. Discovery completeness subtracts these; the hollow-delivery
+        /// report does not.</summary>
+        public int BundlesHollowWithKnownMembership { get; init; }
 
         /// <summary>Producer misses (<c>Manifest.Misses</c>) that name no node path, so which types
         /// their bundle is short of is unknown (#7015 review). Attributable misses are witnessed
@@ -1134,7 +1137,7 @@ public static class ShippedPrebuiltBundles
                 BundlesSeen = left.BundlesSeen + right.BundlesSeen,
                 BundlesDeclined = left.BundlesDeclined + right.BundlesDeclined,
                 BundlesHollow = left.BundlesHollow + right.BundlesHollow,
-                BundlesDeclaredEmpty = left.BundlesDeclaredEmpty + right.BundlesDeclaredEmpty,
+                BundlesHollowWithKnownMembership = left.BundlesHollowWithKnownMembership + right.BundlesHollowWithKnownMembership,
                 BundlesWithUnattributedMisses = left.BundlesWithUnattributedMisses + right.BundlesWithUnattributedMisses,
                 Faulted = left.Faulted + right.Faulted,
                 Leaving = left.Leaving + right.Leaving,
@@ -1434,6 +1437,11 @@ public static class ShippedPrebuiltBundles
                 var unattributedMisses = 0;
                 foreach (var miss in manifest!.Misses ?? [])
                 {
+                    // The registry also reports a module-file divergence as a miss
+                    // ("module '<name>': …"). It names no NodeType, so it neither witnesses nor
+                    // leaves membership unknown.
+                    if (Plugin.Packaging.BundleReader.IsModuleMiss(miss))
+                        continue;
                     if (Plugin.Packaging.BundleReader.MissedNodePath(miss) is not { } missed)
                         unattributedMisses++;
                     else if (snapshot.Paths.Contains(missed))
@@ -1463,6 +1471,10 @@ public static class ShippedPrebuiltBundles
                     // the registry lane): it names no NodeType, so it leaves no membership unknown.
                     // It still counts hollow for the shortfall report, exactly as before.
                     var declaredEmpty = Plugin.Packaging.BundleReader.DeclaresNothingToAdopt(manifest);
+                    // Its membership is known when it declares a module/content-only delivery, or
+                    // when every miss it records was attributed to a node path above (#7015 review).
+                    var membershipKnown = declaredEmpty
+                        || (manifest.Misses is { Count: > 0 } && unattributedMisses == 0);
                     // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
                     // types it should have covered will not compile here (that is the flag's whole
                     // point), so "nothing to adopt" is not a degraded-but-fine state — it is the
@@ -1486,7 +1498,7 @@ public static class ShippedPrebuiltBundles
                     return Observable.Return(default(SeedTally) with
                     {
                         BundlesHollow = 1,
-                        BundlesDeclaredEmpty = declaredEmpty ? 1 : 0,
+                        BundlesHollowWithKnownMembership = membershipKnown ? 1 : 0,
                     });
                 }
 
