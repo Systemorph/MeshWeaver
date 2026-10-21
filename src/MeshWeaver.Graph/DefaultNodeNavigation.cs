@@ -82,6 +82,10 @@ public static class DefaultNodeNavigation
         var root = IndexRoot(currentPath);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
+        // The reader, captured NOW: the tie legs and the probes are opened later, inside live
+        // emissions that run off the reader's delivery with no ambient identity, so every read is
+        // stamped with this viewer explicitly (LayoutAreaHost.ViewerContext).
+        var viewer = host.ViewerContext;
         // 🚨 NEVER the whole partition (policy explorer-navigation). One DIRECT-CHILDREN read per
         // level on the reader's path — the root's children, each ancestor's children, the page's
         // own children — so the cost grows with the page's DEPTH, never with the size of the
@@ -108,7 +112,7 @@ public static class DefaultNodeNavigation
         // window. A two-key order is several legs whose union holds the first Cap + 1 rows of the
         // combined order — see LevelQueries and TieLegQuery for why each leg is there.
         IObservable<(string Level, LevelRows Rows)> Level(string ns)
-            => ReadLevel(meshService, ns, SortOf(ns), CapOf(ns)).Select(rows => (ns, rows));
+            => ReadLevel(meshService, ns, SortOf(ns), CapOf(ns), viewer).Select(rows => (ns, rows));
         var pathLevels = PathLevels(root, currentPath);
         var levels = pathLevels.Select(Level).ToImmutableList();
         // The reader's own branch: every node on the path below the root, read BY PATH (one light
@@ -117,8 +121,8 @@ public static class DefaultNodeNavigation
         // or the branch the reader is on would vanish and its children would have no parent.
         IObservable<MeshNode?> Anchor(string path) =>
             meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(
-                    $"path:{path} select:{SelectFields}"))
+                .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(
+                    $"path:{path} select:{SelectFields}"), viewer))
                 .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
                 .Select(rows => rows.TryGetValue(path, out var row) ? row : null)
                 .StartWith((MeshNode?)null);
@@ -187,7 +191,7 @@ public static class DefaultNodeNavigation
                 // line (FolderProbes), re-subscribed only when the set of lines changes; shared, so
                 // the levels are read once for both halves.
                 .Publish(tree => tree.CombineLatest(
-                    FolderProbes(meshService, tree.Select(t => UnloadedFolders(t.Nodes, root, pathLevels))),
+                    FolderProbes(meshService, tree.Select(t => UnloadedFolders(t.Nodes, root, pathLevels)), viewer, logger),
                     (t, withChildren) => Build(root, t.Nodes, currentPath, t.Views, labels, withChildren)))),
             ex => logger?.LogWarning(ex,
                 "The default index query for {Root} faulted — the page renders without its index",
@@ -199,11 +203,12 @@ public static class DefaultNodeNavigation
     /// <paramref name="cap"/> + 1 rows, ordered by the store, each painting on its own — plus, for
     /// the default order, the TIE leg once the Order leg names its cut value.
     /// </summary>
-    private static IObservable<LevelRows> ReadLevel(IMeshService meshService, string ns, string levelSort, int cap)
+    private static IObservable<LevelRows> ReadLevel(
+        IMeshService meshService, string ns, string levelSort, int cap, AccessContext? viewer)
     {
         IObservable<ImmutableDictionary<string, MeshNode>> Read(string query) =>
             meshService
-                .Query<MeshNode>(MeshQueryRequest.FromQuery(query))
+                .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(query), viewer))
                 .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
                 // Each leg paints on its own: a slow leg never holds the others back.
                 .StartWith(ImmutableDictionary<string, MeshNode>.Empty);
@@ -252,29 +257,65 @@ public static class DefaultNodeNavigation
     }
 
     /// <summary>
+    /// <paramref name="request"/> read as <paramref name="viewer"/> — a read opened inside a live
+    /// emission has no ambient identity, so it names its reader. Unchanged when the host carried
+    /// no viewer (the ambient context is then all there is).
+    /// </summary>
+    private static MeshQueryRequest Stamped(MeshQueryRequest request, AccessContext? viewer)
+        => viewer is { ObjectId.Length: > 0 } ? request.ForViewer(viewer.ObjectId) : request;
+
+    /// <summary>
     /// The folders among <paramref name="folders"/> that have a visible child, live: one
-    /// <see cref="ChildProbeQuery"/> per folder, re-subscribed only when the SET of folders changes,
-    /// emitting at once (nothing known yet = no expanders) so the rail never waits for a probe.
+    /// <see cref="ChildProbeQuery"/> per folder, opened when the folder JOINS the set and closed
+    /// when it LEAVES — a folder that stays keeps its probe and its answer while its siblings
+    /// come and go, so an open folder is never re-rendered as a link while a new sibling's probe
+    /// is pending. Emits as soon as the set does (an unanswered probe = no expander yet), so the
+    /// rail never waits; a probe that faults is logged and reads as "no children".
     /// </summary>
     private static IObservable<ImmutableHashSet<string>> FolderProbes(
-        IMeshService meshService, IObservable<ImmutableSortedSet<string>> folders)
+        IMeshService meshService, IObservable<ImmutableSortedSet<string>> folders,
+        AccessContext? viewer, ILogger? logger)
         => folders
             .DistinctUntilChanged(FolderSetComparer.Instance)
-            .Select(set => set.IsEmpty
-                ? Observable.Return(ImmutableHashSet<string>.Empty)
-                : set.Select(folder => meshService
-                        .Query<MeshNode>(MeshQueryRequest.FromQuery(ChildProbeQuery(folder)))
-                        .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
-                        .Select(rows => (Folder: folder, Has: !rows.IsEmpty))
-                        .StartWith((Folder: folder, Has: false))
-                        // A probe that faults costs its expander, never the index.
-                        .Catch(Observable.Return((Folder: folder, Has: false))))
-                    .CombineLatest()
-                    .Select(probes => probes.Where(p => p.Has).Select(p => p.Folder)
-                        .ToImmutableHashSet(StringComparer.Ordinal)))
-            .Switch()
+            .Publish(sets =>
+            {
+                // Each folder once per stay in the set: the paths each set adds to the one before.
+                var joined = sets
+                    .StartWith(ImmutableSortedSet<string>.Empty)
+                    .Zip(sets, (before, now) => now.Except(before))
+                    .SelectMany(added => added);
+                // A probe lives until its folder leaves the set, then says so (null = gone). The
+                // probe itself never completes first: a completed fallback must not read as "gone".
+                var answers = joined.SelectMany(folder => Probe(meshService, folder, viewer, logger)
+                    .Concat(Observable.Never<bool>())
+                    .TakeUntil(sets.Where(set => !set.Contains(folder)))
+                    .Select(has => (Folder: folder, Has: (bool?)has))
+                    .Concat(Observable.Return((Folder: folder, Has: (bool?)null))));
+                var known = answers
+                    .Scan(ImmutableDictionary<string, bool>.Empty, (map, a) => a.Has is { } has
+                        ? map.SetItem(a.Folder, has)
+                        : map.Remove(a.Folder))
+                    .StartWith(ImmutableDictionary<string, bool>.Empty);
+                return sets.CombineLatest(known, (set, map) => set
+                    .Where(folder => map.TryGetValue(folder, out var has) && has)
+                    .ToImmutableHashSet(StringComparer.Ordinal));
+            })
             .StartWith(ImmutableHashSet<string>.Empty)
             .DistinctUntilChanged(FolderSetComparer.Instance);
+
+    /// <summary>Whether <paramref name="folder"/> has a visible child, live, read as <paramref name="viewer"/>.</summary>
+    private static IObservable<bool> Probe(IMeshService meshService, string folder, AccessContext? viewer, ILogger? logger)
+        => meshService
+            .Query<MeshNode>(Stamped(MeshQueryRequest.FromQuery(ChildProbeQuery(folder)), viewer))
+            .Scan(ImmutableDictionary<string, MeshNode>.Empty, Fold)
+            .Select(rows => !rows.IsEmpty)
+            .DistinctUntilChanged()
+            // A probe that faults costs its expander, never the index — and says why.
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "The index probe for {Folder} faulted — the line shows no expander", folder);
+                return Observable.Return(false);
+            });
 
     private sealed class FolderSetComparer : IEqualityComparer<IReadOnlySet<string>>,
         IEqualityComparer<ImmutableSortedSet<string>>, IEqualityComparer<ImmutableHashSet<string>>
@@ -299,16 +340,18 @@ public static class DefaultNodeNavigation
     /// <param name="folder">The folder whose children are listed.</param>
     /// <param name="currentPath">The page being read — marks the current line.</param>
     /// <param name="showAllLabel">The viewer's label for the show-all line.</param>
+    /// <param name="viewer">The reader every read is stamped with (<c>LayoutAreaHost.ViewerContext</c>).</param>
     /// <param name="logger">Sees a fault before it is swallowed.</param>
     public static IObservable<IReadOnlyList<NodeNavigationEntry>> ObserveFolder(
-        IMeshService meshService, string folder, string currentPath, string showAllLabel, ILogger? logger = null)
+        IMeshService meshService, string folder, string currentPath, string showAllLabel,
+        AccessContext? viewer, ILogger? logger = null)
     {
         ArgumentNullException.ThrowIfNull(meshService);
-        return ReadLevel(meshService, folder, IndexSort.Order, LevelCap)
+        return ReadLevel(meshService, folder, IndexSort.Order, LevelCap, viewer)
             .Select(rows => VisibleInOrder(rows.Nodes.Values))
             .Publish(level => level.CombineLatest(
                 FolderProbes(meshService, level.Select(v => v.Take(LevelCap).Select(n => n.Path)
-                    .ToImmutableSortedSet(StringComparer.Ordinal))),
+                    .ToImmutableSortedSet(StringComparer.Ordinal)), viewer, logger),
                 (visible, withChildren) => FolderEntries(folder, visible, currentPath, withChildren, showAllLabel)))
             .Catch((Exception ex) =>
             {

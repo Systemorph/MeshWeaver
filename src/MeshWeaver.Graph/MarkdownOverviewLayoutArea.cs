@@ -167,7 +167,8 @@ public static class MarkdownOverviewLayoutArea
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
         return DefaultNodeNavigation.ObserveFolder(meshService, folder, currentPath,
-                MeshWeaver.Messaging.LocalizationCatalog.Get("common.showAll", host.ViewerLocale()), logger)
+                MeshWeaver.Messaging.LocalizationCatalog.Get("common.showAll", host.ViewerLocale()),
+                host.ViewerContext, logger)
             .Select(entries => entries.Count == 0
                 ? null
                 : (UiControl?)SuppliedNavigationRail.RenderItems(SuppliedNavigationRail.PlanItems(entries, currentPath)));
