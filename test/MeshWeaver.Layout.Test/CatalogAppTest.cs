@@ -159,6 +159,18 @@ public class CatalogAppTest
     };
 
     [Fact]
+    public void ParenthesesInsideATerm_AreTheTermsOwn()
+    {
+        const string hidden = "partitions:all nodeType:Crm/Opportunity sort:name";
+
+        // A list operand and a value carrying "()" are terms, not expression groups.
+        Assert.Equal("content.status:(Open OR Won)", CatalogQuery.Narrowing(hidden, "content.status:(Open OR Won)"));
+        Assert.Equal("content.code:foo()", CatalogQuery.Narrowing(hidden, "content.code:foo()"));
+        Assert.Equal("content.code:foo() content.status:Open",
+            CatalogQuery.Narrowing(hidden, "(namespace:Globex) content.code:foo() content.status:Open"));
+    }
+
+    [Fact]
     public void ANamespaceAlternation_StillAcceptsATypedFilter()
     {
         // The parser appends the namespace membership AFTER the ordinary filters.

@@ -418,7 +418,7 @@ public static partial class CatalogQuery
     {
         if (string.IsNullOrWhiteSpace(typed))
             return "";
-        var stripped = WithoutEmptyGroups(Removed.Aggregate(typed, (t, q) => Parser.RemoveQualifier(t, q))).Trim();
+        var stripped = Parser.RemoveEmptyGroups(Removed.Aggregate(typed, (t, q) => Parser.RemoveQualifier(t, q))).Trim();
         if (Narrows(hidden, stripped))
             return stripped;
 
@@ -455,21 +455,9 @@ public static partial class CatalogQuery
         {
             return false;
         }
-        ParsedQuery t;
-        try
-        {
-            // Every comparison the reader typed, read with grouping and OR taken out — so a term the
-            // structured parse would drop (after an empty group, a text-only group) is still counted.
-            t = Parser.Parse(Ungrouped(typed));
-        }
-        catch (FormatException)
-        {
-            return false;
-        }
-        catch (ArgumentException)
-        {
-            return false;
-        }
+        // Every filter comparison the reader typed, as the tokenizer reads it — so a term the
+        // structured parse would drop (after an empty group, a text-only group) is still counted.
+        var written = Parser.WrittenComparisons(typed);
         return h.Path == c.Path && h.Scope == c.Scope && h.Limit == c.Limit && h.Source == c.Source
                && h.Context == c.Context && h.IsMain == c.IsMain && h.IsContent == c.IsContent
                && h.CrossPartition == c.CrossPartition
@@ -477,98 +465,17 @@ public static partial class CatalogQuery
                && ConjunctsKept(h.Filter, c.Filter)
                // …and nothing typed was silently dropped on the way (an empty group stops the
                // parser's AND, so a filter after it would vanish while the hidden part still matched).
-               && Comparisons(t.Filter).All(typedTerm => Comparisons(c.Filter).Any(kept => NodeEquals(typedTerm, kept)));
+               && written.All(term => Comparisons(c.Filter).Any(kept => SameCondition(term, kept.Condition)));
     }
 
     /// <summary>Every comparison under <paramref name="node"/>, at any depth.</summary>
-    private static IEnumerable<QueryNode> Comparisons(QueryNode? node) => node switch
+    private static IEnumerable<QueryComparison> Comparisons(QueryNode? node) => node switch
     {
         QueryComparison c => [c],
         QueryAnd and => and.Children.SelectMany(Comparisons),
         QueryOr or => or.Children.SelectMany(Comparisons),
         _ => [],
     };
-
-    /// <summary><paramref name="text"/> with its parentheses and <c>OR</c> keywords blanked outside quoted
-    /// literals — a flat conjunction of the same terms, for counting them. Pure.</summary>
-    private static string Ungrouped(string text)
-    {
-        var sb = new System.Text.StringBuilder(text.Length);
-        char? quote = null;
-        for (var i = 0; i < text.Length; i++)
-        {
-            var ch = text[i];
-            if (quote is not null)
-            {
-                if (ch == quote) quote = null;
-                sb.Append(ch);
-                continue;
-            }
-            if (ch is '"' or '\'')
-            {
-                quote = ch;
-                sb.Append(ch);
-                continue;
-            }
-            var wordStart = i == 0 || char.IsWhiteSpace(text[i - 1]) || text[i - 1] is '(' or ')';
-            if (wordStart && i + 1 < text.Length && (ch is 'O' or 'o') && (text[i + 1] is 'R' or 'r')
-                && (i + 2 >= text.Length || !char.IsLetterOrDigit(text[i + 2])))
-            {
-                sb.Append("  ");
-                i++;
-                continue;
-            }
-            sb.Append(ch is '(' or ')' ? ' ' : ch);
-        }
-        return sb.ToString();
-    }
-
-    /// <summary><paramref name="text"/> without groups left EMPTY by removing qualifiers (<c>()</c>,
-    /// <c>( ( ) )</c>), outside quoted literals. Pure.</summary>
-    private static string WithoutEmptyGroups(string text)
-    {
-        while (true)
-        {
-            var next = RemoveOneEmptyGroupPass(text);
-            if (next == text)
-                return text;
-            text = next;
-        }
-    }
-
-    private static string RemoveOneEmptyGroupPass(string text)
-    {
-        var sb = new System.Text.StringBuilder(text.Length);
-        char? quote = null;
-        for (var i = 0; i < text.Length; i++)
-        {
-            var ch = text[i];
-            if (quote is not null)
-            {
-                if (ch == quote) quote = null;
-                sb.Append(ch);
-                continue;
-            }
-            if (ch is '"' or '\'')
-            {
-                quote = ch;
-                sb.Append(ch);
-                continue;
-            }
-            if (ch == '(')
-            {
-                var j = i + 1;
-                while (j < text.Length && char.IsWhiteSpace(text[j])) j++;
-                if (j < text.Length && text[j] == ')')
-                {
-                    i = j;   // drop "( … )" holding only whitespace
-                    continue;
-                }
-            }
-            sb.Append(ch);
-        }
-        return sb.ToString();
-    }
 
     private static bool Same(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
@@ -600,14 +507,16 @@ public static partial class CatalogQuery
 
     private static bool NodeEquals(QueryNode a, QueryNode b) => (a, b) switch
     {
-        (QueryComparison x, QueryComparison y) =>
-            x.Condition.Selector.Equals(y.Condition.Selector, StringComparison.OrdinalIgnoreCase)
-            && x.Condition.Operator == y.Condition.Operator
-            && x.Condition.Values.SequenceEqual(y.Condition.Values, StringComparer.Ordinal),
+        (QueryComparison x, QueryComparison y) => SameCondition(x.Condition, y.Condition),
         (QueryAnd x, QueryAnd y) => Pairwise(x.Children, y.Children),
         (QueryOr x, QueryOr y) => Pairwise(x.Children, y.Children),
         _ => false,
     };
+
+    private static bool SameCondition(QueryCondition x, QueryCondition y) =>
+        x.Selector.Equals(y.Selector, StringComparison.OrdinalIgnoreCase)
+        && x.Operator == y.Operator
+        && x.Values.SequenceEqual(y.Values, StringComparer.Ordinal);
 
     private static bool Pairwise(IReadOnlyList<QueryNode> a, IReadOnlyList<QueryNode> b) =>
         a.Count == b.Count && a.Zip(b).All(p => NodeEquals(p.First, p.Second));
