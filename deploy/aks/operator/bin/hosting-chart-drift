@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# hosting-chart-drift --namespace <ns> --release <name> [--estate <dir>] [--overlay <file>]
+#                     [--records <dir>] [--expect-patch <file>] [--chart <dir>]
+#
+# Does the cluster run what the CHART describes? The governed home of the Chart Drift comparison
+# (Doc/Architecture/ChartDriftSemantics): the second step of an `Audit` InstanceAction, run on the
+# estate's aks-ops lane as hosting-operator, beside `hosting-audit`.
+#
+# 🚨 WHY IT MOVED HERE (Systemorph/Memex#647). The comparison used to run from core's
+# `.github/workflows/chart-drift.yml`, on a GitHub-hosted runner, reading the PRIVATE cluster through
+# `az aks command invoke` — which needs the AKS Cluster Admin role, and `helm get manifest` reads the
+# release Secrets. That role on a CI identity is exactly the standing cluster right the estate's
+# least-privilege plan retires, and no read-only identity may be given it instead: a read-only PR
+# identity with cluster read would let every pull request read the cluster. The lane that already
+# reads the cluster for `hosting-audit` — in the VNet, as hosting-operator, its kubeconfig minted for
+# the job and gone with it — is the one place this read belongs.
+#
+# hosting-audit and this command answer DIFFERENT questions and neither replaces the other:
+#   hosting-audit         live vs the LAST-DEPLOYED manifest — what lives only on the cluster
+#   hosting-chart-drift   live vs the chart as the estate's COMMITTED inputs render it (plus the
+#                         manifest as the third side: which live-only keys helm still owns) —
+#                         ChartDriftSemantics' COLLIDES / SHADOWS / OFF-RECORD / CLUSTER-ONLY /
+#                         CHART-ONLY / DIFFERS
+#
+# THE INPUTS, all read from the ESTATE checkout (the config repository the lane runs in) unless named:
+#   <estate>/deployments/aks/<ns>/values.<release>.public.yaml   the secret-free overlay (required)
+#   <estate>/deployments/aks/<ns>/portal-patch.json             the declared post-helm patch (optional)
+#   <estate>/mesh/Deployments/                                  the Deployment records (required)
+#   the chart                                                    $HOSTING_CHART, else /opt/hosting/chart
+# The comparison itself is core's drift scripts (deploy/aks/scripts/check-chart-drift.sh and its
+# chart-drift-*.py), found beside this command: $HOSTING_DRIFT_SCRIPTS, else the checkout layout
+# (bin/../../scripts), else the image's /opt/hosting/drift. Nothing is fetched at run time — the
+# scripts are the ones at the operator pin, the same reviewed commit as the chart they render.
+#
+# THE OUTPUT is the drift script's own report (findings name keys; values are compared, never printed)
+# plus the lines the Hosting plugin records on the instance's audit:
+#   ::hosting:: chart_drift_verdict=clean|drift
+#   ::hosting:: chart_drift_divergences=N        ::hosting:: chart_drift_compared=M
+#
+# 🚨 READ-ONLY, and it exits 0 on drift — the same contract as hosting-audit: drift is a FINDING the
+# report carries, and a run that measured is a successful run. It exits non-zero, and prints NO
+# verdict, when the comparison could not be made (an input absent, the cluster unreadable, fewer
+# fields compared than the comparator's evidence floor): "could not measure" must never read as
+# "no drift". A dry run compares for real: nothing here mutates.
+
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/_common.sh"
+# shellcheck disable=SC2034  # read by hosting::die in _common.sh, which shellcheck does not follow here
+HOSTING_CMD="hosting-chart-drift"
+
+SELF_BIN="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+
+namespace="" release="" estate="." overlay="" records="" expect_patch="" chart="${HOSTING_CHART:-/opt/hosting/chart}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --namespace)    namespace="${2:-}";    shift 2 ;;
+    --release)      release="${2:-}";      shift 2 ;;
+    --estate)       estate="${2:-}";       shift 2 ;;
+    --overlay)      overlay="${2:-}";      shift 2 ;;
+    --records)      records="${2:-}";      shift 2 ;;
+    --expect-patch) expect_patch="${2:-}"; shift 2 ;;
+    --chart)        chart="${2:-}";        shift 2 ;;
+    *) hosting::die "unknown argument '$1'" ;;
+  esac
+done
+
+hosting::need_flag namespace "$namespace"
+hosting::need_flag release "$release"
+hosting::safe_name namespace "$namespace"
+hosting::safe_name release "$release"
+
+overlay="${overlay:-${estate}/deployments/aks/${namespace}/values.${release}.public.yaml}"
+records="${records:-${estate}/mesh/Deployments}"
+if [ -z "$expect_patch" ] && [ -f "${estate}/deployments/aks/${namespace}/portal-patch.json" ]; then
+  expect_patch="${estate}/deployments/aks/${namespace}/portal-patch.json"
+fi
+
+# ── the drift scripts, at the operator pin ──────────────────────────────────────────────────────
+drift_dir=""
+for candidate in "${HOSTING_DRIFT_SCRIPTS:-}" "${SELF_BIN}/../../scripts" "/opt/hosting/drift"; do
+  [ -n "$candidate" ] || continue
+  if [ -f "${candidate}/check-chart-drift.sh" ] && [ -f "${candidate}/chart-drift-record.py" ]; then
+    drift_dir="$(cd -- "$candidate" && pwd)"
+    break
+  fi
+done
+[ -n "$drift_dir" ] \
+  || hosting::die "core's drift scripts (check-chart-drift.sh, chart-drift-record.py) are not beside this command — looked in \$HOSTING_DRIFT_SCRIPTS, ${SELF_BIN}/../../scripts and /opt/hosting/drift. The lane's MeshWeaver checkout must include deploy/aks/scripts (the image carries them at /opt/hosting/drift). Without them nothing can be compared, and an audit that compared nothing must not report a verdict."
+
+# ── every input, or a refusal naming it ─────────────────────────────────────────────────────────
+[ -d "$chart" ] \
+  || hosting::die "the chart is not at '${chart}' — set HOSTING_CHART to the operator checkout's deploy/helm. Rendering anything else compares the cluster against a chart nobody deployed."
+[ -f "$overlay" ] \
+  || hosting::die "the committed overlay '${overlay}' does not exist — the estate repository carries the SECRET-FREE half of each release's values there. Without it the render is the chart's defaults, which nobody deployed: a comparison against it is not a measurement."
+[ -d "$records" ] \
+  || hosting::die "the Deployment records folder '${records}' does not exist — the running image is compared against the record that owns ${namespace}/${release}, and with no records there is nothing to compare it against."
+[ -z "$expect_patch" ] || [ -f "$expect_patch" ] \
+  || hosting::die "--expect-patch '${expect_patch}' does not exist"
+
+work="$(mktemp -d)"
+trap 'hosting::on_exit; rm -rf "$work"' EXIT
+
+hosting::dry && hosting::log "dry run requested — the comparison is read-only, so it runs for real"
+hosting::log "chart     ${chart}"
+hosting::log "overlay   ${overlay}"
+hosting::log "records   ${records}"
+hosting::log "patch     ${expect_patch:-none declared — a post-helm addition is reported as drift}"
+hosting::log "scripts   ${drift_dir}"
+
+# ── the record's facts (exactly one record must own the pair) ──────────────────────────────────
+python3 "${drift_dir}/chart-drift-record.py" \
+  --records "$records" --namespace "$namespace" --release "$release" --out "$work/record.json" \
+  || hosting::die "no single Deployment record owns ${namespace}/${release} under ${records} (chart-drift-record.py names why above) — the comparison cannot be decided, and an undecidable comparison is a failure, never a skip."
+
+# ── the comparison ──────────────────────────────────────────────────────────────────────────────
+# In-cluster transport: the lane's kubeconfig (or the Job's ServiceAccount). Never `aks-invoke` —
+# that transport is the cluster-admin path this command exists to retire.
+args=( -n "$namespace" -r "$release" --via kubectl -c "$chart"
+       -f "${chart}/values.yaml" -f "$overlay" --record "$work/record.json" )
+[ -z "$expect_patch" ] || args+=( --expect-patch "$expect_patch" )
+bash "${drift_dir}/check-chart-drift.sh" "${args[@]}" 2>&1 | tee "$work/drift.log"
+rc=${PIPESTATUS[0]}
+
+# ── the verdict — only from a comparison that was actually made ─────────────────────────────────
+# check-chart-drift.sh exits 1 both for drift and for "could not compare". The comparator's own
+# summary line is what tells them apart: it prints one only after it compared at least its evidence
+# floor of fields. No summary line ⇒ no measurement ⇒ no verdict, and a red step.
+clean_line="$(grep -m1 -E '^No drift: [0-9]+ fields compared' "$work/drift.log" || true)"
+drift_line="$(grep -m1 -E '^[0-9]+ divergence\(s\) across [0-9]+ compared fields' "$work/drift.log" || true)"
+
+if [ "$rc" -eq 0 ] && [ -n "$clean_line" ]; then
+  compared="$(sed -E 's/^No drift: ([0-9]+) fields compared.*/\1/' <<< "$clean_line")"
+  hosting::say chart_drift_verdict clean
+  hosting::say chart_drift_divergences 0
+  hosting::say chart_drift_compared "$compared"
+  exit 0
+fi
+if [ "$rc" -ne 0 ] && [ -n "$drift_line" ]; then
+  divergences="$(sed -E 's/^([0-9]+) divergence.*/\1/' <<< "$drift_line")"
+  compared="$(sed -E 's/^[0-9]+ divergence\(s\) across ([0-9]+) compared fields.*/\1/' <<< "$drift_line")"
+  hosting::say chart_drift_verdict drift
+  hosting::say chart_drift_divergences "$divergences"
+  hosting::say chart_drift_compared "$compared"
+  exit 0
+fi
+hosting::die "the chart-drift comparison produced no verdict (exit ${rc}) — it did not get far enough to compare anything, or it disagreed with its own summary. That is a failure to measure, never 'no drift'; the reason is in the lines above."

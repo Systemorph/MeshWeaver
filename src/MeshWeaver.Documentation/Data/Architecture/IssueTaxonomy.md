@@ -192,7 +192,6 @@ number of failed calls.
 |---|---|---|
 | CD on main failed / incomplete image set (`main-cd.yml`) | `ci-failure` | `bug` `sev:H` |
 | a satellite's red main (`node-repo-ci-failure.yml`) | `ci-main-red` | `bug` `sev:H` |
-| the cluster does not match its chart (`chart-drift.yml`) | `chart-drift-sentinel` | `bug` `sev:H` |
 | the promotion gate left the fleet unarmed (`main-cd.yml` → `.github/scripts/fleet-unarmed-alert.py`) | `fleet-unarmed` | `bug` `sev:H` |
 | control image lane failed (`main-cd.yml`) | `control-image` | `bug` `sev:M` |
 | control behind the newest build (`control-always-latest.yml`) | `control-lag` | `bug` `sev:M` |
