@@ -78,6 +78,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             TypeNode(OpenType, declaration: null),
             TypeNode(SatType, declaration: null),
             TypeNode(StaleType, declaration: null),
+            TypeNode(SwitchType, declaration: null),
             // erin is a PLATFORM admin: the Admin role in the Admin partition — no data grant anywhere.
             new MeshNode(PermissionEvaluator.AdminScope) { NodeType = "Markdown", Name = "Admin" },
             AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope),
@@ -93,6 +94,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedType, verdict: false))
             .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedDeclaredType, verdict: false))
             .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(OpenType, verdict: true))
+            .AddSingleton<INodeTypeAccessRule>(switchable)
             // The real satellite rule (Read delegates to the MainNode), held to the rule contract's
             // ONE verdict exactly as the lease does — a rule's own stream never makes a verdict live.
             .AddSingleton<INodeTypeAccessRule>(sp => new FirstVerdictRule(
@@ -139,6 +141,25 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         public string NodeType => nodeType;
         public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
         public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => Observable.Return(verdict);
+    }
+
+    /// <summary>A type whose Read rule starts governing only when the test says so.</summary>
+    private const string SwitchType = "Kiosk/Switch";
+    private readonly SwitchableReadRule switchable = new(SwitchType);
+
+    /// <summary>
+    /// A DENYING Read rule whose governance of Read is switched on mid-subscription — what the rule
+    /// set answers when a module's rule that was absent arrives (or a rule that could not be produced
+    /// recovers): <see cref="NodeTypeAccessRuleSet"/> reads <c>SupportedOperations</c> on every lookup.
+    /// </summary>
+    private sealed class SwitchableReadRule(string nodeType) : INodeTypeAccessRule
+    {
+        private volatile bool governsRead;
+        public void GovernRead() => governsRead = true;
+        public string NodeType => nodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations
+            => governsRead ? [NodeOperation.Read] : [NodeOperation.Update];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => Observable.Return(false);
     }
 
     private sealed class FaultingReadRule(string nodeType) : INodeTypeAccessRule
@@ -503,6 +524,35 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             "revoking the grant withdraws the rule's earlier verdict on the SAME subscription", cancellationToken: ct);
         await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
             "the revocation is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4335537915): the governing rule is resolved on EVERY re-check, never
+    /// captured with the owner revision. No rule governs Read at first, so carol's Viewer grant admits
+    /// her through the fold; then a DENYING Read rule starts to govern the type — the node's revision
+    /// unchanged — and an access commit on the partition re-checks. Capturing the rule with the
+    /// revision re-asked the fold and granted again; the re-check must reach the rule and deny.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARuleThatStartsToGovern_IsConsultedOnTheNextReCheck_OfTheSameRevision()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode(RulePartition) { NodeType = "Markdown", Name = RulePartition });
+        var node = await Issue("switch", "nobody", ct, nodeType: SwitchType, ns: RulePartition);
+
+        var tri = PointReadProbe.Open(Mesh, node, Carol);
+        using var triConnection = tri.Connect();
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted,
+            "POSITIVE CONTROL: no rule governs Read yet, so carol's Viewer grant admits her", cancellationToken: ct);
+
+        switchable.GovernRead();
+        Assert.False(await Verdict(node, Carol, ct), "PRECONDITION: a fresh verdict meets the rule that now governs, and it denies");
+
+        // An access commit on the node's partition — the node's revision and carol's fold unchanged.
+        await AsSystem(AssignmentNodeFactory.UserRole(Dave.ObjectId, "Viewer", RulePartition), ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the re-check consults the rule that governs NOW — a DEFINITIVE denial on the open subscription, not a fold grant re-asked under a captured \"no rule\"", cancellationToken: ct);
     }
 
     /// <summary>

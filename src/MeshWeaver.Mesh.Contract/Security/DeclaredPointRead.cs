@@ -209,7 +209,8 @@ public static class DeclaredPointRead
     }
 
     /// <summary>
-    /// The standard leg for ONE owner revision: the governing rule, or — when no rule governs — the
+    /// The standard leg for ONE owner revision: the governing rule (looked up afresh on each
+    /// evaluation), or — when no rule governs — the
     /// permission fold, each re-decided as ONE verdict on every signal of the ONE input set
     /// (<see cref="ReadInputsChanged"/>). Both branches share the set, the pending withdrawal
     /// (<see cref="SwitchFailClosed"/>), the viewer's context and the per-evaluation budget.
@@ -217,7 +218,6 @@ public static class DeclaredPointRead
     private static IObservable<PermissionCheckOutcome> StandardRead(
         IMessageHub hub, AccessService? access, string path, MeshNode node, AccessContext viewer, string userId, ILogger? logger)
     {
-        var rule = NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read);
         var context = new NodeValidationContext
         {
             Operation = NodeOperation.Read,
@@ -233,9 +233,14 @@ public static class DeclaredPointRead
         // that value.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
-        IObservable<bool> Evaluate() => rule is null
-            ? hub.CheckPermission(path, userId, Permission.Read)
-            : rule.HasAccess(context, userId);
+        // 🚨 The governing rule is resolved on EVERY evaluation, never once per revision: the rule
+        // set answers from the rules that can serve NOW (a module's rule that was absent can arrive,
+        // one that could not be produced can recover), so a rule captured with the revision would
+        // keep re-checking a lookup that no longer holds — a captured "no rule" grants through the
+        // fold after a denying rule has arrived.
+        IObservable<bool> Evaluate() => NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read) is { } rule
+            ? rule.HasAccess(context, userId)
+            : hub.CheckPermission(path, userId, Permission.Read);
         return OffTheGate(ReadInputsChanged(hub, access, node, viewer, userId)
                 .StartWith(false))
             .Select(withdraw => (evaluation: Classified(
