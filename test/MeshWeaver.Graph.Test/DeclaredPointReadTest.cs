@@ -1203,52 +1203,82 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
 
         public void Dispose() => Volatile.Read(ref held)?.Dispose();
 
-        private sealed class HeldQuery : IDisposable
+        /// <summary>
+        /// The gate for one query. Live values, holds and releases are ONE serialized stream (Merge
+        /// delivers one event at a time) folded by Scan, so what is served is decided in event order and
+        /// a release can never publish a snapshot that a refresh already superseded (review of #7013,
+        /// thread 4335721574): a release serves the latest live value as of the release event itself.
+        /// </summary>
+        public sealed class HeldQuery : IDisposable
         {
-            private readonly BehaviorSubject<IEnumerable<MeshNode>?> served = new(null);
-            private readonly object sync = new();
-            private bool isHeld;
-            private IEnumerable<MeshNode>? latest;
-            private readonly IDisposable source;
+            private readonly Subject<bool> holds = new();
+            private readonly IConnectableObservable<IEnumerable<MeshNode>> served;
+            private readonly IDisposable connection;
 
             public HeldQuery(IObservable<IEnumerable<MeshNode>> live)
-                => source = live.Subscribe(value =>
-                {
-                    bool forward;
-                    lock (sync)
-                    {
-                        latest = value;
-                        forward = !isHeld;
-                    }
-                    if (forward)
-                        served.OnNext(value);
-                }, served.OnError);
-
-            public IObservable<IEnumerable<MeshNode>> Stream => served.Where(v => v is not null).Select(v => v!);
-
-            public void Hold()
             {
-                lock (sync)
-                    isHeld = true;
+                served = Observable.Merge(
+                        live.Select(value => (Value: (IEnumerable<MeshNode>?)value, Held: (bool?)null)),
+                        holds.Select(isHeld => (Value: (IEnumerable<MeshNode>?)null, Held: (bool?)isHeld)))
+                    .Scan((Latest: (IEnumerable<MeshNode>?)null, IsHeld: false, Serve: (IEnumerable<MeshNode>?)null),
+                        (state, e) => e.Held switch
+                        {
+                            null => (e.Value, state.IsHeld, state.IsHeld ? null : e.Value),
+                            true => (state.Latest, true, null),
+                            false => (state.Latest, false, state.Latest),
+                        })
+                    .Where(state => state.Serve is not null)
+                    .Select(state => state.Serve!)
+                    .Replay(1);
+                connection = served.Connect();
             }
 
-            public void Release()
-            {
-                IEnumerable<MeshNode>? value;
-                lock (sync)
-                {
-                    isHeld = false;
-                    value = latest;
-                }
-                if (value is not null)
-                    served.OnNext(value);
-            }
+            public IObservable<IEnumerable<MeshNode>> Stream => served;
 
-            public void Dispose() => source.Dispose();
+            public void Hold() => holds.OnNext(true);
+
+            public void Release() => holds.OnNext(false);
+
+            public void Dispose() => connection.Dispose();
         }
     }
 
     private HoldableQueryCache Cache => Mesh.ServiceProvider.GetRequiredService<HoldableQueryCache>();
+
+    /// <summary>
+    /// The seam's own contract (review of #7013, thread 4335721574), event by event: while held, new
+    /// subscribers and old ones keep the pre-hold value; a release serves the latest live value; a
+    /// refresh after the release supersedes it, and a release after a refresh never re-serves an
+    /// older snapshot. Ordering is decided by the one serialized event stream, not by timing.
+    /// </summary>
+    [Fact]
+    public void TheHoldSeam_ServesInEventOrder()
+    {
+        var live = new Subject<IEnumerable<MeshNode>>();
+        using var gate = new HoldableQueryCache.HeldQuery(live);
+        MeshNode[] Of(string id) => [new MeshNode(id)];
+        string? Served()
+        {
+            string? last = null;
+            using (gate.Stream.Subscribe(v => last = v.Single().Id, _ => { }))
+                return last;
+        }
+
+        live.OnNext(Of("granted"));
+        Assert.Equal("granted", Served());
+        gate.Hold();
+        live.OnNext(Of("revoked"));
+        Assert.Equal("granted", Served());
+        gate.Release();
+        Assert.Equal("revoked", Served());
+        live.OnNext(Of("refreshed"));
+        Assert.Equal("refreshed", Served());
+        gate.Release();
+        Assert.Equal("refreshed", Served());
+        gate.Hold();
+        gate.Release();
+        Assert.Equal("refreshed", Served());
+    }
 
     /// <summary>
     /// 🚨 Thread 4335537984: a permission watcher whose mask was computed under a role's OLD definition
