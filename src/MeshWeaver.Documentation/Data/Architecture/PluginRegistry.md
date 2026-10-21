@@ -103,7 +103,11 @@ and they are independent:
   **explicit set** — every entry `Source/Package`, none a whole source `Source/*`. A deployment that
   names its packages gets exactly those and what they declare in `requires`; set the key `true` to
   keep the baseline beside the set, `false` to suppress it everywhere (an explicit value always
-  wins) — policy `declared-package-set-is-exact`. Before that policy the baseline was added on top
+  wins) — policy `declared-package-set-is-exact`. 🚨 **One exception, the default-apps lane:** a
+  package whose root declares `defaultApp: true` (Threads = `AI`, Examples = `Developer`; both
+  free) is selected on every instance, also beside an explicit set, and is suppressed only by an
+  explicit `InstallPreInstalledPackages=false`. The Inbox and the person app (Settings) are not
+  packages at all — the launcher adds them for every viewer. Before that policy the baseline was added on top
   of any set: a fresh control instance naming five packages selected **48** (measured 2026-10-13) — every `preInstalled` package of the registry — and on its closed
   type set each one's in-mesh NodeTypes parked. See
   [The bootstrap: modules first, then nodes](#the-bootstrap-modules-first-then-nodes).

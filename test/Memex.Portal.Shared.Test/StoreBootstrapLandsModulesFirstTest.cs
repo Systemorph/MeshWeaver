@@ -127,6 +127,12 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <summary>What the boot pass is configured to install — the control instance's explicit set.</summary>
     protected virtual IReadOnlyList<string> BootSet => [$"{SourceName}/EntityViews", $"{SourceName}/Chat"];
 
+    /// <summary>The packages the registry lists with <c>defaultApp: true</c> — none unless a fixture says.</summary>
+    protected virtual IReadOnlyList<string> DefaultApps => [];
+
+    /// <summary><c>PluginCatalog:InstallPreInstalledPackages</c> as CONFIGURED; null = not set.</summary>
+    protected virtual bool? ConfiguredPreInstalled => null;
+
     /// <summary>What every derived fixture adds to the mesh — the stand-in for "the module loaded".</summary>
     protected virtual MeshBuilder Arrange(MeshBuilder builder) => builder;
 
@@ -135,7 +141,8 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     {
         Directory.CreateDirectory(LandingRoot);
         Options.InstallByDefault = [.. BootSet];
-        var registry = new BootstrapRegistry(Requests, ChatRequiresAi, ServesAiBytes);
+        Options.InstallPreInstalledPackagesConfigured = ConfiguredPreInstalled;
+        var registry = new BootstrapRegistry(Requests, ChatRequiresAi, ServesAiBytes, [.. DefaultApps]);
         return Arrange(base.ConfigureMesh(builder))
             .AddPluginCatalog()
             .ConfigureServices(services => services
@@ -170,7 +177,8 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
     /// <c>GET /api/plugins/bundles/{plugin}/{version}</c> — the listing stamped with the source name
     /// the registry stamps, the files exactly as a node-repo source serves them (repo-relative paths).
     /// </summary>
-    private sealed class BootstrapRegistry(ConcurrentQueue<string> requests, string chatRequiresAi, bool servesAiBytes)
+    private sealed class BootstrapRegistry(
+        ConcurrentQueue<string> requests, string chatRequiresAi, bool servesAiBytes, ImmutableHashSet<string> defaultApps)
         : HttpMessageHandler
     {
         private static readonly ImmutableDictionary<string, string> Modules = ImmutableDictionary.CreateRange(
@@ -181,8 +189,9 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
                 KeyValuePair.Create("Chat", ChatModule),
             ]);
 
-        private static PackageManifest Package(string id, bool preInstalled, params string[] requires) => new()
+        private PackageManifest Package(string id, bool preInstalled, params string[] requires) => new()
         {
+            DefaultApp = defaultApps.Contains(id),
             Id = id,
             Name = id,
             Kind = PackageKind.NodeRepo,
@@ -195,7 +204,7 @@ public abstract class StoreBootstrapTestBase(ITestOutputHelper output) : Monolit
             Module = Modules.TryGetValue(id, out var module) ? module : null,
         };
 
-        private readonly ImmutableArray<PackageManifest> Listing =
+        private ImmutableArray<PackageManifest> Listing =>
         [
             Package("Store", preInstalled: false),
             Package("AI", preInstalled: true, "Store@^1.0.0"),
@@ -499,6 +508,93 @@ public class StoreBootstrapCompletesAfterTheRestartTest(ITestOutputHelper output
         order.IndexOf("Store").Should().BeLessThan(order.IndexOf("AI"));
         order.IndexOf("Store").Should().BeLessThan(order.IndexOf("EntityViews"));
         order.IndexOf("AI").Should().BeLessThan(order.IndexOf("Chat"));
+    }
+}
+
+/// <summary>
+/// 🚨 The DEFAULT-APPS lane (<c>defaultApp: true</c>) on an instance that DECLARES its package set:
+/// the registry's other <c>preInstalled</c> packages are still dropped (policy
+/// <c>declared-package-set-is-exact</c>), the default app is not — it is the one named exception.
+/// </summary>
+public class ADefaultAppSurvivesAnExplicitSetTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> DefaultApps => ["Games"];
+
+    [Fact(Timeout = 180_000)]
+    public async Task TheDefaultApp_IsSelectedBesideTheDeclaredSet_AndNoOtherPreInstalledPackageIs()
+    {
+        var pass = await FirstPass(TestContext.Current.CancellationToken);
+        Output.WriteLine($"pass: {pass}");
+
+        pass.Packages.Order(StringComparer.Ordinal).Should().Equal(
+            new[] { "Store", "AI", "EntityViews", "Chat", "Games" }.Order(StringComparer.Ordinal),
+            "the declared set, what it requires, and the one package declaring defaultApp");
+    }
+}
+
+/// <summary>
+/// The switch: an explicit <c>PluginCatalog:InstallPreInstalledPackages=false</c> — "this instance
+/// manages its own content" — suppresses the default apps too, and nothing else does.
+/// </summary>
+public class ADefaultAppIsSuppressedByTheExplicitOffSwitchTest(ITestOutputHelper output) : StoreBootstrapTestBase(output)
+{
+    /// <inheritdoc />
+    protected override IReadOnlyList<string> DefaultApps => ["Games"];
+
+    /// <inheritdoc />
+    protected override bool? ConfiguredPreInstalled => false;
+
+    [Fact(Timeout = 180_000)]
+    public async Task WithTheBaselineSwitchedOff_NoDefaultAppIsSelected()
+    {
+        var pass = await FirstPass(TestContext.Current.CancellationToken);
+        Output.WriteLine($"pass: {pass}");
+
+        pass.Packages.Should().NotContain("Games");
+        pass.Packages.Order(StringComparer.Ordinal).Should().Equal(
+            new[] { "Store", "AI", "EntityViews", "Chat" }.Order(StringComparer.Ordinal),
+            "the declared set is still installed — only the platform's own lanes are off");
+    }
+}
+
+/// <summary>The default-apps decision, pure.</summary>
+public class DefaultAppsSelectionTest
+{
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void DefaultApps_AreOn_UnlessTheBaselineSwitchIsExplicitlyFalse(bool? configured, bool expected) =>
+        InstanceAutoRegistrationService.DefaultAppsApply(configured).Should().Be(expected);
+
+    [Fact]
+    public void AnExplicitSet_DropsTheBaseline_ButKeepsTheDefaultApps()
+    {
+        IReadOnlyList<string> named = ["Plugins/EntityViews", "Plugins/Chat"];
+        InstanceAutoRegistrationService.BaselineApplies(null, named).Should().BeFalse();
+        InstanceAutoRegistrationService.DefaultAppsApply(
+            new PluginCatalogOptions { InstallByDefault = [.. named] }.EffectiveInstallPreInstalledPackages).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void BoundFromConfiguration_AnExplicitSet_FollowsTheKeyOnly(string? key, bool expectedDefaultApps)
+    {
+        var entries = new Dictionary<string, string?>
+        {
+            ["PluginCatalog:InstallByDefault:0"] = "Plugins/EntityViews",
+        };
+        if (key is not null)
+            entries["PluginCatalog:InstallPreInstalledPackages"] = key;
+        var options = new Microsoft.Extensions.Configuration.ConfigurationBuilder()
+            .AddInMemoryCollection(entries).Build()
+            .GetSection(PluginCatalogOptions.SectionName).Get<PluginCatalogOptions>()!;
+
+        InstanceAutoRegistrationService.DefaultAppsApply(options.EffectiveInstallPreInstalledPackages)
+            .Should().Be(expectedDefaultApps);
     }
 }
 
