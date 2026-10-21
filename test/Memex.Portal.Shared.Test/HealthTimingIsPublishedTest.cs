@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
@@ -7,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.ServiceDefaults;
+using Defaults = Memex.Portal.ServiceDefaults.ServiceDefaults;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -45,7 +47,9 @@ namespace Memex.Portal.Shared.Test;
 /// <para>Everything here drives the REAL <see cref="ServiceDefaults.AddDefaultHealthChecks"/> +
 /// <see cref="ServiceDefaults.MapDefaultEndpoints"/> composition over a TestServer, for the same
 /// reason <see cref="HealthCensusTest"/> does: a restatement of the wiring would agree with itself
-/// while the deployment answered something else.</para>
+/// while the deployment answered something else. The one exception is the naming FLOOR from the
+/// cheap side: no live check can be guaranteed to measure under 10 ms of wall clock, so that
+/// direction is pinned on the pure line over fixed durations.</para>
 /// </summary>
 public class HealthTimingIsPublishedTest
 {
@@ -89,19 +93,54 @@ public class HealthTimingIsPublishedTest
     /// 🚨 The NEGATIVE CONTROL that keeps the assertion above from passing on a line that simply
     /// names everything: a cheap check is NOT named — and is still COUNTED, so the line states its
     /// own denominator rather than quietly dropping what it did not print.
+    ///
+    /// <para>🚨 It reads the PURE <see cref="Defaults.TimingLine"/> over a report whose
+    /// durations are FIXED, never a live probe. Whether a check is named is decided by the wall
+    /// clock the framework measured, and the wall clock is not the test's to choose: a check that
+    /// returns <c>Healthy()</c> at once was measured at 15 ms on a loaded CI runner (run
+    /// 39647720589, shard 5) and the line correctly named it, failing a test that had asserted the
+    /// machine is fast. The slow direction stays end-to-end above, because a spin of 80 ms is a
+    /// LOWER bound no scheduler can undercut; the cheap direction has no such bound, so it is pinned
+    /// here, including both sides of the floor.</para>
     /// </summary>
     [Fact]
-    public async Task ACheapCheck_IsCountedRatherThanNamed()
+    public void ACheapCheck_IsCountedRatherThanNamed()
     {
-        var body = await HealthBodyAsync(services => services.AddHealthChecks()
-            .AddCheck("cheap_and_healthy", () => HealthCheckResult.Healthy()));
-
-        var timing = TimingLineOf(body);
+        var timing = Defaults.TimingLine(ReportOf(
+            ("cheap_and_healthy", 2),
+            ("just_under_the_floor", 9.9)));
 
         Assert.DoesNotContain("cheap_and_healthy", timing, StringComparison.Ordinal);
-        Assert.Contains("check(s)", timing, StringComparison.Ordinal);
-        Assert.Contains("under 10ms", timing, StringComparison.Ordinal);
+        Assert.DoesNotContain("just_under_the_floor", timing, StringComparison.Ordinal);
+        Assert.Contains("over 2 check(s)", timing, StringComparison.Ordinal);
+        Assert.Contains("all 2 under 10ms", timing, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// The other side of the same floor, over the same fixed durations: a check AT the floor is
+    /// named with its cost, and the cheap one beside it is still counted, not dropped. Without this
+    /// the test above would pass over a line that names nothing at all.
+    /// </summary>
+    [Fact]
+    public void ACheckAtTheFloor_IsNamedAndTheRestAreCounted()
+    {
+        var timing = Defaults.TimingLine(ReportOf(
+            ("cheap_and_healthy", 2),
+            ("at_the_floor", 10)));
+
+        Assert.Contains("slowest first — at_the_floor 10ms; 1 more under 10ms", timing, StringComparison.Ordinal);
+        Assert.DoesNotContain("cheap_and_healthy", timing, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A report of Healthy, uncensused entries with exactly the given durations, so the naming
+    /// rule is read against a known input rather than against how busy the machine was.
+    /// </summary>
+    private static HealthReport ReportOf(params (string Name, double Ms)[] checks) =>
+        new(checks.ToImmutableDictionary(
+                c => c.Name,
+                c => new HealthReportEntry(HealthStatus.Healthy, null, TimeSpan.FromMilliseconds(c.Ms), null, null)),
+            TimeSpan.FromMilliseconds(checks.Sum(c => c.Ms)));
 
     /// <summary>
     /// 🚨 <b>Line ONE stays the bare status word.</b> The fleet watch takes the first
