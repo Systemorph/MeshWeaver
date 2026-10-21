@@ -455,8 +455,17 @@ public class KernelContainer(IServiceProvider serviceProvider)
         claim?.Bind(executor);
         var deliveryId = Guid.NewGuid().ToString("N");
         var settled = runtime.ExpectSettlement(deliveryId);
+        // 🚨 The CALLER-SUPPLIED-id overload. The typed Observe<T> mints its own id and applies it
+        // AFTER the caller's options, so a WithMessageId there is silently overwritten — the
+        // executor then settles under an id nobody registered, and a timed-out wait held its claim
+        // (and the hub) for ever while normal replies leaked their entries.
+        var reply = hub.Observe(submission, o => o.WithTarget(executor.Address), deliveryId)
+            ?? Observable.Throw<IMessageDelivery>(new InvalidOperationException(
+                $"The kernel executor at {executor.Address} could not be addressed."));
         return ReplyOrSettlement(
-                hub.Observe<SubmitCodeResponse>(submission, o => o.WithTarget(executor.Address).WithMessageId(deliveryId)),
+                reply.Select(d => d as IMessageDelivery<SubmitCodeResponse>
+                    ?? throw new InvalidOperationException(
+                        $"Unexpected reply {d.Message?.GetType().Name ?? "null"} to SubmitCodeRequest")),
                 () => settled)
             // A submission that never reached the executor will never settle there — drop its entry.
             .Do(_ => { }, ex => runtime.ForgetSettlement(deliveryId));

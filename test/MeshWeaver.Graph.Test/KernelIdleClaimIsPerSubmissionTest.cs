@@ -70,8 +70,11 @@ public class KernelIdleClaimIsPerSubmissionTest(ITestOutputHelper output) : Mono
         Submit(activity, Gated);
         await CrossTheIdleWindowWhileGated(ct);
 
+        var host = Mesh.GetHostedHub(new Address(activity), HostedHubCreation.Never);
+        host.Should().NotBeNull("the Activity's kernel host is live while block 2 runs");
         await ReturnValue(activity, "2",
             "block 2 was still running when the idle window passed; its host must not have been reclaimed", ct);
+        await Reclaimed(host!, "block 2 ended, so its claim is released and the idle host is reclaimed", ct);
     }
 
     /// <summary>Three blocks queued at once: the first settles the Activity while the second still runs.</summary>
@@ -86,9 +89,32 @@ public class KernelIdleClaimIsPerSubmissionTest(ITestOutputHelper output) : Mono
         Submit(activity, "3");
         await CrossTheIdleWindowWhileGated(ct);
 
+        var host = Mesh.GetHostedHub(new Address(activity), HostedHubCreation.Never);
+        host.Should().NotBeNull("the Activity's kernel host is live while the blocks run");
         await ReturnValue(activity, "3",
             "every queued block must run to its end; none may be cut off by an earlier block's terminal status", ct);
+        await Reclaimed(host!, "every block ended, so every claim is released and the idle host is reclaimed", ct);
     }
+
+    /// <summary>
+    /// The other half of the claim: once its submission has settled it must be RELEASED, or the host
+    /// is never reclaimed. Steps the idle clock one window per tick until the host is disposing —
+    /// a submission may settle a moment after its return value is visible, so one step could land
+    /// before the release; a claim that is never released never gets there.
+    /// </summary>
+    private Task<bool> Reclaimed(IMessageHub host, string because, CancellationToken ct)
+        => Observable.Interval(TimeSpan.FromMilliseconds(100))
+            .Select(_ =>
+            {
+                clock.Advance(Window);
+                return host.IsDisposing;
+            })
+            .Where(disposing => disposing)
+            .FirstAsync()
+            .Timeout(Bound)
+            .Catch<bool, TimeoutException>(ex => Observable.Throw<bool>(
+                new TimeoutException($"the kernel host was never reclaimed: {because}", ex)))
+            .Await(ct);
 
     private async Task CrossTheIdleWindowWhileGated(CancellationToken ct)
     {
