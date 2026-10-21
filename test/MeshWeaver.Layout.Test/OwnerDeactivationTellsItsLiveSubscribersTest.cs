@@ -1,5 +1,6 @@
 using System;
 using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
@@ -200,6 +201,20 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
                 + "before anything about losing them can be measured");
         var streamId = stream.StreamId;
 
+        // POSITIVE CONTROL for the instrument the re-hydration assertion below relies on: the
+        // first activation's snapshot DOES carry the button by Renders' reading. Without it a
+        // Renders that can never answer true (a key read in the wrong encoding) would make the
+        // "the base frame holds no button" assertion pass on anything.
+        await stream.Select(item => Renders(item.Value, ButtonArea)).Should()
+            .Within(TestTimeouts.Convergence).Match(rendered => rendered,
+                "the first activation rendered the button, and Renders has to be able to see it");
+
+        // 🚨 The hold on the re-activation's render is released in an implicit finally: a failing
+        // assertion before the release below must not leave the render observable open. Completing
+        // the AsyncSubject without a value releases nothing that renders — it only ends the hold —
+        // and is a no-op once the release below has completed it.
+        using var releaseTheHold = Disposable.Create(reActivationRenders.OnCompleted);
+
         owner.GetHostedHub(SynchronizationAddress.Create(streamId), HostedHubCreation.Never)
             .Should().NotBeNull(
                 "the owner hosts one sync/{id} sub-hub per subscriber — without it this test measures "
@@ -299,7 +314,9 @@ public class OwnerDeactivationTellsItsLiveSubscribersTest : HubTestBase
         => store.ValueKind == JsonValueKind.Object
            && store.TryGetProperty(LayoutAreaReference.Areas, out var areas)
            && areas.ValueKind == JsonValueKind.Object
-           && areas.TryGetProperty(area, out var control)
+           // Area keys are stored JSON-SERIALIZED (InstanceCollectionConverter writes each key with
+           // JsonSerializer, quotes included), so the raw area name never matches.
+           && areas.TryGetProperty(LayoutAreaReference.Encode(area), out var control)
            && control.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined);
 
     /// <summary>Every <c>REFUSING …</c> line the owner wrote about <paramref name="streamId"/>.</summary>
