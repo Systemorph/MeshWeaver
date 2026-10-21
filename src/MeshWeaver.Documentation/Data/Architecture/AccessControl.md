@@ -2127,6 +2127,19 @@ node hub retained one. Measured: 20 closed followed subscriptions grew the owner
 registry by exactly 20 before, and by 0 after
 (`OpenSubscriptionEndsWithTheReadTest.ClosedFollowedSubscriptions_DoNotGrowTheOwnerHubsDisposalRegistry`).
 
+**The cache exemption covers the INTERNAL cache only.** A participant ingress re-stamps a
+delivery's identity but keeps the participant's own `Sender`, and `SubscribeRequest` is
+participant-postable. A `cache/…` sender on an ingress-stamped delivery is therefore a claim, and
+that subscription is followed like any other
+(`OpenSubscriptionEndsWithTheReadTest.AParticipantDeliveryClaimingTheCacheSender_IsStillFollowed`).
+
+**A stored type's ownership is followed live.** A stored type's declaration counts only while
+its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
+`DeclarationOf` re-reads that config on every commit to it and on every feed gap. Turning the
+sync two-way, emptying it or deleting it therefore ends an open admission without any write to
+the node itself (`AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned`, with a
+config change that keeps ownership as the negative control).
+
 **The follow runs as the subscriber, and only the follow does.** The owner hub's own work never
 takes the subscriber's identity: a watcher on the node reacts to each write as its writer (or as
 System, or a hub credential), with a direct subscriber followed or not

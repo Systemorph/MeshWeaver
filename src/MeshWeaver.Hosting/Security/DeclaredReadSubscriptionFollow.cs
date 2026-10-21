@@ -67,7 +67,13 @@ public static class DeclaredReadSubscriptionFollow
         // (measured in MeshWeaver.Plugins' OperationRequestOnControlTest: the request hub's control
         // plane then composed its next read as the approver instead of as System, and the DSL
         // prelude it reads was invisible to him).
-        if (string.Equals(delivery.Sender?.Type, MeshNodeCacheIdentity.HubAddressType, StringComparison.Ordinal))
+        //
+        // 🚨 Only the INTERNAL cache (review of #7016, thread 4338481261). A participant ingress
+        // re-stamps the identity but keeps the participant's own Sender, and SubscribeRequest is
+        // participant-postable — so a cache-shaped sender on an ingress-stamped delivery is a claim,
+        // never the cache, and is followed like any other subscriber.
+        if (string.Equals(delivery.Sender?.Type, MeshNodeCacheIdentity.HubAddressType, StringComparison.Ordinal)
+            && !delivery.IsFromParticipant())
             return null;
         var access = owner.ServiceProvider.GetRequiredService<AccessService>();
         // The gate consults a declaration only for a TRUSTED context; without one it admitted nothing

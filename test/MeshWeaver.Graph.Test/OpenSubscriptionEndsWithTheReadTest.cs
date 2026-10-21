@@ -270,6 +270,85 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
+    /// 🚨 Review of #7016, thread 4338481261: the cache exemption trusts only a delivery that did NOT
+    /// enter through a participant ingress. An ingress re-stamps the identity but keeps the
+    /// participant's own <c>Sender</c>, and <see cref="SubscribeRequest"/> is participant-postable —
+    /// so a declaration-admitted subscribe claiming a <c>cache/…</c> sender used to skip the follow,
+    /// and its owner-side stream outlived a revocation or an expiry. NEGATIVE CONTROL: the same
+    /// cache-shaped delivery WITHOUT the ingress stamp (the real internal cache) stays exempt.
+    /// </summary>
+    [HubFact]
+    public async Task AParticipantDeliveryClaimingTheCacheSender_IsStillFollowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("spoofed-cache-link", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        await FollowAs(link, ct); // activates the owner; a client's delivery IS followed
+
+        var owner = OwnerOf(link);
+        MessageDelivery<SubscribeRequest> CacheShaped() => new(
+            new Address(MeshWeaver.Hosting.MeshNodeCacheIdentity.HubAddressType, "mesh-under-test"), owner.Address,
+            new SubscribeRequest("cache-shaped", new MeshNodeReference()), Mesh.JsonSerializerOptions)
+        {
+            AccessContext = Visitor,
+        };
+
+        Assert.Null(MeshWeaver.Hosting.Security.DeclaredReadSubscriptionFollow.Follow(owner, CacheShaped()));
+        var fromAParticipant = (IMessageDelivery<SubscribeRequest>)CacheShaped().FromParticipant(Visitor, "signalr");
+        Assert.True(fromAParticipant.IsFromParticipant(), "PRECONDITION: the delivery carries the ingress stamp");
+        Assert.NotNull(MeshWeaver.Hosting.Security.DeclaredReadSubscriptionFollow.Follow(owner, fromAParticipant));
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7016, thread 4338481338: a STORED type's declaration is honoured only while its
+    /// partition is system-owned (a one-way <c>_GitSync</c> naming a repository), and that ownership
+    /// is followed LIVE. It used to be read once per verdict, so turning the sync two-way withdrew
+    /// nothing from an open subscription until the link itself was written again, although a fresh
+    /// read was already refused. NEGATIVE CONTROL: a change to the sync config that keeps the
+    /// partition system-owned leaves the subscription open, and the next link revision is delivered.
+    /// </summary>
+    [HubFact]
+    public async Task AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        await SeedStoredType(ct);
+        var link = await Issue("ownership-link", StoredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        var direct = Record(DirectStream(ClientAs(Visitor), link));
+        using var open = direct.Connect();
+        await FirstNode(direct, link, "the direct subscription serves the stored type's link", ct);
+
+        // NEGATIVE CONTROL: the sync config changes, the partition stays system-owned.
+        await AsSystemSyncConfig(twoWay: false, ct);
+        await AsSystemUpdate(link, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(2).ToString("O") }, ct);
+        var stillOpen = await direct.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(1.5)),
+                "a sync-config change that keeps the partition system-owned leaves the subscription open", cancellationToken: ct);
+        Assert.Equal(NotificationKind.OnNext, stillOpen.Kind);
+
+        // The partition stops being system-owned — and NOTHING writes the link.
+        await AsSystemSyncConfig(twoWay: true, ct);
+        var end = await direct.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends when the type's partition stops being system-owned", cancellationToken: ct);
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+        Assert.Contains("Access denied", end.Exception!.Message);
+        Assert.Equal(link, MeshWeaver.Layout.AreaErrorClassifier.TryGetAccessDeniedPath(end.Exception));
+    }
+
+    private async Task AsSystemSyncConfig(bool twoWay, CancellationToken ct)
+        => await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream($"pkg/{AccessAssignmentGuard.SyncConfigId}").Update(node => node with
+            {
+                Content = new JsonObject
+                {
+                    ["repositoryUrl"] = "https://github.com/example/pkg",
+                    ["twoWay"] = twoWay,
+                    ["lastSyncAt"] = DateTimeOffset.UtcNow.ToString("O"),
+                },
+            }))
+            .Should().Emit(cancellationToken: ct);
+
+    /// <summary>
     /// 🚨 Review of #7016, thread 4338167103: the follow's shared standing-Read verdict is owned by
     /// the SUBSCRIPTION, never by the owner hub. Its connection used to be registered on the node hub
     /// through the hub overload of <c>AutoConnectOwnedBy</c> — one composite per followed subscribe,

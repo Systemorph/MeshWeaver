@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -648,15 +649,47 @@ public static class DeclaredPointRead
         var partition = nodeType.Split('/', 2)[0];
         if (partition.Length == 0)
             return Observable.Return<PointReadDeclaration?>(null);
-        return hub.ReadStoredNode(AccessAssignmentGuard.SyncConfigPath(partition))
-            .Take(1)
-            .DefaultIfEmpty(null)
-            .SelectMany(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)
+        // 🚨 The partition's OWNERSHIP is a live input too (review of #7016, thread 4338481338). It
+        // was read once per verdict, so a sync config turned two-way, emptied or deleted withdrew
+        // nothing from an admission already established until the node itself was written again —
+        // while a fresh read was already refused. It is re-read on every commit to the config and
+        // on every declared feed gap; the stored read is authoritative, so a withdrawal answers null
+        // (no declaration) and the verdict refuses.
+        return OwnershipChanged(hub, partition)
+            .StartWith(Unit.Default)
+            .Select(_ => hub.ReadStoredNode(AccessAssignmentGuard.SyncConfigPath(partition))
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
+            .Switch()
+            .DistinctUntilChanged()
+            .Select(owned => owned
                 // The type node from its OWNER first, like the instance: a warm mirror must not keep
                 // admitting by a declaration the owner has already withdrawn or narrowed.
                 ? OwnerCurrent(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
                 : Observable.Return<PointReadDeclaration?>(null))
+            .Switch()
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Fires on every commit that can change whether <paramref name="partition"/> is system-owned —
+    /// its <c>_GitSync</c> config written or deleted — and on every declared feed gap (a commit
+    /// made in that window was never announced). Never fires on a host without an invalidation feed.
+    /// </summary>
+    private static IObservable<Unit> OwnershipChanged(IMessageHub hub, string partition)
+    {
+        if (hub.ServiceProvider.GetService<IMeshInvalidationFeed>() is not { } feed)
+            return Observable.Never<Unit>();
+        var syncPath = AccessAssignmentGuard.SyncConfigPath(partition).Trim('/');
+        // The feed's handler is forwarded as-is and the filter runs as an Rx operator, so a fault in
+        // it reaches the verdict's OnError (refused) rather than the feed's delivery callback.
+        var commits = Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Where(change => string.Equals((change.Path ?? "").Trim('/'), syncPath, StringComparison.OrdinalIgnoreCase)
+                             || (string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase)
+                                 && string.Equals((change.Namespace ?? "").Trim('/'), partition, StringComparison.OrdinalIgnoreCase)))
+            .Select(_ => Unit.Default);
+        return commits.Merge(feed.Gaps.Select(_ => Unit.Default));
     }
 
     /// <summary>
