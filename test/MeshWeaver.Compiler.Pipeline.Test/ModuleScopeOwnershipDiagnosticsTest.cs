@@ -41,8 +41,12 @@ internal sealed class CapturedLogs : ILoggerFactory, ILoggerProvider
     }
 }
 
+/// <summary>A second platform type a module may register as a SCOPED factory that answers its singleton —
+/// the aliasing shape the review of #7027 named.</summary>
+public interface IDiagnosedAlias;
+
 /// <summary>A platform class a module registers as a SINGLETON — the generation owns it.</summary>
-public sealed class DiagnosedSingleton : IDisposable
+public sealed class DiagnosedSingleton : IDisposable, IDiagnosedAlias
 {
     private int disposed;
 
@@ -85,7 +89,7 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
 
     /// <summary>A root with a module container beside it; the root forwards the module's two classes the
     /// way the <c>Current</c> route does — owned by the resolving scope (the #6588 defect) or not (the fix).</summary>
-    private static Mesh Build(bool forwardersOwnWhatTheyReturn)
+    private static Mesh Build(bool forwardersOwnWhatTheyReturn, bool scopedAliasOfTheSingleton = false)
     {
         var logs = new CapturedLogs();
         IServiceProvider? module = null;
@@ -104,6 +108,10 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         IServiceCollection services = new ServiceCollection();
         services.AddSingleton<DiagnosedSingleton>();
         services.AddScoped<DiagnosedPerCircuit>();
+        if (scopedAliasOfTheSingleton)
+            // A scoped FACTORY that answers the module's singleton: its owning scope disposes what it
+            // returns, and every caller gets the one instance.
+            services.AddScoped<IDiagnosedAlias>(sp => sp.GetRequiredService<DiagnosedSingleton>());
         module = ModuleServiceProvider.CreateForCallers(services, rootProvider, _ => false, [],
             _ => Array.Empty<Func<ILifetimeScope?, object>>());
         return new Mesh { Logs = logs, Root = rootProvider, Module = module };
@@ -196,6 +204,68 @@ public sealed class ModuleScopeOwnershipDiagnosticsTest
         singleton.Disposed.Should().Be(0);
         perCircuit.Disposed.Should().Be(1, "disposed once, by the module scope its circuit owned");
         mesh.Logs.Ownership.Should().BeEmpty("the correct route writes nothing");
+    }
+
+    /// <summary>
+    /// Review of #7027: ownership is recorded by the container that BUILT an instance, and a factory that
+    /// later returns the same object must not take it over. A scoped factory answering the module's
+    /// singleton is owned by the caller's module scope, which disposes the singleton when the caller ends —
+    /// the #6588 defect inside the module container — and the line must still name it.
+    /// </summary>
+    [Fact]
+    public void AFactoryReturningAnInstanceBuiltElsewhere_DoesNotTakeOverItsOwner()
+    {
+        var mesh = Build(forwardersOwnWhatTheyReturn: false, scopedAliasOfTheSingleton: true);
+        var circuit = mesh.Circuit("circuit-a");
+        var alias = ModuleServiceProvider.ResolveAt(mesh.Module, typeof(IDiagnosedAlias), 0, circuit);
+
+        circuit.Dispose();
+
+        ((DiagnosedSingleton)alias).Disposed.Should().Be(1, "the defect is really in place: the caller's module scope disposed the module singleton");
+        mesh.Logs.Ownership.Should().ContainSingle(w => w.Message.Contains("MeshWeaver#6588"),
+            "the singleton's owner is still the module container, so the scope disposing it is named");
+    }
+
+    /// <summary>Review of #7027: a scoped factory answering one shared object through two callers is one
+    /// caller sharing another's instance — the caller recorded first stays the owner.</summary>
+    [Fact]
+    public void AScopedFactoryAnsweringOneObjectToTwoCallers_Warns()
+    {
+        var mesh = Build(forwardersOwnWhatTheyReturn: false, scopedAliasOfTheSingleton: true);
+        using var a = mesh.Circuit("circuit-a");
+        using var b = mesh.Circuit("circuit-b");
+
+        var ofA = ModuleServiceProvider.ResolveAt(mesh.Module, typeof(IDiagnosedAlias), 0, a);
+        var ofB = ModuleServiceProvider.ResolveAt(mesh.Module, typeof(IDiagnosedAlias), 0, b);
+
+        ofB.Should().BeSameAs(ofA, "the factory answers the one singleton to both callers");
+        mesh.Logs.Ownership.Should().ContainSingle(w => w.Message.Contains("MeshWeaver#6584") && w.Message.Contains("circuit-b"),
+            "circuit B was served an instance whose scoped registration circuit A resolved first");
+    }
+
+    /// <summary>Review of #7027: the #6588 line is claimed when a scope ENDS — so the scope that ends first
+    /// is named whichever resolved first — and once per registration, whatever the caller's tag.</summary>
+    [Fact]
+    public void TheScopeThatEndsFirst_IsNamed_AndARegistrationIsReportedOnce()
+    {
+        var mesh = Build(forwardersOwnWhatTheyReturn: true);
+        var a = mesh.Circuit("circuit-a");
+        var b = mesh.Circuit("circuit-b");
+        a.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
+        b.Resolve<IServiceProvider>().GetRequiredService<DiagnosedSingleton>();
+        a.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
+        b.Resolve<IServiceProvider>().GetRequiredService<DiagnosedPerCircuit>();
+
+        b.Dispose();
+
+        var afterB = mesh.Logs.Ownership;
+        afterB.Should().HaveCount(2, "B ended first and disposed both instances it was forwarded");
+        afterB.Should().OnlyContain(w => w.Message.Contains("circuit-b"));
+
+        a.Dispose();
+
+        mesh.Logs.Ownership.Should().HaveCount(2,
+            "once per registration: A's end — another caller, another caller tag — adds nothing");
     }
 
     /// <summary>The happy path through the REAL wiring — a generic host, the mesh's module registry, a

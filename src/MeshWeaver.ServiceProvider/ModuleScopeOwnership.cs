@@ -46,7 +46,11 @@ public sealed class ModuleInstanceOwners
     public void Record(object instance, ILifetimeScope? owner, string ownerName)
     {
         ArgumentNullException.ThrowIfNull(instance);
-        owners.AddOrUpdate(instance, new Owner(owner is null ? null : new WeakReference<ILifetimeScope>(owner), ownerName));
+        // FIRST record wins: the container that BUILT the instance records it before any factory that
+        // later returns the same object can (the build completes inside that factory's resolve). A factory
+        // re-recording it would take over its owner and hide the very disposal this registry exists to name
+        // (review of #7027).
+        owners.TryAdd(instance, new Owner(owner is null ? null : new WeakReference<ILifetimeScope>(owner), ownerName));
     }
 
     /// <summary>Whether <paramref name="instance"/> is a module-owned instance that
@@ -65,6 +69,9 @@ public sealed class ModuleInstanceOwners
     /// <summary>True the first time <paramref name="key"/> is reported — what keeps a defect that repeats
     /// on every circuit from flooding the log.</summary>
     internal bool FirstReport(string key) => ImmutableInterlocked.Update(ref reported, set => set.Add(key));
+
+    /// <summary>Whether <paramref name="key"/> was reported already.</summary>
+    internal bool Reported(string key) => Volatile.Read(ref reported).Contains(key);
 
     private sealed record Owner(WeakReference<ILifetimeScope>? Scope, string Name);
 }
@@ -116,18 +123,26 @@ public static class ModuleScopeOwnership
         var scope = context.ActivationScope;
         if (!owners.IsOwnedByAnotherThan(instance, scope, out var ownerName))
             return;
-        var service = context.Service.Description;
-        if (!owners.FirstReport($"6588|{context.Registration.Id}|{ownerName}"))
+        // Claimed when the scope ENDS, by registration alone (review of #7027): claimed at resolve, the first
+        // scope to RESOLVE took the report and a scope ending before it disposed the instance silently; keyed
+        // by the owner too, every caller tag was a new key — repeated lines and a key retained per circuit.
+        // Once reported, later activations subscribe nothing, so a live defect costs no handler per circuit.
+        var key = $"6588|{context.Registration.Id}";
+        if (owners.Reported(key))
             return;
-        var logger = owners.Logger;
+        var service = context.Service.Description;
         var instanceType = instance.GetType().FullName;
         var scopeTag = scope.Tag;
-        scope.CurrentScopeEnding += (_, _) => logger.LogWarning(
-            "{Marker} Scope {Scope} is ending and will dispose {Service} ({Instance}), which {Owner} owns — "
-            + "a registration owned by the resolving scope returned a module-owned instance, so a scope that "
-            + "does not own it disposes it under its owner and every other user of it (MeshWeaver#6588). "
-            + "Reported once per registration and owner.",
-            Marker, scopeTag, service, instanceType, ownerName);
+        scope.CurrentScopeEnding += (_, _) =>
+        {
+            if (owners.FirstReport(key))
+                owners.Logger.LogWarning(
+                    "{Marker} Scope {Scope} is ending and will dispose {Service} ({Instance}), which {Owner} owns — "
+                    + "a registration owned by the resolving scope returned a module-owned instance, so a scope that "
+                    + "does not own it disposes it under its owner and every other user of it (MeshWeaver#6588). "
+                    + "Reported once per registration.",
+                    Marker, scopeTag, service, instanceType, ownerName);
+        };
     }
 
     internal static ILogger LoggerFrom(ILoggerFactory? factory) =>
@@ -175,7 +190,9 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
             owners?.Record(instance, scope, caller is null ? $"module scope '{scope.Tag}'" : $"the module scope owned by '{caller.Tag}'");
         if (registration.Lifetime is not CurrentScopeLifetime)
             return;
-        scoped.AddOrUpdate(instance, new ScopedOwner(caller is null ? null : new WeakReference<ILifetimeScope>(caller), caller?.Tag?.ToString()));
+        // FIRST record wins (review of #7027): a scoped factory answering one shared object to callers A then
+        // B must keep A as the owner, so B being served it is reported rather than silently re-owned.
+        scoped.TryAdd(instance, new ScopedOwner(caller is null ? null : new WeakReference<ILifetimeScope>(caller), caller?.Tag?.ToString()));
         // The defect's own shape: a SCOPED registration built in the module container's ROOT scope is one
         // instance per generation, shared by every circuit, request and hub, and built against no caller.
         if (caller is null && scope is ISharingLifetimeScope sharing && ReferenceEquals(sharing.RootLifetimeScope, sharing)

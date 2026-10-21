@@ -497,6 +497,24 @@ factory-activated registrations owned by the resolving scope are watched, becaus
 return an instance something else built. Reflection-activated and provided-instance registrations
 cannot transfer ownership.
 
+Two rules keep the readings honest:
+- **The first record wins.** The container that built an instance records it before any factory that
+  later returns the same object can, because the build completes inside that factory's resolve. A
+  factory that re-recorded it would take over the owner and hide the disposal. A scoped factory that
+  answers one shared object to callers A and then B keeps A as the owner, so B is reported.
+- **The #6588 line is claimed when a scope ends**, keyed by the registration alone. Claimed at resolve,
+  the first scope to resolve took the report, and a scope that ended before it disposed silently. Keyed
+  by owner, every caller tag was a new key. Once a registration is reported, later activations subscribe
+  nothing, so a live defect costs no handler per circuit.
+
+**Cost and retention.** Nothing in the diagnostics is static. The registry and each module container's
+diagnostics are instances. Both maps are `ConditionalWeakTable`s, and owners are held through
+`WeakReference`s, so no entry outlives its instance or keeps a scope alive. The set of reported keys
+grows only when a defect fires, bounded by the registrations. On the happy path the work per NEW
+activation of a watched registration is an `IDisposable` type check plus a lock-free table read. The
+work per new shared module instance is one table insert. The work per scoped module service served
+through a forwarder is one lookup.
+
 `ModuleScopeOwnershipDiagnosticsTest` re-introduces each defect deliberately and shows that its line
 fires (the negative control):
 - for #6584, the scoped registration is resolved off the module container with no caller, the route
