@@ -52,6 +52,8 @@ public class ADefaultAppDeclarationSurvivesDiscoveryTest
     [Fact(Timeout = 60_000)]
     public async Task OnlyALiteralTrue_MarksTheManifestAsADefaultApp()
     {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+
         var listed = await Listed();
 
         listed.Single(m => m.Id == "Threads").DefaultApp.Should().BeTrue("the authored declaration reaches the manifest");
