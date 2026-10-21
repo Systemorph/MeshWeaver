@@ -457,7 +457,10 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var open = DeclaredPointRead.ObservePointRead(Mesh, sat, Carol).Replay(1);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, sat, Carol);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: carol reads the satellite of a node she reads", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
 
         await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => Mesh.GetMeshNodeStream(sat).Update(node => node with { MainNode = "p/secret" }))
@@ -466,6 +469,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.False(await Verdict(sat, Carol, ct), "a fresh verdict right after the acknowledged repoint reads the OWNER's revision");
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "the ALREADY-OPEN verdict re-decides the rule on the new revision", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the repoint to a private MainNode is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -485,7 +490,10 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         var grant = (await AsSystem(AssignmentNodeFactory.UserRole(Dave.ObjectId, "Viewer", "g"), ct)).Path;
         var open = DeclaredPointRead.ObservePointRead(Mesh, sat, Dave).Replay(1);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, sat, Dave);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the grant admits dave through the rule", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
 
         await Mesh.ServiceProvider.GetRequiredService<AccessService>()
             .RunAsSystem(() => NodeFactory.DeleteNode(grant))
@@ -493,6 +501,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
 
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "revoking the grant withdraws the rule's earlier verdict on the SAME subscription", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the revocation is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -509,10 +519,10 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         await AsSystem(new MeshNode("doc", "s") { NodeType = "Markdown", Name = "doc" }, ct);
         var stale = (await AsSystem(new MeshNode("stale", "s") { NodeType = StaleType, Name = "stale", MainNode = "s/doc" }, ct)).Path;
 
-        var open = DeclaredPointRead.ObservePointRead(Mesh, stale, Dave).Replay(1);
-        using var connection = open.Connect();
-        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
-            "the fold's first value (dave holds nothing) re-decides the rule's stale first answer", cancellationToken: ct);
+        var tri = PointReadProbe.Open(Mesh, stale, Dave);
+        using var triConnection = tri.Connect();
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the fold's first value (dave holds nothing) re-decides the rule's stale first answer — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -534,8 +544,11 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
 
         var open = DeclaredPointRead.ObservePointRead(Mesh, "owned", Erin).Replay(1);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, "owned", Erin);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v,
             "POSITIVE CONTROL: a platform admin reads a system-owned Space", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
         Assert.False(await Verdict("owned", Dave, ct), "NEGATIVE CONTROL: a non-admin does not");
 
         await Mesh.ServiceProvider.GetRequiredService<AccessService>()
@@ -544,6 +557,8 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
 
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "removing the one-way sync withdraws the admin's read on the SAME subscription", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the one-way sync's removal is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -875,15 +890,22 @@ public class DeclaredPointReadDenyAnonymousTest(ITestOutputHelper output) : Mono
 }
 
 /// <summary>
-/// 🚨 Review of #7013 (thread 4333751887): each re-evaluation of a rule is bounded by the
-/// permission-establishment budget. A rule that grants, then never answers its re-evaluation, turns
-/// the open verdict false (undetermined) once the budget runs out — never leaves the earlier grant in
-/// force. A short mesh timeout keeps the budget small; the idle subscription is not timed out.
+/// 🚨 Review of #7013 (threads 4333751887, 4333874256, 4334011102, 4334011138): each re-evaluation of
+/// a rule is bounded by the permission-establishment budget, and a pending re-check withdraws the
+/// grant. The rule here GRANTS until the verdict is established (every initial signal answered),
+/// then the test switches it into an explicit STALLED phase — so nothing but the commits the test
+/// makes can start a re-check. A short mesh timeout keeps the budget at 1.5 s.
 /// </summary>
 public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
     private const string StallType = "Kiosk/Stall";
     private static readonly AccessContext Dave = new() { ObjectId = "dave", Name = "dave" };
+
+    /// <summary>
+    /// The initial signals of a rule-governed node with no MainNode: the first evaluation, and the
+    /// first value of the node fold, the Admin fold and the role catalog.
+    /// </summary>
+    private const int InitialEvaluations = 4;
 
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
         .WithMeshType(typeof(TicketContent), nameof(TicketContent))
@@ -895,67 +917,103 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
             HubConfiguration = config => config.WithContentType<TicketContent>(),
         })
         .ConfigureServices(services => services
-            .AddSingleton<INodeTypeAccessRule>(new GrantsOnceThenStallsRule(StallType))
+            .AddSingleton<ControlledRule>()
+            .AddSingleton<INodeTypeAccessRule>(sp => sp.GetRequiredService<ControlledRule>())
             .AddSingleton(new MeshOperationOptions { Timeout = TimeSpan.FromSeconds(6) }));
 
-    private sealed class GrantsOnceThenStallsRule(string nodeType) : INodeTypeAccessRule
+    /// <summary>Grants until <see cref="Stall"/>; afterwards never answers. Counts its evaluations.</summary>
+    private sealed class ControlledRule : INodeTypeAccessRule
     {
+        private int stalled;
         private int calls;
-        public string NodeType => nodeType;
+        private readonly BehaviorSubject<int> evaluations = new(0);
+        public string NodeType => StallType;
         public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<int> Evaluations => evaluations;
+        public void Stall() => Volatile.Write(ref stalled, 1);
         public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
-            => Interlocked.Increment(ref calls) == 1 ? Observable.Return(true) : Observable.Never<bool>();
+        {
+            evaluations.OnNext(Interlocked.Increment(ref calls));
+            return Volatile.Read(ref stalled) == 1 ? Observable.Never<bool>() : Observable.Return(true);
+        }
     }
 
-    [Fact(Timeout = 60000)]
-    public async Task AStalledReEvaluation_EndsTheGrant()
+    private ControlledRule Rule => Mesh.ServiceProvider.GetRequiredService<ControlledRule>();
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+    /// <summary>Creates the node, opens both verdicts, waits until they are ESTABLISHED (granted, every initial signal answered), then stalls the rule.</summary>
+    private async Task<(IConnectableObservable<bool> open, IConnectableObservable<PermissionCheckOutcome> tri, IDisposable connections)> EstablishThenStall(
+        string partition, CancellationToken ct)
     {
-        var ct = TestContext.Current.CancellationToken;
-        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        await SeedTopLevel(new MeshNode("k") { NodeType = "Markdown", Name = "k" });
-        var stall = (await access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", "k") { NodeType = StallType, Name = "stall" }))
+        await SeedTopLevel(new MeshNode(partition) { NodeType = "Markdown", Name = partition });
+        var stall = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", partition) { NodeType = StallType, Name = "stall" }))
             .Should().Emit(cancellationToken: ct))!.Path;
-
         var open = DeclaredPointRead.ObservePointRead(Mesh, stall, Dave).Replay(1);
-        using var connection = open.Connect();
-        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule's first answer grants", cancellationToken: ct);
-
-        // An access input on the node's scope commits: the rule is re-asked, and never answers.
-        await access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole("someone", "Viewer", "k")))
-            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
-
-        await open.Should().Within(TimeSpan.FromSeconds(30)).Match(v => !v,
-            "a re-evaluation that never answers is undetermined once the budget runs out — refused", cancellationToken: ct);
+        var tri = PointReadProbe.Open(Mesh, stall, Dave);
+        var connections = new System.Reactive.Disposables.CompositeDisposable(open.Connect(), tri.Connect());
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule grants while initialising", cancellationToken: ct);
+        await Rule.Evaluations.Should().Within(TimeSpan.FromSeconds(20)).Match(n => n >= InitialEvaluations,
+            "every initial signal has been answered (granted) before the stalled phase begins", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "established: granted", cancellationToken: ct);
+        Rule.Stall();
+        return (open, tri, connections);
     }
 
     /// <summary>
-    /// 🚨 Review of #7013 (thread 4333874256): signals arriving FASTER than the budget restart the
-    /// evaluation each time, so a per-evaluation deadline alone never fires and the earlier grant
-    /// survived as long as the signals kept coming. The verdict fails closed while a re-check is
-    /// pending: it is withdrawn on the first signal, while the signals are still arriving.
+    /// After the stalled phase begins, ONE acknowledged access commit starts a re-check that never
+    /// answers. The grant is withdrawn at once (pending — a separate assertion), and the re-check's
+    /// own DEADLINE then classifies it: the timeout-classified undetermined outcome, specifically.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AStalledReEvaluation_EndsInTheDeadlinesVerdict()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (open, tri, connections) = await EstablishThenStall("k", ct);
+        using var _ = connections;
+
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole("someone", "Viewer", "k")))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit("the access commit is acknowledged", cancellationToken: ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsPending,
+            "the commit withdraws the grant while its re-check is pending", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsTimedOut,
+            "the stalled re-check ends in the DEADLINE's verdict — undetermined, classified from its timeout", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// After the stalled phase begins, access commits arrive every 300 ms for 3 s — twice the 1.5 s
+    /// budget, each ACKNOWLEDGED (a writer error fails the test). The grant is withdrawn within the
+    /// first budget, while the commits are still arriving, and is never granted again while they
+    /// continue.
     /// </summary>
     [Fact(Timeout = 60000)]
     public async Task SignalsFasterThanTheBudget_CannotKeepAnOldGrant()
     {
         var ct = TestContext.Current.CancellationToken;
-        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        await SeedTopLevel(new MeshNode("q") { NodeType = "Markdown", Name = "q" });
-        var stall = (await access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", "q") { NodeType = StallType, Name = "stall" }))
-            .Should().Emit(cancellationToken: ct))!.Path;
+        var (open, tri, connections) = await EstablishThenStall("q", ct);
+        using var _ = connections;
 
-        var open = DeclaredPointRead.ObservePointRead(Mesh, stall, Dave).Replay(1);
-        using var connection = open.Connect();
-        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule's first answer grants", cancellationToken: ct);
-
-        // ~10 s of access commits on the node's scope, one every 300 ms — five times faster than the
-        // 1.5 s budget, so no single re-evaluation ever reaches its deadline.
-        using var storm = Observable.Interval(TimeSpan.FromMilliseconds(300)).Take(33)
-            .Select(i => access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole($"storm{i}", "Viewer", "q"))))
+        const int commits = 10;
+        var outcomes = tri.Replay();
+        using var recording = outcomes.Connect();
+        var writer = Observable.Interval(TimeSpan.FromMilliseconds(300)).Take(commits)
+            .Select(i => Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole($"storm{i}", "Viewer", "q"))).Take(1))
             .Concat()
-            .Subscribe(_ => { }, _ => { });
+            .ToList()
+            .Replay(1);
+        using var writing = writer.Connect();
 
-        await open.Should().Within(TimeSpan.FromSeconds(4)).Match(v => !v,
-            "the grant is withdrawn WHILE the signals keep arriving — never kept alive by a restarted deadline", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromMilliseconds(1200)).Match(v => !v,
+            "the grant is withdrawn within the first budget, while the commits keep arriving", cancellationToken: ct);
+        var written = await writer.Should().Within(TimeSpan.FromSeconds(20)).Emit("the writer's commits, each acknowledged", cancellationToken: ct);
+        Assert.Equal(commits, written.Count);
+
+        var seen = await outcomes.TakeUntil(Observable.Return(0L, System.Reactive.Concurrency.Scheduler.Default)).ToList()
+            .Should().Within(TimeSpan.FromSeconds(10)).Emit(cancellationToken: ct);
+        var afterWithdrawal = seen.SkipWhile(o => !PointReadProbe.IsPending(o)).ToList();
+        Assert.NotEmpty(afterWithdrawal);
+        Assert.DoesNotContain(afterWithdrawal, o => o.IsGranted);
     }
 }
 
@@ -977,11 +1035,26 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
             new MeshNode(PermissionEvaluator.AdminScope) { NodeType = "Markdown", Name = "Admin" },
             AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope),
             // The ops GROUP is a platform admin; gina is admin only through her membership.
-            AssignmentNodeFactory.UserRole(Ops, "Admin", PermissionEvaluator.AdminScope))
+            AssignmentNodeFactory.UserRole(Ops, "Admin", PermissionEvaluator.AdminScope),
+            // A satellite type: Read is Read on the MainNode, decided through the permission fold.
+            new MeshNode("Sat", "Kiosk") { NodeType = "NodeType", Name = SatType, Content = new NodeTypeDefinition() })
         .AddSpaceType()
         .ConfigureServices(services => services
             .AddSingleton(sp => new LossyFeed(sp.GetRequiredService<MeshWeaver.Hosting.InProcessMeshChangeFeed>()))
-            .AddSingleton<IMeshInvalidationFeed>(sp => sp.GetRequiredService<LossyFeed>()));
+            .AddSingleton<IMeshInvalidationFeed>(sp => sp.GetRequiredService<LossyFeed>())
+            .AddSingleton<INodeTypeAccessRule>(sp => new OneVerdict(
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(SatType, sp.GetRequiredService<IMessageHub>()))));
+
+    private const string SatType = "Kiosk/Sat";
+    private static readonly AccessContext Hank = new() { ObjectId = "hank", Name = "hank" };
+    private static readonly AccessContext Ivan = new() { ObjectId = "ivan", Name = "ivan" };
+
+    private sealed class OneVerdict(INodeTypeAccessRule inner) : INodeTypeAccessRule
+    {
+        public string NodeType => inner.NodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => inner.HasAccess(context, userId).Take(1);
+    }
 
     /// <summary>The process feed, able to lose an event, strip its node type, or declare a gap.</summary>
     private sealed class LossyFeed(IMeshInvalidationFeed inner) : IMeshInvalidationFeed
@@ -1040,12 +1113,100 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
 
         var open = Open(Mesh, "owned1", Frank);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, "owned1", Frank);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: frank, a platform admin, reads the system-owned Space", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
 
         Feed.Drop(grant);
         await Delete(grant, ct);
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "the Admin fold's convergence alone withdraws the read", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the admin revocation is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Thread 4334011007: the fold resolves a custom role from ONE value of the role catalog and
+    /// does not re-emit when a definition changes. Here the role's commit never reaches this process's
+    /// feed (its re-check would have read the old role); only the role catalog's convergence can say
+    /// the role lost Read — and the existing subscription ends in a DEFINITIVE denial.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ARoleLosingRead_IsHonouredWhenTheRoleCatalogConverges()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode("rp") { NodeType = "Markdown", Name = "rp" });
+        await SeedTopLevel(new MeshNode("rd") { NodeType = "Markdown", Name = "rd" });
+        var role = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("Peek", "rp")
+        {
+            NodeType = SecurityQueries.RoleNodeType,
+            Name = "Peek",
+            Content = new Role { Id = "Peek", Permissions = Permission.Read },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("doc", "rd") { NodeType = "Markdown", Name = "doc" }))
+            .Should().Emit(cancellationToken: ct);
+        var sat = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("sat", "rd") { NodeType = SatType, Name = "sat", MainNode = "rd/doc" }))
+            .Should().Emit(cancellationToken: ct))!.Path;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(Hank.ObjectId, "Peek", "rd")))
+            .Should().Emit(cancellationToken: ct);
+
+        var open = Open(Mesh, sat, Hank);
+        using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, sat, Hank);
+        using var triConnection = tri.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: the custom role grants Read", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
+
+        Feed.Drop(role);
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(role).Update(node => node with
+            {
+                Content = node.ContentAs<Role>(Mesh.JsonSerializerOptions)! with { Permissions = Permission.None },
+            }))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit("the role loses Read — acknowledged", cancellationToken: ct);
+
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the role catalog's convergence re-decides the rule — a DEFINITIVE denial, not the pending withdrawal", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Thread 4334078688: the DELETION form of a role change. ivan is a platform admin only through
+    /// a custom role <c>operator</c> (Permission.All) granted on <c>Admin</c>, and reads a system-owned
+    /// Space through that. The role node lives at <c>Roles/operator</c> — outside every scope the
+    /// typeless-deletion filter watches — and its deletion arrives TYPELESS. The role catalog's own
+    /// emission re-decides the read, and the same subscription SETTLES on a definitive denial.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ACustomRoleDeletedOutsideTheScopes_EndsTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SystemOwnedSpace("owned4", ct);
+        await SeedTopLevel(new MeshNode("Roles") { NodeType = "Markdown", Name = "Roles" });
+        var role = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("operator", "Roles")
+        {
+            NodeType = SecurityQueries.RoleNodeType,
+            Name = "operator",
+            Content = new Role { Id = "operator", Permissions = Permission.All },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(Ivan.ObjectId, "operator", PermissionEvaluator.AdminScope)))
+            .Should().Emit(cancellationToken: ct);
+        await Mesh.IsGlobalAdmin(Ivan.ObjectId).Should().Within(TimeSpan.FromSeconds(20)).Match(a => a,
+            "PRECONDITION: the custom role makes ivan a platform admin", cancellationToken: ct);
+
+        var open = Open(Mesh, "owned4", Ivan);
+        using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, "owned4", Ivan);
+        using var triConnection = tri.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: ivan reads the system-owned Space", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
+
+        Feed.StripType(role);
+        await Delete(role, ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the role's deletion SETTLES on a definitive denial — not just the pending withdrawal", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
     }
 
     /// <summary>
@@ -1060,7 +1221,10 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
 
         var open = Open(Mesh, "owned2", Erin);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, "owned2", Erin);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: erin, a platform admin, reads the system-owned Space", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
 
         Feed.Drop(sync);
         await Delete(sync, ct);
@@ -1071,6 +1235,8 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
         Feed.DeclareGap();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "the gap re-decides the open verdict on the same subscription", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the lost sync deletion is honoured after the gap — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -1092,12 +1258,17 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
 
         var open = Open(Mesh, "owned3", Gina);
         using var connection = open.Connect();
+        var tri = PointReadProbe.Open(Mesh, "owned3", Gina);
+        using var triConnection = tri.Connect();
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: gina is a platform admin through her membership", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
 
         Feed.StripType(membership);
         await Delete(membership, ct);
         await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
             "the typeless deletion of her membership withdraws the read", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the membership's deletion is honoured — a DEFINITIVE denial on the tri-state stream, not the pending withdrawal", cancellationToken: ct);
     }
 
     /// <summary>
@@ -1126,6 +1297,29 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
         Assert.False(DeclaredPointRead.AffectsRead(new MeshChangeEvent("other", "page", "other/page", MeshChangeKind.Updated, null, 2, DateTimeOffset.UtcNow), scopes),
             "a typeless UPDATE is not a deletion");
     }
+}
+
+/// <summary>
+/// The TRI-STATE live standard read (<see cref="DeclaredPointRead.ObserveStandardRead"/>), held open
+/// beside a page's boolean verdict: the boolean maps a pending re-check to <c>false</c>, so a
+/// revocation test that reads only the boolean can pass on the withdrawal before the re-check has
+/// answered. A revocation is proven by a DEFINITIVE denial here.
+/// </summary>
+internal static class PointReadProbe
+{
+    public static IConnectableObservable<PermissionCheckOutcome> Open(IMessageHub mesh, string path, AccessContext viewer)
+        => DeclaredPointRead.ObserveStandardRead(mesh, path, viewer).Replay(1);
+
+    /// <summary>A verdict reached and refused — neither granted nor undetermined (pending, failed or timed out).</summary>
+    public static bool IsDefinitiveDenial(PermissionCheckOutcome outcome) => !outcome.IsGranted && !outcome.IsUndetermined;
+
+    /// <summary>The undetermined outcome a per-evaluation DEADLINE produces (classified from its TimeoutException).</summary>
+    public static bool IsTimedOut(PermissionCheckOutcome outcome)
+        => outcome.IsUndetermined && outcome.UndeterminedReason!.Contains(nameof(TimeoutException), StringComparison.Ordinal);
+
+    /// <summary>The withdrawal a re-check signal produces while that re-check is pending.</summary>
+    public static bool IsPending(PermissionCheckOutcome outcome)
+        => outcome.IsUndetermined && outcome.UndeterminedReason!.Contains("being re-decided", StringComparison.Ordinal);
 }
 
 /// <summary>The content of the test's declared node types — a REGISTERED type, so every hub that reads it can type it.</summary>

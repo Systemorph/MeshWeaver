@@ -2124,6 +2124,13 @@ stays live in every input:
   - every declared gap (`IMeshInvalidationFeed.Gaps`), because commits lost in a gap are never
     replayed.
 
+  The custom-role catalog's own emissions are a signal too. The fold resolves a role from one value
+  of that catalog per evaluation, and it does not re-emit when a role definition changes. A Role
+  commit's re-check can therefore read the old role, and a role deleted outside the node's scopes
+  (with a typeless event) matches no feed filter. The catalog converging afterwards re-decides
+  both: a changed definition and a deletion. Its first value establishes the verdict and withdraws
+  nothing.
+
   A revoked grant therefore withdraws a rule's earlier grant on the same subscription, with no
   timer or poll.
 - **Fail closed while pending.** Every signal after the verdict is established withdraws it

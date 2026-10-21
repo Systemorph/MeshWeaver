@@ -274,7 +274,13 @@ public static class DeclaredPointRead
         var gaps = feed is null
             ? Observable.Never<bool>()
             : feed.Gaps.Select(_ => true);
-        return folds.Append(commits).Append(gaps).Merge();
+        // The custom-role catalog's own emissions: the fold resolves a role from ONE value of that
+        // catalog per evaluation and does not re-emit when a definition changes, so a Role commit's
+        // re-check can read the old role. The catalog converging afterwards is the signal that
+        // re-decides it. Its first value establishes (no withdrawal), like a fold's.
+        var roles = PermissionEvaluator.ObserveRoleCatalog(hub)
+            .Select((_, index) => index > 0);
+        return folds.Append(commits).Append(gaps).Append(roles).Merge();
     }
 
     /// <summary>
