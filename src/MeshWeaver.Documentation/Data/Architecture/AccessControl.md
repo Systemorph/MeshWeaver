@@ -2096,6 +2096,23 @@ listing. It decides the way `RlsNodeValidator` decides a point read, live:
    is never re-decided through the declaration.
 4. Only a definitive denial consults `DeclaredPointRead.Admits`.
 
+Steps 2 and 3 are `DeclaredPointRead.ObserveStandardRead(hub, path, viewer)`. It is **the** live
+standard-read path, and any seam that must follow a read for a whole subscription builds on it. It
+stays live in every input:
+
+- **The node is the owner's current revision.** Storage is only an existence probe, because a
+  stored snapshot may trail a write the owner has acknowledged and never re-emits. Each revision
+  the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
+  or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
+- **A rule is re-asked.** Its contract is one verdict: the lease takes the first, and so does
+  `SpaceAccessRule`. So the path asks it again in three cases: on every revision, whenever the
+  viewer's live fold on the node or its `MainNode` re-emits, and whenever an access input
+  (`AccessAssignment`, `GroupMembership`, `PartitionAccessPolicy`, `Role`) commits on the
+  `IMeshInvalidationFeed`. A revoked grant therefore withdraws a rule's earlier grant on the same
+  subscription, with no timer or poll.
+- **Every evaluation is re-established as the viewer** at the moment it subscribes. A
+  re-evaluation triggered on another thread never inherits that thread's context.
+
 The RLS validator's own-scope shortcut (a user reading inside the partition named after them) is
 not mirrored. Where the fold does not already grant such a read, the verdict errs closed.
 

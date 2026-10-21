@@ -110,6 +110,9 @@ public static class DeclaredPointRead
     /// A rule that DENIES outranks a grant the fold would give; a rule that GRANTS admits; a rule
     /// that faults or answers nothing is UNDETERMINED, which fails closed and is never re-decided
     /// through the declaration — exactly as the RLS validator treats it.</para>
+    ///
+    /// <para>🚨 <b>Live in all of its inputs</b> (review of #7013). The standard leg is
+    /// <see cref="ObserveStandardRead"/> — see there for what it follows.</para>
     /// </summary>
     /// <param name="hub">The hub asking.</param>
     /// <param name="path">The exact path being read.</param>
@@ -123,14 +126,7 @@ public static class DeclaredPointRead
             // The instance-level anonymous switch outranks every rule, as at the RLS validator.
             if (string.IsNullOrEmpty(path) || AnonymousAccess.Refuses(hub.ServiceProvider, userId, viewer))
                 return Observable.Return(false);
-            var identity = viewer ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous };
-            var access = hub.ServiceProvider.GetService<AccessService>();
-            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead));
-            return hub.ReadStoredNode(path)
-                .Take(1)
-                .DefaultIfEmpty(null)
-                .Select(node => access.RunAs(identity, () => StandardRead(hub, path, node, identity, userId, logger)))
-                .Switch()
+            return ObserveStandardRead(hub, path, viewer)
                 .Select(outcome => outcome.IsGranted
                     ? Observable.Return(true)
                     // "We could not check" is never laundered into a declaration question.
@@ -141,32 +137,139 @@ public static class DeclaredPointRead
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
-                    logger?.LogWarning(ex, "The point-read verdict of {Path} for {User} could not be decided — refused", path, userId);
+                    Logger(hub)?.LogWarning(ex, "The point-read verdict of {Path} for {User} could not be decided — refused", path, userId);
                     return Observable.Return(false);
                 });
         });
     }
 
     /// <summary>
-    /// The standard leg of a point read, live: the type's Read rule when one governs the node,
-    /// otherwise the permission fold — with all three terminals represented (a fault or an empty
-    /// completion is <see cref="PermissionCheckOutcome.Undetermined(string)"/>, never a verdict).
-    /// Composed by the caller under the viewer's context.
+    /// 🚨 <b>THE live standard-read path</b> of a point read of <paramref name="path"/> for
+    /// <paramref name="viewer"/>: the type's <see cref="INodeTypeAccessRule"/> for Read when one
+    /// governs, otherwise the permission fold — re-decided whenever an input of that decision
+    /// changes, for the whole subscription. Use it wherever a verdict must FOLLOW the read (an open
+    /// page, an admitted subscription), never to filter a listing.
+    ///
+    /// <list type="bullet">
+    ///   <item><description><b>The node is the OWNER's current revision</b>, never a stored snapshot:
+    ///     storage is only an existence probe (a point read of an absent node opens no live read), then
+    ///     every revision the owner acknowledges re-selects the rule and re-supplies its
+    ///     <see cref="NodeValidationContext.Node"/> — a repointed <see cref="MeshNode.MainNode"/> or a
+    ///     changed <see cref="MeshNode.NodeType"/> decides the very next verdict. A node the owner no
+    ///     longer has is <see cref="PermissionCheckOutcome.Denied"/>.</description></item>
+    ///   <item><description><b>A rule is re-ASKED, because its contract is one verdict</b>
+    ///     (<c>NodeTypeAccessRuleSet</c>'s lease takes the first; <c>SpaceAccessRule</c> does too). It is
+    ///     asked again on every revision, whenever the viewer's live permission fold on the node or its
+    ///     <see cref="MeshNode.MainNode"/> re-emits, and whenever an access input commits anywhere in
+    ///     the mesh (<see cref="IMeshInvalidationFeed"/>: an <c>AccessAssignment</c>,
+    ///     <c>GroupMembership</c>, <c>PartitionAccessPolicy</c> or <c>Role</c>) — so a revoked grant
+    ///     withdraws a rule's earlier grant on the SAME subscription. No timer, no poll.</description></item>
+    ///   <item><description><b>Every evaluation runs AS <paramref name="viewer"/></b>, each one
+    ///     re-established under <see cref="ImpersonationScopeExtensions.RunAs{T}(AccessService?, AccessContext?, Func{IObservable{T}})"/>
+    ///     at the moment it subscribes — a re-evaluation triggered from another thread never inherits
+    ///     that thread's context.</description></item>
+    ///   <item><description><b>Fail closed.</b> A rule or fold that faults or completes without a
+    ///     verdict is <see cref="PermissionCheckOutcome.Undetermined(string)"/>.</description></item>
+    /// </list>
     /// </summary>
-    private static IObservable<PermissionCheckOutcome> StandardRead(
-        IMessageHub hub, string path, MeshNode? node, AccessContext viewer, string userId, ILogger? logger)
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="path">The exact path being read.</param>
+    /// <param name="viewer">The viewer's context, flags and all; null is the anonymous viewer.</param>
+    public static IObservable<PermissionCheckOutcome> ObserveStandardRead(IMessageHub hub, string path, AccessContext? viewer)
     {
-        var rule = node is null ? null : NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read);
-        var verdicts = rule is null
-            ? hub.CheckPermission(path, userId, Permission.Read)
-            : Observable.Defer(() => rule.HasAccess(new NodeValidationContext
-            {
-                Operation = NodeOperation.Read,
-                Node = node!,
-                AccessContext = viewer,
-                IsPointRead = true,
-            }, userId));
-        return verdicts
+        ArgumentNullException.ThrowIfNull(hub);
+        return Observable.Defer(() =>
+        {
+            if (string.IsNullOrEmpty(path))
+                return Observable.Return(PermissionCheckOutcome.Denied);
+            var userId = SubjectOf(viewer);
+            var identity = viewer ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous };
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var logger = Logger(hub);
+            return hub.ReadStoredNode(path)
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .SelectMany(stored => stored is null
+                    ? Observable.Return(PermissionCheckOutcome.Denied)
+                    : OwnerCurrent(hub, access, path)
+                        .DistinctUntilChanged(node => node?.Version ?? long.MinValue)
+                        .Select(node => node is null
+                            ? Observable.Return(PermissionCheckOutcome.Denied)
+                            : StandardRead(hub, access, path, node, identity, userId, logger))
+                        .Switch())
+                .DistinctUntilChanged()
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "The Read check of {Path} for {User} could not reach a verdict — undetermined, refused", path, userId);
+                    return Observable.Return(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' failed ({ex.GetType().Name})"));
+                });
+        });
+    }
+
+    /// <summary>The standard leg for ONE owner revision: the governing rule, re-asked live, or the live fold.</summary>
+    private static IObservable<PermissionCheckOutcome> StandardRead(
+        IMessageHub hub, AccessService? access, string path, MeshNode node, AccessContext viewer, string userId, ILogger? logger)
+    {
+        if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read) is not { } rule)
+            return Classified(access.RunAs(viewer, () => hub.CheckPermission(path, userId, Permission.Read)), path, userId, logger);
+        var context = new NodeValidationContext
+        {
+            Operation = NodeOperation.Read,
+            Node = node,
+            AccessContext = viewer,
+            IsPointRead = true,
+        };
+        return RuleInputsChanged(hub, access, node, viewer, userId)
+            .StartWith(System.Reactive.Unit.Default)
+            .Select(_ => Classified(
+                access.RunAs(viewer, () => Observable.Defer(() => rule.HasAccess(context, userId)).Take(1)),
+                path, userId, logger))
+            .Switch();
+    }
+
+    /// <summary>
+    /// Every input a Read rule's verdict can rest on, as a signal: the viewer's live permission fold
+    /// on the node and on its <see cref="MeshNode.MainNode"/> (each subscribed AS the viewer), and every
+    /// access-input commit the mesh's invalidation feed reports. A fold that faults faults this signal,
+    /// which the caller reports as undetermined — never a silent stop.
+    /// </summary>
+    private static IObservable<System.Reactive.Unit> RuleInputsChanged(
+        IMessageHub hub, AccessService? access, MeshNode node, AccessContext viewer, string userId)
+    {
+        var folds = new[] { node.Path, node.MainNode }
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p!, userId))
+                .DistinctUntilChanged()
+                .Skip(1)
+                .Select(_ => System.Reactive.Unit.Default));
+        var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+        var commits = feed is null
+            ? Observable.Never<System.Reactive.Unit>()
+            : Observable.Create<System.Reactive.Unit>(observer => feed.Subscribe(change =>
+                {
+                    if (IsAccessInput(change))
+                        observer.OnNext(System.Reactive.Unit.Default);
+                }))
+                // Off the feed's delivery: the re-ask subscribes folds, which must not run inside it.
+                .ObserveOn(System.Reactive.Concurrency.TaskPoolScheduler.Default);
+        return folds.Append(commits).Merge();
+    }
+
+    /// <summary>Whether a committed change is an input of access decisions.</summary>
+    private static bool IsAccessInput(MeshChangeEvent change)
+        => change.NodeType is { } type
+           && (string.Equals(type, AccessAssignmentNodeType, StringComparison.Ordinal)
+               || string.Equals(type, SecurityQueries.GroupMembershipNodeType, StringComparison.Ordinal)
+               || string.Equals(type, PartitionAccessPolicyNodeType, StringComparison.Ordinal)
+               || string.Equals(type, SecurityQueries.RoleNodeType, StringComparison.Ordinal));
+
+    private const string AccessAssignmentNodeType = "AccessAssignment";
+    private const string PartitionAccessPolicyNodeType = "PartitionAccessPolicy";
+
+    /// <summary>A verdict stream with all three terminals represented: a fault or an empty completion is undetermined.</summary>
+    private static IObservable<PermissionCheckOutcome> Classified(IObservable<bool> verdicts, string path, string userId, ILogger? logger)
+        => verdicts
             .Select(PermissionCheckOutcome.FromVerdict)
             .Catch((Exception ex) =>
             {
@@ -176,7 +279,9 @@ public static class DeclaredPointRead
             .Select(outcome => (PermissionCheckOutcome?)outcome)
             .DefaultIfEmpty()
             .Select(outcome => outcome ?? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' completed without a verdict"));
-    }
+
+    private static ILogger? Logger(IMessageHub hub)
+        => hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead));
 
     /// <summary>
     /// What <paramref name="declaration"/> admits on a node whose content is <paramref name="content"/>,

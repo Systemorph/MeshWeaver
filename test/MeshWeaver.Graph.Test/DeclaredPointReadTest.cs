@@ -75,6 +75,7 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             TypeNode(SealedType, declaration: null),
             TypeNode(SealedDeclaredType, Declaration),
             TypeNode(OpenType, declaration: null),
+            TypeNode(SatType, declaration: null),
             // carol holds Viewer on the rule partition — the fold grants her every node there.
             AssignmentNodeFactory.UserRole(Carol.ObjectId, "Viewer", RulePartition),
             // Readable by anyone in a browser, NOT through the API: the shape that makes the
@@ -86,7 +87,21 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             .AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType))
             .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedType, verdict: false))
             .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedDeclaredType, verdict: false))
-            .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(OpenType, verdict: true)));
+            .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(OpenType, verdict: true))
+            // The real satellite rule (Read delegates to the MainNode), held to the rule contract's
+            // ONE verdict exactly as the lease does — a rule's own stream never makes a verdict live.
+            .AddSingleton<INodeTypeAccessRule>(sp => new FirstVerdictRule(
+                new MeshWeaver.Graph.Security.SatelliteAccessRule(SatType, sp.GetRequiredService<IMessageHub>()))));
+
+    /// <summary>A satellite type: Read is Read on the node's MainNode.</summary>
+    private const string SatType = "Kiosk/Sat";
+
+    private sealed class FirstVerdictRule(INodeTypeAccessRule inner) : INodeTypeAccessRule
+    {
+        public string NodeType => inner.NodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => inner.HasAccess(context, userId).Take(1);
+    }
 
     /// <summary>A type whose Read rule always DENIES.</summary>
     private const string SealedType = "Kiosk/Sealed";
@@ -400,6 +415,62 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.False(await access.RunAs(Dave, () => DeclaredPointRead.ObservePointRead(Mesh, page, token)).Take(1)
                 .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct),
             "an AMBIENT browser does not unclamp a token viewer");
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333662636): the rule is selected and fed from the OWNER's current
+    /// revision, never a stored snapshot. Repointing a satellite's MainNode from a node carol reads to
+    /// a private one closes her read — on a fresh verdict right after the acknowledged write, and on
+    /// the subscription that was already open.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ThePagesVerdict_FollowsTheOwnersRevision_OfTheNodeTheRuleReads()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode(RulePartition) { NodeType = "Markdown", Name = RulePartition });
+        await SeedTopLevel(new MeshNode("p") { NodeType = "Markdown", Name = "p" });
+        await AsSystem(new MeshNode("doc", RulePartition) { NodeType = "Markdown", Name = "doc" }, ct);
+        await AsSystem(new MeshNode("secret", "p") { NodeType = "Markdown", Name = "secret" }, ct);
+        var sat = (await AsSystem(new MeshNode("sat", RulePartition) { NodeType = SatType, Name = "sat", MainNode = $"{RulePartition}/doc" }, ct)).Path;
+
+        var open = DeclaredPointRead.ObservePointRead(Mesh, sat, Carol).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: carol reads the satellite of a node she reads", cancellationToken: ct);
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream(sat).Update(node => node with { MainNode = "p/secret" }))
+            .Should().Emit(cancellationToken: ct);
+
+        Assert.False(await Verdict(sat, Carol, ct), "a fresh verdict right after the acknowledged repoint reads the OWNER's revision");
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "the ALREADY-OPEN verdict re-decides the rule on the new revision", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333662701): a rule answers ONE verdict, so the live path re-asks
+    /// it when its inputs change. A grant that admits dave through the satellite rule, then revoked,
+    /// withdraws the verdict on the SAME subscription.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ThePagesVerdict_ThroughARule_EndsWhenTheGrantIsRevoked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedTopLevel(new MeshNode("g") { NodeType = "Markdown", Name = "g" });
+        await AsSystem(new MeshNode("doc", "g") { NodeType = "Markdown", Name = "doc" }, ct);
+        var sat = (await AsSystem(new MeshNode("sat", "g") { NodeType = SatType, Name = "sat", MainNode = "g/doc" }, ct)).Path;
+        Assert.False(await Verdict(sat, Dave, ct), "PRECONDITION: dave holds nothing on g");
+
+        var grant = (await AsSystem(AssignmentNodeFactory.UserRole(Dave.ObjectId, "Viewer", "g"), ct)).Path;
+        var open = DeclaredPointRead.ObservePointRead(Mesh, sat, Dave).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the grant admits dave through the rule", cancellationToken: ct);
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => NodeFactory.DeleteNode(grant))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "revoking the grant withdraws the rule's earlier verdict on the SAME subscription", cancellationToken: ct);
     }
 
     private Task<bool> Verdict(string path, AccessContext viewer, CancellationToken ct)
