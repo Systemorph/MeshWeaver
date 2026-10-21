@@ -2106,29 +2106,45 @@ stays live in every input:
   or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
 - **A rule is re-asked.** Its contract is one verdict: the lease takes the first, and so does
   `SpaceAccessRule`. So the path asks it again on every revision and whenever the viewer's live
-  fold on the node or its `MainNode` emits, including the fold's first value. A revocation committed
-  while the watches were being set up is already in that first value, and no later commit reports
-  it. The rule is also asked again whenever the `IMeshInvalidationFeed` reports an access input
-  that can reach this node:
+  fold on the node, on its `MainNode` or on `Admin` emits, including the fold's first value. A
+  revocation committed while the watches were being set up is already in that first value, and no
+  later commit reports it. The `Admin` fold is watched because a rule may read the platform-admin
+  predicate (`SpaceAccessRule`), and that fold can converge after the commit that changed it was
+  signalled. The rule is also asked again when the `IMeshInvalidationFeed` reports:
   - a grant (`{scope}/_Access/…`), a partition policy (`{scope}/_Policy`) or a sync config
     (`{scope}/_GitSync`) on an ancestor-or-self of the node or its `MainNode`, on the root, or on
     `Admin`. These are matched by namespace and id, so a deletion that carries no node type still
     counts. A one-way `_GitSync` is what admits a platform admin to a system-owned Space.
-  - any group membership or role definition.
+  - any group membership or role definition;
+  - conservatively, any deletion whose event carries no node type (the delete pipeline publishes
+    the path alone), since it may have removed a membership or a role;
+  - every declared gap (`IMeshInvalidationFeed.Gaps`), because commits lost in a gap are never
+    replayed.
 
   A revoked grant therefore withdraws a rule's earlier grant on the same subscription, with no
   timer or poll.
-- **Each evaluation is bounded.** It is one verdict, held to the permission-establishment budget.
-  A re-evaluation that never answers turns undetermined (refused). The idle live subscription
-  itself is never timed out.
-- **Off every source gate.** Each signal (revision, fold emission, feed commit) is re-emitted as
-  its own pool work item, in order, before anything is evaluated. This is the `HopOffGate` shape,
-  never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs inside
-  the gate that signalled it, and no thread is held per open subscription.
-- **Fan-out cost.** Each open subscription holds the folds on the node and on its `MainNode`, plus
-  one feed handler. On every commit anywhere in the mesh, that handler runs a string match against
-  the node's scope set (a few entries). Only a commit that can reach the node costs a re-evaluation:
-  one rule call, and an in-flight evaluation is superseded by the next (`Switch`).
+- **Fail closed while pending.** Every signal after the verdict is established withdraws it
+  first. The verdict becomes undetermined ("re-check pending", refused), and only that re-check's
+  own answer can grant again. So a stalled re-check stays refused, and a stream of signals cannot
+  keep an earlier grant alive by restarting the check that would replace it. Each check is also
+  one verdict held to the permission-establishment budget. The idle subscription is never timed
+  out. The signals that establish the verdict (the first check, each fold's first value) withdraw
+  nothing, so opening a page does not blink.
+- **The cost of failing closed.** An open page may show "no access" for the length of one
+  re-check after a matching signal, even when the answer comes back unchanged. The filters are
+  kept tight for that reason: an access input matches only on the node's own scopes, and an
+  ordinary content change never matches. The broad matches are the ones the event alone cannot
+  narrow: group memberships, roles, typeless deletions and gaps. Typeless deletions are the
+  broadest, because the delete pipeline publishes every deletion without its type. Publishing
+  the pre-delete type there would narrow them to memberships and roles.
+- **Off every source gate.** Each signal (revision, fold emission, feed commit, gap) is re-emitted
+  as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
+  shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs
+  inside the gate that signalled it, and no thread is held per open subscription.
+- **Fan-out cost.** Each open subscription holds up to three folds (node, `MainNode`, `Admin`),
+  one feed handler and one gap subscription. On every commit anywhere in the mesh, that handler
+  runs a string match against the node's scope set (a few entries). Only a matching commit costs
+  a re-evaluation: one rule call, and an in-flight evaluation is superseded by the next (`Switch`).
 - **Every evaluation is re-established as the viewer** at the moment it subscribes. A
   re-evaluation triggered on another thread never inherits that thread's context.
 

@@ -197,7 +197,8 @@ public static class DeclaredPointRead
                         .Select(node => node is null
                             ? Observable.Return(PermissionCheckOutcome.Denied)
                             : StandardRead(hub, access, path, node, identity, userId, logger))
-                        .Switch())
+                        .Select(evaluation => (evaluation, withdraw: true))
+                        .SwitchFailClosed(path))
                 .DistinctUntilChanged()
                 .Catch((Exception ex) =>
                 {
@@ -227,11 +228,11 @@ public static class DeclaredPointRead
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
         return OffTheGate(RuleInputsChanged(hub, access, node, viewer, userId)
-                .StartWith(System.Reactive.Unit.Default))
-            .Select(_ => Classified(
+                .StartWith(false))
+            .Select(withdraw => (evaluation: Classified(
                 access.RunAs(viewer, () => Observable.Defer(() => rule.HasAccess(context, userId)).Take(1).Timeout(budget)),
-                path, userId, logger))
-            .Switch();
+                path, userId, logger), withdraw))
+            .SwitchFailClosed(path);
     }
 
     /// <summary>
@@ -245,26 +246,59 @@ public static class DeclaredPointRead
     /// these watches were being established is already in that first value, and no commit will
     /// arrive for it later.</para>
     /// </summary>
-    private static IObservable<System.Reactive.Unit> RuleInputsChanged(
+    private static IObservable<bool> RuleInputsChanged(
         IMessageHub hub, AccessService? access, MeshNode node, AccessContext viewer, string userId)
     {
-        var folds = new[] { node.Path, node.MainNode }
+        // The Admin fold too: a rule may read the platform-admin predicate (SpaceAccessRule's
+        // IsGlobalAdmin), and that fold can converge AFTER the commit that changed it was signalled.
+        var folds = new[] { node.Path, node.MainNode, PermissionEvaluator.AdminScope }
             .Where(p => !string.IsNullOrEmpty(p))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p!, userId))
                 .DistinctUntilChanged()
-                .Select(_ => System.Reactive.Unit.Default));
+                // The INITIAL value is a re-check (a revocation during set-up is already in it) but
+                // not a withdrawal: it belongs to establishing the verdict, not to a later change, so
+                // opening a page does not blink. Every later value withdraws.
+                .Select((_, index) => index > 0));
         var scopes = ReadScopes(node);
         var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         var commits = feed is null
-            ? Observable.Never<System.Reactive.Unit>()
-            : Observable.Create<System.Reactive.Unit>(observer => feed.Subscribe(change =>
+            ? Observable.Never<bool>()
+            : Observable.Create<bool>(observer => feed.Subscribe(change =>
             {
                 if (AffectsRead(change, scopes))
-                    observer.OnNext(System.Reactive.Unit.Default);
+                    observer.OnNext(true);
             }));
-        return folds.Append(commits).Merge();
+        // A gap is a declared hole in the feed: commits made elsewhere in that window were never
+        // announced here, so any of them may have moved this decision.
+        var gaps = feed is null
+            ? Observable.Never<bool>()
+            : feed.Gaps.Select(_ => true);
+        return folds.Append(commits).Append(gaps).Merge();
     }
+
+    /// <summary>
+    /// 🚨 <b>Fail closed while pending.</b> Switches to each new evaluation, and when the signal that
+    /// started it WITHDRAWS (a change after the verdict was established) and a verdict has already
+    /// been emitted, the evaluation starts with an undetermined "re-check pending" outcome — only
+    /// its own answer can grant again. A stall therefore stays refused, and a stream of signals can
+    /// never keep an earlier grant alive by restarting the evaluation that would have replaced it.
+    /// The signals that ESTABLISH a verdict (the first evaluation, a fold's initial value) withdraw
+    /// nothing, so opening a page does not blink.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> SwitchFailClosed(
+        this IObservable<(IObservable<PermissionCheckOutcome> evaluation, bool withdraw)> evaluations, string path)
+        => Observable.Defer(() =>
+        {
+            var emitted = 0;
+            var pending = PermissionCheckOutcome.Undetermined($"the Read check on '{path}' is being re-decided");
+            return evaluations
+                .Select(next => next.withdraw && Volatile.Read(ref emitted) == 1
+                    ? next.evaluation.StartWith(pending)
+                    : next.evaluation)
+                .Switch()
+                .Do(_ => Volatile.Write(ref emitted, 1));
+        });
 
     /// <summary>
     /// Re-emits each notification of <paramref name="source"/> as its OWN pool work item, in order —
@@ -289,7 +323,7 @@ public static class DeclaredPointRead
     /// ancestor-or-self of its path and of its <see cref="MeshNode.MainNode"/>, the root, and the
     /// <c>Admin</c> partition (where the platform-admin predicate lives).
     /// </summary>
-    private static System.Collections.Immutable.ImmutableHashSet<string> ReadScopes(MeshNode node)
+    internal static System.Collections.Immutable.ImmutableHashSet<string> ReadScopes(MeshNode node)
     {
         var scopes = System.Collections.Immutable.ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         scopes.Add("");
@@ -308,10 +342,11 @@ public static class DeclaredPointRead
     /// <paramref name="scopes"/>: a grant (<c>{scope}/_Access/…</c>), a partition policy
     /// (<c>{scope}/_Policy</c>) or a sync config (<c>{scope}/_GitSync</c> — a one-way sync is what
     /// admits a platform admin to a system-owned Space) ON one of those scopes, matched by namespace
-    /// and id so a deletion that carries no node type still counts; and any group membership or role
-    /// definition, which can widen or narrow a principal anywhere.
+    /// and id so a deletion that carries no node type still counts; any group membership or role
+    /// definition, which can widen or narrow a principal anywhere; and — conservatively — any
+    /// deletion whose node type is unknown, since it may have been a membership or a role.
     /// </summary>
-    private static bool AffectsRead(MeshChangeEvent change, System.Collections.Immutable.ImmutableHashSet<string> scopes)
+    internal static bool AffectsRead(MeshChangeEvent change, System.Collections.Immutable.ImmutableHashSet<string> scopes)
     {
         if (string.Equals(change.NodeType, SecurityQueries.GroupMembershipNodeType, StringComparison.Ordinal)
             || string.Equals(change.NodeType, SecurityQueries.RoleNodeType, StringComparison.Ordinal))
@@ -333,7 +368,9 @@ public static class DeclaredPointRead
             || string.Equals(change.Id, PartitionPolicyId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase))
             return scopes.Contains(ns);
-        return false;
+        // A deletion that carries NO node type (the delete pipeline's DeleteAndPublish publishes the
+        // path alone) may have removed a group membership or a role — conservatively a signal.
+        return change.Kind == MeshChangeKind.Deleted && string.IsNullOrEmpty(change.NodeType);
     }
 
     private const string AccessAssignmentNodeType = "AccessAssignment";

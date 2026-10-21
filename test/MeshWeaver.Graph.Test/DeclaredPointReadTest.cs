@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using MeshWeaver.Data;
@@ -925,6 +926,199 @@ public class DeclaredPointReadBudgetTest(ITestOutputHelper output) : MonolithMes
 
         await open.Should().Within(TimeSpan.FromSeconds(30)).Match(v => !v,
             "a re-evaluation that never answers is undetermined once the budget runs out — refused", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Review of #7013 (thread 4333874256): signals arriving FASTER than the budget restart the
+    /// evaluation each time, so a per-evaluation deadline alone never fires and the earlier grant
+    /// survived as long as the signals kept coming. The verdict fails closed while a re-check is
+    /// pending: it is withdrawn on the first signal, while the signals are still arriving.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task SignalsFasterThanTheBudget_CannotKeepAnOldGrant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await SeedTopLevel(new MeshNode("q") { NodeType = "Markdown", Name = "q" });
+        var stall = (await access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("stall", "q") { NodeType = StallType, Name = "stall" }))
+            .Should().Emit(cancellationToken: ct))!.Path;
+
+        var open = DeclaredPointRead.ObservePointRead(Mesh, stall, Dave).Replay(1);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "the rule's first answer grants", cancellationToken: ct);
+
+        // ~10 s of access commits on the node's scope, one every 300 ms — five times faster than the
+        // 1.5 s budget, so no single re-evaluation ever reaches its deadline.
+        using var storm = Observable.Interval(TimeSpan.FromMilliseconds(300)).Take(33)
+            .Select(i => access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole($"storm{i}", "Viewer", "q"))))
+            .Concat()
+            .Subscribe(_ => { }, _ => { });
+
+        await open.Should().Within(TimeSpan.FromSeconds(4)).Match(v => !v,
+            "the grant is withdrawn WHILE the signals keep arriving — never kept alive by a restarted deadline", cancellationToken: ct);
+    }
+}
+
+/// <summary>
+/// The live standard-read path's signals that the mesh's own state does not replay: the Admin fold
+/// converging after the commit, a declared feed GAP, and a deletion whose event carries no node type
+/// (review of #7013, threads 4333874317, 4333874386, 4333874432). An invalidation feed that can lose,
+/// gap and strip events stands in for a cross-process feed.
+/// </summary>
+public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Ops = "Groups/ops";
+    private static readonly AccessContext Erin = new() { ObjectId = "erin", Name = "erin" };
+    private static readonly AccessContext Frank = new() { ObjectId = "frank", Name = "frank" };
+    private static readonly AccessContext Gina = new() { ObjectId = "gina", Name = "gina" };
+
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => ConfigureMeshBase(builder)
+        .AddMeshNodes(
+            new MeshNode(PermissionEvaluator.AdminScope) { NodeType = "Markdown", Name = "Admin" },
+            AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope),
+            // The ops GROUP is a platform admin; gina is admin only through her membership.
+            AssignmentNodeFactory.UserRole(Ops, "Admin", PermissionEvaluator.AdminScope))
+        .AddSpaceType()
+        .ConfigureServices(services => services
+            .AddSingleton(sp => new LossyFeed(sp.GetRequiredService<MeshWeaver.Hosting.InProcessMeshChangeFeed>()))
+            .AddSingleton<IMeshInvalidationFeed>(sp => sp.GetRequiredService<LossyFeed>()));
+
+    /// <summary>The process feed, able to lose an event, strip its node type, or declare a gap.</summary>
+    private sealed class LossyFeed(IMeshInvalidationFeed inner) : IMeshInvalidationFeed
+    {
+        private ImmutableHashSet<string> dropped = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+        private ImmutableHashSet<string> untyped = ImmutableHashSet.Create<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly System.Reactive.Subjects.Subject<ChangeFeedGap> gaps = new();
+
+        public void Drop(string path) => ImmutableInterlocked.Update(ref dropped, set => set.Add(path));
+        public void StripType(string path) => ImmutableInterlocked.Update(ref untyped, set => set.Add(path));
+        public void DeclareGap() => gaps.OnNext(new ChangeFeedGap("test", DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow, "injected"));
+
+        public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
+            => inner.Subscribe(change =>
+            {
+                if (Volatile.Read(ref dropped).Contains(change.Path))
+                    return;
+                handler(Volatile.Read(ref untyped).Contains(change.Path) ? change with { NodeType = null } : change);
+            }, filter);
+
+        public IObservable<ChangeFeedGap> Gaps => inner.Gaps.Merge(gaps);
+    }
+
+    private LossyFeed Feed => Mesh.ServiceProvider.GetRequiredService<LossyFeed>();
+    private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+    private async Task<string> SystemOwnedSpace(string name, CancellationToken ct)
+    {
+        await SeedTopLevel(new MeshNode(name) { NodeType = "Space", Name = name, Content = new MeshWeaver.Graph.Space() });
+        return (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode(AccessAssignmentGuard.SyncConfigId, name)
+        {
+            NodeType = "Markdown",
+            Content = new JsonObject { ["repositoryUrl"] = $"https://github.com/example/{name}" },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+    }
+
+    private Task Delete(string path, CancellationToken ct)
+        => Access.RunAsSystem(() => NodeFactory.DeleteNode(path)).Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
+
+    private static IConnectableObservable<bool> Open(IMessageHub mesh, string path, AccessContext viewer)
+        => DeclaredPointRead.ObservePointRead(mesh, path, viewer).Replay(1);
+
+    /// <summary>
+    /// 🚨 Thread 4333874317: <c>SpaceAccessRule</c> reads the platform-admin predicate, i.e. the
+    /// viewer's live <c>Admin</c> fold. Here the revoking commit never reaches this process's feed
+    /// (the commit-triggered check had nothing new to read); only the Admin fold, converging, can
+    /// say the admin grant is gone — and it withdraws the verdict on the same subscription.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AnAdminRevocation_SeenOnlyByTheAdminFold_EndsTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SystemOwnedSpace("owned1", ct);
+        var grant = (await Access.RunAsSystem(() => NodeFactory.CreateNode(
+            AssignmentNodeFactory.UserRole(Frank.ObjectId, "Admin", PermissionEvaluator.AdminScope))).Should().Emit(cancellationToken: ct))!.Path;
+
+        var open = Open(Mesh, "owned1", Frank);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: frank, a platform admin, reads the system-owned Space", cancellationToken: ct);
+
+        Feed.Drop(grant);
+        await Delete(grant, ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "the Admin fold's convergence alone withdraws the read", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Thread 4333874386: a GAP declares that commits were lost. The one-way sync's deletion is
+    /// lost here (the open verdict stays granted — the loss is real), and the gap withdraws it.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AFeedGap_ReDecidesTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sync = await SystemOwnedSpace("owned2", ct);
+
+        var open = Open(Mesh, "owned2", Erin);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: erin, a platform admin, reads the system-owned Space", cancellationToken: ct);
+
+        Feed.Drop(sync);
+        await Delete(sync, ct);
+        Assert.False(await DeclaredPointRead.ObservePointRead(Mesh, "owned2", Erin).Take(1)
+                .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct),
+            "PRECONDITION: a fresh check already refuses — the sync is gone");
+
+        Feed.DeclareGap();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "the gap re-decides the open verdict on the same subscription", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Thread 4333874432: the delete pipeline publishes a deletion with NO node type. gina is a
+    /// platform admin only through her group membership; that membership's deletion arrives typeless,
+    /// and the open verdict is withdrawn on the same subscription.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ATypelessMembershipDeletion_EndsTheRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SystemOwnedSpace("owned3", ct);
+        await SeedTopLevel(new MeshNode("Groups") { NodeType = "Markdown", Name = "Groups" });
+        var membership = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("gina_Membership", Ops)
+        {
+            NodeType = "GroupMembership",
+            Content = new GroupMembership { Member = Gina.ObjectId, Groups = [new MembershipEntry { Group = Ops }] },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+
+        var open = Open(Mesh, "owned3", Gina);
+        using var connection = open.Connect();
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: gina is a platform admin through her membership", cancellationToken: ct);
+
+        Feed.StripType(membership);
+        await Delete(membership, ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v,
+            "the typeless deletion of her membership withdraws the read", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// The filter itself: a typeless DELETION anywhere is a signal (it may have been a membership or
+    /// a role); access inputs outside the node's scopes and ordinary content changes are not, so an
+    /// open page does not blink for them.
+    /// </summary>
+    [Fact]
+    public void TheSignalFilter_IsTight_ButCountsTypelessDeletions()
+    {
+        var scopes = DeclaredPointRead.ReadScopes(new MeshNode("x", "acme/space") { MainNode = "acme/doc" });
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("Groups/ops/gina_Membership"), scopes), "a typeless deletion");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/_GitSync"), scopes), "a sync config on the node's partition, typeless");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/space/_Access/bob_Access"), scopes), "a grant on an ancestor, typeless");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("Admin/_Access/bob_Access"), scopes), "a grant on Admin");
+        Assert.False(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("other/_Access/bob_Access"), scopes), "a grant on an unrelated scope");
+        Assert.False(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("other/_GitSync"), scopes), "a sync config elsewhere");
+        Assert.False(DeclaredPointRead.AffectsRead(new MeshChangeEvent("acme", "page", "acme/page", MeshChangeKind.Updated, "Markdown", 2, DateTimeOffset.UtcNow), scopes),
+            "an ordinary content change");
+        Assert.False(DeclaredPointRead.AffectsRead(new MeshChangeEvent("other", "page", "other/page", MeshChangeKind.Updated, null, 2, DateTimeOffset.UtcNow), scopes),
+            "a typeless UPDATE is not a deletion");
     }
 }
 
