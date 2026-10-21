@@ -125,6 +125,16 @@ a drain hook and a runaway stop, not a throttle; the CPU half of a cell is bound
 slot: a cell that runs another cell and waits for it completes, and a plain cell completes while the
 pool's only async slot is held by other work. Both stay `Running` on the code before the change.
 
+**The lane REFUSES, it does not queue.** Moving the waits off `Compile` alone only moves the cycle onto
+the new lane: a parent cell holds its `KernelScript` slot while it waits, and the child needs a slot of
+the same lane to warm up and execute — so with every slot held by a waiting parent a queued child is
+never admitted, at any cap. The kernel therefore admits both leaves with `IoPool.InvokeOrRefuse`: a
+free slot runs the leaf, a full lane fails it at once with `IoPoolSaturatedException`, and the refused
+run's Activity reads `Failed` naming the refusal — which its parent sees and reports. Saturation becomes
+a visible terminal instead of a silent queue. `KernelScriptLaneRefusesInsteadOfQueuingTest` pins it with
+a ONE-slot lane: the child is refused and the parent completes with `inner Failed`; with a queue both
+stay `Running`.
+
 Still open (not the cause found here, recorded so it is not re-investigated blind): the cell-surface
 resolution's store lookup (`IAssemblyStore.TryGetBuildPath` in `CellSurfaceAssemblyProvider.ResolveOne`)
 carries no bound of its own. The file-system store answers synchronously, so it cannot park there; a
@@ -140,8 +150,18 @@ The C# branch now observes the kernel's answer through `hub.Observe` exactly as 
 does, and writes any non-success onto the Activity as `Failed` with the reason (a keyed, localized
 transcript entry, `activity.codeRun.failed`). The reconcile never overwrites a status the kernel
 already settled. It adds no timeout: a kernel that never answers is a defect of its own, to be fixed
-where it stalls — the deadlock above is one such stall, fixed at its root. Pinned by `CSharpCellKernelFaultFailsTheActivityTest` (a kernel plug-in that faults) and its
-control `CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`).
+where it stalls — the deadlock above is one such stall, fixed at its root. Pinned by
+`CSharpCellKernelFaultFailsTheActivityTest` (a kernel plug-in that faults) and its control
+`CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`).
+
+🚨 **A request timeout is not a verdict on the run.** The kernel's reply is the END of the execution,
+and each wait for it — the dispatcher's on the Code hub, the kernel container's on the Activity hub —
+is bounded by its hub's `RequestTimeout` of silence. A healthy cell computing past that budget is still
+running. So neither hop turns its own timeout into a failure: the dispatcher writes `Failed` only for a
+delivery fault or a failed reply, and the container no longer answers `Success = false` when its own
+wait expires. The Activity stays the authority and the kernel settles it when the script ends.
+`LongCellOutlivesThe{Dispatchers,KernelContainers}RequestBudgetTest` pin each hop with a two-second
+budget and a six-second cell; both read `Failed` while the script was still running before the change.
 
 Tests, each with a negative control that fails on the unfixed code:
 

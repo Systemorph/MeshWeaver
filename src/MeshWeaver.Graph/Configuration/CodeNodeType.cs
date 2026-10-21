@@ -381,6 +381,15 @@ public static class CodeNodeType
                                 // the answer and reconcile every non-success onto the log, exactly as
                                 // the foreign-language branch above does. FailActivity never
                                 // overwrites a status the kernel already settled.
+                                //
+                                // 🚨 A TIMEOUT is not a failure of the run. The reply is the END of
+                                // the execution, and this wait is bounded by the hub's RequestTimeout
+                                // of silence — a healthy cell computing past it is still running, and
+                                // the kernel will settle its Activity when it ends. Failing it here
+                                // would mark a live run Failed (and race the kernel's own Complete).
+                                // What a timeout CAN say — nothing came back — the Activity already
+                                // says by staying Running; the delivery faults above it (DeliveryFailure,
+                                // NotFound) and a failed reply are the verdicts this path writes.
                                 hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
                                     .Take(1)
                                     .Subscribe(
@@ -390,8 +399,18 @@ public static class CodeNodeType
                                                 FailActivity(hub, activityPath,
                                                     RunFailed("C#", response.Message.Error));
                                         },
-                                        ex => FailActivity(hub, activityPath,
-                                            RunFailed("C#", $"{ex.GetType().Name}: {ex.Message}"), ex));
+                                        ex =>
+                                        {
+                                            if (ex is TimeoutException)
+                                                logger?.LogInformation(
+                                                    "CodeNodeType: no reply for C# run {Activity} within the request "
+                                                    + "budget — the run is still the kernel's; its Activity stays "
+                                                    + "authoritative and is settled when the script ends",
+                                                    activityPath);
+                                            else
+                                                FailActivity(hub, activityPath,
+                                                    RunFailed("C#", $"{ex.GetType().Name}: {ex.Message}"), ex);
+                                        });
                             }
 
                             // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath,ExecutedCodeHash} onto

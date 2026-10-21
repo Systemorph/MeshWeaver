@@ -105,6 +105,15 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.KernelScript)
             ?? IoPool.Unbounded;
 
+    // 🚨 REFUSED, never QUEUED. Moving off Compile alone only moved the cycle: a cell that runs a
+    // cell holds its script-lane slot while it waits, and the child needs a slot of the SAME lane to
+    // warm up and execute — so with every slot held by a waiting parent, a queued child is never
+    // admitted and the whole tree stays Running. Admission without a queue turns that state into a
+    // terminal failure of the child's run (its Activity reads Failed with the refusal), which its
+    // parent then sees. Unbounded fallback (no registry) has no slots to exhaust.
+    private IObservable<T> AdmitToScriptLane<T>(Func<CancellationToken, Task<T>> io)
+        => scriptLane is IoPool bounded ? bounded.InvokeOrRefuse(io) : scriptLane.Invoke(io);
+
     // The CPU lane: a cell's Roslyn build + emit + load runs here, on the lane's own threads, never
     // a ThreadPool worker (#5388, Doc/Architecture/CompileOffTheThreadPool). A leaf on it does
     // nothing but compute — ScriptSession.Compile — so it cannot nest under the Compile pool's gate.
@@ -373,7 +382,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // leaf is mostly a WAIT on the process-wide warm-up, and a Compile slot held across a
         // wait starves every other async Compile leaf (other sessions, the language service).
         return Observable.Defer(() =>
-                scriptLane.Invoke(t => EnsureInitializedAsync(t))
+                AdmitToScriptLane(t => EnsureInitializedAsync(t))
                     .SelectMany(_ => EnsureCellSurfaceReferences())
                     .SelectMany(_ => ResolveNuGetReferences(code))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
@@ -482,7 +491,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                                         .Select(r => r.ToString()).ToList());
                             return submission;
                         })
-                        .SelectMany(compiled => scriptLane.Invoke(t =>
+                        .SelectMany(compiled => AdmitToScriptLane(t =>
                         {
                             // The scope is held only while the submission STARTS: its first await
                             // captures the ExecutionContext with the identity set, and the scope is

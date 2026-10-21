@@ -61,18 +61,7 @@ public class KernelScriptHoldsNoCompileSlotTest(ITestOutputHelper output) : CSha
         var ct = TestContext.Current.CancellationToken;
         CompilePool();
         var inner = await CreateCell("40 + 2", ct);
-        var outer = await CreateCell($$"""
-            using System.Reactive.Linq;
-            using MeshWeaver.Data;
-            var started = await Mesh
-                .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address("{{inner}}")))
-                .FirstAsync();
-            var settled = await Mesh.GetMeshNodeStream(started.Message.ActivityLog!)
-                .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
-                .Where(l => l is not null && l.Status.IsTerminal())
-                .FirstAsync();
-            "inner " + settled!.Status
-            """, ct);
+        var outer = await CreateCell(RunsAndWaitsFor(inner), ct);
 
         var activity = await Run(outer, ct);
         var log = await Terminal(activity,

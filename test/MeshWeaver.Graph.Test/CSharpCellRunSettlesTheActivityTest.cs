@@ -29,6 +29,28 @@ public abstract class CSharpCellRunTestBase(ITestOutputHelper output) : Monolith
     /// <summary>How long a run may take to reach a terminal status before the test calls it stuck.</summary>
     protected static TimeSpan Bound => TestTimeouts.Convergence;
 
+    /// <summary>
+    /// The source of a cell that RUNS the cell at <paramref name="innerPath"/> and waits for its run to
+    /// reach a terminal status, returning <c>"inner {Status}"</c>. Its waits go through the sanctioned
+    /// <c>.Await(Ct)</c> bridge — never a bare <c>await</c> on an observable, whose Rx awaiter resumes
+    /// the script inline on the thread delivering the notification — and <c>Ct</c> (the run's
+    /// cancellation) ends them.
+    /// </summary>
+    protected static string RunsAndWaitsFor(string innerPath) => $$"""
+        using System.Reactive.Linq;
+        using MeshWeaver.Data;
+        var started = await Mesh
+            .Observe<ExecuteScriptResponse>(new ExecuteScriptRequest(), o => o.WithTarget(new Address("{{innerPath}}")))
+            .Take(1)
+            .Await(Ct);
+        var settled = await Mesh.GetMeshNodeStream(started.Message.ActivityLog!)
+            .Select(n => n?.ContentAs<ActivityLog>(Mesh.JsonSerializerOptions))
+            .Where(l => l is not null && l.Status.IsTerminal())
+            .Take(1)
+            .Await(Ct);
+        "inner " + settled!.Status
+        """;
+
     /// <summary>Creates an executable C# cell and returns its path.</summary>
     protected async Task<string> CreateCell(string code, CancellationToken ct)
     {

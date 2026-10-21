@@ -124,8 +124,10 @@ public static class IoPoolNames
     /// cell), a language-service compile. A script holding a Compile slot across that wait is the
     /// nested-gate deadlock — with every slot held by a waiting script, the leaf each one waits for
     /// can never be admitted, and the cell's Activity stays Running for ever.
-    /// A drain hook and a runaway stop, not a throttle — see <see cref="IoPoolOptions.KernelScript"/>
-    /// and <c>Doc/Architecture/CompileOffTheThreadPool</c>.
+    /// The lane itself is admitted WITHOUT a queue (<see cref="IoPool.InvokeOrRefuse{T}"/>): its leaves
+    /// wait on each other (a cell that runs a cell), so a queued child behind waiting parents would be
+    /// the same deadlock again; a full lane refuses and the refused run fails visibly. See
+    /// <see cref="IoPoolOptions.KernelScript"/> and <c>Doc/Architecture/CompileOffTheThreadPool</c>.
     /// </summary>
     public const string KernelScript = "KernelScript";
 
@@ -361,7 +363,8 @@ public sealed record IoPoolOptions
     /// the script's whole run and bounds nothing CPU-shaped; the CPU half of a cell (build, emit, load)
     /// runs on <see cref="CompileCpu"/>. The cap is a drain hook and a runaway-fan-out stop, so it is
     /// generous (256) and independent of <see cref="Compile"/>, which a waiting script must never
-    /// occupy.
+    /// occupy. Admission past it is REFUSED, not queued: the run beyond the cap fails with
+    /// <see cref="IoPoolSaturatedException"/> rather than waiting behind cells that may be waiting on it.
     /// </summary>
     public int KernelScript { get; init; } = 256;
 

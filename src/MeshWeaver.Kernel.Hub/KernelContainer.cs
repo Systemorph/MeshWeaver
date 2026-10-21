@@ -399,9 +399,19 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .Take(1)
             .Subscribe(
                 resp => hub.Post(resp.Message, o => o.ResponseFor(request)),
-                ex => hub.Post(
-                    new SubmitCodeResponse(request.Message.Id, false) { Error = ex.Message },
-                    o => o.ResponseFor(request)));
+                ex =>
+                {
+                    // 🚨 A timeout of THIS wait is not a verdict on the script. The executor answers
+                    // when the script ENDS, and this wait is bounded by RequestTimeout of silence —
+                    // so a healthy cell computing past it used to be reported Success=false while it
+                    // was still running, and the caller then failed a live run. The executor still
+                    // owns the run and settles its Activity; say nothing rather than something false.
+                    if (ex is TimeoutException)
+                        return;
+                    hub.Post(
+                        new SubmitCodeResponse(request.Message.Id, false) { Error = ex.Message },
+                        o => o.ResponseFor(request));
+                });
 
         return request.Processed();
     }
