@@ -1401,6 +1401,7 @@ public static class DynamicTypePreWarmer
                             + $"through the compile watcher's untracked-module gate: waiting on {p}, "
                             + $"for up to {budget}");
                         return DriveThroughCompileWatcher(mesh, workspace, accessService, p, budget, logger)
+                            .SelectMany(o => ReclassifyIfAdoptedHere(mesh, o, definitions, nodes, budget, logger))
                             .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
                             .Do(o => FileForDependents(p, o));
                     }
@@ -1786,6 +1787,54 @@ public static class DynamicTypePreWarmer
                 return Observable.Return(new AdoptionVerification(none, all));
             })
             .DefaultIfEmpty(new AdoptionVerification(none, all));
+    }
+
+    /// <summary>
+    /// #7015 review — the hand-off's answer, re-read against this process's OWN adoption ledger. The
+    /// gate's preflight offer pass can stop short of a type's bundle (its budget, a hollow bundle), so
+    /// the type is routed to the watcher without a local adoption; the watcher's per-type pass may
+    /// then adopt it. On a readiness-gated (provisional) process that adoption is recorded locally
+    /// while the shared stamp is HELD (<c>PrebuiltAssemblySeeder</c>, #5544), so the watcher, reading
+    /// only the shared record, finds no usable build and settles it as if nothing had landed. The
+    /// sweep must not report that as this replica's failure: a type this process adopted, re-probed
+    /// baked on this replica's store, is <see cref="PreWarmStatus.AlreadyBaked"/>; one whose adoption
+    /// could not be verified in <paramref name="verifyBudget"/> is not evaluated
+    /// (<see cref="PreWarmStatus.TimedOut"/>). Every other answer stands. Never faults.
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> ReclassifyIfAdoptedHere(
+        IMessageHub mesh,
+        PreWarmOutcome outcome,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        TimeSpan verifyBudget,
+        ILogger? logger)
+    {
+        if (outcome.ReachedUsableBuild)
+            return Observable.Return(outcome);
+        var path = outcome.TypePath;
+        var candidates = ImmutableDictionary<string, NodeTypeDefinition?>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase)
+            .Add(path, definitions.TryGetValue(path, out var definition) ? definition : null);
+        return AdoptedByThisProcess(
+                mesh, ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, path), candidates, nodes,
+                defs => ProbeOnThisReplica(mesh, defs, logger), verifyBudget, logger)
+            .Select(verified =>
+                verified.Baked.Contains(path)
+                    ? new PreWarmOutcome(path, PreWarmStatus.AlreadyBaked,
+                        "adopted on this process by the compile watcher's per-type pass (the shared stamp "
+                        + $"is held until this process is admitted); the watcher answered {outcome.Status}")
+                    : verified.Unverified.Contains(path)
+                        ? new PreWarmOutcome(path, PreWarmStatus.TimedOut,
+                            "adopted on this process by the compile watcher's per-type pass, but the adoption "
+                            + "could not be verified on this replica's store in time — not evaluated")
+                        : outcome)
+            .Catch<PreWarmOutcome, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: re-reading {TypePath}'s hand-off against this process's adoption "
+                    + "ledger failed — the watcher's answer stands", path);
+                return Observable.Return(outcome);
+            });
     }
 
     /// <summary>The sweep's own store probe — this replica's store, pool and build guards — over

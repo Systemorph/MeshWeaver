@@ -1384,6 +1384,13 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   watcher. The same applies when the store lookup itself faults. The bake probe folds that fault
   into a `BytesMissing` entry flagged `ProbeFailed`, and the verification reads the flag, so the
   adoption counts as not evaluated rather than as a confirmed miss.
+- **An adoption the WATCHER makes counts for this replica too.** The preflight pass can stop short
+  of a type's bundle, so the type is handed to the watcher with no local adoption, and the
+  watcher's own per-type pass then adopts it. On a readiness-gated replica the shared stamp is
+  held, so the watcher reads no usable build. When the hand-off does not end in a usable build,
+  the sweep re-reads this process's adoption ledger
+  (`DynamicTypePreWarmer.ReclassifyIfAdoptedHere`). A type adopted here, and re-probed baked, is
+  reported baked; one whose adoption cannot be verified in time is reported not evaluated.
 - **The watcher's answer is the first terminal record whose version is above the hand-off write.**
   It never depends on seeing a `Pending` frame, and a stale terminal replay is never taken for the
   answer. A hand-off write that fails is reported as a fault at once.
