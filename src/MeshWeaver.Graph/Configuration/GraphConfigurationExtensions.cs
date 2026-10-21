@@ -433,6 +433,11 @@ public static class GraphConfigurationExtensions
                 // rule stays editable. Stateless, like the guard above. See IconSafety.
                 services.AddScoped<INodeValidator, Security.IconMarkupValidator>();
 
+                // Keeps a PartitionAccessPolicy out of any place the permission fold never reads (a
+                // satellite namespace, or an id other than `_Policy`): stored there, a restriction such
+                // as BreaksInheritance was silently ignored. Stateless. See PolicyPlacementValidator.
+                services.AddScoped<INodeValidator, Security.PolicyPlacementValidator>();
+
                 // The create BOUNDARY's half of CreatableTypes (#4077). Until this, a parent
                 // NodeType's whitelist was honoured by the Create FORM alone and the write boundary
                 // asked nothing about it — so a direct CreateNodeRequest, an agent tool call, or a
