@@ -134,7 +134,10 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         await SeedPartition(ct);
         var revokedLink = await Issue("direct-revoked", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
         var keptLink = await Issue("direct-kept", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
-        var expiringLink = await Issue("direct-expiring", HostDeclaredType, DateTimeOffset.UtcNow.AddSeconds(8), ct);
+        // A DISTANT expiry while the subscriptions are set up: the expiry is shortened only right
+        // before the expiry phase (review of #7016, thread 4338339736), so a slow setup can never
+        // refuse the link before its subscription is established.
+        var expiringLink = await Issue("direct-expiring", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
 
         var visitor = ClientAs(Visitor);
         var revoked = Record(DirectStream(visitor, revokedLink));
@@ -163,7 +166,15 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
             .Match(n => n.Kind == NotificationKind.OnNext && ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(1.5)),
                 "a direct subscription to a link that is not revoked keeps streaming", cancellationToken: ct);
 
-        // The expiry: no write, no revision — the subscription ends AT the instant the link expires.
+        // The expiry, shortened now as System — the subscription is already open. The shortened
+        // revision is forwarded first (the link has not expired yet); after it, no write and no
+        // revision: the subscription ends AT the instant the link expires.
+        var expiresAt = DateTimeOffset.UtcNow.AddSeconds(5).ToString("O");
+        await AsSystemUpdate(expiringLink, c => c with { ExpiresAt = expiresAt }, ct);
+        var shortened = await expiring.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext || ExpiresAtOf(n.Value) == expiresAt,
+                "the direct subscription receives the revision that shortens the expiry", cancellationToken: ct);
+        Assert.Equal(NotificationKind.OnNext, shortened.Kind);
         var expired = await expiring.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends at the link's expiry", cancellationToken: ct);
         Assert.Equal(NotificationKind.OnError, expired.Kind);
@@ -354,6 +365,9 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
 
     private bool IsRevoked(MeshNode? node)
         => node?.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)?.RevokedAt is not null;
+
+    private string? ExpiresAtOf(MeshNode? node)
+        => node?.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)?.ExpiresAt;
 
     private bool ExpiresAfter(MeshNode? node, DateTimeOffset instant)
         => node?.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)?.ExpiresAt is { } at
