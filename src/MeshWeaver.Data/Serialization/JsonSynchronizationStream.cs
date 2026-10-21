@@ -429,14 +429,55 @@ public static class JsonSynchronizationStream
         // link to deserialized world. Will also potentially link to workspace.
         var partition = reference is IPartitionedWorkspaceReference p ? p.Partition : null;
 
-        // Capture the caller's AccessContext at stream-creation time. The internal
-        // change-notification Subscribe (below) fires on the stream's emission scheduler,
-        // where AsyncLocal AccessContext does NOT match the user who created this stream
-        // — it would default to the per-cell hub's impersonated address and trigger
-        // "Access denied" on the owner. Stamping each post with the captured user
-        // context preserves authorship through the Update path.
-        var accessServiceForCapture = hub.ServiceProvider.GetService<AccessService>();
-        var capturedAccessContext = accessServiceForCapture?.Context;
+        // 🚨 ONE IDENTITY FOR THE WHOLE STREAM — the subscribe AND every input it sends.
+        //
+        // The owner of a layout area accepts its subscriber's input only from the identity the
+        // area was subscribed for (StreamConfiguration.WithInputFromSubscriberOnly). The input this
+        // stream sends — an edited value (PatchDataChangeRequest) or a data write
+        // (DataChangeRequest) — must therefore leave under EXACTLY the identity its SubscribeRequest
+        // left under. Both are posted the same way: inside the scope of the identity resolved here,
+        // with no explicit AccessContext, so the posting hub's own pipeline stamps them both and
+        // stamps them alike.
+        //
+        // This replaced a SECOND, separate capture: a snapshot of the ambient AccessService.Context
+        // taken here and stamped EXPLICITLY on every input, while the subscribe was stamped by the
+        // pipeline. The two disagree whenever the thread that opens the stream carries an ambient
+        // identity the pipeline overrides — and a portal circuit does exactly that: Blazor runs a
+        // render requested from an Rx callback on the CALLER's execution context, so an area opened
+        // in a render triggered from a platform hub's turn sees `system-security` as ambient, while
+        // the portal hub's post step stamps the circuit user on the subscribe. The owner recorded
+        // the person as the subscriber and refused every edit as "opened under a different
+        // sign-in" (Education journey run 39600717306: the Store paywall's coupon reached the owner
+        // as nothing, and Redeem answered "Enter a coupon code."). Pinned by
+        // MeshWeaver.Layout.Test/AnAreaOpenedOffActivityAcceptsItsSubscribersEditTest.
+        //
+        // The reason the snapshot existed still holds, and the scope covers it: the change
+        // notifications below fire on the stream's own hub, whose AsyncLocal is whatever that turn
+        // carried, so a post with nothing re-established would be attributed to that turn instead
+        // of to this stream's subscriber.
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // 🚨 Resolved through the SHARED helper so this identity is bit-for-bit the one
+        // Workspace._remoteStreamCache keyed this stream under — see ResolveSubscribeIdentity.
+        var subscribeIdentity = ResolveSubscribeIdentity(accessService);
+        var ambient = subscribeIdentity.RealUser;
+        var isRealUser = subscribeIdentity.IsRealUser;
+        var identityForSubscribe = subscribeIdentity.Id;
+        // The scope this stream's input is posted in. For a stream opened for a resolved identity it
+        // is that identity — the one the subscribe is posted under (RunAs below) — and the post
+        // carries no explicit AccessContext, so the pipeline stamps the input exactly as it stamped
+        // the subscribe. Synchronous, around a synchronous Post: open while the post pipeline stamps
+        // the delivery, closed before the turn moves on.
+        IDisposable EnterSubscriberScope() =>
+            isRealUser && accessService is not null
+                ? accessService.SwitchAccessContext(ambient)
+                : System.Reactive.Disposables.Disposable.Empty;
+        // A stream opened with NO resolved identity (an infrastructure mirror — subscribed as System
+        // below) keeps its established input attribution: whatever the request identity was when it
+        // was opened, stamped explicitly, else the pipeline's own choice at post time. Such a stream
+        // is not a person's view, and the owner does not hold its input to a subscriber.
+        var infrastructureInputIdentity = isRealUser ? null : accessService?.Context;
+        PostOptions WithInputIdentity(PostOptions options) =>
+            infrastructureInputIdentity is null ? options : options.WithAccessContext(infrastructureInputIdentity);
 
         var reduced = new SynchronizationStream<TReduced>(
                 new(owner, partition),
@@ -458,11 +499,8 @@ public static class JsonSynchronizationStream
                     {
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
-                        hub.Post(e, o =>
-                        {
-                            var opts = o.WithTarget(reduced.Owner);
-                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
-                        });
+                        using (EnterSubscriberScope())
+                            hub.Post(e, o => WithInputIdentity(o.WithTarget(reduced.Owner)));
                     },
                     ex => logger.LogDebug(ex, "Stream {streamId} errored", reduced.StreamId))
             );
@@ -478,11 +516,9 @@ public static class JsonSynchronizationStream
                         logger.LogDebug("Stream {streamId} sending change notification to owner {owner}",
                             reduced.StreamId, reduced.Owner);
                         e = e with { ClientId = reduced.StreamId };
-                        var delivery = hub.Post(e, o =>
-                        {
-                            var opts = o.WithTarget(reduced.Owner);
-                            return capturedAccessContext != null ? opts.WithAccessContext(capturedAccessContext) : opts;
-                        });
+                        IMessageDelivery? delivery;
+                        using (EnterSubscriberScope())
+                            delivery = hub.Post(e, o => WithInputIdentity(o.WithTarget(reduced.Owner)));
                         if (delivery != null)
                         {
                             hub.Observe(delivery)
@@ -511,7 +547,6 @@ public static class JsonSynchronizationStream
             );
 
 
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
         // Post from `hub` (outer hub), NOT `reduced.Hub` (inner sync hub).
         // When the outer hub is the mesh hub, HierarchicalRouting skips sender-wrapping
         // (parentHub.Address.Type == MeshType check), so posting from the inner hub
@@ -539,12 +574,8 @@ public static class JsonSynchronizationStream
         // for the page owner. Per-user identity must flow into the SubscribeRequest
         // so the owner's RLS can enforce per-user reads; System fallback exists
         // only for the bare-infrastructure paths where no user identity exists.
-        // 🚨 Resolved through the SHARED helper so this identity is bit-for-bit the one
-        // Workspace._remoteStreamCache keyed this stream under — see ResolveSubscribeIdentity.
-        var subscribeIdentity = ResolveSubscribeIdentity(accessService);
-        var ambient = subscribeIdentity.RealUser;
-        var isRealUser = subscribeIdentity.IsRealUser;
-        var identityForSubscribe = subscribeIdentity.Id;
+        // The identity itself (subscribeIdentity / ambient / isRealUser) is resolved ONCE, at the
+        // top of this method, because the input this stream sends is posted under the same one.
 
         // Keep-alive machinery (the 45s heartbeat + the change-feed resubscribe) for a
         // REMOTE owner is collected here so a TERMINAL failure of the initial
