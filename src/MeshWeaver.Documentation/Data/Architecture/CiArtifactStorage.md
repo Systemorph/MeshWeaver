@@ -37,20 +37,28 @@ does not lift it until GitHub recalculates (every 6–12 h).
 This section is the current reading. The sections after it are the history that led here, and
 their dated numbers stay as evidence.
 
-**Two private repositories are on the own store. Five others still write GitHub artifacts.**
+**Three private repositories are on the own store. Four others still write GitHub artifacts.**
 
 - The `gha` repository overrides were deleted on 2026-10-16 (~18:50Z), after the cross-pool proof
   for Systemorph/Memex#420 passed. The organisation variable `MW_ARTIFACT_STORE=file:/ci-artifacts`
-  is still `visibility: selected`, and the selection is still exactly `MeshWeaver.Plugins` and
-  `MeshWeaver.SocialMedia`.
-- 🚨 **So deleting the overrides moved two repositories, not every one.** `MeshWeaver.Reinsurance`,
-  `.Manufacturing`, `.Crm`, `.Education` and `.FundReporting` have no variable at any scope. For them
-  `resolve` maps the empty value to the GitHub branch, so they still write GitHub artifacts.
-  Widening the selection does not move them by itself either: each repository also needs the
-  `artifact-store:` / `artifact-store-id:` wiring that the two pilots carry, resolved once by the
-  run's first producer (see the SocialMedia `preflight` job). Without that wiring a `file:` value
-  turns that repository's module lane red at `Select the affected bundles`. That is the cause of
-  SocialMedia's ~14 h red after the override was deleted.
+  is still `visibility: selected`. The selection is exactly `MeshWeaver.Education`,
+  `MeshWeaver.Plugins` and `MeshWeaver.SocialMedia`.
+- **Education joined the store on 2026-10-21.** MeshWeaver.Education#402 (merged 08:30Z) routed
+  every artifact transfer through core's upload and download actions and resolves the store once in
+  `preflight`, the SocialMedia shape. Education was then added to the selection. The evidence is
+  Education's `Education Content CI` push run on `main`,
+  [39593503376](https://github.com/Systemorph/MeshWeaver.Education/actions/runs/39593503376)
+  (head `01a5101c8`). It completed `success`, resolved `store: file:/ci-artifacts`, and the run's
+  artifacts listing reads `total_count: 0`. An earlier manual run, 39583344941, also used the
+  store. Its one failure was the on-demand journey suite, which is a separate issue.
+- 🚨 **Deleting the overrides moved only the selected repositories.** `MeshWeaver.Reinsurance`,
+  `.Manufacturing`, `.Crm` and `.FundReporting` have no variable at any scope. For them `resolve`
+  maps the empty value to the GitHub branch, so they still write GitHub artifacts. Widening the
+  selection does not move them by itself either: each repository also needs the
+  `artifact-store:` / `artifact-store-id:` wiring that the three repositories on the store carry,
+  resolved once by the run's first producer (see the SocialMedia `preflight` job). Without that
+  wiring a `file:` value turns that repository's module lane red at `Select the affected bundles`.
+  That is the cause of SocialMedia's ~14 h red after the override was deleted.
 - **Plugins writes nothing to GitHub any more.** 100 of 100 completed `Plugin Catalog CI` runs
   between 2026-10-19T22:55Z and 2026-10-20T21:50Z carry **zero** GitHub artifacts. A pre-switch
   main run (`38820453666`, 2026-10-15) carried 76, most of them `module-bundle-*` at 7-day
@@ -74,7 +82,7 @@ Actions storage cost **$263.29** net from 1 to 20 October. Actions compute was *
 | repository | GB-h per day | what the artifact and cache APIs show |
 |---|--:|---|
 | MeshWeaver.Plugins | 40,173 (10-12) → 31,569 (10-19), falling | no new artifacts since 10-16; 11.9 GB of caches, last restored 10-16 |
-| MeshWeaver.Education | 1,190–1,660 | ~10 GB live: `bake-<sha>` 7.1 GB, `e2e-upstream` 2.8 GB; 1.2 GB of caches |
+| MeshWeaver.Education | 1,190–1,660 (before the 10-21 switch) | ~10 GB live before the switch: `bake-<sha>` 7.1 GB, `e2e-upstream` 2.8 GB; 1.2 GB of caches |
 | MeshWeaver.Reinsurance | **863, every full day since 09-22** | 7 MB of `gate-log-*`, no caches |
 | MeshWeaver.SocialMedia | ~550 | no live artifacts; 11.6 GB of caches, last restored 10-16 |
 | MeshWeaver.Crm | **514, every full day since 09-22** | 3 MB of `gate-log-*`, no caches |
@@ -83,7 +91,8 @@ Actions storage cost **$263.29** net from 1 to 20 October. Actions compute was *
 
 What to expect, and what is not explained:
 
-- **Plugins and SocialMedia drain on their own.** The newest Plugins `module-bundle-*` was
+- **Plugins, SocialMedia and Education drain on their own.** Education's last GitHub artifacts
+  were written before its 2026-10-21 switch and expire within 7 days of it. The newest Plugins `module-bundle-*` was
   created on 2026-10-16T18:04Z and expires around 10-23. The deletion lag described below follows
   that. Their caches stop being restored, and cache is not billed anyway (see below). Re-read the
   usage endpoint after **2026-10-30**. Plugins should then be near zero.
@@ -97,10 +106,11 @@ What to expect, and what is not explained:
   churn nightly and total a few MB. Nothing in this repository changes that number. It is a
   question for GitHub billing support: what is metered for those three repositories? Moving them
   to the own store would remove only their few MB of `gate-log-*`.
-- **Education is the one repository whose own bytes still matter.** Its e2e jobs read
-  `bake-<sha>` and `e2e-upstream` within the run. Moving it means wiring its own uploads and
-  downloads through `Systemorph/MeshWeaver/.github/actions/{upload,download}-artifact@main`, plus
-  the store wiring above, and *then* adding it to the selection. It is worth about $0.45/day.
+- **Education was the one repository whose own bytes still mattered, and it has moved.** Its e2e
+  jobs read `bake-<sha>` and `e2e-upstream` within the run. MeshWeaver.Education#402 wired those
+  uploads and downloads through `Systemorph/MeshWeaver/.github/actions/{upload,download}-artifact@main`
+  plus the store wiring above, and only *then* was it added to the selection. That was worth about
+  $0.45/day.
 
 ## The measurement (2026-09-17, REST only)
 
