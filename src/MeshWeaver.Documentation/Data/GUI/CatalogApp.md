@@ -33,7 +33,7 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 | `CatalogCategory { When = IObservable<bool> }` | A conditional category: in the menu only while `When` emits true (the AI catalogs' "This space" tab). Until it first answers it counts as false, so it never holds back the other categories. |
 | `CatalogCategory { Header = control }` | A control above the category's searches — e.g. the legend of what the hits' badges mean. |
 | **Search** — `CatalogSearch.Of(filter, title?, itemArea?, sort?)` | One hidden query: a filter WITHOUT `sort:` plus its default `CatalogSort` (Last activity unless stated; `CatalogSort.Name` is cheaper over `partitions:all`, because last activity costs a read per hit). Rendered as `Controls.Catalog` with the search box hidden. |
-| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller, shown as a plain label — never parsed as markup) instead of running a query. |
+| `CatalogSearch.Computed(IObservable<string?> filter, …, whenEmpty?)` | A COMPUTED hidden query. Each distinct emission re-aims the section; a `null` emission is the empty state and renders `whenEmpty` (localised by the caller, shown as a plain label — never parsed as markup) instead of running a query. Until the filter FIRST answers, the section shows the platform's indeterminate progress bar — never nothing — carrying `whileLoading` when the six-parameter overload passes one (localised by the caller). |
 | `.WithCreate(nodeType, namespace, when?)` | The section's "+" (`CreateNodeType` / `CreateNamespace`). Always state the namespace for a subtree query. `when` (an `IObservable<bool>`) hides it while false — e.g. "only once the set has a member"; until it answers, the results render without the "+". |
 | `.WithMaxColumns(n)` · `.WithPageSize(n)` | A card grid instead of one hit per row; hits per page before "Load more". |
 | `.WithConfigure(c => …)` | The last-mile hook over the composed `MeshSearchControl` — grouping (`WithGroupBy(…).WithSectionCounts(true)`), render mode, anything. Applied last. |
@@ -51,6 +51,12 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 - Computed filters and conditions are kept for the life of the area host (`CatalogApp.Retained`, latest
   value replayed, connections owned by the host): a menu rebuilt because one category's `When`
   changed does not blank another category's computed section.
+- 🚨 **A computed section is LOADING, never absent, until its filter first answers** (2026-10-21). It
+  used to emit nothing until then, so its area did not exist — and a one-shot read of the page (the MCP
+  `get …/area/…` route returns the first frame in which the requested area ITSELF has landed, not its
+  later sub-areas) reported the CRM board's attention tabs as "never rendering" while a live
+  subscription had them within a quarter of a second. A filter that never answers now reads as an
+  endless progress bar: still a defect to chase, but a visible one.
 - A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
