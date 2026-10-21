@@ -53,7 +53,14 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
                 new MeshNode(Vault) { Name = "Synced Vault", NodeType = "Space" },
                 AssignmentNodeFactory.UserRole(Stranger, "Viewer", Lobby),
                 AssignmentNodeFactory.UserRole(Keeper, "Viewer", Lobby),
-                AssignmentNodeFactory.UserRole(Keeper, "Viewer", Vault));
+                AssignmentNodeFactory.UserRole(Keeper, "Viewer", Vault),
+                // The stranger's OWN partition withholds API reach: an API token holds nothing there,
+                // however the row is otherwise admitted (the own-scope shortcut).
+                AssignmentNodeFactory.Policy(Stranger, new PartitionAccessPolicy { Api = false }))
+            .ConfigureServices(services => services.AddSingleton<INodeValidator>(new SilentOnShadowValidator()));
+
+    private const string ShadowName = "VAULT-SHADOW-77d4";
+    private const string DiaryName = "STRANGER-DIARY-3b90";
 
     private static MeshNode Person(string id, string name) => new(id)
     {
@@ -120,6 +127,60 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
                 "UserAccessRule grants every signed-in reader the root User profiles, and the synced query honours it");
     }
 
+    /// <summary>
+    /// 🚨 NO VERDICT IS NOT CONSENT: a registered Read validator that completes WITHOUT emitting
+    /// refuses the row. The keeper may read the vault and every other validator admits the shadow
+    /// node, but one validator stays silent on it, so it must not reach the keeper's synced query.
+    /// </summary>
+    [Fact]
+    public async Task AReadValidatorThatGivesNoVerdictHidesTheRow()
+    {
+        await Seed();
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(SilentOnShadowValidator.ShadowId, Vault) { Name = ShadowName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the shadow node");
+        var client = GetClient(c => ConfigureClient(c).AddData());
+
+        var snapshot = await FirstWith(client, Keeper, SecretName);
+        snapshot.Should().NotContain(ShadowName,
+            "a validator that completed without a verdict gave no consent, so the row is refused");
+    }
+
+    /// <summary>
+    /// 🚨 The API-token clamp holds on the synced-query path: the stranger's OWN partition withholds
+    /// API reach, so the stranger's API token sees nothing there, although the own-scope shortcut
+    /// admits the row before the permission fold (where the clamp lives) is reached. The same person
+    /// in a browser sees it (positive control).
+    /// </summary>
+    [Fact]
+    public async Task AnApiTokenReadsNothingInAnApiCappedOwnScope()
+    {
+        await Seed();
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode("Diary", Stranger) { Name = DiaryName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the stranger's own node");
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        IObservable<IEnumerable<MeshNode>> Open(bool apiToken)
+        {
+            using (access.SwitchAccessContext(new AccessContext { ObjectId = Stranger, Name = Stranger, IsApiToken = apiToken }))
+                return client.GetQuery($"synced-api-{apiToken}-{Guid.NewGuid():N}",
+                    $"namespace:{Lobby}", $"namespace:{Stranger}");
+        }
+
+        await Open(apiToken: false)
+            .Where(nodes => nodes.Any(n => n.Name == DiaryName))
+            .Should().Within(TestTimeouts.Convergence).Emit("the stranger in a browser reads their own node");
+
+        var asToken = await Open(apiToken: true)
+            .Select(nodes => nodes.Select(n => n.Name ?? n.Id).ToList())
+            .Do(names => Output.WriteLine($"token: [{string.Join(", ", names)}]"))
+            .Where(names => names.Contains(OpenName))
+            .Should().Within(TestTimeouts.Convergence).Emit("the token's snapshot arrives (the lobby is not API-capped)");
+        asToken.Should().NotContain(DiaryName, "the partition's policy withholds API reach from every token");
+    }
+
     private async Task Seed()
     {
         var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
@@ -147,4 +208,23 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
             .Where(names => names.Contains(expected))
             .Should().Within(TestTimeouts.Convergence).Emit($"{reader}'s synced query shows {expected}");
     }
+}
+
+/// <summary>
+/// A Read validator that admits everything except the vault's shadow node, on which it completes
+/// WITHOUT emitting a verdict: the contract violation the filter must treat as a refusal.
+/// </summary>
+internal sealed class SilentOnShadowValidator : INodeValidator
+{
+    /// <summary>The id of the node this validator gives no verdict on.</summary>
+    public const string ShadowId = "Shadow";
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+
+    /// <inheritdoc />
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+        => context.Node.Id == ShadowId && context.Node.Namespace == "SyncedVault"
+            ? Observable.Empty<NodeValidationResult>()
+            : Observable.Return(NodeValidationResult.Valid());
 }

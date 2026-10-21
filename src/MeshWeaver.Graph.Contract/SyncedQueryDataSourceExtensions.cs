@@ -312,12 +312,44 @@ public static class SyncedQueryDataSourceExtensions
                 Node = node,
                 AccessContext = reader,
             };
-            return validators
-                .Select(v => v.Validate(context).Take(1))
+            // 🚨 EXACTLY ONE VERDICT PER VALIDATOR, and NO VERDICT IS NOT CONSENT (#2742, #6391 —
+            // the creation-validator runner's rule). A validator that completes without emitting
+            // gave no verdict; Concat used to skip it and All admitted the row on the others' say.
+            // DefaultIfEmpty(false) turns that silence into a refusal before the concatenation.
+            var chain = validators
+                .Select(v => v.Validate(context).Take(1).Select(result => result.IsValid).DefaultIfEmpty(false))
                 .ToInlineObservable()
                 .Concat()
-                .All(result => result.IsValid);
+                .All(valid => valid);
+            return reader.IsApiToken
+                ? chain.Zip(ApiTokenCapAllows(meshHub, accessService, reader, node), (valid, capAllows) => valid && capAllows)
+                : chain;
         });
+
+    /// <summary>
+    /// The API-token clamp, enforced on the synced-query path whatever admitted the row.
+    ///
+    /// <para>🚨 The validator chain can admit a row before the permission fold is ever reached —
+    /// <c>RlsNodeValidator</c>'s own-scope shortcut grants a node under <c>{reader}/…</c> without
+    /// walking the fold, and the fold is the only place the clamp lives
+    /// (<c>PermissionEvaluator</c>: an API token on a scope whose policy withholds
+    /// <see cref="Permission.Api"/> holds NOTHING there). So a token reader is admitted only when
+    /// the fold, evaluated AS THE TOKEN, still grants Read — or when the same person evaluated
+    /// WITHOUT the token flag holds nothing either, i.e. the clamp is not what decides the row and
+    /// a type rule's legitimate grant (a root User profile) stands.</para>
+    /// </summary>
+    private static IObservable<bool> ApiTokenCapAllows(
+        IMessageHub meshHub, AccessService accessService, AccessContext reader, MeshNode node)
+    {
+        var path = node.Path ?? string.Empty;
+        var asToken = accessService.RunAs(reader,
+            () => meshHub.GetEffectivePermissions(path, reader.ObjectId).Take(1));
+        var asPerson = accessService.RunAs(reader with { IsApiToken = false },
+            () => meshHub.GetEffectivePermissions(path, reader.ObjectId).Take(1));
+        return asToken.Zip(asPerson, (token, person) =>
+                token.HasFlag(Permission.Read) || person == Permission.None)
+            .DefaultIfEmpty(false);
+    }
 
     /// <summary>
     /// The RLS filter itself, with the permission probe as a parameter so it can be exercised
