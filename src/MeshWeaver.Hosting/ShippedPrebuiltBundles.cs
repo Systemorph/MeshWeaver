@@ -1351,10 +1351,24 @@ public static class ShippedPrebuiltBundles
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
             {
+                // 🚨 #7015 review — NO MANIFEST is HOLLOW, never a framework decline. A readable ZIP
+                // without meshweaver/manifest.json states no identity and names no entries, so the
+                // identity gate below would "decline" it as another framework's and the pass would
+                // read as complete although it never learned what the bundle carries. Hollow is
+                // the one tally that says "this bundle's membership is unknown".
+                if (manifest is null)
+                {
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: bundle {Bundle} has no readable manifest — what it "
+                        + "names is unknown; counted HOLLOW (offer discovery incomplete), not declined",
+                        Path.GetFileName(bundlePath));
+                    return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
+                }
+
                 // The whole-bundle gate: the exact identity gate as before when no policy context
                 // is in play (the image's own bundles, the install-time re-seed); otherwise the
                 // strictness policy, whose Adopt may still require the per-assembly link check.
-                var decision = context is null || manifest is null
+                var decision = context is null
                     ? (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } exactReason
                         ? new AdoptionDecision(AdoptionVerdict.Decline, exactReason, LinkCheckRequired: false)
                         : new AdoptionDecision(AdoptionVerdict.Adopt, "this framework identity", LinkCheckRequired: false))

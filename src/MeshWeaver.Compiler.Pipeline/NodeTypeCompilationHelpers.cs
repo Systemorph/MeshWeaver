@@ -354,6 +354,11 @@ internal static class NodeTypeCompilationHelpers
                         if (string.Equals(path, hubPath, StringComparison.OrdinalIgnoreCase))
                             Interlocked.Exchange(ref offered, 1);
                     }
+                    // #6930 / #7015 — set when the adoption pass did NOT ask every bundle (an unreadable
+                    // bundle or source, a timeout, a fault): "no offer witnessed" then means UNKNOWN
+                    // membership, never "authored". Read once, in DispatchOrPark.
+                    string? incompleteDiscovery = null;
+                    void OnIncomplete(string reason) => Interlocked.CompareExchange(ref incompleteDiscovery, reason, null);
 
                     // 🅿️ PARKED short-circuit. A prior compile of this NodeType reached a
                     // terminal failed state, so we do NOT re-run Roslyn — that is the
@@ -577,9 +582,20 @@ internal static class NodeTypeCompilationHelpers
                     {
                         var attempt = new SingleAssignmentDisposable();
                         onDemandAdoptionSubs.Add(attempt);
-                        attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath], OnOffered)
+                        attempt.Disposable = prebuiltConsumer.SeedForTypes([hubPath], OnOffered, OnIncomplete)
                             .Take(1)
                             .Timeout(OnDemandAdoptionBudget)
+                            .Catch<int, Exception>(ex =>
+                            {
+                                // The PASS did not complete — its offer witness is partial (#7015).
+                                OnIncomplete(ex is TimeoutException
+                                    ? $"the adoption pass did not complete within {OnDemandAdoptionBudget.TotalSeconds}s"
+                                    : $"the adoption pass faulted: {ex.Message}");
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: on-demand prebuilt adoption for {HubPath} failed — "
+                                    + "deciding without it.", hubPath);
+                                return Observable.Return(0);
+                            })
                             .SelectMany(AdoptionLanded)
                             .Catch<bool, Exception>(ex =>
                             {
@@ -755,7 +771,17 @@ internal static class NodeTypeCompilationHelpers
                         var pendingDefinition = pendingNode!.ContentAs<NodeTypeDefinition>(
                             hub.JsonSerializerOptions, logger);
                         var offeredByBundle = Volatile.Read(ref offered) == 1;
-                        if (pendingDefinition is null || !IsModuleContent(pendingDefinition, offeredByBundle))
+                        // 🚨 #6930 / #7015 — owner decision: when the offer discovery was INCOMPLETE, a
+                        // type with NO adoption history in a partition with NO sync source is parked —
+                        // its membership is unknown and a module's content must not reach Roslyn as
+                        // authored. Every other type keeps its verdict: module content goes to the gate
+                        // below exactly as before, and a tracked partition compiles.
+                        var moduleContent = pendingDefinition is not null
+                            && IsModuleContent(pendingDefinition, offeredByBundle);
+                        var unknownMembership = pendingDefinition is not null && !moduleContent
+                            ? Volatile.Read(ref incompleteDiscovery)
+                            : null;
+                        if (pendingDefinition is null || (!moduleContent && unknownMembership is null))
                         {
                             Dispatch();
                             return;
@@ -774,19 +800,21 @@ internal static class NodeTypeCompilationHelpers
                                         Dispatch();
                                         return;
                                     }
-                                    var reason = PrebuiltAssemblySeeder.UntrackedPartitionParkReason(
-                                        hubPath, offeredByBundle);
+                                    var reason = unknownMembership is null
+                                        ? PrebuiltAssemblySeeder.UntrackedPartitionParkReason(hubPath, offeredByBundle)
+                                        : PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason(
+                                            hubPath, unknownMembership);
                                     // #3583 — a type that still holds a build is HELD, not parked
                                     // dead: the last build keeps serving (same module MAJOR) or is
                                     // refused-but-not-errored (a MAJOR bump), and a person is told.
                                     if (SettleAsHold(pendingDefinition, reason))
                                         return;
                                     logger?.LogError(
-                                        "Compile watcher: {HubPath} is a module's content in a partition this "
-                                        + "mesh does not track, and no prebuilt build for it landed — PARKING "
-                                        + "with a named refusal instead of compiling (offered by a bundle: "
-                                        + "{Offered}). {Reason}",
-                                        hubPath, offeredByBundle, reason);
+                                        "Compile watcher: {HubPath} is a module's content (or of unknown "
+                                        + "membership: {Unknown}) in a partition this mesh does not track, and "
+                                        + "no prebuilt build for it landed — PARKING with a named refusal "
+                                        + "instead of compiling (offered by a bundle: {Offered}). {Reason}",
+                                        hubPath, unknownMembership is not null, offeredByBundle, reason);
                                     var registry = hub.ServiceProvider.GetService<NodeTypeCompileParkRegistry>()
                                         ?? parkRegistry;
                                     registry?.OnCompileFailed(

@@ -149,6 +149,69 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
                 .Emit(cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    /// <summary>A real <c>{partition}/_GitSync</c> naming a repository — "tracked".</summary>
+    protected async Task TrackPartition(string partition)
+    {
+        await MeshService.CreateNode(new MeshNode(GitHubSyncService.ConfigId, partition)
+            {
+                Name = "GitHub Sync",
+                NodeType = GitHubSyncService.ConfigNodeType,
+                State = MeshNodeState.Active,
+                Content = new GitHubSyncConfig
+                {
+                    RepositoryUrl = "https://github.com/Systemorph/Example",
+                    Branch = "main",
+                },
+            })
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        (await NodeTypeCompilationHelpers.PartitionTracksSources(Mesh, $"{partition}/Widget")
+            .Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: TestContext.Current.CancellationToken))
+            .Should().BeTrue("a _GitSync naming a repository is what 'tracked' means");
+    }
+
+    /// <summary>The record once something settled it: an Error, or an Ok whose MVID moved (a Roslyn pass).</summary>
+    protected async Task<NodeTypeDefinition> Settled(string path, string because)
+        => (await Mesh.GetMeshNodeStream(path)
+            .Select(n => n?.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions))
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(d => d is not null
+                        && (d.CompilationStatus == CompilationStatus.Error
+                            || (d.CompilationStatus == CompilationStatus.Ok
+                                && !string.Equals(d.LatestAssemblyMvid, SeededMvid, StringComparison.Ordinal))),
+                because, TestContext.Current.CancellationToken))!;
+
+    /// <summary>
+    /// The owner's decision for an INCOMPLETE offer discovery (#7015 review), asserted through the real
+    /// sweep: the never-adopted type in a partition with no sync source is PARKED with the unknown-
+    /// membership reason and never reaches Roslyn; the same kind of record in a TRACKED partition, in
+    /// the same pass, compiles.
+    /// </summary>
+    protected async Task AssertUnknownMembershipParks_AndTrackedCompiles(string untrackedType, string trackedType)
+    {
+        await TrackPartition(PartitionOf(trackedType));
+        await CreateType(untrackedType, force: false);
+        await CreateType(trackedType, force: false);
+
+        var outcomes = await Sweep();
+        outcomes.Where(o => string.Equals(o.TypePath, untrackedType, StringComparison.OrdinalIgnoreCase))
+            .Should().NotContain(o => o.Status == PreWarmStatus.Compiled, "the batch never compiles it");
+
+        var parked = await Settled(untrackedType, "the unknown-membership type settles");
+        parked.CompilationStatus.Should().Be(CompilationStatus.Error,
+            $"its membership is unknown and its partition tracks no source — park it; error: {parked.CompilationError}");
+        parked.CompilationError.Should().Contain("Unknown module membership").And.Contain("did not complete")
+            .And.Contain("MeshWeaver#6930");
+        parked.LatestAssemblyMvid.Should().Be(SeededMvid, "no Roslyn pass ran");
+        Parks.GetCompileAttemptCount(untrackedType).Should().Be(0, "no compile was dispatched");
+
+        var compiled = await Settled(trackedType, "the tracked type settles");
+        compiled.CompilationStatus.Should().Be(CompilationStatus.Ok,
+            $"a partition with a sync source compiles whatever the discovery said; error: {compiled.CompilationError}");
+        compiled.LatestAssemblyMvid.Should().NotBe(SeededMvid, "a real Roslyn pass wrote real coordinates");
+    }
+
+    private static string PartitionOf(string path) => path[..path.IndexOf('/')];
+
     protected async Task<IList<PreWarmOutcome>> Sweep()
         => await DynamicTypePreWarmer
             .WarmDynamicTypes(Mesh, perTypeBudget: TimeSpan.FromSeconds(30), batchBake: true, betweenTypes: TimeSpan.Zero)
@@ -404,4 +467,59 @@ public class DiscoveryFault(ITestOutputHelper output) : TheGatesVerdictSurvivesT
             "the pass returned normally but could not read every bundle — 'not witnessed' is not "
             + "'authored', so the type must stay out of the batch's direct compile");
     }
+
+    [Fact]
+    public Task ThroughTheSweep_TheUnknownTypeParks_AndATrackedTypeCompiles()
+        => AssertUnknownMembershipParks_AndTrackedCompiles(TypePath, "tracked/Authored");
+}
+
+/// <summary>
+/// #7015 review — a VALID ZIP with no <c>meshweaver/manifest.json</c> states no framework and names
+/// nothing; it is HOLLOW (discovery incomplete), never a framework decline that would let the pass
+/// read as complete.
+/// </summary>
+public class ManifestLessBundle(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string TypePath = "untracked/InTheManifestLessBundle";
+
+    private static byte[] ZipWithoutManifest()
+    {
+        using var buffer = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(
+                   buffer, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var entry = archive.CreateEntry("lib/Something.dll");
+            using var stream = entry.Open();
+            stream.Write(AssemblyBytes());
+        }
+        return buffer.ToArray();
+    }
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-no-manifest.zip"] = ZipWithoutManifest() };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task AManifestLessBundle_IsIncompleteDiscovery_NotADecline()
+    {
+        var refused = await NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(
+                Mesh,
+                new Dictionary<string, NodeTypeDefinition?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [TypePath] = new NodeTypeDefinition { Configuration = "config => config" },
+                },
+                null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the question answers once", cancellationToken: TestContext.Current.CancellationToken);
+        refused.Should().Contain(TypePath,
+            "a bundle with no manifest names an unknown set of types — its membership is not established");
+    }
+
+    [Fact]
+    public Task ThroughTheSweep_TheUnknownTypeParks_AndATrackedTypeCompiles()
+        => AssertUnknownMembershipParks_AndTrackedCompiles(TypePath, "tracked/Authored");
 }

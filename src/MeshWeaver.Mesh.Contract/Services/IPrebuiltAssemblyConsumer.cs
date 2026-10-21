@@ -1,5 +1,4 @@
 using System;
-using System.Reactive.Linq;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -50,15 +49,13 @@ public interface IPrebuiltAssemblyConsumer
     /// skipped — although it completed normally. Only when it stays silent may a caller read "no
     /// offer witnessed" as "no bundle names this type" (MeshWeaver#6930, the untracked-module gate).
     ///
-    /// <para>Defaulted so that an implementation predating the witness keeps its contract. It cannot
-    /// say whether its discovery was complete, so it reports INCOMPLETE — the direction in which a
-    /// caller asks again rather than mistaking a module's content for authored content.</para>
+    /// <para>Defaulted so that an implementation predating the witness keeps its PRE-WITNESS
+    /// contract: it reports nothing, exactly as before the witness existed. Defaulting to
+    /// "incomplete" instead would make the compile watcher PARK every never-adopted NodeType in every
+    /// partition without a sync source — users' own authored types included — on any host whose
+    /// consumer predates this overload.</para>
     /// </summary>
     IObservable<int> SeedForTypes(
         IReadOnlyCollection<string> typePaths, Action<string> onOffered, Action<string> onIncomplete)
-        => Observable.Defer(() =>
-        {
-            onIncomplete("this bundle consumer does not report whether its offer discovery completed");
-            return SeedForTypes(typePaths, onOffered);
-        });
+        => SeedForTypes(typePaths, onOffered);
 }

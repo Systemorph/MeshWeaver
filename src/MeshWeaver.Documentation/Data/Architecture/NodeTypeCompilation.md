@@ -1362,9 +1362,17 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
 - **An incomplete offer pass fails closed.** The pass is incomplete when its budget runs out, or
   when it returns normally without having read every bundle. That covers a bundle it could not
   read, a manifest it could not read, and a published source it skipped. The consumer reports this
-  through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`; a consumer that
-  cannot tell reports incomplete. A type the pass did not ask about has unknown membership, so
-  every candidate in an untracked partition goes through the watcher.
+  through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`. A consumer
+  written before this overload reports nothing, as it did before. A bundle without a manifest
+  counts as unreadable (hollow), not as a framework decline. A type the pass did not ask about has
+  unknown membership, so every candidate in an untracked partition goes through the watcher.
+- **The watcher parks only a type of unknown membership with nothing else to go on** (owner
+  decision on #7015). When its own offer discovery is incomplete, it parks a type only if the type
+  has no adoption history and its partition has no sync source. The park reason is
+  `PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason`, which names why discovery was
+  incomplete. Every other type keeps its verdict: a type in a partition with a sync source
+  compiles, and a type with adoption history goes to the untracked-module gate as before. The park
+  lifts like any other: repair the bundle or add a sync source, then request a release.
 - **Verifying this process's own adoptions is bounded.** An adoption that cannot be verified in
   time is reported as not evaluated. It is still refused a compile, and it is not handed to the
   watcher.
