@@ -594,6 +594,16 @@ internal static class NodeTypeCompilationHelpers
                                     + "skipping on-demand prebuilt adoption and compiling the live source.",
                                     hubPath);
                                 DispatchOrPark();
+                            },
+                            ex =>
+                            {
+                                // One-shot. The chain above already folds a fault or a timeout of
+                                // the tracking question into TRACKED; this arm catches anything that
+                                // still escapes, and reads it the same way — the force is honoured.
+                                logger?.LogWarning(ex,
+                                    "Compile watcher: whether {HubPath}'s partition tracks a source could "
+                                    + "not be read for a FORCED release — honouring the force.", hubPath);
+                                DispatchOrPark();
                             });
                         return;
                     }

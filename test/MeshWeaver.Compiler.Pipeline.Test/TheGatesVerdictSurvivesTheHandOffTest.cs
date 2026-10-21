@@ -214,7 +214,7 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
 
     protected async Task<IList<PreWarmOutcome>> Sweep()
         => await DynamicTypePreWarmer
-            .WarmDynamicTypes(Mesh, perTypeBudget: TimeSpan.FromSeconds(30), batchBake: true, betweenTypes: TimeSpan.Zero)
+            .WarmDynamicTypes(Mesh, perTypeBudget: TestTimeouts.Convergence, batchBake: true, betweenTypes: TimeSpan.Zero)
             .ToList()
             .Should().Within(TestTimeouts.CrossSilo * 3)
             .Emit("the sweep completes", cancellationToken: TestContext.Current.CancellationToken);
