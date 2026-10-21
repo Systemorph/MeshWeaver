@@ -1365,7 +1365,10 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`. A consumer
   written before this overload reports nothing, as it did before. A bundle without a manifest, or
   with a manifest that states no framework identity, counts as unreadable (hollow), not as a
-  framework decline. A bundle that names a different framework identity is still declined. A type the pass did not ask about has
+  framework decline. A bundle that names a different framework identity is still declined. A
+  publication pointer the walk will not follow (it names a generation that is not on disk, or it is
+  empty, unreadable or escaping) also makes the pass incomplete, even when the sealed flat
+  publication behind it is read: the publication the pointer names was never asked about. A type the pass did not ask about has
   unknown membership, so every candidate in an untracked partition goes through the watcher.
 - **The watcher parks only a type of unknown membership with nothing else to go on** (owner
   decision on #7015). When its own offer discovery is incomplete, it parks a type only if the type

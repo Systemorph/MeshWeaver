@@ -691,13 +691,35 @@ public static class ShippedPrebuiltBundles
             // under `source`. Resolving and then composing against the source directory would
             // read the flat layout's bytes while reporting the generation's, which during the
             // migration is a silent wrong answer rather than a missing one.
-            var sourceDir =
-                publicationDirectories is not null
-                && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned)
-                    ? pinned
-                    : ResolvePublicationPointer(source, cancellationToken, logger, io).Directory;
+            string sourceDir;
+            string? pointerFault = null;
+            if (publicationDirectories is not null
+                && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned))
+                sourceDir = pinned;
+            else
+            {
+                var pointer = ResolvePublicationPointer(source, cancellationToken, logger, io);
+                sourceDir = pointer.Directory;
+                pointerFault = pointer.Fault;
+            }
             if (SealedBundlesOfPublication(sourceDir, logger, cancellationToken, readLines, io) is { } listed)
+            {
                 bundles.AddRange(listed);
+                // #7015 review — a pointer this walk would not follow (it names a generation that is
+                // not on disk, it is empty, unreadable or escaping) means the publication the
+                // publisher INTENDED is unknown. The sealed flat fallback is still read — its bytes
+                // are a real publication — but what the intended one names was never asked about,
+                // so the walk does not count as complete for the offer witness.
+                if (pointerFault is not null)
+                {
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {Source}'s publication pointer was not followed ({Fault}) — "
+                        + "its sealed flat publication was read, but the publication the pointer names was "
+                        + "not; offer discovery for this source is INCOMPLETE",
+                        source, pointerFault);
+                    onSourceSkipped?.Invoke(source);
+                }
+            }
             else
                 // #7015 review — a source this walk could not read (unsealed, gone, torn) is one
                 // whose bundles were never ASKED about: what they name is unknown, not "nothing".
@@ -948,7 +970,7 @@ public static class ShippedPrebuiltBundles
         if (tally.BundlesHollow > 0)
             reasons.Add($"{tally.BundlesHollow} bundle(s) had no readable manifest");
         if (skippedSources > 0)
-            reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn)");
+            reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn, or their publication pointer was not followed)");
         if (tally.Leaving > 0)
             reasons.Add("the hub is leaving, so no pass ran");
         return reasons.Count == 0 ? null : string.Join("; ", reasons);

@@ -164,6 +164,48 @@ public class PublicationGenerationTest
     }
 
     /// <summary>
+    /// #7015 review — the same broken pointer over a SEALED flat fallback still serves the flat
+    /// bytes, but the offer-discovery walk reports the source SKIPPED: the publication the pointer
+    /// names was never read, so what it names is unknown, and a never-adopted type only it names
+    /// must not be classified as authored content. The control — the same flat publication with no
+    /// pointer at all — is a complete read.
+    /// </summary>
+    [Fact]
+    public void APointerToAnAbsentGeneration_OverASealedFallback_IsIncompleteDiscovery()
+    {
+        using var root = new TempRoot();
+        var source = root.Source(Identity, Source);
+        WriteBundle(Path.Combine(source, "Store.zip"), "flat-store");
+        Seal(source, "Store.zip");
+        Point(source, "Systemorph-MeshWeaver-swept-away-1");
+
+        var skipped = new System.Collections.Generic.List<string>();
+        var bundles = ShippedPrebuiltBundles.CompletePublishedBundlesOf(
+            Path.Combine(root.Path, Identity), logger: null, TestContext.Current.CancellationToken,
+            onSourceSkipped: skipped.Add);
+
+        Assert.Equal(["Store.zip"], bundles.Select(Path.GetFileName));
+        Assert.Equal([source], skipped);
+    }
+
+    [Fact]
+    public void ASealedFlatPublicationWithNoPointer_IsACompleteRead()
+    {
+        using var root = new TempRoot();
+        var source = root.Source(Identity, Source);
+        WriteBundle(Path.Combine(source, "Store.zip"), "flat-store");
+        Seal(source, "Store.zip");
+
+        var skipped = new System.Collections.Generic.List<string>();
+        var bundles = ShippedPrebuiltBundles.CompletePublishedBundlesOf(
+            Path.Combine(root.Path, Identity), logger: null, TestContext.Current.CancellationToken,
+            onSourceSkipped: skipped.Add);
+
+        Assert.Equal(["Store.zip"], bundles.Select(Path.GetFileName));
+        Assert.Empty(skipped);
+    }
+
+    /// <summary>
     /// And with NO flat copy behind it (phase 3), the same fallback lands on a directory with no
     /// sentinel — which is read as the transient republish window, the 503 every consumer already
     /// waits out. The point is that the degradation is to a WAIT, never to a partial read.
