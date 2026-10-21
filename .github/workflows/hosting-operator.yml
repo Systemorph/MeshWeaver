@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 45 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 45 (39 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 46 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 46 (40 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -238,6 +238,14 @@ jobs:
           # beside bin/). Behaviour-tested against test/stubs/manifest-apply. The plan half is the Plugins
           # ApplyClusterManifest action; the line moves up into the plan list once that has merged.
           hosting-manifest-apply     ApplyClusterManifest — ships and is behaviour-tested; the plan half is the Plugins ApplyClusterManifest action
+          #
+          # hosting-chart-drift is the Chart Drift comparison moved off core's chart-drift.yml into the
+          # governed Audit (Systemorph/Memex#647): the estate's aks-ops lane runs it in the VNet as
+          # hosting-operator, beside hosting-audit, from the MeshWeaver checkout at the operator pin (it
+          # finds core's drift scripts at bin/../../scripts there, and at /opt/hosting/drift in this
+          # image). Behaviour-tested against stub drift scripts. The plan half is the Plugins Audit
+          # action's second step; the line moves up into the plan list once that has merged.
+          hosting-chart-drift        Audit (chart drift) — ships and is behaviour-tested; the plan half is the Plugins Audit action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -338,6 +346,8 @@ jobs:
             command -v hosting-deploy >/dev/null     || { echo "hosting-* not on PATH"; exit 1; }
             command -v helm kubectl az pg_dump jq crane >/dev/null || { echo "a required tool is missing"; exit 1; }
             test -f /opt/hosting/bin/_audit.jq       || { echo "_audit.jq missing — hosting-audit has no detection"; exit 1; }
+            test -f /opt/hosting/drift/check-chart-drift.sh || { echo "drift scripts missing — hosting-chart-drift has nothing to compare with"; exit 1; }
+            command -v python3 >/dev/null && python3 -c "import yaml" || { echo "python3/PyYAML missing — the drift render cannot run"; exit 1; }
             echo "image carries: $(ls /opt/hosting/bin/hosting-* | wc -l) commands + chart $(grep ^version /opt/hosting/chart/Chart.yaml)"
           '
 
