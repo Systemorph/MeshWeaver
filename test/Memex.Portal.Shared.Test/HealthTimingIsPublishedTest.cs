@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
@@ -136,7 +137,7 @@ public class HealthTimingIsPublishedTest
     /// rule is read against a known input rather than against how busy the machine was.
     /// </summary>
     private static HealthReport ReportOf(params (string Name, double Ms)[] checks) =>
-        new(checks.ToDictionary(
+        new(checks.ToImmutableDictionary(
                 c => c.Name,
                 c => new HealthReportEntry(HealthStatus.Healthy, null, TimeSpan.FromMilliseconds(c.Ms), null, null)),
             TimeSpan.FromMilliseconds(checks.Sum(c => c.Ms)));
