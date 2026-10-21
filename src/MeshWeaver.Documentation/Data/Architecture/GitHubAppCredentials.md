@@ -29,7 +29,6 @@ explicitly.**
 | `dotnet-test.yml` · `shared-rules` | `AGENTS.md` in every repo of `.github/shared-rules.json` | contents | **red at the mint** — and the job is a `needs:` of the required `Consolidate test results` |
 | `dotnet-test.yml` · `cross-repo-pair` | the pull request a `Pairs-with:` declares | contents, pull-requests | **red at the mint**, same required chain |
 | `shared-rules.yml` | the same as `shared-rules`, on a clock | contents | red at the mint |
-| `chart-drift.yml` · three jobs | Memex's per-environment overlays | contents, `repositories: Memex` | red at the mint |
 | `pinned-digests.yml` · two jobs | every repository the installation reaches (discovery) | contents | **silent** — the repository drops out of the denominator |
 | `lock-pinned-digests.yml` · two jobs | the same, plus the deployment overlays | contents | **silent** — see below |
 | `combo-verify.yml` · `verify` | the module source repositories | contents | the source fetch fails |
