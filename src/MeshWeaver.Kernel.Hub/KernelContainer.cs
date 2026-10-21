@@ -38,6 +38,8 @@ public class KernelContainer(IServiceProvider serviceProvider)
 {
     private readonly ILogger<KernelContainer> logger = serviceProvider.GetRequiredService<ILogger<KernelContainer>>();
     private IMessageHub? executorHub;
+    // The runtime behind executorHub — the container asks it for a SUBMISSION's settlement signal.
+    private KernelExecutor? executorRuntime;
     private readonly object executorHubLock = new();
 
     /// <summary>
@@ -363,11 +365,12 @@ public class KernelContainer(IServiceProvider serviceProvider)
     /// transient hub, NOT a persisted MeshNode — routing never goes through the
     /// MeshCatalog path.</para>
     /// </summary>
-    private IMessageHub GetOrCreateExecutor(IMessageHub publicHub)
+    private (IMessageHub Hub, KernelExecutor Runtime) GetOrCreateExecutor(IMessageHub publicHub)
     {
         lock (executorHubLock)
         {
-            if (executorHub is not null && !executorHub.IsDisposing) return executorHub;
+            if (executorHub is not null && !executorHub.IsDisposing && executorRuntime is not null)
+                return (executorHub, executorRuntime);
             // Use the parent address as the executor's id so concurrent activity
             // hubs in the same process get distinct executor addresses
             // (HostedHubsCollection scopes by parent, but the child id still
@@ -377,7 +380,8 @@ public class KernelContainer(IServiceProvider serviceProvider)
             var executor = new KernelExecutor(publicHub);
             executorHub = publicHub.GetHostedHub(execAddress, executor.Configure, HostedHubCreation.Always)
                 ?? throw new InvalidOperationException($"Failed to create kernel executor hub at {execAddress}");
-            return executorHub;
+            executorRuntime = executor;
+            return (executorHub, executor);
         }
     }
 
@@ -398,13 +402,13 @@ public class KernelContainer(IServiceProvider serviceProvider)
         // of silence — a healthy cell computing past it is still running. Ending the tracked
         // observable there released the claim, and a quiet script that then also outlived the idle
         // window had this hub and its executor disposed mid-run: the pump stopped and the Activity
-        // stayed Running for ever. So a timed-out wait hands over to the Activity itself (this hub
-        // OWNS it) and the claim is released when its status turns terminal.
-        var activityPath = !string.IsNullOrEmpty(request.Message.ActivityLogPath)
-            ? request.Message.ActivityLogPath!
-            : hub.Address.ToString();
+        // stayed Running for ever. So a timed-out wait hands over to THIS SUBMISSION's own settlement
+        // (KernelExecutor.ExpectSettlement) and the claim is released when it settles. Never the
+        // Activity's status: one Activity carries many submissions (a markdown view's blocks, an
+        // ExecutionManager's queue), and an earlier block's terminal status would release a later,
+        // still-running block's claim at once.
         IObservable<IMessageDelivery<SubmitCodeResponse>?> Run(IdleState.Claim? claim) =>
-            ReplyOrSettlement(Dispatch(hub, request.Message, claim), () => ActivitySettles(hub, activityPath));
+            Dispatch(hub, request.Message, claim);
         var submission = idle is { } state
             ? state.Track(Run)
             : Observable.Defer(() => Run(null));
@@ -438,21 +442,24 @@ public class KernelContainer(IServiceProvider serviceProvider)
             .Select(r => (T?)r)
             .Catch<T?, TimeoutException>(_ => settled().Take(1).Select(_ => (T?)null));
 
-    /// <summary>Emits once the Activity at <paramref name="activityPath"/> — owned by
-    /// <paramref name="hub"/> — reaches a terminal status.</summary>
-    private static IObservable<Unit> ActivitySettles(IMessageHub hub, string activityPath)
-        => hub.GetWorkspace().GetMeshNodeStream(activityPath)
-            .Select(node => node?.ContentAs<ActivityLog>(hub.JsonSerializerOptions)?.Status)
-            .Where(status => status is { } s && s.IsTerminal())
-            .Select(_ => Unit.Default);
-
-    /// <summary>Sets up (or reuses) the executor, binds the claim to it, and posts the submission.</summary>
-    private IObservable<IMessageDelivery<SubmitCodeResponse>> Dispatch(
+    /// <summary>
+    /// Sets up (or reuses) the executor, binds the claim to it, and posts the submission under a
+    /// delivery id of our own — registered with the executor BEFORE the post, so this submission's
+    /// settlement is caught even if it settles while the reply wait is timing out. The reply, or,
+    /// when that wait times out, this submission's settlement (as <c>null</c>).
+    /// </summary>
+    private IObservable<IMessageDelivery<SubmitCodeResponse>?> Dispatch(
         IMessageHub hub, SubmitCodeRequest submission, IdleState.Claim? claim)
     {
-        var executor = GetOrCreateExecutor(hub);
+        var (executor, runtime) = GetOrCreateExecutor(hub);
         claim?.Bind(executor);
-        return hub.Observe<SubmitCodeResponse>(submission, o => o.WithTarget(executor.Address));
+        var deliveryId = Guid.NewGuid().ToString("N");
+        var settled = runtime.ExpectSettlement(deliveryId);
+        return ReplyOrSettlement(
+                hub.Observe<SubmitCodeResponse>(submission, o => o.WithTarget(executor.Address).WithMessageId(deliveryId)),
+                () => settled)
+            // A submission that never reached the executor will never settle there — drop its entry.
+            .Do(_ => { }, ex => runtime.ForgetSettlement(deliveryId));
     }
 
     /// <summary>

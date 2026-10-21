@@ -177,9 +177,14 @@ Three more holes the same review found, each of which could again leave a run wr
   released when its bounded wait for the executor's reply ended, timeout included — so a quiet script
   that outlived both the request budget and the idle window had its hub and executor disposed mid-run,
   the submission pump stopped, and the Activity stayed `Running`. A timed-out reply wait now hands over
-  to the Activity itself (`KernelContainer.ReplyOrSettlement`; the host owns that node) and the claim
-  lasts until its status is terminal. `AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles`
-  (Compiler.Pipeline.Test) crosses both budgets on the injected idle clock.
+  to THAT SUBMISSION's own settlement signal (`KernelContainer.ReplyOrSettlement` over
+  `KernelExecutor.ExpectSettlement`, keyed by the forwarded delivery's id and registered before the
+  post), and the claim lasts until the executor has settled it. Never the Activity's status: one
+  Activity carries many submissions (a markdown view's blocks, an `ExecutionManager` queue), and an
+  earlier block's terminal status released a later, still-running block's claim at once.
+  `AReplyWaitThatTimesOut_KeepsTheClaimUntilTheRunSettles` (Compiler.Pipeline.Test) crosses both
+  budgets on the injected idle clock; `KernelIdleClaimIsPerSubmissionTest` (Graph.Test) does it end
+  to end for sequential and queued blocks sharing one Activity.
 - **An English-only refusal.** The lane's refusal is platform text, so the kernel records it as a keyed
   transcript entry (`activity.codeRun.kernelSaturated`, with the slot count) at its own failure boundary;
   the exception text stays for the host's diagnostics.

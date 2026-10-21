@@ -71,6 +71,31 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     // shared CPU lane (which bounds compiles ACROSS kernels); ordering WITHIN a kernel
     // is this Concat, not a lock. Push order == the executor action block's FIFO handling.
     private readonly Subject<Submission> submissions = new();
+
+    // Per-SUBMISSION settlement signals, keyed by the forwarded delivery's id (KernelContainer sets
+    // it). The container's idle-disconnect claim waits on one when its bounded wait for the reply
+    // times out — the claim must last until THIS submission ends, and an Activity's status cannot
+    // say that: one Activity carries many submissions. AsyncSubject, so a settlement that lands
+    // before the container subscribes is still seen.
+    private ImmutableDictionary<string, AsyncSubject<Unit>> settlements =
+        ImmutableDictionary<string, AsyncSubject<Unit>>.Empty;
+
+    /// <summary>The settlement signal of the submission delivered under <paramref name="deliveryId"/>:
+    /// emits once and completes when the executor has settled it (any outcome) or is torn down.</summary>
+    internal IObservable<Unit> ExpectSettlement(string deliveryId)
+        => ImmutableInterlocked.GetOrAdd(ref settlements, deliveryId, _ => new AsyncSubject<Unit>());
+
+    /// <summary>Drops an expected settlement whose submission never reached this executor.</summary>
+    internal void ForgetSettlement(string deliveryId)
+        => ImmutableInterlocked.TryRemove(ref settlements, deliveryId, out _);
+
+    private void Settle(string deliveryId)
+    {
+        if (!ImmutableInterlocked.TryRemove(ref settlements, deliveryId, out var settled))
+            return;
+        settled.OnNext(Unit.Default);
+        settled.OnCompleted();
+    }
     private IDisposable? submissionPump;
 
     /// <summary>One queued REPL submission + the sink that carries its outcome back to the
@@ -157,6 +182,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 hub.RegisterForDisposal(System.Reactive.Disposables.Disposable.Create(() =>
                 {
                     submissionPump?.Dispose();
+                    // Nothing here will settle any more: release every waiter (the claim's dead-executor
+                    // check would too, but only at the next idle tick).
+                    foreach (var deliveryId in settlements.Keys)
+                        Settle(deliveryId);
                     session?.Dispose();
                     session = null;
                     // Release the cell-surface generation pins with the session — after this,
@@ -240,6 +269,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     activityLogger.Complete(ActivityStatus.Succeeded, returnElement);
                     hub.Post(new SubmitCodeResponse(msg.Id, true) { ActivitySettled = true },
                         o => o.ResponseFor(request));
+                    Settle(request.Id);
                 }
                 catch (Exception settleEx)
                 {
@@ -257,6 +287,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                     hub.Post(
                         new SubmitCodeResponse(msg.Id, false) { Error = settleEx.Message, ActivitySettled = true },
                         o => o.ResponseFor(request));
+                    Settle(request.Id);
                 }
             },
             ex =>
@@ -298,6 +329,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                         ActivitySettled = true,
                     },
                     o => o.ResponseFor(request));
+                Settle(request.Id);
             });
 
         submissions.OnNext(new Submission(
