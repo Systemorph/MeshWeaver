@@ -1723,11 +1723,19 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 // only gate needed. An UN-awaited failure — the subscribe protocol, an RLS denial,
                 // a NotFound — still faults the stream, unchanged.
                 (_, delivery) => !delivery.Properties.ContainsKey(PostOptions.CallbackDispatched)
-            ).WithStreamHandler<StreamErrorEvent>(handled, (_, delivery) =>
+            ).WithStreamHandler<StreamErrorEvent>(handled, (hub, delivery) =>
                 {
                     var evt = delivery.Message;
                     logger.LogWarning("Stream {StreamId} received StreamErrorEvent: {Message}", StreamId, evt.Message);
                     OnError(new InvalidOperationException(evt.Message));
+                    // 🚨 The owner ENDED this stream (review of #7016, thread 4340066051): nothing may
+                    // re-open it. Faulting the store alone left this mirror's recovery running — the
+                    // change-feed staleness latch, the end/recycle re-arm — and each re-subscribes AS
+                    // SYSTEM. After a refused read that re-opened, unfollowed, the very read the
+                    // owner had just ended, and the revoked node streamed again. A faulted mirror
+                    // serves nobody, so its sync hub is disposed with it, which releases every
+                    // recovery path registered on it.
+                    hub.Dispose();
                     return delivery.Processed();
                 }
             ).WithStreamHandler<UnsubscribeRequest>(handled, (hub, delivery) =>

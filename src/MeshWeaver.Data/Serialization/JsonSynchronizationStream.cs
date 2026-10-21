@@ -1915,6 +1915,11 @@ public static class JsonSynchronizationStream
         // (the error arm below), then the server-side stream is disposed. A revision that revokes
         // the read is therefore never sent. Not followed (null) ⇒ the stream's own items, as before.
         var followed = FollowReadAdmission(hub, delivery, reduced, logger);
+        // Set once the subscriber's read is REFUSED, before the server-side stream is disposed: the
+        // end of a refused read is never announced as a StreamEndedEvent, whose handler on the
+        // subscriber re-subscribes (as System) — that would re-open, unfollowed, the very read the
+        // refusal ended (review of #7016, thread 4340066051). The StreamErrorEvent is the answer.
+        var refusedRead = 0;
         // A followed subscription can hold a Full behind its verdict, or refuse it — so the answer
         // to a re-assert on it rides the Full actually POSTED, never the frame merely being set
         // (review of #7016, thread 4336475680). Completed with the stream, which answers a re-ask
@@ -1981,7 +1986,10 @@ public static class JsonSynchronizationStream
                     // on it again, and a resubscribe must pass the delivery gate afresh rather than
                     // be re-asserted onto this stream.
                     if (ex is UnauthorizedAccessException)
+                    {
+                        Interlocked.Exchange(ref refusedRead, 1);
                         EndRefusedSubscription(workspace, request, reduced, logger);
+                    }
                 })
         );
 
@@ -2063,6 +2071,18 @@ public static class JsonSynchronizationStream
             // re-subscribe, a late echo could land on the NEXT incarnation and read as an
             // owner-side end. The announcement stays for the ends it was built for: an idle
             // release or an explicit disposal on a healthy owner.
+            // 🚨 …AND NEVER FOR A REFUSED READ (review of #7016, thread 4340066051). The subscriber
+            // already has its answer (the StreamErrorEvent), and an end announcement is what its
+            // recovery re-subscribes on — as System, which the read follow exempts and the gate
+            // admits — re-opening, unfollowed, the read the refusal just ended.
+            if (Volatile.Read(ref refusedRead) == 1)
+            {
+                logger.LogDebug(
+                    "Stream {StreamId} on {Owner} ended because {Subscriber}'s read was refused; "
+                    + "not announcing an end the subscriber would recover from", request.StreamId,
+                    hub.Address, request.Subscriber);
+                return;
+            }
             if (reduced is SynchronizationStream<TReduced> { SubscriberEnded: true })
             {
                 logger.LogTrace(

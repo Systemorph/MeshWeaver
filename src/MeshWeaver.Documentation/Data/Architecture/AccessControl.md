@@ -2133,6 +2133,17 @@ participant-postable. A `cache/…` sender on an ingress-stamped delivery is the
 that subscription is followed like any other
 (`OpenSubscriptionEndsWithTheReadTest.AParticipantDeliveryClaimingTheCacheSender_IsStillFollowed`).
 
+**A refused subscription stays ended.** Both sides end it.
+- **Owner:** it does not announce a `StreamEndedEvent` for a refused read, because that event is
+  what the subscriber's recovery re-subscribes on.
+- **Subscriber:** on a `StreamErrorEvent` it disposes its sync stream instead of only faulting
+  it, which releases the change-feed staleness latch and the end/recycle re-arm.
+
+Those recovery paths re-subscribe as System, which the follow exempts. Before this fix they
+re-opened the revoked read, unfollowed, about two seconds after the refusal. The test measures
+the owner's registry: it serves neither the refused stream nor a new one
+(`ARefusedDirectSubscription_LeavesNoOwnerSubscriptionBehind`).
+
 **A stored type's ownership is followed live.** A stored type's declaration counts only while
 its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
 `DeclarationOf` re-reads that config on every commit to it and on every feed gap. Turning the

@@ -270,6 +270,57 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
     }
 
     /// <summary>
+    /// 🚨 Review of #7016, thread 4340066051: a REFUSED direct subscription leaves no owner-side
+    /// subscription behind — the client's recovery must not re-open it. The refused mirror only
+    /// FAULTED, and its recovery kept running: the owner's end announcement and the change-feed
+    /// staleness latch (the revoking revision was announced on the feed and never delivered) each
+    /// re-subscribed AS SYSTEM — an identity the follow exempts and the gate admits — so the owner
+    /// served the revoked link again, unfollowed. Measured before the fix: a NEW owner-side stream
+    /// for the same subscriber and stream id, about two seconds after the refusal. Measured here on
+    /// the owner's own registry, compared by reference: after the refusal reached the client, the
+    /// owner serves neither the refused stream nor a new one for that subscriber and stream id.
+    /// The three-second window outlasts the latch's debounce and grace (sanctioned negative wait).
+    /// </summary>
+    [HubFact]
+    public async Task ARefusedDirectSubscription_LeavesNoOwnerSubscriptionBehind()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        var link = await Issue("refused-recovery-link", HostDeclaredType, DateTimeOffset.UtcNow.AddDays(1), ct);
+        var visitor = ClientAs(Visitor);
+        var stream = ((Workspace)visitor.GetWorkspace()).GetRemoteStreamUnchecked<MeshNode, MeshNodeReference>(new Address(link), new MeshNodeReference());
+        var streamId = stream.StreamId;
+        var recorded = Record(stream.Select(change => change.Value).Where(node => node is not null)!);
+        using var open = recorded.Connect();
+        await FirstNode(recorded, link, "the direct subscription serves the link before the revocation", ct);
+        var ownerWorkspace = (Workspace)OwnerOf(link).GetWorkspace();
+        var refused = ownerWorkspace.GetClientSubscription(visitor.Address, streamId, new MeshNodeReference());
+        Assert.NotNull(refused);
+
+        await AsSystemUpdate(link, c => c with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") }, ct);
+        var end = await recorded.Should().Within(TestTimeouts.Convergence)
+            .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends with the refusal", cancellationToken: ct);
+        Assert.Equal(NotificationKind.OnError, end.Kind);
+
+        // Nothing serves it afterwards: neither the refused server-side stream (ended — unregistered,
+        // then disposed) nor a new one (the end announcement and the client's recovery re-open
+        // nothing). The served stream is compared by REFERENCE, so a re-open is told apart from a
+        // stream that never ended.
+        await Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(0L)
+            .Select(_ => ownerWorkspace.GetClientSubscription(visitor.Address, streamId, new MeshNodeReference()))
+            .Do(s =>
+            {
+                if (s is not null)
+                    Output.WriteLine(ReferenceEquals(s, refused)
+                        ? "the owner still serves the REFUSED stream (never ended)"
+                        : "the owner serves a NEW stream for the refused subscriber (re-opened by recovery)");
+            })
+            .Select(s => s is not null)
+            .Where(serves => serves)
+            .Should().NotEmit(TimeSpan.FromSeconds(3), "a refused subscription is never re-opened on the owner", ct);
+    }
+
+    /// <summary>
     /// 🚨 Review of #7016, thread 4338481261: the cache exemption trusts only a delivery that did NOT
     /// enter through a participant ingress. An ingress re-stamps the identity but keeps the
     /// participant's own <c>Sender</c>, and <see cref="SubscribeRequest"/> is participant-postable —
