@@ -104,7 +104,8 @@ public sealed record ActionHandlerRule
     /// asks for <c>Update</c> there authorizes no publisher at all. Naming a node in a WRITABLE space
     /// (for example a publishers node an administrator grants a group <c>Editor</c> on) is how such a
     /// rule gets publishers. The path is only CHECKED, never navigated, so it may lie outside the rule's
-    /// partition; it must be a canonical mesh path (<see cref="ActionHandlerRules.UnsafePublishScope"/>).
+    /// partition; when set it must be a canonical mesh path — a blank one is refused too, never read as
+    /// "absent" (<see cref="ActionHandlerRules.UnsafePublishScope"/>).
     /// A rule that names a scope nobody holds the permission on still authorizes nobody — it fails closed.
     /// </summary>
     public string? PublishScope { get; init; }
@@ -284,7 +285,7 @@ public static class ActionHandlerRules
         if (!IsCanonicalMeshPath(rule.Handler)
             || !ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
             return UnsafeHandler;
-        if (rule.PublishScope is { } scope && !string.IsNullOrWhiteSpace(scope) && !IsCanonicalMeshPath(scope))
+        if (rule.PublishScope is { } scope && !IsCanonicalMeshPath(scope))
             return UnsafePublishScope;
         // Partitions are case-insensitive everywhere (DeclaredNamespaces, schema routing).
         return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.OrdinalIgnoreCase)
@@ -370,7 +371,7 @@ public static class ActionHandlerRules
                     return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
                         $"rule {rulePath}: no permission seam is bound to this chain, so no publisher is authorized"));
                 // The publish check's node: the rule's PublishScope when it names one, else its handler.
-                var handlerPath = (string.IsNullOrWhiteSpace(rule.PublishScope) ? rule.Handler : rule.PublishScope).Trim().Trim('/');
+                var handlerPath = (rule.PublishScope ?? rule.Handler).Trim().Trim('/');
                 return authorizePublisher(handlerPath, publisher, permission)
                     .Take(1)
                     .DefaultIfEmpty(PermissionCheckOutcome.Undetermined("the permission check produced no verdict"))

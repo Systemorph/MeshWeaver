@@ -110,7 +110,7 @@ put an `IActionHandler` into the root service container. It can write a node.
 | `Handler` | the handler's own node, **in the rule's own partition**; its page is the review page |
 | `Capabilities` / `Mutates` | what the rule **declares** the handler offers (copied as written, never detected) and whether completing it changes anything |
 | `PublishPermission` | the `Permission` (`Update`, `Create`, …) a **publisher** must hold on `PublishScope` (else on `Handler`) to distribute a link — see "Who may publish" |
-| `PublishScope` | optional: the node the publish permission is checked on, instead of `Handler` — a canonical mesh path, which may lie outside the rule's partition (it is checked, never navigated); a non-canonical one refuses the rule as `UnsafePublishScope` |
+| `PublishScope` | optional: the node the publish permission is checked on, instead of `Handler` — a canonical mesh path, which may lie outside the rule's partition (it is checked, never navigated); a non-canonical or blank one refuses the rule as `UnsafePublishScope` |
 | `Label` / `LabelKey` | the caption of the navigation, as authored |
 | `Enabled` | a disabled rule claims nothing; a deployment disables one without a build |
 

@@ -453,6 +453,8 @@ public class ActionLinkContractTest
     [InlineData("Campaigns/%2e%2e")]
     [InlineData("Campaigns//Publishers")]
     [InlineData("Campaigns/Publishers?x=1")]
+    [InlineData("")]
+    [InlineData("   ")]
     public void AnUnsafePublishScope_RefusesTheRuleByName(string scope)
     {
         var chain = ActionHandlerRules.Bind(
