@@ -53,9 +53,17 @@ def is_fresh(step: dict) -> bool:
     return isinstance(step.get("uses"), str) and "actions/fresh-merge" in step["uses"]
 
 
-def resolves_only(step: dict) -> bool:
+def applies_merge(step: dict) -> bool:
+    """True only when the step is PROVABLY an applying merge: `resolve-only` omitted or a literal false.
+    Anything else — a literal true, or an expression (`${{ 'true' }}`, `${{ inputs.x }}`) that this
+    file cannot evaluate — may leave the checkout untouched, so it is never counted as a merge."""
     w = step.get("with") or {}
-    return str(w.get("resolve-only", "false")).strip().strip("'\"").lower() == "true"
+    if "resolve-only" not in w:
+        return True
+    v = w["resolve-only"]
+    if v is False:
+        return True
+    return isinstance(v, str) and v.strip().strip("'\"").lower() == "false"
 
 
 def is_selector(step: dict) -> bool:
@@ -95,9 +103,10 @@ def check_tree(root: Path) -> tuple[list[str], int, int]:
             if first_sel is None:
                 continue
             selecting.add(jid)
-            applying = [i for i, s in enumerate(steps) if is_fresh(s) and not resolves_only(s)]
+            applying = [i for i, s in enumerate(steps) if is_fresh(s) and applies_merge(s)]
             if not applying or min(applying) > first_sel:
-                how = ("only RESOLVES the tip (resolve-only: 'true')" if any(is_fresh(s) for s in steps)
+                how = ("does not provably merge (resolve-only is true, or an expression this check cannot evaluate)"
+                       if any(is_fresh(s) for s in steps)
                        else "applies no fresh merge at all")
                 violations.append(
                     f"::error file={rel}::job '{jid}' selects what the run tests (step "
@@ -112,9 +121,15 @@ def check_tree(root: Path) -> tuple[list[str], int, int]:
             if not planners:
                 continue
             for s in steps:
-                if not is_fresh(s) or resolves_only(s):
+                if not is_fresh(s):
                     continue
                 consuming_total += 1
+                if not applies_merge(s):
+                    violations.append(
+                        f"::error file={rel}::job '{jid}' tests what '{'/'.join(planners)}' selected but its fresh-merge "
+                        f"step does not provably merge (resolve-only is {(s.get('with') or {}).get('resolve-only')!r}) — "
+                        f"it keeps GitHub's merge ref while the selector read the fresh merge. Omit resolve-only")
+                    continue
                 main = str((s.get("with") or {}).get("main-sha", ""))
                 if not any(f"needs.{p}.outputs." in main for p in planners):
                     violations.append(
@@ -182,6 +197,15 @@ def self_test() -> int:
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with: {main-sha: "${{ inputs.merge-main-sha }}"}
       - name: select""", "      - name: select"), True),
+        # An expression this check cannot evaluate is not a provable merge (#7028 review).
+        ("plan-resolve-only-expression", GOOD.replace('with: {main-sha: "${{ inputs.merge-main-sha }}"}',
+                                                      'with: {resolve-only: "${{ \'true\' }}", main-sha: "${{ inputs.merge-main-sha }}"}'), True),
+        # A literal false IS a merge — the rule must not over-fire.
+        ("plan-resolve-only-false", GOOD.replace('with: {main-sha: "${{ inputs.merge-main-sha }}"}',
+                                                 'with: {resolve-only: \'false\', main-sha: "${{ inputs.merge-main-sha }}"}'), False),
+        # A consuming shard that only resolves keeps the merge ref: a second candidate (#7028 review).
+        ("shard-resolve-only", GOOD.replace('with: {main-sha: "${{ needs.plan.outputs.main }}"}',
+                                            'with: {resolve-only: \'true\', main-sha: "${{ needs.plan.outputs.main }}"}'), True),
         # Non-vacuity: a fresh-merge lane with no selector at all.
         ("no-selector", GOOD.replace("python3 scripts/affected-modules.py --range \"$M...HEAD\" --json", "echo hi"), True),
     ]
@@ -195,7 +219,7 @@ def self_test() -> int:
             fired = bool(violations)
             ok = fired == expect
             failures += 0 if ok else 1
-            print(f"self-test {'ok' if ok else 'FAIL':4} {name:22} expected={'fire' if expect else 'silent'} "
+            print(f"self-test {'ok' if ok else 'FAIL':4} {name:28} expected={'fire' if expect else 'silent'} "
                   f"got={'fire' if fired else 'silent'}" + ("" if ok else f" {violations}"))
     if failures:
         print(f"::error::check-fresh-merge-candidate.py self-test: {failures} case(s) did not behave — the gate is not proven")
