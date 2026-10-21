@@ -23,6 +23,33 @@ public class CatalogPresetTest
         Assert.Equal($"{Filter} sort:name", Controls.Catalog("Clients", Filter, sort: CatalogSort.Name).HiddenQuery);
     }
 
+    /// <summary>
+    /// A union hidden query (one sub-query per line) is ordered by its FIRST line — the view sends the
+    /// lines as <c>MeshQueryRequest.FromQueries</c>, each followed by the typed text, and the engine
+    /// takes sort/limit from the first. So EVERY line carries the order (a sort on the last line alone
+    /// left the union unsorted); a line with its own <c>sort:</c> keeps it; and a typed <c>sort:</c>
+    /// still wins on the line that orders the union.
+    /// </summary>
+    [Fact]
+    public void AUnion_CarriesTheOrderOnEveryLine_AnOwnSortIsKept_AndATypedSortStillWins()
+    {
+        const string first = "nodeType:Crm/Counterparty namespace:Fabrikam";
+        const string second = "nodeType:Crm/Counterparty namespace:Globex";
+        const string own = "nodeType:Crm/Counterparty namespace:Acme sort:name";
+
+        var hidden = Controls.Catalog("Clients", $"{first}\n{second}\n{own}").HiddenQuery!.ToString()!;
+        var lines = hidden.Split('\n');
+
+        Assert.Equal(
+            [$"{first} sort:subtreeLastModified-desc", $"{second} sort:subtreeLastModified-desc", own],
+            lines);
+
+        // The view's combination of the line that orders the union: the line, then the typed text.
+        var parser = new MeshWeaver.Mesh.QueryParser();
+        Assert.Equal("subtreeLastModified", parser.Parse(lines[0]).OrderBy?.Property);
+        Assert.Equal("name", parser.Parse($"{lines[0]} sort:name").OrderBy?.Property);
+    }
+
     [Fact]
     public void ACatalog_IsASearchBar_AndLoadMore_Only()
     {

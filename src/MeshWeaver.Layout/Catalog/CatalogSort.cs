@@ -7,7 +7,7 @@ namespace MeshWeaver.Layout;
 /// </summary>
 /// <param name="Label">A human name for the order (e.g. "Last activity").</param>
 /// <param name="Sort">The store-side sort term, e.g. <c>sort:name</c>.</param>
-public record CatalogSort(string Label, string Sort)
+public partial record CatalogSort(string Label, string Sort)
 {
     /// <summary>Newest change ANYWHERE under the node first — a container's activity, not its own
     /// stamp (<c>sort:subtreeLastModified-desc</c>, MeshWeaver#6942).</summary>
@@ -28,7 +28,27 @@ public record CatalogSort(string Label, string Sort)
         $"Search {title.ToLowerInvariant()} — e.g. a name, "
         + string.Join(", ", WellKnown.Where(s => s.Sort != current.Sort).Select(s => s.Sort));
 
-    /// <summary><paramref name="filter"/> with <paramref name="sort"/> appended — the one place a
-    /// catalog query gets its order. Pure.</summary>
-    public static string Sorted(string filter, string sort) => $"{filter.TrimEnd()} {sort}";
+    /// <summary>
+    /// <paramref name="filter"/> with <paramref name="sort"/> appended — the one place a catalog query
+    /// gets its order. A UNION filter (one sub-query per line) gets it on EVERY line: the view combines
+    /// each line with the typed text and the engine takes the union's order from the FIRST line
+    /// (<c>MeshQueryRequest.FromQueries</c>), so a sort on the last line alone left the union unsorted.
+    /// A line that already carries its own <c>sort:</c> keeps it; a <c>sort:</c> typed into the bar
+    /// still wins, because the view appends the typed text after each line and the parser keeps the
+    /// last. Pure.
+    /// </summary>
+    /// <param name="filter">The set, one query or a newline-separated union of queries.</param>
+    /// <param name="sort">The store-side sort term, e.g. <c>sort:name</c>.</param>
+    public static string Sorted(string filter, string sort)
+    {
+        var lines = filter.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (lines.Length == 0)
+            return sort;
+        return string.Join("\n", lines.Select(line => HasSort(line) ? line : $"{line} {sort}"));
+    }
+
+    private static bool HasSort(string line) => SortTerm().IsMatch(line);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"(?<=^|\s)sort:\S", System.Text.RegularExpressions.RegexOptions.IgnoreCase)]
+    private static partial System.Text.RegularExpressions.Regex SortTerm();
 }

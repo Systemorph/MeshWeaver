@@ -54,6 +54,13 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 - A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
+- 🚨 **A union is ordered by its FIRST line, so every line carries the order.** A hidden query may
+  be a union — one sub-query per line. The MeshSearch view sends the lines as one
+  `MeshQueryRequest.FromQueries`, each followed by the typed text, and the engine takes sort and
+  limit from the FIRST. `CatalogSort.Sorted` therefore appends the default order to EVERY line (a
+  line that already names its own `sort:` keeps it), and a typed `sort:` still wins because it
+  follows each line. Before this, the order rode only on the LAST line and a union catalog came back
+  unsorted (MeshWeaver.Plugins#4055).
 - 🚨 **Typing can only NARROW — as the production parser reads it.** `CatalogQuery.Narrowing`
   removes every reserved single-slot qualifier but `sort:` (`namespace:`, `path:`, `scope:`,
   `partitions:`, `basePath:`, `source:`, `context:`, `select:`, `is:`, `limit:` — derived from
