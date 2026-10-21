@@ -91,6 +91,14 @@ public record NodeNavigationEntry(string Label, string Path, bool IsCurrent = fa
     public IReadOnlyList<NodeNavigationEntry> Children { get; init; } = [];
 
     /// <summary>
+    /// The entry HAS children that are not loaded — a folder off the reader's path in a lazy index.
+    /// Core still renders it as a collapsible group, so it visibly offers its expander, and loads
+    /// its children only when the reader opens it (<see cref="SuppliedNavigationRail.FolderArea"/>).
+    /// Ignored when <see cref="Children"/> is non-empty.
+    /// </summary>
+    public bool HasUnloadedChildren { get; init; }
+
+    /// <summary>
     /// Where the entry navigates when that is not the node at <see cref="Path"/> — a "Load more" or
     /// "Show all" line, which opens a URL rather than a node. Null links <c>/{Path}</c>.
     /// </summary>

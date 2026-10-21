@@ -149,6 +149,32 @@ public static class MarkdownOverviewLayoutArea
                 : null);
 
     /// <summary>
+    /// One folder of the left-hand index, opened on demand (<see cref="SuppliedNavigationRail.FolderArea"/>):
+    /// the children of the folder named by the <see cref="SuppliedNavigationRail.FolderParameter"/>
+    /// parameter, read with the same bounded level read as the index
+    /// (<see cref="DefaultNodeNavigation.ObserveFolder"/>) and drawn with the same rail lines — a
+    /// child that has children of its own is again a group that loads when opened. Renders nothing
+    /// without a folder, or before the first rows arrive.
+    /// </summary>
+    [System.ComponentModel.Browsable(false)]
+    public static IObservable<UiControl?> IndexFolder(LayoutAreaHost host, RenderingContext _)
+    {
+        var folder = host.Reference.GetParameterValue(SuppliedNavigationRail.FolderParameter)?.Trim('/');
+        var meshService = host.Hub.ServiceProvider.GetService<IMeshService>();
+        if (string.IsNullOrEmpty(folder) || meshService is null)
+            return Observable.Return<UiControl?>(null);
+        var currentPath = host.Hub.Address.ToString();
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.Graph.DefaultNodeNavigation");
+        return DefaultNodeNavigation.ObserveFolder(meshService, folder, currentPath,
+                MeshWeaver.Messaging.LocalizationCatalog.Get("common.showAll", host.ViewerLocale()),
+                host.ViewerContext, logger)
+            .Select(entries => entries.Count == 0
+                ? null
+                : (UiControl?)SuppliedNavigationRail.RenderItems(SuppliedNavigationRail.PlanItems(entries, currentPath)));
+    }
+
+    /// <summary>
     /// Wraps ANY node page with the left-hand index the markdown pages have: the navigation a module
     /// supplied for the page, else core's lazy default tree (<see cref="DefaultNodeNavigation"/>) —
     /// so typed pages read like documents instead of ending in a list of their children
