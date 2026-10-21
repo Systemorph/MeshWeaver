@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading.Tasks;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -44,10 +45,20 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
     {
         public ConcurrentQueue<MeshQueryRequest> Subscribed { get; } = new();
 
+        /// <summary>Every subscription as it happens, replayed — a wait armed late still sees it.</summary>
+        private readonly ReplaySubject<MeshQueryRequest> opened = new();
+        private readonly object gate = new();
+
+        /// <summary>The first subscription to <paramref name="query"/>, whenever it happened.</summary>
+        public IObservable<MeshQueryRequest> OpenedFor(string query) =>
+            opened.Where(r => r.Query == query).FirstAsync();
+
         public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request) =>
             Observable.Defer(() =>
             {
                 Subscribed.Enqueue(request);
+                lock (gate)
+                    opened.OnNext(request);
                 return inner.Query<T>(request);
             });
 
@@ -108,12 +119,33 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
         await RealMeshService.CreateNode(new MeshNode("C", Space) { Name = "C", NodeType = "Markdown", Order = 3 })
             .Timeout(TestTimeouts.WriteConvergence).Await(TestContext.Current.CancellationToken);
         await Next(folder, e => e.Any(x => x.Path == Space + "/C"));
-
         string ProbeOf(string path) => DefaultNodeNavigation.ChildProbeQuery(path);
+        // Seeing C in the entries does not mean its probe has opened yet — wait for the probe itself.
+        await recording.OpenedFor(ProbeOf(Space + "/C"))
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
         recording.Subscribed.Count(r => r.Query == ProbeOf(Space + "/A")).Should().Be(1,
             "A stayed in the level, so its probe stays open — never re-opened for a new sibling");
         recording.Subscribed.Count(r => r.Query == ProbeOf(Space + "/C")).Should().Be(1, "the new sibling is probed once");
         seen.Skip(marked).Should().OnlyContain(e => e.Single(x => x.Path == Space + "/A").HasUnloadedChildren,
             "an open folder is never re-rendered as a link while a sibling's probe is pending");
+    }
+
+    [Fact]
+    public async Task AnAnonymousReaderIsStampedAsAnonymousNeverLeftToTheAmbientIdentity()
+    {
+        // The test host's ambient identity is privileged; an explicit anonymous reader
+        // (empty object id) must still read as anonymous, not inherit it.
+        var recording = new RecordingMeshService(RealMeshService);
+        var anonymous = new AccessContext();
+
+        var folder = DefaultNodeNavigation.ObserveFolder(recording, Space, "Elsewhere/Page", "Show all", anonymous);
+        using var live = folder.Subscribe();
+        await recording.OpenedFor(DefaultNodeNavigation.LevelQueries(Space, IndexSort.Order, DefaultNodeNavigation.LevelCap)[0])
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+
+        recording.Subscribed.Should().NotBeEmpty();
+        recording.Subscribed.Should().OnlyContain(r => r.UserId == "",
+            "an empty object id is an explicit anonymous reader and is stamped as one");
     }
 }

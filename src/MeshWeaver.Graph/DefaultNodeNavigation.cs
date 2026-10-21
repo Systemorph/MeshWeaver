@@ -258,11 +258,12 @@ public static class DefaultNodeNavigation
 
     /// <summary>
     /// <paramref name="request"/> read as <paramref name="viewer"/> — a read opened inside a live
-    /// emission has no ambient identity, so it names its reader. Unchanged when the host carried
-    /// no viewer (the ambient context is then all there is).
+    /// emission has no ambient identity, so it names its reader. An EMPTY object id is an explicit
+    /// anonymous reader and is stamped as such, never left to whatever identity is ambient.
+    /// Unchanged only when the host carried no viewer at all (the ambient context is then all there is).
     /// </summary>
     private static MeshQueryRequest Stamped(MeshQueryRequest request, AccessContext? viewer)
-        => viewer is { ObjectId.Length: > 0 } ? request.ForViewer(viewer.ObjectId) : request;
+        => viewer is not null ? request.ForViewer(viewer.ObjectId) : request;
 
     /// <summary>
     /// The folders among <paramref name="folders"/> that have a visible child, live: one
