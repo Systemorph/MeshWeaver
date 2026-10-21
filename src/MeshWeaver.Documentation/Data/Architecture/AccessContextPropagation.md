@@ -696,6 +696,35 @@ When this fires:
 
 ---
 
+## Emissions arrive as the reader
+
+**A mesh read delivers every emission under the identity of the caller who opened it, never under the identity of the turn that produced the change.** A stream emits on whatever turn wrote: a platform install running as `system-security`, a migration, another person's edit. That turn's identity is ambient while the subscriber's callback runs. A callback that reads again therefore reads for the WRITER unless the source restores its reader first.
+
+The shape this bites is the commonest one a layout area has: wait for content, then read.
+
+```csharp
+mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"namespace:{course} scope:children"))
+    .Where(change => change.Items.Any(n => n.Id == "Intro"))
+    .SelectMany(_ => mesh.Query<MeshNode>(...))   // runs inside the install's emission
+```
+
+The first read is issued while the area renders, under its viewer (`LayoutAreaHost` restores the subscriber's identity for the render). The second is issued inside the emission. Before the fix that emission arrived as `system-security` when the platform installed the course on demand, so the second read, and every read after it, ran as the platform. The person saw nodes they hold no grant on. `AreaRenderedUnderPlatformIdentityShowsOnlyTheViewersDataTest` (MeshWeaver.Graph.Test) measured it through all three read surfaces at once.
+
+Each framework read surface now restores its reader around `OnNext`, `OnError` and `OnCompleted` (`CarryAccessContext` with the identity captured with the read):
+
+| Surface | Reader captured | Where |
+|---|---|---|
+| `IMeshService.Query` (both overloads) | the ambient context the viewer was stamped from | `MeshService.ReaderIdentity` |
+| `hub.GetQuery` / `workspace.GetQuery` | the context the per-user RLS filter was built for | `SyncedQueryDataSourceExtensions.WrapWithPerUserRls` |
+| `GetMeshNodeStream(path)` for another node | the caller's context | `MeshNodeStreamCache.GetStreamRaw` (already did) |
+| `GetMeshNodeStream()` for the hub's own node | the subscriber's `Context` | `MeshNodeStreamHandle.Subscribe` |
+
+A hub-shaped principal (`sync/`, `mesh/`, `node/`, `activity/`, `portal/`) is not a reader and is never restored, and no ambient context leaves the stream unchanged. Infrastructure that subscribes with nothing ambient keeps the behaviour it had.
+
+🚨 **A source the framework does not own carries no reader.** That includes a view's own `Subject`, a timer, or a `Task` it converts. A view that reads inside such an emission restores its viewer itself: `source.CarryAccessContext(host.Hub.ServiceProvider, host.ViewerContext)`, or stamp the read (`MeshQueryRequest.ForViewer`). The guard's `subject` case pins that form.
+
+Opening an area under the wrong ambient identity is a different case, and it is safe. On a portal circuit the `SubscribeRequest` carries the circuit user, because `PortalApplication.DefaultPortalConfig`'s outermost post step stamps it. The owner renders for the identity on the subscribe, not for the identity on the thread that opened the area. The guard's instrument check removes that step and shows that the render then runs as the platform, so the step is load-bearing.
+
 ## `IMeshNodeStreamCache.GetStream` is access-checked
 
 Beyond ensuring writes preserve user identity, reads through the process-wide `IMeshNodeStreamCache` are also gated by the caller's effective Read permission on the path.

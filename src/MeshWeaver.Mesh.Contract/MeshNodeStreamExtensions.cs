@@ -957,9 +957,20 @@ public sealed class MeshNodeStreamHandle : IObservable<MeshNode>
             var (stream, lease) = AcquireStream();
             try
             {
+                // 🚨 Delivered under the SUBSCRIBER's identity, as the cross-hub path above already is
+                // (MeshNodeStreamCache.GetStreamRaw carries the reader's context). The own node emits
+                // on the turn that wrote it — a platform install as system-security, another person's
+                // edit as that person — and a view that reads again inside its callback must read for
+                // its viewer, never for the writer. See Doc/Architecture/AccessContextPropagation →
+                // "Emissions arrive as the reader".
+                var access = _workspace.Hub.ServiceProvider.GetService<AccessService>();
+                var reader = access?.Context;
+                if (reader is not null && AccessService.LooksLikeHubPrincipal(reader.ObjectId))
+                    reader = null;
                 var subscription = stream
                     .Where(change => change.Value != null)
                     .Select(change => change.Value!)
+                    .CarryAccessContext(_workspace.Hub.ServiceProvider, reader)
                     .Subscribe(typedObserver);
                 return new CompositeDisposable(subscription, lease, typedObserver);
             }

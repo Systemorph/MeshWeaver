@@ -254,10 +254,15 @@ public static class SyncedQueryDataSourceExtensions
         var accessService = sp.GetService<AccessService>();
         var captured = accessService?.Context ?? accessService?.CircuitContext;
         var userId = captured?.ObjectId;
+        // 🚨 Every snapshot is delivered under the SUBSCRIBER's identity, not the identity of the turn
+        // that changed the result set (a platform install, another person's edit). A view that reads
+        // again inside this callback would otherwise read for the writer — see
+        // Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".
+        var reader = captured is null || AccessService.LooksLikeHubPrincipal(captured.ObjectId) ? null : captured;
         if (accessService is null
             || string.IsNullOrEmpty(userId)
             || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
-            return upstream;
+            return upstream.CarryAccessContext(sp, reader);
 
         return Observable.Defer(() =>
         {
@@ -271,7 +276,7 @@ public static class SyncedQueryDataSourceExtensions
             return FilterByReadPermission(
                 upstream,
                 node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
-        });
+        }).CarryAccessContext(sp, reader);
     }
 
     /// <summary>

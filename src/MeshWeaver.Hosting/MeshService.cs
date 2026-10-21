@@ -365,7 +365,7 @@ internal sealed class MeshService(
                 Items = [],
                 Partitions = [],
             })
-            : _query.Query<T>(stamped);
+            : _query.Query<T>(stamped).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
     }
 
     public IObservable<T?> Select<T>(string path, string property)
@@ -378,7 +378,27 @@ internal sealed class MeshService(
         var stamped = StampViewer(request);
         return RefusesAnonymousViewer(ViewerOf(request, stamped))
             ? Observable.Return<IReadOnlyCollection<QueryResult>>(Array.Empty<QueryResult>())
-            : _query.Query(stamped);
+            : _query.Query(stamped).CarryAccessContext(hub.ServiceProvider, ReaderIdentity());
+    }
+
+    /// <summary>
+    /// The identity a query's emissions are delivered under: the caller's own, captured with the
+    /// read (the same ambient context <see cref="StampViewer"/> resolved the viewer from).
+    ///
+    /// <para>🚨 A query EMITS on whatever turn produced the change — a write the platform made as
+    /// <c>system-security</c>, or another person's edit — and that turn's identity is ambient while
+    /// the subscriber's callback runs. A layout area that issues its next read inside that callback
+    /// (<c>query.SelectMany(_ => mesh.Query(…))</c>, the shape of every view that waits for content)
+    /// then resolves that read for the WRITER, and shows the viewer what only the writer may read.
+    /// Restoring the reader's identity around each emission keeps the callback, and every read and
+    /// write it issues, on the reader's own grants. A hub-shaped principal is not a reader and is
+    /// not restored; no ambient context passes the stream through unchanged.
+    /// See Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".</para>
+    /// </summary>
+    private AccessContext? ReaderIdentity()
+    {
+        var context = CaptureContext();
+        return context is null || AccessService.LooksLikeHubPrincipal(context.ObjectId) ? null : context;
     }
 
     /// <summary>
