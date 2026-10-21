@@ -613,10 +613,25 @@ header). The lane:
 - downloads `pattern` from `repository`/`run-id` through the shared download action, which verifies
   the store identity, archive size and inventory before extraction;
 - prints, into its job log, every non-passing test of each Playwright HTML report with each
-  attempt's status, duration and error text, the report's `.md` error contexts, every `.txt` and
-  `.csv` file, and the lines of each `.log` file that match `log-pattern`. A report is recognised
-  by the data embedded in its `index.html`, not by a `playwright-report` directory name: an upload
+  attempt's status, duration and error text, the report's `.md` error contexts, and every `.txt`
+  and `.csv` file. A report is recognised by the data embedded in its `index.html` — either the
+  older `playwrightReportBase64 = "data:…"` script or the current
+  `<template id="playwrightReportBase64">` — not by a `playwright-report` directory name: an upload
   whose only path is that directory strips it, and the report then sits at `<artifact>/index.html`;
+- prints the **live results** of a run that was CUT. The HTML reporter writes its file when the run
+  ends, so a job cancelled at its `timeout-minutes` has none. A suite that also appends one
+  `{"kind":"live-results"}` JSON line per attempt as it finishes (MeshWeaver.Education's
+  `e2e/live-results-reporter.ts`, uploaded as `e2e/live-results`) keeps every finished attempt's
+  errors and error context, and names the attempt the cut killed: it began and never ended. A file
+  with no `end` record is reported as cut. Failures the same artifact's HTML report already printed
+  are not printed twice;
+- prints each `.log` file as whole RECORDS — a header line plus its indented continuation lines,
+  because a .NET console record puts the category and the message on separate lines. A record is
+  selected when it matches `log-pattern` (trouble), matches `focus-pattern` (the categories that
+  carry the work; default Activity, Kernel and IoPool), or falls within five seconds of a failing
+  or in-flight attempt's time window from the live results of the same artifact. Over `max-lines`
+  (default 2000) the budget is spread evenly across every minute the selection spans and the
+  omissions are counted per minute, so the print covers the whole run window, not the boot;
 - goes RED when nothing matched, because an expired, swept or wrong-store selection must not read
   as "no failures".
 
