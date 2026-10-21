@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # stage-sealed-upstream.sh --repo <owner/name> --source <segment> --modules "<dir> <dir>…"
 #                          --provenance <dir> --dest <dir> [--caller <dir>] [--resolved-out <file>]
+#                          [--provided-out <file>]
 # stage-sealed-upstream.sh --self-test
 #
 # Stage an UPSTREAM's module SOURCE (its node definitions, its package floors) at exactly the
@@ -31,8 +32,10 @@
 # `requires` (root index.json → content.requires), transitively, is staged with them by the same
 # per-package rule, and each dependency's own `requires` is read at the commit it is staged at.
 # A dependency the caller's own checkout carries (`--caller`) is satisfied there and never staged
-# over it; one found nowhere is RED, naming it and who requires it. `--resolved-out` receives the
-# staged set, one module per line — the list every later step of the lane must use. (MeshWeaver.
+# over it — but its own `requires` are walked as well; one found nowhere is RED, naming it and who
+# requires it. `--resolved-out` receives the staged set, one module per line — the list every later
+# step of the lane must use — and `--provided-out` the caller packages the closure reached, which a
+# narrowed bake must mount although its affected selector never saw the upstream edge to them. (MeshWeaver.
 # SocialMedia#246: AI gained `requires: Training`, the caller's list did not, and the bake failed
 # "Install of 'AI' failed: NodeType(s) not registered: Training/Tour".)
 #
@@ -79,7 +82,7 @@ PY_REQUIRES
 in_words() { case " $2 " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 stage() {
-  local repo="" source="" modules="" prov="" dest="" caller="" resolved_out=""
+  local repo="" source="" modules="" prov="" dest="" caller="" resolved_out="" provided_out=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo)         repo="$2"; shift 2 ;;
@@ -89,6 +92,7 @@ stage() {
       --dest)         dest="$2"; shift 2 ;;
       --caller)       caller="$2"; shift 2 ;;
       --resolved-out) resolved_out="$2"; shift 2 ;;
+      --provided-out) provided_out="$2"; shift 2 ;;
       *) die "stage-sealed-upstream.sh: unknown argument '$1'" ;;
     esac
   done
@@ -187,15 +191,27 @@ stage() {
     done
 
     # The next round: every dependency of this round's packages not already staged or provided.
-    local next="" deps d rc
-    for m in $pending; do
+    # 🚨 A caller-carried dependency is not a leaf: its OWN requires are walked too (read from the
+    # caller's checkout, right away — nothing to fetch), so an upstream package it needs is staged
+    # and a further caller package it needs is reported. Every caller package the closure reaches
+    # goes to --provided-out, because a NARROWED bake mounts only the affected set plus the staged
+    # set, and a caller package reached only THROUGH an upstream one is in neither (review #7042).
+    local next="" deps d rc scan="" item m_dir
+    for m in $pending; do scan="$scan S:$m"; done
+    while [ -n "${scan// /}" ]; do
+      # shellcheck disable=SC2086
+      set -- $scan
+      item="$1"; shift; scan="$*"
+      m="${item#?:}"
+      case "$item" in S:*) m_dir="$dest/$m" ;; *) m_dir="$caller/$m" ;; esac
       rc=0
-      deps=$(requires_of "$dest/$m/index.json" 2> "$dest.req-err") || rc=$?
+      deps=$(requires_of "$m_dir/index.json" 2> "$dest.req-err") || rc=$?
       [ "$rc" = 0 ] || die "the staged '$m' has no readable package declaration ($(cat "$dest.req-err")) — its requires closure is unknown, so what this bake must stage beside it is unknown."
       for d in $deps; do
         if in_words "$d" "$staged $next $provided"; then continue; fi
         if [ -n "$caller" ] && [ -f "$caller/$d/index.json" ]; then
           provided="$provided $d"
+          scan="$scan C:$d"
           echo "'$d' (required by '$m') is this repository's own package — satisfied by the checkout, not staged"
           continue
         fi
@@ -214,6 +230,11 @@ stage() {
   echo "requires closure: $total package(s) staged — $named_count named by the caller, $((total - named_count)) added by their requires, in $round round(s):$staged"
   if [ -n "$resolved_out" ]; then
     printf '%s\n' "$@" > "$resolved_out"
+  fi
+  if [ -n "$provided_out" ]; then
+    # shellcheck disable=SC2086
+    set -- $provided
+    if [ $# -gt 0 ]; then printf '%s\n' "$@" > "$provided_out"; else : > "$provided_out"; fi
   fi
 }
 
@@ -262,6 +283,13 @@ self_test() {
   local P3; P3=$(git -C "$cl" rev-parse HEAD)
   echo 'not json' > "$cl/Alpha/index.json"; git -C "$cl" commit -qam P4
   local P4; P4=$(git -C "$cl" rev-parse HEAD)
+  # P5: Alpha restored; Beta now requires a CALLER package (Local), which itself requires an
+  # upstream package (Gamma, restored) and another caller package (Local2).
+  echo '{"id":"Alpha","content":{"requires":["Beta@^1.0.0"]}}' > "$cl/Alpha/index.json"
+  echo '{"id":"Beta","content":{"requires":["Local@^1.0.0"]}}' > "$cl/Beta/index.json"
+  mkdir -p "$cl/Gamma"; echo '{"id":"Gamma","content":{}}' > "$cl/Gamma/index.json"
+  git -C "$cl" add -A; git -C "$cl" commit -qm P5
+  local P5; P5=$(git -C "$cl" rev-parse HEAD)
 
   check() { # <name> <condition-exit> <why>
     if [ "$2" = 0 ]; then echo "  ok   $1"; else echo "  FAIL $1 — $3"; fails=$((fails + 1)); fi
@@ -334,6 +362,19 @@ self_test() {
     "$([ $rc = 0 ] && [ "$(resolved "$t/c12")" = "Gamma Alpha Beta" ] && [ "$(grep -c 'staged .*/Gamma ' "$t/c12/log")" = 1 ] \
        && grep -q 'requires closure: 3 package(s) staged — 2 named by the caller, 1 added by their requires' "$t/c12/log"; echo $?)" \
     "rc=$rc; resolved='$(cat "$t/c12/resolved" 2>/dev/null)'; $(cat "$t/c12/log")"
+
+  # 13. A caller package reached only THROUGH an upstream one is not a leaf: its own requires are
+  #     walked (the upstream Gamma it needs is staged) and every caller package the closure reaches
+  #     is reported in --provided-out, so a narrowed mount can carry it (review on #7042).
+  prov "$t/c13" "$P5" absent
+  mkdir -p "$t/c13/caller/Local" "$t/c13/caller/Local2"
+  echo '{"id":"Local","content":{"requires":["Gamma","Local2"]}}' > "$t/c13/caller/Local/index.json"
+  echo '{"id":"Local2","content":{}}' > "$t/c13/caller/Local2/index.json"
+  runc "$t/c13" Alpha --caller "$t/c13/caller" --provided-out "$t/c13/provided"; rc=$?
+  check "a caller package reached through an upstream one has its requires walked and is reported" \
+    "$([ $rc = 0 ] && [ "$(resolved "$t/c13")" = "Alpha Beta Gamma" ] && [ "$(tr '\n' ' ' < "$t/c13/provided" | sed 's/ $//')" = "Local Local2" ] \
+       && [ ! -d "$t/c13/out/Local" ]; echo $?)" \
+    "rc=$rc; resolved='$(cat "$t/c13/resolved" 2>/dev/null)'; provided='$(cat "$t/c13/provided" 2>/dev/null)'; $(cat "$t/c13/log")"
 
   [ "$fails" = 0 ] || { echo "stage-sealed-upstream.sh --self-test: $fails failure(s)"; return 1; }
   echo "stage-sealed-upstream.sh --self-test: all cases passed"

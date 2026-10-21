@@ -1485,18 +1485,26 @@ jobs:
           # input: a hand-kept list is what broke MeshWeaver.SocialMedia#246 when AI gained
           # `requires: Training`. A dependency the caller's checkout carries is satisfied there; one
           # found nowhere is RED in the script, naming it.
+          # A caller package the closure reaches only THROUGH an upstream one (App → Upstream →
+          # LocalSupport) is satisfied by the checkout, but a NARROWED mount carries only the
+          # affected set and the staged set — the affected selector never saw that upstream edge.
+          # The script reports every such package (--provided-out); the narrowed mount adds them.
           RESOLVED="$RUNNER_TEMP/staged-modules.txt"
-          rm -f "$RESOLVED"
+          PROVIDED="$RUNNER_TEMP/caller-provided-modules.txt"
+          rm -f "$RESOLVED" "$PROVIDED"
           mw-platform-gate/.github/scripts/stage-sealed-upstream.sh --repo "$STAGE_REPO" --source "$src" \
             --modules "$STAGE_MODULES" --provenance "$RUNNER_TEMP/upstream-provenance" \
             --dest "$GITHUB_WORKSPACE/cross-repo-stage" \
-            --caller "$GITHUB_WORKSPACE" --resolved-out "$RESOLVED"
+            --caller "$GITHUB_WORKSPACE" --resolved-out "$RESOLVED" --provided-out "$PROVIDED"
           [ -s "$RESOLVED" ] || { echo "::error::stage-sealed-upstream.sh wrote no staged set to $RESOLVED although stage-modules is '${STAGE_MODULES}' — the lane cannot tell what to mount and what to exclude from this publication. The script at this lane's scripts ref predates --resolved-out, or it failed without saying so."; exit 1; }
+          [ -f "$PROVIDED" ] || { echo "::error::stage-sealed-upstream.sh wrote no caller-provided set to $PROVIDED — a narrowed bake could miss a caller package the requires closure reaches. The script at this lane's scripts ref predates --provided-out."; exit 1; }
           resolved=$(tr '\n' ' ' < "$RESOLVED" | sed 's/ *$//')
+          provided=$(tr '\n' ' ' < "$PROVIDED" | sed 's/ *$//')
           echo "modules=$resolved" >> "$GITHUB_OUTPUT"
+          echo "provided=$provided" >> "$GITHUB_OUTPUT"
           {
             echo "### Staged from ${STAGE_REPO} (requires closure)"
-            echo "named by the caller: \`$(printf '%s' "$STAGE_MODULES" | tr '\n' ' ' | sed 's/ *$//')\` — staged: \`$resolved\`"
+            echo "named by the caller: \`$(printf '%s' "$STAGE_MODULES" | tr '\n' ' ' | sed 's/ *$//')\` — staged: \`$resolved\` — this repo's own packages reached through them: \`${provided:-none}\`"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Set up Node for the pre-bake hook
         if: inputs.node-version != ''
@@ -1912,6 +1920,9 @@ jobs:
           # The RESOLVED set (named + their requires closure), never the input — see the stage step.
           STAGE_MODULES: ${{ steps.stage.outputs.modules }}
           STAGE_MODULES_NAMED: ${{ inputs.stage-modules }}
+          # This repo's own packages the closure reaches through a staged one (narrowed mount only;
+          # they are this repo's, so they are never excluded from its publication).
+          STAGE_PROVIDED: ${{ steps.stage.outputs.provided }}
           ALLOW_FILE: ${{ inputs.allow-file }}
           WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
@@ -1955,6 +1966,14 @@ jobs:
               if [ -d "$GITHUB_WORKSPACE/$name" ]; then
                 cp -R "$GITHUB_WORKSPACE/$name" "$NARROW/"
               fi
+            done
+            # This repo's own packages that the requires closure reaches only through a staged
+            # upstream package: the affected selector never saw that edge, so they are added here.
+            for m in ${STAGE_PROVIDED:-}; do
+              if [ -d "$NARROW/$m" ]; then continue; fi
+              [ -f "$GITHUB_WORKSPACE/$m/index.json" ] || { echo "::error::the requires closure reached this repository's package '$m', but $GITHUB_WORKSPACE/$m carries no index.json — the narrowed mount cannot carry it."; exit 1; }
+              cp -R "$GITHUB_WORKSPACE/$m" "$NARROW/"
+              echo "narrowed mount: + $m (this repository's package, required through a staged upstream package)"
             done
             if [ -n "${ALLOW_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$ALLOW_FILE" ]; then
               mkdir -p "$NARROW/$(dirname "$ALLOW_FILE")"

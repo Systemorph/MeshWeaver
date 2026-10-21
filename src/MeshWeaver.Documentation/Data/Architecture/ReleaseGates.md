@@ -478,7 +478,10 @@ blank or version-only entry is no dependency). A dependency is satisfied in one 
 
 - it is **staged** from the stage repo, at the commit the sealed publication names for it;
 - the **caller's own checkout** carries it as a top-level package, so it is used there and never
-  staged over it.
+  staged over it. Its own `requires` are walked as well, so an upstream package it needs is staged.
+  Every caller package the closure reaches is reported (step output `provided`). A narrowed bake
+  adds these to its mount, because the affected selector never sees an edge that runs through an
+  upstream package (App → Upstream → LocalSupport).
 
 Anything else is RED, naming the missing package and the package that requires it. A staged
 package whose `index.json` cannot be read is also RED: its closure is unknown, never empty. The
