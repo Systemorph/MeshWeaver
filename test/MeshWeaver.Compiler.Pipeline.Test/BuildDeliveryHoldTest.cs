@@ -219,4 +219,54 @@ public class BuildDeliveryHoldTest
             .And.Contain("waiting for a bundle")
             .And.Contain(NodeTypeCompilationHelpers.FrameworkVersion);
     }
+
+    // ── #6930 / #7015 review: the UNKNOWN-membership hold keeps the record's provenance ──────
+
+    /// <summary>An AUTHORED record: compiled here, never adopted, a usable build on this framework,
+    /// and a forced Pending flip the untracked-module gate met while the offer discovery was
+    /// incomplete.</summary>
+    private static NodeTypeDefinition AuthoredWithAUsableBuild() =>
+        SourceMovedPast(null, null, BuildProvenance.Compiled) with
+        {
+            CompilationStatus = CompilationStatus.Pending,
+            AdoptedSourceFingerprint = null,
+            RequestedReleaseForce = true,
+        };
+
+    [Fact]
+    public void AnUnknownMembershipHold_KeepsServing_WithoutBecomingModuleContent()
+    {
+        var pending = AuthoredWithAUsableBuild();
+        NodeTypeCompilationHelpers.IsModuleContent(pending, offeredByBundle: false)
+            .Should().BeFalse("precondition: the record is authored content");
+
+        var held = BuildDeliveryHold.SettleUnknownMembership(pending, hasUsableBuild: true, "unknown membership");
+
+        held.Should().NotBeNull("a usable build keeps serving while membership is unknown");
+        held!.CompilationStatus.Should().Be(CompilationStatus.Ok);
+        held.DeliveryHoldReason.Should().Be("unknown membership", "the reason survives an Ok record (#6832)");
+        held.RequestedReleaseForce.Should().BeFalse();
+        held.BuildProvenance.Should().Be(BuildProvenance.Compiled,
+            "the type is not KNOWN to be a module's content — a delivery provenance is itself the gate's "
+            + "module-content evidence and would outlive the incomplete discovery");
+        held.CompiledSources.Should().BeSameAs(pending.CompiledSources);
+        NodeTypeCompilationHelpers.IsModuleContent(held, offeredByBundle: false).Should().BeFalse(
+            "after a COMPLETE discovery pass that finds no bundle naming the type, the next release — "
+            + "a forced one included — must compile the authored source again, not hold it forever");
+    }
+
+    [Fact]
+    public void TheDeliveryHold_WouldHaveStampedModuleContent_TheNegativeControl()
+    {
+        var delivery = BuildDeliveryHold.Settle(AuthoredWithAUsableBuild(), hasUsableBuild: true, "unknown membership");
+        delivery!.BuildProvenance.Should().Be(BuildProvenance.StaleAdopted);
+        NodeTypeCompilationHelpers.IsModuleContent(delivery, offeredByBundle: false).Should().BeTrue(
+            "this is the defect the unknown-membership hold avoids: the delivery hold's provenance alone "
+            + "reads as module content on every later pass");
+    }
+
+    [Fact]
+    public void AnUnknownMembershipHold_WithNothingToServe_IsNull_SoTheGateParks()
+        => BuildDeliveryHold.SettleUnknownMembership(AuthoredWithAUsableBuild(), hasUsableBuild: false, "x")
+            .Should().BeNull();
 }

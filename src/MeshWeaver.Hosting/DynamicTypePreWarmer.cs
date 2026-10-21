@@ -1277,7 +1277,8 @@ public static class DynamicTypePreWarmer
         // serves nobody, so there is nothing to be gentle to.)
         IObservable<PreWarmOutcome> Sweep(
             ImmutableDictionary<string, IReadOnlyList<MeshNode>>? batchSources,
-            ImmutableHashSet<string> absentPartitions)
+            ImmutableHashSet<string> absentPartitions,
+            GateRouting gate)
             => order
                 .Select((p, i) => Observable.Defer(() =>
                 {
@@ -1288,6 +1289,28 @@ public static class DynamicTypePreWarmer
                     if (baked.Contains(p))
                         return Observable.Return(new PreWarmOutcome(
                             p, PreWarmStatus.AlreadyBaked, "assembly store already holds this build"));
+
+                    // …and so is a type the untracked-module gate's own offer pass ADOPTED on this
+                    // process (#7015 review), re-probed baked on this replica's store. It takes the
+                    // SAME fast path, ahead of the dependency walk: it compiles nothing, so an
+                    // upstream that failed (one whose sources it shares, parked by the same gate)
+                    // cannot block it — and reporting it UpstreamFailed would hand that false
+                    // failure on to its own dependents and to readiness. Flipping it Pending
+                    // instead would hand the watcher the OLD shared record (a readiness-gated
+                    // replica HOLDS the adoption stamp), which it would park.
+                    if (gate.AdoptedHere.Contains(p))
+                        return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.AlreadyBaked,
+                            "adopted on this process by the untracked-module gate's offer pass"));
+
+                    // …and one whose adoption could not be VERIFIED in time is not evaluated: never
+                    // compiled (the gate refused it), never handed to the watcher (whose record may
+                    // lack the stamp this process holds). Its dependents inherit "no answer".
+                    if (gate.Unverified.Contains(p))
+                        return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.TimedOut,
+                                "adopted on this process by the untracked-module gate's offer pass, but its "
+                                + "store verification did not complete within the budget — not compiled, "
+                                + "not handed to the compile watcher"))
+                            .Do(o => FileForDependents(p, o));
 
                     // 🚨 ITS PARTITION IS GONE, so there is nothing to warm and nothing to wait
                     // for (#5073). Asked BEFORE the work, never after it: warming such a type can
@@ -1365,6 +1388,24 @@ public static class DynamicTypePreWarmer
                             new PreWarmOutcome(p, outcome, $"blocked by {named}") { BlockedBy = named });
                     }
 
+                    // 🚨 MeshWeaver#6930 — a type the untracked-module gate refuses a local compile
+                    // is NEVER compiled by the batch. The batch drives Roslyn directly and never
+                    // reached the gate, so the same leftover type compiled (and failed) on every
+                    // boot here and was PARKED only when a later Pending flip reached the watcher —
+                    // on the same pod, with the same bundle in place. It is handed to the compile
+                    // watcher instead, whose gate is then the only thing that decides it.
+                    if (gate.Refused.Contains(p))
+                    {
+                        progress?.Invoke(
+                            $"building {pending.IndexOf(p) + 1} of {pending.Count} pending NodeType(s) "
+                            + $"through the compile watcher's untracked-module gate: waiting on {p}, "
+                            + $"for up to {budget}");
+                        return DriveThroughCompileWatcher(mesh, workspace, accessService, p, budget, logger)
+                            .SelectMany(o => ReclassifyIfAdoptedHere(mesh, o, definitions, nodes, budget, logger))
+                            .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
+                            .Do(o => FileForDependents(p, o));
+                    }
+
                     // Batch mode drives the ONE compiler directly with the pre-resolved source
                     // set — no activation, no watcher settle. It also subsumes the missing-bytes
                     // case: a direct compile re-emits, re-uploads and re-stamps regardless of
@@ -1416,23 +1457,7 @@ public static class DynamicTypePreWarmer
                         // "No node found" — which is exactly what memex.systemorph.com recorded
                         // as a gating CompileError on 2026-09-08. Asked only for an image verdict.
                         .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
-                        .Do(o =>
-                        {
-                            // A timeout is not a verdict — route it to `unevaluated` so its
-                            // dependents inherit "no answer", not "it broke". Deleted sources, a
-                            // retired type and a removed type are CONTENT verdicts — dependents
-                            // inherit content-broken, never gating. Everything else that missed a
-                            // usable build (CompileError, Faulted) is an image verdict.
-                            if (o.Status is PreWarmStatus.TimedOut)
-                                unevaluated.Add(p);
-                            else if (o.Status is PreWarmStatus.NoSources
-                                     or PreWarmStatus.DeclaredSourcesMissing
-                                     or PreWarmStatus.Retired
-                                     or PreWarmStatus.Removed)
-                                contentBroken.Add(p);
-                            else if (!o.ReachedUsableBuild)
-                                verdictFailed.Add(p);
-                        });
+                        .Do(o => FileForDependents(p, o));
                 }))
                 .Concat()
                 // Stamp the regression baseline on every outcome so a downstream readiness gate can
@@ -1440,6 +1465,25 @@ public static class DynamicTypePreWarmer
                 // to re-read the report — and, beside it, whether this instance has any previous
                 // build to regress FROM.
                 .Select(stampBaseline);
+
+        // Which cascade a measured outcome feeds — ONE rule for every driver of the sweep.
+        void FileForDependents(string p, PreWarmOutcome o)
+        {
+            // A timeout is not a verdict — route it to `unevaluated` so its
+            // dependents inherit "no answer", not "it broke". Deleted sources, a
+            // retired type and a removed type are CONTENT verdicts — dependents
+            // inherit content-broken, never gating. Everything else that missed a
+            // usable build (CompileError, Faulted) is an image verdict.
+            if (o.Status is PreWarmStatus.TimedOut)
+                unevaluated.Add(p);
+            else if (o.Status is PreWarmStatus.NoSources
+                     or PreWarmStatus.DeclaredSourcesMissing
+                     or PreWarmStatus.Retired
+                     or PreWarmStatus.Removed)
+                contentBroken.Add(p);
+            else if (!o.ReachedUsableBuild)
+                verdictFailed.Add(p);
+        }
 
         if (order.Count == 0)
             return Observable.Empty<PreWarmOutcome>();
@@ -1498,10 +1542,17 @@ public static class DynamicTypePreWarmer
         // disproved. The probes run together, so the whole answer is bounded by ONE probe budget
         // rather than by the number of partitions, and it fails OPEN — an indeterminate answer, or
         // any provider saying the partition IS there, leaves this sweep byte-for-byte as it was.
+        //
+        // 🚨 MeshWeaver#6930 — and, on the batch path only, the untracked-module gate's question,
+        // asked BEFORE the batch compiles anything: which pending types would the compile watcher
+        // refuse to compile here? Those leave the batch and go through the watcher (see Sweep). The
+        // activation-driven sweep needs no such question — every compile it causes already goes
+        // through the watcher.
         return AbsentPartitionsAmongPending(mesh, pending, logger)
             .SelectMany(absent => useBatch
-                ? BatchSources().SelectMany(index => Sweep(index, absent))
-                : Sweep(null, absent));
+                ? RefusedByUntrackedModuleGate(mesh, definitions, nodes, pending, absent, budget, logger)
+                    .SelectMany(gate => BatchSources().SelectMany(index => Sweep(index, absent, gate)))
+                : Sweep(null, absent, GateRouting.None));
     }
 
     /// <summary>
@@ -1558,6 +1609,412 @@ public static class DynamicTypePreWarmer
             // PartitionExistenceProbe's own DefaultIfEmpty); this is what keeps that a fact rather
             // than a hope.
             .DefaultIfEmpty(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// MeshWeaver#6930 — how the batch routes the pending types the compile watcher's
+    /// untracked-module gate speaks for: <see cref="Refused"/> leave the batch and go through the
+    /// watcher; <see cref="AdoptedHere"/> were adopted by the gate's own offer pass on THIS process
+    /// and are reported baked.
+    /// </summary>
+    internal sealed record GateRouting(
+        ImmutableHashSet<string> Refused,
+        ImmutableHashSet<string> AdoptedHere,
+        ImmutableHashSet<string> Unverified)
+    {
+        private static readonly ImmutableHashSet<string> Empty =
+            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Nothing routed — the batch compiles every pending type as before.</summary>
+        public static GateRouting None { get; } = new(Empty, Empty, Empty);
+    }
+
+    /// <summary>
+    /// #7015 review — the verification of this process's own adoptions, split: <see cref="Baked"/>
+    /// re-probed baked on this replica; <see cref="Unverified"/> whose probe did not answer within
+    /// the budget. An unverified type is neither baked nor absent: it is refused a compile (the gate
+    /// already refused it) and reported "not evaluated", and it is NOT handed to the watcher — whose
+    /// record may still lack the stamp this process holds, so it would park a build this process can
+    /// serve.
+    /// </summary>
+    internal sealed record AdoptionVerification(ImmutableHashSet<string> Baked, ImmutableHashSet<string> Unverified);
+
+    /// <summary>
+    /// MeshWeaver#6930 — the pending types the compile watcher's untracked-module gate would refuse
+    /// to compile here (<c>NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate</c>). Types whose
+    /// partition is confirmed absent are left out: the sweep reports those without warming them.
+    ///
+    /// <para>🚨 The gate's offer pass is an ADOPTION pass, not only a witness (#7015 review). A type
+    /// it adopted here is classified from THIS process's own ledger
+    /// (<see cref="NodeTypeAdoptionRegistry.OverlayOnto"/> — the same overlay the sweep's probe
+    /// uses), never from the pre-pass snapshot: on a readiness-gated replica the shared stamp is
+    /// HELD until the bake passes, so the shared record still reads "nothing to serve" and the
+    /// watcher would park a type this process can serve. Such a type is re-probed against this
+    /// replica's store and build guards and, when baked, reported baked instead of handed off.</para>
+    ///
+    /// <para>Emits one routing and completes; a question that cannot be answered routes nothing, so
+    /// the batch stays exactly as it was — the direction the gate itself takes on an unreadable
+    /// answer.</para>
+    /// </summary>
+    internal static IObservable<GateRouting> RefusedByUntrackedModuleGate(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        IReadOnlyCollection<string> pending,
+        ImmutableHashSet<string> absentPartitions,
+        TimeSpan verifyBudget,
+        ILogger? logger)
+    {
+        var candidates = pending
+            .Where(p => !absentPartitions.Contains(PartitionExistenceProbe.PartitionOf(p)))
+            .Select(p => (Path: p, Definition: definitions.TryGetValue(p, out var d) ? d : null))
+            .Where(c => c.Definition is not null)
+            .ToImmutableDictionary(c => c.Path, c => c.Definition, StringComparer.OrdinalIgnoreCase);
+        return NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(mesh, candidates, logger)
+            .SelectMany(refused => AdoptedByThisProcess(
+                    mesh, refused, candidates, nodes, defs => ProbeOnThisReplica(mesh, defs, logger),
+                    verifyBudget, logger)
+                .Select(verified => new GateRouting(
+                    refused.Except(verified.Baked).Except(verified.Unverified),
+                    verified.Baked,
+                    verified.Unverified)))
+            .Do(routing =>
+            {
+                if (!routing.Refused.IsEmpty)
+                    logger?.LogInformation(
+                        "DynamicTypePreWarmer: {Count} pending NodeType(s) are a module's content in a "
+                        + "partition this mesh does not track — the batch does NOT compile them; each goes "
+                        + "through the compile watcher, whose untracked-module gate (MeshWeaver#3583) holds "
+                        + "or parks it exactly as on any other trigger (MeshWeaver#6930): {Types}",
+                        routing.Refused.Count,
+                        string.Join(", ", routing.Refused.OrderBy(x => x, StringComparer.Ordinal)));
+                if (!routing.AdoptedHere.IsEmpty)
+                    logger?.LogInformation(
+                        "DynamicTypePreWarmer: the untracked-module gate's offer pass ADOPTED {Count} "
+                        + "pending NodeType(s) on this process — reported baked from this process's own "
+                        + "adoption, not handed to the watcher: {Types}",
+                        routing.AdoptedHere.Count,
+                        string.Join(", ", routing.AdoptedHere.OrderBy(x => x, StringComparer.Ordinal)));
+            })
+            .Catch<GateRouting, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: the untracked-module question could not be answered — the "
+                    + "batch compiles every pending type as before");
+                return Observable.Return(GateRouting.None);
+            })
+            .DefaultIfEmpty(GateRouting.None);
+    }
+
+    /// <summary>
+    /// The types among <paramref name="refused"/> that THIS process holds a usable build for after
+    /// the gate's offer pass: its adoption ledger supersedes the snapshot
+    /// (<see cref="NodeTypeAdoptionRegistry.OverlayOnto"/>) and the store probe — the sweep's own,
+    /// against this replica's store and build guards — answers <see cref="BakeState.Baked"/>.
+    /// </summary>
+    private static IObservable<AdoptionVerification> AdoptedByThisProcess(
+        IMessageHub mesh,
+        ImmutableHashSet<string> refused,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> candidates,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan verifyBudget,
+        ILogger? logger)
+    {
+        var none = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+        var registry = mesh.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
+        if (refused.IsEmpty || registry is null)
+            return Observable.Return(new AdoptionVerification(none, none));
+        var overlay = registry.OverlayOnto(
+            refused.ToImmutableDictionary(p => p, p => candidates[p], StringComparer.OrdinalIgnoreCase),
+            nodes);
+        if (overlay.Applied.IsEmpty)
+            return Observable.Return(new AdoptionVerification(none, none));
+        var adopted = overlay.Applied
+            .ToImmutableDictionary(p => p, p => overlay.Definitions[p], StringComparer.OrdinalIgnoreCase);
+        return VerifyAdoptions(adopted, probe, verifyBudget, logger);
+    }
+
+    /// <summary>
+    /// #7015 review — re-probe this process's adoptions under ONE <paramref name="budget"/>. The
+    /// probe concatenates store reads with no operation timeout, and this runs BEFORE the sweep, so
+    /// an unbounded stall would hold the whole boot sweep. An elapsed or faulted probe yields every
+    /// adopted path as <see cref="AdoptionVerification.Unverified"/> — never an exception (which
+    /// would reach the routing's fallback and let the batch compile them) and never "not adopted"
+    /// (which would hand them to a watcher reading a record whose stamp is still held).
+    /// </summary>
+    internal static IObservable<AdoptionVerification> VerifyAdoptions(
+        IReadOnlyDictionary<string, NodeTypeDefinition?> adopted,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan budget,
+        ILogger? logger)
+    {
+        var all = adopted.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var none = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+        return probe(adopted)
+            .Take(1)
+            .Select(report =>
+            {
+                var baked = report.Entries
+                    .Where(e => !e.NeedsBake)
+                    .Select(e => e.TypePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                // 🚨 #7015 review — the probe FOLDS a faulted store lookup into a BytesMissing entry
+                // (fail safe for the bake), so a store fault never reaches the Catch below. A failed
+                // lookup is "could not be asked", not "the bytes are gone": UNVERIFIED, exactly like
+                // an elapsed or faulted probe — never handed to a watcher whose record still lacks
+                // the stamp this provisional process holds.
+                var unverified = report.Entries
+                    .Where(e => e.ProbeFailed)
+                    .Select(e => e.TypePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!unverified.IsEmpty)
+                    logger?.LogWarning(
+                        "DynamicTypePreWarmer: the store lookup faulted while verifying {Count} adoption(s) "
+                        + "made by the untracked-module gate's offer pass — those types are reported NOT "
+                        + "EVALUATED and are neither compiled nor handed to the watcher: {Types}",
+                        unverified.Count, string.Join(", ", unverified.OrderBy(x => x, StringComparer.Ordinal)));
+                return new AdoptionVerification(baked, unverified);
+            })
+            .Timeout(budget)
+            .Catch<AdoptionVerification, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: verifying {Count} adoption(s) made by the untracked-module gate's "
+                    + "offer pass did not complete within {Budget} — those types are reported NOT EVALUATED and "
+                    + "are neither compiled nor handed to the watcher: {Types}",
+                    all.Count, budget, string.Join(", ", all.OrderBy(x => x, StringComparer.Ordinal)));
+                return Observable.Return(new AdoptionVerification(none, all));
+            })
+            .DefaultIfEmpty(new AdoptionVerification(none, all));
+    }
+
+    /// <summary>
+    /// #7015 review — the hand-off's answer, re-read against this process's OWN adoption ledger. The
+    /// gate's preflight offer pass can stop short of a type's bundle (its budget, a hollow bundle), so
+    /// the type is routed to the watcher without a local adoption; the watcher's per-type pass may
+    /// then adopt it. On a readiness-gated (provisional) process that adoption is recorded locally
+    /// while the shared stamp is HELD (<c>PrebuiltAssemblySeeder</c>, #5544), so the watcher, reading
+    /// only the shared record, finds no usable build and settles it as if nothing had landed. The
+    /// sweep must not report that as this replica's failure: a type this process adopted, re-probed
+    /// baked on this replica's store, is <see cref="PreWarmStatus.AlreadyBaked"/>; one whose adoption
+    /// could not be verified in <paramref name="verifyBudget"/> is not evaluated
+    /// (<see cref="PreWarmStatus.TimedOut"/>). Every other answer stands. Never faults.
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> ReclassifyIfAdoptedHere(
+        IMessageHub mesh,
+        PreWarmOutcome outcome,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyDictionary<string, MeshNode> nodes,
+        TimeSpan verifyBudget,
+        ILogger? logger)
+    {
+        if (outcome.ReachedUsableBuild)
+            return Observable.Return(outcome);
+        var path = outcome.TypePath;
+        var candidates = ImmutableDictionary<string, NodeTypeDefinition?>.Empty
+            .WithComparers(StringComparer.OrdinalIgnoreCase)
+            .Add(path, definitions.TryGetValue(path, out var definition) ? definition : null);
+        return AdoptedByThisProcess(
+                mesh, ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase, path), candidates, nodes,
+                defs => ProbeOnThisReplica(mesh, defs, logger), verifyBudget, logger)
+            .Select(verified =>
+                verified.Baked.Contains(path)
+                    ? new PreWarmOutcome(path, PreWarmStatus.AlreadyBaked,
+                        "adopted on this process by the compile watcher's per-type pass (the shared stamp "
+                        + $"is held until this process is admitted); the watcher answered {outcome.Status}")
+                    : verified.Unverified.Contains(path)
+                        ? new PreWarmOutcome(path, PreWarmStatus.TimedOut,
+                            "adopted on this process by the compile watcher's per-type pass, but the adoption "
+                            + "could not be verified on this replica's store in time — not evaluated")
+                        : outcome)
+            .Catch<PreWarmOutcome, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: re-reading {TypePath}'s hand-off against this process's adoption "
+                    + "ledger failed — the watcher's answer stands", path);
+                return Observable.Return(outcome);
+            });
+    }
+
+    /// <summary>The sweep's own store probe — this replica's store, pool and build guards — over
+    /// <paramref name="definitions"/>.</summary>
+    private static IObservable<NodeTypeBakeReport> ProbeOnThisReplica(
+        IMessageHub mesh, IReadOnlyDictionary<string, NodeTypeDefinition?> definitions, ILogger? logger)
+        => NodeTypeBakeStatus.ProbeThrough(
+            StoreProbePool(mesh), definitions, ResolveAssemblyStore(mesh), logger: logger,
+            liveDependencyIdOf: NodeTypeCompilationHelpers.DependencyIdResolverOf(mesh),
+            liveToolchainId: NodeTypeCompilationHelpers.ProcessToolchainId);
+
+    /// <summary>
+    /// MeshWeaver#6930 — warm a type through the compile WATCHER rather than the batch's direct
+    /// compile: flip it <see cref="CompilationStatus.Pending"/> (the same door the framework-stale
+    /// kickoff and <see cref="RebuildMissingBytes"/> use) and read the watcher's answer. For a
+    /// module's content in an untracked partition that answer is the untracked-module gate's — a
+    /// HOLD (the last build keeps serving) or a named PARK — and never a Roslyn pass.
+    ///
+    /// <para>🚨 <b>A pending <see cref="NodeTypeDefinition.RequestedReleaseForce"/> cannot lose the
+    /// verdict</b> (#7015 review). A force makes the watcher skip its adoption pass (#2818) — the
+    /// pass that is its only source of the bundle-offer witness — but only on a partition that
+    /// TRACKS a source. On an untracked partition the watcher runs the pass for a forced flip too
+    /// (<c>NodeTypeCompilationHelpers</c>, the forced branch), because the gate refuses the
+    /// live-source build the force asks for. That holds for a record this hand-off flips AND for one
+    /// a previous process left persisted at <c>Pending</c>, which the watcher dispatches the moment
+    /// the type's hub activates — before any write from here could land.</para>
+    ///
+    /// <para>The answer and its outcome: see <see cref="SettleAfterHandOff"/> and
+    /// <see cref="OutcomeOfHandOff"/>.</para>
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> DriveThroughCompileWatcher(
+        IMessageHub mesh,
+        IWorkspace workspace,
+        AccessService? accessService,
+        string typePath,
+        TimeSpan budget,
+        ILogger? logger)
+        => accessService.RunAsSystem(
+                () =>
+                {
+                    var options = workspace.Hub.JsonSerializerOptions;
+                    var stream = workspace.GetMeshNodeStream(typePath);
+                    var handOff = stream.Update(node =>
+                    {
+                        var def = node?.ContentAs<NodeTypeDefinition>(options)
+                            ?? throw new InvalidOperationException(
+                                $"{typePath} does not read as a NodeTypeDefinition — nothing to hand to "
+                                + "the compile watcher");
+                        if (IsLiveCompileClaim(def, budget))
+                            return node;
+                        return node with
+                        {
+                            Content = NodeTypeCompilationHelpers.DispatchPending(def, workspace.Hub),
+                        };
+                    });
+                    return ReadHandOff(typePath, stream, handOff, options,
+                        defs => ProbeOnThisReplica(mesh, defs, logger), budget);
+                })
+            .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
+                new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
+            .Do(o => logger?.LogInformation(
+                "DynamicTypePreWarmer: {TypePath} → {Status}{Detail} (through the compile watcher, "
+                + "MeshWeaver#6930)",
+                o.TypePath, o.Status,
+                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})"));
+
+    /// <summary>
+    /// The watcher's answer to one hand-off, classified: <see cref="SettleAfterHandOff"/> then
+    /// <see cref="OutcomeOfHandOff"/>, under ONE per-type <paramref name="budget"/>.
+    ///
+    /// <para>🚨 The budget covers the hand-off AND the store verification (#7015 review). Bounding
+    /// only the settle let a stalled store probe after an <c>Ok</c> hold the type — and the
+    /// sequential sweep behind it — past the budget. Elapsed is <see cref="PreWarmStatus.TimedOut"/>
+    /// ("not evaluated"); a failed hand-off write or probe is <see cref="PreWarmStatus.Faulted"/>.</para>
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> ReadHandOff(
+        string typePath,
+        IObservable<MeshNode?> frames,
+        IObservable<MeshNode> handOff,
+        System.Text.Json.JsonSerializerOptions options,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan budget)
+        => SettleAfterHandOff(frames, handOff, options)
+            .SelectMany(settled => OutcomeOfHandOff(typePath, settled, probe))
+            .Take(1)
+            .Timeout(budget)
+            .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
+                ex is TimeoutException
+                    ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut,
+                        "the compile watcher's answer and its store verification did not complete "
+                        + "within the per-type budget")
+                    : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)));
+
+    /// <summary>
+    /// The watcher's answer to ONE hand-off: the first terminal record
+    /// (<see cref="CompilationStatus.Ok"/>, <see cref="CompilationStatus.Error"/>,
+    /// <see cref="CompilationStatus.Unavailable"/>) that provably comes AFTER the hand-off write.
+    ///
+    /// <para>🚨 <b>Correlated by VERSION, never by seeing an intermediate frame</b> (#7015 review).
+    /// The hand-off write emits the owner-acknowledged node at or past the version it stamped
+    /// (a no-op — an in-flight compile claim left alone — emits the current node). If that node is
+    /// already terminal it IS the answer: a write that landed and has since been settled. Otherwise
+    /// the answer is the first terminal frame with a HIGHER version — so a stale terminal replay of
+    /// the pre-hand-off record (a lower version) is never read as the verdict, and a recovery that
+    /// delivers the terminal snapshot directly, without the <c>Pending</c> frame in between, is
+    /// still recognised.</para>
+    ///
+    /// <para>🚨 A hand-off write that FAILS propagates as an error (#7015 review): nothing was
+    /// requested, so there is nothing to wait for, and the caller reports the fault at once instead
+    /// of spending the whole budget and filing it as "not evaluated".</para>
+    /// </summary>
+    /// <param name="frames">The type's node stream (replays its latest state).</param>
+    /// <param name="handOff">The hand-off write; emits the acknowledged node.</param>
+    /// <param name="options">Serializer options for reading the content.</param>
+    internal static IObservable<NodeTypeDefinition> SettleAfterHandOff(
+        IObservable<MeshNode?> frames,
+        IObservable<MeshNode> handOff,
+        System.Text.Json.JsonSerializerOptions options)
+        => handOff
+            .Take(1)
+            .SelectMany(acknowledged =>
+                acknowledged.ContentAs<NodeTypeDefinition>(options) is { } now && IsTerminal(now)
+                    ? Observable.Return(now)
+                    : frames
+                        .Where(n => n is not null && n.Version > acknowledged.Version)
+                        .Select(n => n!.ContentAs<NodeTypeDefinition>(options))
+                        .Where(d => d is not null && IsTerminal(d))
+                        .Select(d => d!)
+                        .Take(1));
+
+    private static bool IsTerminal(NodeTypeDefinition d) =>
+        d.CompilationStatus is CompilationStatus.Ok or CompilationStatus.Error or CompilationStatus.Unavailable;
+
+    /// <summary>
+    /// The sweep outcome for the watcher's answer to a hand-off.
+    ///
+    /// <para>🚨 <b>A success is RE-PROBED on this replica before it is reported</b> (#7015 review).
+    /// The gate's hold judges "a usable build" from the record alone — coordinates, framework,
+    /// dependencies — and never asks the store, so a type whose bytes are gone (BytesMissing) can
+    /// settle <c>Ok</c>/<see cref="BuildProvenance.StaleAdopted"/> with nothing to load. The sweep's
+    /// own store probe, against this replica's store and build guards, decides: baked is reported
+    /// baked; anything else is a FAULT naming the missing build — never a success that dependents
+    /// and readiness would build on, and never a fallback to the local compile the gate refused.</para>
+    /// </summary>
+    /// <param name="typePath">The NodeType.</param>
+    /// <param name="settled">The watcher's terminal record.</param>
+    /// <param name="probe">The store probe over a set of definitions.</param>
+    internal static IObservable<PreWarmOutcome> OutcomeOfHandOff(
+        string typePath,
+        NodeTypeDefinition settled,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe)
+    {
+        switch (settled.CompilationStatus)
+        {
+            case CompilationStatus.Error:
+                return Observable.Return(FromFailedCompile(typePath, settled));
+            case CompilationStatus.Unavailable:
+                return Observable.Return(
+                    new PreWarmOutcome(typePath, PreWarmStatus.TimedOut, settled.CompilationError));
+        }
+        var held = settled.BuildProvenance is BuildProvenance.StaleAdopted;
+        return probe(ImmutableDictionary<string, NodeTypeDefinition?>.Empty
+                .WithComparers(StringComparer.OrdinalIgnoreCase)
+                .Add(typePath, settled))
+            .Take(1)
+            .Select(report => report.Entries.FirstOrDefault(e =>
+                string.Equals(e.TypePath, typePath, StringComparison.OrdinalIgnoreCase)))
+            .Select(entry => entry is { NeedsBake: false }
+                ? new PreWarmOutcome(typePath,
+                    held ? PreWarmStatus.AlreadyBaked : PreWarmStatus.Compiled,
+                    held
+                        ? "held by the untracked-module gate (MeshWeaver#3583) — its last build keeps serving"
+                        : "built by the compile watcher")
+                : new PreWarmOutcome(typePath, PreWarmStatus.Faulted,
+                    $"the compile watcher settled it Ok{(held ? " (held by the untracked-module gate)" : "")}, "
+                    + "but this replica's store does not serve the build its record names ("
+                    + (entry is null ? "not probed" : entry.State.ToString())
+                    + (entry?.Detail is { Length: > 0 } detail ? ": " + detail : "")
+                    + ") — not reported as baked; this mesh does not compile a module's content it does "
+                    + "not track (MeshWeaver#3583), so publish/rebake the bundle or add a sync source"));
     }
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>

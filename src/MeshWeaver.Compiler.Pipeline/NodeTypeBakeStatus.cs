@@ -130,6 +130,15 @@ public sealed record NodeTypeBakeEntry(string TypePath, BakeState State, string?
     public bool RecordNamesABuildTheStoreLacks { get; init; }
 
     /// <summary>
+    /// 🚨 The store LOOKUP for this type faulted, so <see cref="BakeState.BytesMissing"/> here is the
+    /// probe's fail-safe reading ("assume absent and bake"), NOT a confirmed miss. A caller that must
+    /// tell "the store does not hold the build" from "the store could not be asked" — the boot
+    /// sweep's verification of an adoption this process just made (#7015 review) — reads this, never
+    /// <see cref="Detail"/>'s wording.
+    /// </summary>
+    public bool ProbeFailed { get; init; }
+
+    /// <summary>
     /// 🚨 Whether a WORKING BUILD of this type is on record at all — the thing a regression
     /// regresses FROM (#5544).
     ///
@@ -766,7 +775,10 @@ public static class NodeTypeBakeStatus
                         "Bake probe: assembly store lookup failed for {TypePath} — treating as missing bytes",
                         typePath);
                     return Observable.Return(new NodeTypeBakeEntry(
-                        typePath, BakeState.BytesMissing, $"store probe failed: {ex.Message}"));
+                        typePath, BakeState.BytesMissing, $"store probe failed: {ex.Message}")
+                    {
+                        ProbeFailed = true,
+                    });
                 });
         });
 

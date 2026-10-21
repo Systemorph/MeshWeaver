@@ -678,7 +678,8 @@ public static class ShippedPrebuiltBundles
         string identityDirectory, ILogger? logger, CancellationToken cancellationToken,
         Func<string, string[]>? readLines = null,
         IReadOnlyDictionary<string, string>? publicationDirectories = null,
-        BundleShareIo? io = null)
+        BundleShareIo? io = null,
+        Action<string>? onSourceSkipped = null)
     {
         io ??= BundleShareIo.Real;
         var bundles = new List<string>();
@@ -690,13 +691,39 @@ public static class ShippedPrebuiltBundles
             // under `source`. Resolving and then composing against the source directory would
             // read the flat layout's bytes while reporting the generation's, which during the
             // migration is a silent wrong answer rather than a missing one.
-            var sourceDir =
-                publicationDirectories is not null
-                && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned)
-                    ? pinned
-                    : ResolvePublicationPointer(source, cancellationToken, logger, io).Directory;
+            string sourceDir;
+            string? pointerFault = null;
+            if (publicationDirectories is not null
+                && publicationDirectories.TryGetValue(Path.GetFileName(source)!, out var pinned))
+                sourceDir = pinned;
+            else
+            {
+                var pointer = ResolvePublicationPointer(source, cancellationToken, logger, io);
+                sourceDir = pointer.Directory;
+                pointerFault = pointer.Fault;
+            }
             if (SealedBundlesOfPublication(sourceDir, logger, cancellationToken, readLines, io) is { } listed)
+            {
                 bundles.AddRange(listed);
+                // #7015 review — a pointer this walk would not follow (it names a generation that is
+                // not on disk, it is empty, unreadable or escaping) means the publication the
+                // publisher INTENDED is unknown. The sealed flat fallback is still read — its bytes
+                // are a real publication — but what the intended one names was never asked about,
+                // so the walk does not count as complete for the offer witness.
+                if (pointerFault is not null)
+                {
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: {Source}'s publication pointer was not followed ({Fault}) — "
+                        + "its sealed flat publication was read, but the publication the pointer names was "
+                        + "not; offer discovery for this source is INCOMPLETE",
+                        source, pointerFault);
+                    onSourceSkipped?.Invoke(source);
+                }
+            }
+            else
+                // #7015 review — a source this walk could not read (unsealed, gone, torn) is one
+                // whose bundles were never ASKED about: what they name is unknown, not "nothing".
+                onSourceSkipped?.Invoke(sourceDir);
         }
         return bundles;
     }
@@ -830,6 +857,23 @@ public static class ShippedPrebuiltBundles
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
         string? imageDirectory, string? publishedRoot,
         Action<string>? onCovered, Action<string>? onMatched)
+        => SeedForTypes(mesh, typePaths, logger, imageDirectory, publishedRoot, onCovered, onMatched,
+            onIncomplete: null);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IMessageHub, IReadOnlyCollection{string}, ILogger, string, string, Action{string}, Action{string})"/>
+    /// with a COMPLETENESS witness (#7015 review): <paramref name="onIncomplete"/> is invoked, at
+    /// most once and with the reason, when this pass did not ask every bundle it should have — a
+    /// bundle it could not read (the pass's own fault fold), one with no readable manifest, a
+    /// published source it skipped (unsealed, gone, torn), or a hub that is leaving. The pass still
+    /// "succeeds" in every one of those cases, so a caller that reads the absence of an
+    /// <paramref name="onMatched"/> witness as "no bundle names this type" may do so ONLY when this
+    /// witness stayed silent.
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory, string? publishedRoot,
+        Action<string>? onCovered, Action<string>? onMatched, Action<string>? onIncomplete)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -855,6 +899,7 @@ public static class ShippedPrebuiltBundles
             // documents thread-safety. The caller's own witness is chained, never replaced.
             var covered = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             var matched = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var skippedSources = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             void WitnessCovered(string path)
             {
                 covered.TryAdd(path, 0);
@@ -878,7 +923,8 @@ public static class ShippedPrebuiltBundles
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 sources.Add(identityDir);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    ct => CompletePublishedBundlesOf(identityDir, logger, ct), logger, paths,
+                    ct => CompletePublishedBundlesOf(identityDir, logger, ct,
+                        onSourceSkipped: dir => skippedSources.TryAdd(dir, 0)), logger, paths,
                     WitnessCovered, WitnessMatched));
             }
             return seeds.Concat()
@@ -893,6 +939,9 @@ public static class ShippedPrebuiltBundles
                 // these types is a fact about the deployment (Information).
                 .Do(tally =>
                 {
+                    if (onIncomplete is not null
+                        && DescribeIncompleteDiscovery(tally, skippedSources.Count) is { } incomplete)
+                        onIncomplete(incomplete);
                     var uncovered = paths.Where(p => !covered.ContainsKey(p))
                         .OrderBy(p => p, StringComparer.Ordinal)
                         .ToArray();
@@ -907,6 +956,33 @@ public static class ShippedPrebuiltBundles
                 })
                 .Select(tally => tally.Covered);
         });
+
+    /// <summary>
+    /// Why a pass's offer DISCOVERY is incomplete, or null when every bundle it should have asked
+    /// was asked (#7015 review). Pure. A bundle declined WHOLE on framework identity is not here: it
+    /// names another identity's entries by design, so asking it is complete.
+    /// </summary>
+    internal static string? DescribeIncompleteDiscovery(SeedTally tally, int skippedSources)
+    {
+        var reasons = new List<string>();
+        if (tally.Faulted > 0)
+            reasons.Add($"{tally.Faulted} bundle source(s) faulted mid-pass");
+        // A hollow bundle whose membership is nonetheless KNOWN — one that declares it ships only a
+        // module or content (BundleReader.DeclaresNothingToAdopt), or one whose every producer miss
+        // names its node path (each witnessed per path) — left nothing unasked. Only the hollow
+        // bundles beyond those leave membership unknown. The hollow-delivery report is unaffected.
+        var unknownHollow = tally.BundlesHollow - tally.BundlesHollowWithKnownMembership;
+        if (unknownHollow > 0)
+            reasons.Add($"{unknownHollow} bundle(s) had no readable manifest, stated no framework "
+                + "identity, or carried no assemblies without declaring why");
+        if (tally.BundlesWithUnattributedMisses > 0)
+            reasons.Add($"{tally.BundlesWithUnattributedMisses} producer miss(es) named no node path");
+        if (skippedSources > 0)
+            reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn, or their publication pointer was not followed)");
+        if (tally.Leaving > 0)
+            reasons.Add("the hub is leaving, so no pass ran");
+        return reasons.Count == 0 ? null : string.Join("; ", reasons);
+    }
 
     /// <summary>How many uncovered type paths a shortfall line names before it truncates.</summary>
     private const int NamedUncoveredPaths = 8;
@@ -1035,6 +1111,17 @@ public static class ShippedPrebuiltBundles
         /// <summary>Bundles carrying no assemblies (or no readable manifest).</summary>
         public int BundlesHollow { get; init; }
 
+        /// <summary>…of those, the ones whose MEMBERSHIP is nonetheless known (#7015 review): the
+        /// manifest declares a module or content and records no misses, or every producer miss it
+        /// records names its node path. Discovery completeness subtracts these; the hollow-delivery
+        /// report does not.</summary>
+        public int BundlesHollowWithKnownMembership { get; init; }
+
+        /// <summary>Producer misses (<c>Manifest.Misses</c>) that name no node path, so which types
+        /// their bundle is short of is unknown (#7015 review). Attributable misses are witnessed
+        /// per path instead and never counted here.</summary>
+        public int BundlesWithUnattributedMisses { get; init; }
+
         /// <summary>Bundles that could not be read, plus whole sources that faulted.</summary>
         public int Faulted { get; init; }
 
@@ -1050,6 +1137,8 @@ public static class ShippedPrebuiltBundles
                 BundlesSeen = left.BundlesSeen + right.BundlesSeen,
                 BundlesDeclined = left.BundlesDeclined + right.BundlesDeclined,
                 BundlesHollow = left.BundlesHollow + right.BundlesHollow,
+                BundlesHollowWithKnownMembership = left.BundlesHollowWithKnownMembership + right.BundlesHollowWithKnownMembership,
+                BundlesWithUnattributedMisses = left.BundlesWithUnattributedMisses + right.BundlesWithUnattributedMisses,
                 Faulted = left.Faulted + right.Faulted,
                 Leaving = left.Leaving + right.Leaving,
             };
@@ -1305,10 +1394,28 @@ public static class ShippedPrebuiltBundles
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
             {
+                // 🚨 #7015 review — NO MANIFEST is HOLLOW, never a framework decline. A readable ZIP
+                // without meshweaver/manifest.json states no identity and names no entries, so the
+                // identity gate below would "decline" it as another framework's and the pass would
+                // read as complete although it never learned what the bundle carries. Hollow is
+                // the one tally that says "this bundle's membership is unknown".
+                // The same holds for a manifest that states NO framework identity: it is not
+                // another framework's bundle (a known foreign identity still declines below), it is
+                // one whose identity — and so whether its entries are for this mesh — is unknown.
+                if (manifest is null || string.IsNullOrWhiteSpace(manifest.FrameworkMvid))
+                {
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: bundle {Bundle} has no readable manifest or states no "
+                        + "framework identity — what it names is unknown; counted HOLLOW (offer discovery "
+                        + "incomplete), not declined",
+                        Path.GetFileName(bundlePath));
+                    return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
+                }
+
                 // The whole-bundle gate: the exact identity gate as before when no policy context
                 // is in play (the image's own bundles, the install-time re-seed); otherwise the
                 // strictness policy, whose Adopt may still require the per-assembly link check.
-                var decision = context is null || manifest is null
+                var decision = context is null
                     ? (PrebuiltAssemblySeeder.DeclineReason(manifest?.FrameworkMvid) is { } exactReason
                         ? new AdoptionDecision(AdoptionVerdict.Decline, exactReason, LinkCheckRequired: false)
                         : new AdoptionDecision(AdoptionVerdict.Adopt, "this framework identity", LinkCheckRequired: false))
@@ -1320,6 +1427,37 @@ public static class ShippedPrebuiltBundles
                         + "the sweep compiles instead", Path.GetFileName(bundlePath), decision.Reason);
                     return Observable.Return(default(SeedTally) with { BundlesDeclined = 1 });
                 }
+
+                // 🚨 #7015 review — a producer MISS names a type the bundle is FOR but carries no
+                // bytes for, whatever else the bundle carries. That type is a module's content as
+                // surely as one whose entry is present, so it is witnessed exactly like a matched
+                // entry (and, never covered, shows in the shortfall). Only that type is affected: the
+                // rest of the bundle adopts as before. A miss this reader cannot attribute to a node
+                // path leaves membership unknown, and the pass says so.
+                var unattributedMisses = 0;
+                foreach (var miss in manifest!.Misses ?? [])
+                {
+                    // The registry also reports a module-file divergence as a miss
+                    // ("module '<name>': …"). It names no NodeType, so it neither witnesses nor
+                    // leaves membership unknown.
+                    if (Plugin.Packaging.BundleReader.IsModuleMiss(miss))
+                        continue;
+                    if (Plugin.Packaging.BundleReader.MissedNodePath(miss) is not { } missed)
+                        unattributedMisses++;
+                    else if (snapshot.Paths.Contains(missed))
+                        onMatched?.Invoke(missed);
+                }
+                if (unattributedMisses > 0)
+                    logger?.LogWarning(
+                        "ShippedPrebuiltBundles: bundle {Bundle} records {Count} producer miss(es) that "
+                        + "name no node path — which types it is short of is unknown; offer discovery "
+                        + "is INCOMPLETE", Path.GetFileName(bundlePath), unattributedMisses);
+                return Admitted().Select(t => unattributedMisses == 0
+                    ? t
+                    : t with { BundlesWithUnattributedMisses = t.BundlesWithUnattributedMisses + unattributedMisses });
+
+                IObservable<SeedTally> Admitted()
+                {
                 // A tolerant adoption stamps LIVE dependency ids (the assembly the bytes bind to
                 // here), so "already current" and the stamp agree — see PrebuiltAdoptionPolicy.LiveStampOf.
                 IReadOnlyDictionary<string, string>? DependenciesToStamp(IReadOnlyDictionary<string, string>? recorded)
@@ -1328,6 +1466,15 @@ public static class ShippedPrebuiltBundles
                         : recorded;
                 if (manifest!.Assemblies is not { Count: > 0 } assemblies)
                 {
+                    // #7015 review — a module-only or content-only bundle with no producer misses is
+                    // a valid, COMPLETE delivery (the rule BundleOffering.ClassifyEmpty states for
+                    // the registry lane): it names no NodeType, so it leaves no membership unknown.
+                    // It still counts hollow for the shortfall report, exactly as before.
+                    var declaredEmpty = Plugin.Packaging.BundleReader.DeclaresNothingToAdopt(manifest);
+                    // Its membership is known when it declares a module/content-only delivery, or
+                    // when every miss it records was attributed to a node path above (#7015 review).
+                    var membershipKnown = declaredEmpty
+                        || (manifest.Misses is { Count: > 0 } && unattributedMisses == 0);
                     // 🚨 On a require-prebuilt mesh an empty bundle is an ERROR, loudly named: the
                     // types it should have covered will not compile here (that is the flag's whole
                     // point), so "nothing to adopt" is not a degraded-but-fine state — it is the
@@ -1348,7 +1495,11 @@ public static class ShippedPrebuiltBundles
                         logger?.LogWarning(
                             "ShippedPrebuiltBundles: bundle {Bundle} carries no assemblies (or no "
                             + "readable manifest) — nothing to adopt", Path.GetFileName(bundlePath));
-                    return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
+                    return Observable.Return(default(SeedTally) with
+                    {
+                        BundlesHollow = 1,
+                        BundlesHollowWithKnownMembership = membershipKnown ? 1 : 0,
+                    });
                 }
 
                 var present = assemblies
@@ -1423,6 +1574,7 @@ public static class ShippedPrebuiltBundles
                                 // producer stated them; the seeder declines outside it, loudly.
                                 manifest.ProducerPlatformVersion, manifest.PlatformCeiling));
                     });
+                }
             })
             .Catch<SeedTally, Exception>(ex =>
             {
