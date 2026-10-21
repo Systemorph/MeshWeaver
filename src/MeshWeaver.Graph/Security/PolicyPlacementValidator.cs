@@ -274,7 +274,8 @@ public static class PolicyPlacementGuard
                         JsonNode.Parse(patchRequest.Patch.Content ?? "{}"),
                         patchRequest.Reference is MeshNodeReference,
                         StampedFields.LiveOwnNode(hub),
-                        hub.JsonSerializerOptions);
+                        hub.JsonSerializerOptions,
+                        patchRequest.BaseValues is { Content: { } baseContent } ? JsonNode.Parse(baseContent) : null);
                     if (verdict == PatchRetype.None)
                         return next.Invoke(delivery, ct);
 
@@ -310,11 +311,18 @@ public static class PolicyPlacementGuard
     ///
     /// <para><b>Why a patch is refused rather than judged.</b> Placement needs the partition's layout,
     /// which is a read. Waiting for it here would let a later patch from the same sender pass ahead of
-    /// this one. A merge patch is also not how a policy is made: it is created as one, or a node is
-    /// retyped through <c>IMeshService.UpdateNode</c> or an upsert, and both judge placement before
-    /// they write. So a patch that turns a node INTO a policy is refused, naming those routes. A patch
-    /// of a node that already IS a policy is not a retype and passes, so legacy policies stay
-    /// editable.</para>
+    /// this one. So a patch that turns a node INTO a policy is refused, and a policy is created as one
+    /// (<c>{scope}/_Policy</c>). <c>IMeshService.UpdateNode</c> and the upsert reach the owner as this
+    /// same patch, so a retype into a policy is refused on those routes too, even where its placement
+    /// is valid (#7017 review; tracked in triage). A patch of a node that already IS a policy is not a
+    /// retype and passes, so legacy policies stay editable.</para>
+    ///
+    /// <para><b>The owner's merge semantics, not the literal.</b> A string leaf can also arrive as a
+    /// SPLICE (<c>{"$sd":[start,removed,inserted]}</c>, <see cref="MeshWeaver.Data.Serialization.PatchStringSplice"/>),
+    /// which the owner applies to the live value. A spliced <c>nodeType</c> is judged on the value the
+    /// splice produces from the live type. A splice whose base value differs from the live type, which the
+    /// owner would rebase, and any other non-string <c>nodeType</c> cannot be judged here. Both count as
+    /// naming the policy type.</para>
     ///
     /// <para><b>Every reference shape.</b> A <see cref="MeshNodeReference"/> patch is the node itself, so
     /// only its top-level <c>nodeType</c> counts. Any other reference (an
@@ -328,13 +336,18 @@ public static class PolicyPlacementGuard
     /// <param name="isNodeReference">Whether the patch addresses the node itself.</param>
     /// <param name="live">The node as the hub holds it; null before it has loaded.</param>
     /// <param name="options">The hub's serializer options.</param>
+    /// <param name="baseValues">The patch's <c>BaseValues</c>, the writer's old values, when it carries them.</param>
     /// <returns>The verdict.</returns>
     public static PatchRetype PatchVerdict(
-        JsonNode? patch, bool isNodeReference, MeshNode? live, System.Text.Json.JsonSerializerOptions options)
+        JsonNode? patch, bool isNodeReference, MeshNode? live, System.Text.Json.JsonSerializerOptions options,
+        JsonNode? baseValues = null)
     {
         var key = options.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.NodeType)) ?? nameof(MeshNode.NodeType);
+        var baseType = baseValues is JsonObject baseObject
+            ? baseObject.FirstOrDefault(kvp => IsNodeTypeKey(kvp.Key, key)).Value
+            : null;
         var namesPolicy = isNodeReference
-            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value))
+            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value, live, baseType))
             : NamesPolicyAnywhere(patch, key);
         if (!namesPolicy)
             return PatchRetype.None;
@@ -346,12 +359,34 @@ public static class PolicyPlacementGuard
     private static bool IsNodeTypeKey(string candidate, string key)
         => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase);
 
-    private static bool NamesPolicy(JsonNode? value)
-        => value is JsonValue v && v.TryGetValue<string>(out var s) && PolicyPlacementValidator.IsPolicyType(s);
+    /// <summary>
+    /// Whether a <c>nodeType</c> patch value would leave the node as a policy, under the owner's merge
+    /// semantics, or cannot be judged (which counts as yes).
+    /// </summary>
+    private static bool NamesPolicy(JsonNode? value, MeshNode? live, JsonNode? baseValue)
+    {
+        switch (value)
+        {
+            case null:
+                return false;
+            case JsonValue v when v.TryGetValue<string>(out var literal):
+                return PolicyPlacementValidator.IsPolicyType(literal);
+        }
+        if (MeshWeaver.Data.Serialization.PatchStringSplice.TryDecode(value, out var splice))
+        {
+            if (live?.NodeType is not { } current)
+                return true;
+            if (baseValue is JsonValue b && b.TryGetValue<string>(out var baseString)
+                && !string.Equals(baseString, current, StringComparison.Ordinal))
+                return true;
+            return PolicyPlacementValidator.IsPolicyType(splice.Apply(current));
+        }
+        return true;
+    }
 
     private static bool NamesPolicyAnywhere(JsonNode? node, string key) => node switch
     {
-        JsonObject obj => obj.Any(kvp => (IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value))
+        JsonObject obj => obj.Any(kvp => (IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value, null, null))
                                          || NamesPolicyAnywhere(kvp.Value, key)),
         JsonArray array => array.Any(item => NamesPolicyAnywhere(item, key)),
         _ => false,

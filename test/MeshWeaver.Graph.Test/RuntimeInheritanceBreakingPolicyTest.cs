@@ -312,8 +312,8 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
     /// <summary>
     /// A merge patch is decided on the owner's turn, never after a read: a patch that turns a node into
     /// a policy is refused even where the placement would be valid, so no later patch from the same
-    /// sender can overtake it. (A retype through UpdateNode or an upsert, which judge placement, stays
-    /// possible.)
+    /// sender can overtake it. (UpdateNode and the upsert reach the owner as this same patch, so they
+    /// are refused too; a policy is created as one.)
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task APatchIntoAPolicy_IsRefusedOnTheOwnersTurn_EvenAtAValidPlacement()
@@ -367,6 +367,43 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
 
         failure.Should().NotBeNull("the guard reads the patch at every depth for a reference it cannot map");
         (await TypeOf(path, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>
+    /// The owner applies a SPLICED string leaf to the live value, so a splice that turns
+    /// <c>Markdown</c> into <c>PartitionAccessPolicy</c> is a retype into a policy, and is refused like
+    /// the literal. The control proves the splice route itself rewrites the node type.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ASplicedNodeTypePatch_IntoAPolicy_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var owner = new Address(path);
+
+        await RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":{\"$sd\":[0,8,\"Group\"]}}"))
+                {
+                    BaseValues = new RawJson("{\"nodeType\":\"Markdown\"}"),
+                },
+                o => o.WithTarget(owner))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        (await TypeOf(path, ct)).Should().Be("Group", "control: the owner applies a spliced nodeType");
+
+        var failure = await Record.ExceptionAsync(() => RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new MeshNodeReference(),
+                    new RawJson("{\"nodeType\":{\"$sd\":[0,5,\"PartitionAccessPolicy\"]}}"))
+                {
+                    BaseValues = new RawJson("{\"nodeType\":\"Group\"}"),
+                },
+                o => o.WithTarget(owner))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("a spliced nodeType is judged on the value the owner would produce");
+        (await TypeOf(path, ct)).Should().Be("Group", "the refused splice must leave the node as it was");
     }
 
     /// <summary>A cold owner is not permission: a patch naming the policy type is refused as not loaded.</summary>
