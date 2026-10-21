@@ -2116,8 +2116,11 @@ stays live in every input:
     `Admin`. These are matched by namespace and id, so a deletion that carries no node type still
     counts. A one-way `_GitSync` is what admits a platform admin to a system-owned Space.
   - any group membership or role definition;
-  - conservatively, any deletion whose event carries no node type (the delete pipeline publishes
-    the path alone), since it may have removed a membership or a role;
+  - a deletion whose event carries no node type, scoped by its PATH. The delete pipeline publishes
+    every deletion without its type, so such an event counts only when it removed the node or one
+    of its scopes, or a group membership (`{group}/{member}_Membership`). A typeless role deletion
+    cannot be placed by path, because a Role may live anywhere. The viewer's live folds (node,
+    `MainNode`, `Admin`) carry what it does to this decision;
   - every declared gap (`IMeshInvalidationFeed.Gaps`), because commits lost in a gap are never
     replayed.
 
@@ -2133,10 +2136,11 @@ stays live in every input:
 - **The cost of failing closed.** An open page may show "no access" for the length of one
   re-check after a matching signal, even when the answer comes back unchanged. The filters are
   kept tight for that reason: an access input matches only on the node's own scopes, and an
-  ordinary content change never matches. The broad matches are the ones the event alone cannot
-  narrow: group memberships, roles, typeless deletions and gaps. Typeless deletions are the
-  broadest, because the delete pipeline publishes every deletion without its type. Publishing
-  the pre-delete type there would narrow them to memberships and roles.
+  ordinary content change never matches. A typeless deletion matches only by its path (the
+  node, its scopes, or a membership), never wholesale. Because the delete pipeline publishes
+  every deletion untyped, a wholesale match would blink every open rule-governed page on every
+  delete in the mesh. What remains broad cannot be narrowed from the event: a typed membership
+  or role change anywhere, and a declared gap.
 - **Off every source gate.** Each signal (revision, fold emission, feed commit, gap) is re-emitted
   as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
   shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs

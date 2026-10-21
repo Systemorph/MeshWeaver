@@ -1109,7 +1109,13 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
     public void TheSignalFilter_IsTight_ButCountsTypelessDeletions()
     {
         var scopes = DeclaredPointRead.ReadScopes(new MeshNode("x", "acme/space") { MainNode = "acme/doc" });
-        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("Groups/ops/gina_Membership"), scopes), "a typeless deletion");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("Groups/ops/gina_Membership"), scopes), "a typeless MEMBERSHIP deletion, wherever its group lives");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/space/x"), scopes), "the node itself, deleted typeless");
+        Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/doc"), scopes), "its MainNode, deleted typeless");
+        Assert.False(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("other/page"), scopes),
+            "an UNRELATED typeless deletion elsewhere — the delete pipeline publishes every deletion typeless, so this must not blink open pages");
+        Assert.False(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/space/sibling"), scopes),
+            "a typeless deletion of a SIBLING is no access input");
         Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/_GitSync"), scopes), "a sync config on the node's partition, typeless");
         Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("acme/space/_Access/bob_Access"), scopes), "a grant on an ancestor, typeless");
         Assert.True(DeclaredPointRead.AffectsRead(MeshChangeEvent.Deleted("Admin/_Access/bob_Access"), scopes), "a grant on Admin");

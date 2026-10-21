@@ -343,8 +343,8 @@ public static class DeclaredPointRead
     /// (<c>{scope}/_Policy</c>) or a sync config (<c>{scope}/_GitSync</c> — a one-way sync is what
     /// admits a platform admin to a system-owned Space) ON one of those scopes, matched by namespace
     /// and id so a deletion that carries no node type still counts; any group membership or role
-    /// definition, which can widen or narrow a principal anywhere; and — conservatively — any
-    /// deletion whose node type is unknown, since it may have been a membership or a role.
+    /// definition, which can widen or narrow a principal anywhere; and a deletion whose node type is
+    /// unknown only when its PATH places it: the node or one of its scopes, or a group membership.
     /// </summary>
     internal static bool AffectsRead(MeshChangeEvent change, System.Collections.Immutable.ImmutableHashSet<string> scopes)
     {
@@ -369,13 +369,22 @@ public static class DeclaredPointRead
             || string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase))
             return scopes.Contains(ns);
         // A deletion that carries NO node type (the delete pipeline's DeleteAndPublish publishes the
-        // path alone) may have removed a group membership or a role — conservatively a signal.
-        return change.Kind == MeshChangeKind.Deleted && string.IsNullOrEmpty(change.NodeType);
+        // path alone — for EVERY deletion) is scoped by its PATH, never taken wholesale: a signal
+        // withdraws the verdict until its re-check answers, so a mesh-wide match would blink every
+        // open page on every delete. It counts when it removed the node or one of its ancestors, or
+        // a group membership (a GroupMembership lives under its group as `{member}_Membership`).
+        // A typeless ROLE deletion cannot be placed by path (a Role may live anywhere); the viewer's
+        // live folds — node, MainNode, Admin — carry what a role change does to this decision.
+        if (change.Kind != MeshChangeKind.Deleted || !string.IsNullOrEmpty(change.NodeType))
+            return false;
+        return scopes.Contains((change.Path ?? "").Trim('/'))
+               || (change.Id ?? "").EndsWith(MembershipIdSuffix, StringComparison.OrdinalIgnoreCase);
     }
 
     private const string AccessAssignmentNodeType = "AccessAssignment";
     private const string PartitionAccessPolicyNodeType = "PartitionAccessPolicy";
     private const string PartitionPolicyId = "_Policy";
+    private const string MembershipIdSuffix = "_Membership";
 
     /// <summary>A verdict stream with all three terminals represented: a fault or an empty completion is undetermined.</summary>
     private static IObservable<PermissionCheckOutcome> Classified(IObservable<bool> verdicts, string path, string userId, ILogger? logger)
