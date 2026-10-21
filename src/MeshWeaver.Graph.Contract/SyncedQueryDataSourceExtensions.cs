@@ -322,34 +322,27 @@ public static class SyncedQueryDataSourceExtensions
                 .Concat()
                 .All(valid => valid);
             return reader.IsApiToken
-                ? chain.Zip(ApiTokenCapAllows(meshHub, accessService, reader, node), (valid, capAllows) => valid && capAllows)
+                ? chain.Zip(ApiTokenCapAllows(meshHub, node), (valid, capAllows) => valid && capAllows)
                 : chain;
         });
 
     /// <summary>
-    /// The API-token clamp, enforced on the synced-query path whatever admitted the row.
+    /// The API-token clamp's POLICY half, enforced on the synced-query path whatever admitted the row.
     ///
-    /// <para>🚨 The validator chain can admit a row before the permission fold is ever reached —
-    /// <c>RlsNodeValidator</c>'s own-scope shortcut grants a node under <c>{reader}/…</c> without
-    /// walking the fold, and the fold is the only place the clamp lives
-    /// (<c>PermissionEvaluator</c>: an API token on a scope whose policy withholds
-    /// <see cref="Permission.Api"/> holds NOTHING there). So a token reader is admitted only when
-    /// the fold, evaluated AS THE TOKEN, still grants Read — or when the same person evaluated
-    /// WITHOUT the token flag holds nothing either, i.e. the clamp is not what decides the row and
-    /// a type rule's legitimate grant (a root User profile) stands.</para>
+    /// <para>🚨 The validator chain can admit a row without the permission fold ever deciding it —
+    /// <c>RlsNodeValidator</c>'s own-scope shortcut, or a node type's own Read rule
+    /// (<c>UserAccessRule</c> on a root profile) — and the fold is where the clamp lives. So the
+    /// API capability is evaluated SEPARATELY from any Read grant: the scope chain's policy cap must
+    /// still carry <see cref="Permission.Api"/> (<see cref="PermissionEvaluator.GetApiCapability"/>).
+    /// A capped scope refuses the token however the row was admitted; an uncapped one keeps a type
+    /// rule's grant and an API-only role's grant alike. The grant half — a token whose own roles
+    /// carry no Api on a scope with no public surface — stays in the fold the validator chain
+    /// reaches, evaluated as the token.</para>
     /// </summary>
-    private static IObservable<bool> ApiTokenCapAllows(
-        IMessageHub meshHub, AccessService accessService, AccessContext reader, MeshNode node)
-    {
-        var path = node.Path ?? string.Empty;
-        var asToken = accessService.RunAs(reader,
-            () => meshHub.GetEffectivePermissions(path, reader.ObjectId).Take(1));
-        var asPerson = accessService.RunAs(reader with { IsApiToken = false },
-            () => meshHub.GetEffectivePermissions(path, reader.ObjectId).Take(1));
-        return asToken.Zip(asPerson, (token, person) =>
-                token.HasFlag(Permission.Read) || person == Permission.None)
+    private static IObservable<bool> ApiTokenCapAllows(IMessageHub meshHub, MeshNode node)
+        => PermissionEvaluator.GetApiCapability(meshHub, node.Path ?? string.Empty)
+            .Take(1)
             .DefaultIfEmpty(false);
-    }
 
     /// <summary>
     /// The RLS filter itself, with the permission probe as a parameter so it can be exercised

@@ -471,6 +471,46 @@ internal static class PermissionEvaluator
             });
     }
 
+    /// <summary>
+    /// Whether the API surface reaches <paramref name="nodePath"/>: the AND of every
+    /// <see cref="PartitionAccessPolicy"/> cap on its scope chain (a scope that breaks inheritance
+    /// resets it) still carries <see cref="Permission.Api"/>. This is the POLICY half of the API-token
+    /// clamp, independent of any role grant — a scope that sets <c>api: false</c> is "not reachable
+    /// through the API" whoever is asking and whatever admitted the read (a node type's own rule, an
+    /// own-scope shortcut). The grant half stays in the fold. Reads the same scope-policy chain the
+    /// fold reads, so the two never disagree about which policy applies.
+    /// </summary>
+    /// <param name="hub">The hub whose policies are read (the mesh hub).</param>
+    /// <param name="nodePath">The node path.</param>
+    /// <returns>Live: true while the scope chain's cap carries <see cref="Permission.Api"/>.</returns>
+    public static IObservable<bool> GetApiCapability(IMessageHub hub, string nodePath)
+    {
+        var path = nodePath ?? "";
+        var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
+        var staticPolicies = CollectStaticPolicies(hub);
+        return ObserveScopePolicies(hub, cache, path, staticPolicies)
+            .Select(runtimePolicies =>
+            {
+                // ALL BITS = no cap, exactly as ComputeRoleState folds it.
+                var cap = (Permission)~0;
+                foreach (var scope in GetScopeHierarchy(path))
+                {
+                    PartitionAccessPolicy? policy = null;
+                    if (runtimePolicies.TryGetValue(scope, out var rp))
+                        policy = rp;
+                    else if (staticPolicies.TryGetValue(scope, out var sp))
+                        policy = sp;
+                    if (policy is null)
+                        continue;
+                    if (policy.BreaksInheritance)
+                        cap = (Permission)~0;
+                    cap &= policy.GetPermissionCap();
+                }
+                return cap.HasFlag(Permission.Api);
+            })
+            .DistinctUntilChanged();
+    }
+
     public static IObservable<PartitionAccessPolicy?> GetPolicy(IMessageHub hub, string targetNamespace)
     {
         var ns = targetNamespace ?? "";

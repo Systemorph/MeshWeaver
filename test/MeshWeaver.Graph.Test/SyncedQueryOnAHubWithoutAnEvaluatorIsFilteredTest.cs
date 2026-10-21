@@ -56,11 +56,74 @@ public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper
                 AssignmentNodeFactory.UserRole(Keeper, "Viewer", Vault),
                 // The stranger's OWN partition withholds API reach: an API token holds nothing there,
                 // however the row is otherwise admitted (the own-scope shortcut).
-                AssignmentNodeFactory.Policy(Stranger, new PartitionAccessPolicy { Api = false }))
+                AssignmentNodeFactory.Policy(Stranger, new PartitionAccessPolicy { Api = false }),
+                // The keeper's partition withholds API reach too: its root profile, which only the
+                // User type rule opens to a signed-in reader, must not reach an API token.
+                AssignmentNodeFactory.Policy(Keeper, new PartitionAccessPolicy { Api = false }),
+                // An uncapped profile, explicitly opened to the anonymous visitor.
+                Person(PublicPerson, "Synced Public"),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", PublicPerson))
             .ConfigureServices(services => services.AddSingleton<INodeValidator>(new SilentOnShadowValidator()));
 
     private const string ShadowName = "VAULT-SHADOW-77d4";
     private const string DiaryName = "STRANGER-DIARY-3b90";
+    private const string PublicPerson = "synced-public";
+
+    /// <summary>
+    /// Opens a synced query on a client hub (no evaluator of its own) as <paramref name="reader"/>
+    /// and returns the paths in its first snapshot — the reader's identity is captured at the call.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> SnapshotAs(AccessContext reader, string expect, params string[] queries)
+    {
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<IEnumerable<MeshNode>> query;
+        using (access.SwitchAccessContext(reader))
+            query = client.GetQuery($"synced-snapshot-{Guid.NewGuid():N}", queries);
+        return await query
+            .Select(nodes => (IReadOnlyList<string>)nodes.Select(n => n.Path ?? n.Id).ToList())
+            .Do(paths => Output.WriteLine($"{reader.ObjectId} (token={reader.IsApiToken}): [{string.Join(", ", paths)}]"))
+            .Where(paths => paths.Contains(expect))
+            .Should().Within(TestTimeouts.Convergence).Emit($"{reader.ObjectId}'s synced query shows {expect}");
+    }
+
+    /// <summary>
+    /// 🚨 The named ANONYMOUS visitor is not a signed-in reader: the User type rule opens root
+    /// profiles to authenticated readers only, and the visitor reads one solely through an explicit
+    /// grant to Anonymous. The granted profile is the positive control in the SAME snapshot, so the
+    /// negative cannot pass on an empty answer.
+    /// </summary>
+    [Fact]
+    public async Task TheAnonymousVisitorReadsOnlyTheProfileAGrantOpensToIt()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous, IsVirtual = true }, PublicPerson,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+
+        paths.Should().Contain(PublicPerson, "an explicit Read grant to Anonymous opens that profile to the visitor");
+        paths.Should().NotContain(Keeper, "no grant opens the keeper's profile to a visitor, and the visitor is not signed in");
+    }
+
+    /// <summary>
+    /// 🚨 The API POLICY binds a row a node type's own rule admits: the keeper's partition sets
+    /// <c>api: false</c>, so an API token of a signed-in stranger does not read the keeper's root
+    /// profile, while the uncapped profile — admitted by the same rule — still arrives (positive
+    /// control, same snapshot). The same person in a browser reads both.
+    /// </summary>
+    [Fact]
+    public async Task AnApiTokenReadsATypeRuleGrantOnlyWhereThePolicyAllowsTheApi()
+    {
+        var asToken = await SnapshotAs(
+            new AccessContext { ObjectId = Stranger, Name = Stranger, IsApiToken = true }, PublicPerson,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+        asToken.Should().Contain(PublicPerson, "an uncapped profile the User rule opens stays readable to an API token");
+        asToken.Should().NotContain(Keeper, "the keeper's partition withholds API reach, however the row was admitted");
+
+        var asBrowser = await SnapshotAs(
+            new AccessContext { ObjectId = Stranger, Name = Stranger }, Keeper,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+        asBrowser.Should().Contain([PublicPerson, Keeper], "the API cap does not touch the same person in a browser");
+    }
 
     private static MeshNode Person(string id, string name) => new(id)
     {
