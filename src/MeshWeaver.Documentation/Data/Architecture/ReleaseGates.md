@@ -467,6 +467,35 @@ was `3.1.11102`. Every satellite bake that started after that merge failed
 requires `Store/Plugin` — while the same kind of dispatch, sent nine minutes earlier and started
 before the merge, was green (Manufacturing, Crm, SocialMedia and Reinsurance).
 
+#### 🚨 `stage-modules` names what a repo USES — the lane stages their `requires` closure
+
+A caller lists only the upstream packages its own content uses directly. `stage-sealed-upstream.sh`
+reads each staged package's root `index.json` → `content.requires` **at the commit it was staged
+at**, and stages every dependency it finds by the same per-package rule, round after round, until
+the set is closed. Requirement entries are read with `seal-packages.py`'s `dependency_id`, the
+lane's port of the runtime's `PackageDependencyGraph.DependencyId` (`Store@^1.0.0` → `Store`; a
+blank or version-only entry is no dependency). A dependency is satisfied in one of two ways:
+
+- it is **staged** from the stage repo, at the commit the sealed publication names for it;
+- the **caller's own checkout** carries it as a top-level package, so it is used there and never
+  staged over it. Its own `requires` are walked as well, so an upstream package it needs is staged.
+  Every caller package the closure reaches is reported (step output `provided`). A narrowed bake
+  adds these to its mount, because the affected selector never sees an edge that runs through an
+  upstream package (App → Upstream → LocalSupport).
+
+Anything else is RED, naming the missing package and the package that requires it. A staged
+package whose `index.json` cannot be read is also RED: its closure is unknown, never empty. The
+staged set goes to the step output `modules`, and every later consumer reads it from there and
+never from the input: the mount copy, the narrowed mount, and the exclusion of staged bundles from
+this repository's publication. The job summary prints both the named set and the staged set.
+`stage-sealed-upstream.sh --self-test` includes an A → B → C fixture: naming A stages all three, a
+missing C is RED, and a C that the caller carries is not staged.
+
+The reason this is resolved and not listed: Plugins' `AI` gained `requires: Training@^1.3.0`, and
+SocialMedia's publish bake still staged `AI Store`. Its main went red with
+`Install of 'AI' failed: NodeType(s) not registered: Training/Tour` (MeshWeaver.SocialMedia#246).
+The gate lanes stayed green because they seed the whole sealed upstream, not a list.
+
 ### What closing it looks like
 
 The gate (does the upstream exist?) is done. What is missing is the FETCH — a way for a build to

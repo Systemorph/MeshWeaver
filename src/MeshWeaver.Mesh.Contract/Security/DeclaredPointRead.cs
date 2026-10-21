@@ -1,3 +1,4 @@
+using System.Reactive;
 using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
@@ -543,6 +544,49 @@ public static class DeclaredPointRead
     public static bool IsPlatformIssued(MeshNode node)
         => string.Equals(node.LastModifiedBy?.Trim(), WellKnownUsers.System, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Whether <paramref name="caller"/> may read THIS revision of a node through its type's declared
+    /// point read — decided on the revision's own content (issuance, revocation, expiry, audience),
+    /// then live for its expiry, its type's declaration and a group audience's memberships
+    /// (MeshWeaver#4306, follow-up 1). A seam that forwards a node's revisions to a declaration-only
+    /// caller asks this for EACH revision before forwarding it, so the revision that revokes or
+    /// narrows the read is never delivered; it combines it with <see cref="Admits"/>, which decides
+    /// from the owner's current state. Fails closed exactly as <see cref="Admits"/> does. Cold.
+    /// </summary>
+    /// <param name="hub">The hub asking.</param>
+    /// <param name="revision">The revision about to be served.</param>
+    /// <param name="caller">The caller's context; null or virtual is the anonymous caller.</param>
+    /// <param name="area">Null for a read of the node itself; otherwise the layout area to render (<c>""</c> = the default area).</param>
+    public static IObservable<bool> AdmitsRevision(IMessageHub hub, MeshNode? revision, AccessContext? caller, string? area = null)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        return Observable.Defer(() =>
+        {
+            var userId = SubjectOf(caller);
+            if (revision is null || string.IsNullOrEmpty(revision.Path) || RefusedOutright(hub, userId, caller))
+                return Observable.Return(false);
+            return Decide(hub, hub.ServiceProvider.GetService<AccessService>(), revision, userId, caller, hub.JsonSerializerOptions, area)
+                .DistinctUntilChanged()
+                .Catch((Exception ex) =>
+                {
+                    hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead))
+                        .LogWarning(ex, "The declared point read of revision {Version} of {Path} for {User} could not be decided — refused",
+                            revision.Version, revision.Path, userId);
+                    return Observable.Return(false);
+                });
+        });
+    }
+
+    /// <summary>
+    /// The callers a declaration never admits, whatever the node says: an API token (admitted by the
+    /// permission fold or not at all), a System identity in a caller's place, and a logged-out caller
+    /// on an instance that denies anonymous access. The same refusals <see cref="Admits"/> makes.
+    /// </summary>
+    private static bool RefusedOutright(IMessageHub hub, string userId, AccessContext? caller)
+        => caller?.IsApiToken == true
+           || string.Equals(userId, WellKnownUsers.System, StringComparison.OrdinalIgnoreCase)
+           || AnonymousAccess.Refuses(hub.ServiceProvider, userId, caller);
+
     /// <summary>The verdict for ONE revision of the node: issuance, declaration, namespace, content, then the audience and the expiry, live.</summary>
     private static IObservable<bool> Decide(
         IMessageHub hub, AccessService? access, MeshNode? node, string userId, AccessContext? caller, JsonSerializerOptions options,
@@ -605,15 +649,47 @@ public static class DeclaredPointRead
         var partition = nodeType.Split('/', 2)[0];
         if (partition.Length == 0)
             return Observable.Return<PointReadDeclaration?>(null);
-        return hub.ReadStoredNode(AccessAssignmentGuard.SyncConfigPath(partition))
-            .Take(1)
-            .DefaultIfEmpty(null)
-            .SelectMany(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)
+        // 🚨 The partition's OWNERSHIP is a live input too (review of #7016, thread 4338481338). It
+        // was read once per verdict, so a sync config turned two-way, emptied or deleted withdrew
+        // nothing from an admission already established until the node itself was written again —
+        // while a fresh read was already refused. It is re-read on every commit to the config and
+        // on every declared feed gap; the stored read is authoritative, so a withdrawal answers null
+        // (no declaration) and the verdict refuses.
+        return OwnershipChanged(hub, partition)
+            .StartWith(Unit.Default)
+            .Select(_ => hub.ReadStoredNode(AccessAssignmentGuard.SyncConfigPath(partition))
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .Select(sync => AccessAssignmentGuard.IsSystemOwned(sync, options)))
+            .Switch()
+            .DistinctUntilChanged()
+            .Select(owned => owned
                 // The type node from its OWNER first, like the instance: a warm mirror must not keep
                 // admitting by a declaration the owner has already withdrawn or narrowed.
                 ? OwnerCurrent(hub, access, nodeType).Select(type => type is null ? null : Parse(type, options))
                 : Observable.Return<PointReadDeclaration?>(null))
+            .Switch()
             .DistinctUntilChanged();
+    }
+
+    /// <summary>
+    /// Fires on every commit that can change whether <paramref name="partition"/> is system-owned —
+    /// its <c>_GitSync</c> config written or deleted — and on every declared feed gap (a commit
+    /// made in that window was never announced). Never fires on a host without an invalidation feed.
+    /// </summary>
+    private static IObservable<Unit> OwnershipChanged(IMessageHub hub, string partition)
+    {
+        if (hub.ServiceProvider.GetService<IMeshInvalidationFeed>() is not { } feed)
+            return Observable.Never<Unit>();
+        var syncPath = AccessAssignmentGuard.SyncConfigPath(partition).Trim('/');
+        // The feed's handler is forwarded as-is and the filter runs as an Rx operator, so a fault in
+        // it reaches the verdict's OnError (refused) rather than the feed's delivery callback.
+        var commits = Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Where(change => string.Equals((change.Path ?? "").Trim('/'), syncPath, StringComparison.OrdinalIgnoreCase)
+                             || (string.Equals(change.Id, AccessAssignmentGuard.SyncConfigId, StringComparison.OrdinalIgnoreCase)
+                                 && string.Equals((change.Namespace ?? "").Trim('/'), partition, StringComparison.OrdinalIgnoreCase)))
+            .Select(_ => Unit.Default);
+        return commits.Merge(feed.Gaps.Select(_ => Unit.Default));
     }
 
     /// <summary>

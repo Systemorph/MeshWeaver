@@ -36,6 +36,11 @@ using Microsoft.Extensions.Logging;
 // observation point that proves the router's TargetUnserved NACK actually reached the owner
 // and disposed the leaked server-side stream, rather than merely that some log line appeared.
 [assembly: InternalsVisibleTo("MeshWeaver.Hosting.Orleans.Test")]
+// The open-subscription security tests (#4306, follow-up 2) open a DIRECT owner-side node
+// subscription — the shape that bypasses the node-stream cache's read gate — to prove the owner
+// ends it when a delegated read is revoked or expires. That shape is exactly the raw single-node
+// subscribe, so it needs the sanctioned escape hatch.
+[assembly: InternalsVisibleTo("MeshWeaver.Graph.Test")]
 
 namespace MeshWeaver.Data;
 
@@ -1590,8 +1595,16 @@ public class Workspace : IWorkspace
     // or compares it. See the _evictedRemoteStreams field note.
     private sealed class ClientSubscription(
         Address subscriber, WorkspaceReference reference, ISynchronizationStream stream,
-        bool acceptsCoalescedEnd)
+        bool acceptsCoalescedEnd, IObservable<System.Reactive.Unit>? fullsPosted)
     {
+        /// <summary>
+        /// Fires after a Full has been POSTED to the subscriber, for a subscription whose revisions
+        /// wait for a read verdict before they are forwarded (a followed one, MeshWeaver#4306);
+        /// null otherwise. A re-assert on such a stream is answered when this fires, never when the
+        /// frame is merely set: its forwarding can wait for the verdict, or be refused.
+        /// </summary>
+        public IObservable<System.Reactive.Unit>? FullsPosted { get; } = fullsPosted;
+
         /// <summary>
         /// The subscriber's ADDRESS, kept alongside the string that keys the dictionary: a recycle
         /// announcement has to post back to it, and an Address cannot be reconstructed faithfully
@@ -1630,6 +1643,18 @@ public class Workspace : IWorkspace
             ? existing.Stream
             : null;
     }
+
+    /// <summary>
+    /// The posted-Full signal of the subscription serving <paramref name="streamId"/> for
+    /// <paramref name="subscriber"/> — non-null only for a subscription whose revisions wait for a
+    /// read verdict (see <c>ClientSubscription.FullsPosted</c>).
+    /// </summary>
+    internal IObservable<System.Reactive.Unit>? GetClientSubscriptionFullsPosted(Address? subscriber, string? streamId)
+        => subscriber is null || string.IsNullOrEmpty(streamId)
+            ? null
+            : _clientSubscriptions.TryGetValue((subscriber.ToString(), streamId), out var existing)
+                ? existing.FullsPosted
+                : null;
 
     /// <summary>
     /// Total client subscriptions this workspace evicted on an authoritative
@@ -1724,12 +1749,12 @@ public class Workspace : IWorkspace
     /// </summary>
     internal void RegisterClientSubscription(
         Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream,
-        bool acceptsCoalescedEnd = false)
+        bool acceptsCoalescedEnd = false, IObservable<System.Reactive.Unit>? fullsPosted = null)
     {
         if (subscriber is null || string.IsNullOrEmpty(streamId))
             return;
         var key = (subscriber.ToString(), streamId);
-        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd);
+        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd, fullsPosted);
         // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
         // a later stream that legitimately took over this key must not be unregistered by an
         // earlier stream's teardown.
@@ -1739,6 +1764,22 @@ public class Workspace : IWorkspace
                 && ReferenceEquals(current.Stream, stream))
                 _clientSubscriptions.TryRemove(key, out _);
         }));
+    }
+
+    /// <summary>
+    /// Removes <paramref name="stream"/>'s registry entry for (<paramref name="subscriber"/>,
+    /// <paramref name="streamId"/>) — only when it is still the registered one (reference identity) —
+    /// BEFORE the caller disposes it, so a resubscribe in the disposal window builds a fresh stream
+    /// through the delivery gate instead of being re-asserted onto the ending one (the same ordering
+    /// <see cref="EvictClientSubscriptions"/> keeps).
+    /// </summary>
+    internal void UnregisterClientSubscription(Address? subscriber, string? streamId, ISynchronizationStream stream)
+    {
+        if (subscriber is null || string.IsNullOrEmpty(streamId))
+            return;
+        var key = (subscriber.ToString(), streamId);
+        if (_clientSubscriptions.TryGetValue(key, out var current) && ReferenceEquals(current.Stream, stream))
+            _clientSubscriptions.TryRemove(new KeyValuePair<(string, string), ClientSubscription>(key, current));
     }
 
     /// <summary>
