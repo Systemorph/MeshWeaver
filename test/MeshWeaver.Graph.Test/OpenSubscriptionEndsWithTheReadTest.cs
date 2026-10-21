@@ -71,7 +71,7 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
     /// revokes it — the stream ends with the read gate's refusal instead. NEGATIVE CONTROL: an open
     /// stream of a link that is not revoked receives its next revision and stays open.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [HubFact]
     public async Task TheNodeStream_NeverDeliversTheRevisionThatRevokesIt()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -91,14 +91,14 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         await AsSystemUpdate(revokedLink, c => c with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") }, ct);
         await AsSystemUpdate(keptLink, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(2).ToString("O") }, ct);
 
-        var end = await revoked.Should().Within(TimeSpan.FromSeconds(30))
+        var end = await revoked.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind != NotificationKind.OnNext || IsRevoked(n.Value), "the stream ends, or delivers the revoking revision", cancellationToken: ct);
         Assert.False(end.Kind == NotificationKind.OnNext, "the revision that revokes the read must never reach the visitor");
         Assert.Equal(NotificationKind.OnError, end.Kind);
         Assert.IsType<UnauthorizedAccessException>(end.Exception);
 
         // NEGATIVE CONTROL: the same kind of open stream, a non-revoking revision, delivered.
-        await kept.Should().Within(TimeSpan.FromSeconds(30))
+        await kept.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind == NotificationKind.OnNext && ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(1.5)),
                 "a link that is not revoked keeps streaming its next revision", cancellationToken: ct);
     }
@@ -109,7 +109,7 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
     /// never forwarded; and it ends at the link's expiry with nothing else emitting. NEGATIVE CONTROL:
     /// a direct subscription to a link that is not revoked keeps receiving revisions.
     /// </summary>
-    [Fact(Timeout = 90000)]
+    [HubFact]
     public async Task ADirectSubscription_EndsWithTheDelegatedRead()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -130,7 +130,7 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         await FirstNode(expiring, expiringLink, "the direct subscription serves the link before its expiry", ct);
 
         await AsSystemUpdate(revokedLink, c => c with { RevokedAt = DateTimeOffset.UtcNow.ToString("O") }, ct);
-        var end = await revoked.Should().Within(TimeSpan.FromSeconds(30))
+        var end = await revoked.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind != NotificationKind.OnNext || IsRevoked(n.Value), "the subscription ends, or forwards the revoking revision", cancellationToken: ct);
         Assert.False(end.Kind == NotificationKind.OnNext, "the owner must never forward the revision that revokes the read");
         Assert.Equal(NotificationKind.OnError, end.Kind);
@@ -138,19 +138,19 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
 
         // NEGATIVE CONTROL: a non-revoking revision of a link that is not revoked is forwarded.
         await AsSystemUpdate(keptLink, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(2).ToString("O") }, ct);
-        await kept.Should().Within(TimeSpan.FromSeconds(30))
+        await kept.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind == NotificationKind.OnNext && ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(1.5)),
                 "a direct subscription to a link that is not revoked keeps streaming", cancellationToken: ct);
 
         // The expiry: no write, no revision — the subscription ends AT the instant the link expires.
-        var expired = await expiring.Should().Within(TimeSpan.FromSeconds(30))
+        var expired = await expiring.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind != NotificationKind.OnNext, "the subscription ends at the link's expiry", cancellationToken: ct);
         Assert.Equal(NotificationKind.OnError, expired.Kind);
         Assert.Contains("Access denied", expired.Exception!.Message);
 
         // …and the kept link is STILL served afterwards (the negative control holds past the expiry).
         await AsSystemUpdate(keptLink, c => c with { ExpiresAt = DateTimeOffset.UtcNow.AddDays(3).ToString("O") }, ct);
-        await kept.Should().Within(TimeSpan.FromSeconds(30))
+        await kept.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind == NotificationKind.OnNext && ExpiresAfter(n.Value, DateTimeOffset.UtcNow.AddDays(2.5)),
                 "the kept link's subscription is still open", cancellationToken: ct);
     }
@@ -162,7 +162,7 @@ public class OpenSubscriptionEndsWithTheReadTest(ITestOutputHelper output) : Mon
         => source.Materialize().Replay();
 
     private static Task FirstNode(IObservable<Notification<MeshNode>> stream, string path, string because, CancellationToken ct)
-        => stream.Should().Within(TimeSpan.FromSeconds(30))
+        => stream.Should().Within(TestTimeouts.Convergence)
             .Match(n => n.Kind == NotificationKind.OnNext && n.Value?.Path == path, because, cancellationToken: ct);
 
     private static IObservable<MeshNode> DirectStream(IMessageHub client, string path)

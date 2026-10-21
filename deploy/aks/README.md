@@ -311,8 +311,10 @@ the network side.
 
 Both are supported; the VPN is for *interactive* tooling that needs to open a
 socket into the VNet, and nothing automated depends on it. `check-chart-drift.sh`
-makes the split explicit — it takes `--via kubectl|aks-invoke`, and its only CI
-caller (`.github/workflows/chart-drift.yml`) passes `aks-invoke`.
+makes the split explicit — it takes `--via kubectl|aks-invoke`. Its scheduled caller is the
+governed `Audit` InstanceAction (`hosting-chart-drift`, in the VNet as hosting-operator), which
+passes `kubectl`; the former GitHub-side caller `chart-drift.yml` and its `aks-invoke` read were
+retired with Systemorph/Memex#647.
 
 > **Jumpbox + Azure Bastion** is the third option: the `AzureBastionSubnet` is
 > already carved out by `network.bicep`; deploy Bastion + a small VM in the VNet

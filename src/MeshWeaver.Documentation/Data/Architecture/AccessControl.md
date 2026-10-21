@@ -264,7 +264,7 @@ Access that reaches many people, or that the platform writes for someone else, i
 
 A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
 
-**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, and the public-link standards `link.publish`, `link.revoke` and `group.org-create` (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, and `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
 
 **Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
 
@@ -2137,31 +2137,72 @@ stays live in every input:
   stored snapshot may trail a write the owner has acknowledged and never re-emits. Each revision
   the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
   or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
-- **A rule is re-asked.** Its contract is one verdict: the lease takes the first, and so does
-  `SpaceAccessRule`. So the path asks it again on every revision and whenever the viewer's live
-  fold on the node or its `MainNode` emits, including the fold's first value. A revocation committed
-  while the watches were being set up is already in that first value, and no later commit reports
-  it. The rule is also asked again whenever the `IMeshInvalidationFeed` reports an access input
-  that can reach this node:
-  - a grant (`{scope}/_Access/…`), a partition policy (`{scope}/_Policy`) or a sync config
-    (`{scope}/_GitSync`) on an ancestor-or-self of the node or its `MainNode`, on the root, or on
-    `Admin`. These are matched by namespace and id, so a deletion that carries no node type still
-    counts. A one-way `_GitSync` is what admits a platform admin to a system-owned Space.
-  - any group membership or role definition.
+- **One input set, both branches.** The evaluation is the type's Read rule when one governs,
+  otherwise the permission fold. Either way it is one verdict, asked again on every signal of one
+  shared input set. A rule's contract is one verdict (the lease takes the first, and so does
+  `SpaceAccessRule`). The fold resolves a custom role from one value of the role catalog and does
+  not re-emit when a role changes, so keeping an evaluation subscribed would not keep it current.
+  Liveness comes from the signals alone.
 
-  A revoked grant therefore withdraws a rule's earlier grant on the same subscription, with no
-  timer or poll.
-- **Each evaluation is bounded.** It is one verdict, held to the permission-establishment budget.
-  A re-evaluation that never answers turns undetermined (refused). The idle live subscription
-  itself is never timed out.
-- **Off every source gate.** Each signal (revision, fold emission, feed commit) is re-emitted as
-  its own pool work item, in order, before anything is evaluated. This is the `HopOffGate` shape,
-  never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs inside
-  the gate that signalled it, and no thread is held per open subscription.
-- **Fan-out cost.** Each open subscription holds the folds on the node and on its `MainNode`, plus
-  one feed handler. On every commit anywhere in the mesh, that handler runs a string match against
-  the node's scope set (a few entries). Only a commit that can reach the node costs a re-evaluation:
-  one rule call, and an in-flight evaluation is superseded by the next (`Switch`).
+**The contract: any input the evaluation reads must be in this set.** The set is derived from what
+`PermissionEvaluator` and the platform's access rules actually consult:
+
+| Input the evaluation reads | Who reads it | Signal |
+|---|---|---|
+| Grants and policies on the node's scope chain; group memberships; type gates; the partition's `_GitSync` (content ownership) | the fold (`ObserveEffectiveAssignments`, `ObserveScopePolicies`, `ObserveAllMembershipNodes`, `ObserveGatedNodes`, `ObserveRepositoryOwnedContent`) | the viewer's live fold on the **node** |
+| The fold on the `MainNode` | `SatelliteAccessRule` | the viewer's live fold on the **MainNode** |
+| Update on the **partition root**, which a descendant `_Policy` can cut off from the node's own fold | `StorageBindingAccessRule` | the viewer's live fold on the **root** of the node and of its MainNode |
+| The platform-admin predicate (`IsGlobalAdmin`) | `SpaceAccessRule`, `GitHubSyncConfigAccessRule` | the viewer's live fold on **`Admin`** |
+| Custom role definitions | the fold (`GetRole`, one catalog value per evaluation) | the **role catalog's** own emissions, changes and deletions alike |
+| `{space}/_GitSync` content read from storage | `SpaceAccessRule` | feed commits on the node's scopes |
+| Anything committed elsewhere and lost | — | feed **gaps** |
+
+Feed commits count when they can reach the node:
+- grants (`{scope}/_Access/…`), policies (`{scope}/_Policy`) and sync configs (`{scope}/_GitSync`)
+  on an ancestor-or-self of the node or its `MainNode`, on the root, or on `Admin`, matched by
+  namespace and id so a typeless deletion still counts;
+- any typed group membership or role;
+- a typeless deletion only when its path places it: the node, one of its scopes, or a membership
+  (`{group}/{member}_Membership`). A typeless role deletion is carried by the role catalog.
+
+A fold's or the catalog's first value establishes the verdict; every later signal withdraws it.
+
+**Rules that only test the caller or the context read nothing from the mesh**: `VUserAccessRule`,
+`SystemOnlyAccessRule`, the functional rule sets, and the denying placeholders.
+`ReadInputSetGuardTest` lists every `INodeTypeAccessRule` in the core assemblies the suite loads,
+with what its Read consults. A new rule fails the test until someone checks its inputs against this
+table and adds its line. The guard cannot see what a rule reads, so it forces that review instead.
+Rules in MeshWeaver.Plugins are outside it: `ThreadNodeType`, `ThreadMessageNodeType`,
+`TokenUsage`, `PortalNodeType`, `DocumentPartNodeTypes`, `SessionPresenceNodeType` and
+`DispatchSwitchAccessRule`. Each of them must also read only inputs in this table.
+- **Fail closed while pending.** Every signal after the verdict is established withdraws it
+  first. The verdict becomes undetermined ("re-check pending", refused), and only that re-check's
+  own answer can grant again. So a stalled re-check stays refused, and a stream of signals cannot
+  keep an earlier grant alive by restarting the check that would replace it. Each check is also
+  one verdict held to the permission-establishment budget. The idle subscription is never timed
+  out. The signals that establish the verdict (the first check, each fold's first value) withdraw
+  nothing, so opening a page does not blink.
+- **The cost of failing closed.** An open page may show "no access" for the length of one
+  re-check after a matching signal, even when the answer comes back unchanged. The filters are
+  kept tight for that reason: an access input matches only on the node's own scopes, and an
+  ordinary content change never matches. A typeless deletion matches only by its path (the
+  node, its scopes, or a membership), never wholesale. Because the delete pipeline publishes
+  every deletion untyped, a wholesale match would blink every open rule-governed page on every
+  delete in the mesh. What remains broad cannot be narrowed from the event: a typed membership
+  or role change anywhere, and a declared gap.
+- **Off every source gate.** Each signal (revision, fold emission, feed commit, gap) is re-emitted
+  as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
+  shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs
+  inside the gate that signalled it, and no thread is held per open subscription.
+- **Fan-out cost.** Each open subscription holds the following, whether or not a rule governs the
+  node:
+  - up to five folds (node, `MainNode`, the root of each, `Admin`, deduplicated);
+  - one subscription to the process-wide cached role catalog;
+  - one feed handler and one gap subscription.
+
+  On every commit anywhere in the mesh, the handler runs a string match against the node's scope
+  set (a few entries). Only a matching signal costs a re-evaluation: one rule call or one fold read.
+  An in-flight evaluation is superseded by the next (`Switch`).
 - **Every evaluation is re-established as the viewer** at the moment it subscribes. A
   re-evaluation triggered on another thread never inherits that thread's context.
 

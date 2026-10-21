@@ -267,6 +267,25 @@ public record PackageManifest
     public bool PreInstalled { get; init; }
 
     /// <summary>
+    /// 🚨 This package is an APP every instance carries — the narrow DEFAULT-APPS lane (Threads,
+    /// Examples). Authored as <c>"defaultApp": true</c> on the package root's content, read off it
+    /// while listing exactly like <see cref="PreInstalled"/>.
+    ///
+    /// <para>Unlike <see cref="PreInstalled"/> — dropped wholesale on an instance whose deployment
+    /// record names an explicit package set (policy <c>declared-package-set-is-exact</c>) — a default
+    /// app is selected there too; the single exception, named in that policy. It is suppressed only by
+    /// an explicit <c>PluginCatalog:InstallPreInstalledPackages=false</c>
+    /// (<see cref="InstanceAutoRegistrationService"/>'s <c>DefaultAppsApply</c>). It adds NOTHING else:
+    /// no public read, no gating change — pair it with <c>preInstalled</c> and <c>tier: free</c> on the
+    /// root, which is what the platform's own default apps do.</para>
+    ///
+    /// <para>Default <c>false</c> — the CLR default — so it round-trips loss-free under
+    /// default-suppressing serialization (the declared-<c>true</c> bool trap, see
+    /// <see cref="AutoUpdate"/>).</para>
+    /// </summary>
+    public bool DefaultApp { get; init; }
+
+    /// <summary>
     /// What this package must be TOLD before it works, as its own manifest declares it — carried
     /// from the plugin's <c>content.configuration</c> so a CONSUMER (the first-run setup wizard)
     /// can render the declaration instead of hard-coding a form per plugin.

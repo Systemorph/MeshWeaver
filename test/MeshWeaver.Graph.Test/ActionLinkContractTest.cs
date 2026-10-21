@@ -418,6 +418,52 @@ public class ActionLinkContractTest
         seam.Asked.Should().Equal(("Store/Review", "mallory", Permission.Update), ("Store/Review", "alice", Permission.Update));
     }
 
+    /// <summary>
+    /// A rule may name WHERE its publish permission is checked — a node in a writable space, because a
+    /// package's own handler page sits in a partition its one-way sync owns, where no write right can
+    /// be granted. The check moves there entirely: Update on the handler node alone no longer admits.
+    /// </summary>
+    [Fact]
+    public void APublishScope_MovesThePublishCheck_OffTheHandlerNode()
+    {
+        var onScope = new OneGrant("alice", "Campaigns/Publishers", Permission.Update);
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule
+            {
+                Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update", PublishScope = "/Campaigns/Publishers/",
+            })],
+            Declared, onScope.Check);
+        Validated(chain, Publication).Status.Should().Be(ActionOutcomeStatus.Ready, "alice holds Update on the publish scope");
+        onScope.Asked.Should().Equal(("Campaigns/Publishers", "alice", Permission.Update));
+
+        var onHandler = new OneGrant("alice", "Store/Review", Permission.Update);
+        var moved = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule
+            {
+                Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update", PublishScope = "Campaigns/Publishers",
+            })],
+            Declared, onHandler.Check);
+        var refused = Validated(moved, Publication);
+        refused.Status.Should().Be(ActionOutcomeStatus.Unauthorized, "NEGATIVE CONTROL: Update on the handler node no longer admits");
+        refused.Detail.Should().Contain("Campaigns/Publishers");
+    }
+
+    [Theory]
+    [InlineData("Campaigns/../Admin")]
+    [InlineData("Campaigns/%2e%2e")]
+    [InlineData("Campaigns//Publishers")]
+    [InlineData("Campaigns/Publishers?x=1")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void AnUnsafePublishScope_RefusesTheRuleByName(string scope)
+    {
+        var chain = ActionHandlerRules.Bind(
+            [("Store/ActionHandlers/r", new ActionHandlerRule { Claims = ["k"], Handler = "Store/Review", PublishPermission = "Update", PublishScope = scope })],
+            Declared);
+        chain.Handlers.Should().BeEmpty();
+        chain.Rejected.Should().Equal(new RejectedActionHandlerRule("Store/ActionHandlers/r", ActionHandlerRules.UnsafePublishScope));
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(WellKnownUsers.System)]

@@ -156,6 +156,10 @@ public class BroadGrantGuardTest
         ["Executing", "Governance/Standards/link.publish", true],
         ["Executing", "link.revoke", true],
         ["Executing", "group.org-create", true],
+        // A group scoped to one path may write its one grant and its manager's…
+        ["Executing", "Governance/Standards/group.scoped-create", true],
+        ["Ready", "group.scoped-create", false],
+        ["Executing", "group.scoped-create-anything", false],
         // …only while executing, and a look-alike id is not on the list.
         ["Ready", "link.publish", false],
         ["Executing", "link.publish-anything", false],

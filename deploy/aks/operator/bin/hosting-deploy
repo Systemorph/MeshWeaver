@@ -8,8 +8,10 @@
 # created after the repo was last edited. So the shape is TWO layers, in this order:
 #
 #   helm-values-<release>   the Key Vault VALUES HALF — `parameters:`, `pgbackrest:`, `secrets:` —
-#                           captured from the live release by the config repo's `helm-release
-#                           capture` and held in no repository. Layered FIRST, from the vault the
+#                           written by a governed Provision (hosting-kv-ensure --values-half;
+#                           once captured from the live release by the config repo's `helm-release
+#                           capture`, retired by Systemorph/Memex#647) and held in no repository.
+#                           Layered FIRST, from the vault the
 #                           record names (--vault), only when the record declares that the chart's
 #                           own Secret is fed from it (`vaultValuesKeys`).
 #   --values <file>         the record's RENDER (HelmValues in the Hosting plugin) — secret-free by
@@ -293,9 +295,9 @@ if [ -n "$vault" ]; then
   # values half", and every record-driven Reconcile of memex died at step 4/7 on 2026-09-20 with the
   # half sitting in the vault. The test stub used to overwrite silently; it now refuses like the CLI.
   kv_err="$(hosting::read az keyvault secret download --vault-name "$vault" --name "helm-values-${release}" --file "$vault_values" --overwrite --output none 2>&1 >/dev/null)" \
-    || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Run the config repo's helm-release workflow with action=capture for this release first, or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
+    || hosting::die "Key Vault ${vault} holds no values half for release ${release} (helm-values-${release}): ${kv_err}. The record declares vaultValuesKeys — keys the chart's own Secret must carry — and nothing in the record renders them, so an upgrade without this file would re-render memex-portal-secrets from the chart's in-cluster defaults and every new pod would fail at silo start (MeshWeaver#3780). Remedy: a governed Provision of this record composes it or filters it to the declared keys (hosting-kv-ensure --values-half; the previous version stays in the vault as the rollback); or clear vaultValuesKeys on the record if the chart's Secret genuinely carries nothing."
   [ -s "$vault_values" ] \
-    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a capture that wrote nothing. Re-run helm-release capture for this release (MeshWeaver#3780)."
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} is EMPTY — an empty vault half is not 'no secrets', it is a write that stored nothing. Remedy: a governed Provision of this record composes it or filters it to the declared keys (hosting-kv-ensure --values-half; the previous version stays in the vault as the rollback) (MeshWeaver#3780)."
   # 🚨 THE HALF CARRIES SECRET FAMILIES ONLY — STRUCTURE IS REFUSED, NEVER LAYERED (Memex#295).
   # "The record's render wins on every key it declares" is true only for keys the render DECLARES.
   # helm REPLACES a list the later file names and LEAVES one it omits, and HelmValues omits an empty
@@ -314,7 +316,7 @@ if [ -n "$vault" ]; then
   # a value — and the refusal names them, with the one remedy: re-capture the half filtered to its
   # families (the previous version stays in the vault as the rollback).
   if ! vault_keys="$(vault_top_level_keys "$vault_values")"; then
-    hosting::die "the values half helm-values-${release} in Key Vault ${vault} is not a block-style YAML mapping or a JSON object — its top-level keys cannot be read, so whether it carries structure is unknown and it is refused rather than layered (Memex#295). Re-capture it: a governed HelmRelease action with helmAction: capture stores the families as block YAML."
+    hosting::die "the values half helm-values-${release} in Key Vault ${vault} is not a block-style YAML mapping or a JSON object — its top-level keys cannot be read, so whether it carries structure is unknown and it is refused rather than layered (Memex#295). Re-store it: a governed Provision of this record composes it or filters it to the declared keys (hosting-kv-ensure --values-half; the previous version stays in the vault as the rollback)."
   fi
   structural="" families=0
   while IFS= read -r key; do
@@ -325,9 +327,9 @@ if [ -n "$vault" ]; then
     esac
   done <<< "$vault_keys"
   [ -z "$structural" ] \
-    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} carries STRUCTURE — top-level key(s):${structural}. The half holds secret families only (secrets, parameters, pgbackrest); structure lives on the Deployment record. Layered first, a structural list the record's render omits DEPLOYS beside the record's own wiring (memex 2026-09-25: Job memex-migration-62 invalid, duplicate volume \"kv-secrets\"), and a structural map supplies every leaf the render does not name. Refused before helm, nothing changed. Remedy: a governed HelmRelease action for ${release} with helmAction: capture — it re-stores the half filtered to its families and keeps the previous version as the rollback. Before capturing, confirm every leaf the half alone supplies is inert or declared on the record (Memex#295)."
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} carries STRUCTURE — top-level key(s):${structural}. The half holds secret families only (secrets, parameters, pgbackrest); structure lives on the Deployment record. Layered first, a structural list the record's render omits DEPLOYS beside the record's own wiring (memex 2026-09-25: Job memex-migration-62 invalid, duplicate volume \"kv-secrets\"), and a structural map supplies every leaf the render does not name. Refused before helm, nothing changed. Remedy: a governed Provision of this record composes it or filters it to the declared keys (hosting-kv-ensure --values-half; the previous version stays in the vault as the rollback) — it re-stores the half filtered to the record's declared keys. Before re-storing, confirm every leaf the half alone supplies is inert or declared on the record (Memex#295)."
   [ "$families" -gt 0 ] \
-    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} holds none of the families (secrets, parameters, pgbackrest) — a record that declares vaultValuesKeys needs the chart's Secrets fed from it, so this half would deploy no secrets at all (MeshWeaver#3780). Re-run the HelmRelease capture for this release."
+    || hosting::die "the values half helm-values-${release} in Key Vault ${vault} holds none of the families (secrets, parameters, pgbackrest) — a record that declares vaultValuesKeys needs the chart's Secrets fed from it, so this half would deploy no secrets at all (MeshWeaver#3780). Remedy: a governed Provision of this record composes it or filters it to the declared keys (hosting-kv-ensure --values-half; the previous version stays in the vault as the rollback)."
   # 🚨 EXACTLY THE DECLARED KEYS (policy `one-values-half-per-release`, MeshWeaver#4685). The families
   # check above stops STRUCTURE; it cannot stop a secret family that feeds a key the record never
   # declared — a `config` leaf captured into the half (Systemorph/Memex#295) or a secret nobody
@@ -340,7 +342,7 @@ if [ -n "$vault" ]; then
       0) hosting::log "vault     helm-values-${release} feeds exactly the record's $(tr ',' '\n' <<< "$declared_keys" | wc -l | tr -d ' ') declared key(s)"
          hosting::say vault_values_keys exact ;;
       3) hosting::say vault_values_keys mismatch
-         hosting::die "the values half helm-values-${release} in Key Vault ${vault} does not hold EXACTLY the record's vaultValuesKeys — $(tr '\n' ';' <<< "$half_diff"). Refused before helm, nothing changed (policy one-values-half-per-release). An UNDECLARED key is fed to the pod by nothing anyone reviews: a governed Provision or Repair of this record re-stores the half filtered to the declared keys (hosting-kv-ensure --values-half --vault-keys; the previous version stays in the vault as the rollback). A MISSING key cannot be invented: put it in the half, or drop it from the record's vaultValuesKeys." ;;
+         hosting::die "the values half helm-values-${release} in Key Vault ${vault} does not hold EXACTLY the record's vaultValuesKeys — $(tr '\n' ';' <<< "$half_diff"). Refused before helm, nothing changed (policy one-values-half-per-release). An UNDECLARED key is fed to the pod by nothing anyone reviews: a governed Provision of this record re-stores the half filtered to the declared keys (hosting-kv-ensure --values-half --vault-keys; the previous version stays in the vault as the rollback). A MISSING key cannot be invented: put it in the half, or drop it from the record's vaultValuesKeys." ;;
       *) hosting::die "the values half helm-values-${release} in Key Vault ${vault} could not be checked against the record's vaultValuesKeys (rc ${half_rc}) — refused rather than layered unchecked." ;;
     esac
   fi

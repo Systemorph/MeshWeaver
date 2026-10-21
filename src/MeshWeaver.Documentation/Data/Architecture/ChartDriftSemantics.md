@@ -8,7 +8,8 @@ Icon: BranchCompare
 # Chart Drift: what a deploy actually does
 
 `Chart Drift` compares what the chart *describes* against what the cluster *runs*
-(`deploy/aks/scripts/check-chart-drift.sh`, scheduled daily by `.github/workflows/chart-drift.yml`).
+(`deploy/aks/scripts/check-chart-drift.sh`, run inside the governed `Audit` InstanceAction by the
+operator verb `hosting-chart-drift` — see *Where the comparison runs* below).
 Its report was ranked by a model of `helm upgrade` that **measurement does not support**. This page
 records the measurement, so the ranking is not re-derived from intuition every time somebody
 re-reads the backlog.
@@ -361,9 +362,9 @@ compared.
 
 ## What this report does NOT prove
 
-🚨 **The left-hand side is not the chart a deploy renders.** `chart-drift.yml` renders
-`deploy/helm/values.yaml + deployments/aks/<ns>/values.<release>.public.yaml`. `helm-release.yml`
-(mode `deploy`) renders `<the Key Vault capture> + <that same committed overlay>`, where the capture
+🚨 **The left-hand side is not the chart a deploy renders.** The comparison renders
+`deploy/helm/values.yaml + deployments/aks/<ns>/values.<release>.public.yaml`. The retired
+`helm-release.yml` (mode `deploy`) rendered `<the Key Vault capture> + <that same committed overlay>`, where the capture
 is a `helm get values` of the live release — the whole user-supplied values document, `config:`
 included. The overlay is layered LAST, so:
 
@@ -400,37 +401,39 @@ Findings are printed worst-first and the summary counts each class. Rank the wor
 inside it, which are dated work: the next deploy removes them**; `DIFFERS` is a decision, not a
 deploy.
 
-### The one tracking issue, and how it is found
+## Where the comparison runs
 
-The workflow keeps ONE standing issue, updated in place, closed when every environment matches and
-reopened on the next divergence. It is found by the dedicated label **`chart-drift-sentinel`** —
-never remove it from the issue; the triage label `feature:chart-drift` is NOT the key, other issues
-carry it too. The lookup (`.github/scripts/sentinel-issue.py`) filters on that label server-side
-through the REST issues endpoint, both states, read to the last page.
+**Inside the governed `Audit` InstanceAction, on the estate's aks-ops lane, as `hosting-operator`.**
+An `Audit` has two read-only steps, and they answer different questions:
 
-It used to scan the 200 most recently created issues for a marker in the body. That is a window,
-not a key: the sentinel is long-lived by design, every newer issue pushed it further back, and once
-it aged out the scan found nothing and the workflow opened a fresh one — #5049, then #5491, then
-#5844 (consolidated into #5844). Now:
+| step | compares | answers |
+|---|---|---|
+| `hosting-chart-drift --namespace <ns> --release <release>` | the chart as the estate's COMMITTED inputs render it (chart + `deployments/aks/<ns>/values.<release>.public.yaml` + the owning `mesh/Deployments` record), the live objects, and the release manifest | this page's classes: `COLLIDES`, `SHADOWS`, `OFF-RECORD`, `CLUSTER-ONLY` (with `PENDING DELETION`), `CHART-ONLY`, `DIFFERS` |
+| `hosting-audit --namespace <ns> --release <release>` | the live namespace against the last-deployed manifest | what lives ONLY on the cluster (the `Hosting/ConfigAudit` report) |
 
-- the label's existence is checked on the single-label endpoint first, because an unknown label
-  lists `[]` — indistinguishable from "no sentinel", which would create one;
-- several OPEN sentinels ⇒ the oldest is kept, the rest are reported (a run warning, the step
-  summary and a line in the kept issue's body) and never closed silently; another is never opened;
-- no open one ⇒ the newest closed one is reopened;
-- the `report` job is serialised (`concurrency: chart-drift-report`). The label filter is not
-  instantaneous — measured 2026-10-07, a label applied to #5844 was missing from the filtered
-  listing seconds later and present on the next read — so two overlapping runs could otherwise
-  each find "none" and both create one;
-- serialising alone does not close that lag: a queued run could still look up before the previous
-  run's NEW issue is listed. So creating has a postcondition — `sentinel-issue.py await-visible` —
-  and the creating run does not finish until the new issue is returned by the same label lookup
-  the next run will use, and goes red if it never is. GitHub keeps one pending job per concurrency
-  group (a third arrival replaces it); that is accepted, because the issue body is a standing state
-  every report overwrites.
+`hosting-chart-drift` is a thin operator verb over this repository's drift scripts: it finds them at
+the operator pin (the lane's MeshWeaver checkout, `deploy/aks/scripts`; the operator image carries
+them at `/opt/hosting/drift`), reads the overlay and the records from the estate checkout, and
+compares **in-cluster** (`--via kubectl` with the lane's job-scoped kubeconfig). Its contract is the
+audit's: **drift is a finding** — exit 0 with `::hosting:: chart_drift_verdict=drift`,
+`chart_drift_divergences=N`, `chart_drift_compared=M` — and **a comparison that could not be made is
+red with no verdict line**, never "no drift". The Hosting plugin records the verdict on the
+instance's audit, beside the live-only report.
 
-`sentinel-issue.py --self-test` runs on every pull request (`dotnet-test.yml` → *CI's own shell*),
-with the old window scan and a first-page-only pager as negative controls that must miss.
+**Why it moved.** Until Systemorph/Memex#647 the comparison ran from core's `chart-drift.yml` on a
+GitHub-hosted runner, reaching the private cluster through `az aks command invoke` — which needs the
+*AKS Cluster Admin* role, and whose `helm get manifest` reads release Secrets. That kept a standing
+cluster right on a CI identity the estate's least-privilege plan retires, and it could not be moved
+to the read-only identity: giving a pull-request identity cluster read would let every pull request
+read the cluster. The aks-ops lane already reads the cluster for `hosting-audit`, in the VNet, with a
+kubeconfig minted for the job and gone with it; the comparison is now one more read there. The
+GitHub-side workflow, its `preflight`, its daily schedule and its standing `chart-drift-sentinel`
+issue were retired with it — the instance's audit record is the standing state now, and the
+comparator's own logic is still tested on every pull request by `chart-gate.yml`
+(`test-chart-drift-compare.sh`, `test-chart-drift-render.sh`).
+
+**Not established yet:** the first governed `Audit` carrying the comparison has not run; until it
+has, "the chart and the cluster agree" is unmeasured, not green.
 
 ## `CLUSTER-ONLY` splits in two, and the check now computes the split
 

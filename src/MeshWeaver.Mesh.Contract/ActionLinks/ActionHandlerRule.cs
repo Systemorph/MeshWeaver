@@ -96,13 +96,26 @@ public sealed record ActionHandlerRule
     /// stated by the rule's author, never assumed.</para>
     /// </summary>
     public string? PublishPermission { get; init; }
+
+    /// <summary>
+    /// WHERE <see cref="PublishPermission"/> is checked: a node path, or null to check it on
+    /// <see cref="Handler"/>. 🚨 A handler page shipped in a package lives in a partition the package's
+    /// one-way sync owns, and on such a partition nobody can be granted a write right — so a rule that
+    /// asks for <c>Update</c> there authorizes no publisher at all. Naming a node in a WRITABLE space
+    /// (for example a publishers node an administrator grants a group <c>Editor</c> on) is how such a
+    /// rule gets publishers. The path is only CHECKED, never navigated, so it may lie outside the rule's
+    /// partition; when set it must be a canonical mesh path — a blank one is refused too, never read as
+    /// "absent" (<see cref="ActionHandlerRules.UnsafePublishScope"/>).
+    /// A rule that names a scope nobody holds the permission on still authorizes nobody — it fails closed.
+    /// </summary>
+    public string? PublishScope { get; init; }
 }
 
 /// <summary>
 /// A rule node the chain could not use, and why — reported, never dropped in silence.
 /// </summary>
 /// <param name="Path">The rule node's path.</param>
-/// <param name="Reason">An identifier for operators and logs: <c>UndeclaredNamespace</c>, <c>UnreadableContent</c>, <c>NoHandler</c>, <c>HandlerOutsidePartition</c>, <c>UnsafeHandler</c>.</param>
+/// <param name="Reason">An identifier for operators and logs: <c>UndeclaredNamespace</c>, <c>UnreadableContent</c>, <c>NoHandler</c>, <c>HandlerOutsidePartition</c>, <c>UnsafeHandler</c>, <c>UnsafePublishScope</c>.</param>
 public sealed record RejectedActionHandlerRule(string Path, string Reason);
 
 /// <summary>
@@ -185,6 +198,9 @@ public static class ActionHandlerRules
     /// own-partition check, so any of them could leave the rule's partition.
     /// </summary>
     public const string UnsafeHandler = "UnsafeHandler";
+
+    /// <summary>The rule's <see cref="ActionHandlerRule.PublishScope"/> is not a canonical mesh path.</summary>
+    public const string UnsafePublishScope = "UnsafePublishScope";
 
     /// <summary>The rule node's content does not read as an <see cref="ActionHandlerRule"/>.</summary>
     public const string UnreadableContent = "UnreadableContent";
@@ -269,6 +285,8 @@ public static class ActionHandlerRules
         if (!IsCanonicalMeshPath(rule.Handler)
             || !ActivityActionReference.IsLocalTarget(Target(rule.Handler, null)))
             return UnsafeHandler;
+        if (rule.PublishScope is { } scope && !IsCanonicalMeshPath(scope))
+            return UnsafePublishScope;
         // Partitions are case-insensitive everywhere (DeclaredNamespaces, schema routing).
         return string.Equals(Partition(path), Partition(rule.Handler), StringComparison.OrdinalIgnoreCase)
             ? null
@@ -352,7 +370,8 @@ public static class ActionHandlerRules
                 if (authorizePublisher is null)
                     return Observable.Return(ActionOutcome.Of(ActionOutcomeStatus.Unauthorized, invocation,
                         $"rule {rulePath}: no permission seam is bound to this chain, so no publisher is authorized"));
-                var handlerPath = rule.Handler.Trim().Trim('/');
+                // The publish check's node: the rule's PublishScope when it names one, else its handler.
+                var handlerPath = (rule.PublishScope ?? rule.Handler).Trim().Trim('/');
                 return authorizePublisher(handlerPath, publisher, permission)
                     .Take(1)
                     .DefaultIfEmpty(PermissionCheckOutcome.Undetermined("the permission check produced no verdict"))

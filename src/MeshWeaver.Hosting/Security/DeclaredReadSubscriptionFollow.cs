@@ -93,7 +93,7 @@ public static class DeclaredReadSubscriptionFollow
             })
             .DefaultIfEmpty(false)
             .Replay(1)
-            .AutoConnect(1);
+            .AutoConnectOwnedBy(owner, nameof(DeclaredReadSubscriptionFollow));
 
         return new ClientReadFollow(
             revision => standing

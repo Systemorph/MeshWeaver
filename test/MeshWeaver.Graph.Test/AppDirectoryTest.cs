@@ -507,6 +507,31 @@ public class AppDirectoryPureTest
         evidence.IsInstalled("crm").Should().Be(expected, "package ids are case-insensitive, like paths");
     }
 
+    /// <summary>
+    /// The DEFAULT APPS (Threads = package <c>AI</c>, Examples = package <c>Developer</c>) as their
+    /// roots are authored — <c>tier: free</c>, <c>defaultApp</c>, <c>app</c>. Once the package is
+    /// installed, they are tiles for ANY viewer beside the built-ins Inbox and Settings, and a plan is
+    /// never consulted: the launcher decides on the install record and the viewer's read grant alone
+    /// (a free-plan viewer has both for a free, pre-installed package).
+    /// </summary>
+    [Fact]
+    public void TheDefaultApps_AreTilesForAnyViewerOnceInstalled_BesideInboxAndSettings()
+    {
+        var threads = AppDirectory.ReadRoot(Root("AI",
+            """{"app":true,"entryPoint":"AI/AiThreads","tier":"free","preInstalled":true,"defaultApp":true}"""), Options)!;
+        var examples = AppDirectory.ReadRoot(Root("Developer",
+            """{"app":true,"entryPoint":"Developer/Home","tier":"free","preInstalled":true,"defaultApp":true}"""), Options)!;
+        var evidence = Evidence(["AI", "Developer"]);
+
+        AppDirectory.IsTile(threads, evidence).Should().BeTrue();
+        AppDirectory.IsTile(examples, evidence).Should().BeTrue();
+        AppDirectory.IsTile(threads, Evidence([])).Should().BeFalse("not installed, no tile");
+
+        var list = AppDirectory.Compose("rbuergi", [threads, examples], isGlobalAdmin: false);
+        list.Select(e => e.Id).Should().Contain(["Inbox", "Settings", "AI", "Developer"]);
+        list.Select(e => e.Id).Should().NotContain("Admin", "a plain viewer has no Administration");
+    }
+
     [Fact]
     public void AnUninstalledApp_IsNoTile_EvenWithItsRootAndAppFlagLeft()
     {

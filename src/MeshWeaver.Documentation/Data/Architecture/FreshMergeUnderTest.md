@@ -87,12 +87,38 @@ on the fresh merge is left alone; a conflict is refused, naming the path; and, a
 control, the merge onto the OLD main is a different tree. Swapping the parents in the script reds
 two of the cases.
 
+## One candidate per run
+
+A lane that fans out has a job that decides WHAT is tested — `node-repo-gate.yml`'s `plan` computes
+the affected package closure, and that closure reads the TREE: every module's `requires` edges. So
+the selecting job must read the **same fresh merge** the shards test, not merely name the tip:
+
+- **The selector applies the merge before it selects.** `plan` merges the head onto the tip, diffs
+  `<tip>...HEAD` (the pull request's effect on the CURRENT main) and reads the dependency edges from
+  the merged tree. It hands the tip (`merge-main-sha`) and the merged tree (`candidate-tree`) to the
+  shards.
+- **Each shard proves it.** After its own fresh merge onto the plan's tip, a shard compares its tree
+  with `candidate-tree` and is red when they differ — compared by tree, not commit id, because a
+  checkout GitHub already built on the current tip is the same content under another commit.
+- **The workflows are checked statically.** `.github/scripts/check-fresh-merge-candidate.py` (core's
+  `workflow-shell` job, self-test first) is red when a job that runs a selector (`affected-modules.py`,
+  a `--range` diff) only resolves the tip or merges after it selects, when a job that tests what a
+  selector chose merges onto any tip other than that job's output, and when it finds no selecting job
+  at all (it would otherwise pass having checked nothing).
+
+**Why it matters, measured.** The gate's `plan` used to resolve the tip only and compute the closure
+on GitHub's merge ref. On MeshWeaver.Plugins#4043 (run 39580565444), main had just gained
+`AI requires Training@^1.3.0` plus a `Training/Tour` node (Plugins#4039). The plan's older tree had no
+such edge, so the closure left Training out; the shard tested the fresh merge, which had it, staged 23
+packages without Training, and failed *Install of 'AI' failed: NodeType(s) not registered:
+Training/Tour*. Running `affected-modules.py` over the two bases reproduces the two different sets.
+
 ## Where it runs
 
 | Repository / lane | Resolves the tip | Applies the merge |
 |---|---|---|
 | core `dotnet-test.yml` | `build` (its `main-sha` output) — as the suites START; a run held for its review is released by `rerun-failed-jobs`, which re-runs `build` but not a green `precheck` | `precheck` (for the green-tree probe, on its own resolution), `build`, every `test` shard, `doc-gate`, `platform-compat` (all on the build's main), and `collect-results` (the `refs/ci-green` marker keys the BUILD's tree) |
-| `node-repo-gate.yml` | `plan` (resolve only — the shard plan is unchanged) | every gate shard |
+| `node-repo-gate.yml` | `plan` | `plan` (the affected closure is computed on the merged tree), every gate shard (each asserts its tree equals the plan's `candidate-tree`) |
 | `node-repo-module-pack.yml` | `select` | `select` (the build keys hash the tested tree), `build-workspace`, every `pack` and `tests` leg |
 | `node-repo-compile-check.yml` | the job itself | the job itself |
 | MeshWeaver.Plugins `ci.yml` | `admission`, as the run is ADMITTED (a held run's dispatch re-runs it) — for the portal hosts and the two shared lanes; the lighter legs that do not wait for admission resolve at their own start | `portal-hosts-build` + `portal-hosts-test`, `modules-floor` / `test-repos` (through the lanes' `merge-main-sha`), `compile-check-unit`, `compile-check-lanes`, `tests-ratchet`, `test-drift`, `rn-app`, `e2e-static`, `memex-template` |
