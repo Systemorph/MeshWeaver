@@ -162,7 +162,8 @@ Controls.Catalog("Partners",
   ("Search partners — e.g. a name, sort:name, sort:lastModified-desc"). The typed text follows the
   hidden query, so a typed `sort:` replaces the default order.
 - **The filter carries no `sort:`.** The catalog appends the default order (`CatalogSort`, **Last
-  activity** — `sort:subtreeLastModified-desc` — unless you pass another), and the store orders; there
+  activity** — `sort:subtreeLastModified-desc` — unless you pass another) to EVERY line of a union
+  filter (the union is ordered by its first line), and the store orders; there
   is no client-side `WithSortBy` to re-sort the hits behind the reader's back.
 - **One hit per row, through the hit's own area** (`itemArea`).
 - **Places a reader sees as different are different catalogs.** Clients, partners and suppliers are
