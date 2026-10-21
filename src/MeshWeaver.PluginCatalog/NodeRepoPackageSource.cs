@@ -192,6 +192,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // The package's own declaration that it belongs to the platform's default
                         // install — read off the ROOT's content, where the plugins repo authors it.
                         PreInstalled = peeked.PreInstalled,
+                        // The package is an app EVERY instance carries (the default-apps lane): read
+                        // off the same root content, for the same dead-metadata reason.
+                        DefaultApp = peeked.DefaultApp,
                         // The declared public surface — what the installer's access step scopes a
                         // free package's public read to.
                         PublicSegments = peeked.PublicSegments,
@@ -320,7 +323,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
     private readonly record struct PeekedRoot(
         string? NodeType, string? Name, string? Description,
         string? Category, string? Icon, decimal? Price, string? Currency, string? Poster,
-        bool PreInstalled, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
+        bool PreInstalled, bool DefaultApp, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
         ImmutableList<string> ProtectedSegments,
         string? License, string? ContactEmail, string? Module, string? MinMeshVersion,
         ImmutableList<PackageParameter> Parameters, string? Tier);
@@ -340,6 +343,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             string? poster = null;
             string? contactEmail = null;
             var preInstalled = false;
+            var defaultApp = false;
             var requires = ImmutableList<string>.Empty;
             string? license = null;
             var publicSegments = ImmutableList<string>.Empty;
@@ -374,6 +378,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 // a package on every instance.
                 if (content.TryGetProperty("preInstalled", out var pre))
                     preInstalled = pre.ValueKind == JsonValueKind.True;
+                // Same literal-true rule for the default-apps lane (see PackageManifest.DefaultApp).
+                if (content.TryGetProperty("defaultApp", out var defApp))
+                    defaultApp = defApp.ValueKind == JsonValueKind.True;
                 // 🚨 The plugin's declared dependencies ("Store@^1.0.0"). Read here because an
                 // UNATTENDED install has to order by them: installing a package before the one it
                 // depends on fails outright ("NodeType(s) not registered: Training/Tour" — Chess
@@ -441,7 +448,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("description", out var d) ? d.GetString() : null,
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
-                price, currency, poster, preInstalled, requires, publicSegments, protectedSegments,
+                price, currency, poster, preInstalled, defaultApp, requires, publicSegments, protectedSegments,
                 license, contactEmail, module, minMeshVersion, parameters, tier);
         }
         catch (JsonException ex)
