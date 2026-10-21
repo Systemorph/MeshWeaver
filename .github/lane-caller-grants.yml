@@ -185,6 +185,13 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Store-artifact reader (MeshWeaver#7032) — ARRIVING. A workflow_dispatch caller that prints a
+      # run's own-store artifacts into a job log; the lane demands nothing beyond the caller's grant.
+      - workflow: read-store-artifact.yml
+        job: read
+        lane: read-store-artifact.yml
+        grants: {contents: read}
+        pending: Systemorph/MeshWeaver.Education#405 lands the caller after the lane (MeshWeaver#7032) is on core main
 
   # ── MeshWeaver.Reinsurance ────────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Reinsurance:

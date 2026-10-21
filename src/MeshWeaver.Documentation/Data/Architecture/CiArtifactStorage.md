@@ -595,6 +595,39 @@ first, then whichever handoff this run used, and a refusal that now names both.
 `--retention-days` the ledger record states were two independent literals until 2026-09-17. They now
 read one expression, so **a record can never outlive the artifact it names**.
 
+### Reading a run's artifacts when you are not on the runner pool
+
+A `file:` store is a share mounted only on the in-cluster runner pods. A workstation, a
+GitHub-hosted runner and the GitHub UI cannot open it, so failure evidence a lane uploaded there
+(Playwright reports, mesh diagnostics, test output) is unreadable from outside unless a job on
+that pool prints it.
+
+`.github/workflows/read-store-artifact.yml` is that job. It is a `workflow_call` lane, not a
+`workflow_dispatch` one: this repository is public, the org runner group does not admit public
+repositories, and a dispatch here could never reach a runner with the share mounted. A private
+repository calls it from its own dispatchable workflow (the caller template is in the lane's
+header). The lane:
+
+- resolves the store from the caller's `vars.MW_ARTIFACT_STORE` and runs on the caller's
+  `vars.MW_RUNNER_DOCKER` pool;
+- downloads `pattern` from `repository`/`run-id` through the shared download action, which verifies
+  the store identity, archive size and inventory before extraction;
+- prints, into its job log, every non-passing test of each Playwright HTML report with each
+  attempt's status, duration and error text, the report's `.md` error contexts, every `.txt` and
+  `.csv` file, and the lines of each `.log` file that match `log-pattern`. A report is recognised
+  by the data embedded in its `index.html`, not by a `playwright-report` directory name: an upload
+  whose only path is that directory strips it, and the report then sits at `<artifact>/index.html`;
+- goes RED when nothing matched, because an expired, swept or wrong-store selection must not read
+  as "no failures".
+
+It uses no secret and no token. Everything derived from an artifact or an input is printed with
+workflow commands suspended (`::stop-commands::` under a random token, resumed afterwards), so a
+test title or log line cannot raise an annotation, add a mask or end the suspension. Indenting the
+lines is not a guard the runner promises to honour, so the lane does not rely on it.
+
+`retention-days: 0` on an upload to the own store means the 7-day default
+(`ci-run-artifacts.py upload`), not "delete immediately".
+
 ## Supported backend and retention
 
 The named-artifact adapter currently supports **`file:` only**, alongside the compatible `gha`

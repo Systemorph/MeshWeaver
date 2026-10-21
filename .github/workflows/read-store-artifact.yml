@@ -1,0 +1,205 @@
+name: Read store artifacts into the job log
+
+# ♻️ REUSABLE (workflow_call) — print what a run left in the shared CI artifact store.
+#
+# WHY. A lane on our runners uploads its failure evidence to the shared store
+# (`file:/ci-artifacts`, a share mounted ONLY on the in-cluster runner pods), not to GitHub. Nothing
+# outside that runner pool can read it: not a workstation, not a GitHub-hosted runner, not the
+# GitHub UI. So when a job is cut and its log does not carry the per-test error texts, the evidence
+# exists and nobody can open it. This lane is the reader: it downloads the named artifacts of one
+# run, verified against the store identity, and prints the Playwright failures and the mesh
+# diagnostics summaries into its own job log.
+#
+# WHY A CALLER IS NEEDED. This repository is PUBLIC, and the org runner group does not admit public
+# repositories, so a `workflow_dispatch` here could never reach a runner that has the share mounted.
+# A PRIVATE repository calls this lane from its own dispatchable workflow; the job then resolves
+# `vars.MW_RUNNER_DOCKER` (the in-cluster pool) and `vars.MW_ARTIFACT_STORE` from the CALLER:
+#
+#     on:
+#       workflow_dispatch:
+#         inputs:
+#           run-id: { required: true, type: string }
+#           pattern: { required: false, type: string, default: '*' }
+#     jobs:
+#       read:
+#         uses: Systemorph/MeshWeaver/.github/workflows/read-store-artifact.yml@main
+#         with:
+#           repository: ${{ github.repository }}
+#           run-id: ${{ inputs.run-id }}
+#           pattern: ${{ inputs.pattern }}
+#
+# No secrets, no token: the own store is a mounted filesystem. The download verifies the archive
+# size, inventory and the store identity before anything is extracted. An empty selection is RED
+# (expired, swept, wrong run, or a different share behind the same path), never a quiet success.
+# Everything printed from an artifact is printed with workflow commands SUSPENDED
+# (`::stop-commands::` under a random token): a test title or log line cannot raise an annotation,
+# mask a value or end the suspension early. Reports are found by their embedded Playwright data,
+# not by a `playwright-report` directory name, which an upload may strip.
+#
+# Doc: Doc/Architecture/CiArtifactStorage, "Reading a run's artifacts when you are not on the runner pool".
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: The repository whose run uploaded the artifacts (owner/name).
+        required: true
+        type: string
+      run-id:
+        description: The run that uploaded the artifacts.
+        required: true
+        type: string
+      pattern:
+        description: Artifact name glob, e.g. e2e-journeys-report-shard*.
+        required: false
+        type: string
+        default: '*'
+      store:
+        description: The store to read. Empty means the caller's vars.MW_ARTIFACT_STORE.
+        required: false
+        type: string
+        default: ''
+      expected-store-id:
+        description: >-
+          The identity the uploading job printed beside its `store: wrote` line. Empty means "the
+          share this runner mounts", which is resolved and printed so the reader can compare it.
+        required: false
+        type: string
+        default: ''
+      log-pattern:
+        description: Python regular expression selecting the lines printed from each *.log file.
+        required: false
+        type: string
+        default: '(?i)(\bfail|\berror|exception|\bcrit|timed? ?out|\bwarn)'
+      max-lines:
+        description: Upper bound on the lines printed per file.
+        required: false
+        type: string
+        default: '400'
+
+jobs:
+  read:
+    name: Read store artifacts
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - name: Resolve the store this runner mounts
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.store || vars.MW_ARTIFACT_STORE }}
+          expected-store-id: ${{ inputs.expected-store-id }}
+
+      - name: Download the selected artifacts
+        id: download
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
+          repository: ${{ inputs.repository }}
+          run-id: ${{ inputs.run-id }}
+          pattern: ${{ inputs.pattern }}
+          path: ${{ runner.temp }}/store-artifacts
+
+      - name: Print the failures and diagnostics
+        env:
+          READ_ROOT: ${{ runner.temp }}/store-artifacts
+          READ_STORE_ID: ${{ steps.store.outputs.store-id }}
+          READ_REPOSITORY: ${{ inputs.repository }}
+          READ_RUN_ID: ${{ inputs.run-id }}
+          READ_PATTERN: ${{ inputs.pattern }}
+          READ_LOG_PATTERN: ${{ inputs.log-pattern }}
+          READ_MAX_LINES: ${{ inputs.max-lines }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, io, json, os, re, secrets, sys, zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["READ_ROOT"])
+          limit = int(os.environ["READ_MAX_LINES"])
+          log_re = re.compile(os.environ["READ_LOG_PATTERN"])
+          ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+          signature = re.compile(r'playwrightReportBase64\s*=\s*"data:application/zip;base64,([^"]+)"')
+          files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+          if not files:
+              print("::error::no artifact matched this repository, run and pattern on this store — "
+                    "expired, swept, a different run, or a different share behind the same path")
+              sys.exit(1)
+
+          # 🚨 Everything below is derived from the artifact or from caller inputs: test titles, file
+          # names, log lines. A line of it can carry `::error::`, `::add-mask::` or `::stop-commands::`
+          # anywhere on the line, and indenting it does not stop the runner. So workflow-command
+          # processing is SUSPENDED for the whole print, under a token nobody can predict, and resumed
+          # only after it. No `::group::` headers inside: a title is artifact-derived too.
+          token = secrets.token_hex(32)
+          print(f"::stop-commands::{token}")
+          print(f"store-id: {os.environ['READ_STORE_ID']}")
+          print(f"source:   {os.environ['READ_REPOSITORY']} run {os.environ['READ_RUN_ID']}, pattern {os.environ['READ_PATTERN']!r}")
+          print(f"{len(files)} file(s) downloaded:")
+          for f in files:
+              print(f"  {f.relative_to(root)}  {f.stat().st_size} B")
+
+          def clean(line):
+              return ansi.sub("", line.rstrip())
+
+          def capped(lines, title):
+              print("\n===== " + clean(" ".join(title.split())))
+              for i, line in enumerate(lines):
+                  if i >= limit:
+                      print(f"  … cut at {limit} lines")
+                      break
+                  print("  " + clean(line))
+
+          def report_entries(html):
+              # A Playwright HTML report is recognised by its embedded data, never by a directory
+              # name: an upload of `path: e2e/playwright-report` alone strips that directory, so the
+              # report lands at `<artifact>/index.html`.
+              m = signature.search(html.read_text(errors="replace"))
+              if not m:
+                  return None
+              archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+              return {n: json.loads(archive.read(n)) for n in archive.namelist() if n.endswith(".json")}
+
+          report_roots = []
+          for html in (f for f in files if f.name == "index.html"):
+              entries = report_entries(html)
+              if entries is None:
+                  continue
+              report_roots.append(html.parent)
+              summary = entries.get("report.json", {})
+              print(f"\n##### Playwright report {html.relative_to(root)}: stats {json.dumps(summary.get('stats', {}))}")
+              for name, doc in sorted(entries.items()):
+                  if name == "report.json":
+                      continue
+                  for test in doc.get("tests", []):
+                      if test.get("outcome") in ("expected", "skipped"):
+                          continue
+                      title = " › ".join(test.get("path", []) + [test.get("title", "")])
+                      lines = [f"{doc.get('fileName', name)}:{test.get('location', {}).get('line', '?')}  outcome={test.get('outcome')}"]
+                      for result in test.get("results", []):
+                          lines.append(f"-- attempt {result.get('retry', 0) + 1}: {result.get('status')} after {result.get('duration', 0) / 1000:.1f} s")
+                          for error in result.get("errors", []):
+                              # Older reporters store a plain string, newer ones {message, codeframe}.
+                              text = error if isinstance(error, str) else (error.get("message") or json.dumps(error))
+                              lines.extend(text.splitlines())
+                      capped(lines, f"{test.get('outcome', '?').upper()}  {title}")
+
+          def in_report(f):
+              return any(r in f.parents for r in report_roots)
+
+          for f in files:
+              rel = f.relative_to(root)
+              if f.suffix == ".md" and in_report(f):
+                  capped(f.read_text(errors="replace").splitlines(), f"error context {rel}")
+              elif f.suffix == ".log":
+                  lines = f.read_text(errors="replace").splitlines()
+                  hits = [l for l in lines if log_re.search(l)]
+                  capped(hits, f"{rel}: {len(hits)} of {len(lines)} lines match the log pattern")
+              elif f.suffix in (".txt", ".csv"):
+                  capped(f.read_text(errors="replace").splitlines(), str(rel))
+
+          print(f"::{token}::")
+          if not report_roots:
+              print("::warning::no Playwright HTML report was found among the downloaded files")
+          PY
