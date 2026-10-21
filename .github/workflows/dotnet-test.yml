@@ -2693,6 +2693,12 @@ jobs:
     - name: "Own-store named artifacts preserve rerun inputs and reject corrupt archives"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test_ci_run_artifacts.py
+    # read-store-artifact.yml runs only on the runner pool with the share mounted, never on a PR, so
+    # this executes its embedded printer verbatim over fixtures: a cut run's live results, the
+    # current report embedding, and whole-run log coverage under the line cap (#7035).
+    - name: "The store-artifact reader prints a cut run and covers every minute of its log"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/test-read-store-artifact.py
     - name: "The composite actions execute the own-store transport contract"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/test-ci-artifact-actions.py

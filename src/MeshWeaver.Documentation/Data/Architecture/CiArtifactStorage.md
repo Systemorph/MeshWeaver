@@ -630,8 +630,11 @@ header). The lane:
   selected when it matches `log-pattern` (trouble), matches `focus-pattern` (the categories that
   carry the work; default Activity, Kernel and IoPool), or falls within five seconds of a failing
   or in-flight attempt's time window from the live results of the same artifact. Over `max-lines`
-  (default 2000) the budget is spread evenly across every minute the selection spans and the
-  omissions are counted per minute, so the print covers the whole run window, not the boot;
+  (default 2000) every minute the selection spans is first RESERVED an equal share — a minute whose
+  every record is longer than its share prints its shortest one cut to the share, and says so — and
+  only then is the remainder redistributed, so a long early record cannot starve the end of the
+  run. Omissions are counted per minute. `.github/scripts/test-read-store-artifact.py` runs the
+  embedded printer verbatim over fixtures on every pull request;
 - goes RED when nothing matched, because an expired, swept or wrong-store selection must not read
   as "no failures".
 

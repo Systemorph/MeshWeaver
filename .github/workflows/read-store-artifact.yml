@@ -337,6 +337,7 @@ jobs:
               print("\n===== " + clean(header))
               for s, e, what in wins:
                   print("  window " + clean(f"{s} .. {e or 'end of log'}  {what}"))
+              trimmed = {}  # record index -> lines printed, for a record longer than its minute's share
               if n_lines <= limit:
                   chosen = {i for i, _, _ in picked}
               else:
@@ -346,11 +347,36 @@ jobs:
                       buckets.setdefault(key, []).append((prio, i, r))
                   for b in buckets.values():
                       b.sort(key=lambda x: (x[0], x[1]))
-                  chosen, budget, progress = set(), limit, True
+                  chosen, budget = set(), limit
+                  # 1. RESERVE each minute its share before anything is redistributed. Charging one shared
+                  #    budget in arrival order let long early records spend what the end of the run needed
+                  #    (thread 4338716927: a 100-line record in minute 0 left minute 39 unprinted although
+                  #    all forty minutes fit). Inside its share a minute takes records in priority order,
+                  #    skipping any that do not fit; a minute whose every record is longer than its share
+                  #    prints its shortest record CUT to the share, and says so.
+                  share = max(1, limit // len(buckets))
+                  for k in sorted(buckets):
+                      room = min(share, budget)
+                      if room <= 0:
+                          break
+                      for _, i, r in buckets[k]:
+                          if len(r["lines"]) <= room:
+                              chosen.add(i)
+                              room -= len(r["lines"])
+                              budget -= len(r["lines"])
+                      if not any(i in chosen for _, i, _ in buckets[k]):
+                          _, i, r = min(buckets[k], key=lambda x: (len(x[2]["lines"]), x[0], x[1]))
+                          trimmed[i] = room
+                          chosen.add(i)
+                          budget -= room
+                  # 2. REDISTRIBUTE what the shares left over, round-robin across minutes, whole records.
                   cursors = {k: 0 for k in buckets}
+                  progress = True
                   while budget > 0 and progress:
                       progress = False
                       for k in sorted(buckets):
+                          while cursors[k] < len(buckets[k]) and buckets[k][cursors[k]][1] in chosen:
+                              cursors[k] += 1
                           if cursors[k] < len(buckets[k]):
                               _, i, r = buckets[k][cursors[k]]
                               cursors[k] += 1
@@ -358,8 +384,10 @@ jobs:
                                   chosen.add(i)
                                   budget -= len(r["lines"])
                               progress = True
-                  print(f"  (over the {limit}-line cap: the budget is spread across "
-                        f"{len(buckets)} minute(s); omissions are counted per minute)")
+                  uncovered = sum(1 for b in buckets.values() if not any(i in chosen for _, i, _ in b))
+                  print(f"  (over the {limit}-line cap: {share} line(s) reserved for each of {len(buckets)} minute(s), "
+                        f"the rest redistributed; omissions are counted per minute"
+                        + (f"; {uncovered} minute(s) got no line — more minutes than the cap" if uncovered else "") + ")")
               omitted = {}
               def flush():
                   for key, count in omitted.items():
@@ -368,8 +396,11 @@ jobs:
               for i, r, _ in picked:
                   if i in chosen:
                       flush()
-                      for line in r["lines"]:
+                      keep = trimmed.get(i, len(r["lines"]))
+                      for line in r["lines"][:keep]:
                           print("  " + clean(line))
+                      if keep < len(r["lines"]):
+                          print(f"  … {len(r['lines']) - keep} more line(s) of this record cut to its minute's share")
                   else:
                       key = r["ts"].strftime("%H:%M") if r["ts"] else "untimed lines"
                       omitted[key] = omitted.get(key, 0) + 1
