@@ -254,10 +254,15 @@ public static class SyncedQueryDataSourceExtensions
         var accessService = sp.GetService<AccessService>();
         var captured = accessService?.Context ?? accessService?.CircuitContext;
         var userId = captured?.ObjectId;
+        // 🚨 Every snapshot is delivered under the SUBSCRIBER's identity, not the identity of the turn
+        // that changed the result set (a platform install, another person's edit). A view that reads
+        // again inside this callback would otherwise read for the writer — see
+        // Doc/Architecture/AccessContextPropagation → "Emissions arrive as the reader".
+        var reader = AccessService.ReaderOf(captured);
         if (accessService is null
             || string.IsNullOrEmpty(userId)
             || string.Equals(userId, WellKnownUsers.System, StringComparison.Ordinal))
-            return upstream;
+            return upstream.CarryAccessContext(sp, reader);
 
         return Observable.Defer(() =>
         {
@@ -278,15 +283,21 @@ public static class SyncedQueryDataSourceExtensions
             // grant or refusal holds here exactly as it does in a query, and never only the scope
             // fold (which hides, for instance, the User root profiles UserAccessRule opens to every
             // signed-in reader). Resolved here, at subscribe — see the SecurityService cycle above.
+            //
+            // 🚨 The filter itself runs under the READER, not only the callback after it (#7038):
+            // upstream snapshots arrive on the query pool or on the turn that changed the result set,
+            // and the fold ALSO reads the ambient context's IsVirtual (Access:DenyAnonymous) and
+            // IsApiToken. So the snapshots are carried as the reader into the filter, and each row's
+            // check installs the reader's whole context (CanRead → RunAs).
             var validators = meshHub.ServiceProvider.GetServices<INodeValidator>()
                 .Where(v => v.SupportedOperations.Count == 0
                             || v.SupportedOperations.Contains(NodeOperation.Read))
                 .ToList();
-            var reader = captured!;
+            var subject = captured!;
             return FilterByReadPermission(
-                upstream,
-                node => CanRead(meshHub, accessService, reader, validators, node));
-        });
+                upstream.CarryAccessContext(sp, reader),
+                node => CanRead(meshHub, accessService, subject, validators, node));
+        }).CarryAccessContext(sp, reader);
     }
 
     /// <summary>
