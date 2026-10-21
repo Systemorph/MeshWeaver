@@ -205,15 +205,15 @@ It fails RED when it cannot compare — an unreachable cluster, a failed render,
 ConfigMap with no keys, or an unreadable release manifest — rather than reporting "no drift" on no
 evidence.
 
-**Two callers, and neither may skip.** The script's inputs are cluster credentials and the
-per-env values, so it cannot be a pull-request gate: a gate that skips when a credential is
-absent renders the same tick as one that passed, which would rebuild the very defect it catches.
-It runs from `.github/workflows/chart-drift.yml` on a daily `schedule` (plus `workflow_dispatch`)
-behind a `preflight` job that asserts every external input and **fails red naming what to
-provision** — never an `if:` that decides whether to run. Expect it red until the CI identity has
-AKS `runCommand` rights and each environment's SECRET-FREE `values.<env>.public.yaml` is
-committed to the private deploy repo; that red is the honest report that drift detection is not
-wired up yet.
+**Where it runs: inside the governed `Audit`, never from GitHub-side CI.** The script's inputs are
+cluster read and the per-env values, so it cannot be a pull-request gate: a gate that skips when a
+credential is absent renders the same tick as one that passed. It runs as the second step of an
+`Audit` InstanceAction — the operator verb `hosting-chart-drift`, on the estate's aks-ops lane, in the
+VNet as hosting-operator, beside `hosting-audit` — reading the estate checkout's committed
+`deployments/aks/<ns>/values.<release>.public.yaml` and `mesh/Deployments` records. It used to run
+from core's `chart-drift.yml` through `az aks command invoke`, which kept the AKS Cluster Admin role
+on a CI identity; that caller was retired (Systemorph/Memex#647) — see
+[Chart Drift](/Doc/Architecture/ChartDriftSemantics) → "Where the comparison runs".
 
 **Reading its report.** The findings are ranked worst-first and the classes mean different things
 — and the two that matter most, `COLLIDES` and `SHADOWS`, are wrong on the cluster *right now*
