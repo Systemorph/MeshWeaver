@@ -678,7 +678,8 @@ public static class ShippedPrebuiltBundles
         string identityDirectory, ILogger? logger, CancellationToken cancellationToken,
         Func<string, string[]>? readLines = null,
         IReadOnlyDictionary<string, string>? publicationDirectories = null,
-        BundleShareIo? io = null)
+        BundleShareIo? io = null,
+        Action<string>? onSourceSkipped = null)
     {
         io ??= BundleShareIo.Real;
         var bundles = new List<string>();
@@ -697,6 +698,10 @@ public static class ShippedPrebuiltBundles
                     : ResolvePublicationPointer(source, cancellationToken, logger, io).Directory;
             if (SealedBundlesOfPublication(sourceDir, logger, cancellationToken, readLines, io) is { } listed)
                 bundles.AddRange(listed);
+            else
+                // #7015 review — a source this walk could not read (unsealed, gone, torn) is one
+                // whose bundles were never ASKED about: what they name is unknown, not "nothing".
+                onSourceSkipped?.Invoke(sourceDir);
         }
         return bundles;
     }
@@ -830,6 +835,23 @@ public static class ShippedPrebuiltBundles
         IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
         string? imageDirectory, string? publishedRoot,
         Action<string>? onCovered, Action<string>? onMatched)
+        => SeedForTypes(mesh, typePaths, logger, imageDirectory, publishedRoot, onCovered, onMatched,
+            onIncomplete: null);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IMessageHub, IReadOnlyCollection{string}, ILogger, string, string, Action{string}, Action{string})"/>
+    /// with a COMPLETENESS witness (#7015 review): <paramref name="onIncomplete"/> is invoked, at
+    /// most once and with the reason, when this pass did not ask every bundle it should have — a
+    /// bundle it could not read (the pass's own fault fold), one with no readable manifest, a
+    /// published source it skipped (unsealed, gone, torn), or a hub that is leaving. The pass still
+    /// "succeeds" in every one of those cases, so a caller that reads the absence of an
+    /// <paramref name="onMatched"/> witness as "no bundle names this type" may do so ONLY when this
+    /// witness stayed silent.
+    /// </summary>
+    public static IObservable<int> SeedForTypes(
+        IMessageHub mesh, IReadOnlyCollection<string> typePaths, ILogger? logger,
+        string? imageDirectory, string? publishedRoot,
+        Action<string>? onCovered, Action<string>? onMatched, Action<string>? onIncomplete)
         => Observable.Defer(() =>
         {
             if (typePaths.Count == 0)
@@ -855,6 +877,7 @@ public static class ShippedPrebuiltBundles
             // documents thread-safety. The caller's own witness is chained, never replaced.
             var covered = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             var matched = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+            var skippedSources = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
             void WitnessCovered(string path)
             {
                 covered.TryAdd(path, 0);
@@ -878,7 +901,8 @@ public static class ShippedPrebuiltBundles
                 var identityDir = Path.Combine(publishedRoot, PrebuiltAssemblySeeder.LiveFrameworkMvid);
                 sources.Add(identityDir);
                 seeds.Add(SeedBundles(mesh, identityDir,
-                    ct => CompletePublishedBundlesOf(identityDir, logger, ct), logger, paths,
+                    ct => CompletePublishedBundlesOf(identityDir, logger, ct,
+                        onSourceSkipped: dir => skippedSources.TryAdd(dir, 0)), logger, paths,
                     WitnessCovered, WitnessMatched));
             }
             return seeds.Concat()
@@ -893,6 +917,9 @@ public static class ShippedPrebuiltBundles
                 // these types is a fact about the deployment (Information).
                 .Do(tally =>
                 {
+                    if (onIncomplete is not null
+                        && DescribeIncompleteDiscovery(tally, skippedSources.Count) is { } incomplete)
+                        onIncomplete(incomplete);
                     var uncovered = paths.Where(p => !covered.ContainsKey(p))
                         .OrderBy(p => p, StringComparer.Ordinal)
                         .ToArray();
@@ -907,6 +934,25 @@ public static class ShippedPrebuiltBundles
                 })
                 .Select(tally => tally.Covered);
         });
+
+    /// <summary>
+    /// Why a pass's offer DISCOVERY is incomplete, or null when every bundle it should have asked
+    /// was asked (#7015 review). Pure. A bundle declined WHOLE on framework identity is not here: it
+    /// names another identity's entries by design, so asking it is complete.
+    /// </summary>
+    internal static string? DescribeIncompleteDiscovery(SeedTally tally, int skippedSources)
+    {
+        var reasons = new List<string>();
+        if (tally.Faulted > 0)
+            reasons.Add($"{tally.Faulted} bundle source(s) faulted mid-pass");
+        if (tally.BundlesHollow > 0)
+            reasons.Add($"{tally.BundlesHollow} bundle(s) had no readable manifest");
+        if (skippedSources > 0)
+            reasons.Add($"{skippedSources} published source(s) were skipped (unsealed, gone or torn)");
+        if (tally.Leaving > 0)
+            reasons.Add("the hub is leaving, so no pass ran");
+        return reasons.Count == 0 ? null : string.Join("; ", reasons);
+    }
 
     /// <summary>How many uncovered type paths a shortfall line names before it truncates.</summary>
     private const int NamedUncoveredPaths = 8;

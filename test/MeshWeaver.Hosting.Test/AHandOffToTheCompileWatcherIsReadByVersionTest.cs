@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.IO;
 using System.Reactive;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
@@ -121,6 +122,38 @@ public class AHandOffToTheCompileWatcherIsReadByVersionTest
             .Emit("the per-type budget covers the store verification too — a stalled probe must not hold "
                   + "the type, and the sequential sweep behind it", TestContext.Current.CancellationToken);
         outcome.Status.Should().Be(PreWarmStatus.TimedOut, "an elapsed budget is 'not evaluated'");
+    }
+
+    private static readonly IReadOnlyDictionary<string, NodeTypeDefinition?> Adopted =
+        ImmutableDictionary<string, NodeTypeDefinition?>.Empty.Add(TypePath, new NodeTypeDefinition());
+
+    [Fact]
+    public async Task AStalledAdoptionVerification_EndsAtTheBudget_Unverified_NeverAbsent()
+    {
+        var verified = await DynamicTypePreWarmer.VerifyAdoptions(
+                Adopted, _ => Observable.Never<NodeTypeBakeReport>(), TimeSpan.FromMilliseconds(500), null)
+            .Should().Within(TestTimeouts.Quick)
+            .Emit("the verification runs before the sweep — a stalled probe must not hold the boot sweep",
+                TestContext.Current.CancellationToken);
+        verified.Unverified.Should().Contain(TypePath,
+            "an adoption that could not be verified is UNVERIFIED — not absent (the watcher would park a "
+            + "build this process holds) and not a fault reaching the routing fallback (the batch would compile it)");
+        verified.Baked.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task AFaultedAdoptionVerification_IsUnverified_NotAnError()
+    {
+        var verified = await DynamicTypePreWarmer.VerifyAdoptions(
+                Adopted, _ => Observable.Throw<NodeTypeBakeReport>(new IOException("share unreachable")),
+                TestTimeouts.Quick, null)
+            .Should().Within(TestTimeouts.Quick).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        verified.Unverified.Should().Contain(TypePath);
+
+        var control = await DynamicTypePreWarmer.VerifyAdoptions(Adopted, Probe(BakeState.Baked), TestTimeouts.Quick, null)
+            .Should().Within(TestTimeouts.Quick).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        control.Baked.Should().Contain(TypePath, "a probe that answers baked verifies the adoption");
+        control.Unverified.Should().BeEmpty();
     }
 
     [Fact]

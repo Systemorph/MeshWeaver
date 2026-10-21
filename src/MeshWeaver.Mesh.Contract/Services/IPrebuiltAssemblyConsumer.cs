@@ -1,4 +1,5 @@
 using System;
+using System.Reactive.Linq;
 
 namespace MeshWeaver.Mesh.Services;
 
@@ -41,4 +42,23 @@ public interface IPrebuiltAssemblyConsumer
     /// </summary>
     IObservable<int> SeedForTypes(IReadOnlyCollection<string> typePaths, Action<string> onOffered)
         => SeedForTypes(typePaths);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IReadOnlyCollection{string}, Action{string})"/> with a COMPLETENESS
+    /// witness: <paramref name="onIncomplete"/> is invoked (at most once, with the reason) when the
+    /// pass did not ask every bundle it should have — a bundle it could not read, a source it
+    /// skipped — although it completed normally. Only when it stays silent may a caller read "no
+    /// offer witnessed" as "no bundle names this type" (MeshWeaver#6930, the untracked-module gate).
+    ///
+    /// <para>Defaulted so that an implementation predating the witness keeps its contract. It cannot
+    /// say whether its discovery was complete, so it reports INCOMPLETE — the direction in which a
+    /// caller asks again rather than mistaking a module's content for authored content.</para>
+    /// </summary>
+    IObservable<int> SeedForTypes(
+        IReadOnlyCollection<string> typePaths, Action<string> onOffered, Action<string> onIncomplete)
+        => Observable.Defer(() =>
+        {
+            onIncomplete("this bundle consumer does not report whether its offer discovery completed");
+            return SeedForTypes(typePaths, onOffered);
+        });
 }

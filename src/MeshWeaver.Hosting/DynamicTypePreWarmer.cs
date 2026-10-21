@@ -1302,6 +1302,16 @@ public static class DynamicTypePreWarmer
                         return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.AlreadyBaked,
                             "adopted on this process by the untracked-module gate's offer pass"));
 
+                    // …and one whose adoption could not be VERIFIED in time is not evaluated: never
+                    // compiled (the gate refused it), never handed to the watcher (whose record may
+                    // lack the stamp this process holds). Its dependents inherit "no answer".
+                    if (gate.Unverified.Contains(p))
+                        return Observable.Return(new PreWarmOutcome(p, PreWarmStatus.TimedOut,
+                                "adopted on this process by the untracked-module gate's offer pass, but its "
+                                + "store verification did not complete within the budget — not compiled, "
+                                + "not handed to the compile watcher"))
+                            .Do(o => FileForDependents(p, o));
+
                     // 🚨 ITS PARTITION IS GONE, so there is nothing to warm and nothing to wait
                     // for (#5073). Asked BEFORE the work, never after it: warming such a type can
                     // only end one of two ways, and both were measured in production —
@@ -1539,7 +1549,7 @@ public static class DynamicTypePreWarmer
         // through the watcher.
         return AbsentPartitionsAmongPending(mesh, pending, logger)
             .SelectMany(absent => useBatch
-                ? RefusedByUntrackedModuleGate(mesh, definitions, nodes, pending, absent, logger)
+                ? RefusedByUntrackedModuleGate(mesh, definitions, nodes, pending, absent, budget, logger)
                     .SelectMany(gate => BatchSources().SelectMany(index => Sweep(index, absent, gate)))
                 : Sweep(null, absent, GateRouting.None));
     }
@@ -1606,13 +1616,27 @@ public static class DynamicTypePreWarmer
     /// watcher; <see cref="AdoptedHere"/> were adopted by the gate's own offer pass on THIS process
     /// and are reported baked.
     /// </summary>
-    internal sealed record GateRouting(ImmutableHashSet<string> Refused, ImmutableHashSet<string> AdoptedHere)
+    internal sealed record GateRouting(
+        ImmutableHashSet<string> Refused,
+        ImmutableHashSet<string> AdoptedHere,
+        ImmutableHashSet<string> Unverified)
     {
+        private static readonly ImmutableHashSet<string> Empty =
+            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+
         /// <summary>Nothing routed — the batch compiles every pending type as before.</summary>
-        public static GateRouting None { get; } = new(
-            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase),
-            ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
+        public static GateRouting None { get; } = new(Empty, Empty, Empty);
     }
+
+    /// <summary>
+    /// #7015 review — the verification of this process's own adoptions, split: <see cref="Baked"/>
+    /// re-probed baked on this replica; <see cref="Unverified"/> whose probe did not answer within
+    /// the budget. An unverified type is neither baked nor absent: it is refused a compile (the gate
+    /// already refused it) and reported "not evaluated", and it is NOT handed to the watcher — whose
+    /// record may still lack the stamp this process holds, so it would park a build this process can
+    /// serve.
+    /// </summary>
+    internal sealed record AdoptionVerification(ImmutableHashSet<string> Baked, ImmutableHashSet<string> Unverified);
 
     /// <summary>
     /// MeshWeaver#6930 — the pending types the compile watcher's untracked-module gate would refuse
@@ -1637,6 +1661,7 @@ public static class DynamicTypePreWarmer
         IReadOnlyDictionary<string, MeshNode> nodes,
         IReadOnlyCollection<string> pending,
         ImmutableHashSet<string> absentPartitions,
+        TimeSpan verifyBudget,
         ILogger? logger)
     {
         var candidates = pending
@@ -1645,8 +1670,13 @@ public static class DynamicTypePreWarmer
             .Where(c => c.Definition is not null)
             .ToImmutableDictionary(c => c.Path, c => c.Definition, StringComparer.OrdinalIgnoreCase);
         return NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(mesh, candidates, logger)
-            .SelectMany(refused => AdoptedByThisProcess(mesh, refused, candidates, nodes, logger)
-                .Select(adopted => new GateRouting(refused.Except(adopted), adopted)))
+            .SelectMany(refused => AdoptedByThisProcess(
+                    mesh, refused, candidates, nodes, defs => ProbeOnThisReplica(mesh, defs, logger),
+                    verifyBudget, logger)
+                .Select(verified => new GateRouting(
+                    refused.Except(verified.Baked).Except(verified.Unverified),
+                    verified.Baked,
+                    verified.Unverified)))
             .Do(routing =>
             {
                 if (!routing.Refused.IsEmpty)
@@ -1681,29 +1711,66 @@ public static class DynamicTypePreWarmer
     /// (<see cref="NodeTypeAdoptionRegistry.OverlayOnto"/>) and the store probe — the sweep's own,
     /// against this replica's store and build guards — answers <see cref="BakeState.Baked"/>.
     /// </summary>
-    private static IObservable<ImmutableHashSet<string>> AdoptedByThisProcess(
+    private static IObservable<AdoptionVerification> AdoptedByThisProcess(
         IMessageHub mesh,
         ImmutableHashSet<string> refused,
         IReadOnlyDictionary<string, NodeTypeDefinition?> candidates,
         IReadOnlyDictionary<string, MeshNode> nodes,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan verifyBudget,
         ILogger? logger)
     {
         var none = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
         var registry = mesh.ServiceProvider.GetService<NodeTypeAdoptionRegistry>();
         if (refused.IsEmpty || registry is null)
-            return Observable.Return(none);
+            return Observable.Return(new AdoptionVerification(none, none));
         var overlay = registry.OverlayOnto(
             refused.ToImmutableDictionary(p => p, p => candidates[p], StringComparer.OrdinalIgnoreCase),
             nodes);
         if (overlay.Applied.IsEmpty)
-            return Observable.Return(none);
+            return Observable.Return(new AdoptionVerification(none, none));
         var adopted = overlay.Applied
             .ToImmutableDictionary(p => p, p => overlay.Definitions[p], StringComparer.OrdinalIgnoreCase);
-        return ProbeOnThisReplica(mesh, adopted, logger)
-            .Select(report => report.Entries
-                .Where(e => !e.NeedsBake)
-                .Select(e => e.TypePath)
-                .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+        return VerifyAdoptions(adopted, probe, verifyBudget, logger);
+    }
+
+    /// <summary>
+    /// #7015 review — re-probe this process's adoptions under ONE <paramref name="budget"/>. The
+    /// probe concatenates store reads with no operation timeout, and this runs BEFORE the sweep, so
+    /// an unbounded stall would hold the whole boot sweep. An elapsed or faulted probe yields every
+    /// adopted path as <see cref="AdoptionVerification.Unverified"/> — never an exception (which
+    /// would reach the routing's fallback and let the batch compile them) and never "not adopted"
+    /// (which would hand them to a watcher reading a record whose stamp is still held).
+    /// </summary>
+    internal static IObservable<AdoptionVerification> VerifyAdoptions(
+        IReadOnlyDictionary<string, NodeTypeDefinition?> adopted,
+        Func<IReadOnlyDictionary<string, NodeTypeDefinition?>, IObservable<NodeTypeBakeReport>> probe,
+        TimeSpan budget,
+        ILogger? logger)
+    {
+        var all = adopted.Keys.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var none = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+        return probe(adopted)
+            .Take(1)
+            .Select(report =>
+            {
+                var baked = report.Entries
+                    .Where(e => !e.NeedsBake)
+                    .Select(e => e.TypePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                return new AdoptionVerification(baked, none);
+            })
+            .Timeout(budget)
+            .Catch<AdoptionVerification, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: verifying {Count} adoption(s) made by the untracked-module gate's "
+                    + "offer pass did not complete within {Budget} — those types are reported NOT EVALUATED and "
+                    + "are neither compiled nor handed to the watcher: {Types}",
+                    all.Count, budget, string.Join(", ", all.OrderBy(x => x, StringComparer.Ordinal)));
+                return Observable.Return(new AdoptionVerification(none, all));
+            })
+            .DefaultIfEmpty(new AdoptionVerification(none, all));
     }
 
     /// <summary>The sweep's own store probe — this replica's store, pool and build guards — over

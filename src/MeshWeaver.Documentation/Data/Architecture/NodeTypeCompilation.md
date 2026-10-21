@@ -1359,8 +1359,15 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   adoption pass is the watcher's only source of the offer witness, so skipping it would let an
   offered-only type read as authored content and be compiled. This covers a record the hand-off
   flips and one a previous process left persisted at `Pending`.
-- **An offer pass cut short by its budget fails closed.** A type the pass did not reach has
-  unknown membership, so every candidate in an untracked partition goes through the watcher.
+- **An incomplete offer pass fails closed.** The pass is incomplete when its budget runs out, or
+  when it returns normally without having read every bundle. That covers a bundle it could not
+  read, a manifest it could not read, and a published source it skipped. The consumer reports this
+  through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`; a consumer that
+  cannot tell reports incomplete. A type the pass did not ask about has unknown membership, so
+  every candidate in an untracked partition goes through the watcher.
+- **Verifying this process's own adoptions is bounded.** An adoption that cannot be verified in
+  time is reported as not evaluated. It is still refused a compile, and it is not handed to the
+  watcher.
 - **The watcher's answer is the first terminal record whose version is above the hand-off write.**
   It never depends on seeing a `Pending` frame, and a stale terminal replay is never taken for the
   answer. A hand-off write that fails is reported as a fault at once.

@@ -48,6 +48,10 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
     /// <summary>The bundle entries the image ships for this case.</summary>
     protected abstract IReadOnlyList<BundleWriter.AssemblyEntry> Entries { get; }
 
+    /// <summary>Extra files laid into the image bundle directory beside the bundle (file name → bytes).</summary>
+    protected virtual IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]>();
+
     /// <summary>Extra services for this case (an admission authority).</summary>
     protected virtual void AddServices(IServiceCollection services) { }
 
@@ -87,6 +91,8 @@ public abstract class TheGatesVerdictSurvivesTheHandOffTestBase(ITestOutputHelpe
     private void WriteImageBundle()
     {
         Directory.CreateDirectory(imageDirectory);
+        foreach (var (name, bytes) in ExtraImageFiles)
+            File.WriteAllBytes(Path.Combine(imageDirectory, name), bytes);
         using var file = File.Create(Path.Combine(imageDirectory, "image.zip"));
         BundleWriter.Write(
             file, plugin: "Leftover", version: "1.0.0",
@@ -358,5 +364,44 @@ public class AdoptedBehindAParkedUpstream(ITestOutputHelper output) : TheGatesVe
         public MeshAdmission Admission => MeshAdmission.Provisional;
 
         public string AdmissionReason => "test: the bake is still measuring";
+    }
+}
+
+/// <summary>
+/// #7015 review — the offer pass RETURNS NORMALLY after a discovery fault: the bundle walk folds a
+/// bundle it cannot read into its tally (<c>Faulted</c>) and carries on, and the consumer reports
+/// only the adopted count. The unreadable archive is the one that would have named
+/// <c>untracked/InTheUnreadableBundle</c> — nothing else does — so the pass never learned whether a
+/// bundle names it. Its membership is unknown, and it must not be classified as authored content
+/// and handed to the batch compile. The readable bundle beside it names only another type, so the
+/// pass itself completes and returns normally.
+/// </summary>
+public class DiscoveryFault(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string TypePath = "untracked/InTheUnreadableBundle";
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-unreadable.zip"] = System.Text.Encoding.UTF8.GetBytes("not a zip archive") };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task ASwallowedDiscoveryFault_FailsClosed()
+    {
+        var refused = await NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(
+                Mesh,
+                new Dictionary<string, NodeTypeDefinition?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [TypePath] = new NodeTypeDefinition { Configuration = "config => config" },
+                },
+                null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the question answers once", cancellationToken: TestContext.Current.CancellationToken);
+        refused.Should().Contain(TypePath,
+            "the pass returned normally but could not read every bundle — 'not witnessed' is not "
+            + "'authored', so the type must stay out of the batch's direct compile");
     }
 }

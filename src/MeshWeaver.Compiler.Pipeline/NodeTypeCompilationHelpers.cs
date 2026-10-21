@@ -3723,15 +3723,29 @@ internal static class NodeTypeCompilationHelpers
                     StringComparer.OrdinalIgnoreCase);
                 var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
                 // Emits whether the pass COMPLETED — the only condition under which "no offer
-                // witnessed" may be read as "no bundle names this type".
+                // witnessed" may be read as "no bundle names this type". A pass that returns
+                // normally can still have asked only SOME bundles: the bundle walk folds an
+                // unreadable bundle or source into its tally and carries on (#7015 review), so its
+                // own completeness witness decides, not the fact that it returned.
+                var incomplete = 0;
                 var completed = consumer is null
                     ? Observable.Return(true)
                     : consumer.SeedForTypes(
                             inUntracked.Select(c => c.Key).ToArray(),
-                            path => offered.TryAdd(path, 0))
+                            path => offered.TryAdd(path, 0),
+                            reason =>
+                            {
+                                Interlocked.Exchange(ref incomplete, 1);
+                                logger?.LogWarning(
+                                    "Untracked-module gate: the bundle-offer pass for {Count} type(s) in "
+                                    + "untracked partitions did not ask every bundle ({Reason}) — membership "
+                                    + "is UNKNOWN, so all of them go through the compile watcher (fail closed, "
+                                    + "#7015).", inUntracked.Length, reason);
+                            })
                         .Take(1)
                         .Select(_ => true)
                         .DefaultIfEmpty(true)
+                        .Select(_ => Volatile.Read(ref incomplete) == 0)
                         .Timeout(offerBudget)
                         .Catch<bool, Exception>(ex =>
                         {
