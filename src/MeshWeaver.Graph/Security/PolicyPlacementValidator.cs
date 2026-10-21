@@ -115,11 +115,38 @@ public sealed class PolicyPlacementValidator(IMessageHub hub) : INodeValidator, 
                 }))
             .Where(change => change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset)
             .Take(1)
-            .Select(change => (Established: true, Definition: (change.Items ?? [])
-                .Select(n => n.ContentAs<PartitionDefinition>(options))
-                .FirstOrDefault(d => d is not null
-                    && string.Equals(d.Namespace, partition, StringComparison.OrdinalIgnoreCase))))
+            .Select(change => ClassifyLayout(change, partition, options))
             .DefaultIfEmpty((Established: false, Definition: null));
+    }
+
+    /// <summary>
+    /// What one answer of the layout read establishes. Pure.
+    /// <list type="bullet">
+    /// <item>An INCOMPLETE answer (<see cref="QueryResultChange{T}.SnapshotIncomplete"/>, or a provider in
+    /// <see cref="QueryResultChange{T}.SilentProviders"/>) establishes nothing: its empty list is not
+    /// "no record".</item>
+    /// <item>A returned record whose content does not read as a <see cref="PartitionDefinition"/> for this
+    /// partition establishes nothing either: it is not confirmed absence.</item>
+    /// <item>Only a complete answer without a record is the standard layout.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="change">The read's Initial/Reset answer.</param>
+    /// <param name="partition">The partition whose record was read.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <returns>Whether the layout is established, and the record's definition when there is one.</returns>
+    public static (bool Established, PartitionDefinition? Definition) ClassifyLayout(
+        QueryResultChange<MeshNode> change, string partition, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 })
+            return (false, null);
+        var records = (change.Items ?? []).Where(n => n is not null).ToList();
+        if (records.Count == 0)
+            return (true, null);
+        var definition = records
+            .Select(n => n.ContentAs<PartitionDefinition>(options))
+            .FirstOrDefault(d => d is not null
+                && string.Equals(d.Namespace, partition, StringComparison.OrdinalIgnoreCase));
+        return definition is null ? (false, null) : (true, definition);
     }
 
     /// <summary>
@@ -240,73 +267,109 @@ public static class PolicyPlacementGuard
                 var hub = pipeline.Hub;
                 return pipeline.AddPipeline((delivery, ct, next) =>
                 {
-                    if (RetypeIntoAPolicyByPatch(hub, delivery) is not { } context)
+                    if (!IsClientPatchOfThisHub(hub, delivery))
+                        return next.Invoke(delivery, ct);
+                    var patchRequest = (PatchDataRequest)delivery.Message;
+                    var verdict = PatchVerdict(
+                        JsonNode.Parse(patchRequest.Patch.Content ?? "{}"),
+                        patchRequest.Reference is MeshNodeReference,
+                        StampedFields.LiveOwnNode(hub),
+                        hub.JsonSerializerOptions);
+                    if (verdict == PatchRetype.None)
                         return next.Invoke(delivery, ct);
 
-                    var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-                        ?.CreateLogger("MeshWeaver.Graph.PolicyPlacement");
-                    new PolicyPlacementValidator(hub).Validate(context)
-                        .Take(1)
-                        .DefaultIfEmpty(NodeValidationResult.Invalid(
-                            LocalizationCatalog.Get("policy.placement.unestablished", context.AccessContext?.Locale,
-                                context.Node.Path, PolicyPlacementValidator.PartitionOfPath(context.Node.Path)),
-                            NodeRejectionReason.Unavailable))
-                        .Subscribe(
-                            result =>
-                            {
-                                if (result.IsValid)
-                                {
-                                    next.Invoke(delivery, ct).Subscribe(_ => { },
-                                        ex => logger?.LogError(ex,
-                                            "PolicyPlacement: downstream pipeline faulted for {Path}", context.Node.Path));
-                                    return;
-                                }
-                                logger?.LogWarning("PolicyPlacement: refused a retype of {Path} from {Sender}: {Message}",
-                                    context.Node.Path, delivery.Sender, result.ErrorMessage);
-                                hub.Post(new DeliveryFailure(delivery)
-                                {
-                                    ErrorType = result.Reason == NodeRejectionReason.Unavailable
-                                        ? ErrorType.Unavailable
-                                        : ErrorType.Rejected,
-                                    Message = result.ErrorMessage,
-                                }, o => o.ResponseFor(delivery));
-                            },
-                            ex => logger?.LogError(ex, "PolicyPlacement: the guard faulted for {Path}", context.Node.Path));
+                    var locale = delivery.AccessContext?.Locale;
+                    var message = verdict == PatchRetype.OwnerNotLoaded
+                        ? LocalizationCatalog.Get("policy.placement.ownerNotLoaded", locale, hub.Address.Path)
+                        : LocalizationCatalog.Get("policy.placement.patchRetype", locale, hub.Address.Path);
+                    hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger("MeshWeaver.Graph.PolicyPlacement")
+                        .LogWarning("PolicyPlacement: refused a patch of {Path} from {Sender}: {Message}",
+                            hub.Address.Path, delivery.Sender, message);
+                    hub.Post(new DeliveryFailure(delivery)
+                    {
+                        ErrorType = verdict == PatchRetype.OwnerNotLoaded ? ErrorType.Unavailable : ErrorType.Rejected,
+                        Message = message,
+                    }, o => o.ResponseFor(delivery));
                     return Observable.Return(delivery.Forwarded());
                 });
             });
 
-    /// <summary>
-    /// The Update context of a client merge patch of this hub's own node that turns it INTO a
-    /// policy, or null for every other delivery.
-    /// </summary>
-    private static NodeValidationContext? RetypeIntoAPolicyByPatch(IMessageHub hub, IMessageDelivery delivery)
+    /// <summary>What a client merge patch does to the hub's node type, as far as placement is concerned.</summary>
+    public enum PatchRetype
     {
-        if (delivery.Message is not PatchDataRequest { Reference: MeshNodeReference } patchRequest)
-            return null;
+        /// <summary>The patch does not turn the node into a policy: it continues on this turn.</summary>
+        None,
+        /// <summary>The patch turns a node of another type into a policy: refused.</summary>
+        IntoAPolicy,
+        /// <summary>The patch names the policy type, and the hub has not loaded its node, so it cannot tell.</summary>
+        OwnerNotLoaded,
+    }
+
+    /// <summary>
+    /// The verdict on a client merge patch, decided SYNCHRONOUSLY on the hub's turn. Pure.
+    ///
+    /// <para><b>Why a patch is refused rather than judged.</b> Placement needs the partition's layout,
+    /// which is a read. Waiting for it here would let a later patch from the same sender pass ahead of
+    /// this one. A merge patch is also not how a policy is made: it is created as one, or a node is
+    /// retyped through <c>IMeshService.UpdateNode</c> or an upsert, and both judge placement before
+    /// they write. So a patch that turns a node INTO a policy is refused, naming those routes. A patch
+    /// of a node that already IS a policy is not a retype and passes, so legacy policies stay
+    /// editable.</para>
+    ///
+    /// <para><b>Every reference shape.</b> A <see cref="MeshNodeReference"/> patch is the node itself, so
+    /// only its top-level <c>nodeType</c> counts. Any other reference (an
+    /// <see cref="EntityReference"/> to the <c>MeshNode</c> collection, a JSON pointer, …) is searched at
+    /// every depth, because its shape says nothing this guard can map field by field.</para>
+    ///
+    /// <para><b>A cold owner is not permission.</b> When the hub has not loaded its node, a patch that
+    /// names the policy type is refused as Unavailable, never let through.</para>
+    /// </summary>
+    /// <param name="patch">The parsed patch.</param>
+    /// <param name="isNodeReference">Whether the patch addresses the node itself.</param>
+    /// <param name="live">The node as the hub holds it; null before it has loaded.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <returns>The verdict.</returns>
+    public static PatchRetype PatchVerdict(
+        JsonNode? patch, bool isNodeReference, MeshNode? live, System.Text.Json.JsonSerializerOptions options)
+    {
+        var key = options.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.NodeType)) ?? nameof(MeshNode.NodeType);
+        var namesPolicy = isNodeReference
+            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value))
+            : NamesPolicyAnywhere(patch, key);
+        if (!namesPolicy)
+            return PatchRetype.None;
+        if (live is null)
+            return PatchRetype.OwnerNotLoaded;
+        return PolicyPlacementValidator.IsPolicyType(live.NodeType) ? PatchRetype.None : PatchRetype.IntoAPolicy;
+    }
+
+    private static bool IsNodeTypeKey(string candidate, string key)
+        => string.Equals(candidate, key, StringComparison.OrdinalIgnoreCase);
+
+    private static bool NamesPolicy(JsonNode? value)
+        => value is JsonValue v && v.TryGetValue<string>(out var s) && PolicyPlacementValidator.IsPolicyType(s);
+
+    private static bool NamesPolicyAnywhere(JsonNode? node, string key) => node switch
+    {
+        JsonObject obj => obj.Any(kvp => (IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value))
+                                         || NamesPolicyAnywhere(kvp.Value, key)),
+        JsonArray array => array.Any(item => NamesPolicyAnywhere(item, key)),
+        _ => false,
+    };
+
+    /// <summary>
+    /// A merge patch ADDRESSED to this hub's own node that came from anywhere but this hub. The owning
+    /// hub's own writes never arrive as a message, so the sender test is exact.
+    /// </summary>
+    private static bool IsClientPatchOfThisHub(IMessageHub hub, IMessageDelivery delivery)
+    {
+        if (delivery.Message is not PatchDataRequest)
+            return false;
         var ownPath = hub.Address.Path;
         if (delivery.Target is { } target && !string.Equals(target.Path, ownPath, StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (delivery.Sender is { } sender && string.Equals(sender.Path, ownPath, StringComparison.OrdinalIgnoreCase))
-            return null;
-        if (JsonNode.Parse(patchRequest.Patch.Content ?? "{}") is not JsonObject patch)
-            return null;
-        var key = hub.JsonSerializerOptions.PropertyNamingPolicy?.ConvertName(nameof(MeshNode.NodeType))
-                  ?? nameof(MeshNode.NodeType);
-        var proposed = patch
-            .Where(kvp => string.Equals(kvp.Key, key, StringComparison.OrdinalIgnoreCase))
-            .Select(kvp => kvp.Value is JsonValue v && v.TryGetValue<string>(out var s) ? s : null)
-            .FirstOrDefault();
-        var live = StampedFields.LiveOwnNode(hub);
-        if (live is null || !PolicyPlacementValidator.IsPolicyType(proposed) || PolicyPlacementValidator.IsPolicyType(live.NodeType))
-            return null;
-        return new NodeValidationContext
-        {
-            Operation = NodeOperation.Update,
-            Node = live with { NodeType = proposed },
-            ExistingNode = live,
-            AccessContext = delivery.AccessContext,
-        };
+            return false;
+        return delivery.Sender is null
+            || !string.Equals(delivery.Sender.Path, ownPath, StringComparison.OrdinalIgnoreCase);
     }
 }
 
@@ -323,11 +386,44 @@ internal sealed class PolicyPlacementDataValidator(IMessageHub hub) : IDataValid
     /// <inheritdoc />
     public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
-        var live = StampedFields.LiveOwnNode(hub);
-        if (live is null || PolicyPlacementValidator.IsPolicyType(live.NodeType))
+        var options = hub.JsonSerializerOptions;
+        var held = StampedFields.LiveOwnNode(hub);
+        if (held is not null)
+            return Judge(context, held, options);
+
+        // 🚨 A cold owner is not permission (#7017 review). Establish the node from storage: absent
+        // there, the write is a create and the creation chain judges it
+        // (MeshNodeCreationDataValidator); present, it is judged against the stored node. A read that
+        // answers nothing refuses as Unavailable.
+        if (context.Entity.As<MeshNode>(options) is not { Path.Length: > 0 } incoming
+            || !PolicyPlacementValidator.IsPolicyType(incoming.NodeType))
+            return Observable.Return(context.Entity is EntityDeltaUpdate
+                ? DataValidationResult.Invalid(
+                    LocalizationCatalog.Get("policy.placement.ownerNotLoaded", context.AccessContext?.Locale, hub.Address.Path),
+                    DataValidationRejectionReason.Unknown)
+                : DataValidationResult.Valid());
+        var storage = hub.ServiceProvider.GetService<IStorageAdapter>();
+        if (storage is null)
+            return Observable.Return(DataValidationResult.Valid());
+        return Observable.Defer(() => storage.Read(incoming.Path, options))
+            .Take(1)
+            .Select(stored => (Answered: true, Stored: stored))
+            .DefaultIfEmpty((Answered: false, Stored: null))
+            .SelectMany(read => !read.Answered
+                ? Observable.Return(DataValidationResult.Invalid(
+                    LocalizationCatalog.Get("policy.placement.ownerNotLoaded", context.AccessContext?.Locale, hub.Address.Path),
+                    DataValidationRejectionReason.Unknown))
+                : read.Stored is null
+                    ? Observable.Return(DataValidationResult.Valid())
+                    : Judge(context, read.Stored, options));
+    }
+
+    private IObservable<DataValidationResult> Judge(
+        DataValidationContext context, MeshNode live, System.Text.Json.JsonSerializerOptions options)
+    {
+        if (PolicyPlacementValidator.IsPolicyType(live.NodeType))
             return Observable.Return(DataValidationResult.Valid());
 
-        var options = hub.JsonSerializerOptions;
         var after = context.Entity switch
         {
             EntityDeltaUpdate delta when delta.Collection == nameof(MeshNode)

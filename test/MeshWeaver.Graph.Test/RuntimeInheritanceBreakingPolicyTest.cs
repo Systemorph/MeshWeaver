@@ -309,6 +309,112 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         self.Should().BeNull();
     }
 
+    /// <summary>
+    /// A merge patch is decided on the owner's turn, never after a read: a patch that turns a node into
+    /// a policy is refused even where the placement would be valid, so no later patch from the same
+    /// sender can overtake it. (A retype through UpdateNode or an upsert, which judge placement, stays
+    /// possible.)
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APatchIntoAPolicy_IsRefusedOnTheOwnersTurn_EvenAtAValidPlacement()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var area = await CreateMarkdown($"area-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var path = await CreateMarkdown($"{area[(TestPartition.Length + 1)..]}/_Policy", ct);
+
+        var failure = await Record.ExceptionAsync(() =>
+            Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Update(current => current with
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Content = new PartitionAccessPolicy { BreaksInheritance = true },
+                })
+                .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("a patch cannot be judged for placement without a read, so it is refused outright");
+        (await TypeOf(path, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>
+    /// The <c>EntityReference("MeshNode", …)</c> patch route reaches the same node through another
+    /// reducer, and must not skip the guard. The control proves the route itself lands a write.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APatchThroughAnEntityReference_IntoAPolicy_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var owner = new Address(path);
+
+        var control = await RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new EntityReference(nameof(MeshNode), path.Split('/')[^1]), new RawJson("{\"name\":\"renamed\"}")),
+                o => o.WithTarget(owner))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"control: {control.Message}");
+        await Mesh.GetWorkspace().GetMeshNodeStream(path)
+            .Where(n => n is { Name: "renamed" })
+            .Should().Within(TestTimeouts.Convergence).Emit("control: the entity-reference route lands a write", ct);
+
+        var failure = await Record.ExceptionAsync(() => RequestHub
+            .Observe<PatchDataResponse>(
+                new PatchDataRequest(new EntityReference(nameof(MeshNode), path.Split('/')[^1]),
+                    new RawJson("{\"nodeType\":\"PartitionAccessPolicy\"}")),
+                o => o.WithTarget(owner))
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct));
+
+        failure.Should().NotBeNull("the guard reads the patch at every depth for a reference it cannot map");
+        (await TypeOf(path, ct)).Should().Be("Markdown");
+    }
+
+    /// <summary>A cold owner is not permission: a patch naming the policy type is refused as not loaded.</summary>
+    [Fact]
+    public void APatchNamingThePolicyType_OnAnOwnerThatHasNotLoaded_IsNotLetThrough()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var patch = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"PartitionAccessPolicy\"}");
+        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, live: null, options)
+            .Should().Be(PolicyPlacementGuard.PatchRetype.OwnerNotLoaded);
+
+        var legacy = AssignmentNodeFactory.Policy("TestData/_Storage", new PartitionAccessPolicy());
+        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, live: legacy, options)
+            .Should().Be(PolicyPlacementGuard.PatchRetype.None, "a policy that already is one stays editable");
+        PolicyPlacementGuard.PatchVerdict(System.Text.Json.Nodes.JsonNode.Parse("{\"name\":\"x\"}"), true, null, options)
+            .Should().Be(PolicyPlacementGuard.PatchRetype.None, "a patch that names no type is not judged");
+    }
+
+    /// <summary>
+    /// An incomplete answer, or a record that does not read, is not "no record": neither establishes
+    /// the standard layout.
+    /// </summary>
+    [Fact]
+    public void AnIncompleteOrUnreadableLayoutRead_IsNotEstablished()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        PolicyPlacementValidator.ClassifyLayout(
+                new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SnapshotIncomplete = true },
+                "LedgerSpace", options)
+            .Established.Should().BeFalse("a dropped read is not confirmed absence");
+        PolicyPlacementValidator.ClassifyLayout(
+                new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial, SilentProviders = ["pg"] },
+                "LedgerSpace", options)
+            .Established.Should().BeFalse("a silent provider is not confirmed absence");
+        PolicyPlacementValidator.ClassifyLayout(
+                new QueryResultChange<MeshNode>
+                {
+                    ChangeType = QueryChangeType.Initial,
+                    Items = [new MeshNode("LedgerSpace", "Admin/Partition") { NodeType = "Partition", Content = "not a definition" }],
+                },
+                "LedgerSpace", options)
+            .Established.Should().BeFalse("a record that does not read is not confirmed absence");
+        PolicyPlacementValidator.ClassifyLayout(
+                new QueryResultChange<MeshNode> { ChangeType = QueryChangeType.Initial },
+                "LedgerSpace", options)
+            .Should().Be((true, (PartitionDefinition?)null), "control: a complete answer without a record is the standard layout");
+    }
+
     /// <summary>The fold reads a policy only under the id <c>_Policy</c>; any other id is refused.</summary>
     [Fact]
     public void APolicyUnderAnotherId_IsRefused()
