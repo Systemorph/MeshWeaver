@@ -112,6 +112,27 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
         reader.Should().Contain(UntypedPath, "the reader may read the partition — the control");
     }
 
+    /// <summary>
+    /// <c>WhatsNew</c> is an untyped registration WITHOUT a hub configuration, so it is not
+    /// vocabulary and the row filter decides it — and release notes are for everyone. Its read access
+    /// is DECLARED (a <c>PublicRead</c> policy on its partition, as <c>Doc</c> and <c>_Setting</c>
+    /// declare theirs): a viewer holding no grant anywhere still finds it, in the same request where
+    /// the untyped private node is still withheld from them — the policy opens one partition, not the
+    /// filter.
+    /// </summary>
+    [Fact]
+    public async Task WhatsNew_IsReadableByEveryone_WhilePrivateUntypedContentStaysHidden()
+    {
+        var whatsNew = await QueryAs(Stranger, "path:" + MeshWeaver.Graph.Configuration.WhatsNewNodeType.NodeType);
+        var privateRows = await QueryAs(Stranger, "path:" + UntypedPath);
+        Output.WriteLine($"stranger whatsnew: {string.Join(", ", whatsNew)} | private: {string.Join(", ", privateRows)}");
+
+        whatsNew.Should().Contain(MeshWeaver.Graph.Configuration.WhatsNewNodeType.NodeType,
+            "WhatsNew declares PublicRead on its partition — release notes are readable by every viewer");
+        privateRows.Should().NotContain(UntypedPath,
+            "the WhatsNew policy opens its own partition only; untyped private content is still row-filtered");
+    }
+
     /// <summary>The paths the declared-node provider suggests to <paramref name="viewer"/> under the partition.</summary>
     private Task<IReadOnlyList<string>> AutocompleteAs(string viewer)
     {
