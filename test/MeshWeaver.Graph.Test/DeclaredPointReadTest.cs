@@ -1036,10 +1036,17 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
             AssignmentNodeFactory.UserRole(Erin.ObjectId, "Admin", PermissionEvaluator.AdminScope),
             // The ops GROUP is a platform admin; gina is admin only through her membership.
             AssignmentNodeFactory.UserRole(Ops, "Admin", PermissionEvaluator.AdminScope),
+            // The storage partition: `sb/_Storage` breaks inheritance, so a binding's own fold never
+            // carries the root's grants — only the root fold does.
+            new MeshNode("sb") { NodeType = "Markdown", Name = "sb" },
+            AssignmentNodeFactory.Policy(MeshWeaver.Mesh.Storage.StorageBindingPaths.NamespaceOf("sb"), new PartitionAccessPolicy { BreaksInheritance = true }),
             // A satellite type: Read is Read on the MainNode, decided through the permission fold.
             new MeshNode("Sat", "Kiosk") { NodeType = "NodeType", Name = SatType, Content = new NodeTypeDefinition() })
         .AddSpaceType()
         .ConfigureServices(services => services
+            .AddSingleton<MeshWeaver.Mesh.Storage.IInstanceStore>(sp => new MeshWeaver.Graph.Storage.DirectoryInstanceStore(
+                StoreId, "Test files", StoreRoot(), [MeshWeaver.Mesh.Storage.StoragePurpose.DocParts],
+                sp.GetRequiredService<MeshWeaver.Mesh.Threading.IoPoolRegistry>()))
             .AddSingleton(sp => new LossyFeed(sp.GetRequiredService<MeshWeaver.Hosting.InProcessMeshChangeFeed>()))
             .AddSingleton<IMeshInvalidationFeed>(sp => sp.GetRequiredService<LossyFeed>())
             .AddSingleton<INodeTypeAccessRule>(sp => new OneVerdict(
@@ -1077,6 +1084,25 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
 
         public IObservable<ChangeFeedGap> Gaps => inner.Gaps.Merge(gaps);
     }
+
+    private const string StoreId = "files";
+    private readonly string storeRoot = Path.Combine(Path.GetTempPath(), "mw-pointread-" + Guid.NewGuid().ToString("N")[..8]);
+
+    private string StoreRoot()
+    {
+        Directory.CreateDirectory(Path.Combine(storeRoot, "sb"));
+        return storeRoot;
+    }
+
+    public override async ValueTask DisposeAsync()
+    {
+        await base.DisposeAsync();
+        try { Directory.Delete(storeRoot, recursive: true); }
+        catch (IOException) { }
+    }
+
+    private static readonly AccessContext Jill = new() { ObjectId = "jill", Name = "jill" };
+    private static readonly AccessContext Kate = new() { ObjectId = "kate", Name = "kate" };
 
     private LossyFeed Feed => Mesh.ServiceProvider.GetRequiredService<LossyFeed>();
     private AccessService Access => Mesh.ServiceProvider.GetRequiredService<AccessService>();
@@ -1210,6 +1236,112 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
     }
 
     /// <summary>
+    /// 🚨 Thread 4334180374: the NO-RULE branch (a plain Markdown node) shares the input set. jill reads
+    /// it only through a custom role; the role's commit is lost, the role then loses Read — and the
+    /// same subscription SETTLES on a definitive denial once the role catalog converges.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ANoRuleNode_ReadThroughACustomRole_EndsWhenTheRoleLosesRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (page, role) = await NoRulePageReadThroughARole("nr1", "Look1", ct);
+        var (open, tri, connections) = await OpenGranted(page, Jill, ct);
+        using var _ = connections;
+
+        Feed.Drop(role);
+        await Access.RunAsSystem(() => Mesh.GetMeshNodeStream(role).Update(node => node with
+            {
+                Content = node.ContentAs<Role>(Mesh.JsonSerializerOptions)! with { Permissions = Permission.None },
+            }))
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit("the role loses Read — acknowledged", cancellationToken: ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "a no-rule node's read SETTLES on a definitive denial when the role loses Read", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
+    }
+
+    /// <summary>🚨 Thread 4334180374, the deletion form: the custom role is deleted, typeless and outside the node's scopes.</summary>
+    [Fact(Timeout = 60000)]
+    public async Task ANoRuleNode_ReadThroughACustomRole_EndsWhenTheRoleIsDeleted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (page, role) = await NoRulePageReadThroughARole("nr2", "Look2", ct);
+        var (open, tri, connections) = await OpenGranted(page, Jill, ct);
+        using var _ = connections;
+
+        Feed.StripType(role);
+        await Delete(role, ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "a no-rule node's read SETTLES on a definitive denial when the role is deleted", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
+    }
+
+    /// <summary>
+    /// 🚨 Thread 4334180426: <c>StorageBindingAccessRule</c> decides Read from Update on the PARTITION
+    /// ROOT. The binding's MainNode is itself and <c>sb/_Storage/_Policy</c> breaks inheritance, so the
+    /// binding's own fold never moves. kate's root Editor grant is revoked with its commit lost: only
+    /// the root fold converging can say so — and the same subscription SETTLES on a definitive denial.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task AStorageBindingRead_EndsWhenTheRootGrantIsRevoked_WithInheritanceBroken()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var grant = (await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(Kate.ObjectId, "Editor", "sb")))
+            .Should().Emit(cancellationToken: ct))!.Path;
+        var bindingPath = $"{MeshWeaver.Mesh.Storage.StorageBindingPaths.NamespaceOf("sb")}/files";
+        var binding = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("files", MeshWeaver.Mesh.Storage.StorageBindingPaths.NamespaceOf("sb"))
+        {
+            NodeType = MeshWeaver.Mesh.Storage.StorageBindingPaths.NodeType,
+            Name = "files",
+            MainNode = bindingPath,
+            Content = new MeshWeaver.Mesh.Storage.StorageBinding { Purpose = MeshWeaver.Mesh.Storage.StoragePurpose.DocParts, StoreId = StoreId, Container = "sb" },
+        })).Should().Emit(cancellationToken: ct))!;
+        Assert.Equal(bindingPath, binding.MainNode);
+        await Mesh.GetEffectivePermissions(bindingPath, Kate.ObjectId).Should().Within(TimeSpan.FromSeconds(20))
+            .Match(p => !p.HasFlag(Permission.Read), "PRECONDITION: inheritance is broken — the binding's own fold grants kate nothing", cancellationToken: ct);
+
+        var (open, tri, connections) = await OpenGranted(bindingPath, Kate, ct);
+        using var _ = connections;
+
+        Feed.Drop(grant);
+        await Delete(grant, ct);
+
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(PointReadProbe.IsDefinitiveDenial,
+            "the root fold's convergence re-decides the binding read — a SETTLED definitive denial", cancellationToken: ct);
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => !v, "the page's verdict is withdrawn", cancellationToken: ct);
+    }
+
+    /// <summary>A Markdown page in <paramref name="partition"/> that jill reads only through custom role <paramref name="roleId"/> (Read), defined OUTSIDE the partition.</summary>
+    private async Task<(string page, string role)> NoRulePageReadThroughARole(string partition, string roleId, CancellationToken ct)
+    {
+        await SeedTopLevel(new MeshNode(partition) { NodeType = "Markdown", Name = partition });
+        await SeedTopLevel(new MeshNode($"{partition}roles") { NodeType = "Markdown", Name = $"{partition}roles" });
+        var role = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode(roleId, $"{partition}roles")
+        {
+            NodeType = SecurityQueries.RoleNodeType,
+            Name = roleId,
+            Content = new Role { Id = roleId, Permissions = Permission.Read },
+        })).Should().Emit(cancellationToken: ct))!.Path;
+        var page = (await Access.RunAsSystem(() => NodeFactory.CreateNode(new MeshNode("page", partition) { NodeType = "Markdown", Name = "page" }))
+            .Should().Emit(cancellationToken: ct))!.Path;
+        await Access.RunAsSystem(() => NodeFactory.CreateNode(AssignmentNodeFactory.UserRole(Jill.ObjectId, roleId, partition)))
+            .Should().Emit(cancellationToken: ct);
+        return (page, role);
+    }
+
+    private async Task<(IConnectableObservable<bool> open, IConnectableObservable<PermissionCheckOutcome> tri, IDisposable connections)> OpenGranted(
+        string path, AccessContext viewer, CancellationToken ct)
+    {
+        var open = Open(Mesh, path, viewer);
+        var tri = PointReadProbe.Open(Mesh, path, viewer);
+        var connections = new System.Reactive.Disposables.CompositeDisposable(open.Connect(), tri.Connect());
+        await open.Should().Within(TimeSpan.FromSeconds(20)).Match(v => v, "POSITIVE CONTROL: the viewer reads the node", cancellationToken: ct);
+        await tri.Should().Within(TimeSpan.FromSeconds(20)).Match(o => o.IsGranted, "POSITIVE CONTROL: the tri-state read grants first", cancellationToken: ct);
+        return (open, tri, connections);
+    }
+
+    /// <summary>
     /// 🚨 Thread 4333874386: a GAP declares that commits were lost. The one-way sync's deletion is
     /// lost here (the open verdict stays granted — the loss is real), and the gap withdraws it.
     /// </summary>
@@ -1296,6 +1428,64 @@ public class DeclaredPointReadFeedTest(ITestOutputHelper output) : MonolithMeshT
             "an ordinary content change");
         Assert.False(DeclaredPointRead.AffectsRead(new MeshChangeEvent("other", "page", "other/page", MeshChangeKind.Updated, null, 2, DateTimeOffset.UtcNow), scopes),
             "a typeless UPDATE is not a deletion");
+    }
+}
+
+/// <summary>
+/// 🚨 The contract of <see cref="DeclaredPointRead.ObserveStandardRead"/>: ANY input a Read decision
+/// reads must be one of its signals. Every <see cref="INodeTypeAccessRule"/> in the platform assemblies
+/// this suite loads is listed here WITH the inputs its Read reads, each checked against the input set.
+/// A NEW rule fails this test until someone reads it and adds its line; a rule that left fails it too.
+/// It cannot see what a rule reads (that is the review this forces), and it sees only the assemblies in
+/// this suite's output — rules in MeshWeaver.Plugins are outside it.
+/// </summary>
+public class ReadInputSetGuardTest
+{
+    /// <summary>Rule type → what its Read consults. Every entry must be covered by the input set in AccessControl.md.</summary>
+    private static readonly ImmutableDictionary<string, string> Reviewed = new Dictionary<string, string>
+    {
+        ["MeshWeaver.Graph.Security.SatelliteAccessRule"] = "fold on MainNode (or the node itself)",
+        ["MeshWeaver.Graph.Storage.StorageBindingAccessRule"] = "fold on the partition ROOT (Update)",
+        ["MeshWeaver.Graph.SpaceNodeType+SpaceAccessRule"] = "fold on the node; Admin fold (IsGlobalAdmin); {space}/_GitSync content (feed commit)",
+        ["MeshWeaver.GitSync.GitHubSyncConfigAccessRule"] = "fold on the node; Admin fold (IsGlobalAdmin)",
+        ["MeshWeaver.Graph.Configuration.UserNodeType+UserAccessRule"] = "path shape; fold on the node",
+        ["MeshWeaver.Graph.Configuration.PartitionNodeType+PartitionAccessRule"] = "fold on the node",
+        ["MeshWeaver.Graph.Configuration.VUserNodeType+VUserAccessRule"] = "caller address only",
+        ["MeshWeaver.Graph.Configuration.StepUpNodeTypes+SystemOnlyAccessRule"] = "caller identity only",
+        ["MeshWeaver.Graph.Configuration.NodeAccessRuleSet+FunctionalAccessRule"] = "synchronous predicates over the context only",
+        ["MeshWeaver.Mesh.Services.NodeTypeAccessRuleSet+DenyingRule"] = "refuses — reads nothing",
+        ["MeshWeaver.Mesh.Services.NodeTypeAccessRuleSet+DenyingPermissionRule"] = "refuses — reads nothing",
+        ["MeshWeaver.Mesh.Services.NodeTypeAccessRuleSet+LeasedAccessRule"] = "forwards to a module rule (one verdict)",
+        ["MeshWeaver.Mesh.Services.NodeTypeAccessRuleSet+LeasedPermissionRule"] = "forwards to a module rule (one verdict)",
+    }.ToImmutableDictionary();
+
+    [Fact]
+    public void EveryPlatformAccessRule_IsReviewedAgainstTheInputSet()
+    {
+        var assemblies = new[]
+        {
+            typeof(INodeTypeAccessRule).Assembly,
+            typeof(MeshWeaver.Graph.Security.SatelliteAccessRule).Assembly,
+            typeof(MeshWeaver.GitSync.GitHubSyncConfigAccessRule).Assembly,
+        };
+        var found = assemblies
+            .SelectMany(a => a.GetTypes())
+            .Where(t => !t.IsAbstract && !t.IsInterface && typeof(INodeTypeAccessRule).IsAssignableFrom(t))
+            .Select(t => t.FullName!)
+            .ToImmutableSortedSet();
+        var unreviewed = found.Except(Reviewed.Keys);
+        Assert.True(unreviewed.IsEmpty,
+            "an access rule nobody has checked against the live read's input set — read what its Read consults, make sure "
+            + "every input is a signal of DeclaredPointRead.ObserveStandardRead, then list it here: " + string.Join(", ", unreviewed));
+        var gone = Reviewed.Keys.Except(found).ToArray();
+        Assert.True(gone.Length == 0, "a reviewed rule that no longer exists — remove its line: " + string.Join(", ", gone));
+    }
+
+    [Fact]
+    public void TheFoldScopes_CoverNodeMainNodeTheirRootsAndAdmin()
+    {
+        var scopes = DeclaredPointRead.FoldScopes(new MeshNode("files", "sb/_Storage") { MainNode = "acme/doc" });
+        Assert.Equal(["sb/_Storage/files", "acme/doc", "sb", "acme", PermissionEvaluator.AdminScope], scopes);
     }
 }
 

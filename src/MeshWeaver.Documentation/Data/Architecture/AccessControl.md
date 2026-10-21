@@ -2104,35 +2104,44 @@ stays live in every input:
   stored snapshot may trail a write the owner has acknowledged and never re-emits. Each revision
   the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
   or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
-- **A rule is re-asked.** Its contract is one verdict: the lease takes the first, and so does
-  `SpaceAccessRule`. So the path asks it again on every revision and whenever the viewer's live
-  fold on the node, on its `MainNode` or on `Admin` emits, including the fold's first value. A
-  revocation committed while the watches were being set up is already in that first value, and no
-  later commit reports it. The `Admin` fold is watched because a rule may read the platform-admin
-  predicate (`SpaceAccessRule`), and that fold can converge after the commit that changed it was
-  signalled. The rule is also asked again when the `IMeshInvalidationFeed` reports:
-  - a grant (`{scope}/_Access/…`), a partition policy (`{scope}/_Policy`) or a sync config
-    (`{scope}/_GitSync`) on an ancestor-or-self of the node or its `MainNode`, on the root, or on
-    `Admin`. These are matched by namespace and id, so a deletion that carries no node type still
-    counts. A one-way `_GitSync` is what admits a platform admin to a system-owned Space.
-  - any group membership or role definition;
-  - a deletion whose event carries no node type, scoped by its PATH. The delete pipeline publishes
-    every deletion without its type, so such an event counts only when it removed the node or one
-    of its scopes, or a group membership (`{group}/{member}_Membership`). A typeless role deletion
-    cannot be placed by path, because a Role may live anywhere. The viewer's live folds (node,
-    `MainNode`, `Admin`) carry what it does to this decision;
-  - every declared gap (`IMeshInvalidationFeed.Gaps`), because commits lost in a gap are never
-    replayed.
+- **One input set, both branches.** The evaluation is the type's Read rule when one governs,
+  otherwise the permission fold. Either way it is one verdict, asked again on every signal of one
+  shared input set. A rule's contract is one verdict (the lease takes the first, and so does
+  `SpaceAccessRule`). The fold resolves a custom role from one value of the role catalog and does
+  not re-emit when a role changes, so keeping an evaluation subscribed would not keep it current.
+  Liveness comes from the signals alone.
 
-  The custom-role catalog's own emissions are a signal too. The fold resolves a role from one value
-  of that catalog per evaluation, and it does not re-emit when a role definition changes. A Role
-  commit's re-check can therefore read the old role, and a role deleted outside the node's scopes
-  (with a typeless event) matches no feed filter. The catalog converging afterwards re-decides
-  both: a changed definition and a deletion. Its first value establishes the verdict and withdraws
-  nothing.
+**The contract: any input the evaluation reads must be in this set.** The set is derived from what
+`PermissionEvaluator` and the platform's access rules actually consult:
 
-  A revoked grant therefore withdraws a rule's earlier grant on the same subscription, with no
-  timer or poll.
+| Input the evaluation reads | Who reads it | Signal |
+|---|---|---|
+| Grants and policies on the node's scope chain; group memberships; type gates; the partition's `_GitSync` (content ownership) | the fold (`ObserveEffectiveAssignments`, `ObserveScopePolicies`, `ObserveAllMembershipNodes`, `ObserveGatedNodes`, `ObserveRepositoryOwnedContent`) | the viewer's live fold on the **node** |
+| The fold on the `MainNode` | `SatelliteAccessRule` | the viewer's live fold on the **MainNode** |
+| Update on the **partition root**, which a descendant `_Policy` can cut off from the node's own fold | `StorageBindingAccessRule` | the viewer's live fold on the **root** of the node and of its MainNode |
+| The platform-admin predicate (`IsGlobalAdmin`) | `SpaceAccessRule`, `GitHubSyncConfigAccessRule` | the viewer's live fold on **`Admin`** |
+| Custom role definitions | the fold (`GetRole`, one catalog value per evaluation) | the **role catalog's** own emissions, changes and deletions alike |
+| `{space}/_GitSync` content read from storage | `SpaceAccessRule` | feed commits on the node's scopes |
+| Anything committed elsewhere and lost | — | feed **gaps** |
+
+Feed commits count when they can reach the node:
+- grants (`{scope}/_Access/…`), policies (`{scope}/_Policy`) and sync configs (`{scope}/_GitSync`)
+  on an ancestor-or-self of the node or its `MainNode`, on the root, or on `Admin`, matched by
+  namespace and id so a typeless deletion still counts;
+- any typed group membership or role;
+- a typeless deletion only when its path places it: the node, one of its scopes, or a membership
+  (`{group}/{member}_Membership`). A typeless role deletion is carried by the role catalog.
+
+A fold's or the catalog's first value establishes the verdict; every later signal withdraws it.
+
+**Rules that only test the caller or the context read nothing from the mesh**: `VUserAccessRule`,
+`SystemOnlyAccessRule`, the functional rule sets, and the denying placeholders.
+`ReadInputSetGuardTest` lists every `INodeTypeAccessRule` in the core assemblies the suite loads,
+with what its Read consults. A new rule fails the test until someone checks its inputs against this
+table and adds its line. The guard cannot see what a rule reads, so it forces that review instead.
+Rules in MeshWeaver.Plugins are outside it: `ThreadNodeType`, `ThreadMessageNodeType`,
+`TokenUsage`, `PortalNodeType`, `DocumentPartNodeTypes`, `SessionPresenceNodeType` and
+`DispatchSwitchAccessRule`. Each of them must also read only inputs in this table.
 - **Fail closed while pending.** Every signal after the verdict is established withdraws it
   first. The verdict becomes undetermined ("re-check pending", refused), and only that re-check's
   own answer can grant again. So a stalled re-check stays refused, and a stream of signals cannot
@@ -2152,10 +2161,15 @@ stays live in every input:
   as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
   shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs
   inside the gate that signalled it, and no thread is held per open subscription.
-- **Fan-out cost.** Each open subscription holds up to three folds (node, `MainNode`, `Admin`),
-  one feed handler and one gap subscription. On every commit anywhere in the mesh, that handler
-  runs a string match against the node's scope set (a few entries). Only a matching commit costs
-  a re-evaluation: one rule call, and an in-flight evaluation is superseded by the next (`Switch`).
+- **Fan-out cost.** Each open subscription holds the following, whether or not a rule governs the
+  node:
+  - up to five folds (node, `MainNode`, the root of each, `Admin`, deduplicated);
+  - one subscription to the process-wide cached role catalog;
+  - one feed handler and one gap subscription.
+
+  On every commit anywhere in the mesh, the handler runs a string match against the node's scope
+  set (a few entries). Only a matching signal costs a re-evaluation: one rule call or one fold read.
+  An in-flight evaluation is superseded by the next (`Switch`).
 - **Every evaluation is re-established as the viewer** at the moment it subscribes. A
   re-evaluation triggered on another thread never inherits that thread's context.
 

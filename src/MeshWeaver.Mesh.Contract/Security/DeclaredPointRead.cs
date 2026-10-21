@@ -208,12 +208,16 @@ public static class DeclaredPointRead
         });
     }
 
-    /// <summary>The standard leg for ONE owner revision: the governing rule, re-asked live, or the live fold.</summary>
+    /// <summary>
+    /// The standard leg for ONE owner revision: the governing rule, or — when no rule governs — the
+    /// permission fold, each re-decided as ONE verdict on every signal of the ONE input set
+    /// (<see cref="ReadInputsChanged"/>). Both branches share the set, the pending withdrawal
+    /// (<see cref="SwitchFailClosed"/>), the viewer's context and the per-evaluation budget.
+    /// </summary>
     private static IObservable<PermissionCheckOutcome> StandardRead(
         IMessageHub hub, AccessService? access, string path, MeshNode node, AccessContext viewer, string userId, ILogger? logger)
     {
-        if (NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read) is not { } rule)
-            return Classified(access.RunAs(viewer, () => hub.CheckPermission(path, userId, Permission.Read)), path, userId, logger);
+        var rule = NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read);
         var context = new NodeValidationContext
         {
             Operation = NodeOperation.Read,
@@ -223,42 +227,50 @@ public static class DeclaredPointRead
         };
         // 🚨 Each evaluation is ONE verdict, bounded by the same budget the RLS validator holds a
         // check to: a re-evaluation that never answers times out INTO Classified and is undetermined
-        // — refused — instead of leaving the previous grant in force. The idle live subscription
-        // itself is never timed out; only each evaluation is.
+        // — refused. The idle live subscription itself is never timed out; only each evaluation is.
+        // Liveness comes from the signals, never from an evaluation staying subscribed: the fold
+        // resolves a custom role from ONE value of the role catalog, so a fold kept open would keep
+        // that value.
         var budget = (hub.ServiceProvider.GetService<MeshOperationOptions>() ?? new MeshOperationOptions())
             .PermissionEstablishmentBudget;
-        return OffTheGate(RuleInputsChanged(hub, access, node, viewer, userId)
+        IObservable<bool> Evaluate() => rule is null
+            ? hub.CheckPermission(path, userId, Permission.Read)
+            : rule.HasAccess(context, userId);
+        return OffTheGate(ReadInputsChanged(hub, access, node, viewer, userId)
                 .StartWith(false))
             .Select(withdraw => (evaluation: Classified(
-                access.RunAs(viewer, () => Observable.Defer(() => rule.HasAccess(context, userId)).Take(1).Timeout(budget)),
+                access.RunAs(viewer, () => Observable.Defer(Evaluate).Take(1).Timeout(budget)),
                 path, userId, logger), withdraw))
             .SwitchFailClosed(path);
     }
 
     /// <summary>
-    /// Every input a Read rule's verdict can rest on, as a signal: the viewer's live permission fold
-    /// on the node and on its <see cref="MeshNode.MainNode"/> (each subscribed AS the viewer), and every
-    /// access-input commit the mesh's invalidation feed reports that can reach THIS node
-    /// (<see cref="AffectsRead"/>). A fold that faults faults this signal, which the caller reports as
-    /// undetermined — never a silent stop.
-    ///
-    /// <para>🚨 A fold's INITIAL value is a signal too, never skipped: a revocation committed while
-    /// these watches were being established is already in that first value, and no commit will
-    /// arrive for it later.</para>
+    /// 🚨 <b>THE input set of a Read decision — the contract: any input the evaluation reads must be
+    /// a signal here.</b> Derived from what the evaluation actually consults:
+    /// <list type="bullet">
+    ///   <item><description>the permission fold on the node, on its <see cref="MeshNode.MainNode"/>
+    ///     (<c>SatelliteAccessRule</c>), on the PARTITION ROOT of each (<c>StorageBindingAccessRule</c>
+    ///     reads Update on the root; a descendant's <c>_Policy</c> can break inheritance so the node's
+    ///     own fold never moves) and on <c>Admin</c> (<c>IsGlobalAdmin</c>: <c>SpaceAccessRule</c>,
+    ///     <c>GitHubSyncConfigAccessRule</c>) — each subscribed AS the viewer;</description></item>
+    ///   <item><description>the custom-role catalog's own emissions — the fold resolves a role from ONE
+    ///     catalog value and does not re-emit on a role change or deletion;</description></item>
+    ///   <item><description>access-input commits on the invalidation feed that can reach this node
+    ///     (<see cref="AffectsRead"/>: grants, policies and sync configs on its scopes, memberships,
+    ///     roles, path-placed typeless deletions) — the content a rule reads from storage
+    ///     (<c>{space}/_GitSync</c>) is among them;</description></item>
+    ///   <item><description>every declared feed gap.</description></item>
+    /// </list>
+    /// A fold's or the catalog's INITIAL value establishes the verdict (no withdrawal); every later
+    /// signal withdraws it until its re-check answers. A fold that faults faults this signal, which
+    /// the caller reports as undetermined — never a silent stop.
     /// </summary>
-    private static IObservable<bool> RuleInputsChanged(
+    private static IObservable<bool> ReadInputsChanged(
         IMessageHub hub, AccessService? access, MeshNode node, AccessContext viewer, string userId)
     {
-        // The Admin fold too: a rule may read the platform-admin predicate (SpaceAccessRule's
-        // IsGlobalAdmin), and that fold can converge AFTER the commit that changed it was signalled.
-        var folds = new[] { node.Path, node.MainNode, PermissionEvaluator.AdminScope }
-            .Where(p => !string.IsNullOrEmpty(p))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p!, userId))
+        var folds = FoldScopes(node)
+            .Select(p => access.RunAs(viewer, () => hub.GetEffectivePermissions(p, userId))
                 .DistinctUntilChanged()
-                // The INITIAL value is a re-check (a revocation during set-up is already in it) but
-                // not a withdrawal: it belongs to establishing the verdict, not to a later change, so
-                // opening a page does not blink. Every later value withdraws.
                 .Select((_, index) => index > 0));
         var scopes = ReadScopes(node);
         var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
@@ -274,14 +286,24 @@ public static class DeclaredPointRead
         var gaps = feed is null
             ? Observable.Never<bool>()
             : feed.Gaps.Select(_ => true);
-        // The custom-role catalog's own emissions: the fold resolves a role from ONE value of that
-        // catalog per evaluation and does not re-emit when a definition changes, so a Role commit's
-        // re-check can read the old role. The catalog converging afterwards is the signal that
-        // re-decides it. Its first value establishes (no withdrawal), like a fold's.
         var roles = PermissionEvaluator.ObserveRoleCatalog(hub)
             .Select((_, index) => index > 0);
         return folds.Append(commits).Append(gaps).Append(roles).Merge();
     }
+
+    /// <summary>
+    /// The paths whose live permission fold is part of a Read decision about <paramref name="node"/>:
+    /// the node, its <see cref="MeshNode.MainNode"/>, the partition root of each, and <c>Admin</c>.
+    /// </summary>
+    internal static IReadOnlyList<string> FoldScopes(MeshNode node)
+        => new[] { node.Path, node.MainNode, RootOf(node.Path), RootOf(node.MainNode), PermissionEvaluator.AdminScope }
+            .Where(p => !string.IsNullOrEmpty(p))
+            .Select(p => p!.Trim('/'))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static string? RootOf(string? path)
+        => string.IsNullOrEmpty(path) ? null : path.Trim('/').Split('/', 2)[0];
 
     /// <summary>
     /// 🚨 <b>Fail closed while pending.</b> Switches to each new evaluation, and when the signal that
