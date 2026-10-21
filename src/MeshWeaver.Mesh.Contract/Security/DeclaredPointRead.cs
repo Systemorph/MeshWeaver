@@ -93,22 +93,89 @@ public static class DeclaredPointRead
     }
 
     /// <summary>
-    /// The live Read verdict of a POINT read of <paramref name="path"/> for <paramref name="viewer"/>:
-    /// the standard permission check, or — when that denies — the declared point read. For a page
-    /// that must follow whether its viewer may still read the node it shows. Never use it to filter
-    /// a listing: a listing is not a point read.
+    /// The live Read verdict of a POINT read of <paramref name="path"/> for <paramref name="viewer"/>,
+    /// decided the way the RLS validator decides a point read: the node type's own
+    /// <see cref="INodeTypeAccessRule"/> for Read when one governs, otherwise the permission fold —
+    /// both evaluated AS <paramref name="viewer"/> — and, only when that is a DEFINITIVE denial, the
+    /// declared point read. For a page that must follow whether its viewer may still read the node
+    /// it shows. Never use it to filter a listing: a listing is not a point read.
+    ///
+    /// <para>🚨 <b>The standard leg runs under the viewer's context, never the ambient one</b>
+    /// (MeshWeaver#4306, follow-up 3). The fold reads the caller's flags off the AMBIENT context
+    /// (the API-token clamp reads <see cref="AccessContext.IsApiToken"/>), so a check composed under
+    /// whatever context happened to be ambient answered a Bearer viewer as if it were a browser — and
+    /// a browser viewer as if it were a token when a token was ambient.</para>
+    ///
+    /// <para>🚨 <b>The type's rule is consulted, as at every other point-read seam</b> (follow-up 4).
+    /// A rule that DENIES outranks a grant the fold would give; a rule that GRANTS admits; a rule
+    /// that faults or answers nothing is UNDETERMINED, which fails closed and is never re-decided
+    /// through the declaration — exactly as the RLS validator treats it.</para>
     /// </summary>
     /// <param name="hub">The hub asking.</param>
     /// <param name="path">The exact path being read.</param>
-    /// <param name="viewer">The viewer's context as the render turn resolved it — its virtual and API-token flags are kept.</param>
+    /// <param name="viewer">The viewer's context as the render turn resolved it — its virtual and API-token flags are kept; null is the anonymous viewer.</param>
     public static IObservable<bool> ObservePointRead(IMessageHub hub, string path, AccessContext? viewer)
     {
         ArgumentNullException.ThrowIfNull(hub);
-        var userId = SubjectOf(viewer);
-        return hub.CheckPermission(path, userId, Permission.Read)
-            .Select(granted => granted ? Observable.Return(true) : Admits(hub, path, viewer))
-            .Switch()
-            .DistinctUntilChanged();
+        return Observable.Defer(() =>
+        {
+            var userId = SubjectOf(viewer);
+            // The instance-level anonymous switch outranks every rule, as at the RLS validator.
+            if (string.IsNullOrEmpty(path) || AnonymousAccess.Refuses(hub.ServiceProvider, userId, viewer))
+                return Observable.Return(false);
+            var identity = viewer ?? new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous };
+            var access = hub.ServiceProvider.GetService<AccessService>();
+            var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(DeclaredPointRead));
+            return hub.ReadStoredNode(path)
+                .Take(1)
+                .DefaultIfEmpty(null)
+                .Select(node => access.RunAs(identity, () => StandardRead(hub, path, node, identity, userId, logger)))
+                .Switch()
+                .Select(outcome => outcome.IsGranted
+                    ? Observable.Return(true)
+                    // "We could not check" is never laundered into a declaration question.
+                    : outcome.IsUndetermined
+                        ? Observable.Return(false)
+                        : Admits(hub, path, viewer))
+                .Switch()
+                .DistinctUntilChanged()
+                .Catch((Exception ex) =>
+                {
+                    logger?.LogWarning(ex, "The point-read verdict of {Path} for {User} could not be decided — refused", path, userId);
+                    return Observable.Return(false);
+                });
+        });
+    }
+
+    /// <summary>
+    /// The standard leg of a point read, live: the type's Read rule when one governs the node,
+    /// otherwise the permission fold — with all three terminals represented (a fault or an empty
+    /// completion is <see cref="PermissionCheckOutcome.Undetermined(string)"/>, never a verdict).
+    /// Composed by the caller under the viewer's context.
+    /// </summary>
+    private static IObservable<PermissionCheckOutcome> StandardRead(
+        IMessageHub hub, string path, MeshNode? node, AccessContext viewer, string userId, ILogger? logger)
+    {
+        var rule = node is null ? null : NodeTypeAccessRuleGate.Find(hub, node.NodeType, NodeOperation.Read);
+        var verdicts = rule is null
+            ? hub.CheckPermission(path, userId, Permission.Read)
+            : Observable.Defer(() => rule.HasAccess(new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node!,
+                AccessContext = viewer,
+                IsPointRead = true,
+            }, userId));
+        return verdicts
+            .Select(PermissionCheckOutcome.FromVerdict)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "The Read check of {Path} for {User} could not reach a verdict — undetermined, refused", path, userId);
+                return Observable.Return(PermissionCheckOutcome.Undetermined($"the Read check on '{path}' failed ({ex.GetType().Name})"));
+            })
+            .Select(outcome => (PermissionCheckOutcome?)outcome)
+            .DefaultIfEmpty()
+            .Select(outcome => outcome ?? PermissionCheckOutcome.Undetermined($"the Read check on '{path}' completed without a verdict"));
     }
 
     /// <summary>

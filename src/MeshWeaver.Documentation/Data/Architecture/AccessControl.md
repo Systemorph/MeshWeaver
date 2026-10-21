@@ -2082,8 +2082,22 @@ declaration). Later revisions are therefore never delivered to a caller who lost
 `IsPointRead` defaults to false. A seam that does not say it serves a point read is treated as a
 listing, which is the closed direction. A page that must follow whether its viewer may still read
 the node it shows uses `DeclaredPointRead.ObservePointRead(hub, path, viewer)`, with the viewer's
-whole context so a virtual visitor or an API token keeps its flags: the standard check, or the
-declaration when that denies. It is never used to filter a listing.
+whole context so a virtual visitor or an API token keeps its flags. It is never used to filter a
+listing. It decides the way `RlsNodeValidator` decides a point read, live:
+
+1. `Access:DenyAnonymous` refuses a logged-out viewer before anything else.
+2. The node type's `INodeTypeAccessRule` for Read decides when one governs: a denying rule
+   outranks a grant the fold would give, and a granting rule admits. Otherwise the permission fold
+   decides. Either leg is composed **under the viewer's context**, never the ambient one, because
+   the fold reads the caller's flags off the ambient context. Composed under the ambient context,
+   it answered a Bearer viewer as a browser (the API-token clamp never ran) and a browser viewer as
+   a token whenever a token was ambient.
+3. A rule or fold that faults, or completes with no verdict, is undetermined. That fails closed and
+   is never re-decided through the declaration.
+4. Only a definitive denial consults `DeclaredPointRead.Admits`.
+
+The RLS validator's own-scope shortcut (a user reading inside the partition named after them) is
+not mirrored. Where the fold does not already grant such a read, the verdict errs closed.
 
 Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
 - a point read admitted while no listing sees the node, and the restored grant row leaking into the
@@ -2096,6 +2110,10 @@ Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
   at expiry, and a refusal right after the owner acknowledged a revocation;
 - an undetermined type rule not re-decided, and a borrowed System stamp not making a node
   platform-issued;
+- the page's live verdict consulting the type's rule like the RLS validator (a denying rule
+  outranks a grant, a granting rule admits, an undetermined rule is not re-decided, a definitive
+  rule denial reaches the declaration), and evaluating the fold as the viewer rather than the
+  ambient context (an API-token viewer clamped, an ambient token not clamping a browser viewer);
 - a collection read or subscription on an admitted node's hub refused (no satellite returned), an
   undeclared layout area refused, and a declared one admitted.
 

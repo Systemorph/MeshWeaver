@@ -71,7 +71,38 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
             AssignmentNodeFactory.UserRole("alice", "Admin", Partition))
         // A type whose OWN Read rule faults: its check is UNDETERMINED, which no declaration may
         // re-decide as if it were a denial.
-        .ConfigureServices(services => services.AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType)));
+        .AddMeshNodes(
+            TypeNode(SealedType, declaration: null),
+            TypeNode(SealedDeclaredType, Declaration),
+            TypeNode(OpenType, declaration: null),
+            // carol holds Viewer on the rule partition — the fold grants her every node there.
+            AssignmentNodeFactory.UserRole(Carol.ObjectId, "Viewer", RulePartition),
+            // Readable by anyone in a browser, NOT through the API: the shape that makes the
+            // API-token clamp observable (RoutedApiTokenClampTest).
+            new MeshNode(CappedPartition) { NodeType = "Markdown", Name = CappedPartition },
+            new MeshNode("Page", CappedPartition) { NodeType = "Markdown", Name = "Capped Page" },
+            AssignmentNodeFactory.Policy(CappedPartition, new PartitionAccessPolicy { PublicRead = true, Api = false }))
+        .ConfigureServices(services => services
+            .AddSingleton<INodeTypeAccessRule>(new FaultingReadRule(FaultyType))
+            .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedType, verdict: false))
+            .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(SealedDeclaredType, verdict: false))
+            .AddSingleton<INodeTypeAccessRule>(new FixedReadRule(OpenType, verdict: true)));
+
+    /// <summary>A type whose Read rule always DENIES.</summary>
+    private const string SealedType = "Kiosk/Sealed";
+    /// <summary>A type whose Read rule always DENIES and which DECLARES a point read.</summary>
+    private const string SealedDeclaredType = "Kiosk/SealedDeclared";
+    /// <summary>A type whose Read rule always GRANTS.</summary>
+    private const string OpenType = "Kiosk/Open";
+    private const string RulePartition = "r";
+    private const string CappedPartition = "capped";
+
+    private sealed class FixedReadRule(string nodeType, bool verdict) : INodeTypeAccessRule
+    {
+        public string NodeType => nodeType;
+        public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+        public IObservable<bool> HasAccess(NodeValidationContext context, string? userId) => Observable.Return(verdict);
+    }
 
     private sealed class FaultingReadRule(string nodeType) : INodeTypeAccessRule
     {
@@ -309,6 +340,71 @@ public class DeclaredPointReadTest(ITestOutputHelper output) : MonolithMeshTestB
         Assert.Equal("alice", response.Node?.LastModifiedBy);
         Assert.False((await Rls(Visitor, forged.Path, true, ct)).IsValid, "a borrowed System stamp does not make a node platform-issued");
     }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#4306, follow-up 4: the page's live verdict (<see cref="DeclaredPointRead.ObservePointRead"/>)
+    /// decides like the RLS validator's point read — the type's Read rule first, the declaration only
+    /// after a DEFINITIVE denial. Before the fix it asked the permission fold alone, so a denying rule
+    /// was overridden by a grant, a granting rule was ignored, and an UNDETERMINED rule was re-decided
+    /// through the declaration — the one thing no seam may do.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ThePagesVerdict_ConsultsTheTypesRule_LikeEveryPointReadSeam()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedPartition(ct);
+        await SeedTopLevel(new MeshNode(RulePartition) { NodeType = "Markdown", Name = RulePartition });
+
+        var plain = await Issue("plain", "nobody", ct, nodeType: UndeclaredType, ns: RulePartition);
+        Assert.True(await Verdict(plain, Carol, ct), "POSITIVE CONTROL: carol's Viewer grant admits her to a node no rule governs");
+
+        var sealedNode = await Issue("sealed", "nobody", ct, nodeType: SealedType, ns: RulePartition);
+        Assert.False((await Rls(Carol, sealedNode, true, ct, SealedType)).IsValid, "PRECONDITION: the RLS validator lets the denying rule outrank the grant");
+        Assert.False(await Verdict(sealedNode, Carol, ct), "the page's verdict lets a DENYING rule outrank the fold's grant, as RLS does");
+
+        var open = await Issue("open", "nobody", ct, nodeType: OpenType, ns: RulePartition);
+        Assert.True((await Rls(Dave, open, true, ct, OpenType)).IsValid, "PRECONDITION: the RLS validator admits through the granting rule");
+        Assert.True(await Verdict(open, Dave, ct), "the page's verdict admits through a GRANTING rule, as RLS does");
+        Assert.False(await Verdict(sealedNode, Dave, ct), "NEGATIVE CONTROL: dave holds nothing and the rule denies");
+
+        var faulty = await Issue("faulty-page", WellKnownUsers.Anonymous, ct, nodeType: FaultyType);
+        Assert.False((await Rls(Visitor, faulty, true, ct, FaultyType)).IsValid, "PRECONDITION: RLS never re-decides an undetermined rule");
+        Assert.False(await Verdict(faulty, Visitor, ct),
+            "an UNDETERMINED rule is never re-decided through the declaration — although the node names the visitor's audience");
+
+        var declared = await Issue("sealed-declared", WellKnownUsers.Anonymous, ct, nodeType: SealedDeclaredType);
+        Assert.True((await Rls(Visitor, declared, true, ct, SealedDeclaredType)).IsValid, "PRECONDITION: RLS re-decides a DEFINITIVE rule denial through the declaration");
+        Assert.True(await Verdict(declared, Visitor, ct), "a DEFINITIVE rule denial is re-decided through the declaration, as RLS does");
+    }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#4306, follow-up 3: the page's live verdict evaluates the permission fold AS THE
+    /// VIEWER — its API-token flag included — never as whatever context is ambient. Before the fix a
+    /// Bearer viewer was answered as a browser (the clamp never saw it), and a browser viewer was
+    /// answered as a token whenever a token was ambient.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public async Task ThePagesVerdict_EvaluatesTheFoldAsTheViewer()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string page = CappedPartition + "/Page";
+        var token = new AccessContext { ObjectId = Dave.ObjectId, Name = Dave.Name, IsApiToken = true };
+
+        Assert.True(await Verdict(page, Dave, ct), "POSITIVE CONTROL: dave's browser reads a PublicRead page");
+        Assert.False(await Verdict(page, token, ct), "dave's API TOKEN is clamped — the page is not reachable through the API");
+
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        Assert.True(await access.RunAs(token, () => DeclaredPointRead.ObservePointRead(Mesh, page, Dave)).Take(1)
+                .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct),
+            "an AMBIENT token does not clamp a browser viewer — the verdict is about the viewer");
+        Assert.False(await access.RunAs(Dave, () => DeclaredPointRead.ObservePointRead(Mesh, page, token)).Take(1)
+                .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct),
+            "an AMBIENT browser does not unclamp a token viewer");
+    }
+
+    private Task<bool> Verdict(string path, AccessContext viewer, CancellationToken ct)
+        => DeclaredPointRead.ObservePointRead(Mesh, path, viewer).Take(1)
+            .Should().Within(TimeSpan.FromSeconds(20)).Emit(cancellationToken: ct);
 
     private bool IsRevoked(MeshNode? node)
         => node?.ContentAs<TicketContent>(Mesh.JsonSerializerOptions)?.RevokedAt is not null;
