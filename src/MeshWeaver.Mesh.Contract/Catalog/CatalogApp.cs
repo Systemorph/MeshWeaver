@@ -41,6 +41,19 @@ public record CatalogSearch
         CatalogSort? sort = null, string? whenEmpty = null)
         => new() { ComputedFilter = filter, Title = title, ItemArea = itemArea, Sort = sort, WhenEmpty = whenEmpty };
 
+    /// <summary><see cref="Computed(IObservable{string?}, string?, string?, CatalogSort?, string?)"/> with the
+    /// sentence the section shows while its filter has not answered yet. A separate overload, never an
+    /// added optional parameter: a module compiled against the five-parameter signature must keep binding.</summary>
+    /// <param name="filter">The filter stream; null emissions mean "nothing to show".</param>
+    /// <param name="title">The section title; null means the category's label.</param>
+    /// <param name="itemArea">The area each hit renders through; null for the default card.</param>
+    /// <param name="sort">The default order; null means <see cref="CatalogSort.LastActivity"/>.</param>
+    /// <param name="whenEmpty">The sentence shown while the filter is null.</param>
+    /// <param name="whileLoading">The (localised) sentence shown beside the loading indicator until the filter first answers.</param>
+    public static CatalogSearch Computed(IObservable<string?> filter, string? title, string? itemArea,
+        CatalogSort? sort, string? whenEmpty, string? whileLoading)
+        => Computed(filter, title, itemArea, sort, whenEmpty) with { WhileLoading = whileLoading };
+
     /// <summary>What the viewer sees in place of a refused (unanchored) section: the anchors it lacks, no query.</summary>
     public const string RefusedLabel = "⚠️ namespace: | path: | partitions:all";
 
@@ -77,6 +90,10 @@ public record CatalogSearch
     /// <summary>The (localised) sentence shown while a computed filter is null; null shows a neutral dash.</summary>
     public string? WhenEmpty { get; init; }
 
+    /// <summary>The (localised) sentence shown beside the loading indicator until a computed filter first
+    /// answers; null shows the indicator alone.</summary>
+    public string? WhileLoading { get; init; }
+
     /// <summary>The last-mile hook over the composed control (grouping, section counts, render mode),
     /// applied AFTER everything above.</summary>
     public Func<MeshSearchControl, MeshSearchControl>? Configure { get; init; }
@@ -108,17 +125,34 @@ public record CatalogSearch
     /// <summary>
     /// The section, live: re-emitted when the filter, the typed text or the "+" condition changes —
     /// and only then. Each search is its own area, so one search re-aiming never re-renders another.
+    ///
+    /// <para>🚨 A COMPUTED search opens on <see cref="Loading"/>, synchronously, and keeps it until its
+    /// filter first answers. Before, the section emitted nothing until then, so its area did not exist:
+    /// a reader saw an empty tab, and a one-shot read of the page (the MCP <c>get …/area/…</c> route
+    /// returns the first frame in which the requested area itself has landed) reported the section as
+    /// missing — which is how the CRM board's attention tabs were diagnosed as "never rendering" while
+    /// they rendered within a quarter of a second (Crm Incidents, 2026-10-21). A computed filter that
+    /// never answers now reads as loading, never as absent.</para>
     /// </summary>
     /// <param name="typed">What the reader typed into the app's bar, RAW — <see cref="Render"/> narrows it against this search's own hidden query.</param>
     /// <param name="categoryLabel">The category label, the title fallback.</param>
     /// <param name="refused">Told the details when a filter is refused (see <see cref="Render"/>).</param>
-    public IObservable<UiControl> Section(IObservable<string> typed, string categoryLabel, Action<string>? refused = null) =>
-        Filters()
+    public IObservable<UiControl> Section(IObservable<string> typed, string categoryLabel, Action<string>? refused = null)
+    {
+        var section = Filters()
             .CombineLatest(typed.DistinctUntilChanged(),
                 // A silent condition hides the "+" — it never holds back the results.
                 (CreateWhen?.StartWith(false) ?? Observable.Return(true)).DistinctUntilChanged(),
                 (filter, text, create) => (filter, text, create))
             .Select(t => Render(t.filter, t.text, t.create, categoryLabel, refused));
+        return ComputedFilter is null ? section : section.StartWith(Loading());
+    }
+
+    /// <summary>What a computed section shows until its filter first answers: the platform's
+    /// indeterminate progress bar, carrying <see cref="WhileLoading"/> when the caller gave one — no
+    /// literal English here (i18n). Pure.</summary>
+    public UiControl Loading() =>
+        Controls.Progress(WhileLoading ?? "", null!).WithWidth("100%").WithHideNumber(true);
 
     /// <summary>
     /// The section for one state. A null <paramref name="filter"/> is the empty sentence (a plain
