@@ -133,6 +133,17 @@ heading that names what it is, inside any Markdown body (a Space body, a Markdow
 definition):
 
 ```markdown
+## Reports by type
+
+@@("area/Search?groupBy=type")
+```
+
+The `@@` double-at prefix renders the area **inline**; a single `@` would render a link instead.
+Absolute (`@@/ACME/area/Search`) and relative (`@@("area/Search")`) forms both work — see the
+embed syntax in [Layout Areas](../LayoutAreas).
+
+---
+
 ## `Controls.Catalog` — the standard list of nodes
 
 When a page shows ONE set of nodes (the clients, the funds, the partners, an inbox) declare it with
@@ -161,16 +172,24 @@ Refine with any `With…` of the control (`WithCreateNodeType`/`WithCreateNamesp
 `WithMaxColumns` for a grid). A view that has to COMPUTE something across the set (a total, a KPI)
 computes it beside the catalog, never instead of it.
 
-## Reports by type
+## A catalog app — a menu of catalogs with one query bar
 
-@@("area/Search?groupBy=type")
+When a page holds SEVERAL places a reader perceives as different (clients, partners, the deals,
+"reply needed"), declare a **catalog app**: a menu of categories, each delegating to the catalog
+above with its hidden queries, and ONE query bar shared by all of them. What the reader types is
+appended after every hidden query of the active category and survives switching categories; it can
+only narrow (anchoring terms are dropped from it). Full contract, adopters and requirements:
+[Catalog App](/Doc/GUI/CatalogApp).
+
+```csharp
+new CatalogApp("Portfolio")
+    .WithCategory("clients", "Clients", CatalogSearch.Of(clients, itemArea: "Card"))
+    .WithCategory("deals", "Deals", CatalogSearch.Of(openDeals, "Open"), CatalogSearch.Of(wonDeals, "Won"))
+    .Render(host);
 ```
 
-The `@@` double-at prefix renders the area **inline**; a single `@` would render a link instead.
-Absolute (`@@/ACME/area/Search`) and relative (`@@("area/Search")`) forms both work — see the
-embed syntax in [Layout Areas](../LayoutAreas).
-
 ---
+
 
 ## Listing containers by last activity
 
