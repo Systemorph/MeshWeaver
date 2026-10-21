@@ -1356,11 +1356,15 @@ public static class ShippedPrebuiltBundles
                 // identity gate below would "decline" it as another framework's and the pass would
                 // read as complete although it never learned what the bundle carries. Hollow is
                 // the one tally that says "this bundle's membership is unknown".
-                if (manifest is null)
+                // The same holds for a manifest that states NO framework identity: it is not
+                // another framework's bundle (a known foreign identity still declines below), it is
+                // one whose identity — and so whether its entries are for this mesh — is unknown.
+                if (manifest is null || string.IsNullOrWhiteSpace(manifest.FrameworkMvid))
                 {
                     logger?.LogWarning(
-                        "ShippedPrebuiltBundles: bundle {Bundle} has no readable manifest — what it "
-                        + "names is unknown; counted HOLLOW (offer discovery incomplete), not declined",
+                        "ShippedPrebuiltBundles: bundle {Bundle} has no readable manifest or states no "
+                        + "framework identity — what it names is unknown; counted HOLLOW (offer discovery "
+                        + "incomplete), not declined",
                         Path.GetFileName(bundlePath));
                     return Observable.Return(default(SeedTally) with { BundlesHollow = 1 });
                 }

@@ -523,3 +523,57 @@ public class ManifestLessBundle(ITestOutputHelper output) : TheGatesVerdictSurvi
     public Task ThroughTheSweep_TheUnknownTypeParks_AndATrackedTypeCompiles()
         => AssertUnknownMembershipParks_AndTrackedCompiles(TypePath, "tracked/Authored");
 }
+
+/// <summary>
+/// #7015 review — a manifest that states NO framework identity is HOLLOW (discovery incomplete), never
+/// a framework decline: it is not KNOWN to be another framework's, and declining it before its entries
+/// are witnessed would let the pass read as complete although the bundle names
+/// <c>untracked/InTheIdentityLessBundle</c>.
+/// </summary>
+public class IdentityLessBundle(ITestOutputHelper output) : TheGatesVerdictSurvivesTheHandOffTestBase(output)
+{
+    private const string TypePath = "untracked/InTheIdentityLessBundle";
+
+    private static byte[] ZipWithIdentityLessManifest()
+    {
+        using var buffer = new MemoryStream();
+        using (var archive = new System.IO.Compression.ZipArchive(
+                   buffer, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var manifest = archive.CreateEntry(NuGetPackageWriter.ManifestEntry);
+            using (var writer = new StreamWriter(manifest.Open()))
+                writer.Write(
+                    "{\"plugin\":\"Anonymous\",\"version\":\"1.0.0\",\"assemblies\":["
+                    + $"{{\"nodePath\":\"{TypePath}\",\"assembly\":\"Anonymous.dll\"}}]}}");
+            var dll = archive.CreateEntry($"{NuGetPackageWriter.AssemblyFolder}/Anonymous.dll");
+            using var stream = dll.Open();
+            stream.Write(AssemblyBytes());
+        }
+        return buffer.ToArray();
+    }
+
+    protected override IReadOnlyDictionary<string, byte[]> ExtraImageFiles { get; } =
+        new Dictionary<string, byte[]> { ["a-no-identity.zip"] = ZipWithIdentityLessManifest() };
+
+    protected override IReadOnlyList<BundleWriter.AssemblyEntry> Entries =>
+    [
+        new BundleWriter.AssemblyEntry("untracked/SomethingElse", () => new MemoryStream(AssemblyBytes())),
+    ];
+
+    [Fact]
+    public async Task AnIdentityLessBundle_IsIncompleteDiscovery_NotADecline()
+    {
+        var refused = await NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(
+                Mesh,
+                new Dictionary<string, NodeTypeDefinition?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    [TypePath] = new NodeTypeDefinition { Configuration = "config => config" },
+                },
+                null)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the question answers once", cancellationToken: TestContext.Current.CancellationToken);
+        refused.Should().Contain(TypePath,
+            "a bundle that states no framework identity names this type, and whether its bytes are "
+            + "for this mesh is unknown — its membership is not established, so it is not authored");
+    }
+}

@@ -1363,8 +1363,9 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   when it returns normally without having read every bundle. That covers a bundle it could not
   read, a manifest it could not read, and a published source it skipped. The consumer reports this
   through `IPrebuiltAssemblyConsumer.SeedForTypes(paths, onOffered, onIncomplete)`. A consumer
-  written before this overload reports nothing, as it did before. A bundle without a manifest
-  counts as unreadable (hollow), not as a framework decline. A type the pass did not ask about has
+  written before this overload reports nothing, as it did before. A bundle without a manifest, or
+  with a manifest that states no framework identity, counts as unreadable (hollow), not as a
+  framework decline. A bundle that names a different framework identity is still declined. A type the pass did not ask about has
   unknown membership, so every candidate in an untracked partition goes through the watcher.
 - **The watcher parks only a type of unknown membership with nothing else to go on** (owner
   decision on #7015). When its own offer discovery is incomplete, it parks a type only if the type
@@ -1372,10 +1373,17 @@ nothing, and its batch is unchanged. These properties keep the verdict intact ac
   `PrebuiltAssemblySeeder.UnknownModuleMembershipParkReason`, which names why discovery was
   incomplete. Every other type keeps its verdict: a type in a partition with a sync source
   compiles, and a type with adoption history goes to the untracked-module gate as before. The park
-  lifts like any other: repair the bundle or add a sync source, then request a release.
+  lifts like any other: repair the bundle or add a sync source, then request a release. If such a
+  type still names a usable build, that build keeps serving (`Ok`, with the reason in
+  `DeliveryHoldReason`). Its provenance stays `Compiled` (`BuildDeliveryHold.SettleUnknownMembership`).
+  A delivery provenance such as `StaleAdopted` would itself count as module-content evidence and
+  outlive the incomplete pass. The authored source would then never compile again, even after a
+  complete pass that found no bundle naming the type.
 - **Verifying this process's own adoptions is bounded.** An adoption that cannot be verified in
   time is reported as not evaluated. It is still refused a compile, and it is not handed to the
-  watcher.
+  watcher. The same applies when the store lookup itself faults. The bake probe folds that fault
+  into a `BytesMissing` entry flagged `ProbeFailed`, and the verification reads the flag, so the
+  adoption counts as not evaluated rather than as a confirmed miss.
 - **The watcher's answer is the first terminal record whose version is above the hand-off write.**
   It never depends on seeing a `Pending` frame, and a stale terminal replay is never taken for the
   answer. A hand-off write that fails is reported as a fault at once.

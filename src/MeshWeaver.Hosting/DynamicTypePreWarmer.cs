@@ -1758,7 +1758,22 @@ public static class DynamicTypePreWarmer
                     .Where(e => !e.NeedsBake)
                     .Select(e => e.TypePath)
                     .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
-                return new AdoptionVerification(baked, none);
+                // 🚨 #7015 review — the probe FOLDS a faulted store lookup into a BytesMissing entry
+                // (fail safe for the bake), so a store fault never reaches the Catch below. A failed
+                // lookup is "could not be asked", not "the bytes are gone": UNVERIFIED, exactly like
+                // an elapsed or faulted probe — never handed to a watcher whose record still lacks
+                // the stamp this provisional process holds.
+                var unverified = report.Entries
+                    .Where(e => e.ProbeFailed)
+                    .Select(e => e.TypePath)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+                if (!unverified.IsEmpty)
+                    logger?.LogWarning(
+                        "DynamicTypePreWarmer: the store lookup faulted while verifying {Count} adoption(s) "
+                        + "made by the untracked-module gate's offer pass — those types are reported NOT "
+                        + "EVALUATED and are neither compiled nor handed to the watcher: {Types}",
+                        unverified.Count, string.Join(", ", unverified.OrderBy(x => x, StringComparer.Ordinal)));
+                return new AdoptionVerification(baked, unverified);
             })
             .Timeout(budget)
             .Catch<AdoptionVerification, Exception>(ex =>

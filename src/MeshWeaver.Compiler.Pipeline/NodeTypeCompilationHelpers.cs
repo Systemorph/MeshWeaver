@@ -439,6 +439,29 @@ internal static class NodeTypeCompilationHelpers
                         return true;
                     }
 
+                    // 🚨 #6930 / #7015 review — the UNKNOWN-membership hold keeps the record's own
+                    // provenance (BuildDeliveryHold.SettleUnknownMembership): a delivery provenance
+                    // would itself read as "module content" to IsModuleContent and outlive the
+                    // incomplete discovery that caused the hold, so the authored source would never
+                    // compile again. Nothing to serve → false, and the caller parks named.
+                    bool SettleAsUnknownMembershipHold(NodeTypeDefinition pendingDefinition, string reason)
+                    {
+                        if (BuildDeliveryHold.SettleUnknownMembership(
+                                pendingDefinition, HasUsableBuild(pendingNode!, pendingDefinition, guards), reason)
+                            is null)
+                            return false;
+                        logger?.LogWarning(
+                            "Compile watcher: {HubPath} is of unknown module membership — its last build keeps "
+                            + "serving and its provenance is kept, so the next release after a complete "
+                            + "discovery decides afresh. {Reason}",
+                            hubPath, reason);
+                        SettlePending(parkedDef =>
+                            BuildDeliveryHold.SettleUnknownMembership(
+                                parkedDef, HasUsableBuild(pendingNode!, parkedDef, guards), reason)
+                            ?? ApplyGateSettle(parkedDef, reason, true, guards.ModulesHash));
+                        return true;
+                    }
+
                     void SettlePending(Func<NodeTypeDefinition, NodeTypeDefinition> settle)
                     {
                         using (accessService?.ImpersonateAsSystem())
@@ -807,7 +830,9 @@ internal static class NodeTypeCompilationHelpers
                                     // #3583 — a type that still holds a build is HELD, not parked
                                     // dead: the last build keeps serving (same module MAJOR) or is
                                     // refused-but-not-errored (a MAJOR bump), and a person is told.
-                                    if (SettleAsHold(pendingDefinition, reason))
+                                    if (unknownMembership is null
+                                            ? SettleAsHold(pendingDefinition, reason)
+                                            : SettleAsUnknownMembershipHold(pendingDefinition, reason))
                                         return;
                                     logger?.LogError(
                                         "Compile watcher: {HubPath} is a module's content (or of unknown "

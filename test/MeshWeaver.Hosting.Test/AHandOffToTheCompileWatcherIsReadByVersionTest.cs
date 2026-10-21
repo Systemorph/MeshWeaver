@@ -156,6 +156,64 @@ public class AHandOffToTheCompileWatcherIsReadByVersionTest
         control.Unverified.Should().BeEmpty();
     }
 
+    /// <summary>A record the probe ASKS the store about — it names a build on coordinates.</summary>
+    private static readonly IReadOnlyDictionary<string, NodeTypeDefinition?> AdoptedOnCoordinates =
+        ImmutableDictionary<string, NodeTypeDefinition?>.Empty.Add(TypePath, new NodeTypeDefinition
+        {
+            CompilationStatus = CompilationStatus.Ok,
+            LatestAssemblyCollection = "assemblies",
+            LatestAssemblyPath = "untracked_Widget/v6.dll",
+            LastCompiledVersion = 6,
+            CompiledFrameworkVersion = "fw",
+        });
+
+    /// <summary>
+    /// #7015 review — the PRODUCTION probe folds a faulted store lookup into a <c>BytesMissing</c>
+    /// entry (fail safe for the bake), so the fault never reaches <c>VerifyAdoptions</c>' Catch. The
+    /// folded report — not an <c>Observable.Throw</c> — must still read UNVERIFIED, or the adoption
+    /// goes to a watcher reading a record whose stamp this provisional process still holds.
+    /// </summary>
+    [Fact]
+    public async Task AFoldedStoreFault_IsUnverified_NotAConfirmedMiss()
+    {
+        var verified = await DynamicTypePreWarmer.VerifyAdoptions(
+                AdoptedOnCoordinates,
+                defs => NodeTypeBakeStatus.Probe(defs, new FaultingStore(), "fw"),
+                TestTimeouts.Quick, null)
+            .Should().Within(TestTimeouts.Quick).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        verified.Unverified.Should().Contain(TypePath,
+            "the store could not be ASKED — that is not 'the bytes are gone'");
+        verified.Baked.Should().BeEmpty();
+
+        // Negative control: a store that ANSWERS "not here" is a confirmed miss — neither baked nor
+        // unverified, so the type goes to the watcher.
+        var miss = await DynamicTypePreWarmer.VerifyAdoptions(
+                AdoptedOnCoordinates,
+                defs => NodeTypeBakeStatus.Probe(defs, new EmptyStore(), "fw"),
+                TestTimeouts.Quick, null)
+            .Should().Within(TestTimeouts.Quick).Emit(cancellationToken: TestContext.Current.CancellationToken);
+        miss.Unverified.Should().BeEmpty("a store that answered is a verdict, not a fault");
+        miss.Baked.Should().BeEmpty();
+    }
+
+    private sealed class FaultingStore : IAssemblyStore
+    {
+        public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version) =>
+            Observable.Throw<string?>(new IOException("share unreachable"));
+
+        public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes) =>
+            Observable.Return(string.Empty);
+    }
+
+    private sealed class EmptyStore : IAssemblyStore
+    {
+        public IObservable<string?> TryGetAssemblyPath(string nodeTypePath, long version) =>
+            Observable.Return<string?>(null);
+
+        public IObservable<string> Put(string nodeTypePath, long version, byte[] assemblyBytes, byte[]? pdbBytes) =>
+            Observable.Return(string.Empty);
+    }
+
     [Fact]
     public async Task AHeldBuildWhoseBytesAreGone_IsAFault_NotBaked()
     {
