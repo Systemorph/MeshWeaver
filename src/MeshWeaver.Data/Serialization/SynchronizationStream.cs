@@ -456,6 +456,15 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     internal AccessContext? SubscriberContext { get; set; }
 
     /// <summary>
+    /// The hub whose OWN credential this mirror subscribes under, or <c>null</c>. Set for a mirror
+    /// opened through <c>Workspace.GetRemoteStreamAsHub</c>, whose initial subscribe overrides the
+    /// ambient caller with <c>ImpersonateAsHub(hub.Address)</c>. Every re-subscribe applies the same
+    /// override, so a hub mirror opened while a user happened to be ambient never re-subscribes as
+    /// that user (<c>MeshWeaver.Data.Test/FrameLossResubscribeKeepsTheHubCredentialTest</c>).
+    /// </summary>
+    internal Address? SubscribeAsHub { get; set; }
+
+    /// <summary>
     /// The most recently applied change item (the current state snapshot), or <c>null</c> before any value
     /// has been set.
     /// </summary>
@@ -2447,6 +2456,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // explicitly: the ambient one on this turn is the emission thread's, often a sync/… hub
         // address the owner would refuse. An infrastructure mirror (no subscriber) keeps System.
         var subscriber = SubscriberContext;
+        // A hub mirror's subscribe left under the hub's own credential; its re-ask does too.
+        var asHub = SubscribeAsHub;
         {
             // 🚨 Minted, never constructed inline: a re-subscribe declares the SAME negotiated
             // wire capabilities as the initial subscribe. When the owner cannot match this
@@ -2475,7 +2486,9 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
                 .Defer(() => Host.Observe(
                     JsonSynchronizationStream.MintSubscribeRequest(StreamId, wsRef, identity: subscriber?.ObjectId)
                         with { Subscriber = Configuration.Subscriber! },
-                    o => o.WithTarget(StreamIdentity.Owner)));
+                    o => asHub is not null
+                        ? o.WithTarget(StreamIdentity.Owner).ImpersonateAsHub(asHub)
+                        : o.WithTarget(StreamIdentity.Owner)));
             resyncSubscription.Disposable = (subscriber is not null
                     ? accessService.RunAs(subscriber, ReAsk)
                     : accessService.RunAsSystem(ReAsk))

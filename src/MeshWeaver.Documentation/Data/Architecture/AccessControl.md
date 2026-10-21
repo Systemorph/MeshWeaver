@@ -2156,7 +2156,9 @@ identity is captured once, when the client stream is created
 from the ambient context of the turn that triggers the recovery. A revoked reader's re-subscribe
 is refused and the stream ends with the denial. An infrastructure mirror keeps its own identity:
 one opened with no user (System, a hub address) re-subscribes as System, and the node-stream
-cache re-subscribes as `cache/mesh-node-cache`. Pinned by `RecoveryResubscribesAsTheSubscriberTest`.
+cache re-subscribes as `cache/mesh-node-cache`. A mirror opened as its hub (`GetRemoteStreamAsHub`)
+re-subscribes as that hub on every path, the frame-loss re-ask included. This holds even when a
+user was ambient when the mirror opened (`FrameLossResubscribeKeepsTheHubCredentialTest`). Pinned by `RecoveryResubscribesAsTheSubscriberTest`.
 A revoked reader is not served after a recycle, and the reader who keeps the grant recovers
 (negative control). A reader who never had Read is never served by recovery; that case already
 held before the fix.

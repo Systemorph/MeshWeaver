@@ -491,6 +491,9 @@ public static class JsonSynchronizationStream
         // initial subscribe, null for an infrastructure mirror (which re-subscribes as System, as it
         // subscribed). See SynchronizationStream.SubscriberContext.
         reduced.SubscriberContext = ambient;
+        // …and a mirror opened AS ITS HUB keeps the hub's credential on every re-subscribe, exactly as
+        // the initial subscribe and Resubscribe below apply it (review of #7016, thread 4340459051).
+        reduced.SubscribeAsHub = impersonateAsHub ? hub.Address : null;
 
 
         if (typeof(TReduced) == typeof(JsonElement))
