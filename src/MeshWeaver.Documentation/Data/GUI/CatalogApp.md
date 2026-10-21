@@ -51,7 +51,7 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 - Computed filters and conditions are kept for the life of the area host (`CatalogApp.Retained`, latest
   value replayed, connections owned by the host): a menu rebuilt because one category's `When`
   changed does not blank another category's computed section.
-  A changed typed text is a new result set: the section's search re-queries and its paging restarts.
+- A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
 - 🚨 **Typing can only NARROW — as the production parser reads it.** `CatalogQuery.Narrowing`

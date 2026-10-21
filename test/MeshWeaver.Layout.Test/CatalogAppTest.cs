@@ -134,6 +134,31 @@ public class CatalogAppTest
     }
 
     [Fact]
+    public void AGroupEmptiedByStripping_DoesNotSwallowTheFilterAfterIt()
+    {
+        const string hidden = "partitions:all nodeType:Crm/Opportunity sort:name";
+
+        var typed = CatalogQuery.Narrowing(hidden, "(namespace:Globex) content.status:Open");
+        var parsed = new QueryParser().Parse($"{hidden} {typed}");
+
+        Assert.Equal("content.status:Open", typed);
+        Assert.Contains(Comparisons(parsed.Filter), c => c.Selector == "content.status");
+        // A typed filter the parser would silently drop is not accepted as narrowing — an empty group
+        // or a text-only group stops the parser's AND and swallows the term after it.
+        Assert.False(CatalogQuery.Narrows(hidden, "() content.status:Open"));
+        Assert.False(CatalogQuery.Narrows(hidden, "(fabrikam) content.status:Open"));
+        Assert.True(CatalogQuery.Narrows(hidden, "fabrikam content.status:Open"));
+    }
+
+    private static IEnumerable<QueryCondition> Comparisons(QueryNode? node) => node switch
+    {
+        QueryComparison c => [c.Condition],
+        QueryAnd and => and.Children.SelectMany(Comparisons),
+        QueryOr or => or.Children.SelectMany(Comparisons),
+        _ => [],
+    };
+
+    [Fact]
     public void ANamespaceAlternation_StillAcceptsATypedFilter()
     {
         // The parser appends the namespace membership AFTER the ordinary filters.
