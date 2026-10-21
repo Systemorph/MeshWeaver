@@ -521,6 +521,19 @@ public class ADefaultAppSurvivesAnExplicitSetTest(ITestOutputHelper output) : St
     /// <inheritdoc />
     protected override IReadOnlyList<string> DefaultApps => ["Games"];
 
+    /// <summary>Names ONLY Chat, so EntityViews - a preInstalled package nobody named - is the probe
+    /// for "the lane accidentally enabled the whole baseline".</summary>
+    protected override IReadOnlyList<string> BootSet => [$"{SourceName}/Chat"];
+
+    /// <inheritdoc />
+    protected override MeshBuilder Arrange(MeshBuilder builder) =>
+        builder.AddMeshNodes(new MeshNode("Skill")
+        {
+            Name = "Skill",
+            NodeType = MeshNode.NodeTypePath,
+            IsSatelliteType = false,
+        });
+
     [Fact(Timeout = 180_000)]
     public async Task TheDefaultApp_IsSelectedBesideTheDeclaredSet_AndNoOtherPreInstalledPackageIs()
     {
@@ -528,8 +541,34 @@ public class ADefaultAppSurvivesAnExplicitSetTest(ITestOutputHelper output) : St
         Output.WriteLine($"pass: {pass}");
 
         pass.Packages.Order(StringComparer.Ordinal).Should().Equal(
-            new[] { "Store", "AI", "EntityViews", "Chat", "Games" }.Order(StringComparer.Ordinal),
+            new[] { "Store", "AI", "Chat", "Games" }.Order(StringComparer.Ordinal),
             "the declared set, what it requires, and the one package declaring defaultApp");
+        pass.Packages.Should().NotContain("EntityViews", "the rest of the baseline stays dropped");
+    }
+
+    /// <summary>
+    /// A default app is RECONCILED, not seeded once: after the first pass the ledger lists it as
+    /// seeded, its install record is removed straight from storage (no uninstall marker), and the
+    /// next pass puts it back. Without the reconciled exemption the ledger filter would drop it.
+    /// </summary>
+    [Fact(Timeout = 240_000)]
+    public async Task ASeededDefaultApp_WhosePartitionIsMissing_IsRestoredByTheNextPass()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var installer = Mesh.ServiceProvider.GetRequiredService<InstanceAutoRegistrationService>();
+        var first = await FirstPass(ct);
+        first.Packages.Should().Contain("Games");
+        first.Delivered.Should().Contain("Games", "the first pass seeds it, so the ledger now lists it");
+
+        await Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()
+            .Delete($"{PackageInstaller.InstalledPartition}/Games")
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var second = await installer.RunDefaultInstall()
+            .FirstAsync().Timeout(TimeSpan.FromSeconds(180)).Await(ct);
+        Output.WriteLine($"pass 2: {second}");
+        second.Packages.Should().Contain("Games",
+            "a default app re-asserts every boot - the ledger's 'seeded' must not drop it");
     }
 }
 
