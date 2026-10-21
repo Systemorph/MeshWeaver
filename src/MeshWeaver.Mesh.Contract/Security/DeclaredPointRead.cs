@@ -276,11 +276,12 @@ public static class DeclaredPointRead
         var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
         var commits = feed is null
             ? Observable.Never<bool>()
-            : Observable.Create<bool>(observer => feed.Subscribe(change =>
-            {
-                if (AffectsRead(change, scopes))
-                    observer.OnNext(true);
-            }));
+            // The feed's handler is forwarded as-is and the filter runs as an Rx operator, so a fault
+            // in AffectsRead reaches this signal's OnError (reported undetermined by the caller)
+            // instead of being thrown out of the feed's delivery callback.
+            : Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+                .Where(change => AffectsRead(change, scopes))
+                .Select(_ => true);
         // A gap is a declared hole in the feed: commits made elsewhere in that window were never
         // announced here, so any of them may have moved this decision.
         var gaps = feed is null
