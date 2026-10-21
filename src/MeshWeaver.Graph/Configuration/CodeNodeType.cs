@@ -351,9 +351,7 @@ public static class CodeNodeType
                                 if (presence is not null && !presence.IsConnected(submitTarget))
                                 {
                                     FailActivity(hub, activityPath,
-                                        $"No {submit.Language} worker connected at '{submitTarget}'. The " +
-                                        "language gate is not running in this deployment — see " +
-                                        "Doc/Architecture/PythonCodeNodes.");
+                                        NoWorkerConnected(submit.Language, submitTarget.ToString()));
                                 }
                                 else
                                 {
@@ -366,15 +364,34 @@ public static class CodeNodeType
                                             // The delivery faulted (target unreachable / disconnected)
                                             // before any terminal write — reconcile so the run ends.
                                             ex => FailActivity(hub, activityPath,
-                                                $"{submit.Language} run failed: "
-                                                + $"{ex.GetType().Name}: {ex.Message}", ex));
+                                                RunFailed(submit.Language, $"{ex.GetType().Name}: {ex.Message}"), ex));
                                 }
                             }
                             else
                             {
-                                // C# in-process: the Activity hub's Roslyn kernel always calls
-                                // ActivityLogLogger.Complete, so the ActivityLog can never hang here.
-                                hub.Post(submit, o => o.WithTarget(submitTarget));
+                                // C# in-process on the Activity hub's Roslyn kernel. When the kernel
+                                // RUNS the script it settles the ActivityLog itself (Complete) - but
+                                // not every failure reaches that point: the kernel container's own
+                                // dispatch can fault and answer Success=false without touching the
+                                // log, the Activity hub can answer DeliveryFailure (no kernel wired,
+                                // a handler that threw), and routing can answer NotFound. This used
+                                // to be a bare fire-and-forget Post on the assumption that the kernel
+                                // always completes, so each of those left the run Running for ever,
+                                // silently (the Education journey suite: every exercise Run). Observe
+                                // the answer and reconcile every non-success onto the log, exactly as
+                                // the foreign-language branch above does. FailActivity never
+                                // overwrites a status the kernel already settled.
+                                hub.Observe<SubmitCodeResponse>(submit, o => o.WithTarget(submitTarget))
+                                    .Take(1)
+                                    .Subscribe(
+                                        response =>
+                                        {
+                                            if (!response.Message.Success)
+                                                FailActivity(hub, activityPath,
+                                                    RunFailed("C#", response.Message.Error));
+                                        },
+                                        ex => FailActivity(hub, activityPath,
+                                            RunFailed("C#", $"{ex.GetType().Name}: {ex.Message}"), ex));
                             }
 
                             // Stamp Last{ExecutedAt,ExecutedBy,ActivityPath,ExecutedCodeHash} onto
@@ -540,17 +557,41 @@ public static class CodeNodeType
             hubAddress, activityPath);
 
     /// <summary>
-    /// Reconcile a foreign-language run's ActivityLog to a terminal <see cref="ActivityStatus.Failed"/>
-    /// when the worker never wrote one — no worker was connected, or the submission delivery faulted.
+    /// The transcript entry for a run its kernel did not settle — keyed, so the Output pane renders
+    /// it in the VIEWER's language (<c>LogMessage.Localize</c>); the English text is the stored
+    /// fallback. <paramref name="reason"/> is verbatim (an exception or kernel message) and is not
+    /// translated; <paramref name="language"/> is the language's own name.
+    /// </summary>
+    internal static LogMessage RunFailed(string language, string? reason) =>
+        string.IsNullOrWhiteSpace(reason)
+            ? new LogMessage($"{language} run failed: the kernel reported a failure without giving a reason.",
+                    LogLevel.Error)
+                .WithKey("activity.codeRun.failedNoReason", ("language", language))
+            : new LogMessage($"{language} run failed: {reason}", LogLevel.Error)
+                .WithKey("activity.codeRun.failed", ("language", language), ("reason", reason));
+
+    /// <summary>The transcript entry for a foreign-language run with no worker connected.</summary>
+    internal static LogMessage NoWorkerConnected(string language, string target) =>
+        new LogMessage(
+                $"No {language} worker connected at '{target}'. The language gate is not running in "
+                + "this deployment — see Doc/Architecture/PythonCodeNodes.",
+                LogLevel.Error)
+            .WithKey("activity.codeRun.noWorker", ("language", language), ("target", target));
+
+    /// <summary>
+    /// Reconcile a run's ActivityLog to a terminal <see cref="ActivityStatus.Failed"/> when the kernel
+    /// never wrote one — no worker was connected, the submission delivery faulted, or the C# kernel
+    /// answered a failure it did not record. A log already at a terminal status is left as it is.
     /// Writes through the external-node stream handle (routes to the ActivityLog's owning hub and
-    /// carries the caller's AccessContext across the Subscribe boundary); <see cref="ActivityLog.Fail"/>
-    /// appends the error and stamps <c>End</c>, so the Output pane leaves "Running…" with the reason.
+    /// carries the caller's AccessContext across the Subscribe boundary); the entry is appended and
+    /// <c>End</c> stamped, so the Output pane leaves "Running…" with the reason.
     /// </summary>
     // internal, not private: MeshWeaver.Graph.Test drives this directly to pin the #3117
     // release and the ContentAs fix. Nothing outside the test assembly can see it.
-    internal static void FailActivity(IMessageHub hub, string activityPath, string error,
+    internal static void FailActivity(IMessageHub hub, string activityPath, LogMessage entry,
         Exception? exception = null)
     {
+        var error = entry.Message;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
             ?.CreateLogger(LoggerCategory);
         // Log the REASON, not only a failure to record it: the activity content is visible
@@ -571,8 +612,19 @@ public static class CodeNodeType
                 // Content can be a degraded JsonElement, and a plain type test is then null — the
                 // lambda no-ops, no patch is sent, and the run this method exists to FAIL is left
                 // Running for ever. Exactly the trap ActivityLogAppender.Append's own lambda names.
+                // A status already settled is never overwritten: a C# kernel that ran the script
+                // has written Succeeded / Failed / Cancelled itself before it answers, and a late
+                // reconcile must not turn a cancelled run into a failed one.
                 curr.ContentAs<ActivityLog>(hub.JsonSerializerOptions, logger) is { } log
-                    ? curr with { Content = log.Fail(error) }
+                && !log.Status.IsTerminal()
+                    ? curr with
+                    {
+                        Content = log.Append(entry) with
+                        {
+                            Status = ActivityStatus.Failed,
+                            End = DateTime.UtcNow,
+                        },
+                    }
                     : curr)
             .Subscribe(
                 _ => { },

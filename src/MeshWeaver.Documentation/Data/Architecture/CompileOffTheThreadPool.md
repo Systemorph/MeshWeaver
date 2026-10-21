@@ -96,6 +96,53 @@ held by a script waiting for a compile that needs a slot). A lane leaf does noth
 pool call, no mesh read, no wait on another leaf, so it cannot nest by construction. Keep it that way —
 a leaf that needs IO splits it off, as the three diagnostics arms do.
 
+### A kernel script holds no `Compile` slot (the `KernelScript` lane)
+
+The paragraph above kept the EMIT out of the `Compile` pool, but the script's EXECUTION — and the
+session warm-up wait in front of it (`KernelScriptReferences.GetReferencesAsync`, which awaits the
+process-wide `SharedWarmup`) — were still async leaves of that same pool, holding one of its async
+slots (default: one per processor, so two to four on a CI runner) for the cell's whole run. That is the
+same nested-gate deadlock one level up: a running script can wait on another of the pool's ASYNC
+leaves — another kernel session's warm-up or execution (a cell that runs a cell and waits for it), a
+language-service workspace compile (`MeshNodeLanguageService`). With every slot held by a script waiting
+on such a leaf, none is ever admitted and no script ever finishes. Every Activity involved then stays
+`Running` for ever, and — because nothing faults — nothing is logged. Below saturation the same hold
+still capped the process at one running cell per processor and queued the language service behind
+user scripts.
+
+Measured while pinning it: the pool's BLOCKING leaves (`InvokeBlocking` — prebuilt adoption's MVID read
+in `PrebuiltAssemblySeeder.StandingBytesResolve`, the cell-surface loads in `CellSurfaceAssemblyProvider`)
+are admitted by a separate limited-concurrency scheduler, not by the async gate, so a script holding an
+async slot does NOT starve them. A script waiting on a NodeType activation is therefore not, by itself,
+this deadlock; a script waiting on another cell is.
+
+Both waits now run on their own lane, `IoPoolNames.KernelScript` (`IoPoolOptions.KernelScript`, 256 —
+a drain hook and a runaway stop, not a throttle; the CPU half of a cell is bounded by `CompileCpu`).
+**Rule:** a leaf that WAITS — on the mesh, on another leaf, on user code — never holds a `Compile` slot;
+`Compile` leaves are short file/PE reads and Roslyn workspace IO.
+
+`KernelScriptHoldsNoCompileSlotTest` (Graph.Test) pins it on a real mesh whose `Compile` pool has ONE
+slot: a cell that runs another cell and waits for it completes, and a plain cell completes while the
+pool's only async slot is held by other work. Both stay `Running` on the code before the change.
+
+Still open (not the cause found here, recorded so it is not re-investigated blind): the cell-surface
+resolution's store lookup (`IAssemblyStore.TryGetBuildPath` in `CellSurfaceAssemblyProvider.ResolveOne`)
+carries no bound of its own. The file-system store answers synchronously, so it cannot park there; a
+remote store that never answers would stall the submission before it runs.
+
+### A C# run that the kernel did not settle is failed, not left `Running`
+
+The dispatcher (`CodeNodeType`) used to post a C# cell's `SubmitCodeRequest` fire-and-forget, on the
+assumption that the Roslyn kernel always settles the ActivityLog. It does — when it runs the script.
+Every failure before that point (the kernel container's dispatch faulting and answering
+`Success = false`, a `DeliveryFailure`, a routing `NotFound`) left the run `Running` for ever, silently.
+The C# branch now observes the kernel's answer through `hub.Observe` exactly as the Python/JS branch
+does, and writes any non-success onto the Activity as `Failed` with the reason (a keyed, localized
+transcript entry, `activity.codeRun.failed`). The reconcile never overwrites a status the kernel
+already settled. It adds no timeout: a kernel that never answers is a defect of its own, to be fixed
+where it stalls — the deadlock above is one such stall, fixed at its root. Pinned by `CSharpCellKernelFaultFailsTheActivityTest` (a kernel plug-in that faults) and its
+control `CSharpCellRunKeepsTheKernelsVerdictTest` (the real kernel: success stays `Succeeded`).
+
 Tests, each with a negative control that fails on the unfixed code:
 
 - `CompileCpuLaneIsBoundedAndOffThePoolTest` (Hosting.Test) — six parked leaves on a cap-2 lane: at

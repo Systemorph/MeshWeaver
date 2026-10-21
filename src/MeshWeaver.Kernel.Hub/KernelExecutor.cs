@@ -68,7 +68,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     // (i.e. after scriptState is assigned), so block #2 always sees block #1's variables.
     // This replaces a hand-woven SemaphoreSlim — per ControlledIoPooling.md the ONLY
     // concurrency primitives are the IoPools. The compile LEAF inside Execute runs on the
-    // shared Compile pool (which bounds compiles ACROSS kernels); ordering WITHIN a kernel
+    // shared CPU lane (which bounds compiles ACROSS kernels); ordering WITHIN a kernel
     // is this Concat, not a lock. Push order == the executor action block's FIFO handling.
     private readonly Subject<Submission> submissions = new();
     private IDisposable? submissionPump;
@@ -91,18 +91,18 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         AsyncSubject<object?> Result,
         AccessContext? AccessContext);
 
-    // 🚦 Roslyn script compile+execute is a CPU/blocking leaf (the compile prologue +
-    // RuntimeMetadataReferenceResolver.ResolveMissingAssembly file I/O run synchronously).
-    // It MUST go through the bounded Compile IoPool — NEVER a bare Observable.FromAsync on
-    // the shared ThreadPool. An unbounded script compile parks a ThreadPool thread for the
-    // whole compile (and can block on an assembly-file lock when a concurrent NodeType
-    // compile is writing the same DLL); a burst of them under a bulk test run starves the
-    // ThreadPool, so every reactive-timeout op elsewhere (synced queries, mesh-node updates)
-    // deadlocks. Routing through the SAME Compile pool NodeType compilation uses serialises
-    // the two so they never race on the same assembly file. Unbounded fallback only when no
-    // registry is wired (DI-less); still offloads, just no cap.
-    private readonly IIoPool compilePool =
-        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile)
+    // 🚦 A cell's EXECUTION (user code that awaits) and the session warm-up WAIT run on their
+    // own lane — IoPoolNames.KernelScript — never a bare Observable.FromAsync on the shared
+    // ThreadPool, and never the Compile pool. They used to be async leaves of Compile, and that
+    // was the nested-gate deadlock: a running script can wait on another of that pool's async
+    // leaves — ANOTHER kernel session's warm-up or execution (a cell that runs a cell), a
+    // language-service compile. With every Compile slot held by a script waiting on such a leaf,
+    // none is ever admitted, no script finishes, and every Activity involved stays Running for
+    // ever with nothing logged (KernelScriptHoldsNoCompileSlotTest pins it). The CPU half of a
+    // cell (build, emit, load) runs on the CPU lane below, which cannot nest by construction.
+    // Unbounded fallback only when no registry is wired (DI-less); still offloads, no cap.
+    private readonly IIoPool scriptLane =
+        publicHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.KernelScript)
             ?? IoPool.Unbounded;
 
     // The CPU lane: a cell's Roslyn build + emit + load runs here, on the lane's own threads, never
@@ -346,7 +346,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// <list type="number">
     ///   <item>Resolve NuGet refs (Http IoPool leaf).</item>
     ///   <item>Bind per-submission globals + run Roslyn script under stdout capture
-    ///         (<c>Observable.Using</c> + the Compile IoPool leaf in RunOnePass).</item>
+    ///         (<c>Observable.Using</c> + the CPU-lane compile and script-lane execute leaves in RunOnePass).</item>
     ///   <item>Render return value if any (sync tail).</item>
     /// </list>
     /// Ordering across submissions is the serial Concat pump's job (no lock here).
@@ -367,12 +367,13 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
         // previous submission completed. So Execute is just: init → resolve NuGet refs → run
         // the Roslyn pass. SubscribeOn moves the WHOLE subscribe onto the ThreadPool, so the
         // executor action block is never blocked by a compile. EnsureInitializedAsync's
-        // AppDomain scan is ADDITIONALLY routed through the bounded Compile IoPool (issues
-        // #2480/#2578) — it used to run as a bare synchronous call here, off any pool, which
-        // meant it could neither be tracked nor cancelled by silo/mesh teardown; now it is the
-        // same tracked, drainable leaf shape as the Roslyn compile itself in RunOnePass.
+        // AppDomain scan is ADDITIONALLY a pooled leaf (issues #2480/#2578) — it used to run as
+        // a bare synchronous call here, off any pool, which meant it could neither be tracked
+        // nor cancelled by silo/mesh teardown. Its pool is the script lane, not Compile: the
+        // leaf is mostly a WAIT on the process-wide warm-up, and a Compile slot held across a
+        // wait starves every other async Compile leaf (other sessions, the language service).
         return Observable.Defer(() =>
-                compilePool.Invoke(t => EnsureInitializedAsync(t))
+                scriptLane.Invoke(t => EnsureInitializedAsync(t))
                     .SelectMany(_ => EnsureCellSurfaceReferences())
                     .SelectMany(_ => ResolveNuGetReferences(code))
                     .SelectMany(cleaned => RunOnePass(cleaned, viewId, scriptOutputLogger, inputs, accessContext, ct)))
@@ -423,7 +424,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                 var capture = CapturingTextWriter.Capture(stdoutPipe, stderrPipe);
                 return new StdoutScope(stdoutPipe, stderrPipe, capture);
             },
-            // Roslyn compile+execute on the bounded Compile IoPool (see `compilePool`) —
+            // Roslyn compile on the CPU lane, execute on the script lane (see `scriptLane`) —
             // NOT a bare Observable.FromAsync on the shared ThreadPool. `t` is the pool's
             // cancellation (cancelled on unsubscribe), identical to the prior FromAsync CT,
             // so REPL state + CancelScriptRequest semantics are preserved. The session owns
@@ -445,8 +446,10 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
             // 🚨 TWO leaves, not one (#5388). The Roslyn half — build the submission, emit, load —
             // is pure computation and runs on the CPU lane's own threads (`cpuLane`), never a
             // ThreadPool worker; only the script's EXECUTION, which is user code that awaits, runs
-            // as the Compile pool's async leaf. As one async leaf the whole emit ran on a pool
-            // worker before its first await (Doc/Architecture/CompileOffTheThreadPool).
+            // as an async leaf — of the script lane, never the Compile pool, because the script
+            // may wait on other async Compile leaves (another cell's kernel). As one async
+            // leaf the whole emit ran on a pool worker before its first await
+            // (Doc/Architecture/CompileOffTheThreadPool).
             scope => Observable.Defer(() =>
                 {
                     // A module the script names — its entry assembly or one of its PRIVATE
@@ -479,7 +482,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
                                         .Select(r => r.ToString()).ToList());
                             return submission;
                         })
-                        .SelectMany(compiled => compilePool.Invoke(t =>
+                        .SelectMany(compiled => scriptLane.Invoke(t =>
                         {
                             // The scope is held only while the submission STARTS: its first await
                             // captures the ExecutionContext with the identity set, and the scope is
@@ -554,7 +557,7 @@ internal sealed class KernelExecutor(IMessageHub publicHub)
     /// the globals from the public hub (the parent), so scripts see the SAME hub
     /// external callers do — they can post messages, subscribe streams, etc.
     ///
-    /// <para>🚨 Runs INSIDE the Compile IoPool leaf <see cref="Execute"/> wraps it in — never bare
+    /// <para>🚨 Runs INSIDE the script-lane IoPool leaf <see cref="Execute"/> wraps it in — never bare
     /// on the ThreadPool as before (issues #2480/#2578). The reference materialization behind
     /// <see cref="MeshScriptEnvironment.ReferencesAsync"/> can be genuinely slow the first time
     /// any mesh in the process touches it, and used to hold no pool gate at all while doing so —
