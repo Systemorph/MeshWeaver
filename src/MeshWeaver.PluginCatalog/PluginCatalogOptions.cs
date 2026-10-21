@@ -162,6 +162,11 @@ public sealed class PluginCatalogOptions
     /// here still suppresses it. This property keeps its surface and default
     /// (<c>true</c>); "unset" is read from <see cref="InstallPreInstalledPackagesConfigured"/>, which
     /// the configuration binds from the SAME key.</para>
+    ///
+    /// <para>🚨 <b>This key is also the ONE off-switch of the default-apps lane</b>
+    /// (<see cref="PackageManifest.DefaultApp"/>: Threads, Examples). Those apps are selected on every
+    /// instance — beside an explicit <see cref="InstallByDefault"/> set too, the single named exception to
+    /// <c>declared-package-set-is-exact</c> — and only an explicit <c>false</c> here removes them.</para>
     /// </summary>
     public bool InstallPreInstalledPackages { get; set; } = true;
 
