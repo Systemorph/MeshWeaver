@@ -2082,8 +2082,99 @@ declaration). Later revisions are therefore never delivered to a caller who lost
 `IsPointRead` defaults to false. A seam that does not say it serves a point read is treated as a
 listing, which is the closed direction. A page that must follow whether its viewer may still read
 the node it shows uses `DeclaredPointRead.ObservePointRead(hub, path, viewer)`, with the viewer's
-whole context so a virtual visitor or an API token keeps its flags: the standard check, or the
-declaration when that denies. It is never used to filter a listing.
+whole context so a virtual visitor or an API token keeps its flags. It is never used to filter a
+listing. It decides the way `RlsNodeValidator` decides a point read, live:
+
+1. `Access:DenyAnonymous` refuses a logged-out viewer before anything else.
+2. The node type's `INodeTypeAccessRule` for Read decides when one governs: a denying rule
+   outranks a grant the fold would give, and a granting rule admits. Otherwise the permission fold
+   decides. Either leg is composed **under the viewer's context**, never the ambient one, because
+   the fold reads the caller's flags off the ambient context. Composed under the ambient context,
+   it answered a Bearer viewer as a browser (the API-token clamp never ran) and a browser viewer as
+   a token whenever a token was ambient.
+3. A rule or fold that faults, or completes with no verdict, is undetermined. That fails closed and
+   is never re-decided through the declaration.
+4. Only a definitive denial consults `DeclaredPointRead.Admits`.
+
+Steps 2 and 3 are `DeclaredPointRead.ObserveStandardRead(hub, path, viewer)`. It is **the** live
+standard-read path, and any seam that must follow a read for a whole subscription builds on it. It
+stays live in every input:
+
+- **The node is the owner's current revision.** Storage is only an existence probe, because a
+  stored snapshot may trail a write the owner has acknowledged and never re-emits. Each revision
+  the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
+  or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
+- **One input set, both branches.** The evaluation is the type's Read rule when one governs,
+  otherwise the permission fold. Either way it is one verdict, asked again on every signal of one
+  shared input set. A rule's contract is one verdict (the lease takes the first, and so does
+  `SpaceAccessRule`). The fold resolves a custom role from one value of the role catalog and does
+  not re-emit when a role changes, so keeping an evaluation subscribed would not keep it current.
+  Liveness comes from the signals alone.
+
+**The contract: any input the evaluation reads must be in this set.** The set is derived from what
+`PermissionEvaluator` and the platform's access rules actually consult:
+
+| Input the evaluation reads | Who reads it | Signal |
+|---|---|---|
+| Grants and policies on the node's scope chain; group memberships; type gates; the partition's `_GitSync` (content ownership) | the fold (`ObserveEffectiveAssignments`, `ObserveScopePolicies`, `ObserveAllMembershipNodes`, `ObserveGatedNodes`, `ObserveRepositoryOwnedContent`) | the viewer's live fold on the **node** |
+| The fold on the `MainNode` | `SatelliteAccessRule` | the viewer's live fold on the **MainNode** |
+| Update on the **partition root**, which a descendant `_Policy` can cut off from the node's own fold | `StorageBindingAccessRule` | the viewer's live fold on the **root** of the node and of its MainNode |
+| The platform-admin predicate (`IsGlobalAdmin`) | `SpaceAccessRule`, `GitHubSyncConfigAccessRule` | the viewer's live fold on **`Admin`** |
+| Custom role definitions | the fold (`GetRole`, one catalog value per evaluation) | the **role catalog's** own emissions, changes and deletions alike |
+| `{space}/_GitSync` content read from storage | `SpaceAccessRule` | feed commits on the node's scopes |
+| Anything committed elsewhere and lost | — | feed **gaps** |
+
+Feed commits count when they can reach the node:
+- grants (`{scope}/_Access/…`), policies (`{scope}/_Policy`) and sync configs (`{scope}/_GitSync`)
+  on an ancestor-or-self of the node or its `MainNode`, on the root, or on `Admin`, matched by
+  namespace and id so a typeless deletion still counts;
+- any typed group membership or role;
+- a typeless deletion only when its path places it: the node, one of its scopes, or a membership
+  (`{group}/{member}_Membership`). A typeless role deletion is carried by the role catalog.
+
+A fold's or the catalog's first value establishes the verdict; every later signal withdraws it.
+
+**Rules that only test the caller or the context read nothing from the mesh**: `VUserAccessRule`,
+`SystemOnlyAccessRule`, the functional rule sets, and the denying placeholders.
+`ReadInputSetGuardTest` lists every `INodeTypeAccessRule` in the core assemblies the suite loads,
+with what its Read consults. A new rule fails the test until someone checks its inputs against this
+table and adds its line. The guard cannot see what a rule reads, so it forces that review instead.
+Rules in MeshWeaver.Plugins are outside it: `ThreadNodeType`, `ThreadMessageNodeType`,
+`TokenUsage`, `PortalNodeType`, `DocumentPartNodeTypes`, `SessionPresenceNodeType` and
+`DispatchSwitchAccessRule`. Each of them must also read only inputs in this table.
+- **Fail closed while pending.** Every signal after the verdict is established withdraws it
+  first. The verdict becomes undetermined ("re-check pending", refused), and only that re-check's
+  own answer can grant again. So a stalled re-check stays refused, and a stream of signals cannot
+  keep an earlier grant alive by restarting the check that would replace it. Each check is also
+  one verdict held to the permission-establishment budget. The idle subscription is never timed
+  out. The signals that establish the verdict (the first check, each fold's first value) withdraw
+  nothing, so opening a page does not blink.
+- **The cost of failing closed.** An open page may show "no access" for the length of one
+  re-check after a matching signal, even when the answer comes back unchanged. The filters are
+  kept tight for that reason: an access input matches only on the node's own scopes, and an
+  ordinary content change never matches. A typeless deletion matches only by its path (the
+  node, its scopes, or a membership), never wholesale. Because the delete pipeline publishes
+  every deletion untyped, a wholesale match would blink every open rule-governed page on every
+  delete in the mesh. What remains broad cannot be narrowed from the event: a typed membership
+  or role change anywhere, and a declared gap.
+- **Off every source gate.** Each signal (revision, fold emission, feed commit, gap) is re-emitted
+  as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
+  shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs
+  inside the gate that signalled it, and no thread is held per open subscription.
+- **Fan-out cost.** Each open subscription holds the following, whether or not a rule governs the
+  node:
+  - up to five folds (node, `MainNode`, the root of each, `Admin`, deduplicated);
+  - one subscription to the process-wide cached role catalog;
+  - one feed handler and one gap subscription.
+
+  On every commit anywhere in the mesh, the handler runs a string match against the node's scope
+  set (a few entries). Only a matching signal costs a re-evaluation: one rule call or one fold read.
+  An in-flight evaluation is superseded by the next (`Switch`).
+- **Every evaluation is re-established as the viewer** at the moment it subscribes. A
+  re-evaluation triggered on another thread never inherits that thread's context.
+
+The RLS validator's own-scope shortcut (a user reading inside the partition named after them) is
+not mirrored. Where the fold does not already grant such a read, the verdict errs closed.
 
 Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
 - a point read admitted while no listing sees the node, and the restored grant row leaking into the
@@ -2096,6 +2187,10 @@ Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
   at expiry, and a refusal right after the owner acknowledged a revocation;
 - an undetermined type rule not re-decided, and a borrowed System stamp not making a node
   platform-issued;
+- the page's live verdict consulting the type's rule like the RLS validator (a denying rule
+  outranks a grant, a granting rule admits, an undetermined rule is not re-decided, a definitive
+  rule denial reaches the declaration), and evaluating the fold as the viewer rather than the
+  ambient context (an API-token viewer clamped, an ambient token not clamping a browser viewer);
 - a collection read or subscription on an admitted node's hub refused (no satellite returned), an
   undeclared layout area refused, and a declared one admitted.
 
