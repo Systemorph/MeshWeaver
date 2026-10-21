@@ -48,7 +48,7 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
   involved**, and a section whose inputs did not change is not re-rendered.
 - The bar is seeded once per area host (`LayoutAreaHost.TryMarkEditStateInitialized`), so an area
   that re-renders the app keeps what was typed.
-- Computed filters and conditions are kept for the life of the render (`CatalogApp.Retained`, latest
+- Computed filters and conditions are kept for the life of the area host (`CatalogApp.Retained`, latest
   value replayed, connections owned by the host): a menu rebuilt because one category's `When`
   changed does not blank another category's computed section.
   A changed typed text is a new result set: the section's search re-queries and its paging restarts.

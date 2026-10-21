@@ -21,7 +21,9 @@ public class CatalogAppTest
     private static List<UiControl> Collect(IObservable<UiControl> source)
     {
         var seen = new List<UiControl>();
-        source.Subscribe(seen.Add);
+        // An error arm: a retained stream whose owner is disposed at the end of a test terminates its
+        // late subscribers with ObjectDisposedException, which must not escape as an unhandled fault.
+        source.Subscribe(seen.Add, _ => { });
         return seen;
     }
 
@@ -132,6 +134,16 @@ public class CatalogAppTest
     }
 
     [Fact]
+    public void ANamespaceAlternation_StillAcceptsATypedFilter()
+    {
+        // The parser appends the namespace membership AFTER the ordinary filters.
+        const string hidden = "namespace:Fabrikam/Deals|Globex/Deals nodeType:Crm/Opportunity sort:name";
+
+        Assert.Equal("content.status:Open", CatalogQuery.Narrowing(hidden, "content.status:Open"));
+        Assert.Equal("", CatalogQuery.Narrowing(hidden, "content.status:Open OR content.status:Won"));
+    }
+
+    [Fact]
     public void ARetainedApp_ResumesAComputedFilter_WhenTheMenuIsRebuilt()
     {
         var filter = new Subject<string?>();
@@ -140,7 +152,7 @@ public class CatalogAppTest
         var search = app.Retained(owner, new MeshWeaver.Messaging.ReleaseLane()).Categories[0].Searches[0];
 
         var first = new List<UiControl>();
-        var subscription = search.Section(NothingTyped, "Reply needed").Subscribe(first.Add);
+        var subscription = search.Section(NothingTyped, "Reply needed").Subscribe(first.Add, _ => { });
         filter.OnNext("nodeType:Crm/Counterparty id:fabrikam partitions:all");
         subscription.Dispose();   // the menu is rebuilt: its sections are torn down and re-subscribed
 

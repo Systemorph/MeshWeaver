@@ -257,11 +257,13 @@ public record CatalogApp(string? Title = null)
         }
         else
             typed = Observable.Return("");
-        // The caller's computed filters and conditions are kept (latest value replayed) for as long as
-        // this render lives: a menu rebuilt because a category's When changed must not lose a filter
-        // that already emitted. A re-render replaces — and so releases — the previous owner.
+        // The caller's computed filters and conditions are kept (latest value replayed) for the life of
+        // the host: a menu rebuilt because a category's When changed must not lose a filter that already
+        // emitted. Owned by the HOST, not replaced per render: releasing an owner while the previous
+        // render's sections are still subscribed would fault them (the helper refuses a ride on a
+        // released connection) before the new render replaces them.
         var owner = new CompositeDisposable();
-        host.ReplaceDisposable($"catalogApp:{QueryDataId}", owner);
+        host.RegisterForDisposal(owner);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<CatalogApp>();
         return Retained(owner, host.Hub.ServiceProvider.GetRequiredService<ReleaseLane>()).Compose(typed, selected ?? CategoryIdOf(host.Reference.Id?.ToString()),
             logger is null ? null : details => logger.LogWarning("{Details}", details));
@@ -463,16 +465,24 @@ public static partial class CatalogQuery
     private static bool Same(IReadOnlyList<string>? a, IReadOnlyList<string>? b) =>
         (a is null && b is null) || (a is not null && b is not null && a.SequenceEqual(b, StringComparer.Ordinal));
 
-    /// <summary>Every conjunct of the hidden filter is, in order, a leading conjunct of the combined one.</summary>
+    /// <summary>Every conjunct of the hidden filter is still a conjunct of the combined one — in ANY
+    /// order (the parser appends a namespace membership after the ordinary filters, so a typed term
+    /// lands BEFORE it), each matched once. Then the combined filter is the hidden one AND more.</summary>
     private static bool ConjunctsKept(QueryNode? hidden, QueryNode? combined)
     {
         if (hidden is null)
             return true;
         if (combined is null)
             return false;
-        var h = Conjuncts(hidden);
-        var c = Conjuncts(combined);
-        return c.Count >= h.Count && h.Select((n, i) => NodeEquals(n, c[i])).All(x => x);
+        var remaining = Conjuncts(combined).ToList();
+        foreach (var conjunct in Conjuncts(hidden))
+        {
+            var at = remaining.FindIndex(c => NodeEquals(conjunct, c));
+            if (at < 0)
+                return false;
+            remaining.RemoveAt(at);
+        }
+        return true;
     }
 
     /// <summary>The conjuncts of <paramref name="node"/>, AND groups flattened at every depth (a
