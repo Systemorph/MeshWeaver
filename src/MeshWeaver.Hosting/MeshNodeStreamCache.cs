@@ -233,10 +233,11 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     /// Validity window for a cached <c>(path,user) → Permission</c> result. A
     /// hit within this window short-circuits the local permission evaluation; a
     /// miss evaluates <c>hub.GetEffectivePermissions</c> and caches the result.
-    /// Trade-off: permission revocations propagate after at most <c>AccessTtl</c>
-    /// — short enough for interactive UX, long enough that <c>GetStream</c> hot
-    /// paths don't re-walk the scope hierarchy every emission. The value matches
-    /// the canonical AccessControl cache TTL used elsewhere in the codebase (30s).
+    /// 🚨 The TTL is NOT what keeps a verdict fresh: an entry is served only while the
+    /// permission fold's inputs are unchanged (<see cref="AccessGeneration"/>), so a
+    /// grant, deny, policy, membership or role change stops it being served the moment
+    /// the fold can see that change — in both directions. The TTL bounds only what the
+    /// fold's own queries do not carry (a node type's read rule, re-decided on a denial).
     /// </summary>
     private static readonly TimeSpan AccessTtl = TimeSpan.FromSeconds(30);
 
@@ -667,8 +668,128 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         // re-enqueue IS that prescription. See the failure handler in BuildUpdateQueueObservable.
         int Attempt = 0);
 
-    /// <summary>Cached effective-permission probe with expiry.</summary>
-    private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil, bool Undetermined = false);
+    /// <summary>
+    /// Cached effective-permission probe with expiry, stamped with the fold-input
+    /// <see cref="AccessGeneration"/> that was current when its evaluation STARTED.
+    /// </summary>
+    private sealed record AccessEntry(Permission Permissions, DateTimeOffset ValidUntil, AccessGeneration Generation,
+        bool Undetermined = false);
+
+    /// <summary>
+    /// How many snapshots the permission fold's inputs have committed: the GLOBAL ones (root grants
+    /// and policy, roles, memberships, gated nodes — any of them can change a verdict on any path)
+    /// and the ones anchored to the verdict's own partition. Two verdicts computed under the same
+    /// generation were computed from the same inputs.
+    /// </summary>
+    private readonly record struct AccessGeneration(long Global, long Partition);
+
+    /// <summary>
+    /// One scope's fold-input commit counters. <see cref="Generation"/> advances TWICE per committed
+    /// snapshot — when the commit begins and when it ends — and <see cref="InFlight"/> counts the
+    /// commits between those two points. Mutated only through <see cref="Interlocked"/>.
+    /// </summary>
+    private sealed class FoldInputCounters
+    {
+        public long Generation;
+        public long InFlight;
+    }
+
+    // 🚨 A cached verdict is valid only while the fold's INPUTS are unchanged (a read of a page probed
+    // a moment before its partition's PublicRead `_Policy` landed went on answering the denial computed
+    // in that moment). Every `$security-*` query COMMITS each new snapshot in two phases around its
+    // delivery (FoldInputReplay): begin (InFlight++, Generation++) → buffer + notify subscribers → end
+    // (Generation++, InFlight--). See ReadAccessGeneration for why that makes a cached verdict safe to
+    // serve from inside a subscriber's own change callback.
+    private readonly FoldInputCounters _globalFoldInputs = new();
+    private readonly ConcurrentDictionary<string, FoldInputCounters> _partitionFoldInputs = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The generation a verdict for <paramref name="path"/> is evaluated under, and whether that
+    /// verdict may be CACHED.
+    ///
+    /// <para>🚨 <b>The generations are read BEFORE the in-flight counts</b>, and a commit raises its
+    /// in-flight count BEFORE its generation. So either this read sees the commit in flight (the verdict
+    /// is answered but not cached — it may come from either snapshot), or the commit begins after the
+    /// generations were read, which advances them and leaves anything stamped here stale on arrival.
+    /// There is no third interleaving: an old-snapshot verdict can never be stored under a generation
+    /// that a completed commit has not already moved past.</para>
+    ///
+    /// <para>That is what closes the in-callback read (review of #7046). A subscriber is notified
+    /// INSIDE the commit, so a read it opens from that callback finds the generation already advanced
+    /// — no verdict cached before the commit matches — and re-evaluates against a buffer that already
+    /// holds the new snapshot. Advancing only after delivery let that read take the previous verdict;
+    /// advancing only before buffering would pair the new generation with the old snapshot.</para>
+    /// </summary>
+    private (AccessGeneration Generation, bool Cacheable) ReadAccessGeneration(string path)
+    {
+        var partition = _partitionFoldInputs.TryGetValue(PartitionOf(path), out var p) ? p : null;
+        var generation = new AccessGeneration(
+            Interlocked.Read(ref _globalFoldInputs.Generation),
+            partition is null ? 0 : Interlocked.Read(ref partition.Generation));
+        var inFlight = Interlocked.Read(ref _globalFoldInputs.InFlight)
+            + (partition is null ? 0 : Interlocked.Read(ref partition.InFlight));
+        return (generation, inFlight == 0);
+    }
+
+    private static string PartitionOf(string path)
+    {
+        var trimmed = path.TrimStart('/');
+        var slash = trimmed.IndexOf('/');
+        return slash < 0 ? trimmed : trimmed[..slash];
+    }
+
+    /// <summary>
+    /// The counters a fold-input query commits against: its partition's for a partition-anchored
+    /// read, the global ones otherwise (a global input can change a verdict on any path).
+    /// </summary>
+    private FoldInputCounters FoldInputCountersFor(object queryId)
+        => SecurityQueries.TryGetAnchoredPartition(queryId, out var partition)
+            ? _partitionFoldInputs.GetOrAdd(partition, static _ => new FoldInputCounters())
+            : _globalFoldInputs;
+
+    private static void BeginFoldInputCommit(FoldInputCounters counters)
+    {
+        Interlocked.Increment(ref counters.InFlight);
+        Interlocked.Increment(ref counters.Generation);
+    }
+
+    private static void EndFoldInputCommit(FoldInputCounters counters)
+    {
+        Interlocked.Increment(ref counters.Generation);
+        Interlocked.Decrement(ref counters.InFlight);
+    }
+
+    /// <summary>
+    /// <c>Replay(1)</c>'s subject with each snapshot COMMITTED in two phases around its delivery:
+    /// the commit begins before the buffer takes the snapshot and notifies the subscribers, and ends
+    /// after. Pure counter operations on the emitting thread — no I/O, nothing re-subscribed; the next
+    /// read simply re-evaluates. See <see cref="ReadAccessGeneration"/> for why both phases are needed.
+    /// </summary>
+    private sealed class FoldInputReplay<T>(FoldInputCounters counters) : ISubject<T>
+    {
+        private readonly ReplaySubject<T> buffer = new(1);
+
+        public void OnNext(T value)
+        {
+            BeginFoldInputCommit(counters);
+            try
+            {
+                buffer.OnNext(value);
+            }
+            finally
+            {
+                // A subscriber that throws must not leave the scope "in flight" forever — that would
+                // stop every later verdict in it from being cached, silently.
+                EndFoldInputCommit(counters);
+            }
+        }
+
+        public void OnError(Exception error) => buffer.OnError(error);
+
+        public void OnCompleted() => buffer.OnCompleted();
+
+        public IDisposable Subscribe(IObserver<T> observer) => buffer.Subscribe(observer);
+    }
 
     public MeshNodeStreamCache(
         IMessageHub meshHub,
@@ -2357,9 +2478,19 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
         var key = BuildAccessCacheKey(path, captured);
         return Observable.Defer(() =>
         {
-            // TTL cache hit ⇒ short-circuit the evaluation. The entry keeps whether its denial was
-            // UNDETERMINED, so a cached "could not check" is never mistaken for a definitive denial.
+            // The generation is read BEFORE the evaluation, so a fold input that commits while it
+            // runs leaves the stored verdict stamped with the generation it was not computed from;
+            // and a verdict evaluated while a commit is IN FLIGHT is answered but never cached (see
+            // ReadAccessGeneration).
+            var (generation, cacheable) = ReadAccessGeneration(path);
+
+            // Cache hit ⇒ short-circuit the evaluation — only while the fold's inputs are the ones
+            // the verdict was computed from (a grant, deny, policy, membership or role written since
+            // makes it stale at once, in either direction) and within the TTL. The entry keeps
+            // whether its denial was UNDETERMINED, so a cached "could not check" is never mistaken
+            // for a definitive denial.
             if (_access.TryGetValue(key, out var cached)
+                && cached.Generation == generation
                 && cached.ValidUntil > DateTimeOffset.UtcNow)
             {
                 return Observable.Return((cached.Permissions, cached.Undetermined));
@@ -2407,8 +2538,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                             .Select(verdict => verdict == true
                                 ? (Permissions: perms | Permission.Read, Undetermined: false)
                                 : (Permissions: perms, Undetermined: verdict is null)))
-                    .Do(probe => _access[key] =
-                        new AccessEntry(probe.Permissions, DateTimeOffset.UtcNow + AccessTtl, probe.Undetermined));
+                    .Do(probe =>
+                    {
+                        if (cacheable)
+                            _access[key] = new AccessEntry(
+                                probe.Permissions, DateTimeOffset.UtcNow + AccessTtl, generation, probe.Undetermined);
+                    });
             }
         });
     }
@@ -3478,7 +3613,12 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
                         : Observable.Using(() => accessService.ImpersonateAsSystem(), _ => updates);
                 })
                 .SubscribeOn(TaskPoolScheduler.Default)
-                .Replay(1)
+                // A permission-fold input reports each committed snapshot, so verdicts cached from
+                // the previous one stop being served (see AccessGeneration). Everything else is a
+                // plain Replay(1).
+                .Multicast(SecurityQueries.IsFoldInput(id)
+                    ? new FoldInputReplay<IEnumerable<MeshNode>>(FoldInputCountersFor(id))
+                    : (ISubject<IEnumerable<MeshNode>>)new ReplaySubject<IEnumerable<MeshNode>>(1))
                 // AutoConnect(1): connect the upstream on the FIRST subscriber
                 // and keep it alive thereafter (AutoConnect doesn't track
                 // disconnect). Lazy connect matters under CAS contention —

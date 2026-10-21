@@ -238,7 +238,7 @@ public static class SecurityQueries
         => Enumeration($"path:{AccessAssignmentGuard.SyncConfigPath(partition)} {ContentProjection}");
 
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the sync-config read.</summary>
-    public const string SyncConfigQueryIdPrefix = "$security-sync:";
+    public const string SyncConfigQueryIdPrefix = QueryIdPrefix + "sync:";
 
     /// <summary>The cache id of <see cref="PartitionSyncConfig"/> for <paramref name="partition"/>.</summary>
     /// <param name="partition">The partition (first path segment).</param>
@@ -248,11 +248,11 @@ public static class SecurityQueries
 
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the grant read — <c>$security-access:</c>
     /// alone is the ROOT scope's id, and a partition's is this prefix plus its name.</summary>
-    public const string AssignmentsQueryIdPrefix = "$security-access:";
+    public const string AssignmentsQueryIdPrefix = QueryIdPrefix + "access:";
 
     /// <summary>The <c>IMeshNodeStreamCache</c> id prefix of the policy read — the
     /// <see cref="AssignmentsQueryIdPrefix"/> twin.</summary>
-    public const string PoliciesQueryIdPrefix = "$security-policy:";
+    public const string PoliciesQueryIdPrefix = QueryIdPrefix + "policy:";
 
     /// <summary>The cache id of <see cref="RootAssignments"/> — the scope that belongs to no partition.</summary>
     public const string RootAssignmentsQueryId = AssignmentsQueryIdPrefix;
@@ -297,6 +297,49 @@ public static class SecurityQueries
             ? ImmutableArray<string>.Empty
             : [PartitionAssignmentsQueryId(partition), PartitionPoliciesQueryId(partition),
                 PartitionSyncConfigQueryId(partition)];
+
+    /// <summary>
+    /// The prefix EVERY permission-fold read is cached under in <c>IMeshNodeStreamCache</c> — the
+    /// per-partition grant, policy and sync-config reads above and the global role, membership and
+    /// gated-node reads <c>PermissionEvaluator</c> mints. The stream cache keys its verdict
+    /// invalidation on it: a new snapshot of any query carrying this prefix is a change to an input
+    /// of the fold, so a verdict computed before it may no longer hold.
+    /// </summary>
+    public const string QueryIdPrefix = "$security-";
+
+    /// <summary>Whether <paramref name="queryId"/> names a permission-fold read (see <see cref="QueryIdPrefix"/>).</summary>
+    /// <param name="queryId">A stream-cache query id.</param>
+    /// <returns><c>true</c> for every <c>$security-*</c> id.</returns>
+    public static bool IsFoldInput(object? queryId)
+        => queryId is string id && id.StartsWith(QueryIdPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The partition a fold-input query is confined to, when it is one of the
+    /// <see cref="PartitionAnchoredQueryIds"/>; <c>false</c> for a GLOBAL fold input (the root
+    /// scope's grants and policy, roles, memberships, gated nodes), whose change can affect a
+    /// verdict on any path.
+    /// </summary>
+    /// <param name="queryId">A stream-cache query id.</param>
+    /// <param name="partition">The partition (first path segment) the query reads.</param>
+    /// <returns><c>true</c> when the id is partition-anchored.</returns>
+    public static bool TryGetAnchoredPartition(object? queryId, out string partition)
+    {
+        partition = string.Empty;
+        if (queryId is not string id)
+            return false;
+        foreach (var prefix in AnchoredPrefixes)
+        {
+            if (id.Length > prefix.Length && id.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                partition = id[prefix.Length..];
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static readonly ImmutableArray<string> AnchoredPrefixes =
+        [AssignmentsQueryIdPrefix, PoliciesQueryIdPrefix, SyncConfigQueryIdPrefix];
 
     /// <summary>
     /// The root-scope <c>AccessAssignment</c>s naming ONE subject — <see cref="RootAssignments"/>
