@@ -123,6 +123,41 @@ public class CatalogAppTest
     }
 
     [Fact]
+    public void AGroupedHiddenConjunction_StillAcceptsATypedFilter()
+    {
+        const string grouped = "partitions:all (nodeType:Crm/Opportunity content.isOpen:true) sort:name";
+
+        Assert.Equal("content.status:Open", CatalogQuery.Narrowing(grouped, "content.status:Open"));
+        Assert.Equal("", CatalogQuery.Narrowing(grouped, "content.status:Open OR content.status:Won"));
+    }
+
+    [Fact]
+    public void ARetainedApp_ResumesAComputedFilter_WhenTheMenuIsRebuilt()
+    {
+        var filter = new Subject<string?>();
+        var app = new CatalogApp().WithCategory("reply", "Reply needed", CatalogSearch.Computed(filter, itemArea: "Card"));
+        using var owner = new System.Reactive.Disposables.CompositeDisposable();
+        var search = app.Retained(owner, new MeshWeaver.Messaging.ReleaseLane()).Categories[0].Searches[0];
+
+        var first = new List<UiControl>();
+        var subscription = search.Section(NothingTyped, "Reply needed").Subscribe(first.Add);
+        filter.OnNext("nodeType:Crm/Counterparty id:fabrikam partitions:all");
+        subscription.Dispose();   // the menu is rebuilt: its sections are torn down and re-subscribed
+
+        var second = Collect(search.Section(NothingTyped, "Reply needed"));
+
+        Assert.Single(first);
+        var resumed = Assert.IsType<MeshSearchControl>(Assert.Single(second));
+        Assert.StartsWith("nodeType:Crm/Counterparty id:fabrikam", resumed.HiddenQuery?.ToString());
+    }
+
+    [Fact]
+    public void TheParsersReservedNames_CannotBeMutated()
+    {
+        Assert.IsNotType<HashSet<string>>(QueryParser.ReservedQualifierNames);
+    }
+
+    [Fact]
     public void TheDropSet_IsTheParsersReservedQualifiers_ExceptSort()
     {
         var expected = QueryParser.ReservedQualifierNames.Where(q => !q.Equals("sort", StringComparison.OrdinalIgnoreCase))

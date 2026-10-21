@@ -46,7 +46,11 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
   the reader types. Each search's section is its OWN area, re-emitted with the typed text as the
   catalog's `VisibleQuery` — so the existing MeshSearch view re-queries; **no view change is
   involved**, and a section whose inputs did not change is not re-rendered.
-- The bar is seeded once per area host, so an area that re-renders the app keeps what was typed.
+- The bar is seeded once per area host (`LayoutAreaHost.TryMarkEditStateInitialized`), so an area
+  that re-renders the app keeps what was typed.
+- Computed filters and conditions are kept for the life of the render (`CatalogApp.Retained`, latest
+  value replayed, connections owned by the host): a menu rebuilt because one category's `When`
+  changed does not blank another category's computed section.
   A changed typed text is a new result set: the section's search re-queries and its paging restarts.
 - The typed text follows each hidden query, and the parser keeps the last `sort:`, so a typed order
   (`sort:name`) wins. Switching category keeps the text.
@@ -85,8 +89,8 @@ back to the first. The selection is carried as the tabs' `ActiveTabId`.
 | Where | Shape |
 |---|---|
 | CRM portfolio board (MeshWeaver.Crm) | Reply needed / Waiting on them (computed) · one category per counterparty kind · Deals (legend + pipeline). |
-| AI catalogs — `src/MeshWeaver.AI/AiCatalogLayoutAreas.cs` (Plugins) | Agents / Skills / Providers / Models / Tiers × This space · User · Global; a "+" per tab into that tab's namespace; "This space" conditional. Today on the superseded `WithMeshSearch`. |
-| Threads app — `AiThreadsApplication.cs`, `ThreadGroups.cs` (Plugins) | Groups as categories, computed filters; addressable groups (`/AI/AiThreads/{group}`); count badges once the menu carries counts. |
+| AI catalogs — `src/MeshWeaver.AI/AiCatalogLayoutAreas.cs` (Plugins) — **first Plugins migration** | Agents / Skills / Providers / Models / Tiers × This space · User · Global; a "+" per tab into that tab's namespace; "This space" conditional. Today on the superseded `WithMeshSearch`. |
+| Threads app — `AiThreadsApplication.cs`, `ThreadGroups.cs` (Plugins) | **Not yet.** Its groups partition ONE query in memory by content facts, not by query terms, and it needs lazy Count/Active badges. It adopts once groups are query-expressible (or a rows variant of `CatalogSearch` exists) and the menu carries counts. |
 | Mailbox — `Essentials/Mailbox/Source/MailboxAreas.cs` | Flat and grouped (`WithGroupBy(…).WithSectionCounts(true)` through `WithConfigure`). |
 | Playroom, Chess history, Store plugin sources | Per-module `Catalog(…)` factories with a conditional "+" (`WithCreate(…, when:)`). |
 | Examples start tab — `Developer/DeveloperApp` | Categories per extension slot, `sort:name`, 3 columns, **no bar**. |

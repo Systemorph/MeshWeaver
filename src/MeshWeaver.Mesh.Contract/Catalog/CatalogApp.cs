@@ -1,10 +1,11 @@
 using System.Collections.Frozen;
 using System.Collections.Immutable;
-using System.Runtime.CompilerServices;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -245,9 +246,9 @@ public record CatalogApp(string? Title = null)
         IObservable<string> typed;
         if (ShowQueryBar)
         {
-            // Seeded ONCE per host: an area that re-renders the app (an observable area re-emitting)
-            // must not wipe what the reader has typed.
-            if (Seeded.GetOrCreateValue(host).Add(QueryDataId))
+            // Seeded ONCE per host (the host's own synchronized guard): an area that re-renders the
+            // app (an observable area re-emitting) must not wipe what the reader has typed.
+            if (host.TryMarkEditStateInitialized($"catalogApp:{QueryDataId}"))
                 host.UpdateData(QueryDataId, "");
             typed = host.Stream.GetDataStream<string>(QueryDataId)
                 .Select(text => text ?? "")
@@ -256,12 +257,41 @@ public record CatalogApp(string? Title = null)
         }
         else
             typed = Observable.Return("");
+        // The caller's computed filters and conditions are kept (latest value replayed) for as long as
+        // this render lives: a menu rebuilt because a category's When changed must not lose a filter
+        // that already emitted. A re-render replaces — and so releases — the previous owner.
+        var owner = new CompositeDisposable();
+        host.ReplaceDisposable($"catalogApp:{QueryDataId}", owner);
         var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger<CatalogApp>();
-        return Compose(typed, selected ?? CategoryIdOf(host.Reference.Id?.ToString()),
+        return Retained(owner, host.Hub.ServiceProvider.GetRequiredService<ReleaseLane>()).Compose(typed, selected ?? CategoryIdOf(host.Reference.Id?.ToString()),
             logger is null ? null : details => logger.LogWarning("{Details}", details));
     }
 
-    private static readonly ConditionalWeakTable<LayoutAreaHost, HashSet<string>> Seeded = new();
+    /// <summary>
+    /// A copy whose computed filters, create conditions and category conditions REPLAY their latest
+    /// value, the connections owned by <paramref name="owner"/>. A section re-subscribed after the
+    /// menu was rebuilt (a category's <see cref="CatalogCategory.When"/> changed) then resumes from
+    /// the last filter instead of waiting, blank, for the next emission. <see cref="Render"/> does this.
+    /// </summary>
+    /// <param name="owner">Owns the replay connections; dispose it to release them.</param>
+    /// <param name="lane">The release lane the connections' terminals are delivered on — the mesh's.</param>
+    public CatalogApp Retained(CompositeDisposable owner, ReleaseLane lane)
+    {
+        IObservable<T>? Keep<T>(IObservable<T>? source) =>
+            source?.Replay(1).AutoConnectOwnedBy(owner, lane, nameof(CatalogApp));
+        return this with
+        {
+            Categories = Categories.Select(c => c with
+            {
+                When = Keep(c.When),
+                Searches = c.Searches.Select(s => s with
+                {
+                    ComputedFilter = Keep(s.ComputedFilter),
+                    CreateWhen = Keep(s.CreateWhen),
+                }).ToImmutableList(),
+            }).ToImmutableList(),
+        };
+    }
 
     /// <summary>The category a reference id names: the id without its URL query (<c>deals?x=1</c> → <c>deals</c>). Pure.</summary>
     /// <param name="referenceId">The layout-area reference's id, or null.</param>
@@ -445,8 +475,10 @@ public static partial class CatalogQuery
         return c.Count >= h.Count && h.Select((n, i) => NodeEquals(n, c[i])).All(x => x);
     }
 
+    /// <summary>The conjuncts of <paramref name="node"/>, AND groups flattened at every depth (a
+    /// grouped hidden <c>(a b)</c> followed by <c>c</c> parses as <c>AND(AND(a,b),c)</c>); OR groups stay whole.</summary>
     private static IReadOnlyList<QueryNode> Conjuncts(QueryNode node) =>
-        node is QueryAnd and ? and.Children : [node];
+        node is QueryAnd and ? and.Children.SelectMany(Conjuncts).ToList() : [node];
 
     private static bool NodeEquals(QueryNode a, QueryNode b) => (a, b) switch
     {
