@@ -550,6 +550,96 @@ public class DefaultNodeNavigationTest
             "Show all links to the search, not to a node");
     }
 
+    /// <summary>
+    /// "In the side menu index, show expand when an element has children" (maintainer, 2026-10-21):
+    /// a folder OFF the reader's path is listed but its level is not loaded, so without a probe it
+    /// was a plain link — a folder that looked like a page. The probe's answer marks it, and the
+    /// rail then draws it as a group with its chevron.
+    /// </summary>
+    [Fact]
+    public void AFolderOffThePathThatHasChildrenOffersItsExpander()
+    {
+        // Only the root level is loaded: HardwareOptions' own child (Gpus) is NOT in the subtree.
+        var rootLevel = Tree().Where(n => n.Path.Count(c => c == '/') <= Root.Count(c => c == '/') + 1).ToList();
+        var nav = DefaultNodeNavigation.Build(Root, rootLevel, Root + "/Consumption",
+            ImmutableDictionary<string, IndexLevel>.Empty,
+            new IndexLabels("Load more", "Show all", m => m),
+            ImmutableHashSet.Create(Root + "/HardwareOptions"))!;
+
+        var hardware = nav.Entries.Single(e => e.Path == Root + "/HardwareOptions");
+        hardware.Children.Should().BeEmpty("its level is not loaded");
+        hardware.HasUnloadedChildren.Should().BeTrue("the probe found a child, so its line must offer an expander");
+        nav.Entries.Single(e => e.Path == Root + "/CapacityModel").HasUnloadedChildren
+            .Should().BeFalse("a page the probe found empty stays a plain link");
+
+        var rail = SuppliedNavigationRail.Plan(nav, Root + "/Consumption");
+        var group = rail.Items.OfType<SuppliedNavigationRail.RailGroup>().Single(g => g.Path == Root + "/HardwareOptions");
+        group.Expanded.Should().BeFalse("only the groups on the reader's path are open");
+        group.Links.Select(l => l.Path).Should().Equal([Root + "/HardwareOptions"], "the folder's own page is its first line");
+        group.Folder.Should().NotBeNull("its children load when the reader opens it");
+        group.Folder!.Address.Should().Be(Root + "/Consumption", "the page being read serves the folder area");
+        group.Folder.Reference.Area.Should().Be(SuppliedNavigationRail.FolderArea);
+        group.Folder.Reference.GetParameterValue(SuppliedNavigationRail.FolderParameter)
+            .Should().Be(Root + "/HardwareOptions");
+    }
+
+    [Fact]
+    public void ALoadedFolderIsNeverAlsoLoadedOnDemand()
+    {
+        // On a page below HardwareOptions its level IS loaded: the group carries the children and
+        // no folder area, even if a probe had marked it.
+        var nav = DefaultNodeNavigation.Build(Root, Tree(), Root + "/HardwareOptions/Gpus",
+            ImmutableDictionary<string, IndexLevel>.Empty,
+            new IndexLabels("Load more", "Show all", m => m),
+            ImmutableHashSet.Create(Root + "/HardwareOptions"))!;
+
+        var group = SuppliedNavigationRail.Plan(nav, Root + "/HardwareOptions/Gpus").Items
+            .OfType<SuppliedNavigationRail.RailGroup>().Single(g => g.Path == Root + "/HardwareOptions");
+        group.Folder.Should().BeNull();
+        group.Links.Select(l => l.Path).Should().Contain(Root + "/HardwareOptions/Gpus");
+    }
+
+    [Fact]
+    public void OnlyRowsWhoseLevelIsNotLoadedAreProbed()
+    {
+        var levels = DefaultNodeNavigation.PathLevels(Root, Root + "/HardwareOptions");
+        var probed = DefaultNodeNavigation.UnloadedFolders(Tree(), Root, levels);
+
+        probed.Should().Equal(
+            [Root + "/CapacityModel", Root + "/Consumption", Root + "/HardwareOptions/Gpus"],
+            "the root and every level on the reader's path are loaded; internal _ rows are never lines");
+    }
+
+    [Fact]
+    public void AProbeReadsAtMostOneVisibleRow()
+    {
+        var query = new QueryParser().Parse(DefaultNodeNavigation.ChildProbeQuery("Doc/Architecture"));
+
+        query.Limit.Should().Be(1, "a probe answers 'has children', never lists them");
+        DefaultNodeNavigation.ChildProbeQuery("Doc/Architecture").Should().Contain("-id:_*",
+            "an internal satellite is not a child the reader can open");
+    }
+
+    [Fact]
+    public void AFolderOpenedOnDemandListsItsFirstLevelAndMarksItsOwnFolders()
+    {
+        var children = Enumerable.Range(1, DefaultNodeNavigation.LevelCap + 1)
+            .Select(i => Node($"Doc/Chapter/P{i:00}", $"Page {i}", i))
+            .ToList();
+
+        var entries = DefaultNodeNavigation.FolderEntries("Doc/Chapter", children, "Doc/Other",
+            ImmutableHashSet.Create("Doc/Chapter/P02"), "Show all");
+
+        entries.Take(DefaultNodeNavigation.LevelCap).Select(e => e.Path)
+            .Should().Equal(children.Take(DefaultNodeNavigation.LevelCap).Select(n => n.Path), "the level's order is kept");
+        entries.Single(e => e.Path == "Doc/Chapter/P02").HasUnloadedChildren
+            .Should().BeTrue("a nested folder again offers its expander");
+        entries.Single(e => e.Path == "Doc/Chapter/P01").HasUnloadedChildren.Should().BeFalse();
+        entries.Should().HaveCount(DefaultNodeNavigation.LevelCap + 1);
+        entries[^1].Label.Should().Be("Show all", "a folder that holds more than it shows ends with Show all");
+        entries[^1].Href.Should().StartWith("/search?");
+    }
+
     private static IEnumerable<string> Paths(IEnumerable<NodeNavigationEntry> entries)
         => entries.SelectMany(e => new[] { e.Path }.Concat(Paths(e.Children)));
 }

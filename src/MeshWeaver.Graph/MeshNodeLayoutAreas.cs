@@ -287,6 +287,8 @@ public static class MeshNodeLayoutAreas
             // registers on every per-node hub) — delisting it drops the server-side external
             // URL-fetch surface.
             .WithView(MarkdownOverviewLayoutArea.SuppliedNavArea, MarkdownOverviewLayoutArea.SuppliedNavigationMenu)
+            // One folder of the left-hand index, opened on demand from the page being read.
+            .WithView(SuppliedNavigationRail.FolderArea, MarkdownOverviewLayoutArea.IndexFolder)
             // StopSync's VIEW rides the MeshWeaver.Graph.Views MODULE, registered on every
             // per-node hub exactly as OgCard above — the platform keeps the area name and the menu
             // descriptor (StopSyncLayoutArea), which is what the node menu is assembled from.

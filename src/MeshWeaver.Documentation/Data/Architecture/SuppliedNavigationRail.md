@@ -26,8 +26,17 @@ index of the Space, with the page being read marked and only the groups on the r
 
 - **Only the reader's path is loaded.** One direct-children read per level
   (`DefaultNodeNavigation.PathLevels`): the Space's children, each ancestor's children, and the
-  page's own. The cost grows with the page's depth, never with the size of the Space. A folder off
-  the path is listed and not opened; the reader drills in by opening it.
+  page's own. The cost grows with the page's depth, never with the size of the Space.
+- **A folder off the path still offers its expander.** Its level is not loaded, but one bounded
+  probe per listed line (`DefaultNodeNavigation.ChildProbeQuery` — at most one row, internal `_`
+  entries excluded) tells whether it has children, and a line that does renders as a collapsed group
+  with its chevron instead of a plain link that looks like a page (maintainer, 2026-10-21: *"in the
+  side menu index, please see that we show expand when an element has children"*). Its children load
+  only when the reader OPENS it: the group's body is the `IndexFolder?folder={path}` area
+  (`SuppliedNavigationRail.FolderArea`), served by the page being read, which reads that one level
+  with the same bounded read, probes its lines in turn and draws them with the same rail lines — so a
+  folder inside an opened folder expands the same way. The renderers draw a group's items only while
+  it is open, so a closed folder costs its probe and nothing more.
 - **A level shows 10 entries at first** (`LevelCap`), and **reads only those plus one**. Every
   read of a level is a query bounded to `Cap + 1` rows and ordered **by the store** in the key the
   level renders by (`DefaultNodeNavigation.LevelQueries`), so a large folder never loads whole. A
