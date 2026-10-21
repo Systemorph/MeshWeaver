@@ -70,7 +70,7 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
 
     private static Task<IReadOnlyList<NodeNavigationEntry>> Next(
         IObservable<IReadOnlyList<NodeNavigationEntry>> folder, Func<IReadOnlyList<NodeNavigationEntry>, bool> until) =>
-        folder.Where(until).FirstAsync().Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+        folder.Where(until).FirstAsync().Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
 
     [Fact]
     public async Task AFolderLineOffersItsExpanderAndEveryReadNamesTheReader()
@@ -106,7 +106,7 @@ public class DefaultNodeNavigationProbeTest(ITestOutputHelper output) : Monolith
         var marked = seen.Count;
 
         await RealMeshService.CreateNode(new MeshNode("C", Space) { Name = "C", NodeType = "Markdown", Order = 3 })
-            .Timeout(30.Seconds()).Await(TestContext.Current.CancellationToken);
+            .Timeout(TestTimeouts.WriteConvergence).Await(TestContext.Current.CancellationToken);
         await Next(folder, e => e.Any(x => x.Path == Space + "/C"));
 
         string ProbeOf(string path) => DefaultNodeNavigation.ChildProbeQuery(path);
