@@ -42,6 +42,11 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
     private const string SiblingPath = Partition + "/_Policy";
     private const string NestedId = "declaredrls-nested";
     private const string NestedPath = SiblingPath + "/" + NestedId;
+    // The SAME two shapes declared with a FULL-PATH id (Namespace null, Id = the whole path) - a
+    // documented registration shape that AddMeshNodes preserves. Classification must read the PATH,
+    // never how it happens to be split between Id and Namespace.
+    private const string FullPathSibling = Partition + "/fullpath/_Policy";
+    private const string FullPathNested = FullPathSibling + "/declaredrls-fullpath-nested";
     private const string Reader = "declaredrls-reader";
     private const string Stranger = "declaredrls-stranger";
 
@@ -56,6 +61,8 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
                 new MeshNode(UntypedId, Partition) { Name = UntypedId, Content = "<p>untyped secret body</p>" },
                 new MeshNode("_Policy", Partition) { Name = "declaredrls-sibling", HubConfiguration = config => config },
                 new MeshNode(NestedId, SiblingPath) { Name = NestedId, HubConfiguration = config => config },
+                new MeshNode(FullPathSibling) { Name = "declaredrls-fullpath-sibling", HubConfiguration = config => config },
+                new MeshNode(FullPathNested) { Name = "declaredrls-fullpath-nested", HubConfiguration = config => config },
                 AssignmentNodeFactory.UserRole(Reader, "Viewer", Partition));
 
     private Task<IReadOnlyList<string>> QueryAs(string viewer, string query)
@@ -151,6 +158,10 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
     [InlineData("path:" + NestedPath, NestedPath)]
     [InlineData("namespace:" + Partition + " scope:descendants", SiblingPath)]
     [InlineData("namespace:" + Partition + " scope:descendants", NestedPath)]
+    [InlineData("path:" + FullPathSibling, FullPathSibling)]
+    [InlineData("path:" + FullPathNested, FullPathNested)]
+    [InlineData("namespace:" + Partition + " scope:descendants", FullPathSibling)]
+    [InlineData("namespace:" + Partition + " scope:descendants", FullPathNested)]
     public async Task ARegistrationShapedNodeUnderASiblingSegment_IsFilteredInAQuery(string query, string path)
     {
         var stranger = await QueryAs(Stranger, query);
@@ -170,8 +181,12 @@ public class DeclaredNodeIsRowFilteredInQueriesTest(ITestOutputHelper output) : 
 
         stranger.Should().NotContain(SiblingPath, "a sibling metadata node is never vocabulary");
         stranger.Should().NotContain(NestedPath, "nor is anything under one");
+        stranger.Should().NotContain(FullPathSibling, "declared with a full-path id it is the same metadata");
+        stranger.Should().NotContain(FullPathNested, "declared with a full-path id it is the same metadata");
         reader.Should().Contain(SiblingPath, "the reader may read the partition - the control");
         reader.Should().Contain(NestedPath, "the reader may read the partition - the control");
+        reader.Should().Contain(FullPathSibling, "the reader may read the partition - the control");
+        reader.Should().Contain(FullPathNested, "the reader may read the partition - the control");
     }
 
     /// <summary>The paths the declared-node provider suggests to <paramref name="viewer"/> under the partition.</summary>

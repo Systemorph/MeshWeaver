@@ -450,18 +450,32 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
 
     /// <summary>
     /// A declared node that is metadata of another node rather than a definition: on a satellite-table
-    /// path, itself a sibling satellite (<see cref="SatelliteTableMapping.IsSiblingSatellite"/>), or
-    /// filed under an underscore metadata segment below its partition root. The root segment itself is
-    /// skipped — a partition may be NAMED with a leading underscore (<c>_Setting</c>).
+    /// path, or with ANY underscore metadata segment (<see cref="SatelliteTableMapping.IsSatelliteId"/>)
+    /// below its partition root — itself (<c>{ns}/_Policy</c>, a sibling satellite) or an ancestor.
+    ///
+    /// <para>🚨 Read from the PATH, never from how it is split between <see cref="MeshNode.Id"/> and
+    /// <see cref="MeshNode.Namespace"/>: a full-path id (<c>new MeshNode("p/_Policy")</c>, Namespace
+    /// null) is a documented registration shape that <c>AddMeshNodes</c> preserves, and a check on the
+    /// namespace or on the id alone exempted it. The root segment is skipped — a partition may be
+    /// NAMED with a leading underscore (<c>_Setting</c>) — and so is an entry of the partition CATALOG
+    /// (<c>Admin/Partition/{name}</c>), whose id is the name it declares, exactly as
+    /// <see cref="SatelliteTableMapping.IsSiblingSatellite"/> rules.</para>
     /// </summary>
     private static bool IsMetadataPath(MeshNode node)
     {
-        if (SatelliteTableMapping.IsSatellitePath(node.Path) || SatelliteTableMapping.IsSiblingSatellite(node))
+        if (SatelliteTableMapping.IsSatellitePath(node.Path))
             return true;
-        var segments = (node.Namespace ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var segments = (node.Path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
         for (var i = 1; i < segments.Length; i++)
-            if (SatelliteTableMapping.IsSatelliteId(segments[i]))
+        {
+            if (!SatelliteTableMapping.IsSatelliteId(segments[i]))
+                continue;
+            var isCatalogEntry = i == segments.Length - 1 && i == 2
+                && string.Equals(segments[0], "Admin", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[1], "Partition", StringComparison.OrdinalIgnoreCase);
+            if (!isCatalogEntry)
                 return true;
+        }
         return false;
     }
 
