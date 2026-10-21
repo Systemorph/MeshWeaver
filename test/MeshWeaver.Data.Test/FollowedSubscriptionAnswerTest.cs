@@ -140,6 +140,70 @@ public class RevisionAdmissionHandOverTest
         Assert.Equal([0], forwarded);
     }
 
+    /// <summary>
+    /// Review of #7016, thread 4336694621: a refusal of a QUEUED revision is terminal. Revision 0's
+    /// first verdict is pending; revision 1 waits behind it, and its verdict turns false and then
+    /// true again before its turn. Pre-fix only the latest value was retained, so revision 1 was
+    /// forwarded once revision 0 admitted and the refusal was never seen.
+    /// </summary>
+    [Fact]
+    public void AQueuedRevisionsRefusal_IsTerminal_EvenIfItsVerdictRecovers()
+    {
+        var revisions = new Subject<int>();
+        var pendingFirst = new Subject<bool>();
+        var queued = new Subject<bool>();
+        var forwarded = ImmutableList<int>.Empty;
+        Exception? ended = null;
+
+        using var _ = revisions
+            .AdmitEachRevision(
+                revision => revision == 0 ? pendingFirst : queued,
+                TimeSpan.FromHours(1),
+                () => new UnauthorizedAccessException("refused"))
+            .Subscribe(r => forwarded = forwarded.Add(r), ex => ended = ex);
+
+        revisions.OnNext(0);
+        revisions.OnNext(1);
+        queued.OnNext(false); // the audience is withdrawn while revision 1 waits…
+        queued.OnNext(true);  // …and restored before its turn
+        pendingFirst.OnNext(true);
+
+        Assert.IsType<UnauthorizedAccessException>(ended);
+        Assert.DoesNotContain(1, forwarded);
+    }
+
+    /// <summary>
+    /// Review of #7016, thread 4336694680: an unsubscribe that lands WHILE a revision's verdict is
+    /// being set up still releases that verdict subscription. Pre-fix the connection was made before
+    /// the revision reached the pipeline, whose only cleanup had not been installed yet: the verdict
+    /// stayed subscribed for good.
+    /// </summary>
+    [Fact]
+    public void AnUnsubscribeDuringVerdictSetup_ReleasesTheVerdict()
+    {
+        var revisions = new Subject<int>();
+        var active = 0;
+        IDisposable? subscription = null;
+        subscription = revisions
+            .AdmitEachRevision(
+                _ =>
+                {
+                    subscription!.Dispose(); // the caller leaves while this verdict is being subscribed
+                    return Observable.Create<bool>(_ =>
+                    {
+                        Interlocked.Increment(ref active);
+                        return System.Reactive.Disposables.Disposable.Create(() => Interlocked.Decrement(ref active));
+                    });
+                },
+                TimeSpan.FromHours(1),
+                () => new UnauthorizedAccessException("refused"))
+            .Subscribe(_ => { }, _ => { });
+
+        revisions.OnNext(0);
+
+        Assert.Equal(0, Volatile.Read(ref active));
+    }
+
     [Fact]
     public void ARevisionAdmittedInTurn_HandsTheFollowOver()
     {

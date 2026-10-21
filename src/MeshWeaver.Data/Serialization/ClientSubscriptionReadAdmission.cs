@@ -86,47 +86,54 @@ public static class RevisionAdmission
         ArgumentNullException.ThrowIfNull(revisions);
         ArgumentNullException.ThrowIfNull(verdictOf);
         ArgumentNullException.ThrowIfNull(refusal);
-        return Observable.Defer(() =>
+        return Observable.Create<T>(observer =>
         {
-            // The index of the newest ADMITTED revision. A revision's live verdict is followed until a
-            // NEWER revision has been admitted — never merely until one has arrived — so there is no
-            // hand-over gap while the newer revision's first verdict is still being decided (review
-            // of #7016, thread 4336475629): an expiry or a withdrawn audience inside that window ends
-            // the sequence at once instead of when the pending verdict answers or its budget runs out.
+            // Every per-revision verdict subscription is owned HERE, registered before it connects
+            // (review of #7016, thread 4336694680): an unsubscribe that lands while a verdict is being
+            // set up — before its revision reaches the pipeline below — still releases it.
+            var owned = new System.Reactive.Disposables.CompositeDisposable();
+            // The index of the newest ADMITTED revision. A revision is followed until a NEWER one has
+            // been admitted — never merely until one has arrived — so there is no hand-over gap while
+            // the newer revision's first verdict is still being decided (thread 4336475629).
             var admitted = new BehaviorSubject<long>(-1);
-            return revisions
+            var pipeline = revisions
                 // Each revision's verdict is subscribed the moment the revision ARRIVES, so it is
-                // decided while the previous one is still followed.
-                .Select((revision, index) => Prepare(revision, index, verdictOf, firstVerdictBudget))
+                // decided while the previous one is still followed, and its first refusal is latched
+                // then, whatever the verdict says afterwards.
+                .Select((revision, index) => Prepare(revision, index, verdictOf, firstVerdictBudget, owned))
                 .Publish(prepared => Observable.Merge(
                     // Ordered admission: one revision at a time, each forwarded only once its own
-                    // first verdict admits it.
+                    // FIRST decision admits it.
                     prepared
-                        .Select(item => item.Verdict.Take(1)
+                        .Select(item => item.First
                             .SelectMany(ok => ok
                                 ? Observable.Return(item)
                                 : Observable.Throw<Prepared<T>>(refusal())))
                         .Concat()
                         .Do(item => admitted.OnNext(item.Index))
                         .Select(item => item.Revision),
-                    // Live refusal: from its admission until a newer revision is admitted, a
-                    // revision's verdict turning false ends the sequence. Its verdict subscription
-                    // is released when its follow ends, however it ends.
-                    prepared.SelectMany(item => admitted
-                        .Where(n => n >= item.Index)
-                        .Take(1)
-                        .SelectMany(_ => item.Verdict.Where(ok => !ok).Take(1))
+                    // Terminal refusal: a revision's verdict turning false at ANY point from its
+                    // arrival until a newer revision is admitted ends the sequence — a false while it
+                    // waits in the queue included, even if the verdict turns true again before its
+                    // turn (thread 4336694621). Its verdict subscription is released when its follow
+                    // ends, however it ends.
+                    prepared.SelectMany(item => item.Refused
                         .TakeUntil(admitted.Where(n => n > item.Index))
                         .SelectMany(_ => Observable.Throw<T>(refusal()))
-                        .Finally(item.Connection.Dispose))))
-                .Finally(admitted.Dispose);
+                        .Finally(() => owned.Remove(item.Connection)))));
+            owned.Add(pipeline.Subscribe(observer));
+            owned.Add(admitted);
+            return owned;
         });
     }
 
-    private sealed record Prepared<T>(T Revision, long Index, IObservable<bool> Verdict, System.Reactive.Disposables.CompositeDisposable Connection);
+    private sealed record Prepared<T>(
+        T Revision, long Index, IObservable<bool> First, IObservable<bool> Refused,
+        System.Reactive.Disposables.CompositeDisposable Connection);
 
     private static Prepared<T> Prepare<T>(
-        T revision, int index, Func<T, IObservable<bool>> verdictOf, TimeSpan firstVerdictBudget)
+        T revision, int index, Func<T, IObservable<bool>> verdictOf, TimeSpan firstVerdictBudget,
+        System.Reactive.Disposables.CompositeDisposable owned)
     {
         var verdict = Observable.Defer(() => verdictOf(revision))
             .DistinctUntilChanged()
@@ -136,10 +143,19 @@ public static class RevisionAdmission
             .Catch((Exception _) => Observable.Return(false))
             // A verdict that completes without ever answering admits nothing.
             .DefaultIfEmpty(false)
-            // ONE subscription to the verdict per revision, shared by its admission and its follow.
-            .Replay(1);
+            // ONE subscription to the verdict per revision.
+            .Publish();
+        // Both latches are attached BEFORE the verdict connects, so a verdict that answers during
+        // its own subscription cannot slip a value past them.
+        var first = verdict.Take(1).Replay(1);
+        var refused = verdict.Where(ok => !ok).Take(1).Replay(1);
         var connection = new System.Reactive.Disposables.CompositeDisposable();
+        // Owned by the outer subscription first: if that is already disposed, this disposes the
+        // connection at once and nothing below stays subscribed.
+        owned.Add(connection);
+        first.ConnectOwnedBy(connection);
+        refused.ConnectOwnedBy(connection);
         verdict.ConnectOwnedBy(connection);
-        return new Prepared<T>(revision, index, verdict, connection);
+        return new Prepared<T>(revision, index, first, refused, connection);
     }
 }

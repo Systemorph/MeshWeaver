@@ -1785,15 +1785,15 @@ public static class JsonSynchronizationStream
             if (registry.GetClientSubscriptionFullsPosted(request.Subscriber, request.StreamId) is { } fullsPostedOnThis)
             {
                 var parentHub = hub.Configuration.ParentHub;
+                // No per-request disposal registration (review of #7016, thread 4336694741): the
+                // signal completes with the stream, and its completion arm already refuses an answer
+                // still pending — a registration here would be retained by a long-lived stream for
+                // every re-subscribe it ever answered. A subject that has already completed answers a
+                // late subscriber at once.
                 var pendingAnswer = fullsPostedOnThis.Take(1).Subscribe(
                     _ => Ack(),
                     Refuse,
-                    () => RefuseAsTornDown(parentHub, "its read ended before the answering snapshot was forwarded"));
-                alreadyServing.RegisterForDisposal(new AnonymousDisposable(() =>
-                {
-                    pendingAnswer.Dispose();
-                    RefuseAsTornDown(parentHub, "its stream was disposed before the answering snapshot was forwarded");
-                }));
+                    () => RefuseAsTornDown(parentHub, "its read ended, or its stream was disposed, before the answering snapshot was forwarded"));
                 alreadyServing.Update(
                     _ => BuildReassertFrame(alreadyServing),
                     ex =>
