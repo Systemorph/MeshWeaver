@@ -406,6 +406,60 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         (await TypeOf(path, ct)).Should().Be("Group", "the refused splice must leave the node as it was");
     }
 
+    /// <summary>
+    /// A LITERAL with a stale base is three-way merged by the owner: disjoint edits of
+    /// <c>Parition</c> (base) to <c>Partition</c> (live) and to <c>ParitionAccessPolicy</c> (patch)
+    /// produce <c>PartitionAccessPolicy</c>. The guard must judge what the merge produces, not the literal.
+    /// </summary>
+    [Fact]
+    public void AStaleBaseLiteral_ThatTheOwnerMergesIntoAPolicy_IsRefused()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var patch = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"ParitionAccessPolicy\"}");
+        var baseValues = System.Text.Json.Nodes.JsonNode.Parse("{\"nodeType\":\"Parition\"}");
+
+        // The hole, measured on the owner's own merge.
+        var live = new System.Text.Json.Nodes.JsonObject { ["nodeType"] = "Partition" };
+        MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply(live,
+            (System.Text.Json.Nodes.JsonObject)patch!.DeepClone(), (System.Text.Json.Nodes.JsonObject)baseValues!.DeepClone());
+        ((string?)live["nodeType"]).Should().Be("PartitionAccessPolicy", "precondition: the owner merges the disjoint edits");
+
+        var node = new MeshNode("restrict", TestPartition) { NodeType = "Partition" };
+        PolicyPlacementGuard.PatchVerdict(patch, isNodeReference: true, node, options, baseValues)
+            .Should().Be(PolicyPlacementGuard.PatchRetype.IntoAPolicy);
+    }
+
+    /// <summary>
+    /// A <c>DataChangeRequest</c> sent to ANOTHER node's hub may carry a node whose path is not that
+    /// hub's. Carrying a policy that way bypasses the target owner's guard, so it is refused. The
+    /// control shows the same carrier hub accepts a write of its own node.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APolicyCarriedThroughAnotherNodesHub_IsRefused()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Access.SetCircuitContext(TestUsers.Admin);
+        var target = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var carrier = await CreateMarkdown($"carrier-{Guid.NewGuid().ToString("N")[..8]}", ct);
+        var targetNode = await Mesh.GetWorkspace().GetMeshNodeStream(target)
+            .Where(n => n is not null).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+        var response = await RequestHub
+            .Observe<DataChangeResponse>(
+                DataChangeRequest.Update([targetNode! with
+                {
+                    NodeType = PartitionAccessPolicyNodeType.NodeType,
+                    Content = new PartitionAccessPolicy { BreaksInheritance = true },
+                }]),
+                o => o.WithTarget(new Address(carrier)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        Output.WriteLine($"carried write: {response.Message.Status} {response.Message.Log}");
+
+        response.Message.Status.Should().NotBe(DataChangeStatus.Committed,
+            "a policy for another node, carried through this hub, would never meet its own owner's guard");
+        (await TypeOf(target, ct)).Should().Be("Markdown");
+    }
+
     /// <summary>A cold owner is not permission: a patch naming the policy type is refused as not loaded.</summary>
     [Fact]
     public void APatchNamingThePolicyType_OnAnOwnerThatHasNotLoaded_IsNotLetThrough()

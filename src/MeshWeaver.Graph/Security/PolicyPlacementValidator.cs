@@ -347,7 +347,7 @@ public static class PolicyPlacementGuard
             ? baseObject.FirstOrDefault(kvp => IsNodeTypeKey(kvp.Key, key)).Value
             : null;
         var namesPolicy = isNodeReference
-            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && NamesPolicy(kvp.Value, live, baseType))
+            ? patch is JsonObject top && top.Any(kvp => IsNodeTypeKey(kvp.Key, key) && MergesIntoPolicy(kvp.Key, kvp.Value, live, baseType))
             : NamesPolicyAnywhere(patch, key);
         if (!namesPolicy)
             return PatchRetype.None;
@@ -382,6 +382,33 @@ public static class PolicyPlacementGuard
             return PolicyPlacementValidator.IsPolicyType(splice.Apply(current));
         }
         return true;
+    }
+
+    /// <summary>
+    /// Whether the owner's own merge (<see cref="MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply"/>)
+    /// of this <c>nodeType</c> leaf onto the live type leaves a policy type. The merge is RUN, not
+    /// re-implemented: a literal with a stale base is three-way merged by the owner (disjoint edits of
+    /// <c>Parition</c>→<c>Partition</c> and →<c>ParitionAccessPolicy</c> produce
+    /// <c>PartitionAccessPolicy</c>), and a splice is applied to the live value. A cold owner
+    /// (<paramref name="live"/> null) or a non-string merge result that is not plainly another type
+    /// cannot be judged and counts as yes.
+    /// </summary>
+    private static bool MergesIntoPolicy(string patchKey, JsonNode? value, MeshNode? live, JsonNode? baseValue)
+    {
+        if (value is null)
+            return false;
+        if (live is null)
+            return NamesPolicy(value, null, null);
+        var simulated = new JsonObject { [patchKey] = live.NodeType is { } current ? JsonValue.Create(current) : null };
+        var patchLeaf = new JsonObject { [patchKey] = value.DeepClone() };
+        var baseLeaf = baseValue is null ? null : new JsonObject { [patchKey] = baseValue.DeepClone() };
+        MeshWeaver.Data.Serialization.MeshNodePatchMerge.Apply(simulated, patchLeaf, baseLeaf);
+        return simulated[patchKey] switch
+        {
+            null => false,
+            JsonValue v when v.TryGetValue<string>(out var merged) => PolicyPlacementValidator.IsPolicyType(merged),
+            _ => true,
+        };
     }
 
     private static bool NamesPolicyAnywhere(JsonNode? node, string key) => node switch
@@ -422,6 +449,20 @@ internal sealed class PolicyPlacementDataValidator(IMessageHub hub) : IDataValid
     public IObservable<DataValidationResult> Validate(DataValidationContext context)
     {
         var options = hub.JsonSerializerOptions;
+
+        // 🚨 A policy written through ANOTHER node's hub (#7017 review). A DataChangeRequest may carry
+        // a MeshNode whose path is not this hub's; the change pipeline adds it to this hub's collection
+        // and the type source persists it, so the target's own owner never sees it. Such a write of a
+        // policy cannot be judged against the target's predecessor here: refuse it.
+        if (context.Entity is not EntityDeltaUpdate
+            && context.Entity.As<MeshNode>(options) is { Path.Length: > 0 } carried
+            && PolicyPlacementValidator.IsPolicyType(carried.NodeType)
+            && !string.Equals(carried.Path, hub.Address.Path, StringComparison.OrdinalIgnoreCase))
+            return Observable.Return(DataValidationResult.Invalid(
+                LocalizationCatalog.Get("policy.placement.foreignWrite", context.AccessContext?.Locale,
+                    carried.Path, hub.Address.Path),
+                DataValidationRejectionReason.ValidationFailed));
+
         var held = StampedFields.LiveOwnNode(hub);
         if (held is not null)
             return Judge(context, held, options);
