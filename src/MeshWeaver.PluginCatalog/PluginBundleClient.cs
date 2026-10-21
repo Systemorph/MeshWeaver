@@ -1289,7 +1289,12 @@ public sealed class PluginBundleClient
                 // countable". Without it a bundle that resolved nothing for this lane looks exactly
                 // like a package that has no NodeTypes, and the compile that follows looks like
                 // normal behaviour rather than a regression in the distribution lane.
-                if (manifest?.Misses is { Count: > 0 } misses)
+                // A DECLARED-BUT-NOT-SERVED module (`module '<name>': not served — …`) names no NodeType: it
+                // explains an empty bundle (below) but is not NodeType coverage, so it must
+                // neither warn as one nor fail a require-prebuilt adoption of types that DID arrive.
+                var moduleMisses = (manifest?.Misses ?? []).Where(BundleReader.IsModuleNotServedMiss).ToArray();
+                if (manifest?.Misses?.Where(m => !BundleReader.IsModuleNotServedMiss(m)).ToArray()
+                    is { Length: > 0 } misses)
                 {
                     // The consequence half of the line must tell the truth PER MODE: on a default
                     // mesh the unresolved types compile here; on a require-prebuilt mesh the very
@@ -1297,7 +1302,7 @@ public sealed class PluginBundleClient
                     _logger?.LogWarning(
                         "Bundle for {Plugin}: the registry could resolve NO artifact for {Missed} "
                         + "NodeType(s) on framework {Identity}/{Architecture} — {Consequence}: {Misses}",
-                        pluginId, misses.Count, PrebuiltAssemblySeeder.LiveFrameworkMvid,
+                        pluginId, misses.Length, PrebuiltAssemblySeeder.LiveFrameworkMvid,
                         ReleaseArchitecture.Live,
                         MissConsequence("they will be compiled here"),
                         string.Join(" | ", misses));
@@ -1308,7 +1313,7 @@ public sealed class PluginBundleClient
                     // after the rebake harder to reason about, not easier.
                     if (_requirePrebuilt)
                         return Miss(pluginId, BundleAdoptionKind.NoAssemblies,
-                            $"the registry resolved no artifact for {misses.Count} NodeType(s): "
+                            $"the registry resolved no artifact for {misses.Length} NodeType(s): "
                             + string.Join(" | ", misses));
                 }
 
@@ -1340,11 +1345,14 @@ public sealed class PluginBundleClient
                         return Nothing(pluginId, $"the package ships {offering}, no NodeTypes");
                     }
 
+                    var why = moduleMisses.Length == 0
+                        ? string.Empty
+                        : " — the registry says: " + string.Join(" | ", moduleMisses);
                     _logger?.LogInformation(
-                        "Bundle for {Plugin} carried no assemblies — {Consequence}", pluginId,
-                        MissConsequence("compiling instead"));
+                        "Bundle for {Plugin} carried no assemblies{Why} — {Consequence}", pluginId,
+                        why, MissConsequence("compiling instead"));
                     return Miss(pluginId, BundleAdoptionKind.NoAssemblies,
-                        "the bundle carried no assemblies");
+                        "the bundle carried no assemblies" + why);
                 }
 
                 return assemblies
