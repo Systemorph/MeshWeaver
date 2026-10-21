@@ -648,6 +648,9 @@ jobs:
       baseline: ${{ steps.digests.outputs.baseline }}
       # The base tip every shard merges the head onto (empty off pull requests).
       merge-main-sha: ${{ steps.fresh.outputs.main-sha }}
+      # The TREE of that merge — the candidate the closure was computed on. Each shard asserts its
+      # own fresh merge produced this tree (empty off pull requests).
+      candidate-tree: ${{ steps.candidate.outputs.tree }}
     steps:
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
@@ -694,12 +697,40 @@ jobs:
           [ "$(git rev-parse --is-shallow-repository)" = "false" ] || { echo "::error::the repository is still SHALLOW after the history fetch — every selector that reads a tag, a publication baseline or a merge-base would now narrow silently. Refusing to continue."; exit 1; }
           echo "full history: $(git rev-list --count HEAD) commit(s), $(git tag | wc -l | tr -d ' ') tag(s)"
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
-      - name: Name the base tip every shard merges onto
+      # 🚨 The plan MERGES — it does not merely name the tip. The affected closure below reads the
+      # TREE (every module's `requires` edges), so it must read the very candidate the shards test.
+      # The plan used to resolve the tip only and compute the closure on GitHub's merge ref, built
+      # on an OLDER main, while the shards merged onto the CURRENT tip: when main gained a
+      # `requires` edge in between, the shards installed a set that lacked the new dependency
+      # (measured: MeshWeaver.Plugins#4043, run 39580565444 — `AI` had gained `requires Training`,
+      # the plan's tree did not carry the edge, the shard staged 23 packages without Training, and
+      # the install failed "NodeType(s) not registered: Training/Tour").
+      # `check-fresh-merge-candidate.py` (core's workflow-shell job) refuses a selecting job that
+      # only resolves, and each shard asserts its merged TREE equals `candidate-tree` below.
+      - name: Merge the head onto the base tip every shard merges onto
         id: fresh
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with:
-          resolve-only: 'true'
           main-sha: ${{ inputs.merge-main-sha }}
+      - name: Name the candidate tree every shard must test
+        id: candidate
+        env:
+          FRESH_MODE: ${{ steps.fresh.outputs.mode }}
+          FRESH_MAIN: ${{ steps.fresh.outputs.main-sha }}
+        run: |
+          set -euo pipefail
+          case "$FRESH_MODE" in
+            merged|already-fresh)
+              TREE="$(git rev-parse 'HEAD^{tree}')"
+              echo "tree=$TREE" >> "$GITHUB_OUTPUT"
+              echo "candidate: tree $TREE (head merged onto $FRESH_MAIN) — the closure below and every shard read this one tree" ;;
+            not-a-pull-request)
+              echo "tree=" >> "$GITHUB_OUTPUT"
+              echo "not a pull request — the event's own commit is the candidate, and every shard checks out that same commit" ;;
+            *)
+              echo "::error::the fresh merge reported mode '$FRESH_MODE', which this lane does not know — refusing to plan a selection whose candidate is unnamed"
+              exit 1 ;;
+          esac
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -711,6 +742,7 @@ jobs:
           SCRIPTS_REF: ${{ inputs.scripts-ref || inputs.platform-ref }}
           CALLER_WORKFLOW: ${{ github.workflow }}
           GH_TOKEN: ${{ github.token }}
+          FRESH_MAIN: ${{ steps.fresh.outputs.main-sha }}
         # 🎯 PRs gate only the AFFECTED dependency closure — changed modules, plus every
         # transitive DEPENDENT, plus the affected set's own dependencies (the fresh gate mesh
         # needs them present to install and to resolve `shared=@…`).
@@ -736,8 +768,12 @@ jobs:
             echo "adopted verdict: $ADOPTED_VERDICT" >> "$GITHUB_STEP_SUMMARY"
             echo '{"mount": [], "runAll": false, "adopted": "'"$ADOPTED_VERDICT"'"}' > affected.json
           elif [ "$NARROWING" = "true" ] && [ "${{ github.event_name }}" = "pull_request" ]; then
+            # The range's base is the tip the fresh merge was built on: HEAD's first parent IS that
+            # tip, so this diff is exactly the pull request's effect on the CURRENT main, and the
+            # dependency edges are read from the merged tree the shards test.
+            [ -n "$FRESH_MAIN" ] || { echo "::error::a narrowed pull_request run has no fresh-merge base tip — refusing to select against a base nobody named"; exit 1; }
             python3 scripts/affected-modules.py \
-              --range "origin/${{ github.base_ref }}...HEAD" --json > affected.json
+              --range "$FRESH_MAIN...HEAD" --json > affected.json
           else
             echo "${{ github.event_name }} on ${{ github.ref_name }} — full run (narrowing applies only to PR diffs)"
             echo '{"mount": [], "runAll": true}' > affected.json
@@ -964,9 +1000,29 @@ jobs:
       - uses: actions/checkout@v7
       # 🔀 Test the head merged onto the CURRENT base tip (policy suites-test-fresh-merge).
       - name: Merge the head onto the run's current base tip
+        id: fresh
         uses: Systemorph/MeshWeaver/.github/actions/fresh-merge@main
         with:
           main-sha: ${{ needs.plan.outputs.merge-main-sha }}
+      # 🚨 ONE CANDIDATE: the plan selected the packages on a merged tree; this shard must test that
+      # same tree, or the staged set can lack a dependency the tested tree requires (the
+      # MeshWeaver.Plugins#4043 shape). Compared by TREE, not commit id: a checkout GitHub already
+      # built on the current tip is the same content under a different commit.
+      - name: The shard tests the tree the plan selected on
+        env:
+          PLAN_TREE: ${{ needs.plan.outputs.candidate-tree }}
+          FRESH_MODE: ${{ steps.fresh.outputs.mode }}
+        run: |
+          set -euo pipefail
+          MINE="$(git rev-parse 'HEAD^{tree}')"
+          if [ "$FRESH_MODE" = "not-a-pull-request" ]; then
+            [ -z "$PLAN_TREE" ] || { echo "::error::this shard did not merge (not a pull request) but the plan named candidate tree $PLAN_TREE — the two disagree about what this run tests"; exit 1; }
+            echo "not a pull request — the event's own commit (tree $MINE) is tested"
+            exit 0
+          fi
+          [ -n "$PLAN_TREE" ] || { echo "::error::this shard merged (mode $FRESH_MODE, tree $MINE) but the plan named no candidate tree — the package set was selected on something else"; exit 1; }
+          [ "$MINE" = "$PLAN_TREE" ] || { echo "::error::this shard tests tree $MINE but the plan selected the packages on tree $PLAN_TREE — plan and shards read different candidates, so the staged set can lack a dependency the tested tree requires (MeshWeaver.Plugins#4043)"; exit 1; }
+          echo "candidate tree $MINE — the same one the plan selected on"
       # The tester installs this tree and stamps each install with its lock's moduleVersion; a
       # main-owned repo's pull request carries the BASE's locks, so the gate reads this tree's —
       # written by the generator at this lane's scripts ref (a disposable checkout the action removes).
