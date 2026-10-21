@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
@@ -3589,6 +3590,106 @@ internal static class NodeTypeCompilationHelpers
             .CombineLatest()
             .Select(answers => answers.Any(tracked => tracked))
             .Take(1);
+    }
+
+    /// <summary>
+    /// 🚨 MeshWeaver#6930 — the types among <paramref name="candidates"/> that the untracked-module
+    /// gate of the compile watcher REFUSES a local compile: a module's content (<see cref="IsModuleContent"/>)
+    /// in a partition that tracks no source (<see cref="PartitionTracksSources"/>). Emits ONE set and
+    /// completes; never faults.
+    ///
+    /// <para>The boot sweep's batch compile drives Roslyn DIRECTLY — no activation, no compile watcher —
+    /// so it never reached the gate in <c>DispatchOrPark</c>. One leftover type on memex.systemorph.com
+    /// was therefore compiled (and failed) by the batch on every pod boot, and PARKED by the gate only
+    /// on the two occasions a later Pending flip reached the watcher on the SAME pod with the SAME
+    /// bundle in place: the verdict depended on which route reached the type first, never on what the
+    /// type is. The batch asks this question before it compiles and hands every type it names to the
+    /// watcher, so the gate is the only thing that ever answers it.</para>
+    ///
+    /// <para>Every witness is the watcher's own, read the watcher's way: the partition-tracking vote
+    /// (one per partition, with the gate's budget, and an unreadable answer reads TRACKED — the
+    /// gate's "whether the answer could be read is not a verdict: compile" rule), the record's
+    /// adoption provenance, and the bundle offer from the SAME on-demand pass the watcher runs
+    /// (<see cref="IPrebuiltAssemblyConsumer.SeedForTypes(IReadOnlyCollection{string}, Action{string})"/>),
+    /// asked only for types in an untracked partition. A host with no tracking seam (local, CI, the
+    /// bake host) names nothing, exactly as the gate never fires there.</para>
+    /// </summary>
+    /// <param name="hub">The mesh hub whose services hold the tracking seam and the bundle consumer.</param>
+    /// <param name="candidates">The NodeType paths about to be compiled, with their definitions.</param>
+    /// <param name="logger">Optional.</param>
+    internal static IObservable<ImmutableHashSet<string>> RefusedByUntrackedModuleGate(
+        IMessageHub hub,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> candidates,
+        ILogger? logger)
+    {
+        var none = ImmutableHashSet<string>.Empty
+            .WithComparer(StringComparer.OrdinalIgnoreCase);
+        if (candidates.Count == 0
+            || !hub.ServiceProvider.GetServices<IPartitionSourceTracking>().Any())
+            return Observable.Return(none);
+
+        var partitions = candidates.Keys
+            .Select(PartitionOf)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var untrackedPartitions = partitions
+            .Select(partition => PartitionTracksSources(hub, partition)
+                .Timeout(OnDemandAdoptionBudget)
+                .Catch<bool, Exception>(ex =>
+                {
+                    logger?.LogWarning(ex,
+                        "Untracked-module gate: whether partition '{Partition}' tracks a source could not be "
+                        + "read within {Budget}s — its types compile, as the gate itself decides on an "
+                        + "unreadable answer (MeshWeaver#3583).",
+                        partition, OnDemandAdoptionBudget.TotalSeconds);
+                    return Observable.Return(true);
+                })
+                .DefaultIfEmpty(true)
+                .Select(tracked => (Partition: partition, Tracked: tracked)))
+            .Merge()
+            .Where(answer => !answer.Tracked)
+            .Select(answer => answer.Partition)
+            .ToList()
+            .Select(list => list.ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+
+        return untrackedPartitions
+            .SelectMany(untracked =>
+            {
+                var inUntracked = candidates
+                    .Where(c => c.Value is not null && untracked.Contains(PartitionOf(c.Key)))
+                    .ToArray();
+                if (inUntracked.Length == 0)
+                    return Observable.Return(none);
+
+                // The watcher's own offer witness: written from the consumer's pool threads, so a
+                // concurrent set, local to this one pass.
+                var offered = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(
+                    StringComparer.OrdinalIgnoreCase);
+                var consumer = hub.ServiceProvider.GetService<IPrebuiltAssemblyConsumer>();
+                var offers = consumer is null
+                    ? Observable.Return(0)
+                    : consumer.SeedForTypes(
+                            inUntracked.Select(c => c.Key).ToArray(),
+                            path => offered.TryAdd(path, 0))
+                        .Take(1)
+                        .Timeout(OnDemandAdoptionBudget)
+                        .Catch<int, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "Untracked-module gate: the bundle-offer pass for {Count} type(s) in untracked "
+                                + "partitions did not complete — the offers it witnessed before it stopped "
+                                + "still count, exactly as in the compile watcher.",
+                                inUntracked.Length);
+                            return Observable.Return(0);
+                        })
+                        .DefaultIfEmpty(0);
+
+                return offers.Select(_ => inUntracked
+                    .Where(c => IsModuleContent(c.Value!, offered.ContainsKey(c.Key)))
+                    .Select(c => c.Key)
+                    .ToImmutableHashSet(StringComparer.OrdinalIgnoreCase));
+            })
+            .DefaultIfEmpty(none);
     }
 
     /// <summary>

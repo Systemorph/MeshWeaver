@@ -1336,6 +1336,23 @@ clears it. Read it first when a type serves an old build after a release request
 names this gate, recycling again changes nothing — publish a bundle of the current source for this
 framework identity, or add a sync source for the partition. Pinned by `AHeldReleaseRequestSaysWhyTest`.
 
+**The boot sweep's batch compile asks the same question first** (#6930). The batch drives Roslyn
+directly — no activation, no compile watcher — so for a long time it never reached `DispatchOrPark`
+at all. Measured on memex.systemorph.com between 2026-10-17 18:55Z and 2026-10-18 07:56Z, the
+leftover `SocialMedia/SocialTests` (a module's content, in a partition with no sync source) logged
+`BatchBake: … → CompileError` on 51 pod boots and `Compile watcher: … PARKING … (offered by a
+bundle: True)` exactly twice — and both parks came on pods whose own boot had batch-compiled it
+minutes earlier, with the same bundle in place. The verdict depended on which route reached the
+type first; the bundle offer never flapped. The batch now asks
+`NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate` before it compiles. That check uses the
+watcher's own witnesses: one tracking vote per partition, the record's adoption provenance, and the
+offer from the same `SeedForTypes(paths, onOffered)` pass, asked only for types in untracked
+partitions. Every type it names leaves the batch: the sweep flips it `Pending` and waits for the
+watcher, whose gate holds or parks it as on any other trigger. A host with no tracking seam names
+nothing, and its batch is unchanged. Pinned by `TheBootBakeAsksTheUntrackedModuleGateTest`: two
+identical records, one reached by the watcher and one by the batch, must end word for word the
+same, with no Roslyn pass on either.
+
 Whether the answer could be read is never a verdict: a fault or a timeout while asking the tracking
 seam compiles, as the mesh did before the gate existed — a stranded type is worse than a redundant
 compile, and the refusal is only ever formed from a positive *false*.

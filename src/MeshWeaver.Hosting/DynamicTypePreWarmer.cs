@@ -1277,7 +1277,8 @@ public static class DynamicTypePreWarmer
         // serves nobody, so there is nothing to be gentle to.)
         IObservable<PreWarmOutcome> Sweep(
             ImmutableDictionary<string, IReadOnlyList<MeshNode>>? batchSources,
-            ImmutableHashSet<string> absentPartitions)
+            ImmutableHashSet<string> absentPartitions,
+            ImmutableHashSet<string> refusedByGate)
             => order
                 .Select((p, i) => Observable.Defer(() =>
                 {
@@ -1385,6 +1386,23 @@ public static class DynamicTypePreWarmer
                     // It is warmed by activation — ONE type leaves the batch, never all of them, and
                     // it is never compiled against an empty set (that would be #1216's fabricated
                     // verdict).
+                    // 🚨 MeshWeaver#6930 — a type the untracked-module gate refuses a local compile
+                    // is NEVER compiled by the batch. The batch drives Roslyn directly and never
+                    // reached the gate, so the same leftover type compiled (and failed) on every
+                    // boot here and was PARKED only when a later Pending flip reached the watcher —
+                    // on the same pod, with the same bundle in place. It is handed to the compile
+                    // watcher instead, whose gate is then the only thing that decides it.
+                    if (refusedByGate.Contains(p))
+                    {
+                        progress?.Invoke(
+                            $"building {pending.IndexOf(p) + 1} of {pending.Count} pending NodeType(s) "
+                            + $"through the compile watcher's untracked-module gate: waiting on {p}, "
+                            + $"for up to {budget}");
+                        return DriveThroughCompileWatcher(workspace, accessService, p, budget, logger)
+                            .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
+                            .Do(o => FileForDependents(p, o));
+                    }
+
                     IReadOnlyList<MeshNode>? batchSet = null;
                     MeshNode? typeNode = null;
                     var inBatch = batchSources is not null
@@ -1416,23 +1434,7 @@ public static class DynamicTypePreWarmer
                         // "No node found" — which is exactly what memex.systemorph.com recorded
                         // as a gating CompileError on 2026-09-08. Asked only for an image verdict.
                         .SelectMany(o => ReclassifyIfRemoved(mesh, o, logger))
-                        .Do(o =>
-                        {
-                            // A timeout is not a verdict — route it to `unevaluated` so its
-                            // dependents inherit "no answer", not "it broke". Deleted sources, a
-                            // retired type and a removed type are CONTENT verdicts — dependents
-                            // inherit content-broken, never gating. Everything else that missed a
-                            // usable build (CompileError, Faulted) is an image verdict.
-                            if (o.Status is PreWarmStatus.TimedOut)
-                                unevaluated.Add(p);
-                            else if (o.Status is PreWarmStatus.NoSources
-                                     or PreWarmStatus.DeclaredSourcesMissing
-                                     or PreWarmStatus.Retired
-                                     or PreWarmStatus.Removed)
-                                contentBroken.Add(p);
-                            else if (!o.ReachedUsableBuild)
-                                verdictFailed.Add(p);
-                        });
+                        .Do(o => FileForDependents(p, o));
                 }))
                 .Concat()
                 // Stamp the regression baseline on every outcome so a downstream readiness gate can
@@ -1440,6 +1442,25 @@ public static class DynamicTypePreWarmer
                 // to re-read the report — and, beside it, whether this instance has any previous
                 // build to regress FROM.
                 .Select(stampBaseline);
+
+        // Which cascade a measured outcome feeds — ONE rule for every driver of the sweep.
+        void FileForDependents(string p, PreWarmOutcome o)
+        {
+            // A timeout is not a verdict — route it to `unevaluated` so its
+            // dependents inherit "no answer", not "it broke". Deleted sources, a
+            // retired type and a removed type are CONTENT verdicts — dependents
+            // inherit content-broken, never gating. Everything else that missed a
+            // usable build (CompileError, Faulted) is an image verdict.
+            if (o.Status is PreWarmStatus.TimedOut)
+                unevaluated.Add(p);
+            else if (o.Status is PreWarmStatus.NoSources
+                     or PreWarmStatus.DeclaredSourcesMissing
+                     or PreWarmStatus.Retired
+                     or PreWarmStatus.Removed)
+                contentBroken.Add(p);
+            else if (!o.ReachedUsableBuild)
+                verdictFailed.Add(p);
+        }
 
         if (order.Count == 0)
             return Observable.Empty<PreWarmOutcome>();
@@ -1498,10 +1519,18 @@ public static class DynamicTypePreWarmer
         // disproved. The probes run together, so the whole answer is bounded by ONE probe budget
         // rather than by the number of partitions, and it fails OPEN — an indeterminate answer, or
         // any provider saying the partition IS there, leaves this sweep byte-for-byte as it was.
+        //
+        // 🚨 MeshWeaver#6930 — and, on the batch path only, the untracked-module gate's question,
+        // asked BEFORE the batch compiles anything: which pending types would the compile watcher
+        // refuse to compile here? Those leave the batch and go through the watcher (see Sweep). The
+        // activation-driven sweep needs no such question — every compile it causes already goes
+        // through the watcher.
+        var noneRefused = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
         return AbsentPartitionsAmongPending(mesh, pending, logger)
             .SelectMany(absent => useBatch
-                ? BatchSources().SelectMany(index => Sweep(index, absent))
-                : Sweep(null, absent));
+                ? RefusedByUntrackedModuleGate(mesh, definitions, pending, absent, logger)
+                    .SelectMany(refused => BatchSources().SelectMany(index => Sweep(index, absent, refused)))
+                : Sweep(null, absent, noneRefused));
     }
 
     /// <summary>
@@ -1559,6 +1588,130 @@ public static class DynamicTypePreWarmer
             // than a hope.
             .DefaultIfEmpty(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase));
     }
+
+    /// <summary>
+    /// MeshWeaver#6930 — the pending types the compile watcher's untracked-module gate would refuse
+    /// to compile here (<c>NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate</c>). Types whose
+    /// partition is confirmed absent are left out: the sweep reports those without warming them.
+    /// Emits one set and completes; a question that cannot be answered names nothing, so the batch
+    /// stays exactly as it was — the direction the gate itself takes on an unreadable answer.
+    /// </summary>
+    internal static IObservable<ImmutableHashSet<string>> RefusedByUntrackedModuleGate(
+        IMessageHub mesh,
+        IReadOnlyDictionary<string, NodeTypeDefinition?> definitions,
+        IReadOnlyCollection<string> pending,
+        ImmutableHashSet<string> absentPartitions,
+        ILogger? logger)
+    {
+        var none = ImmutableHashSet<string>.Empty.WithComparer(StringComparer.OrdinalIgnoreCase);
+        var candidates = pending
+            .Where(p => !absentPartitions.Contains(PartitionExistenceProbe.PartitionOf(p)))
+            .Select(p => (Path: p, Definition: definitions.TryGetValue(p, out var d) ? d : null))
+            .Where(c => c.Definition is not null)
+            .ToImmutableDictionary(c => c.Path, c => c.Definition, StringComparer.OrdinalIgnoreCase);
+        return NodeTypeCompilationHelpers.RefusedByUntrackedModuleGate(mesh, candidates, logger)
+            .Do(refused =>
+            {
+                if (!refused.IsEmpty)
+                    logger?.LogInformation(
+                        "DynamicTypePreWarmer: {Count} pending NodeType(s) are a module's content in a "
+                        + "partition this mesh does not track — the batch does NOT compile them; each goes "
+                        + "through the compile watcher, whose untracked-module gate (MeshWeaver#3583) holds "
+                        + "or parks it exactly as on any other trigger (MeshWeaver#6930): {Types}",
+                        refused.Count, string.Join(", ", refused.OrderBy(x => x, StringComparer.Ordinal)));
+            })
+            .Catch<ImmutableHashSet<string>, Exception>(ex =>
+            {
+                logger?.LogWarning(ex,
+                    "DynamicTypePreWarmer: the untracked-module question could not be answered — the "
+                    + "batch compiles every pending type as before");
+                return Observable.Return(none);
+            })
+            .DefaultIfEmpty(none);
+    }
+
+    /// <summary>
+    /// MeshWeaver#6930 — warm a type through the compile WATCHER rather than the batch's direct
+    /// compile: flip it <see cref="CompilationStatus.Pending"/> (the same door the framework-stale
+    /// kickoff and <see cref="RebuildMissingBytes"/> use) and wait for the watcher's answer. For a
+    /// module's content in an untracked partition that answer is the untracked-module gate's — a
+    /// HOLD (the last build keeps serving) or a named PARK — and never a Roslyn pass.
+    ///
+    /// <para>The answer is the first terminal state AFTER the flip has been observed: the record
+    /// may already sit at <see cref="CompilationStatus.Error"/> from an earlier verdict, and that
+    /// replayed value must not be read as this one. If the flip is never observed the wait ends as
+    /// <see cref="PreWarmStatus.TimedOut"/> — "not evaluated", never a verdict.</para>
+    /// </summary>
+    internal static IObservable<PreWarmOutcome> DriveThroughCompileWatcher(
+        IWorkspace workspace,
+        AccessService? accessService,
+        string typePath,
+        TimeSpan budget,
+        ILogger? logger)
+        => accessService.RunAsSystem(
+                () =>
+                {
+                    var options = workspace.Hub.JsonSerializerOptions;
+                    var stream = workspace.GetMeshNodeStream(typePath);
+                    var clock = System.Diagnostics.Stopwatch.StartNew();
+                    var settled = stream
+                        .Select(n => n?.ContentAs<NodeTypeDefinition>(options))
+                        .Where(d => d is not null)
+                        .SkipWhile(d => d!.CompilationStatus
+                            is not (CompilationStatus.Pending or CompilationStatus.Compiling))
+                        .Where(d => d!.CompilationStatus
+                            is CompilationStatus.Ok or CompilationStatus.Error or CompilationStatus.Unavailable)
+                        .Take(1)
+                        .Select(d => d!.CompilationStatus switch
+                        {
+                            CompilationStatus.Error => FromFailedCompile(typePath, d),
+                            CompilationStatus.Unavailable => new PreWarmOutcome(
+                                typePath, PreWarmStatus.TimedOut, d.CompilationError),
+                            _ when d.BuildProvenance is BuildProvenance.StaleAdopted => new PreWarmOutcome(
+                                typePath, PreWarmStatus.AlreadyBaked,
+                                "held by the untracked-module gate (MeshWeaver#3583) — its last build keeps serving"),
+                            _ => new PreWarmOutcome(typePath, PreWarmStatus.Compiled, "compiled by the compile watcher"),
+                        });
+
+                    // Never emits — it exists only for its write side effect, and it is merged
+                    // SECOND so `settled` is already listening when the flip lands.
+                    var trigger = stream
+                        .Update(node =>
+                        {
+                            if (node?.ContentAs<NodeTypeDefinition>(options) is not { } def
+                                || IsLiveCompileClaim(def, budget))
+                                return node!;
+                            return node with
+                            {
+                                Content = NodeTypeCompilationHelpers.DispatchPending(def, workspace.Hub)
+                            };
+                        })
+                        .IgnoreElements()
+                        .Select(_ => default(PreWarmOutcome)!)
+                        .Catch<PreWarmOutcome, Exception>(ex =>
+                        {
+                            logger?.LogWarning(ex,
+                                "DynamicTypePreWarmer: could not flip {TypePath} to Pending for the compile "
+                                + "watcher — the settle wait will time out and report it", typePath);
+                            return Observable.Empty<PreWarmOutcome>();
+                        });
+
+                    return Observable.Merge(settled, trigger)
+                        .Take(1)
+                        .Timeout(budget)
+                        .Select(o => o with { Duration = clock.Elapsed });
+                })
+            .Catch<PreWarmOutcome, Exception>(ex => Observable.Return(
+                ex is TimeoutException
+                    ? new PreWarmOutcome(typePath, PreWarmStatus.TimedOut,
+                        "the compile watcher did not answer within the per-type budget")
+                    : new PreWarmOutcome(typePath, PreWarmStatus.Faulted, ex.Message)))
+            .Do(o => logger?.LogInformation(
+                "DynamicTypePreWarmer: {TypePath} → {Status}{Detail} (through the compile watcher, "
+                + "MeshWeaver#6930) — {Cost}",
+                o.TypePath, o.Status,
+                string.IsNullOrEmpty(o.Detail) ? "" : $" ({o.Detail})",
+                o.DescribeCost()));
 
     /// <summary>A NodeType has something for Roslyn to compile (so it is a dynamic type worth warming).</summary>
     internal static bool HasCompilableSource(NodeTypeDefinition d) =>
