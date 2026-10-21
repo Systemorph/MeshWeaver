@@ -7,11 +7,17 @@ namespace MeshWeaver.Mesh;
 public partial class QueryParser
 {
     // Reserved qualifier names (case-insensitive)
-    private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
-        "partitions", BasePathQualifier
-    };
+    // Frozen: it is exposed (ReservedQualifierNames), so it must not be mutable through a downcast.
+    private static readonly System.Collections.Frozen.FrozenSet<string> ReservedQualifiers =
+        System.Collections.Frozen.FrozenSet.ToFrozenSet(
+        [
+            "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
+            "partitions", BasePathQualifier
+        ], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The reserved (single-slot) qualifier names — what a query may state only once. Read by
+    /// the catalog app's typed-text guard (<c>CatalogQuery.Anchoring</c>), which pins itself to this.</summary>
+    public static IReadOnlySet<string> ReservedQualifierNames => ReservedQualifiers;
 
     /// <summary>
     /// <c>basePath:X</c> — the query-text spelling of the search tools' <c>basePath</c> argument:
