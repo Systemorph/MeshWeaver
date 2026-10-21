@@ -731,6 +731,39 @@ When a user joins or leaves a group, the `GroupMembership` node change lands on 
 
 > On PostgreSQL the *SQL listing* path is a separate materialisation — `user_effective_permissions`, rebuilt by trigger (see "PostgreSQL integration" below). The evaluator above answers exact reads and every UI gate; the SQL fold answers query listing. They must agree.
 
+### 🚨 A cached read verdict follows the fold's inputs, not a clock
+
+The exact-node read gate in `MeshNodeStreamCache` caches each `(path, user)` verdict so a hot
+`GetMeshNodeStream` path does not re-walk the scope chain on every subscribe. That entry used to be
+valid for a flat 30 s, with nothing tying it to what it was computed from. Found chasing the
+intermittent Education e2e denial on a freshly installed package page: a viewer who opened a page
+**while its package was installing** — before the partition's `_Policy` existed — was denied, the
+denial was cached, the installer then wrote the root, the PublicRead `_Policy` and the page, the
+fold answered Read = true at once, and `get` (which reads through this gate) still answered
+`Not found` for the rest of the TTL. A withdrawn grant was the mirror image: a cached grant kept
+serving reads after the fold had stopped conferring it.
+
+The rule now: **an entry is served only while the fold's inputs are the ones it was computed
+from.** Every fold input is a cached query whose id starts `$security-`
+(`SecurityQueries.QueryIdPrefix` — grants, policies and the sync config per partition; root grants
+and policy, roles, memberships and gated nodes globally). Each committed snapshot of such a query
+advances a generation — the partition's for a partition-anchored read, the global one otherwise —
+and a verdict is stamped with the generation current when its evaluation *started*. A hit whose
+stamp no longer matches is re-evaluated.
+
+- **The order is load-bearing.** The generation advances only after the new snapshot is in the
+  query's replay buffer (`FoldInputReplay`), so an evaluation that starts after the bump reads the
+  new snapshot. Bumping first would let a read starting in between stamp an old-snapshot verdict
+  with the new generation, which nothing would ever invalidate.
+- **Not a timer, not a re-subscribe.** The bump is a counter increment on the emitting thread; the
+  next natural read re-evaluates. The TTL still bounds what the fold's queries do not carry — a node
+  type's own read rule, re-decided only on a fold denial.
+- **The delivery gate was never affected.** `AccessControlPipeline` asks the fold on every delivery
+  and caches nothing; this applies to the stream cache's read gate only.
+
+Pinned by `APolicyLandingAfterAProbeIsSeenTest` (`test/MeshWeaver.Graph.Test/`), both directions;
+on the unfixed build both fail on a single read taken right after the fold converged.
+
 ## Closest-wins semantics
 
 When the same role is assigned at multiple levels, the **deepest assignment wins**:
@@ -1606,8 +1639,8 @@ Concretely:
 
 - **Reads / subscriptions** — `MeshNodeStreamCache` gates each subscription by
   evaluating `hub.GetEffectivePermissions(path, user)` **locally** (the same
-  evaluator every other decision uses), cached per `(path, user)` for the
-  AccessControl TTL. It does **not** post a `GetPermissionRequest` to the leaf
+  evaluator every other decision uses), cached per `(path, user)` until a fold
+  input changes (see "A cached read verdict follows the fold's inputs"). It does **not** post a `GetPermissionRequest` to the leaf
   path's hub. A satellite / cell sub-path (e.g. a `{thread}/{messageId}` the GUI
   subscribed to that was never persisted, or a brand-new thread) has no hub of
   its own — routing returns NotFound — so a leaf-hub probe would block on a grain
