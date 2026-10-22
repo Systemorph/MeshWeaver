@@ -551,7 +551,11 @@ line and changed what they validate against (each reads the VALIDATING hub's con
 consumer was the defect. Now a singleton consumer takes the set from `SingletonNodeValidators`, a root
 singleton that begins a scope of its own and resolves the set there: that scope is the caller, a module's
 scoped validator is built in the module scope it owns, and everything the scope built is disposed with
-the root. A native backend whose query provider filters reads the same way must take its validators from
+the root. The set it hands out is read afresh on every enumeration and is empty once the holder is
+disposed: a consumer can outlive the root (the static-node provider stays subscribed to the module
+registry), and holding the validator array itself kept the disposed mesh hub alive through
+`StaticNodeQueryProvider → Lazy<INodeValidator>[] → ServicePrincipalAdminGuard → MessageHub`
+(`CopyMoveDeadlineReleasesHubTest`). A native backend whose query provider filters reads the same way must take its validators from
 the same holder; the Sqlite and Cosmos providers in MeshWeaver.Plugins still take them from the root and
 move once this holder is on their platform pin (the public portals run Postgres, whose provider
 consults no validator). `AModuleNodeValidatorIsNeverBuiltForNoCallerTest` installs a module with a write-only scoped

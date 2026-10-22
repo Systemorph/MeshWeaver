@@ -26,6 +26,7 @@ namespace MeshWeaver.Hosting.Persistence;
 public sealed class SingletonNodeValidators : IDisposable, IAsyncDisposable
 {
     private readonly AsyncServiceScope scope;
+    private Lazy<INodeValidator>[] held;
 
     /// <summary>Begins the owned scope and resolves the validator set in it — lazily: no validator is
     /// built until a consumer asks for <see cref="Lazy{T}.Value"/> (row-level security takes
@@ -35,15 +36,40 @@ public sealed class SingletonNodeValidators : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(scopes);
         scope = scopes.CreateAsyncScope();
-        Validators = scope.ServiceProvider.GetService<IEnumerable<Lazy<INodeValidator>>>() ?? [];
+        held = scope.ServiceProvider.GetService<IEnumerable<Lazy<INodeValidator>>>()?.ToArray() ?? [];
+        Validators = Enumerate();
     }
 
-    /// <summary>The mesh's node validators, each built on first use in the scope this holder owns.</summary>
+    /// <summary>
+    /// The mesh's node validators, each built on first use in the scope this holder owns. Read afresh on
+    /// every enumeration, and EMPTY once this holder is disposed.
+    ///
+    /// <para>🚨 A consumer keeps this sequence for its own life, and a consumer can outlive the mesh's root
+    /// (the static-node provider stays subscribed to the module registry). Handing it the validator array
+    /// itself made every validator the scope built — and the mesh hub each one holds — reachable for as
+    /// long as that consumer is: measured by <c>CopyMoveDeadlineReleasesHubTest</c>, where the disposed
+    /// mesh hub stayed alive through <c>StaticNodeQueryProvider → Lazy&lt;INodeValidator&gt;[] →
+    /// ServicePrincipalAdminGuard → MessageHub</c>. What the scope built ends with the scope.</para>
+    /// </summary>
     public IEnumerable<Lazy<INodeValidator>> Validators { get; }
 
-    /// <inheritdoc />
-    public void Dispose() => scope.Dispose();
+    private IEnumerable<Lazy<INodeValidator>> Enumerate()
+    {
+        foreach (var validator in Volatile.Read(ref held))
+            yield return validator;
+    }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync() => scope.DisposeAsync();
+    public void Dispose()
+    {
+        Volatile.Write(ref held, []);
+        scope.Dispose();
+    }
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync()
+    {
+        Volatile.Write(ref held, []);
+        return scope.DisposeAsync();
+    }
 }
