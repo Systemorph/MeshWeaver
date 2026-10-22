@@ -226,7 +226,8 @@ host of `PluginCatalog:HomeUrl`. A mount marked `isRegistrySource` is a git sour
 from, not a registry an instance pulls from.
 
 Three kinds of record are deliberately **not** expected consumers, and the ledger counts each
-apart (`… N retired, M not mounting this store, K reporting without a record`):
+apart, beside the suspended ones described below
+(`… N retired, S suspended with their last report pinned, M not mounting this store, K reporting without a record`):
 
 | record | why it is not counted |
 |---|---|
@@ -275,9 +276,33 @@ the harmless half: on the registry, a leftover probe under a user's partition wa
 `memex` record's sink report and refused every pass as "incomplete or legacy", standing in for the
 report that had never arrived.
 
+🚨 **A suspended consumer is paused, not gone** (#6989). A suspended instance stops reporting, so
+about a day after its suspension its last report is older than `StaleAfter`, and that one refusal
+used to fault every pass until the record was retired. The record **declares** the suspension
+(`status: Suspended`), and the pass reads it from there; it never infers a suspension from the
+silence. Such a record stays an expected consumer with two differences:
+
+| | a suspended consumer | a retired one |
+|---|---|---|
+| its stale report refuses the pass | no — the freshness budget is excused | not read at all |
+| the builds its last report names | **stay pinned**, so it can resume onto them | not protected |
+| it never reported, or its report is unreadable | still refuses: what it would resume onto is unknown | not read at all |
+
+Everything nobody else references is reclaimed. Only the exact value `Suspended` (case-insensitive)
+excuses the budget. Any other status, including one the platform has never seen, keeps the full
+verdict. Tests: `ASuspendedConsumerWithAStaleReport_NoLongerFaultsThePass`,
+`ASuspendedConsumer_KeepsEveryBuildItsLastReportNamedPinned`,
+`ASuspendedConsumerThatNeverReported_StillRefuses` and the negative control
+`ANonSuspendedConsumerWithAStaleReport_StillRefuses` (`DeploymentPinnedReferencesTest`).
+
+The status is read from the copy of the record **the retention host holds**. A host whose records
+arrive by sync sees a suspension only once the sync has carried it there, so read `status` on that
+host's own copy of the record before expecting the pass to complete.
+
 **What still refuses**, and must:
 
-- A declared consumer with no report, an unreadable one, or one older than `StaleAfter` (24 h). A
+- A declared consumer with no report, an unreadable one, or one older than `StaleAfter` (24 h)
+  while its record does not declare it suspended. A
   consumer on an image that does not deliver to its stores yet is such a consumer, so the
   registry's pass completes only once every instance that mounts it runs a build carrying the
   delivery. Until then it keeps refusing, and the refusal names each silent instance.

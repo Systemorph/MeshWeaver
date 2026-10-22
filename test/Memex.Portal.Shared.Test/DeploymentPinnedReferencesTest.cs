@@ -366,6 +366,100 @@ public class DeploymentPinnedReferencesTest
             .And.Contain("1 not mounting this store");
     }
 
+    // ── #6989: a SUSPENDED consumer is paused, not gone ─────────────────────────────────────────
+    //
+    // Measured on the registry: one expected consumer's record was suspended (pending teardown), the
+    // instance stopped reporting, and a day later its last report was past the 24 h budget — every
+    // pass FAULTED on that one refusal and nothing was reclaimed. The record's declared status
+    // excuses the freshness verdict; the builds its last report names stay pinned so it can resume.
+
+    private static ImmutableList<MeshNode> FleetWithCustomer(string? status) =>
+        SyncedFleet().Select(r => r.Id == "customer"
+            ? Deployment("customer", extra: status is null ? null : $$"""{ "status": "{{status}}" }""")
+            : r).ToImmutableList();
+
+    private static ImmutableList<MeshNode> FleetReportsWithStaleCustomer() =>
+    [
+        StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+        StoreReport("control", TimeSpan.FromHours(2), "s-control"),
+        StaleCustomerReport(),
+    ];
+
+    /// <summary>The suspended consumer's last report: 31 h old, running one build and holding another adopted.</summary>
+    private static MeshNode StaleCustomerReport()
+    {
+        var report = Report("customer", TimeSpan.FromHours(31), "s-customer-running", adopted: ["s-customer-adopted"]);
+        ((JsonObject)report.Content!)["registeredInstance"] = "customer";
+        return report with
+        {
+            Namespace = $"{DeploymentReportService.DefaultOperationalSpace}/{DeploymentReportService.StoreReportsSegment}",
+        };
+    }
+
+    [Theory]
+    [InlineData("Suspended")]
+    [InlineData(" suspended ")]
+    public void ASuspendedConsumerWithAStaleReport_NoLongerFaultsThePass(string status)
+    {
+        var references = Resolve(FleetWithCustomer(status), FleetReportsWithStaleCustomer(),
+            new ConsumerScope("registry", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().Contain(["s-company", "s-control"],
+            because: "the pass completes, so every other consumer's builds are what protection is computed from");
+    }
+
+    [Fact]
+    public void ASuspendedConsumer_KeepsEveryBuildItsLastReportNamedPinned()
+    {
+        var references = Resolve(FleetWithCustomer("Suspended"), FleetReportsWithStaleCustomer(),
+            new ConsumerScope("registry", [], IsControlInstance: false));
+
+        references.Select(r => r.Identity).Should().Contain(["s-customer-running", "s-customer-adopted"],
+            because: "a suspended instance can be resumed onto what it last reported, so those builds stay protected — "
+                + "it is excused from the freshness budget, never treated as retired");
+
+        // And the pins hold through the PLAN, not only in the reference list.
+        var old = Now.AddDays(-100);
+        PrebuiltIdentityEntry Identity(string id) => new(id, "/store/" + id,
+            [new PrebuiltSourceEntry("plugins", true, old, old, null)], 1024, old);
+        var scan = new PrebuiltStoreScan(
+            [Identity("s-registry"), Identity("s-customer-running"), Identity("s-customer-adopted"), Identity("s-unreferenced")], []);
+        var plan = PrebuiltBundleStore.Plan("s-registry", "3.0.0-ci.9000", scan, [], references,
+            new PrebuiltBundleRetention { KeepNewestPerSource = 0 }, Now);
+
+        plan.Collectable.Select(i => i.Identity).Should().Contain("s-unreferenced",
+            because: "everything nobody references is reclaimed")
+            .And.NotContain(["s-customer-running", "s-customer-adopted"]);
+    }
+
+    [Fact]
+    public void ASuspendedConsumerThatNeverReported_StillRefuses()
+    {
+        // What it would resume onto is unknown, so nothing may be shown to be unreferenced.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(FleetWithCustomer("Suspended"),
+            [StoreReport("company", TimeSpan.FromMinutes(30), "s-company"),
+             StoreReport("control", TimeSpan.FromHours(2), "s-control")],
+            new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        refusal.Message.Should().Contain("Deployments/customer: no Hosting/ModuleInventory report has ever arrived");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("Live")]
+    [InlineData("SomeStatusNobodyDeclaredYet")]
+    public void ANonSuspendedConsumerWithAStaleReport_StillRefuses(string? status)
+    {
+        // The negative control: only the record's DECLARED suspension excuses the budget; silence,
+        // an ordinary status or an unknown one keeps the full verdict.
+        var refusal = Assert.Throws<InvalidOperationException>(() => Resolve(FleetWithCustomer(status),
+            FleetReportsWithStaleCustomer(), new ConsumerScope("registry", [], IsControlInstance: false)));
+
+        // Unchanged behaviour by design: this passes with and without the suspension rule.
+        refusal.Message.Should().Contain("Deployments/customer: its newest report")
+            .And.Contain("past the 24 h budget");
+    }
+
     [Fact]
     public void AReportCanOnlyStandForTheInstanceTheStoreAuthenticated_NotTheOneItsBodyClaims()
     {
