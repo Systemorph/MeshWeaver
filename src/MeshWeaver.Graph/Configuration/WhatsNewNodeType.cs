@@ -1,4 +1,5 @@
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 
 namespace MeshWeaver.Graph.Configuration;
 
@@ -29,9 +30,36 @@ public static class WhatsNewNodeType
     /// <summary>Registers the built-in "WhatsNew" MeshNode on the mesh builder.</summary>
     public static TBuilder AddWhatsNewType<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(CreateMeshNode());
+        builder.AddMeshNodes(CreateMeshNode(), CreatePolicy());
         return builder;
     }
+
+    /// <summary>
+    /// The partition policy for <c>WhatsNew</c>: readable by everyone, writable by nobody.
+    ///
+    /// <para>🚨 The registration is a TOP-LEVEL node, so it is its own partition, and a partition
+    /// with no policy is private. A declared node is row-filtered like a stored one, so without this
+    /// policy every viewer but an admin lost the type from a query — while release notes are written
+    /// for everyone. Read access is DECLARED here, the way <c>Doc</c> and <c>_Setting</c> declare
+    /// theirs, never granted by an exemption in the row filter.</para>
+    /// </summary>
+    /// <returns>The read-only, publicly readable <c>WhatsNew/_Policy</c> node.</returns>
+    // Satellite(): MainNode = the partition root, not the node's own path — see #2383.
+    public static MeshNode CreatePolicy() =>
+        MeshNode.Satellite("_Policy", NodeType) with
+        {
+            NodeType = PartitionAccessPolicyNodeType.NodeType,
+            Name = "Access Policy",
+            Content = new PartitionAccessPolicy
+            {
+                PublicRead = true,
+                Create = false,
+                Update = false,
+                Delete = false,
+                Comment = false,
+                Thread = false
+            }
+        };
 
     /// <summary>Creates the MeshNode definition for the What's New entry node type.</summary>
     public static MeshNode CreateMeshNode() => new(NodeType)
