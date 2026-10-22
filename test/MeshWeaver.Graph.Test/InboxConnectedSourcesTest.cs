@@ -25,7 +25,7 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string SourcesArea = InboxLayoutArea.AreaName + "/Main/Commands/Sources";
+    private const string SourcesArea = InboxLayoutArea.AreaName + "/Filters/Source/Content";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -56,8 +56,8 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
 
         // The page is a TEMPLATE: every source's toggle is declared at once, its style BOUND to the
         // connection the rows feed publishes — never built after a wait.
-        var toggle = (ToggleButtonControl)(await Open(without).GetControlStream($"{SourcesArea}/Toggle{mail}")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the Mail toggle is in the template", ct))!;
+        var toggle = (StackControl)(await Open(without).GetControlStream($"{SourcesArea}/Source{mail}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the Mail source row is in the template", ct))!;
         toggle.Style.Should().BeOfType<JsonPointerReference>()
             .Which.Pointer.Should().Be(InboxLayoutArea.SourceStylePointer(mail), "its visibility is bound, not baked");
 
