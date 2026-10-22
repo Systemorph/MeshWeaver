@@ -26,7 +26,7 @@ public static class InboxSourceIcons
     private static readonly ImmutableDictionary<string, string> Known = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
     {
         // The mesh's own sources — Fluent symbols.
-        ["Approvals"] = "ShieldCheckmark",
+        ["Approvals"] = "Gavel",
         ["Notifications"] = "Alert",
         ["Activities"] = "Settings",
         ["Mail"] = "Mail",

@@ -396,7 +396,7 @@ public static class InboxQueries
     /// <summary>The source id of the approval requests.</summary>
     public const string ApprovalsSource = "Approvals";
 
-    private const string ApprovalsIcon = "✅";
+    private const string ApprovalsIcon = "✋";
 
     /// <summary>
     /// Every <see cref="NotificationType"/> other than the default

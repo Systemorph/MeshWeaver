@@ -247,15 +247,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Match(c => c is LayoutGridControl, "the page is a layout grid: filters, then the list", ct))!;
         page.Should().NotBeNull();
 
-        foreach (var (area, what) in new[] { ("Kind", "the filter panel's kinds"), ("Tags", "the filter panel's tags") })
-        {
-            var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/{area}/Content")
-                .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, what, ct))!;
-            menu.Type?.ToString().Should().Be(nameof(String),
-                "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
-        }
+        // Kinds are checkboxes (a Stack of rows); tags are a bound list of checkboxes.
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Kind/Content")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the kind checkboxes", ct)).Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Tags/Content")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is ItemTemplateControl, "the tag checkboxes", ct)).Should().NotBeNull();
         (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Options/Content")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is SwitchControl, "the ignorable switch", ct))
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is CheckBoxControl, "the ignorable checkbox", ct))
             .Should().NotBeNull();
         (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Source/Content/Only")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is SelectControl, "the Only select", ct))

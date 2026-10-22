@@ -237,6 +237,8 @@ public static class InboxLayoutArea
             host.UpdateData(HiddenActionStyleId, HiddenStyle);
             host.UpdateData(IgnorableId, string.Empty);
             host.UpdateData(TagOptionsId, TagOptions(host.Localize("inbox.tag.all"), host.Localize("inbox.tag.important"), []));
+            host.UpdateData(TagItemsId, ImmutableList<InboxTagItem>.Empty);
+            host.UpdateData(KindLabelsId, KindLabels(CategoriesOf(host, sections), InboxRows.CategoryCounts([])));
             // Until the connection reads answer, only the sources that need none are listed.
             var unprobed = Unprobed(sections);
             host.UpdateData(CategoryOptionsId, CategoryOptions(host.Localize("inbox.category.all"),
@@ -268,21 +270,28 @@ public static class InboxLayoutArea
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
 
         // ── The side panel: every filter, grouped under a small title. ─────────────────────────
-        // Kind: the platform's one-choice control, its value bound to the filter's category (two-way,
-        // like the search) and its options fed with the live counts.
-        var kind = (Controls.RadioGroup(new JsonPointerReference("category"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(CategoryOptionsId)),
-                // The CLR type NAME the client resolves through its registry — "String", never the
-                // C# keyword: "string" is not a type name, and the menu failed with "Type not found".
-                typeof(string).Name)
-            with { DataContext = filterContext, AriaLabel = host.Localize("inbox.section.kind") })
-            .WithOrientation(Orientation.Vertical);
-        // The tags a triage gave — GitHub's label filter: Important first, then each tag by how
-        // often it is used. A tag narrows whatever folder and sources are shown.
-        var tags = (Controls.RadioGroup(new JsonPointerReference("tag"),
-                new JsonPointerReference(LayoutAreaReference.GetDataPointer(TagOptionsId)), typeof(string).Name)
-            with { DataContext = filterContext, AriaLabel = host.Localize("inbox.section.tags") })
-            .WithOrientation(Orientation.Vertical);
+        // Kind: one checkbox per kind (side-menu category), the symbol before it, its name and count
+        // bound from the feed. The union of the ticked kinds is listed; none ticked lists all.
+        var kind = Controls.Stack.WithVerticalGap(4);
+        foreach (var category in CategoriesOf(host, sections))
+        {
+            var key = InboxRows.SourceKey(category.Key);
+            kind = kind.WithView(
+                Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
+                    .WithView(Controls.Icon(category.Icon).WithWidth("20px"), "Icon" + key)
+                    .WithView(Controls.CheckBox(new JsonPointerReference($"kinds/{key}")) with
+                    {
+                        DataContext = filterContext,
+                        Label = new JsonPointerReference(LayoutAreaReference.GetDataPointer(KindLabelsId) + "/" + key),
+                    }, "Kind" + key), "Row" + key);
+        }
+        // Tags: one checkbox per tag the triage gave — Important first, then each by use. They are
+        // known only once the rows are, so the list is a bound collection, one checkbox per item.
+        // A row matching ANY ticked tag is listed; none ticked lists all.
+        // The list is fed here (RowsOf writes TagItemsId), so the template's own feed stays silent —
+        // otherwise its emission would overwrite a box the viewer just ticked.
+        var tags = Observable.Never<IEnumerable<InboxTagItem>>()
+            .BindMany(TagItemsId, tag => Controls.CheckBox(tag.Checked).WithLabel(tag.Label));
         // Source: Only narrows to the one source picked and wins over the switches; below it ONE row
         // per source — the SAME symbol the grid's first column shows, then a switch named for it. A
         // source stays hidden until the rows feed says the viewer has connected it.
@@ -297,7 +306,7 @@ public static class InboxLayoutArea
                 (Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
                     with { Style = new JsonPointerReference(SourceStylePointer(key)) })
                 .WithView(Controls.Icon(source.Icon).WithWidth("20px"), "Icon" + key)
-                .WithView(Controls.Switch(new JsonPointerReference($"sources/{key}")) with
+                .WithView(Controls.CheckBox(new JsonPointerReference($"sources/{key}")) with
                 {
                     DataContext = filterContext, Label = source.Label,
                 }, "Show" + key), "Source" + key);
@@ -312,7 +321,7 @@ public static class InboxLayoutArea
             .WithView(Section(host.Localize("inbox.section.tags"), tags), "Tags")
             .WithView(Section(host.Localize("inbox.section.source"), sourceList), "Source")
             // Spam, promotions and noise stay out of the list until the viewer asks for them.
-            .WithView(Section(host.Localize("inbox.section.options"), Controls.Switch(new JsonPointerReference("showIgnorable")) with
+            .WithView(Section(host.Localize("inbox.section.options"), Controls.CheckBox(new JsonPointerReference("showIgnorable")) with
             {
                 DataContext = filterContext, Label = host.Localize("inbox.showIgnorable"),
             }), "Options");
@@ -410,6 +419,39 @@ public static class InboxLayoutArea
             });
             return Unit.Default;
         });
+
+    /// <summary>The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden.</summary>
+    internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts)
+        => row.State.Length > 0 && texts.TryGetValue(row.State, out var text)
+            ? row with { StateText = text, StateColor = InboxState.Color(row.State), StateStyle = string.Empty }
+            : row;
+
+    /// <summary>The data id of the kind checkboxes' labels — each kind's name and count, keyed by <see cref="InboxRows.SourceKey"/>.</summary>
+    public const string KindLabelsId = "inboxKindLabels";
+
+    /// <summary>The data id of the tag checkboxes — one <see cref="InboxTagItem"/> per tag, most used first.</summary>
+    public const string TagItemsId = "inboxTagItems";
+
+    /// <summary>
+    /// Each kind's checkbox text — its name and count, the count being the unread ones when it has any, else
+    /// all of them — keyed by <see cref="InboxRows.SourceKey"/> of the category. Pure.
+    /// </summary>
+    internal static ImmutableDictionary<string, string> KindLabels(
+        ImmutableList<(string Key, string Label, string Icon)> categories,
+        ImmutableDictionary<string, (int Total, int Unread)> counts)
+        => categories.ToImmutableDictionary(c => InboxRows.SourceKey(c.Key),
+            c => c.Label + (counts.TryGetValue(c.Key, out var n) && (n.Unread > 0 ? n.Unread : n.Total) is > 0 and var shown ? $"  {shown}" : string.Empty),
+            StringComparer.Ordinal);
+
+    /// <summary>The tag checkboxes: Important first, then each tag by use with its count; the ones in <paramref name="ticked"/> are ticked. Pure.</summary>
+    internal static ImmutableList<InboxTagItem> TagItems(IEnumerable<(string Key, string Tag, int Count)> counts,
+        string importantLabel, ImmutableHashSet<string> ticked)
+        => [.. counts.Select(c => new InboxTagItem
+        {
+            Key = c.Key,
+            Label = (string.Equals(c.Key, InboxRows.ImportantKey, StringComparison.Ordinal) ? $"⭐ {importantLabel}" : "#" + c.Tag) + $"  {c.Count}",
+            Checked = ticked.Contains(c.Key),
+        })];
 
     /// <summary>The data id of the Approve / Reject style: empty while they apply, hidden otherwise.</summary>
     public const string DecideStyleId = "inboxDecideStyle";
@@ -514,6 +556,8 @@ public static class InboxLayoutArea
             host.Localize("inbox.approvals.requestedFrom", "{0}"),
             host.Localize("inbox.approvals.approvedBy", "{0}"),
             host.Localize("inbox.approvals.rejectedBy", "{0}"));
+        var stateTexts = InboxState.All.ToImmutableDictionary(state => state,
+            state => InboxState.Mark(state) + host.Localize(InboxState.LabelKey(state)), StringComparer.Ordinal);
         var allLabel = host.Localize("inbox.category.all");
         var allTags = host.Localize("inbox.tag.all");
         var importantLabel = host.Localize("inbox.tag.important");
@@ -531,6 +575,8 @@ public static class InboxLayoutArea
         // writes: rows written → filter "changes" → rows written again, without end.
         var filter = host.GetDataStream<InboxFilter>(InboxRows.FilterId).Select(f => f ?? new InboxFilter())
             .DistinctUntilChanged(InboxRows.Fingerprint, StringComparer.Ordinal);
+        var tagItems = host.GetDataStream<ImmutableList<InboxTagItem>>(TagItemsId).Select(items => items ?? [])
+            .DistinctUntilChanged(items => string.Join('\n', items.Select(item => $"{item.Key}|{item.Label}|{item.Checked}")), StringComparer.Ordinal);
 
         // What each leg last answered: its rows, and whether that answer was a failure. A leg that
         // cannot be read contributes no rows, is LOGGED and is NAMED above the grid — one provider's
@@ -541,12 +587,12 @@ public static class InboxLayoutArea
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
             Nodes(hub, section, term, owner)
                 .Select(nodes => (nodes
-                    .Select(node => InboxApprovalLedger.Decorate(
+                    .Select(node => WithStateText(InboxApprovalLedger.Decorate(
                         InboxRows.Of(node, section, zone,
                             BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
                             bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
                             hub.JsonSerializerOptions),
-                        node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions))
+                        node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {
@@ -566,11 +612,7 @@ public static class InboxLayoutArea
                     : string.Empty);
             })
             .Select(legs => InboxRows.Merge(legs.Select(leg => leg.Rows)))
-            .Do(merged =>
-            {
-                host.UpdateData(CategoryOptionsId, CategoryOptions(allLabel, categories, InboxRows.CategoryCounts(merged)));
-                host.UpdateData(TagOptionsId, TagOptions(allTags, importantLabel, InboxRows.TagCounts(merged)));
-            });
+            .Do(merged => host.UpdateData(KindLabelsId, KindLabels(categories, InboxRows.CategoryCounts(merged))));
 
         // The date bounds (before:/after:) are applied to the rows by InboxRows.Apply; only the
         // remaining text goes to the sources.
@@ -585,8 +627,14 @@ public static class InboxLayoutArea
             .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, (rows, asked) =>
+            .CombineLatest(filter, tagItems, (rows, asked, items) =>
             {
+                // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
+                var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
+                var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked);
+                if (!wanted.SequenceEqual(items))
+                    host.UpdateData(TagItemsId, wanted);
+                asked = asked with { TagKeys = [.. wanted.Where(item => item.Checked).Select(item => item.Key)] };
                 var shown = InboxRows.Apply(rows, asked, asked.Category);
                 var hidden = InboxRows.HiddenObligations(rows, asked, needsYou);
                 host.UpdateData(HiddenId, hidden == 0 ? string.Empty : host.Localize("inbox.hidden", hidden));
@@ -724,14 +772,30 @@ public static class InboxLayoutArea
         foreach (var (property, key, width) in new[]
                  {
                      (nameof(InboxRow.Title), "inbox.column.item", "3fr"),
+                     (nameof(InboxRow.StateText), "inbox.column.state", "150px"),
                      (nameof(InboxRow.From), "inbox.column.source", "1.5fr"),
                      // Which of the viewer's accounts it reached — several mailboxes in one list.
                      (nameof(InboxRow.Account), "inbox.column.account", "1.5fr"),
                      (nameof(InboxRow.TagText), "inbox.column.tags", "1fr"),
                      (nameof(InboxRow.When), "inbox.column.when", "170px"),
                  })
+        {
+            // The lifecycle state as a badge — coloured by state, a check only for what is done, and
+            // hidden (not drawn empty) for an item that has none.
+            if (property == nameof(InboxRow.StateText))
+            {
+                grid = grid.WithColumn(new TemplateColumnControl(Controls.Badge(new ContextProperty(InboxRows.StateTextProperty)) with
+                    {
+                        BackgroundColor = new ContextProperty(InboxRows.StateColorProperty),
+                        Color = "#ffffff",
+                        Style = new ContextProperty(InboxRows.StateStyleProperty),
+                    })
+                    .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
+                continue;
+            }
             grid = grid.WithColumn(new PropertyColumnControl<string> { Property = property.ToCamelCase() }
                 .WithTitle(host.Localize(key)).WithWidth(width).WithSortable(false));
+        }
         return grid
             // A click on a row OPENS it, as in a mail client — always INSIDE the portal, in the
             // inbox's reading view (InboxReadingView), never the provider's own client. (Ticking a box

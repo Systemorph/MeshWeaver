@@ -392,6 +392,13 @@ function of the filter and the legs.
 > WhatsApp, Teams), falling back to the symbol the leg declared. The side panel lists each source with that same
 > symbol and a switch. "N item(s) needing you are hidden by the source filter" is one quiet line with a Show all
 > action that clears Only and switches every source on.
+>
+> Kinds, tags, sources and "Show ignorable" are CHECKBOXES (`filter.kinds/{key}`, a bound list of `InboxTagItem`
+> for tags, `sources/{key}`): the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
+> column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
+> Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
+> for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
+> are symbolised by a gavel (`InboxSourceIcons`), never a tick.
 
 | Control | Bound to | What it does |
 |---|---|---|
