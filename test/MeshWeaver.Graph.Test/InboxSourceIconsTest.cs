@@ -191,4 +191,125 @@ public class InboxStateAndFilterTest
         items[0].Label.Should().Contain("Important").And.Contain("2");
         items[1].Label.Should().Be("#reply  3");
     }
+
+    private static InboxRow ActivityRow(object? content)
+    {
+        var node = new MeshNode("run1", "alice/_Activity") { Name = "Import", NodeType = "Activity" };
+        if (content is not null)
+            node = node with { Content = System.Text.Json.JsonSerializer.SerializeToElement(content) };
+        return InboxRows.Of(node, new InboxSection(InboxBand.Running, "Activities", 10, "q"), null, null);
+    }
+
+    /// <summary>A running activity shows its step out of its sub-activities and its latest log line.</summary>
+    [Fact]
+    public void ARunningActivity_ShowsItsStepAndLatestLogLine()
+    {
+        var row = ActivityRow(new
+        {
+            subActivities = new object[]
+            {
+                new { status = "Succeeded" }, new { status = "Warning" }, new { status = 1 }, new { status = "Running" }, new { status = "Running" },
+            },
+            messages = new object[] { new { message = "first" }, new { message = "Building the model\nsecond line" } },
+        });
+        row.State.Should().Be(InboxState.Running);
+        row.StepNumber.Should().Be("4/5", "three finished sub-activities (by name and by number), the fourth is running");
+        row.StepMessage.Should().Be("Building the model", "the first line of the latest message");
+        var texts = new[] { InboxState.Running }.ToImmutableDictionary(s => s, _ => "Running");
+        InboxLayoutArea.WithStateText(row, texts, "step {0}").StateText.Should().Be("Running · step 4/5: Building the model");
+    }
+
+    /// <summary>Each part of the step is optional; without either the badge is the plain state.</summary>
+    [Fact]
+    public void AnActivity_WithoutAStep_ShowsThePlainState()
+    {
+        var texts = new[] { InboxState.Running }.ToImmutableDictionary(s => s, _ => "Running");
+        InboxLayoutArea.WithStateText(ActivityRow(new { status = "Running" }), texts, "step {0}").StateText.Should().Be("Running");
+        InboxLayoutArea.WithStateText(ActivityRow(null), texts, "step {0}").StateText.Should().Be("Running", "a leg that dropped content");
+        InboxLayoutArea.WithStateText(ActivityRow(new { messages = new object[] { new { message = "Working" } } }), texts, "step {0}")
+            .StateText.Should().Be("Running · Working");
+        InboxLayoutArea.WithStateText(ActivityRow(new { subActivities = new object[] { new { status = "Running" } } }), texts, "step {0}")
+            .StateText.Should().Be("Running · step 1/1");
+        ActivityRow(new { messages = new object[] { new { message = new string('x', 200) } } }).StepMessage
+            .Should().HaveLength(InboxRows.StepMessageLimit).And.EndWith("…");
+    }
+
+    /// <summary>Children may overlap and finish out of order: the step is the first unfinished one.</summary>
+    [Fact]
+    public void TheStep_IsTheFirstUnfinishedSubActivity_WhenTheyFinishOutOfOrder()
+    {
+        ActivityRow(new { subActivities = new object[] { new { status = "Running" }, new { status = "Succeeded" }, new { status = "Running" } } })
+            .StepNumber.Should().Be("1/3");
+        ActivityRow(new { subActivities = new object[] { new { status = "Succeeded" }, new { status = "Running" }, new { status = "Succeeded" } } })
+            .StepNumber.Should().Be("2/3");
+        ActivityRow(new { subActivities = new object[] { new { status = "Succeeded" }, new { status = "Failed" } } })
+            .StepNumber.Should().Be("2/2", "never past the last");
+    }
+
+    /// <summary>A localizable log entry is read in the viewer's locale; the English text is the fallback.</summary>
+    [Fact]
+    public void TheStepMessage_IsLocalizedForTheViewer()
+    {
+        var node = new MeshNode("run3", "alice/_Activity") { NodeType = "Activity", Content = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            messages = new object[] { new { message = "Running", logLevel = "Information", messageKey = "inbox.state.running" } },
+        }) };
+        var section = new InboxSection(InboxBand.Running, "Activities", 10, "q");
+        InboxRows.Of(node, section, null, null, null, 0, null, null, null, "de").StepMessage.Should().Be("Läuft");
+        InboxRows.Of(node, section, null, null, null, 0, null, null, null, null).StepMessage.Should().Be("Running", "no locale: the English fallback");
+    }
+
+    /// <summary>Only a running activity carries a step; a failed one and a mail do not.</summary>
+    [Fact]
+    public void OnlyARunningActivity_CarriesAStep()
+    {
+        var content = System.Text.Json.JsonSerializer.SerializeToElement(new { status = "Failed", messages = new object[] { new { message = "boom" } } });
+        var node = new MeshNode("run2", "alice/_Activity") { NodeType = "Activity", Content = content };
+        var failed = InboxRows.Of(node, new InboxSection(InboxBand.NeedsYou, "Activities", 50, "q"), null, null);
+        failed.State.Should().Be(InboxState.Failed);
+        failed.StepMessage.Should().BeEmpty();
+        InboxRows.Of(node, new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q"), null, null).StepMessage.Should().BeEmpty();
+    }
+
+    /// <summary>The running-activities leg keeps content, so the step can be read.</summary>
+    [Fact]
+    public void TheRunningActivitiesLeg_KeepsContentInItsProjection()
+    {
+        var leg = InboxQueries.BuiltIn.Single(l => l.Source == "Activities" && l.Band == InboxBand.Running);
+        leg.TimeField.Should().Be("start");
+        InboxQueries.Bounded(leg.Query, leg.TimeField).Should().Contain("content");
+        leg.Query.Should().Contain("sort:content.start-desc", "the bound is chosen by the stamp the rows are shown by");
+    }
+
+    private static InboxRow StateRow(string name, string state)
+        => new() { Path = "alice/" + name, Title = name, SourceId = "Mail", Category = "Mail", Stamp = name, State = state };
+
+    private static readonly InboxRow[] StateRows =
+    [
+        StateRow("awaiting", InboxState.Awaiting), StateRow("requested", InboxState.Requested), StateRow("running", InboxState.Running),
+        StateRow("unread", InboxState.Unread), StateRow("approved", InboxState.Approved), StateRow("rejected", InboxState.Rejected),
+        StateRow("expired", InboxState.Expired), StateRow("done", InboxState.Done), StateRow("failed", InboxState.Failed),
+        StateRow("cancelled", InboxState.Cancelled), StateRow("stateless", string.Empty),
+    ];
+
+    private static InboxFilter Groups(params string[] groups)
+        => new() { States = groups.ToImmutableDictionary(g => g, _ => true) };
+
+    /// <summary>Open lists what still waits; Done what is over; both everything; none everything.</summary>
+    [Fact]
+    public void TheStateFilter_OpenDoneBothAndNone()
+    {
+        string[] open = ["awaiting", "requested", "running", "unread"];
+        string[] done = ["approved", "rejected", "expired", "done", "failed", "cancelled", "stateless"];
+        InboxRows.Apply(StateRows, Groups(InboxRows.OpenKey)).Select(r => r.Title).Order().Should().Equal(open.Order());
+        InboxRows.Apply(StateRows, Groups(InboxRows.DoneKey)).Select(r => r.Title).Order().Should().Equal(done.Order());
+        InboxRows.Apply(StateRows, Groups(InboxRows.OpenKey, InboxRows.DoneKey)).Should().HaveCount(StateRows.Length);
+        InboxRows.Apply(StateRows, new InboxFilter()).Should().HaveCount(StateRows.Length, "none ticked: all");
+        InboxRows.Apply(StateRows, new InboxFilter { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false) })
+            .Should().HaveCount(StateRows.Length, "an unticked box narrows nothing");
+        InboxRows.Apply(StateRows, Groups(InboxRows.OpenKey) with { Category = "Mail" }).Should().HaveCount(open.Length, "it narrows a picked category too");
+        InboxRows.Fingerprint(Groups(InboxRows.OpenKey)).Should().NotBe(InboxRows.Fingerprint(new InboxFilter()))
+            .And.NotBe(InboxRows.Fingerprint(Groups(InboxRows.DoneKey)));
+        InboxState.All.Should().OnlyContain(s => open.Contains(s) ? InboxRows.StateGroupOf(s) == InboxRows.OpenKey : InboxRows.StateGroupOf(s) == InboxRows.DoneKey);
+    }
 }

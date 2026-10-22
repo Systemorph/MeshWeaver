@@ -45,6 +45,15 @@ namespace MeshWeaver.PluginCatalog;
 /// registry it pulls from), and the reports reach the store because each instance also delivers its
 /// report to every registry it mounts (<see cref="DeploymentReportService"/>, filed there under the
 /// instance id the registry AUTHENTICATED). An expected consumer that is silent still refuses.</para>
+///
+/// <para>🚨 A SUSPENDED CONSUMER IS PAUSED, NOT GONE (#6989). A suspended instance stops reporting,
+/// so its last report ages past <see cref="StaleAfter"/> about a day later and used to refuse every
+/// pass until the record was retired. Its record DECLARES the suspension
+/// (<c>status: Suspended</c>, <see cref="IsSuspended"/>), so the pass reads it from there and never
+/// derives it from the silence: the stale report no longer refuses, and the builds that report
+/// names stay PINNED, because the instance may be resumed onto exactly those. It is not retired —
+/// its pins are kept, never dropped — and a suspended consumer with no readable report still
+/// refuses, since what it would resume onto is then unknown.</para>
 /// </summary>
 public static class DeploymentPinnedReferences
 {
@@ -53,6 +62,14 @@ public static class DeploymentPinnedReferences
 
     /// <summary>The Deployment record's pinned image tag field.</summary>
     public const string PinnedImageTagField = "pinnedImageTag";
+
+    /// <summary>The Deployment record's lifecycle status field (an open string vocabulary owned by
+    /// the Hosting plugin).</summary>
+    public const string StatusField = "status";
+
+    /// <summary>The <see cref="StatusField"/> value of a record whose instance is suspended: paused,
+    /// resumable, and not retired.</summary>
+    public const string SuspendedStatus = "Suspended";
 
     private static readonly TimeSpan EnumerationBudget = TimeSpan.FromSeconds(60);
 
@@ -236,6 +253,7 @@ public static class DeploymentPinnedReferences
         var refusals = ImmutableList.CreateBuilder<string>();
         var expected = 0;
         var retired = 0;
+        var suspended = 0;
         var elsewhere = 0;
         var fresh = 0;
 
@@ -339,6 +357,22 @@ public static class DeploymentPinnedReferences
             }
             if (failed)
                 continue;
+
+            // 🚨 #6989 — A SUSPENDED CONSUMER'S LAST REPORT IS WHAT IT RESUMES ONTO. The record
+            // declares the suspension; a suspended instance does not report, so its report goes stale
+            // by construction and the age budget says nothing about it. Its references were added
+            // above and stay pinned; only the freshness verdict is excused. Not counted as retired:
+            // its pins are kept, never dropped.
+            if (IsSuspended(record, options))
+            {
+                suspended++;
+                logger?.LogInformation(
+                    "PrebuiltBundleRetention: {Deployment} is suspended — its last report is not held to the "
+                    + "{Budget} freshness budget, and the builds it names stay protected so the instance can resume",
+                    record.Path, freshnessBudget);
+                continue;
+            }
+
             var newest = reports
                 .Select(report => (report, age: FreshnessOf(report, options, now)))
                 .OrderBy(entry => entry.age ?? TimeSpan.MaxValue)
@@ -405,10 +439,11 @@ public static class DeploymentPinnedReferences
 
         logger?.LogInformation(
             "PrebuiltBundleRetention consumer inventory of the store served as {Store}: {Expected} expected "
-            + "instance(s) ({Retired} retired, {Elsewhere} not mounting this store, {Orphan} reporting without a "
-            + "record), {Fresh} with a report no older than {Budget}, {References} protected reference(s){Verdict}",
+            + "instance(s) ({Retired} retired, {Suspended} suspended with their last report pinned, {Elsewhere} not "
+            + "mounting this store, {Orphan} reporting without a record), {Fresh} with a report no older than {Budget}, "
+            + "{References} protected reference(s){Verdict}",
             storeHosts.IsEmpty ? "(unnamed)" : string.Join(" / ", storeHosts),
-            expected, retired, elsewhere, unclaimed.Count, fresh, freshnessBudget, references.Count,
+            expected, retired, suspended, elsewhere, unclaimed.Count, fresh, freshnessBudget, references.Count,
             refusals.Count == 0 ? " — COMPLETE" : $" — INCOMPLETE, {refusals.Count} refusal(s)");
 
         if (refusals.Count > 0)
@@ -418,7 +453,8 @@ public static class DeploymentPinnedReferences
             // the shape of an operator message nobody can act on.
             throw new InvalidOperationException(
                 $"the fleet consumer inventory is INCOMPLETE — {refusals.Count} refusal(s) over {expected} expected "
-                + $"instance(s) ({retired} retired, {elsewhere} not mounting this store, {unclaimed.Count} reporting "
+                + $"instance(s) ({retired} retired, {suspended} suspended with their last report pinned, {elsewhere} "
+                + $"not mounting this store, {unclaimed.Count} reporting "
                 + "without a record), so no artifact can "
                 + "be shown to be unreferenced and nothing may be collected:"
                 + string.Concat(refusals.Select(r => Environment.NewLine + "  • " + r)));
@@ -521,6 +557,16 @@ public static class DeploymentPinnedReferences
             return $"retiredAt = {retiredAt}";
         return Flag(record, "retired", options) is true ? "retired = true" : null;
     }
+
+    /// <summary>
+    /// Whether the record DECLARES its instance suspended (<see cref="StatusField"/> =
+    /// <see cref="SuspendedStatus"/>, case-insensitive, trimmed). Any other status, including one
+    /// this assembly has never heard of, is not a suspension and keeps the full freshness verdict.
+    /// </summary>
+    /// <param name="record">A <c>Hosting/Deployment</c> record.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    public static bool IsSuspended(MeshNode record, JsonSerializerOptions options) =>
+        string.Equals(Field(record, StatusField, options)?.Trim(), SuspendedStatus, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>How long ago the report was sampled, or null when that cannot be read at all.</summary>
     private static TimeSpan? FreshnessOf(MeshNode report, JsonSerializerOptions options, DateTimeOffset now)
