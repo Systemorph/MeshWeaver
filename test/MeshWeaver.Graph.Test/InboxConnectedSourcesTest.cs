@@ -25,7 +25,7 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string SourcesArea = InboxLayoutArea.AreaName + "/Main/Commands/Sources";
+    private const string SourcesArea = InboxLayoutArea.AreaName + "/Filters/Source/Content";
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -56,8 +56,8 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
 
         // The page is a TEMPLATE: every source's toggle is declared at once, its style BOUND to the
         // connection the rows feed publishes — never built after a wait.
-        var toggle = (ToggleButtonControl)(await Open(without).GetControlStream($"{SourcesArea}/Toggle{mail}")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the Mail toggle is in the template", ct))!;
+        var toggle = (StackControl)(await Open(without).GetControlStream($"{SourcesArea}/Source{mail}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the Mail source row is in the template", ct))!;
         toggle.Style.Should().BeOfType<JsonPointerReference>()
             .Which.Pointer.Should().Be(InboxLayoutArea.SourceStylePointer(mail), "its visibility is bound, not baked");
 
@@ -65,6 +65,16 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
         bare.Styles[notifications].Should().BeEmpty("a source that names no connection is listed for everyone");
         bare.Styles[mail].Should().Be(InboxLayoutArea.HiddenStyle, "nobody stored mail for this viewer — the mailbox is not connected");
         bare.Only.Should().Contain(notifications).And.NotContain(mail, "the Only select lists connected sources only");
+
+        // The Kind panel follows the same connections: Mail's kind row is declared for every viewer but
+        // hidden (bound) while nothing of that kind is connected, and its label stays in the map.
+        var kinds = await Open(without).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.KindStylesId)))
+            .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Object
+                && o.TryGetProperty(mail, out var m) && m.GetString() == InboxLayoutArea.HiddenStyle, "the Mail kind row is hidden", ct);
+        kinds.GetProperty(notifications).GetString().Should().BeEmpty("a kind with a connection-free source is listed");
+        var kindRow = (StackControl)(await Open(without).GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Kind/Content/Row{mail}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the Mail kind row is in the template", ct))!;
+        kindRow.Style.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be(InboxLayoutArea.KindStylePointer(mail));
 
         var connected = await Answered(with, ct);
         connected.Styles[mail].Should().BeEmpty("stored mail connects the Mail source — the probe answered and showed it");

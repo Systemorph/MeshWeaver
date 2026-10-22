@@ -27,8 +27,8 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private const string DeleteArea = InboxLayoutArea.AreaName + "/Main/Commands/Delete";
-    private const string UndoArea = InboxLayoutArea.AreaName + "/Main/Commands/Undo";
+    private const string DeleteArea = InboxLayoutArea.AreaName + "/Main/Toolbar/Delete";
+    private const string UndoArea = InboxLayoutArea.AreaName + "/Main/Toolbar/Undo";
     private const string GridArea = InboxLayoutArea.AreaName + "/Main/Grid";
 
     /// <inheritdoc />
@@ -241,25 +241,21 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         grid.ItemsPerPage?.ToString().Should().Be("50", "the inbox is paged");
         grid.IsClickable.Should().BeTrue("a click on a row opens it");
 
-        // The page SCROLLS (owner, 2026-10-16: "i cannot scroll the mailbox now"): the splitter flows
-        // at its content height — never pinned to the viewport, which clipped the list below the fold.
+        // The filters sit beside the list on a wide page and above it on a narrow one: a platform grid
+        // of two cells, the filters first — and the PAGE scrolls (owner, 2026-10-16).
         var page = (await stream.GetControlStream(InboxLayoutArea.AreaName).Should().Within(TestTimeouts.Convergence)
-            .Match(c => c is SplitterControl, "the page is the side-menu splitter", ct))!;
-        page.Style?.ToString().Should().Be(InboxLayoutArea.FlowingSplitterStyle, "the splitter flows and the page scrolls");
-        page.Skins.OfType<SplitterSkin>().Should().AllSatisfy(skin => (skin.Height?.ToString() ?? string.Empty)
-            .Should().NotContain("vh", "a viewport-pinned height clips the list with nothing to scroll"));
+            .Match(c => c is LayoutGridControl, "the page is a layout grid: filters, then the list", ct))!;
+        page.Should().NotBeNull();
 
-        foreach (var (area, what) in new[] { ("Folders", "the side menu's folders"), ("Tags", "the side menu's tags") })
-        {
-            var menu = (RadioGroupControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Categories/{area}")
-                .Should().Within(TestTimeouts.Convergence).Match(c => c is RadioGroupControl, what, ct))!;
-            menu.Type?.ToString().Should().Be(nameof(String),
-                "the client resolves the CLR type name — \"string\" failed live with 'Type not found: string'");
-        }
-        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/ShowIgnorable")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is SwitchControl, "the ignorable switch", ct))
+        // Kinds are checkboxes (a Stack of rows); tags are a bound list of checkboxes.
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Kind/Content")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the kind checkboxes", ct)).Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Tags/Content")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is ItemTemplateControl, "the tag checkboxes", ct)).Should().NotBeNull();
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Options/Content")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is CheckBoxControl, "the ignorable checkbox", ct))
             .Should().NotBeNull();
-        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Commands/Only")
+        (await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Source/Content/Only")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is SelectControl, "the Only select", ct))
             .Should().NotBeNull();
 
@@ -267,10 +263,16 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             .Match(c => c is ButtonControl, "the Delete button", ct))!;
         delete.Shortcut.Should().Be("Backspace|Delete", "Backspace deletes the ticked rows, as in a mail client");
 
-        var toggle = (ToggleButtonControl)(await stream.GetControlStream(
-                $"{InboxLayoutArea.AreaName}/Main/Commands/Sources/Toggle{InboxRows.SourceKey("Notifications")}")
-            .Should().Within(TestTimeouts.Convergence).Match(c => c is ToggleButtonControl, "the notifications toggle", ct))!;
-        toggle.Icon.Should().NotBeNull("a source is switched by its symbol");
+        // The toolbar holds the acts only, icon-only: no visible text, the name is the tooltip.
+        delete.Data.Should().Be(string.Empty, "an icon-only button shows no text");
+        delete.Label.Should().Be("Delete", "the name is the tooltip and the accessible name");
+        delete.IconStart.Should().NotBeNull();
+
+        // Each source is listed in the filter panel with the SAME symbol the grid's first column shows.
+        var sourceIcon = (IconControl)(await stream.GetControlStream(
+                $"{InboxLayoutArea.AreaName}/Filters/Source/Content/Source{InboxRows.SourceKey("Notifications")}/Icon{InboxRows.SourceKey("Notifications")}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is IconControl, "the notifications source's symbol", ct))!;
+        sourceIcon.Data.Should().Be(InboxSourceIcons.Resolve("Notifications", null));
         (await stream.GetDataStream<InboxFilter>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.FilterId)))
                 .Should().Within(TestTimeouts.Convergence).Match(f => f is not null, "the filter", ct))!
             .Sources[InboxRows.SourceKey("Notifications")].Should().BeFalse("notifications start switched off");
