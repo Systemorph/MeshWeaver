@@ -136,6 +136,7 @@ public static class SpaceDeletion
     public static readonly ImmutableHashSet<string> ProtectedPartitions = ImmutableHashSet.Create(
         StringComparer.OrdinalIgnoreCase,
         "Admin", "Auth", "User", "Portal", "Kernel", "ApiToken", "system-security", "Anonymous",
+        "Groups", "ScopedGroups",
         "_Access", "_Activity", "_UserActivity", "_Thread",
         "Hosting", "Hosting.Instance", "Deployments", "Ops", "Store", "Plugins", "Governance",
         "Doc", "Documentation", "Essentials", "Agent", "Skill", "Provider", "Providers", "Model", "AI",
