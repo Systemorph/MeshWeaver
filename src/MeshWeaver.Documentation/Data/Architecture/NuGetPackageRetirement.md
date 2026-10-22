@@ -132,7 +132,7 @@ red in `preflight` → *Every input this lane consumes exists*:
 
 `vars.NUGET_TRUSTED_USER` exists neither as a repository variable nor as an organisation variable
 (both REST reads 404; the repository's variable list carries no NuGet entry). The lane switched to
-Trusted Publishing on 2026-09-15 (#4452), and nothing has been provisioned for it since. That is the
+Trusted Publishing on 2026-09-08 (#3714), and nothing has been provisioned for it since. That is the
 whole root cause. The red preflight is the gate doing its job: it names the missing input instead
 of pushing with a credential that is not there. Dispatching it again changes nothing.
 
@@ -146,8 +146,12 @@ The fix is owner provisioning, and nothing in the repository can supply it:
 3. Dispatch `publish-packages.yml` with `packages=cli` and no version. The lane publishes the
    csproj's `3.0.0`, and *Verify every published version reads as LISTED* is the evidence.
 
-The same two inputs unblock the Aspire integration on the next release tag and
-`unlist-orphaned-packages.yml`, which reads the same variable.
+The same two inputs unblock the Aspire integration on the next release tag. They do **not** by
+themselves unblock `unlist-orphaned-packages.yml`: it reads the same variable, but nuget.org issues
+a Trusted Publishing policy per workflow file, so unlisting also needs its own policy naming
+`unlist-orphaned-packages.yml` (same owner, repository owner `Systemorph`, repository `MeshWeaver`,
+environment blank). Without it the unlist lane's `NuGet/login` exchange is refused even after steps
+1–3 succeed (§6).
 
 The issue that reported this (#6845) was raised by `cli-publish-alert.sh` under the withdrawn
 `cli-on-nuget-follows-3-latest` design, so its premise is also stale. Under
