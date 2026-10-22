@@ -395,6 +395,23 @@ public static class BundleReader
         => miss is not null && miss.TrimStart().StartsWith("module '", StringComparison.Ordinal);
 
     /// <summary>
+    /// The text a registry opens a module miss's reason with when the package DECLARES a module it
+    /// cannot serve at the requested version (the shelf holds no such generation). Shared by the
+    /// producer that writes it and <see cref="IsModuleNotServedMiss"/> that reads it.
+    /// </summary>
+    public const string ModuleNotServedReason = "not served — ";
+
+    /// <summary>
+    /// Whether one producer miss is a module the registry DECLARED but did not serve
+    /// (<c>"module '&lt;name&gt;': not served — …"</c>). It explains an empty bundle; unlike a
+    /// divergence it says nothing about the NodeType assemblies that did arrive. Pure.
+    /// </summary>
+    /// <param name="miss">One <see cref="Manifest.Misses"/> entry.</param>
+    public static bool IsModuleNotServedMiss(string? miss)
+        => IsModuleMiss(miss)
+           && miss!.Contains("': " + ModuleNotServedReason, StringComparison.Ordinal);
+
+    /// <summary>
     /// The NodeType path one producer <see cref="Manifest.Misses"/> entry names, or null when the
     /// entry does not read as one. The plugin-bundle endpoint writes a NodeType miss as
     /// <c>"&lt;node path&gt;: &lt;reason&gt;"</c> (#1751);
