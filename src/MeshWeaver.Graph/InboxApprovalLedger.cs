@@ -35,6 +35,7 @@ internal static class InboxApprovalLedger
             return row;
         return row with
         {
+            State = kind == ApprovalLedgerKind.Requested ? InboxState.Awaiting : InboxState.FromStatus(approval.Status.ToString()),
             From = kind == ApprovalLedgerKind.Requested
                 ? Say(texts.RequestedFrom, approval.Approver)
                 : Say(approval.Status == ApprovalStatus.Rejected ? texts.RejectedBy : texts.ApprovedBy, approval.Approver),

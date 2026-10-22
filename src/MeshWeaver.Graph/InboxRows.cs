@@ -83,6 +83,18 @@ public sealed record InboxRow
     /// <summary>The source's symbol, shown before the title.</summary>
     public string SourceIcon { get; init; } = string.Empty;
 
+    /// <summary>The item's lifecycle state (an <see cref="InboxState"/> constant), or empty when it has none.</summary>
+    public string State { get; init; } = string.Empty;
+
+    /// <summary>The state as the viewer reads it, with its mark; empty without a state. Filled by the page.</summary>
+    public string StateText { get; init; } = string.Empty;
+
+    /// <summary>The state badge's colour; empty without a state.</summary>
+    public string StateColor { get; init; } = string.Empty;
+
+    /// <summary>The state badge's style — hidden without a state, so an empty badge is never drawn.</summary>
+    public string StateStyle { get; init; } = InboxLayoutArea.HiddenStyle;
+
     /// <summary>Whether the item is unread — the row is shown bold.</summary>
     public bool Unread { get; init; }
 
@@ -219,10 +231,36 @@ public sealed record InboxFilter
     public string Tag { get; init; } = string.Empty;
 
     /// <summary>
+    /// The kinds (side-menu categories) ticked, by <see cref="InboxRows.SourceKey"/> of the category. The
+    /// union of the ticked ones is listed; none ticked means all.
+    /// </summary>
+    public ImmutableDictionary<string, bool> Kinds { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The tags ticked (<see cref="InboxRows.TagKey"/> or <see cref="InboxRows.ImportantKey"/>). A row
+    /// matching ANY ticked tag is listed; none ticked means all. Derived by the page from the tag
+    /// checkboxes — not a bound field.
+    /// </summary>
+    public ImmutableList<string> TagKeys { get; init; } = ImmutableList<string>.Empty;
+
+    /// <summary>
     /// Whether the items judged <see cref="InboxImportance.Ignorable"/> are listed. Off by default: the
     /// noise is a switch away, and the notice above the grid counts what it hides.
     /// </summary>
     public bool ShowIgnorable { get; init; }
+}
+
+/// <summary>One tag checkbox of the side menu.</summary>
+public sealed record InboxTagItem
+{
+    /// <summary>The tag's key — <see cref="InboxRows.TagKey"/> or <see cref="InboxRows.ImportantKey"/>.</summary>
+    public string Key { get; init; } = string.Empty;
+
+    /// <summary>The checkbox text: the tag and its count.</summary>
+    public string Label { get; init; } = string.Empty;
+
+    /// <summary>Whether the viewer ticked it.</summary>
+    public bool Checked { get; init; }
 }
 
 /// <summary>The rows of the inbox, as pure functions of the nodes the legs returned.</summary>
@@ -233,6 +271,15 @@ public static class InboxRows
 
     /// <summary>The row property that carries the source's symbol.</summary>
     public const string SourceIconProperty = "sourceIcon";
+
+    /// <summary>The row property that carries the state's label.</summary>
+    public const string StateTextProperty = "stateText";
+
+    /// <summary>The row property that carries the state badge's colour.</summary>
+    public const string StateColorProperty = "stateColor";
+
+    /// <summary>The row property that carries the state badge's style.</summary>
+    public const string StateStyleProperty = "stateStyle";
 
     /// <summary>The row property that carries the row's CSS class.</summary>
     public const string RowClassProperty = "rowClass";
@@ -273,7 +320,9 @@ public static class InboxRows
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
         => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
-            .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}")));
+            .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}"))
+            .Concat(filter.Kinds.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"kind:{s.Key}={s.Value}"))
+            .Concat(filter.TagKeys.Order(StringComparer.Ordinal).Select(t => "tagkey:" + t)));
 
     /// <summary>
     /// The row for <paramref name="node"/>, brought by <paramref name="section"/>.
@@ -342,6 +391,7 @@ public static class InboxRows
             Tags = tags,
             TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
+            State = InboxState.Of(section.Source, section.Band, section.Ledger == ApprovalLedgerKind.Requested, unread, StringOf(content, "status")),
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
             Account = StringOf(content, "account")?.Trim() ?? string.Empty,
@@ -484,15 +534,29 @@ public static class InboxRows
     internal static ImmutableList<InboxRow> Apply(IEnumerable<InboxRow> rows, InboxFilter filter, string? category)
     {
         var (_, before, after) = SplitDates(filter.Search);
-        var shown = string.IsNullOrEmpty(category)
-            ? rows.Where(row => Shown(row, filter))
-            : rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal));
+        var kinds = TickedKinds(filter);
+        var shown = !string.IsNullOrEmpty(category)
+            ? rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal))
+            : kinds.Count > 0
+                ? rows.Where(row => kinds.Contains(SourceKey(row.Category)))
+                : rows.Where(row => Shown(row, filter));
+        var tags = ActiveTags(filter);
         return shown.Where(row => InRange(row.Stamp, before, after))
-            .Where(row => filter.Tag.Length == 0 ? filter.ShowIgnorable || !IsIgnorable(row) : HasTag(row, filter.Tag))
+            .Where(row => tags.Count == 0 ? filter.ShowIgnorable || !IsIgnorable(row) : tags.Any(tag => HasTag(row, tag)))
             .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
             .ToImmutableList();
     }
+
+    /// <summary>The kinds ticked, by <see cref="SourceKey"/> of the category; empty when none is (all are listed). Pure.</summary>
+    /// <param name="filter">The filter.</param>
+    internal static ImmutableHashSet<string> TickedKinds(InboxFilter filter)
+        => [.. filter.Kinds.Where(kind => kind.Value).Select(kind => kind.Key)];
+
+    /// <summary>The tags asked for: the ticked ones, plus the legacy single <see cref="InboxFilter.Tag"/>; empty for all. Pure.</summary>
+    /// <param name="filter">The filter.</param>
+    internal static ImmutableList<string> ActiveTags(InboxFilter filter)
+        => filter.Tag.Length > 0 && !filter.TagKeys.Contains(filter.Tag) ? filter.TagKeys.Add(filter.Tag) : filter.TagKeys;
 
     /// <summary>Whether a triage judged <paramref name="row"/> safe to ignore. Pure.</summary>
     internal static bool IsIgnorable(InboxRow row)
@@ -540,7 +604,7 @@ public static class InboxRows
     /// is never the switch's silent doing. Zero while the switch is on or a tag is picked. Pure.
     /// </summary>
     public static int HiddenIgnorable(IEnumerable<InboxRow> rows, InboxFilter filter)
-        => filter.ShowIgnorable || filter.Tag.Length > 0
+        => filter.ShowIgnorable || ActiveTags(filter).Count > 0
             ? 0
             : Apply(rows, filter with { ShowIgnorable = true }, filter.Category).Count(IsIgnorable);
 
@@ -607,7 +671,7 @@ public static class InboxRows
     public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
         // A picked category shows every row filed under it whatever the source filter says, so the
         // source filter hides nothing then — counting would report a visible obligation as hidden.
-        => needsYouRank is not { } rank || filter.Category.Length > 0
+        => needsYouRank is not { } rank || filter.Category.Length > 0 || TickedKinds(filter).Count > 0
             ? 0
             : rows.Count(row => row.Rank == rank && !Shown(row, filter));
 
