@@ -213,6 +213,16 @@ public static class InboxLayoutArea
         => sections.Select(s => s.Source).Distinct(StringComparer.Ordinal)
             .ToImmutableDictionary(InboxRows.SourceKey, source => connected.Contains(source) ? string.Empty : HiddenStyle);
 
+    /// <summary>The data id of each kind row's style — shown while a source of the kind is connected, hidden otherwise.</summary>
+    public const string KindStylesId = "inboxKindStyles";
+
+    internal static string KindStylePointer(string key) => LayoutAreaReference.GetDataPointer(KindStylesId) + "/" + key;
+
+    /// <summary>Each kind's style, keyed by <see cref="InboxRows.SourceKey"/> of the category: shown when any source filed under it is in <paramref name="connected"/>. Pure.</summary>
+    internal static ImmutableDictionary<string, string> KindStyles(ImmutableArray<InboxSection> sections, ImmutableHashSet<string> connected)
+        => sections.GroupBy(s => s.Category, StringComparer.Ordinal)
+            .ToImmutableDictionary(g => InboxRows.SourceKey(g.Key), g => g.Any(s => connected.Contains(s.Source)) ? string.Empty : HiddenStyle);
+
     /// <summary>The page over every source's <paramref name="sections"/>; the rows feed narrows it to the connected ones.</summary>
     private static UiControl Page(LayoutAreaHost host, string owner, string? zone, ImmutableArray<InboxSection> sections)
     {
@@ -247,6 +257,7 @@ public static class InboxLayoutArea
                 sources.Where(source => unprobed.Contains(source.Id))
                     .Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
             host.UpdateData(SourceStylesId, SourceStyles(sections, unprobed));
+            host.UpdateData(KindStylesId, KindStyles(sections, unprobed));
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
@@ -277,7 +288,8 @@ public static class InboxLayoutArea
         {
             var key = InboxRows.SourceKey(category.Key);
             kind = kind.WithView(
-                Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
+                (Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(8)
+                    with { Style = new JsonPointerReference(KindStylePointer(key)) })
                     .WithView(Controls.Icon(category.Icon).WithWidth("20px"), "Icon" + key)
                     .WithView(Controls.CheckBox(new JsonPointerReference($"kinds/{key}")) with
                     {
@@ -532,6 +544,7 @@ public static class InboxLayoutArea
             .Do(connected =>
             {
                 host.UpdateData(SourceStylesId, SourceStyles(sections, connected));
+                host.UpdateData(KindStylesId, KindStyles(sections, connected));
                 host.UpdateData(SourceOptionsId, SourceOptions(allSources,
                     sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
             })

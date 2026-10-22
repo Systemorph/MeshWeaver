@@ -66,6 +66,16 @@ public class InboxConnectedSourcesTest(ITestOutputHelper output) : MonolithMeshT
         bare.Styles[mail].Should().Be(InboxLayoutArea.HiddenStyle, "nobody stored mail for this viewer — the mailbox is not connected");
         bare.Only.Should().Contain(notifications).And.NotContain(mail, "the Only select lists connected sources only");
 
+        // The Kind panel follows the same connections: Mail's kind row is declared for every viewer but
+        // hidden (bound) while nothing of that kind is connected, and its label stays in the map.
+        var kinds = await Open(without).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.KindStylesId)))
+            .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Object
+                && o.TryGetProperty(mail, out var m) && m.GetString() == InboxLayoutArea.HiddenStyle, "the Mail kind row is hidden", ct);
+        kinds.GetProperty(notifications).GetString().Should().BeEmpty("a kind with a connection-free source is listed");
+        var kindRow = (StackControl)(await Open(without).GetControlStream($"{InboxLayoutArea.AreaName}/Filters/Kind/Content/Row{mail}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is StackControl, "the Mail kind row is in the template", ct))!;
+        kindRow.Style.Should().BeOfType<JsonPointerReference>().Which.Pointer.Should().Be(InboxLayoutArea.KindStylePointer(mail));
+
         var connected = await Answered(with, ct);
         connected.Styles[mail].Should().BeEmpty("stored mail connects the Mail source — the probe answered and showed it");
         connected.Only.Should().Contain([notifications, mail]);
