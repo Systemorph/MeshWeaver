@@ -68,12 +68,7 @@ public sealed class SingletonNodeValidatorsReleaseOnDisposeTest
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static WeakReference[] Materialize(IEnumerable<Lazy<INodeValidator>> validators)
-    {
-        var built = new List<WeakReference>();
-        foreach (var validator in validators)
-            built.Add(new WeakReference(validator.Value));
-        return built.ToArray();
-    }
+        => validators.Select(validator => new WeakReference(validator.Value)).ToArray();
 
     private sealed class ProbeValidator : INodeValidator
     {
