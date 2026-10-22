@@ -297,6 +297,14 @@ public static class InboxLayoutArea
                         Label = new JsonPointerReference(LayoutAreaReference.GetDataPointer(KindLabelsId) + "/" + key),
                     }, "Kind" + key), "Row" + key);
         }
+        // State: Open (awaiting a decision, requested, running, unread) and Done (decided, finished,
+        // failed, cancelled, or nothing left to do). The union of the ticked groups is listed; none ticked lists all.
+        var stateGroups = Controls.Stack.WithVerticalGap(4);
+        foreach (var (key, labelKey) in new[] { (InboxRows.OpenKey, "inbox.filter.open"), (InboxRows.DoneKey, "inbox.filter.done") })
+            stateGroups = stateGroups.WithView(Controls.CheckBox(new JsonPointerReference($"states/{key}")) with
+            {
+                DataContext = filterContext, Label = host.Localize(labelKey),
+            }, "State" + key);
         // Tags: one checkbox per tag the triage gave — Important first, then each by use. They are
         // known only once the rows are, so the list is a bound collection, one checkbox per item.
         // A row matching ANY ticked tag is listed; none ticked lists all.
@@ -330,6 +338,7 @@ public static class InboxLayoutArea
                 Placeholder = host.Localize("inbox.search.placeholder"),
             }, "Search")
             .WithView(Section(host.Localize("inbox.section.kind"), kind), "Kind")
+            .WithView(Section(host.Localize("inbox.section.state"), stateGroups), "States")
             .WithView(Section(host.Localize("inbox.section.tags"), tags), "Tags")
             .WithView(Section(host.Localize("inbox.section.source"), sourceList), "Source")
             // Spam, promotions and noise stay out of the list until the viewer asks for them.
@@ -433,10 +442,21 @@ public static class InboxLayoutArea
         });
 
     /// <summary>The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden.</summary>
-    internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts)
+    internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts, string? stepFormat = null)
         => row.State.Length > 0 && texts.TryGetValue(row.State, out var text)
-            ? row with { StateText = text, StateColor = InboxState.Color(row.State), StateStyle = string.Empty }
+            ? row with { StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State), StateStyle = string.Empty }
             : row;
+
+    /// <summary>
+    /// What follows a running activity's state — <c> · step 3/7: Build</c>, <c> · step 3/7</c> or <c> · Build</c> —
+    /// and nothing for a row that carries no step. <paramref name="stepFormat"/> holds <c>{0}</c> for the number.
+    /// </summary>
+    internal static string StepSuffix(InboxRow row, string? stepFormat)
+    {
+        var number = row.StepNumber.Length > 0 ? (stepFormat ?? "step {0}").Replace("{0}", row.StepNumber, StringComparison.Ordinal) : string.Empty;
+        var parts = new[] { number, row.StepMessage }.Where(part => part.Length > 0).ToArray();
+        return parts.Length == 0 ? string.Empty : " · " + string.Join(": ", parts);
+    }
 
     /// <summary>The data id of the kind checkboxes' labels — each kind's name and count, keyed by <see cref="InboxRows.SourceKey"/>.</summary>
     public const string KindLabelsId = "inboxKindLabels";
@@ -563,7 +583,8 @@ public static class InboxLayoutArea
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
-        var culture = ViewerCulture(host.ViewerLocale());
+        var locale = host.ViewerLocale();
+        var culture = ViewerCulture(locale);
         // Per row only the person differs: the sentences are resolved ONCE here, with "{0}" kept for them.
         var ledgerTexts = InboxApprovalLedger.Texts.Of(
             host.Localize("inbox.approvals.requestedFrom", "{0}"),
@@ -571,6 +592,7 @@ public static class InboxLayoutArea
             host.Localize("inbox.approvals.rejectedBy", "{0}"));
         var stateTexts = InboxState.All.ToImmutableDictionary(state => state,
             state => InboxState.Mark(state) + host.Localize(InboxState.LabelKey(state)), StringComparer.Ordinal);
+        var stepFormat = host.Localize("inbox.state.step", "{0}");
         var allLabel = host.Localize("inbox.category.all");
         var allTags = host.Localize("inbox.tag.all");
         var importantLabel = host.Localize("inbox.tag.important");
@@ -604,8 +626,8 @@ public static class InboxLayoutArea
                         InboxRows.Of(node, section, zone,
                             BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
                             bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
-                            hub.JsonSerializerOptions),
-                        node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts))
+                            hub.JsonSerializerOptions, locale),
+                        node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts, stepFormat))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
                 {
