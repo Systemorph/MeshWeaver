@@ -555,7 +555,12 @@ the root. The set it hands out is read afresh on every enumeration and is empty 
 disposed: a consumer can outlive the root (the static-node provider stays subscribed to the module
 registry), and holding the validator array itself kept the disposed mesh hub alive through
 `StaticNodeQueryProvider → Lazy<INodeValidator>[] → ServicePrincipalAdminGuard → MessageHub`
-(`CopyMoveDeadlineReleasesHubTest`). A native backend whose query provider filters reads the same way must take its validators from
+(`CopyMoveDeadlineReleasesHubTest`). The handed-out set holds the array alone — never the holder,
+whose disposed scope still references every service it resolved — and is never a C# iterator method: an
+iterator enumerated on the thread that created it is its own enumerator, keeps its last `Current` after
+the walk, and so pinned the hub only when the first enumeration happened to run on the constructing
+thread (red in CI, green locally; `SingletonNodeValidatorsReleaseOnDisposeTest` makes that thread shape
+deterministic). A native backend whose query provider filters reads the same way must take its validators from
 the same holder; the Sqlite and Cosmos providers in MeshWeaver.Plugins still take them from the root and
 move once this holder is on their platform pin (the public portals run Postgres, whose provider
 consults no validator). `AModuleNodeValidatorIsNeverBuiltForNoCallerTest` installs a module with a write-only scoped

@@ -26,7 +26,7 @@ namespace MeshWeaver.Hosting.Persistence;
 public sealed class SingletonNodeValidators : IDisposable, IAsyncDisposable
 {
     private readonly AsyncServiceScope scope;
-    private Lazy<INodeValidator>[] held;
+    private readonly LiveValidators live;
 
     /// <summary>Begins the owned scope and resolves the validator set in it — lazily: no validator is
     /// built until a consumer asks for <see cref="Lazy{T}.Value"/> (row-level security takes
@@ -36,8 +36,7 @@ public sealed class SingletonNodeValidators : IDisposable, IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(scopes);
         scope = scopes.CreateAsyncScope();
-        held = scope.ServiceProvider.GetService<IEnumerable<Lazy<INodeValidator>>>()?.ToArray() ?? [];
-        Validators = Enumerate();
+        live = new LiveValidators(scope.ServiceProvider.GetService<IEnumerable<Lazy<INodeValidator>>>()?.ToArray() ?? []);
     }
 
     /// <summary>
@@ -50,26 +49,44 @@ public sealed class SingletonNodeValidators : IDisposable, IAsyncDisposable
     /// long as that consumer is: measured by <c>CopyMoveDeadlineReleasesHubTest</c>, where the disposed
     /// mesh hub stayed alive through <c>StaticNodeQueryProvider → Lazy&lt;INodeValidator&gt;[] →
     /// ServicePrincipalAdminGuard → MessageHub</c>. What the scope built ends with the scope.</para>
+    ///
+    /// <para>🚨 Never a C# iterator method (<c>yield return</c>). An iterator object enumerated on the thread
+    /// that created it hands ITSELF out as its enumerator, and its generated fields — the last <c>Current</c>
+    /// and the hoisted copy of the array being walked — outlive the enumeration. The consumer holds that
+    /// object, so clearing the array released nothing: whether the mesh hub stayed pinned depended on which
+    /// thread enumerated first. And the sequence must not reach THIS holder either: the holder keeps the
+    /// disposed scope, and a disposed scope still references every service it resolved.
+    /// <see cref="LiveValidators"/> holds the array alone and hands out a FRESH enumerator over it on every
+    /// call (<c>SingletonNodeValidatorsReleaseOnDisposeTest</c>).</para>
     /// </summary>
-    public IEnumerable<Lazy<INodeValidator>> Validators { get; }
+    public IEnumerable<Lazy<INodeValidator>> Validators => live;
 
-    private IEnumerable<Lazy<INodeValidator>> Enumerate()
+    /// <summary>The sequence a consumer keeps: it holds the validator array and nothing else — not the
+    /// holder, not the scope — and every enumeration walks a fresh enumerator over the array held at that
+    /// moment, empty once <see cref="Release"/> ran. No enumeration state lives on this object.</summary>
+    private sealed class LiveValidators(Lazy<INodeValidator>[] validators) : IEnumerable<Lazy<INodeValidator>>
     {
-        foreach (var validator in Volatile.Read(ref held))
-            yield return validator;
+        private Lazy<INodeValidator>[] held = validators;
+
+        public void Release() => Volatile.Write(ref held, []);
+
+        public IEnumerator<Lazy<INodeValidator>> GetEnumerator()
+            => ((IEnumerable<Lazy<INodeValidator>>)Volatile.Read(ref held)).GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <inheritdoc />
     public void Dispose()
     {
-        Volatile.Write(ref held, []);
+        live.Release();
         scope.Dispose();
     }
 
     /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
-        Volatile.Write(ref held, []);
+        live.Release();
         return scope.DisposeAsync();
     }
 }
