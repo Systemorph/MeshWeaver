@@ -432,6 +432,19 @@ var liveMessageCount = log
     .DistinctUntilChanged();
 ```
 
+### Where a code cell's VIEW says the run is over
+
+The `Status` above is the authority, and a code cell shows it in its **toolbar chip** (✓ Done /
+✗ Failed / …). The cell's **output pane** is the Activity's `Progress` area, and for a successful
+run that returned a result it shows that result **alone**, with no status line — so a reader or a
+browser harness that waits for "✓ Done" inside the pane waits for ever. Read the chip for the end
+of the run and the pane for what it produced; the contract is written up and pinned in
+MeshWeaver.Plugins (`DefaultViews/ActivityPage` → "Where a code cell says its run is over",
+`CodeCellRunReachesTerminalInViewTest`). The server half — a C# cell run reaching `Succeeded` on
+**Orleans**, the hosting shape of every deployed portal — is pinned by
+`OrleansCSharpCellRunReachesTerminalTest` (core `MeshWeaver.Hosting.Orleans.Test`), with the
+Education solution battery as its second case.
+
 > **Never query for the activity log** with `IMeshService.QueryAsync("path:...")`. The query path is eventually consistent and will lag behind the workspace stream — you may miss intermediate snapshots or read a stale `Status`. `GetMeshNodeStream(path)` bypasses the index and observes the owning hub's workspace directly. See [CqrsAndContentAccess.md](/Doc/Architecture/CqrsAndContentAccess).
 
 ---
