@@ -265,10 +265,14 @@ public static class InboxQueries
             SourceIcon = ActivitiesIcon,
             Band = InboxBand.Running,
             Order = 10,
+            // Timed by when the run STARTED, and the content stays in the projection: the State badge
+            // shows the run's current step (sub-activities done, latest log line). Progress writes
+            // must not move the row either.
+            TimeField = "start",
             // Running itself is the omitted default, so every stamped terminal state is negated.
             Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
                     + string.Join(" ", TerminalActivityStatuses.Select(s => $"-content.status:{s}"))
-                    + $" sort:LastModified-desc {RowProjection}",
+                    + $" sort:LastModified-desc {TimedRowProjection}",
         },
         new()
         {
