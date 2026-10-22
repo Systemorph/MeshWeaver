@@ -516,6 +516,8 @@ A `SynchronizationStream.OnNext` that unconditionally stamps `ImpersonateAsHub(H
 
 **Correct shape**: protocol messages stamp `protocol/sync-stream`; user-data messages carry the user via `CarryAccessContext` (no impersonation at the post site). Two message types, two code paths, two identities — never collapsed.
 
+🚨 **A `SubscribeRequest` is an ADMISSION, so it carries the subscriber, and so does every RE-subscribe.** The owner decides Read on it. A client stream re-subscribes by itself when the owner announces the end of its half, when the change feed shows the mirror is behind, and when a frame is lost. Each re-subscribe is decided afresh. Posting those as System re-opened a person's stream for nobody in particular: a reader whose grant was deleted was served again after the owner's next recycle. Every re-subscribe now runs under the identity captured when the stream was opened (`SynchronizationStream.SubscriberContext`, applied with `RunAs`). It is never read from the ambient context of the turn that triggers it, which is often a `sync/…` address. A mirror opened with no user keeps System, and the node-stream cache keeps `cache/mesh-node-cache`. See [Access Control](/Doc/Architecture/AccessControl) → "Recovery re-subscribes as the subscriber".
+
 ### Example 4 — `system-security` (true infrastructure)
 
 `accessService.ImpersonateAsSystem()` switches the baton to `"system-security"`, granted `Permission.All` unconditionally by `PermissionEvaluator`. Use **only** for genuine framework infrastructure with no user context AND no narrower sanctioned identity that fits — schema migration, framework-level bootstrap, internal recursive lookups inside `PermissionEvaluator` itself.
@@ -736,7 +738,7 @@ Why local, and why the hub round-trip was removed: `GetEffectivePermissions` wal
 
 The caller's captured `AccessContext` is restored around the *synchronous* evaluator capture (`accessService.SwitchAccessContext(captured)`) so claim-based (Bearer-token) roles on `AccessContext.Roles` resolve — `PermissionEvaluator` snapshots `accessService.Context` on the calling thread before any Rx scheduler hop.
 
-Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). Revocation surfaces within at most that window; the cache is not invalidated reactively. The shared upstream is unchanged — only the returned subscriber-side observable is gated.
+Per-`(path, userId)` validations are cached in-process for 30 s (the `AccessTtl` constant in `MeshNodeStreamCache.cs`). A NEW read sees a revocation within at most that window; the cache is not invalidated reactively. An OPEN read does not see it at all: for a standard grant the gate is decided once per `GetStream`, so a revoked reader's open stream keeps its revisions until it ends (measured; see [Access Control](/Doc/Architecture/AccessControl) → "Recovery re-subscribes as the subscriber"). The shared upstream is unchanged — only the returned subscriber-side observable is gated.
 
 ## A render reads as its viewer
 

@@ -112,6 +112,54 @@ client does not need hundreds of versions.
 CI still reaches the verbs through the `mw-plugin-test` image; nothing in the fleet installs the
 tool. The package is for people and build servers outside it.
 
+#### Status: not on nuget.org yet — the publish lane has never been able to authenticate
+
+Measured 2026-10-20 (#6845): nuget.org lists only `MeshWeaver.Cli` `3.0.0-rc1`…`rc13`
+(`https://api.nuget.org/v3-flatcontainer/meshweaver.cli/index.json`). The csproj declares `3.0.0`,
+and that version has never been published. `dotnet tool install -g MeshWeaver.Cli` therefore fails
+to resolve a stable version. An install has to name the old prerelease explicitly, and that
+prerelease is not the current client.
+
+The workflow and the package are not the problem. **`publish-packages.yml` has never completed a
+run**: every dispatch (thirteen `packages=cli` runs, 2026-10-15/16, `3.1.10959`…`3.1.11007`) went
+red in `preflight` → *Every input this lane consumes exists*:
+
+```
+::error::the surviving packages cannot be published — provision:
+  • vars.NUGET_TRUSTED_USER — the nuget.org account (user or organisation) that owns the Trusted
+    Publishing policy for publish-packages.yml
+```
+
+`vars.NUGET_TRUSTED_USER` exists neither as a repository variable nor as an organisation variable
+(both REST reads 404; the repository's variable list carries no NuGet entry). The lane switched to
+Trusted Publishing on 2026-09-08 (#3714), and nothing has been provisioned for it since. That is the
+whole root cause. The red preflight is the gate doing its job: it names the missing input instead
+of pushing with a credential that is not there. Dispatching it again changes nothing.
+
+The fix is owner provisioning, and nothing in the repository can supply it:
+
+1. On nuget.org, as an owner of `MeshWeaver.Cli` (today `rbuergi`; the organisation after §6 step
+   1), add a **Trusted Publishing policy**: repository owner `Systemorph`, repository `MeshWeaver`,
+   workflow file `publish-packages.yml`, environment blank.
+2. Set the **Actions variable** `NUGET_TRUSTED_USER` on `Systemorph/MeshWeaver` to that policy's
+   owner account. It is a variable, not a secret.
+3. Dispatch `publish-packages.yml` with `packages=cli` and no version. The lane publishes the
+   csproj's `3.0.0`, and *Verify every published version reads as LISTED* is the evidence.
+
+The same two inputs unblock the Aspire integration on the next release tag. They do **not** by
+themselves unblock `unlist-orphaned-packages.yml`: it reads the same variable, but nuget.org issues
+a Trusted Publishing policy per workflow file, so unlisting also needs its own policy naming
+`unlist-orphaned-packages.yml` (same owner, repository owner `Systemorph`, repository `MeshWeaver`,
+environment blank). Without it the unlist lane's `NuGet/login` exchange is refused even after steps
+1–3 succeed (§6).
+
+The issue that reported this (#6845) was raised by `cli-publish-alert.sh` under the withdrawn
+`cli-on-nuget-follows-3-latest` design, so its premise is also stale. Under
+`cli-thin-wrapper-own-version` the CLI does **not** follow `3-latest`, and its `3.1.<run>` numbers
+are not owed to nuget.org. The script was removed with that design, so the issue no longer closes
+itself. What remains true is the narrower fact above: no `MeshWeaver.Cli` that matches the
+repository is on nuget.org.
+
 ## 2. The ground rule: startup dependencies are Aspire options, never packages
 
 > *"everything which has a startup-dependency should be configurable via aspire plugin"* —
@@ -353,7 +401,7 @@ step below is a web action by the current owner, so this section is the checklis
 | `MeshWeaver.MemexTemplate` and every retired id — fully unlisted, ownership unchanged | still `rbuergi`'s; an owner can re-list any version |
 | `verified: false` on the survivor | the **`MeshWeaver.*` ID prefix is not reserved** — anyone can publish a new `MeshWeaver.X` |
 | nuget.org profile `Systemorph` exists | the organisation account to transfer to is there |
-| `publish-packages.yml` and `unlist-orphaned-packages.yml` authenticate by **Trusted Publishing** — GitHub OIDC exchanged by `NuGet/login` for a short-lived key, under a nuget.org policy per workflow file — with the policy owner in `vars.NUGET_TRUSTED_USER` | no stored NuGet secret; the policy today is the owner's, not the organisation's |
+| `publish-packages.yml` and `unlist-orphaned-packages.yml` authenticate by **Trusted Publishing** — GitHub OIDC exchanged by `NuGet/login` for a short-lived key, under a nuget.org policy per workflow file — with the policy owner in `vars.NUGET_TRUSTED_USER` | no stored NuGet secret. Measured 2026-10-20: `vars.NUGET_TRUSTED_USER` is **unset** (repository and organisation), so no publish has completed since the switch (§1a → *Status*); whether a policy exists on nuget.org cannot be read without the owner's sign-in |
 
 The transfer, in the order that keeps publishing working throughout:
 

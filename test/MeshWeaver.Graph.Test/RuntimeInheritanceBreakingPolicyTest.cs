@@ -380,15 +380,15 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
         var owner = new Address(path);
 
-        await RequestHub
+        var spliced = (await RequestHub
             .Observe<PatchDataResponse>(
                 new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":{\"$sd\":[0,8,\"Group\"]}}"))
                 {
                     BaseValues = new RawJson("{\"nodeType\":\"Markdown\"}"),
                 },
                 o => o.WithTarget(owner))
-            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
-        (await TypeOf(path, ct)).Should().Be("Group", "control: the owner applies a spliced nodeType");
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Message;
+        (await TypeAt(path, spliced.CommittedVersion, ct)).Should().Be("Group", "control: the owner applies a spliced nodeType");
 
         (await Refused(RequestHub
             .Observe<PatchDataResponse>(
@@ -423,11 +423,11 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
 
         var path = await CreateMarkdown($"restrict-{Guid.NewGuid().ToString("N")[..8]}", ct);
         var owner = new Address(path);
-        await RequestHub
+        var literal = (await RequestHub
             .Observe<PatchDataResponse>(new PatchDataRequest(new MeshNodeReference(), new RawJson("{\"nodeType\":\"Group\"}")),
                 o => o.WithTarget(owner))
-            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct);
-        (await TypeOf(path, ct)).Should().Be("Group", "control: a literal retype between non-policy types lands");
+            .Take(1).Timeout(TestTimeouts.Convergence).Await(ct)).Message;
+        (await TypeAt(path, literal.CommittedVersion, ct)).Should().Be("Group", "control: a literal retype between non-policy types lands");
 
         (await Refused(RequestHub
             .Observe<PatchDataResponse>(
@@ -469,9 +469,14 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
         using var awayConnection = away.Connect();
         using var backConnection = back.Connect();
 
-        (await Refused(away, ct)).Should().BeFalse("retyping a policy AWAY is not a retype into one");
+        var awayAnswer = (await away.Timeout(TestTimeouts.Convergence).Await(ct)).Message;
+        awayAnswer.Success.Should().BeTrue("retyping a policy AWAY is not a retype into one");
         (await Refused(back, ct)).Should().BeTrue("the second patch meets the Markdown node the first one left");
-        (await TypeOf(path, ct)).Should().Be("Markdown");
+        // Read at the version the owner committed the first patch at. The response travels to the
+        // client hub and the committed node to this hub's stream cache, unordered: the cache was
+        // primed with the policy by the precondition read above, so a plain first read can still
+        // return that pre-patch policy, which is not what the owner holds.
+        (await TypeAt(path, awayAnswer.CommittedVersion, ct)).Should().Be("Markdown");
     }
 
     /// <summary>
@@ -847,6 +852,21 @@ public class RuntimeInheritanceBreakingPolicyTest(ITestOutputHelper output) : Mo
             .Where(n => n is not null)
             .Select(n => n!.NodeType)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>
+    /// The node type at or past <paramref name="committedVersion"/>, the version a patch's success
+    /// answer names. A patch's answer reaches the client hub and the committed node reaches the
+    /// mesh hub's stream cache on unordered routes, so a cache entry primed by an earlier read can
+    /// still hold the pre-patch node when the answer arrives; reading at the committed version
+    /// observes what the owner holds. A missing version fails the read rather than reading the cache.
+    /// </summary>
+    private Task<string?> TypeAt(string path, long? committedVersion, CancellationToken ct) =>
+        committedVersion is not { } version
+            ? throw new InvalidOperationException($"the patch on {path} was answered without a committed version")
+            : Mesh.GetWorkspace().GetMeshNodeStream(path)
+                .Where(n => n is not null && n.Version >= version)
+                .Select(n => n!.NodeType)
+                .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
 
     private Task<Permission> Effective(string path, CancellationToken ct) =>
         Mesh.GetEffectivePermissions(path, SubjectId)

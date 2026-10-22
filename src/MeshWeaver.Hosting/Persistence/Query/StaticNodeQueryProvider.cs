@@ -14,6 +14,8 @@ namespace MeshWeaver.Hosting.Persistence.Query;
 /// from IStaticNodeProvider instances and MeshConfiguration.Nodes.
 /// Provider nodes (roles) bypass path/scope checks (they are global).
 /// Configuration nodes (type definitions) respect path/scope and context filtering.
+/// Every served row that is not a definition (<see cref="IsDeclaredVocabulary"/>) is row-filtered
+/// for the query's viewer exactly as a stored row is.
 /// </summary>
 public class StaticNodeQueryProvider : IMeshQueryProvider
 {
@@ -129,10 +131,9 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// As the five-argument constructor, row-filtering every declared node on a SATELLITE path
-    /// (<c>_Access</c>, <c>_Thread</c>, … — see <see cref="SatelliteTableMapping.IsSatellitePath"/>)
-    /// through <paramref name="nodeValidators"/> for the viewer of each query, exactly as the
-    /// storage providers filter a stored row. See <see cref="Query{T}"/>.
+    /// As the five-argument constructor, row-filtering every declared node that is not a definition
+    /// (<see cref="IsDeclaredVocabulary"/>) through <paramref name="nodeValidators"/> for the viewer
+    /// of each query, exactly as the storage providers filter a stored row. See <see cref="Query{T}"/>.
     /// </summary>
     /// <param name="providers">The static node providers.</param>
     /// <param name="matches">Predicate deciding whether a scoped query's namespaces are owned by this provider.</param>
@@ -238,7 +239,7 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
         var providerName = ((IMeshQueryProvider)this).Name;
         // 🚨 The viewer is resolved NOW, on the caller's thread — the same instant and the same
         // AccessService StorageAdapterMeshQueryProvider.Autocomplete resolves it at — and every
-        // declared satellite row (a declared access grant) is row-filtered BEFORE the limit, so a
+        // declared row that is not a definition is row-filtered BEFORE the limit, so a
         // suggestion and a `search` of the same path agree: a caller who cannot read
         // Admin/_Access cannot autocomplete the platform admins out of it either (#6578).
         var viewer = QueryIdentityResolver.Resolve(
@@ -396,24 +397,23 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// 🚨 <b>A declared node on a SATELLITE path is row-filtered like a stored one.</b> Declared
-    /// nodes are public to every caller by design — type definitions, roles, partitions, docs — and
-    /// they are served from memory without the per-user filter. The exception that made this
-    /// necessary is access data: the platform-admin seed (<c>Auth:GlobalAdmins</c>) declares an
-    /// <c>AccessAssignment</c> per platform admin under <c>Admin/_Access</c>, and without this filter
-    /// any authenticated caller could list who holds platform admin. Satellite paths
-    /// (<c>_Access</c>, <c>_Thread</c>, <c>_Comment</c>, …) are exactly the per-user rows the storage
-    /// providers filter, so the same validators decide them here, for the same viewer
-    /// (<see cref="QueryIdentityResolver"/>). Every other declared node stays public — and so a
-    /// declaration must never carry anything that is not (<c>Doc/Architecture/AccessControl</c>).
+    /// 🚨 <b>A declared node is row-filtered like a stored one — unless it is platform VOCABULARY.</b>
+    /// Declared nodes are served from memory, and until this filter covered them they reached every
+    /// caller: a viewer holding no grant on a partition listed a node declared there through
+    /// <c>IMeshService.Query</c> — viewer stamped on the request — while a point read of the very same
+    /// node (<c>GetMeshNodeStream</c>, whose gate is the permission fold) refused them. Two read seams
+    /// answering one question differently is the defect; the point read is the one that is right. So
+    /// every declared row is decided by the same validators the storage providers apply to a stored
+    /// row, for the same viewer (<see cref="QueryIdentityResolver"/>) — the one exception being
+    /// <see cref="IsDeclaredVocabulary"/>, the definitions every caller needs in order to use the mesh
+    /// at all and that no grant is ever written for.
     ///
-    /// <para>Pure in-memory and synchronous when there is nothing to decide (no satellite row, no
-    /// validators, or a System read), which is every query but the rare one that reaches a declared
-    /// grant.</para>
+    /// <para>Pure in-memory and synchronous when there is nothing to decide (no row needs a verdict,
+    /// no validators, or a System read).</para>
     /// </summary>
     private IObservable<List<T>> RowFilter<T>(List<T> items, MeshQueryRequest request)
     {
-        if (_nodeValidators is null || !items.Any(i => i is MeshNode n && SatelliteTableMapping.IsSatellitePath(n.Path)))
+        if (_nodeValidators is null || !items.Any(i => i is MeshNode n && RequiresRowFilter(n)))
             return Observable.Return(items);
         var viewer = QueryIdentityResolver.ResolveAndReport(
             request, _accessService?.Context?.ObjectId ?? _accessService?.CircuitContext?.ObjectId, _logger).UserId;
@@ -421,19 +421,93 @@ public class StaticNodeQueryProvider : IMeshQueryProvider
     }
 
     /// <summary>
-    /// <paramref name="items"/> without the declared SATELLITE rows <paramref name="viewer"/> may not
-    /// read — the one filter <see cref="Query{T}"/> and <see cref="Autocomplete"/> share. Synchronous
-    /// when there is nothing to decide (no satellite row, no validators, or a System read).
+    /// The declared nodes served to every caller without a per-row verdict: DEFINITIONS — a type's
+    /// hub registration (no node type of its own, and a <see cref="MeshNode.HubConfiguration"/>: it
+    /// configures the hub of every instance of the type it names), a
+    /// <see cref="MeshNode.NodeTypePath">NodeType</see> definition, a <c>Role</c> definition and a
+    /// <c>Partition</c> definition. They are the mesh's vocabulary: every caller resolves types,
+    /// roles and partitions by them, and no access grant is written on them — on a mesh with no
+    /// public grants a viewer holds Read on almost none of them, so filtering them would empty every
+    /// type picker and role list for everyone but an admin. A declared node of ANY other type —
+    /// content, configuration, a grant — is decided by the row filter, so declaring it is no longer a
+    /// way to publish it.
+    ///
+    /// <para>🚨 A missing node type ALONE identifies nothing: content may be declared untyped (a body,
+    /// a name, no hub configuration), and treating that as vocabulary served it — name, path and
+    /// content — to a viewer with no grant on its partition. Only a positively identified
+    /// registration is exempt; an untyped node without a hub configuration is decided by the row
+    /// filter like any other declared row.</para>
+    ///
+    /// <para>🚨 METADATA is never vocabulary, whatever its shape (<see cref="IsMetadataPath"/>):
+    /// a satellite-table path (<c>_Access</c>, <c>_Thread</c>, …), a SIBLING metadata node
+    /// (<c>{ns}/_Policy</c> — a regular row, so <see cref="SatelliteTableMapping.IsSatellitePath"/>
+    /// does not see it), and anything filed beneath one.</para>
+    /// </summary>
+    /// <param name="node">The declared node.</param>
+    internal static bool IsDeclaredVocabulary(MeshNode node)
+        => !IsMetadataPath(node)
+           && (IsTypeRegistration(node) || (node.NodeType is { } type && DefinitionNodeTypes.Contains(type)));
+
+    /// <summary>
+    /// A declared node that is metadata of another node rather than a definition: on a satellite-table
+    /// path, or with ANY underscore metadata segment (<see cref="SatelliteTableMapping.IsSatelliteId"/>)
+    /// below its partition root — itself (<c>{ns}/_Policy</c>, a sibling satellite) or an ancestor.
+    ///
+    /// <para>🚨 Read from the PATH, never from how it is split between <see cref="MeshNode.Id"/> and
+    /// <see cref="MeshNode.Namespace"/>: a full-path id (<c>new MeshNode("p/_Policy")</c>, Namespace
+    /// null) is a documented registration shape that <c>AddMeshNodes</c> preserves, and a check on the
+    /// namespace or on the id alone exempted it. The root segment is skipped — a partition may be
+    /// NAMED with a leading underscore (<c>_Setting</c>) — and so is an entry of the partition CATALOG
+    /// (<c>Admin/Partition/{name}</c>), whose id is the name it declares, exactly as
+    /// <see cref="SatelliteTableMapping.IsSiblingSatellite"/> rules.</para>
+    /// </summary>
+    private static bool IsMetadataPath(MeshNode node)
+    {
+        if (SatelliteTableMapping.IsSatellitePath(node.Path))
+            return true;
+        var segments = (node.Path ?? string.Empty).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (var i = 1; i < segments.Length; i++)
+        {
+            if (!SatelliteTableMapping.IsSatelliteId(segments[i]))
+                continue;
+            var isCatalogEntry = i == segments.Length - 1 && i == 2
+                && string.Equals(segments[0], "Admin", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(segments[1], "Partition", StringComparison.OrdinalIgnoreCase);
+            if (!isCatalogEntry)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>A type's hub registration: untyped itself, and carrying the hub configuration of the
+    /// type it names. See <see cref="IsDeclaredVocabulary"/>.</summary>
+    private static bool IsTypeRegistration(MeshNode node)
+        => string.IsNullOrEmpty(node.NodeType) && node.HubConfiguration is not null;
+
+    private static bool RequiresRowFilter(MeshNode node) => !IsDeclaredVocabulary(node);
+
+    // Immutable, read-only lookup — the node types whose declared instances ARE definitions.
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> DefinitionNodeTypes =
+        System.Collections.Immutable.ImmutableHashSet.Create(
+            StringComparer.OrdinalIgnoreCase,
+            MeshNode.NodeTypePath,
+            MeshWeaver.Graph.Configuration.RoleNodeType.NodeType,
+            MeshWeaver.Graph.Configuration.PartitionNodeType.NodeType);
+
+    /// <summary>
+    /// <paramref name="items"/> without the declared rows <paramref name="viewer"/> may not read — the
+    /// one filter <see cref="Query{T}"/> and <see cref="Autocomplete"/> share. Synchronous when there
+    /// is nothing to decide (only vocabulary rows, no validators, or a System read).
     /// </summary>
     private IObservable<List<TItem>> FilterReadable<TItem>(List<TItem> items, Func<TItem, MeshNode?> nodeOf, string viewer)
     {
         if (_nodeValidators is null
             || string.Equals(viewer, WellKnownUsers.System, StringComparison.Ordinal)
-            || !items.Any(i => nodeOf(i) is { } n && SatelliteTableMapping.IsSatellitePath(n.Path)))
+            || !items.Any(i => nodeOf(i) is { } n && RequiresRowFilter(n)))
             return Observable.Return(items);
 
         return items
-            .Select(item => nodeOf(item) is { } node && SatelliteTableMapping.IsSatellitePath(node.Path)
+            .Select(item => nodeOf(item) is { } node && RequiresRowFilter(node)
                 ? ValidateRead(node, viewer).Select(visible => (item, visible))
                 : Observable.Return((item, visible: true)))
             .ToInlineObservable()

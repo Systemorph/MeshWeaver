@@ -35,6 +35,12 @@ internal static class MeshNodeCacheIdentity
     internal const string Address = "cache/mesh-node-cache";
 
     /// <summary>
+    /// The address TYPE of the node-stream cache's hub (<c>cache/{meshId}</c>) — the subscriber of
+    /// every stream the cache opens, whichever identity that stream carries.
+    /// </summary>
+    internal const string HubAddressType = "cache";
+
+    /// <summary>
     /// Pre-allocated <see cref="AccessContext"/> for the cache identity. The
     /// name matches the address for log readability — there is no human
     /// behind this identity.

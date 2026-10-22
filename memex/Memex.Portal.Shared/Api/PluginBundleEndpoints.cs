@@ -2195,6 +2195,22 @@ public static class PluginBundleEndpoints
                 var served = ServedModuleBytes.Resolve(
                     package.Module, package.PluginId, files, assets, recorded,
                     publishedRoot, identity, logger, natives);
+                // 🚨 A module the package DECLARES but this registry cannot serve at this version
+                // (the shelf holds no such generation — typically the package record is ahead of
+                // the module's own publish) used to leave NOTHING on the wire: no module section
+                // (it is written only when files exist), no miss, and an Information log line. The
+                // manifest was then byte-for-byte the one an empty archive that declared nothing
+                // carries, which every consumer reads as NoAssemblies with no reason (/health
+                // bundle_adoption Degraded, "the bundle carried no assemblies"). State the decline
+                // as the same `module '<name>': …` miss a divergence is, so it is countable and
+                // attributable on BOTH sides.
+                if (served.Files.Count == 0 && served.Divergence is null && decline is not null)
+                    served = served with
+                    {
+                        Divergence = BundleReader.ModuleNotServedReason
+                                     + $"the package declares this module but this registry cannot "
+                                     + $"serve it at {package.Version}: {decline}",
+                    };
                 if (served.Divergence is not null)
                     logger?.LogWarning(
                         "Plugin bundles: {Plugin} on framework {Identity} — {Divergence}",

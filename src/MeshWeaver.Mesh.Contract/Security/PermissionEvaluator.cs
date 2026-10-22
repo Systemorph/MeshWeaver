@@ -70,18 +70,18 @@ internal static class PermissionEvaluator
     /// </summary>
     internal const string AdminScope = "Admin";
 
-    private const string RoleQueryId = "$security-roles";
+    private const string RoleQueryId = SecurityQueries.QueryIdPrefix + "roles";
 
     // Group access is resolved GLOBALLY — a group defined in one partition can be granted in
     // another (cross-partition licensing), so we read EVERY GroupMembership node (as System, like
     // the other $security-* queries) and expand the viewer's transitive group set in-memory. This
     // mirrors the Postgres rebuild, which reads memberships from the global auth mirror.
     private const string GroupMembershipNodeType = SecurityQueries.GroupMembershipNodeType;
-    private const string MembershipQueryId = "$security-memberships";
+    private const string MembershipQueryId = SecurityQueries.QueryIdPrefix + "memberships";
 
     // Per-gated-type cached query key prefix — one shared upstream subscription per gated node
     // type, process-wide, like every other $security-* query.
-    private const string GatedQueryPrefix = "$security-gated:";
+    private const string GatedQueryPrefix = SecurityQueries.QueryIdPrefix + "gated:";
 
     #region Public surface
 

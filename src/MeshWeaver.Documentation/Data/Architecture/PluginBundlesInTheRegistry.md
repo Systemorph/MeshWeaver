@@ -368,6 +368,20 @@ layout), while `ShippedPrebuiltBundles` — the pre-warm on an installation whos
 `bundles.registry` — still reads the share. A publication that reaches one target and not the
 other is refused as unsealed, as it is today: the lane fails RED on either half.
 
+## A declared module the registry cannot serve is a stated miss
+
+A package whose record declares a module, asked for at a version whose module generation is not on
+the registry's shelf (the package record is ahead of the module's own publish), is answered with
+NO module section — the section is written only when files exist. The manifest then used to carry
+nothing at all, the same bytes an empty archive that declared nothing carries, and every consumer
+read it as `NoAssemblies` ("the bundle carried no assemblies") with no reason. The registry now
+writes the decline as a `module '<name>': not served — …` entry in `misses`. The consumer's
+classification is unchanged (it is still a miss: the module did not arrive at that version), but
+the reason reaches the consumer's log and `/health` detail, and such an entry is not counted as
+NodeType coverage (`BundleReader.IsModuleNotServedMiss`), so it can neither warn as a NodeType miss
+nor fail a require-prebuilt adoption of types that did arrive. It clears when the module for that
+version is published.
+
 ## What stays on the HTTP surface
 
 * **`GET /api/plugins`** and **`POST /api/plugins/files`** — the catalog index and package files.
