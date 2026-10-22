@@ -89,6 +89,15 @@ public sealed record InboxRow
     /// <summary>The state as the viewer reads it, with its mark; empty without a state. Filled by the page.</summary>
     public string StateText { get; init; } = string.Empty;
 
+    /// <summary>
+    /// For a running activity: where it stands, as <c>3/7</c> (the step it is on out of its sub-activities),
+    /// or empty when it has no sub-activities. Read from the activity's content; shown in the State badge.
+    /// </summary>
+    public string StepNumber { get; init; } = string.Empty;
+
+    /// <summary>For a running activity: its latest log line (first line, shortened), or empty. Shown in the State badge.</summary>
+    public string StepMessage { get; init; } = string.Empty;
+
     /// <summary>The state badge's colour; empty without a state.</summary>
     public string StateColor { get; init; } = string.Empty;
 
@@ -248,6 +257,12 @@ public sealed record InboxFilter
     /// noise is a switch away, and the notice above the grid counts what it hides.
     /// </summary>
     public bool ShowIgnorable { get; init; }
+
+    /// <summary>
+    /// The state groups ticked, by <see cref="InboxRows.OpenKey"/> / <see cref="InboxRows.DoneKey"/>.
+    /// A row in any ticked group is listed; none ticked means all.
+    /// </summary>
+    public ImmutableDictionary<string, bool> States { get; init; } = ImmutableDictionary<string, bool>.Empty;
 }
 
 /// <summary>One tag checkbox of the side menu.</summary>
@@ -322,6 +337,7 @@ public static class InboxRows
         => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}"))
             .Concat(filter.Kinds.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"kind:{s.Key}={s.Value}"))
+            .Concat(filter.States.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"state:{s.Key}={s.Value}"))
             .Concat(filter.TagKeys.Order(StringComparer.Ordinal).Select(t => "tagkey:" + t)));
 
     /// <summary>
@@ -356,6 +372,25 @@ public static class InboxRows
     /// <param name="options">The hub's serializer options; Web defaults when null.</param>
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
         string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options)
+        => Of(node, section, zone, blockedReason, band, rank, sourceLabel, culture, options, locale: null);
+
+    /// <summary>
+    /// <see cref="Of(MeshNode, InboxSection, string?, string?, string?, int, string?, CultureInfo?, JsonSerializerOptions?)"/>
+    /// with the viewer's locale, in which a running activity's latest log line is localized. A separate overload —
+    /// never an added optional parameter, which would replace the released signature.
+    /// </summary>
+    /// <param name="node">The node the leg returned.</param>
+    /// <param name="section">The leg that returned it.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="blockedReason">Why the row cannot be selected, or null when it can.</param>
+    /// <param name="band">The band's title as the viewer reads it.</param>
+    /// <param name="rank">The band's rank.</param>
+    /// <param name="sourceLabel">The source's display name.</param>
+    /// <param name="culture">The viewer's culture.</param>
+    /// <param name="options">The hub's serializer options; Web defaults when null.</param>
+    /// <param name="locale">The viewer's locale, or null for the English fallback.</param>
+    public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
+        string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options, string? locale)
     {
         // ONE read of the row's content — its time, sender, link and read state all come from it, and
         // that conversion is paid per row on every render.
@@ -370,6 +405,10 @@ public static class InboxRows
         // options OMITS a default `false`, and an unread item would then read as "no read state".
         var unread = (section.TimeField is null ? null : TypedBool(node.Content, "isRead") ?? BoolOf(content, "isRead"))
             is { } read ? !read : section.Unread;
+        var state = InboxState.Of(section.Source, section.Band, section.Ledger == ApprovalLedgerKind.Requested, unread, StringOf(content, "status"));
+        var running = string.Equals(section.Source, "Activities", StringComparison.Ordinal)
+                      && string.Equals(state, InboxState.Running, StringComparison.Ordinal);
+        var step = running ? StepOf(content, locale) : (Number: string.Empty, Message: string.Empty);
         return new()
         {
             Path = node.Path,
@@ -391,7 +430,9 @@ public static class InboxRows
             Tags = tags,
             TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
-            State = InboxState.Of(section.Source, section.Band, section.Ledger == ApprovalLedgerKind.Requested, unread, StringOf(content, "status")),
+            State = state,
+            StepNumber = running ? step.Number : string.Empty,
+            StepMessage = running ? step.Message : string.Empty,
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
             Account = StringOf(content, "account")?.Trim() ?? string.Empty,
@@ -401,6 +442,12 @@ public static class InboxRows
     }
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);
+
+    // The mesh writes enums as names ("logLevel":"Information"); numbers are accepted too.
+    private static readonly JsonSerializerOptions LogEntryOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
 
     /// <summary>
     /// When <paramref name="node"/> happened as its source times it: the content property
@@ -448,6 +495,66 @@ public static class InboxRows
         {
             return null;
         }
+    }
+
+    /// <summary>The longest step message the State badge shows.</summary>
+    internal const int StepMessageLimit = 60;
+
+    /// <summary>
+    /// Where a running activity stands, read off its <c>ActivityLog</c> content: the step it is on out
+    /// of its <c>subActivities</c> (finished ones + 1, as <c>3/7</c>; empty without sub-activities) and its latest
+    /// log line (<c>messages</c>, first line, at most <see cref="StepMessageLimit"/> characters; empty without
+    /// messages). Pure; unreadable or absent content gives two empty strings.
+    /// </summary>
+    /// <param name="content">The row's content, or null.</param>
+    internal static (string Number, string Message) StepOf(JsonElement? content, string? locale = null)
+    {
+        var number = string.Empty;
+        if (PropertyOf(content, "subActivities") is { ValueKind: JsonValueKind.Array } subs && subs.GetArrayLength() > 0)
+        {
+            var total = subs.GetArrayLength();
+            // Leading finished children only: they may overlap and finish out of order, so [Running, Succeeded, Running] is on step 1.
+            var finished = subs.EnumerateArray().TakeWhile(IsTerminal).Count();
+            number = $"{Math.Min(finished + 1, total).ToString(CultureInfo.InvariantCulture)}/{total.ToString(CultureInfo.InvariantCulture)}";
+        }
+        var message = string.Empty;
+        if (PropertyOf(content, "messages") is { ValueKind: JsonValueKind.Array } messages && messages.GetArrayLength() > 0)
+        {
+            var last = messages.EnumerateArray().Last();
+            var text = LogLineOf(last, locale);
+            var line = (text ?? string.Empty).Split('\n', 2)[0].Trim();
+            message = line.Length > StepMessageLimit ? line[..(StepMessageLimit - 1)] + "…" : line;
+        }
+        return (number, message);
+    }
+
+    // The log entry as the viewer reads it: a localizable entry (messageKey + messageArgs) is resolved in
+    // the viewer's locale, anything else keeps its English fallback text.
+    private static string? LogLineOf(JsonElement entry, string? locale)
+    {
+        if (entry.ValueKind != JsonValueKind.Object)
+            return null;
+        try
+        {
+            if (entry.Deserialize<MeshWeaver.Data.LogMessage>(LogEntryOptions) is { } message)
+                return MeshWeaver.Data.LogMessageLocalizationExtensions.Localize(message, locale);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
+        {
+            // Unreadable entry: fall back to its plain text below.
+        }
+        return StringOf(entry, "message");
+    }
+
+    // A sub-activity is finished once its status is a terminal ActivityStatus, as a name or a number.
+    private static bool IsTerminal(JsonElement sub)
+    {
+        if (sub.ValueKind != JsonValueKind.Object || PropertyOf(sub, "status") is not { } status)
+            return false;
+        var name = status.ValueKind == JsonValueKind.Number && status.TryGetInt32(out var n)
+            ? Enum.GetName(typeof(MeshWeaver.Data.ActivityStatus), n)
+            : status.ValueKind == JsonValueKind.String ? status.GetString() : null;
+        return name is not null && InboxQueries.TerminalActivityStatuses.Contains(name, StringComparer.OrdinalIgnoreCase);
     }
 
     private static JsonElement? PropertyOf(JsonElement? content, string name)
@@ -541,7 +648,9 @@ public static class InboxRows
                 ? rows.Where(row => kinds.Contains(SourceKey(row.Category)))
                 : rows.Where(row => Shown(row, filter));
         var tags = ActiveTags(filter);
+        var states = TickedStates(filter);
         return shown.Where(row => InRange(row.Stamp, before, after))
+            .Where(row => states.Count == 0 || states.Contains(StateGroupOf(row.State)))
             .Where(row => tags.Count == 0 ? filter.ShowIgnorable || !IsIgnorable(row) : tags.Any(tag => HasTag(row, tag)))
             .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
@@ -552,6 +661,26 @@ public static class InboxRows
     /// <param name="filter">The filter.</param>
     internal static ImmutableHashSet<string> TickedKinds(InboxFilter filter)
         => [.. filter.Kinds.Where(kind => kind.Value).Select(kind => kind.Key)];
+
+    /// <summary>The side-menu key of the open group — items still waiting on a decision, a start, an end or a read.</summary>
+    public const string OpenKey = "open";
+
+    /// <summary>The side-menu key of the done group — items decided, finished, failed, cancelled, or with nothing left to do.</summary>
+    public const string DoneKey = "done";
+
+    /// <summary>
+    /// The group a state belongs to: <see cref="OpenKey"/> for awaiting, requested, running and unread;
+    /// <see cref="DoneKey"/> for everything else — approved, rejected, expired, done, failed, cancelled, and an
+    /// item with no state (a read mail has nothing left to do). Pure.
+    /// </summary>
+    /// <param name="state">An <see cref="InboxState"/> constant, or empty.</param>
+    public static string StateGroupOf(string state)
+        => state is InboxState.Awaiting or InboxState.Requested or InboxState.Running or InboxState.Unread ? OpenKey : DoneKey;
+
+    /// <summary>The state groups ticked (<see cref="OpenKey"/>, <see cref="DoneKey"/>); empty when none is (all are listed). Pure.</summary>
+    /// <param name="filter">The filter.</param>
+    internal static ImmutableHashSet<string> TickedStates(InboxFilter filter)
+        => [.. filter.States.Where(state => state.Value).Select(state => state.Key)];
 
     /// <summary>The tags asked for: the ticked ones, plus the legacy single <see cref="InboxFilter.Tag"/>; empty for all. Pure.</summary>
     /// <param name="filter">The filter.</param>
