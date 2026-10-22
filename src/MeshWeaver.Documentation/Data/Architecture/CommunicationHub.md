@@ -382,14 +382,32 @@ The page holds one piece of view state, an `InboxFilter` in its data section, an
 bound to a field of it. No control has a click handler that re-renders the page; the rows are a
 function of the filter and the legs.
 
+> **Layout (2026-10).** Every filter below lives in a side panel beside the list (a platform `LayoutGrid`: the
+> panel stacks ABOVE the list on a narrow page), grouped under small titles — Kind, Tags, Source, Options. The
+> toolbar over the list holds the bulk acts only, icon-only (the name is the tooltip and accessible name):
+> Delete, Undo and — only while the list or the ticked rows hold an approval request the viewer decides
+> (`InboxLayoutArea.ToolbarOf`) — Approve and Reject. The grid's first column is headed **Source** and shows the
+> MEDIUM the item came through; `InboxSourceIcons` maps the leg's source id to a Fluent symbol (Approvals,
+> Notifications, Activities, Mail, Chat, Conversations) or a small inline mark (Outlook, Gmail, iMessage,
+> WhatsApp, Teams), falling back to the symbol the leg declared. The side panel lists each source with that same
+> symbol and a switch. "N item(s) needing you are hidden by the source filter" is one quiet line with a Show all
+> action that clears Only and switches every source on.
+>
+> Kinds, tags, sources and "Show ignorable" are CHECKBOXES (`filter.kinds/{key}`, a bound list of `InboxTagItem`
+> for tags, `sources/{key}`): the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
+> column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
+> Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
+> for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
+> are symbolised by a gavel (`InboxSourceIcons`), never a tick.
+
 | Control | Bound to | What it does |
 |---|---|---|
-| search box | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
-| one icon toggle per source (`ToggleButtonControl`), beside the search | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, by its symbol (`InboxQueryLeg.SourceIcon`), its name the tooltip; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away and the bell still shows it) |
-| the Only select (`SelectControl`), before the toggles | `only` (a source key, empty for all) | Only / Show / Hide per source: picking one source lists that source alone and wins over its switch (so "only Outlook" shows Outlook even while its toggle is off); "All sources" gives the switches back exactly as they were. A side-menu category still wins over both, and what Only hides of the "Needs you" band is counted in the hidden-obligations notice like a switch |
-| the Show ignorable switch (`SwitchControl`) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
-| the side menu's tags (`RadioGroupControl`, below the folders) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`, read from the content's `tags`): ⭐ Important first (the content's `importance`), then each tag by use, each with its count. A tag narrows the folder and sources shown, and shows its rows even when ignorable — picking `#promo` asks for the promotions. The entries are keyed apart — `importance:important` for what a triage JUDGED important, `tag:<name>` for a tag — so an ordinary tag spelled `important` is its own entry. Importance and tags are read from whatever content a row carries, timed or not; an untimed leg's projection drops content, so a source whose rows carry a triage declares a time field (the timed projection keeps content). The grid's Tags column shows them as `#reply #act` |
-| ⚙︎ settings menu (`MenuItemControl`, icon only) | `order`, `sources/{key}` | the order select — `InboxOrder.Newest` by default, everything by date as a mail client lists it; also oldest, by title, by source, and what needs you first (band rank) — and the same source switches with their names |
+| search box (top of the side panel) | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
+| one symbol + switch per source (side panel, Source) | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, its symbol `InboxSourceIcons.Resolve`; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away) |
+| the Only select (`SelectControl`), above the source rows | `only` (a source key, empty for all) | picking one source lists that source alone and wins over its switch; "All sources" gives the switches back exactly as they were. A side-menu category still wins over both |
+| the Show ignorable switch (side panel, Options) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
+| the tags (`RadioGroupControl`, side panel) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`): Important first, then each tag by use, each with its count. A tag narrows the folder and sources shown |
+
 | the grid's checkboxes | `inboxSelection` | the ticked row keys, read by Delete |
 
 Three properties of that binding are load-bearing:
