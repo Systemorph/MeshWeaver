@@ -881,10 +881,11 @@ the request job before anything is dispatched. There is no label and no `none` f
 |---|---|---|
 | preflight | `dotnet-test.yml` → `Required CI inputs` | asserts the App credential RED by name |
 | request | `dotnet-test.yml` → `Dependent suites (request)` | **only once core's own build and tests are green on the candidate** (or the tree is a reused green) — otherwise it is NOT sent and goes red as "waiting for core's own suites"; then it proves the receiver exists on Plugins' default branch and sends `repository_dispatch core-candidate-suites` with the candidate (`github.sha`), its **first parent** as the base and a key unique to the run attempt — once for Plugins' default branch, once more at a declared counterpart's head |
-| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | the per-realm, affected-only selection above, printed as an audit table (selected realms with edges, then not-selected realms); `refused` when it cannot compute one; legs cut by the portal-host lane's measured weights |
-| candidate arm | Plugins `core-candidate-arm.yml` | (with MeshWeaver.Plugins#3187; before it, each leg builds its own suites from source) the union of the legs' suites built **once, from source** against the candidate (`-p:MeshWeaverRoot`, no image — the candidate is unpublished), shipped to the legs through `scripts/dedupe-tree.py`, and run there with `--no-build`; a one-leg arm builds in its leg; exit codes and dead hosts recorded exactly as the platform canary records them |
-| control arm | the same arm, at the base | **only** what the candidate did not pass — so a test already red in Plugins against core `main` is reported and never blocks core |
-| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base), on ANY missing evidence, or on a refused selection; a conclusion per realm; written as a root commit at `refs/core-candidate/<key>` in Plugins |
+| scope | Plugins `core-candidate.yml` → `scripts/core-candidate-scope.py` | the per-realm, affected-only selection above, printed as an audit table (selected realms with edges, then not-selected realms); `refused` when it cannot compute one; legs cut by the suite times this lane measured on its own runners |
+| builds | Plugins `core-candidate-build.yml` | the union of the legs' suites built **once, from source** (`-p:MeshWeaverRoot`, no image — the candidate is unpublished) at the candidate and, in parallel and always, at the **base**; shipped to the legs through `scripts/dedupe-tree.py` |
+| candidate arm | Plugins `core-candidate-arm.yml`, one job per leg (`leg-<N>`) | each leg runs its suites with `--no-build` (a one-leg arm builds in its leg); exit codes and dead hosts recorded exactly as the platform canary records them |
+| control arm | the same arm, one job per candidate leg (`control-<N>`), at the base | **only** what candidate leg N did not pass, started the moment leg N is done, from the base build — so a test already red in Plugins against core `main` is reported and never blocks core |
+| verdict | Plugins `scripts/core-candidate-verdict.py` | failure on drift (passes at the base, fails at the candidate; a host that dies only at the candidate; a leg that builds only at the base), on ANY missing evidence, on a planned control job that did not succeed, or on a refused selection; a conclusion per realm; written as a root commit at `refs/core-candidate/<key>` in Plugins |
 | wait | `dotnet-test.yml` → `Dependent suites (MeshWeaver.Plugins)` → `.github/scripts/await-dependent-verdict.py` | polls that ref read-only over REST once a minute and prints the **queue census** every 5 minutes; silence by the deadline is red on its OWN step (exit 3 → "No verdict in time … (infrastructure)"), whose title says WHY — "no runner within 42 min (queued behind N candidate runs: …)", "still running at the deadline", or "no run carries this key" |
 | decide | the same job → `.github/scripts/check-plugins-break-declaration.py` | green, or a declared break that holds (table above), or red naming the realms and the line to write |
 | require | `Consolidate test results` | NEEDS `preflight`, `dependent-suites-dispatch` and `dependent-suites`, and fails unless all three succeeded; a fork or Dependabot pull request prints **NOT MEASURED** by name |
@@ -980,6 +981,53 @@ suites; before = run 37809289143, after = run 37818559621 on MeshWeaver.Plugins#
 
 So build-once trades about 8 minutes of latency on an idle pool for a third fewer runner-minutes,
 and those runner-minutes are what a congested pool is short of.
+
+### The control arm overlaps the candidate arm (the 42-minute finding, 2026-10-21)
+
+A candidate that needed a control arm answered past the waiter's 42 minutes, though nothing was slow.
+The path was serialized: on MeshWeaver.Plugins runs 39605098279, 39631988321 and 39637464992 the
+candidate build ended at ~13 min and the twelve legs at 30.4 min, with leg 9/12 always last. Only then
+was the control arm planned (a job can only `needs:` a WHOLE matrix), and its one leg built core at
+the base from source (7.2 min) before running the one failing suite. The verdicts landed 42.9–45.0
+min into the run. Of the last 90 candidate runs, the 8 that ran a control arm through answered at
+31–51 min (4 past 42), and the others at 11–41 min. Three changes in MeshWeaver.Plugins#4067, with
+no bound raised:
+
+1. **A control job per candidate leg.** The legs are one job per slot, and `control-<N>` needs only
+   `leg-<N>` and the base build, so it runs while the slower legs are still running. The verdict
+   recomputes each control leg's plan from the candidate evidence and holds the control leg to it.
+   A planned control job that did not succeed is red, as the arm-level job result was before.
+2. **The base is built early.** The base commit is known when the run starts, so the union is built
+   at the base beside the candidate's build, and a control leg only restores and runs. This costs one
+   build job per run whether or not a control leg is needed.
+3. **Legs packed by what the lane measures.** Leg 9 was always last because of how the legs were
+   packed. `Fleet.Control.Test` (321–326 s) was missing from the portal-host weight table, so it
+   weighed 8 s and was put last, onto the leg that already held `Blazor.Views.Test` (322 s). 33 of the
+   82 suites were unweighed. Packed by the lane's own times, the same suites ran in 7 legs of
+   8.3–12.7 min (measured below), instead of 12 legs with one at 15.5–16.8.
+
+**Measured after the change** on MeshWeaver.Plugins run 39647701650, the same pair as run
+39637464992. No control leg was needed this time, so the control path itself is not yet measured.
+Times are minutes into the run:
+
+| stage | before (39637464992) | after (39647701650) |
+|---|---|---|
+| builds | candidate 1.5 → 13.0 | base 1.6 → 13.2 and candidate 3.5 → 15.9, side by side (the candidate's waited 1.9 min for a runner) |
+| legs | 12 legs, 13.4 → 30.4 | 7 legs, 16.3 → 24.9–29.0 (the Monolith leg last, 12.7 min) |
+| control | planned at 31.4, done 42.7 | none needed |
+| verdict job queued for an `aks-silos` runner | 0.2 min | **6.0 min** (29.0 → 35.0) |
+| verdict published | 43.1 | **35.4** |
+
+Two gaps between this run and the planning estimate (~27–28 min for a green run) were runner
+waits: 1.9 min before the candidate build and 6.0 min before the verdict job. A third finding
+holds a runner without delaying the verdict: the verdict job ran 5 min 7 s past publishing, because
+its prune of old verdict refs fetched each of 318 refs one at a time on the light runner the next
+run's verdict job waits for. MeshWeaver.Plugins#4072 makes that prune one fetch and one push. With
+a control leg, the expected publish time is the time the failing leg finishes plus ~1.5 min of
+setup and the suite's own time (AI.Test 3.2 min, Fleet.Control.Test 5.4 min). That is still to be
+measured on a run that needs one. Reusing one run's base result in another was **declined**.
+A cached base failure excuses that test at every candidate in the reuse window, so one flaky base
+run would loosen the gate for all of them. That is not exactly as strict.
 
 ### A late verdict still decides — no human step (the 2026-10-08 livelock)
 

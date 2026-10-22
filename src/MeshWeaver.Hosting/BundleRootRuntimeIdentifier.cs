@@ -67,6 +67,21 @@ public static class BundleRootRuntimeIdentifier
     }
 
     /// <summary>
+    /// Expands the placeholder in ANOTHER per-architecture store path IN PLACE — the shared module
+    /// tier's root (<c>Modules:SharedRoot</c>, Doc/Architecture/SharedArtifactStore increment 3) — so
+    /// it names this process's own runtime's store before anything reads it. A key without the
+    /// placeholder is untouched; an unset key stays unset. Returns the value now in effect.
+    /// </summary>
+    public static string? ExpandConfiguredKey(IConfiguration configuration, string key, string? rid = null)
+    {
+        var configured = configuration[key];
+        var expanded = Expand(configured, rid ?? Current());
+        if (expanded is not null && !string.Equals(expanded, configured, StringComparison.Ordinal))
+            configuration[key] = expanded;
+        return expanded;
+    }
+
+    /// <summary>
     /// Where <see cref="ExpandConfigured"/> keeps the unexpanded root, so a reader serving another runtime
     /// can resolve that runtime's store with <see cref="Expand"/>. Absent on a root without the placeholder.
     /// </summary>

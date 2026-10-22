@@ -49,4 +49,20 @@ public class BundleRootRuntimeIdentifierTest
         Assert.Null(untouched[ShippedPrebuiltBundles.PublishedRootConfigKey]);
         Assert.Null(untouched[BundleRootRuntimeIdentifier.TemplateConfigKey]);
     }
+
+    [Fact]
+    public void TheSharedModuleTiersRoot_IsExpandedInPlace_ToThisRuntimesStore()
+    {
+        const string key = "Modules:SharedRoot";
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { [key] = "/artifacts/{rid}/modules" })
+            .Build();
+
+        Assert.Equal("/artifacts/linux-arm64/modules", BundleRootRuntimeIdentifier.ExpandConfiguredKey(configuration, key, "linux-arm64"));
+        Assert.Equal("/artifacts/linux-arm64/modules", configuration[key]);
+
+        var unset = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>()).Build();
+        Assert.Null(BundleRootRuntimeIdentifier.ExpandConfiguredKey(unset, key, "linux-x64"));
+        Assert.Null(unset[key]);
+    }
 }

@@ -74,6 +74,25 @@ public class PlanTierRefusalTest : IDisposable
         GC.SuppressFinalize(this);
     }
 
+    /// <summary>
+    /// The DEFAULT APPS are free-tier packages (<c>AI</c> = Threads, <c>Developer</c> = Examples): a
+    /// free-plan instance is served them by a whole-source grant, and is never refused them by plan.
+    /// Pinned because the default-apps lane would otherwise select a package the registry then
+    /// withholds, which reads as "installed nothing" on exactly the instances it exists for.
+    /// </summary>
+    [Theory]
+    [InlineData("AI")]
+    [InlineData("Developer")]
+    public void AFreePlanInstance_IsServedTheDefaultApps_AndNeverRefusedThemByPlan(string package)
+    {
+        var caller = Instance("free", Entry(Platform));
+
+        Assert.True(caller.Allows(Platform, package, "free", Now));
+        Assert.Null(caller.TierRefusal(Platform, package, "free", module: null, Now));
+        // an unset plan is the baseline, i.e. free, and untiered packages are covered as well
+        Assert.True(Instance(null, Entry(Platform)).Allows(Platform, package, "free", Now));
+    }
+
     // ───────────────────────────────────────────── the registry side: the grant's verdict
 
     /// <summary>

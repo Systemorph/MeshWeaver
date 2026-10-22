@@ -459,6 +459,39 @@ Three things changed, so that neither path can produce that render again:
    host (invariant 16) that simply did not exist — so `check-chart-invariants.sh` now carries a
    **refusal control**: a fixture of exactly the #3780 render that must fail to template.
 
+### Changing a key in the half — the governed writer
+
+Until `hosting-kv-values-set`, the half had one writer, `hosting-kv-ensure --values-half`, and it
+never changes a value: it composes an ABSENT half and filters an existing one to the declared keys.
+So a value that also lives in the half kept its stale copy there. The case that surfaced it is the
+control instance's mesh connection string: rotating `<instance>-db-connection` through the record
+page's **Set Key Vault secrets…** dialog left the old string in `helm-values-<release>`, and the next
+Reconcile layered it straight back into `memex-portal-secrets` (Memex#647).
+
+`hosting-kv-values-set --vault <v> --release <r> --declared <vaultValuesKeys> --key <K> …` changes
+exactly the named keys and keeps everything else:
+
+| Rule | Why |
+|---|---|
+| Every `--key` must be in `--declared` (the record's `vaultValuesKeys`), or nothing is written | the half holds exactly the record's keys (policy `one-values-half-per-release`); a writer that could add one would reopen that hole |
+| The value comes from `HOSTING_SECRETS` under `values-half:<K>`, never an argument | the same transport as `hosting-kv-set`, in the same Job, kept apart by the prefix |
+| A key is written into every half that already carries its leaf; one no half carries yet goes into `memex_portal`, and into `memex_migration` too for `ConnectionStrings__memex` and `MEMEX_PASSWORD` | the migration reads those two, which is why `hosting-kv-ensure` composes them into both |
+| `ConnectionStrings__orleans` is refused while no half carries it | the chart DERIVES it from the mesh string; a first copy would freeze that derivation |
+| Every other leaf, half, family (`parameters`, `pgbackrest`) and multi-line value is kept; the document is re-stored as JSON | helm reads JSON as YAML, so a PEM block scalar keeps its exact value; scalar types are kept too |
+| The version id is read before the download and again before the write; a change in between refuses | a concurrent writer's change is never silently dropped |
+| The new version is read back and compared leaf by leaf, by equality, names only | a write the vault acknowledged but did not keep is a failure, not a success |
+| An absent half is refused | composing one is the Provision's job |
+
+It runs as the operator identity because it must READ the half (see
+[Secrets: write-only entry](../SecretsWriteOnlyEntry) → *The one write that has to read*). The
+governed path is the record page's dialog on the control instance: a declared values-half key is
+offered as a row of its own, and a vault object whose key ALSO lives in the half is written to both
+in one approved `SetSecrets` action (the dialog names the half on that row).
+
+🚨 **The pods do not see it until the next Reconcile or Roll.** `hosting-deploy` layers the half when
+it renders `memex-portal-secrets`; a restart re-reads the Secret that is already rendered. The verb's
+closing line says so, and so does the dialog.
+
 ### The half carries secret families only — structure is refused (Memex#295)
 
 "The record wins on every key it declares" holds only for keys the render DECLARES. helm REPLACES a

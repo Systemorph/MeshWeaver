@@ -91,6 +91,35 @@ Nothing new, if it already sends as the subscriber:
   stamped with the connection's validated identity;
 - a test posts under the identity it subscribed with.
 
+### A client stream sends its input under the identity it subscribed with
+
+The other end has to keep its half of the rule. A remote layout stream
+(`JsonSynchronizationStream.CreateExternalClient`) resolves its identity **once**, when it is
+opened (`ResolveSubscribeIdentity`: the request identity, else the circuit identity), and posts its
+`SubscribeRequest` **and every input it sends** — each edited value (`PatchDataChangeRequest`), each
+data write (`DataChangeRequest`) — inside that identity's scope, with no explicit `AccessContext`,
+so the posting hub's own pipeline stamps them all the same way. On a portal circuit that pipeline
+step is the portal hub's "stamp the circuit user" step, so the subscribe and the edits both carry
+the person.
+
+It used to stamp its input with a separate **snapshot** of the ambient request identity taken when
+the stream was opened, while the subscribe went through the pipeline. The two disagree whenever the
+thread that opens the area carries an ambient identity the pipeline overrides, and a portal circuit
+produces exactly that: Blazor runs a render a parent requested from an Rx callback on the
+**caller's** execution context, so an area opened in a render triggered from a platform hub's turn
+sees `system-security` as ambient. The owner recorded the person as the subscriber and refused every
+edit — `Refused PatchDataChangeRequest (SubscriberInput) … accepts it only from its subscriber
+'e2e-admin'; the delivery carries 'system-security'` — while the person's clicks, which carry the
+acting user explicitly, were accepted. On the Store paywall that read as a coupon box that showed
+the code and a Redeem that answered *"Enter a coupon code."* (MeshWeaver.Education journey run
+39600717306, during an on-demand course install). Pinned by
+`MeshWeaver.Layout.Test/AnAreaOpenedOffActivityAcceptsItsSubscribersEditTest`, which opens the
+area once under the platform identity (it fails on the snapshot with that exact log line) and once
+inside the person's own activity (the control).
+
+A stream opened with **no** resolved identity — an infrastructure mirror, subscribed as the
+platform — keeps its earlier input attribution; it is not a person's view.
+
 A session whose identity **changes** after a stream was subscribed (a sign-in, an onboarding that
 resolves the user) is a different identity to that stream: the view must subscribe again, and until
 it does its actions are refused with the sentence above.

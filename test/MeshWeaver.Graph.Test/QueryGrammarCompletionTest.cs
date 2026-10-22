@@ -104,9 +104,7 @@ public class QueryGrammarCompletionTest
     public void EveryReservedQualifierIsOffered()
     {
         // The parser's own reserved set — a qualifier it learns must be offered.
-        var reserved = (System.Collections.Generic.HashSet<string>)typeof(QueryParser)
-            .GetField("ReservedQualifiers", BindingFlags.NonPublic | BindingFlags.Static)!
-            .GetValue(null)!;
+        var reserved = QueryParser.ReservedQualifierNames;
 
         var offered = QueryGrammar.Qualifiers.Select(q => q.Name).ToArray();
         reserved.Should().OnlyContain(r => offered.Contains(r, System.StringComparer.OrdinalIgnoreCase),

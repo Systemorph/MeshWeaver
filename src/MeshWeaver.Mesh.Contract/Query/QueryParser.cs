@@ -7,11 +7,17 @@ namespace MeshWeaver.Mesh;
 public partial class QueryParser
 {
     // Reserved qualifier names (case-insensitive)
-    private static readonly HashSet<string> ReservedQualifiers = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
-        "partitions", BasePathQualifier
-    };
+    // Frozen: it is exposed (ReservedQualifierNames), so it must not be mutable through a downcast.
+    private static readonly System.Collections.Frozen.FrozenSet<string> ReservedQualifiers =
+        System.Collections.Frozen.FrozenSet.ToFrozenSet(
+        [
+            "path", "namespace", "scope", "sort", "limit", "source", "select", "context", "is",
+            "partitions", BasePathQualifier
+        ], StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>The reserved (single-slot) qualifier names — what a query may state only once. Read by
+    /// the catalog app's typed-text guard (<c>CatalogQuery.Anchoring</c>), which pins itself to this.</summary>
+    public static IReadOnlySet<string> ReservedQualifierNames => ReservedQualifiers;
 
     /// <summary>
     /// <c>basePath:X</c> — the query-text spelling of the search tools' <c>basePath</c> argument:
@@ -101,6 +107,61 @@ public partial class QueryParser
         sb.Append(query, copied, query.Length - copied);
         return sb.ToString();
     }
+
+    /// <summary>
+    /// <paramref name="query"/> without the EXPRESSION groups that hold nothing — <c>()</c>, <c>( ( ) )</c>
+    /// — as THIS parser's tokenizer reads it: a parenthesis inside a term (a list operand
+    /// <c>status:(Open OR Won)</c>, a value <c>code:foo()</c>, a quoted literal) is part of that term and
+    /// is never touched. An empty group stops <c>ParseAnd</c>, so a term after it would be dropped.
+    /// </summary>
+    /// <param name="query">The query string.</param>
+    /// <returns>The query without empty expression groups.</returns>
+    public string RemoveEmptyGroups(string query)
+    {
+        if (string.IsNullOrEmpty(query))
+            return query;
+        while (true)
+        {
+            var spans = new List<(int Start, int End, Token Token)>();
+            Tokenize(query, spans);
+            var inTerm = new bool[query.Length];
+            foreach (var (start, end, _) in spans)
+                for (var k = start; k < end && k < query.Length; k++)
+                    inTerm[k] = true;
+
+            var cut = -1;
+            var cutEnd = -1;
+            for (var i = 0; i < query.Length && cut < 0; i++)
+            {
+                if (inTerm[i] || query[i] != '(')
+                    continue;
+                var j = i + 1;
+                while (j < query.Length && !inTerm[j] && char.IsWhiteSpace(query[j]))
+                    j++;
+                if (j < query.Length && !inTerm[j] && query[j] == ')')
+                    (cut, cutEnd) = (i, j + 1);
+            }
+            if (cut < 0)
+                return query;
+            query = query[..cut] + query[cutEnd..];
+        }
+    }
+
+    /// <summary>
+    /// Every FILTER comparison written in <paramref name="query"/> — each <c>field:value</c> term that is
+    /// not a reserved qualifier, at any depth, as THIS parser's tokenizer reads it. What a caller
+    /// compares a parse against to prove no written term was dropped on the way.
+    /// </summary>
+    /// <param name="query">The query string.</param>
+    /// <returns>The written filter conditions, in order.</returns>
+    public IReadOnlyList<QueryCondition> WrittenComparisons(string? query) =>
+        string.IsNullOrWhiteSpace(query)
+            ? []
+            : Tokenize(query)
+                .Where(t => t.Type == TokenType.Comparison && t.Condition is not null
+                            && !ReservedQualifiers.Contains(t.Value))
+                .Select(t => t.Condition!)
+                .ToList();
 
     /// <summary>
     /// <paramref name="value"/> as a LITERAL query value: quoted, so a space, <c>|</c>, <c>*</c> or

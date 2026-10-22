@@ -342,4 +342,26 @@ public class SuppliedNavigationRailTest
         menu.Areas.Should().HaveCount(rail.Items.Count + 1,
             "the heading link plus one area per supplied entry — nothing dropped, nothing doubled");
     }
+
+    [Fact]
+    public void AnEntryWithUnloadedChildrenRendersAsAGroupThatLoadsThemOnDemand()
+    {
+        var supplied = new NodeNavigation("Docs",
+        [
+            new NodeNavigationEntry("Chapter", "Docs/Chapter") { HasUnloadedChildren = true },
+            new NodeNavigationEntry("Page", "Docs/Page"),
+        ]) { TitlePath = "Docs" };
+
+        var rail = SuppliedNavigationRail.Plan(supplied, "Docs/Page");
+
+        rail.Items[0].Should().BeOfType<SuppliedNavigationRail.RailGroup>("a folder offers its expander even unloaded");
+        rail.Items[1].Should().BeOfType<SuppliedNavigationRail.RailLink>();
+        var group = (SuppliedNavigationRail.RailGroup)rail.Items[0];
+        group.Folder.Should().NotBeNull();
+
+        var rendered = SuppliedNavigationRail.Render(rail);
+        rendered.Areas.Should().HaveCount(3, "the heading link plus one area per entry");
+        var items = SuppliedNavigationRail.RenderItems(rail.Items);
+        items.Areas.Should().HaveCount(2, "a folder opened on demand draws each of its lines once");
+    }
 }

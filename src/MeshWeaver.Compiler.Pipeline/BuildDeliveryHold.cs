@@ -164,6 +164,44 @@ public static class BuildDeliveryHold
         };
     }
 
+    /// <summary>
+    /// The hold the compile watcher settles a type of UNKNOWN module membership with
+    /// (MeshWeaver#6930): a never-adopted type, in a partition that tracks no source, met while the
+    /// prebuilt-bundle discovery was incomplete. When the record still names a usable build that
+    /// build keeps serving (<c>Ok</c>, the reason kept in
+    /// <see cref="NodeTypeDefinition.DeliveryHoldReason"/>); with nothing to serve this is
+    /// <c>null</c> and the caller parks with the named refusal.
+    ///
+    /// <para>🚨 Unlike <see cref="Settle(NodeTypeDefinition, bool, string, int)"/> it does NOT stamp
+    /// <see cref="BuildProvenance.StaleAdopted"/> and keeps <see cref="NodeTypeDefinition.CompiledSources"/>
+    /// (#7015 review). The type is not KNOWN to be a module's content — that is the whole point of
+    /// the hold — and a delivery provenance is itself the evidence the untracked-module gate reads
+    /// as "module content" (<c>NodeTypeCompilationHelpers.IsModuleContent</c>). Stamping it would
+    /// turn one incomplete discovery pass into a permanent verdict: once discovery recovered and
+    /// found no bundle naming the type, every later release — forced ones included — would still be
+    /// held instead of compiling the authored source. Pure.</para>
+    /// </summary>
+    /// <param name="pending">The Pending record the gate observed.</param>
+    /// <param name="hasUsableBuild">Whether the record names a build usable on this framework.</param>
+    /// <param name="reason">The unknown-membership refusal (what is unknown and why).</param>
+    public static NodeTypeDefinition? SettleUnknownMembership(
+        NodeTypeDefinition pending, bool hasUsableBuild, string reason)
+    {
+        ArgumentNullException.ThrowIfNull(pending);
+        if (!hasUsableBuild)
+            return null;
+        return pending with
+        {
+            DispatchedBuildInputs = null,
+            CompilationStatus = CompilationStatus.Ok,
+            CompilationError = null,
+            CompilationDiagnostics = null,
+            CompilationImportRefusals = null,
+            RequestedReleaseForce = false,
+            DeliveryHoldReason = reason,
+        };
+    }
+
     /// <summary>Whether <paramref name="def"/> is in a delivery hold of either kind — the page and
     /// the notifier ask this, so the two cannot disagree about what "held" means.</summary>
     public static bool IsHeld(NodeTypeDefinition? def)

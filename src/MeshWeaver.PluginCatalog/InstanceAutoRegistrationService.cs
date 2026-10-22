@@ -832,7 +832,9 @@ public sealed class InstanceAutoRegistrationService(
     ///     (the Agents and Skills libraries, Essentials, …). Reconciled on EVERY boot, because it
     ///     is what the platform requires to function and what must survive a self-update; it is
     ///     also the only thing that can heal an instance whose baseline partition was lost (#902).
-    ///     Suppressible with <see cref="PluginCatalogOptions.InstallPreInstalledPackages"/>.</item>
+    ///     Suppressible with <see cref="PluginCatalogOptions.InstallPreInstalledPackages"/>.
+    ///     <b>The default-apps lane</b> (<c>defaultApp: true</c> — Threads, Examples) rides the same
+    ///     reconcile but is NOT dropped by an explicit declared set (<see cref="DefaultAppsApply"/>).</item>
     ///   <item><b>The ENVIRONMENT's feature flags</b> (<c>Features:Flags:{name}:Packages</c>) —
     ///     what THIS deployment always has. Reconciled on EVERY boot, because that is the whole
     ///     difference between a policy and a seed: an environment declaring "I have the Store"
@@ -977,12 +979,15 @@ public sealed class InstanceAutoRegistrationService(
                 + "package set, and the preInstalled baseline is kept.",
                 malformed.Count, string.Join(", ", malformed));
         var baseline = BaselineApplies(options.EffectiveInstallPreInstalledPackages, options.InstallByDefault);
+        var defaultApps = DefaultAppsApply(options.EffectiveInstallPreInstalledPackages);
         if (options.EffectiveInstallPreInstalledPackages is null && !baseline)
             logger.LogInformation(
                 "[DefaultInstall] PluginCatalog:InstallByDefault declares an EXPLICIT package set [{Wanted}] — "
                 + "exactly those packages and what they declare in `requires` are selected; the "
-                + "registry's preInstalled baseline is not. Set PluginCatalog:InstallPreInstalledPackages=true "
-                + "to keep the baseline beside the set.",
+                + "registry's preInstalled baseline is not (the packages declaring `defaultApp` still are: "
+                + "Threads, Examples — the narrow default-apps lane). Set "
+                + "PluginCatalog:InstallPreInstalledPackages=true to keep the whole baseline beside the "
+                + "set, or =false to suppress the default apps as well.",
                 string.Join(", ", wanted));
         // The environment's own composition, read ONCE per boot pass off the live flag surface. The
         // reader is reactive (configuration reloads push a new value), but a boot pass is a single
@@ -1006,7 +1011,7 @@ public sealed class InstanceAutoRegistrationService(
                 })
             : Observable.Return(FeatureComposition.Empty);
 
-        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, composed, authorizing));
+        return composition.SelectMany(composed => InstallSelection(options, wanted, baseline, defaultApps, composed, authorizing));
     }
 
     /// <summary>
@@ -1035,6 +1040,29 @@ public sealed class InstanceAutoRegistrationService(
     internal static bool BaselineApplies(bool? configured, IReadOnlyList<string> patterns) =>
         configured ?? !DeclaresExplicitSet(patterns);
 
+    /// <summary>
+    /// Whether the packages declaring <c>defaultApp</c> (<see cref="PackageManifest.DefaultApp"/>) are
+    /// selected — the narrow DEFAULT-APPS lane. Pure.
+    ///
+    /// <para>🚨 <b>The one named exception to <c>declared-package-set-is-exact</c>.</b> A package that
+    /// says <c>defaultApp: true</c> on its root (Threads, Examples, …) is an app EVERY instance carries:
+    /// the launcher's own entries (Inbox, Settings) are platform built-ins, and these are the two
+    /// installable apps a person expects to find beside them. An instance that names an explicit
+    /// package set must not lose them — that is the very case this lane exists for: the baseline
+    /// lane (<see cref="BaselineApplies"/>) rightly drops the 47 other <c>preInstalled</c> packages
+    /// there, and with them the apps. The lane is deliberately SMALL (a flag only an app author sets,
+    /// free by contract) so the exception cannot grow into the baseline it was carved out of.</para>
+    ///
+    /// <para>Suppressed by exactly one thing: an explicit
+    /// <c>PluginCatalog:InstallPreInstalledPackages=false</c> — the existing "this instance manages
+    /// its own content" switch (an air-gapped or hand-curated instance). No second switch: an
+    /// operator who turned the platform's content off would otherwise have to know to turn it off
+    /// twice. Unset, or <c>true</c>, selects them.</para>
+    /// </summary>
+    /// <param name="configured">The configured <see cref="PluginCatalogOptions.EffectiveInstallPreInstalledPackages"/>; null when not set.</param>
+    /// <returns>Whether the <c>defaultApp</c> packages are selected this pass.</returns>
+    internal static bool DefaultAppsApply(bool? configured) => configured != false;
+
     /// <summary>Whether the operator's patterns name an explicit package set: at least one entry,
     /// and EVERY configured entry is a well-formed <c>Source/Package</c> (never a whole source, never
     /// an entry that does not parse — a malformed entry keeps the baseline rather than letting the
@@ -1055,12 +1083,13 @@ public sealed class InstanceAutoRegistrationService(
         PluginCatalogOptions options,
         IReadOnlyList<PluginGrantEntry> wanted,
         bool baseline,
+        bool defaultApps,
         FeatureComposition composition,
         IReadOnlyList<PluginGrantEntry>? authorizing = null)
     {
         var included = Parse(composition.Included);
         var excluded = Parse(composition.Excluded);
-        if (!baseline && wanted.Count == 0 && included.Count == 0)
+        if (!baseline && !defaultApps && wanted.Count == 0 && included.Count == 0)
             return Observable.Return(DefaultInstallSummary.Empty);
 
         return Sources(options).SelectMany(sources => sources.Count == 0
@@ -1107,7 +1136,7 @@ public sealed class InstanceAutoRegistrationService(
                         "Default-install ledger holds {Count} package(s) already seeded; they are "
                         + "not re-installed even if absent (an operator removed them).", seeded.Count);
 
-                return Candidates(sources, baseline, wanted, included, excluded, authorizing)
+                return Candidates(sources, baseline, defaultApps, wanted, included, excluded, authorizing)
                     // Drop anything the seed has already delivered once. Done AFTER listing because
                     // the decision is per PACKAGE, and only the listing knows which packages a
                     // pattern covers.
@@ -1579,6 +1608,7 @@ public sealed class InstanceAutoRegistrationService(
     private IObservable<CandidateSelection> Candidates(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
+        bool defaultApps,
         IReadOnlyList<PluginGrantEntry> wanted,
         IReadOnlyList<FlagPattern> included,
         IReadOnlyList<FlagPattern> excluded,
@@ -1628,6 +1658,10 @@ public sealed class InstanceAutoRegistrationService(
                     .Select(g => g.First())
                     .OrderBy(c => c.Package.Id, StringComparer.Ordinal)
                     .ToList();
+                // The platform's own lanes: the preInstalled baseline, and the narrow default-apps lane
+                // (defaultApp, which survives an explicit declared set — see DefaultAppsApply).
+                bool IsPlatformDefault(InstallCandidate c) =>
+                    (baseline && c.Package.PreInstalled) || (defaultApps && c.Package.DefaultApp);
                 bool IsIncluded(InstallCandidate c) =>
                     included.Any(i => i.Entry.Matches(c.Package.Source ?? "", c.Package.Id));
                 bool IsWanted(InstallCandidate c) =>
@@ -1644,7 +1678,7 @@ public sealed class InstanceAutoRegistrationService(
                     named.Any(w => w.PackageId != PluginGrantEntry.AllPackages
                                     && w.Matches(c.Package.Source ?? "", c.Package.Id));
                 var selected = catalog
-                    .Where(c => (baseline && c.Package.PreInstalled) || IsIncluded(c) || IsWanted(c))
+                    .Where(c => IsPlatformDefault(c) || IsIncluded(c) || IsWanted(c))
                     .ToList();
                 // Judge the FLAG lane on its own too, for the same reason the operator's patterns
                 // are judged on their own below: with a baseline selected, "matched something" is
@@ -1759,7 +1793,7 @@ public sealed class InstanceAutoRegistrationService(
                     // package re-asserts on every boot, a seeded one never does.
                     .Select(c => c with
                     {
-                        Reconciled = (baseline && c.Package.PreInstalled)
+                        Reconciled = IsPlatformDefault(c)
                                      || IsIncluded(c)
                                      || (c.Source.LocalCheckout && IsWanted(c)),
                         // Selected ONLY because a whole-source pattern (`Source/*`) covers it — no
@@ -1770,7 +1804,7 @@ public sealed class InstanceAutoRegistrationService(
                         WildcardOnly = IsWanted(c)
                                        && !IsSelectedExactly(c)
                                        && !IsIncluded(c)
-                                       && !(baseline && c.Package.PreInstalled),
+                                       && !IsPlatformDefault(c),
                         // Why the deployment configuration authorizes it — named exactly, or
                         // required by a package that is. Null when it does not (a wildcard, the
                         // baseline, a flag): such a commercial package is still skipped.
@@ -3078,13 +3112,15 @@ public sealed class InstanceAutoRegistrationService(
     /// <param name="baseline">Whether packages declaring <c>preInstalled</c> are selected.</param>
     /// <param name="wanted">The operator's source-scoped <c>Source/Package</c> patterns.</param>
     /// <param name="composition">The environment's feature-flag composition (includes + excludes).</param>
+    /// <param name="defaultApps">Whether packages declaring <c>defaultApp</c> are selected.</param>
     internal IObservable<DefaultInstallSummary> InstallFrom(
         IReadOnlyList<ConfiguredPackageSource> sources,
         bool baseline,
         IReadOnlyList<PluginGrantEntry> wanted,
-        FeatureComposition? composition = null) =>
+        FeatureComposition? composition = null,
+        bool defaultApps = false) =>
         Candidates(
-                sources, baseline, wanted,
+                sources, baseline, defaultApps, wanted,
                 Parse((composition ?? FeatureComposition.Empty).Included),
                 Parse((composition ?? FeatureComposition.Empty).Excluded))
             .SelectMany(selection => InstallAll(selection.Candidates)

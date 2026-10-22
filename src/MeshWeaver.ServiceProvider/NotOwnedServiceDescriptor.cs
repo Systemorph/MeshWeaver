@@ -88,8 +88,22 @@ public static class NotOwnedServiceDescriptorExtensions
     /// <param name="services">The registrations, in order.</param>
     public static void PopulateMeshWeaver(this ContainerBuilder builder, IEnumerable<ServiceDescriptor> services)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        var materialized = services as IReadOnlyCollection<ServiceDescriptor> ?? services.ToArray();
+        PopulateMeshWeaverWithOwners(builder, materialized,
+            materialized.Select(d => d.IsKeyedService ? null : d.ImplementationInstance).OfType<ModuleInstanceOwners>().LastOrDefault());
+    }
+
+    /// <summary>As <see cref="PopulateMeshWeaver(ContainerBuilder, IEnumerable{ServiceDescriptor})"/>, with the
+    /// mesh's <see cref="ModuleInstanceOwners"/> — when there is one, a scope about to dispose a module-owned
+    /// instance it does not own says so (MeshWeaver#6588, <see cref="ModuleScopeOwnership"/>).</summary>
+    internal static void PopulateMeshWeaverWithOwners(this ContainerBuilder builder, IEnumerable<ServiceDescriptor> services,
+        ModuleInstanceOwners? owners)
+    {
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(services);
+        if (owners is not null)
+            ModuleScopeOwnership.WatchOwnershipTransfers(builder, owners);
         builder.Populate(InOrder(builder, services));
     }
 

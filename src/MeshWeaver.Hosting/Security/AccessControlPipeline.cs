@@ -4,6 +4,7 @@ using System.Reactive.Disposables;
 using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -260,6 +261,9 @@ public static class AccessControlPipeline
     public static MessageHubConfiguration AddAccessControlPipeline(this MessageHubConfiguration config)
         => config
         .WithHandler<GetPermissionRequest>(HandleGetPermission)
+        // A subscription this gate admits through a declared point read on its first verdict ends
+        // when that delegated read ends — revoked, expired, narrowed (#4306, follow-up 2).
+        .WithClientSubscriptionReadAdmission(DeclaredReadSubscriptionFollow.Follow)
         .AddDeliveryPipeline(pipeline =>
         {
             var hub = pipeline.Hub;

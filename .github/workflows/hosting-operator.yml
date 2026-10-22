@@ -72,8 +72,8 @@ jobs:
         run: |
           set -euo pipefail
           tracked=$(git ls-files deploy/aks/operator/bin/ | wc -l | tr -d ' ')
-          if [ "$tracked" -lt 45 ]; then
-            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 45 (39 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
+          if [ "$tracked" -lt 46 ]; then
+            echo "::error::only ${tracked} file(s) tracked under deploy/aks/operator/bin/ — expected 46 (40 commands + run.sh + _common.sh + _audit.jq + _values_half.py + _dump_analyze_pod.sh + _storage_prune_pod.sh). The floor is the REAL count — raise it with every command added, or a lost file passes."
             echo "::error::Almost certainly .gitignore matching this bin/ again. `git add` on an ignored path exits 0 and does NOTHING, so the loss is silent until a fresh checkout builds an image with no scripts in it."
             git check-ignore -v deploy/aks/operator/bin/run.sh || true
             exit 1
@@ -108,6 +108,7 @@ jobs:
           # MeshWeaver.Plugins/Hosting/InstanceAction/Source/InstanceActionPlan.cs.
           cat > "$plan_src" <<'EOF'
           hosting-aks-upgrade
+          hosting-artifact-store-bind
           hosting-audit
           hosting-backup
           hosting-deploy
@@ -238,13 +239,19 @@ jobs:
           # ApplyClusterManifest action; the line moves up into the plan list once that has merged.
           hosting-manifest-apply     ApplyClusterManifest — ships and is behaviour-tested; the plan half is the Plugins ApplyClusterManifest action
           #
-          # hosting-artifact-store-bind binds the control-owned SHARED ARTIFACT STORE read-only into a
-          # consumer namespace (Doc/Architecture/SharedArtifactStore): a static Retain PV on the owner's
-          # share, read off the owner's bound PV, plus the consumer's claim. Behaviour-tested against
-          # test/stubs/artifact-store-bind. Its plan half is the Plugins Provision/Reconcile/Roll step for
-          # a record whose artifactStore.role is Consumer, which merges after this image is on
-          # hosting-operator:main, for the same reason as hosting-migrate above.
-          hosting-artifact-store-bind  SharedArtifactStore — ships and is behaviour-tested; the plan half is the Plugins consumer-binding step
+          # hosting-kv-values-set is the governed key-level writer of the values half (helm-values-<release>,
+          # policy one-values-half-per-release): behaviour-tested against test/stubs/kv-values-set. The plan
+          # step that emits it (a SetSecrets carrying a values-half key) is the Plugins half, which merges after
+          # this image is on hosting-operator:main; the line moves up into the plan list once it has.
+          hosting-kv-values-set      values-half writer — ships and is behaviour-tested; the plan half is the Plugins SetSecrets values-half step
+          #
+          # hosting-chart-drift is the Chart Drift comparison moved off core's chart-drift.yml into the
+          # governed Audit (Systemorph/Memex#647): the estate's aks-ops lane runs it in the VNet as
+          # hosting-operator, beside hosting-audit, from the MeshWeaver checkout at the operator pin (it
+          # finds core's drift scripts at bin/../../scripts there, and at /opt/hosting/drift in this
+          # image). Behaviour-tested against stub drift scripts. The plan half is the Plugins Audit
+          # action's second step; the line moves up into the plan list once that has merged.
+          hosting-chart-drift        Audit (chart drift) — ships and is behaviour-tested; the plan half is the Plugins Audit action
           EOF
           unclaimed=()
           for path in deploy/aks/operator/bin/hosting-*; do
@@ -293,7 +300,7 @@ jobs:
         # MeshWeaver#4722 sweep added them with the helm one.
         run: |
           set -euo pipefail
-          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/registry-coupon/curl deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/kv-status/az deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/inventory/psql deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl deploy/aks/operator/test/stubs/db-reset/psql deploy/aks/operator/test/stubs/db-reset/az; do
+          for f in deploy/aks/operator/test/stubs/pull-secret/az deploy/aks/operator/test/stubs/pull-secret/kubectl deploy/aks/operator/test/stubs/pv-resize/kubectl deploy/aks/operator/test/stubs/inline-env/kubectl deploy/aks/operator/test/stubs/kv-rotate/az deploy/aks/operator/test/stubs/kv-ensure/az deploy/aks/operator/test/stubs/kv-copy/az deploy/aks/operator/test/stubs/registry-register/az deploy/aks/operator/test/stubs/registry-coupon/curl deploy/aks/operator/test/stubs/signin-app/az deploy/aks/operator/test/stubs/image-mirror/az deploy/aks/operator/test/stubs/image-mirror/crane deploy/aks/operator/test/stubs/deploy/az deploy/aks/operator/test/stubs/kv-set/az deploy/aks/operator/test/stubs/kv-set/kubectl deploy/aks/operator/test/stubs/kv-values-set/az deploy/aks/operator/test/stubs/kv-status/az deploy/aks/operator/test/stubs/db-release/kubectl deploy/aks/operator/test/stubs/db-release/helm deploy/aks/operator/test/stubs/pg/az deploy/aks/operator/test/stubs/pg/pg_dump deploy/aks/operator/test/stubs/pg/psql deploy/aks/operator/test/stubs/pg/pg_restore deploy/aks/operator/test/stubs/inventory/psql deploy/aks/operator/test/stubs/aks-upgrade/az deploy/aks/operator/test/stubs/aks-upgrade/kubectl deploy/aks/operator/test/stubs/aks-upgrade/curl deploy/aks/operator/test/stubs/db-reset/psql deploy/aks/operator/test/stubs/db-reset/az; do
             git ls-files --error-unmatch "$f" >/dev/null 2>&1 || { echo "::error::${f} is not tracked"; git check-ignore -v "$f" || true; exit 1; }
             [ "$(git ls-files -s "$f" | awk '{print $1}')" = "100755" ] || { echo "::error::${f} is not committed executable (mode 100755)"; exit 1; }
           done
@@ -345,6 +352,8 @@ jobs:
             command -v hosting-deploy >/dev/null     || { echo "hosting-* not on PATH"; exit 1; }
             command -v helm kubectl az pg_dump jq crane >/dev/null || { echo "a required tool is missing"; exit 1; }
             test -f /opt/hosting/bin/_audit.jq       || { echo "_audit.jq missing — hosting-audit has no detection"; exit 1; }
+            test -f /opt/hosting/drift/check-chart-drift.sh || { echo "drift scripts missing — hosting-chart-drift has nothing to compare with"; exit 1; }
+            command -v python3 >/dev/null && python3 -c "import yaml" || { echo "python3/PyYAML missing — the drift render cannot run"; exit 1; }
             echo "image carries: $(ls /opt/hosting/bin/hosting-* | wc -l) commands + chart $(grep ^version /opt/hosting/chart/Chart.yaml)"
           '
 

@@ -1,0 +1,428 @@
+name: Read store artifacts into the job log
+
+# ♻️ REUSABLE (workflow_call) — print what a run left in the shared CI artifact store.
+#
+# WHY. A lane on our runners uploads its failure evidence to the shared store
+# (`file:/ci-artifacts`, a share mounted ONLY on the in-cluster runner pods), not to GitHub. Nothing
+# outside that runner pool can read it: not a workstation, not a GitHub-hosted runner, not the
+# GitHub UI. So when a job is cut and its log does not carry the per-test error texts, the evidence
+# exists and nobody can open it. This lane is the reader: it downloads the named artifacts of one
+# run, verified against the store identity, and prints the Playwright failures and the mesh
+# diagnostics summaries into its own job log.
+#
+# A run CUT at its timeout has no Playwright HTML report (the reporter writes it when the run ends).
+# A suite that also appends one `{"kind":"live-results"}` JSON line per attempt as it finishes
+# (MeshWeaver.Education `e2e/live-results-reporter.ts`) still has every finished attempt's errors and
+# the attempt the cut killed; this lane prints those, and prints each log's records inside every
+# failing or in-flight attempt's time window, across the whole run rather than the first N lines.
+#
+# WHY A CALLER IS NEEDED. This repository is PUBLIC, and the org runner group does not admit public
+# repositories, so a `workflow_dispatch` here could never reach a runner that has the share mounted.
+# A PRIVATE repository calls this lane from its own dispatchable workflow; the job then resolves
+# `vars.MW_RUNNER_DOCKER` (the in-cluster pool) and `vars.MW_ARTIFACT_STORE` from the CALLER:
+#
+#     on:
+#       workflow_dispatch:
+#         inputs:
+#           run-id: { required: true, type: string }
+#           pattern: { required: false, type: string, default: '*' }
+#     jobs:
+#       read:
+#         uses: Systemorph/MeshWeaver/.github/workflows/read-store-artifact.yml@main
+#         with:
+#           repository: ${{ github.repository }}
+#           run-id: ${{ inputs.run-id }}
+#           pattern: ${{ inputs.pattern }}
+#
+# No secrets, no token: the own store is a mounted filesystem. The download verifies the archive
+# size, inventory and the store identity before anything is extracted. An empty selection is RED
+# (expired, swept, wrong run, or a different share behind the same path), never a quiet success.
+# Everything printed from an artifact is printed with workflow commands SUSPENDED
+# (`::stop-commands::` under a random token): a test title or log line cannot raise an annotation,
+# mask a value or end the suspension early. Reports are found by their embedded Playwright data,
+# not by a `playwright-report` directory name, which an upload may strip.
+#
+# Doc: Doc/Architecture/CiArtifactStorage, "Reading a run's artifacts when you are not on the runner pool".
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: The repository whose run uploaded the artifacts (owner/name).
+        required: true
+        type: string
+      run-id:
+        description: The run that uploaded the artifacts.
+        required: true
+        type: string
+      pattern:
+        description: Artifact name glob, e.g. e2e-journeys-report-shard*.
+        required: false
+        type: string
+        default: '*'
+      store:
+        description: The store to read. Empty means the caller's vars.MW_ARTIFACT_STORE.
+        required: false
+        type: string
+        default: ''
+      expected-store-id:
+        description: >-
+          The identity the uploading job printed beside its `store: wrote` line. Empty means "the
+          share this runner mounts", which is resolved and printed so the reader can compare it.
+        required: false
+        type: string
+        default: ''
+      log-pattern:
+        description: >-
+          Python regular expression selecting the records (a header line plus its indented
+          continuation lines) printed from each *.log file as trouble.
+        required: false
+        type: string
+        default: '(?i)(\bfail|\berror|exception|\bcrit|timed? ?out|\bwarn)'
+      focus-pattern:
+        description: >-
+          Python regular expression selecting the records that carry the run's work, printed
+          across the whole run window beside the trouble records. Empty selects none.
+        required: false
+        type: string
+        default: '(?i)(\bActivit|\bKernel|\bIoPool)'
+      max-lines:
+        description: >-
+          Upper bound on the lines printed per file. Over it, a log's budget is spread evenly
+          across every minute the selection spans.
+        required: false
+        type: string
+        default: '2000'
+
+jobs:
+  read:
+    name: Read store artifacts
+    runs-on: ${{ vars.MW_RUNNER_DOCKER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    steps:
+      - name: Resolve the store this runner mounts
+        id: store
+        uses: Systemorph/MeshWeaver/.github/actions/resolve-artifact-store@main
+        with:
+          store: ${{ inputs.store || vars.MW_ARTIFACT_STORE }}
+          expected-store-id: ${{ inputs.expected-store-id }}
+
+      - name: Download the selected artifacts
+        id: download
+        uses: Systemorph/MeshWeaver/.github/actions/download-artifact@main
+        with:
+          store: ${{ steps.store.outputs.store || 'unresolved' }}
+          expected-store-id: ${{ steps.store.outputs.store-id }}
+          repository: ${{ inputs.repository }}
+          run-id: ${{ inputs.run-id }}
+          pattern: ${{ inputs.pattern }}
+          path: ${{ runner.temp }}/store-artifacts
+
+      - name: Print the failures and diagnostics
+        env:
+          READ_ROOT: ${{ runner.temp }}/store-artifacts
+          READ_STORE_ID: ${{ steps.store.outputs.store-id }}
+          READ_REPOSITORY: ${{ inputs.repository }}
+          READ_RUN_ID: ${{ inputs.run-id }}
+          READ_PATTERN: ${{ inputs.pattern }}
+          READ_LOG_PATTERN: ${{ inputs.log-pattern }}
+          READ_FOCUS_PATTERN: ${{ inputs.focus-pattern }}
+          READ_MAX_LINES: ${{ inputs.max-lines }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, datetime, io, json, os, re, secrets, sys, zipfile
+          from pathlib import Path
+
+          root = Path(os.environ["READ_ROOT"])
+          limit = int(os.environ["READ_MAX_LINES"])
+          log_re = re.compile(os.environ["READ_LOG_PATTERN"])
+          focus_re = re.compile(os.environ["READ_FOCUS_PATTERN"]) if os.environ.get("READ_FOCUS_PATTERN") else None
+          ansi = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+          # Two embeddings, both live: older reporters assign `playwrightReportBase64 = "data:…"` in a
+          # script; Playwright 1.5x+ (this fleet's suites run 1.64) put it in
+          # `<template id="playwrightReportBase64">data:…</template>`. Matching only the first made every
+          # current report read as "no Playwright HTML report was found".
+          signature = re.compile(r'playwrightReportBase64(?:\s*=\s*"|"\s*>)\s*data:application/zip;base64,([A-Za-z0-9+/=]+)')
+          files = sorted(p for p in root.rglob("*") if p.is_file()) if root.is_dir() else []
+          if not files:
+              print("::error::no artifact matched this repository, run and pattern on this store — "
+                    "expired, swept, a different run, or a different share behind the same path")
+              sys.exit(1)
+
+          # 🚨 Everything below is derived from the artifact or from caller inputs: test titles, file
+          # names, log lines. A line of it can carry `::error::`, `::add-mask::` or `::stop-commands::`
+          # anywhere on the line, and indenting it does not stop the runner. So workflow-command
+          # processing is SUSPENDED for the whole print, under a token nobody can predict, and resumed
+          # only after it. No `::group::` headers inside: a title is artifact-derived too.
+          token = secrets.token_hex(32)
+          print(f"::stop-commands::{token}")
+          print(f"store-id: {os.environ['READ_STORE_ID']}")
+          print(f"source:   {os.environ['READ_REPOSITORY']} run {os.environ['READ_RUN_ID']}, pattern {os.environ['READ_PATTERN']!r}")
+          print(f"{len(files)} file(s) downloaded:")
+          for f in files:
+              print(f"  {f.relative_to(root)}  {f.stat().st_size} B")
+
+          def clean(line):
+              return ansi.sub("", line.rstrip())
+
+          def capped(lines, title):
+              print("\n===== " + clean(" ".join(title.split())))
+              for i, line in enumerate(lines):
+                  if i >= limit:
+                      print(f"  … cut at {limit} lines")
+                      break
+                  print("  " + clean(line))
+
+          def artifact_of(f):
+              # Selected artifacts are extracted into one sub-directory per artifact name, so the first
+              # path component is the artifact: a shard's results and that shard's portal log share it.
+              rel = f.relative_to(root)
+              return rel.parts[0] if len(rel.parts) > 1 else ""
+
+          def parse_time(text):
+              # Docker's `--timestamps` carries nanoseconds and Playwright milliseconds; fromisoformat
+              # takes at most microseconds on every Python this runner may carry.
+              m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d+))?", text or "")
+              if not m:
+                  return None
+              frac = (m.group(2) or "0")[:6].ljust(6, "0")
+              return datetime.datetime.fromisoformat(f"{m.group(1)}.{frac}")
+
+          def error_lines(errors):
+              lines = []
+              for error in errors:
+                  # Older reporters store a plain string, newer ones {message, stack}.
+                  text = error if isinstance(error, str) else (error.get("message") or error.get("stack") or json.dumps(error))
+                  lines.extend(text.splitlines())
+              return lines
+
+          report_roots = []
+          report_artifacts = set()
+          for html in (f for f in files if f.name == "index.html"):
+              # A Playwright HTML report is recognised by its embedded data, never by a directory
+              # name: an upload of `path: e2e/playwright-report` alone strips that directory, so the
+              # report lands at `<artifact>/index.html`.
+              m = signature.search(html.read_text(errors="replace"))
+              if not m:
+                  continue
+              archive = zipfile.ZipFile(io.BytesIO(base64.b64decode(m.group(1))))
+              entries = {n: json.loads(archive.read(n)) for n in archive.namelist() if n.endswith(".json")}
+              report_roots.append(html.parent)
+              report_artifacts.add(artifact_of(html))
+              summary = entries.get("report.json", {})
+              print(f"\n##### Playwright report {html.relative_to(root)}: stats {json.dumps(summary.get('stats', {}))}")
+              for name, doc in sorted(entries.items()):
+                  if name == "report.json":
+                      continue
+                  for test in doc.get("tests", []):
+                      if test.get("outcome") in ("expected", "skipped"):
+                          continue
+                      title = " › ".join(test.get("path", []) + [test.get("title", "")])
+                      lines = [f"{doc.get('fileName', name)}:{test.get('location', {}).get('line', '?')}  outcome={test.get('outcome')}"]
+                      for result in test.get("results", []):
+                          lines.append(f"-- attempt {result.get('retry', 0) + 1}: {result.get('status')} after {result.get('duration', 0) / 1000:.1f} s")
+                          lines.extend(error_lines(result.get("errors", [])))
+                      capped(lines, f"{test.get('outcome', '?').upper()}  {title}")
+
+          # ---- live per-attempt results: what a run CUT before Playwright's onEnd still has ----------------
+          # The HTML report is written when the run ends, so a job cut at its timeout has none. A suite that
+          # also runs a reporter appending one `{"kind":"live-results"}` JSON line per attempt as it finishes
+          # keeps every finished attempt's errors, and names the attempt the cut killed: it began, never
+          # ended. Each failing or in-flight attempt also yields a TIME WINDOW, and the same artifact's
+          # portal log is printed for those windows below — the server's side of exactly that attempt.
+          windows = {}  # artifact -> [(start, end | None, label)]
+          live_found = False
+          for f in files:
+              if f.suffix != ".jsonl":
+                  continue
+              records = []
+              for raw in f.read_text(errors="replace").splitlines():
+                  try:
+                      rec = json.loads(raw)
+                  except ValueError:
+                      continue  # the line the kill cut in half
+                  if isinstance(rec, dict) and rec.get("kind") == "live-results":
+                      records.append(rec)
+              if not records:
+                  continue
+              live_found = True
+              art = artifact_of(f)
+              begin = next((r for r in records if r.get("event") == "begin"), {})
+              end = next((r for r in records if r.get("event") == "end"), None)
+              ended = [r for r in records if r.get("event") == "testEnd"]
+              done = {(r.get("id"), r.get("retry")) for r in ended}
+              in_flight = [r for r in records if r.get("event") == "testBegin" and (r.get("id"), r.get("retry")) not in done]
+              bad = [r for r in ended if r.get("status") not in (r.get("expectedStatus"), "skipped")]
+              verdict = f"ended {end.get('status')} at {end.get('at')}" if end else \
+                  f"NO end record — the run was CUT; last record at {records[-1].get('at')}"
+              print(f"\n##### Live results {f.relative_to(root)}: shard {begin.get('shard') or '-'}, "
+                    f"{begin.get('total', '?')} test(s) planned, began {begin.get('at', '?')}, "
+                    f"{len(ended)} attempt(s) finished, {len(bad)} went wrong, {len(in_flight)} in flight; {verdict}")
+              def label(r):
+                  return " › ".join(r.get("title") or []) + f"  (attempt {int(r.get('retry') or 0) + 1})"
+              for r in bad:
+                  start = parse_time(r.get("startTime"))
+                  if start:
+                      windows.setdefault(art, []).append(
+                          (start, start + datetime.timedelta(milliseconds=float(r.get("duration") or 0)), label(r)))
+                  if art in report_artifacts:
+                      continue  # the HTML report above already printed this attempt's errors
+                  lines = [f"{r.get('file')}:{r.get('line')}  status={r.get('status')} expected={r.get('expectedStatus')} "
+                           f"started {r.get('startTime')} after {float(r.get('duration') or 0) / 1000:.1f} s"]
+                  lines.extend(error_lines(r.get("errors") or []))
+                  if r.get("errorContext"):
+                      lines.append("-- error context")
+                      lines.extend(r["errorContext"].splitlines())
+                  for stream in ("stdout", "stderr"):
+                      if r.get(stream):
+                          lines.append(f"-- {stream}")
+                          lines.extend(r[stream].splitlines())
+                  capped(lines, f"{str(r.get('status', '?')).upper()}  {label(r)}")
+              for r in in_flight:
+                  start = parse_time(r.get("startTime"))
+                  if start:
+                      windows.setdefault(art, []).append((start, None, label(r) + " — IN FLIGHT AT THE CUT"))
+                  capped([f"{r.get('file')}:{r.get('line')}  started {r.get('startTime')} and never finished"],
+                         f"IN FLIGHT AT THE CUT  {label(r)}")
+
+          # ---- logs: whole records over the WHOLE run window -----------------------------------------------
+          # A .NET console log writes a record as a header (`info: Category[0]`) plus indented message lines,
+          # and `docker compose logs --timestamps` prefixes every one of them. Matching LINES therefore
+          # matched a category with no message, or a message with no category. A record is the header plus
+          # its continuation lines, and it is selected when it matches `log-pattern` (trouble), matches
+          # `focus-pattern` (the categories that carry the work, e.g. Activity / Kernel / IoPool), or falls
+          # inside a failing or in-flight attempt's window from the live results above.
+          #
+          # 🚨 The cap used to keep the FIRST lines that matched, so the print covered the boot and stopped:
+          # run 39600717306's cell clicks happened 12:55–13:21 and none of them was printed. Over the cap,
+          # the budget is now spread evenly across every minute the selection spans, so every minute of the
+          # run is represented and the omissions are counted per minute instead of silently dropped.
+          stamp = re.compile(r"^(?:\S+\s+\|\s)?(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z?)\s?(.*)$")
+          PAD = datetime.timedelta(seconds=5)
+
+          def records_of(lines):
+              recs = []
+              for line in lines:
+                  m = stamp.match(line)
+                  body = m.group(2) if m else line
+                  if recs and body[:1] in (" ", "\t"):
+                      recs[-1]["lines"].append(line)
+                      continue
+                  recs.append({"lines": [line], "ts": parse_time(m.group(1)) if m else None})
+              return recs
+
+          def print_log(f, art):
+              lines = f.read_text(errors="replace").splitlines()
+              recs = records_of(lines)
+              wins = windows.get(art, [])
+              last_ts = next((r["ts"] for r in reversed(recs) if r["ts"]), None)
+              def in_window(r):
+                  return r["ts"] is not None and any(
+                      s - PAD <= r["ts"] <= ((e + PAD) if e else (last_ts or r["ts"])) for s, e, _ in wins)
+              picked = []
+              for i, r in enumerate(recs):
+                  text = "\n".join(r["lines"])
+                  trouble = bool(log_re.search(text))
+                  win = in_window(r)
+                  focus = bool(focus_re and focus_re.search(text))
+                  if trouble or win or focus:
+                      # Priority inside a minute when the budget is short: trouble, then the failing
+                      # attempt's own window, then the focus categories.
+                      picked.append((i, r, 0 if trouble else 1 if win else 2))
+              n_lines = sum(len(r["lines"]) for _, r, _ in picked)
+              first_ts = next((r["ts"] for r in recs if r["ts"]), None)
+              header = (f"{f.relative_to(root)}: {len(picked)} of {len(recs)} records selected ({n_lines} lines), "
+                        f"log spans {first_ts or '?'} .. {last_ts or '?'}")
+              print("\n===== " + clean(header))
+              for s, e, what in wins:
+                  print("  window " + clean(f"{s} .. {e or 'end of log'}  {what}"))
+              trimmed = {}  # record index -> lines printed, for a record longer than its minute's share
+              if n_lines <= limit:
+                  chosen = {i for i, _, _ in picked}
+              else:
+                  buckets = {}
+                  for i, r, prio in picked:
+                      key = r["ts"].strftime("%Y-%m-%d %H:%M") if r["ts"] else f"#{i // 200:06d}"
+                      buckets.setdefault(key, []).append((prio, i, r))
+                  for b in buckets.values():
+                      b.sort(key=lambda x: (x[0], x[1]))
+                  chosen, budget = set(), limit
+                  # 1. RESERVE each minute its share before anything is redistributed. Charging one shared
+                  #    budget in arrival order let long early records spend what the end of the run needed
+                  #    (thread 4338716927: a 100-line record in minute 0 left minute 39 unprinted although
+                  #    all forty minutes fit). Inside its share a minute takes records in priority order,
+                  #    skipping any that do not fit; a minute whose every record is longer than its share
+                  #    prints its shortest record CUT to the share, and says so.
+                  share = max(1, limit // len(buckets))
+                  for k in sorted(buckets):
+                      room = min(share, budget)
+                      if room <= 0:
+                          break
+                      for _, i, r in buckets[k]:
+                          if len(r["lines"]) <= room:
+                              chosen.add(i)
+                              room -= len(r["lines"])
+                              budget -= len(r["lines"])
+                      if not any(i in chosen for _, i, _ in buckets[k]):
+                          _, i, r = min(buckets[k], key=lambda x: (len(x[2]["lines"]), x[0], x[1]))
+                          trimmed[i] = room
+                          chosen.add(i)
+                          budget -= room
+                  # 2. REDISTRIBUTE what the shares left over, round-robin across minutes, whole records.
+                  cursors = {k: 0 for k in buckets}
+                  progress = True
+                  while budget > 0 and progress:
+                      progress = False
+                      for k in sorted(buckets):
+                          while cursors[k] < len(buckets[k]) and buckets[k][cursors[k]][1] in chosen:
+                              cursors[k] += 1
+                          if cursors[k] < len(buckets[k]):
+                              _, i, r = buckets[k][cursors[k]]
+                              cursors[k] += 1
+                              if len(r["lines"]) <= budget:
+                                  chosen.add(i)
+                                  budget -= len(r["lines"])
+                              progress = True
+                  uncovered = sum(1 for b in buckets.values() if not any(i in chosen for _, i, _ in b))
+                  print(f"  (over the {limit}-line cap: {share} line(s) reserved for each of {len(buckets)} minute(s), "
+                        f"the rest redistributed; omissions are counted per minute"
+                        + (f"; {uncovered} minute(s) got no line — more minutes than the cap" if uncovered else "") + ")")
+              omitted = {}
+              def flush():
+                  for key, count in omitted.items():
+                      print(f"  … {count} selected record(s) omitted in {key}")
+                  omitted.clear()
+              for i, r, _ in picked:
+                  if i in chosen:
+                      flush()
+                      keep = trimmed.get(i, len(r["lines"]))
+                      for line in r["lines"][:keep]:
+                          print("  " + clean(line))
+                      if keep < len(r["lines"]):
+                          print(f"  … {len(r['lines']) - keep} more line(s) of this record cut to its minute's share")
+                  else:
+                      key = r["ts"].strftime("%H:%M") if r["ts"] else "untimed lines"
+                      omitted[key] = omitted.get(key, 0) + 1
+              flush()
+
+          def in_report(f):
+              return any(r in f.parents for r in report_roots)
+
+          for f in files:
+              rel = f.relative_to(root)
+              if f.suffix == ".md" and in_report(f):
+                  capped(f.read_text(errors="replace").splitlines(), f"error context {rel}")
+              elif f.suffix == ".log":
+                  print_log(f, artifact_of(f))
+              elif f.suffix in (".txt", ".csv"):
+                  capped(f.read_text(errors="replace").splitlines(), str(rel))
+
+          print(f"::{token}::")
+          if not report_roots:
+              if live_found:
+                  print("::notice::no Playwright HTML report (a cut run never writes one) — the live per-attempt "
+                        "results above are the record")
+              else:
+                  print("::warning::no Playwright HTML report and no live results were found among the downloaded files")
+          PY

@@ -36,9 +36,10 @@ name: Chart Gate
 # It cannot tell you whether the CLUSTER runs what the chart describes — the live memex-cloud
 # PodDisruptionBudget was a hand-applied `minAvailable: 2` the chart never produced, and its
 # ScaledObject carried `autoscaling.keda.sh/paused-replicas: "1"`, an annotation no chart has heard
-# of. That is deploy/aks/scripts/check-chart-drift.sh, which needs cluster credentials and the
-# private per-env values and so cannot be a pull-request gate; see chart-drift.yml for how it is
-# scheduled, and DeploymentAKS.md for running it by hand.
+# of. That is deploy/aks/scripts/check-chart-drift.sh, which needs cluster read and the private
+# per-env values and so cannot be a pull-request gate. It runs inside the governed Audit
+# InstanceAction (operator verb hosting-chart-drift, on the estate's aks-ops lane as
+# hosting-operator — Systemorph/Memex#647); see ChartDriftSemantics.md.
 
 on:
   pull_request:
@@ -125,6 +126,16 @@ jobs:
       - name: Assert crash-dump retention keeps the newest, deletes the rest, and holds without headroom
         if: ${{ !cancelled() }}
         run: deploy/aks/scripts/test-crash-dump-retention.sh
+
+      # The shared artifact store's OWNER jobs (Doc/Architecture/SharedArtifactStore, increments 4
+      # and 5) WRITE the store every portal of an environment reads. EXECUTED here against scratch
+      # directories with stub oras/git/dotnet: a publication is placed as its own generation with
+      # `_current` moved last, nothing is ever deleted, a torn or foreign-identity publication is
+      # refused, the read token never reaches a URL or a log — and the chart helper refuses every
+      # half-declared block. Also pins the build's compose-gate-host.sh to the platform's own copy.
+      - name: Assert the artifact-store sync and local build publish whole generations and delete nothing
+        if: ${{ !cancelled() }}
+        run: deploy/aks/scripts/test-artifact-store-jobs.sh
 
       - name: Assert observability installation refuses ephemeral or unverified storage
         if: ${{ !cancelled() }}

@@ -109,7 +109,8 @@ put an `IActionHandler` into the root service container. It can write a node.
 | `Order` | lower runs first; between two rules claiming the same key and version the lower wins, an equal order is `AmbiguousHandler` — never registration, load or query order |
 | `Handler` | the handler's own node, **in the rule's own partition**; its page is the review page |
 | `Capabilities` / `Mutates` | what the rule **declares** the handler offers (copied as written, never detected) and whether completing it changes anything |
-| `PublishPermission` | the `Permission` (`Update`, `Create`, …) a **publisher** must hold on `Handler` to distribute a link — see "Who may publish" |
+| `PublishPermission` | the `Permission` (`Update`, `Create`, …) a **publisher** must hold on `PublishScope` (else on `Handler`) to distribute a link — see "Who may publish" |
+| `PublishScope` | optional: the node the publish permission is checked on, instead of `Handler` — a canonical mesh path, which may lie outside the rule's partition (it is checked, never navigated); a non-canonical or blank one refuses the rule as `UnsafePublishScope` |
 | `Label` / `LabelKey` | the caption of the navigation, as authored |
 | `Enabled` | a disabled rule claims nothing; a deployment disables one without a build |
 
@@ -168,13 +169,20 @@ action authorizes nobody. A rule-bound handler authorizes against its rule's `Pu
 - no `PublishPermission`, or a word that is not exactly one `Permission` flag → `Unauthorized`;
 - a blank or reserved publisher (System, `Anonymous`, `Public`, a hub-shaped `node/…`/`mesh/…`
   principal) → `Unauthorized` — the platform's own identity would pass every permission check;
-- otherwise the mesh's permission seam (`hub.CheckPermissionOutcome(Handler, publisher,
-  permission)`) decides: granted → the structural `Ready`; denied → `Unauthorized`, naming the
+- otherwise the mesh's permission seam (`hub.CheckPermissionOutcome(PublishScope ?? Handler,
+  publisher, permission)`) decides: granted → the structural `Ready`; denied → `Unauthorized`, naming the
   permission and the node; a fold that reached no verdict → `Failed`, *could not be checked*,
   never a denial and never a grant.
 
 The live chain binds that seam; a pure `ActionHandlerRules.Bind(rules, declared)` with no seam
 authorizes nobody.
+
+🚨 **Why `PublishScope` exists.** A package's handler page lives in the package's partition, which
+its one-way sync owns; on such a partition nobody can be granted a write right
+(`AccessAssignmentGuard.IsForbiddenOnSystemOwned`), so a rule asking for `Update` on its handler
+authorizes no publisher at all. `PublishScope` points the check at a node in a WRITABLE space — a
+publishers node an administrator grants a group `Editor` on. The check moves there entirely: a right
+on the handler node alone no longer admits.
 
 **What a rule-bound handler does.** `Validate` is the structural check followed by the publisher
 authorization above. `Prepare` answers `Ready`

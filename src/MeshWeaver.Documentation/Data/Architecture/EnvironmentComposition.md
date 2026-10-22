@@ -102,6 +102,7 @@ install:
 | lane | declared by | when | why |
 |---|---|---|---|
 | `preInstalled` on the package manifest | the **package author** | **every boot** | the platform's own baseline (the Agents and Skills libraries, Essentials). Suppressed by `PluginCatalog:InstallPreInstalledPackages=false` — and, with that key unset, by an `InstallByDefault` that names an explicit set (`Source/Package` entries only): a deployment that names its packages gets those and their `requires`. It is what heals an instance whose baseline partition was lost. |
+| `defaultApp` on the package manifest | the **package author** | **every boot** | the narrow **default-apps lane** (Threads, Examples): an app every instance carries. 🚨 The one exception to the exact-set rule above — it is **kept beside an explicit `InstallByDefault` set** and suppressed only by an explicit `PluginCatalog:InstallPreInstalledPackages=false` (one switch for "this instance manages its own content", not two). Free by contract; pair it with `preInstalled` and `tier: free`. |
 | **`Features:Flags:{name}:Packages`** | the **environment** | **every boot** | "this environment always has X". |
 | `PluginCatalog:InstallByDefault` | the operator | every boot, **once per package** (ledger-gated) | seeds what it has never delivered, except a package newly listed under a whole-source pattern on an already-seeded instance, which is HELD for a governed `package.provision` (no ledger entry); a commercial package that passes the hold is recorded as `skipped`, never installed. |
 

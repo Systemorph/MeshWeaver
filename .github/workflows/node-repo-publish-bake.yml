@@ -93,7 +93,8 @@ name: Node repo publish-bake (reusable)
 #       upstream-sources: plugins                    # exit unless `plugins` is published for the
 #                                                    # framework identity this bake targets
 #       stage-repo: Systemorph/MeshWeaver.Plugins
-#       stage-modules: Store
+#       stage-modules: Store                         # what this repo USES; their `requires`
+#                                                    # closure is staged with them, never listed
 #     secrets:
 #       acr-username: ${{ secrets.ACR_USERNAME }}
 #       acr-password: ${{ secrets.ACR_PASSWORD }}
@@ -315,9 +316,12 @@ on:
       stage-modules:
         description: >-
           Module directories to sparse-checkout from stage-repo and copy into the bake mount
-          (newline-separated for several). Staged modules are OWNED by stage-repo: their bundles
-          are excluded from this repo's publication so no package is ever seeded from two
-          sources.
+          (newline-separated for several) — the packages this repo USES DIRECTLY. Their
+          transitive `requires` closure (root index.json → content.requires, read at each
+          package's sealed commit) is staged with them automatically, so a dependency is never
+          listed here; one that resolves nowhere fails RED naming it (stage-sealed-upstream.sh).
+          Staged modules — named and resolved alike — are OWNED by stage-repo: their bundles are
+          excluded from this repo's publication so no package is ever seeded from two sources.
         required: false
         type: string
         default: ''
@@ -1475,9 +1479,33 @@ jobs:
           for u in "${upstream_list[@]}"; do [ "$u" = "$src" ] && declared=1; done
           [ -n "$declared" ] || { echo "::error::stage-repo '$STAGE_REPO' stages SOURCE from upstream '$src', which is not in upstream-sources ('${UPSTREAMS}'). Its source can only be staged at the commits of a sealed publication this run was cleared against — declare it in upstream-sources, or set stage-source to the bake-source segment ${STAGE_REPO} publishes under."; exit 1; }
           echo "source=$src" >> "$GITHUB_OUTPUT"
+          # 🚨 stage-modules names what the caller USES; the script stages the transitive `requires`
+          # CLOSURE of it (each dependency at its own sealed commit) and writes the staged set to
+          # --resolved-out. EVERY later consumer reads `steps.stage.outputs.modules`, never the
+          # input: a hand-kept list is what broke MeshWeaver.SocialMedia#246 when AI gained
+          # `requires: Training`. A dependency the caller's checkout carries is satisfied there; one
+          # found nowhere is RED in the script, naming it.
+          # A caller package the closure reaches only THROUGH an upstream one (App → Upstream →
+          # LocalSupport) is satisfied by the checkout, but a NARROWED mount carries only the
+          # affected set and the staged set — the affected selector never saw that upstream edge.
+          # The script reports every such package (--provided-out); the narrowed mount adds them.
+          RESOLVED="$RUNNER_TEMP/staged-modules.txt"
+          PROVIDED="$RUNNER_TEMP/caller-provided-modules.txt"
+          rm -f "$RESOLVED" "$PROVIDED"
           mw-platform-gate/.github/scripts/stage-sealed-upstream.sh --repo "$STAGE_REPO" --source "$src" \
             --modules "$STAGE_MODULES" --provenance "$RUNNER_TEMP/upstream-provenance" \
-            --dest "$GITHUB_WORKSPACE/cross-repo-stage"
+            --dest "$GITHUB_WORKSPACE/cross-repo-stage" \
+            --caller "$GITHUB_WORKSPACE" --resolved-out "$RESOLVED" --provided-out "$PROVIDED"
+          [ -s "$RESOLVED" ] || { echo "::error::stage-sealed-upstream.sh wrote no staged set to $RESOLVED although stage-modules is '${STAGE_MODULES}' — the lane cannot tell what to mount and what to exclude from this publication. The script at this lane's scripts ref predates --resolved-out, or it failed without saying so."; exit 1; }
+          [ -f "$PROVIDED" ] || { echo "::error::stage-sealed-upstream.sh wrote no caller-provided set to $PROVIDED — a narrowed bake could miss a caller package the requires closure reaches. The script at this lane's scripts ref predates --provided-out."; exit 1; }
+          resolved=$(tr '\n' ' ' < "$RESOLVED" | sed 's/ *$//')
+          provided=$(tr '\n' ' ' < "$PROVIDED" | sed 's/ *$//')
+          echo "modules=$resolved" >> "$GITHUB_OUTPUT"
+          echo "provided=$provided" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Staged from ${STAGE_REPO} (requires closure)"
+            echo "named by the caller: \`$(printf '%s' "$STAGE_MODULES" | tr '\n' ' ' | sed 's/ *$//')\` — staged: \`$resolved\` — this repo's own packages reached through them: \`${provided:-none}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Set up Node for the pre-bake hook
         if: inputs.node-version != ''
         uses: actions/setup-node@v7
@@ -1889,7 +1917,12 @@ jobs:
         # shas, not an input-shaped skip. Everything downstream is skipped with it.
         if: steps.scope.outputs.scope != 'none'
         env:
-          STAGE_MODULES: ${{ inputs.stage-modules }}
+          # The RESOLVED set (named + their requires closure), never the input — see the stage step.
+          STAGE_MODULES: ${{ steps.stage.outputs.modules }}
+          STAGE_MODULES_NAMED: ${{ inputs.stage-modules }}
+          # This repo's own packages the closure reaches through a staged one (narrowed mount only;
+          # they are this repo's, so they are never excluded from its publication).
+          STAGE_PROVIDED: ${{ steps.stage.outputs.provided }}
           ALLOW_FILE: ${{ inputs.allow-file }}
           WARNING_BASELINE_FILE: ${{ inputs.warning-baseline-file }}
           BAKE_SCOPE: ${{ steps.scope.outputs.scope || 'full' }}
@@ -1899,6 +1932,12 @@ jobs:
           TARGET_IDENTITY: ${{ steps.identity.outputs.identity }}
         run: |
           set -euo pipefail
+          # A caller that names staged modules and a resolved set that came back empty would mount
+          # none of them and publish their bundles as this repo's own — RED, never that.
+          if [ -n "${STAGE_MODULES_NAMED//[[:space:]]/}" ] && [ -z "${STAGE_MODULES//[[:space:]]/}" ]; then
+            echo "::error::stage-modules is set ('$STAGE_MODULES_NAMED') but the stage step resolved no staged set (steps.stage.outputs.modules is empty)."
+            exit 1
+          fi
           # The mount the tester sees: the checkout, unless the pre-bake hook built its own
           # (BAKE_MOUNT_DIR via $GITHUB_ENV — Education's package snapshot). When the hook owns
           # the mount it owns its composition too, so staged modules are only auto-copied into
@@ -1927,6 +1966,14 @@ jobs:
               if [ -d "$GITHUB_WORKSPACE/$name" ]; then
                 cp -R "$GITHUB_WORKSPACE/$name" "$NARROW/"
               fi
+            done
+            # This repo's own packages that the requires closure reaches only through a staged
+            # upstream package: the affected selector never saw that edge, so they are added here.
+            for m in ${STAGE_PROVIDED:-}; do
+              if [ -d "$NARROW/$m" ]; then continue; fi
+              [ -f "$GITHUB_WORKSPACE/$m/index.json" ] || { echo "::error::the requires closure reached this repository's package '$m', but $GITHUB_WORKSPACE/$m carries no index.json — the narrowed mount cannot carry it."; exit 1; }
+              cp -R "$GITHUB_WORKSPACE/$m" "$NARROW/"
+              echo "narrowed mount: + $m (this repository's package, required through a staged upstream package)"
             done
             if [ -n "${ALLOW_FILE:-}" ] && [ -f "$GITHUB_WORKSPACE/$ALLOW_FILE" ]; then
               mkdir -p "$NARROW/$(dirname "$ALLOW_FILE")"

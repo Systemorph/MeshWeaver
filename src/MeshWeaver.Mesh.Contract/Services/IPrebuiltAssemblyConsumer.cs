@@ -41,4 +41,21 @@ public interface IPrebuiltAssemblyConsumer
     /// </summary>
     IObservable<int> SeedForTypes(IReadOnlyCollection<string> typePaths, Action<string> onOffered)
         => SeedForTypes(typePaths);
+
+    /// <summary>
+    /// <see cref="SeedForTypes(IReadOnlyCollection{string}, Action{string})"/> with a COMPLETENESS
+    /// witness: <paramref name="onIncomplete"/> is invoked (at most once, with the reason) when the
+    /// pass did not ask every bundle it should have — a bundle it could not read, a source it
+    /// skipped — although it completed normally. Only when it stays silent may a caller read "no
+    /// offer witnessed" as "no bundle names this type" (MeshWeaver#6930, the untracked-module gate).
+    ///
+    /// <para>Defaulted so that an implementation predating the witness keeps its PRE-WITNESS
+    /// contract: it reports nothing, exactly as before the witness existed. Defaulting to
+    /// "incomplete" instead would make the compile watcher PARK every never-adopted NodeType in every
+    /// partition without a sync source — users' own authored types included — on any host whose
+    /// consumer predates this overload.</para>
+    /// </summary>
+    IObservable<int> SeedForTypes(
+        IReadOnlyCollection<string> typePaths, Action<string> onOffered, Action<string> onIncomplete)
+        => SeedForTypes(typePaths, onOffered);
 }

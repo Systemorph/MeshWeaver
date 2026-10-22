@@ -117,6 +117,20 @@ public static class IoPoolNames
     /// </summary>
     public const string CompileCpu = "CompileCpu";
 
+    /// <summary>
+    /// A kernel code cell's EXECUTION — user script code that awaits — and the session warm-up wait
+    /// in front of it. Its own lane, never <see cref="Compile"/>: a running script may wait on another
+    /// of that pool's ASYNC leaves — another kernel session's warm-up or execution (a cell that runs a
+    /// cell), a language-service compile. A script holding a Compile slot across that wait is the
+    /// nested-gate deadlock — with every slot held by a waiting script, the leaf each one waits for
+    /// can never be admitted, and the cell's Activity stays Running for ever.
+    /// The lane itself is admitted WITHOUT a queue (<see cref="IoPool.InvokeOrRefuse{T}"/>): its leaves
+    /// wait on each other (a cell that runs a cell), so a queued child behind waiting parents would be
+    /// the same deadlock again; a full lane refuses and the refused run fails visibly. See
+    /// <see cref="IoPoolOptions.KernelScript"/> and <c>Doc/Architecture/CompileOffTheThreadPool</c>.
+    /// </summary>
+    public const string KernelScript = "KernelScript";
+
     /// <summary>External process execution (<c>Process.Start</c>). Wave 3.</summary>
     public const string Process = "Process";
 
@@ -343,6 +357,17 @@ public sealed record IoPoolOptions
     /// </summary>
     public int CompileCpu { get; init; } = Environment.ProcessorCount;
 
+    /// <summary>
+    /// Concurrent kernel script executions (<see cref="IoPoolNames.KernelScript"/>). A script is user
+    /// code that mostly AWAITS — the mesh, another cell — so the slot is held for
+    /// the script's whole run and bounds nothing CPU-shaped; the CPU half of a cell (build, emit, load)
+    /// runs on <see cref="CompileCpu"/>. The cap is a drain hook and a runaway-fan-out stop, so it is
+    /// generous (256) and independent of <see cref="Compile"/>, which a waiting script must never
+    /// occupy. Admission past it is REFUSED, not queued: the run beyond the cap fails with
+    /// <see cref="IoPoolSaturatedException"/> rather than waiting behind cells that may be waiting on it.
+    /// </summary>
+    public int KernelScript { get; init; } = 256;
+
     /// <summary>Concurrent external processes. Heavy; defaults to 4.</summary>
     public int Process { get; init; } = 4;
 
@@ -407,6 +432,7 @@ public sealed record IoPoolOptions
             IoPoolNames.Routing => Routing,
             IoPoolNames.Compile => Compile,
             IoPoolNames.CompileCpu => CompileCpu,
+            IoPoolNames.KernelScript => KernelScript,
             IoPoolNames.Process => Process,
             _ => Default,
         };

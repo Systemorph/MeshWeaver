@@ -70,18 +70,18 @@ internal static class PermissionEvaluator
     /// </summary>
     internal const string AdminScope = "Admin";
 
-    private const string RoleQueryId = "$security-roles";
+    private const string RoleQueryId = SecurityQueries.QueryIdPrefix + "roles";
 
     // Group access is resolved GLOBALLY — a group defined in one partition can be granted in
     // another (cross-partition licensing), so we read EVERY GroupMembership node (as System, like
     // the other $security-* queries) and expand the viewer's transitive group set in-memory. This
     // mirrors the Postgres rebuild, which reads memberships from the global auth mirror.
     private const string GroupMembershipNodeType = SecurityQueries.GroupMembershipNodeType;
-    private const string MembershipQueryId = "$security-memberships";
+    private const string MembershipQueryId = SecurityQueries.QueryIdPrefix + "memberships";
 
     // Per-gated-type cached query key prefix — one shared upstream subscription per gated node
     // type, process-wide, like every other $security-* query.
-    private const string GatedQueryPrefix = "$security-gated:";
+    private const string GatedQueryPrefix = SecurityQueries.QueryIdPrefix + "gated:";
 
     #region Public surface
 
@@ -1093,6 +1093,16 @@ internal static class PermissionEvaluator
     // 🚨 Both global queries take the cache they read from rather than the hub they were asked on
     // (#2679): the fold resolves it ONCE at its entry point, so a later emission — after the hub's
     // scope has been disposed — never resolves from that scope.
+    /// <summary>
+    /// The live custom-role catalog the fold resolves roles from (<see cref="GetRole(IMessageHub,string)"/>
+    /// takes ONE value of it per evaluation, so the fold itself does not re-emit when a role
+    /// definition changes). A live verdict that must follow role definitions observes this
+    /// catalog's own emissions — they are what "the role query converged" looks like.
+    /// </summary>
+    /// <param name="hub">The hub whose node-stream cache serves the catalog.</param>
+    internal static IObservable<MeshNode[]> ObserveRoleCatalog(IMessageHub hub)
+        => ObserveAllRoleNodes(hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>(), hub.JsonSerializerOptions);
+
     private static IObservable<MeshNode[]> ObserveAllRoleNodes(IMeshNodeStreamCache cache, JsonSerializerOptions options)
         => SecurityQuery(cache, RoleQueryId, options, SecurityQueries.Roles)
             .Select(arr => arr.ToArray());

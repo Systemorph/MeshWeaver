@@ -32,6 +32,86 @@ behind it reddened for want of its input, and nothing published
 storage-quota refusal is therefore **a budget event, not a capacity event**, and deleting artifacts
 does not lift it until GitHub recalculates (every 6–12 h).
 
+## Where it stands (measured 2026-10-21, REST only)
+
+This section is the current reading. The sections after it are the history that led here, and
+their dated numbers stay as evidence.
+
+**Three private repositories are on the own store. Four others still write GitHub artifacts.**
+
+- The `gha` repository overrides were deleted on 2026-10-16 (~18:50Z), after the cross-pool proof
+  for Systemorph/Memex#420 passed. The organisation variable `MW_ARTIFACT_STORE=file:/ci-artifacts`
+  is still `visibility: selected`. The selection is exactly `MeshWeaver.Education`,
+  `MeshWeaver.Plugins` and `MeshWeaver.SocialMedia`.
+- **Education joined the store on 2026-10-21.** MeshWeaver.Education#402 (merged 08:30Z) routed
+  every artifact transfer through core's upload and download actions and resolves the store once in
+  `preflight`, the SocialMedia shape. Education was then added to the selection. The evidence is
+  Education's `Education Content CI` push run on `main`,
+  [39593503376](https://github.com/Systemorph/MeshWeaver.Education/actions/runs/39593503376)
+  (head `01a5101c8`). It completed `success`, resolved `store: file:/ci-artifacts`, and the run's
+  artifacts listing reads `total_count: 0`. An earlier manual run, 39583344941, also used the
+  store. Its one failure was the on-demand journey suite, which is a separate issue.
+- 🚨 **Deleting the overrides moved only the selected repositories.** `MeshWeaver.Reinsurance`,
+  `.Manufacturing`, `.Crm` and `.FundReporting` have no variable at any scope. For them `resolve`
+  maps the empty value to the GitHub branch, so they still write GitHub artifacts. Widening the
+  selection does not move them by itself either: each repository also needs the
+  `artifact-store:` / `artifact-store-id:` wiring that the three repositories on the store carry,
+  resolved once by the run's first producer (see the SocialMedia `preflight` job). Without that
+  wiring a `file:` value turns that repository's module lane red at `Select the affected bundles`.
+  That is the cause of SocialMedia's ~14 h red after the override was deleted.
+- **Plugins writes nothing to GitHub any more.** 100 of 100 completed `Plugin Catalog CI` runs
+  between 2026-10-19T22:55Z and 2026-10-20T21:50Z carry **zero** GitHub artifacts. A pre-switch
+  main run (`38820453666`, 2026-10-15) carried 76, most of them `module-bundle-*` at 7-day
+  retention. `core-candidate`, `examples-smoke` and `platform-canary` produced none either. The
+  last two still call `actions/upload-artifact` directly, but only for KB-sized handoffs, and in
+  the sampled runs those paths did not execute.
+- The repository "Artifact and log retention" setting is **7 days** at the organisation and on
+  every repository. That is a **cap**, not a floor: it clamps a longer declaration down to 7 days
+  and leaves a shorter one alone. The shared lane already declares less where its consumers allow
+  it, for example `retention-days: 1` on the same-run `module-pack-tool-*` handoff in
+  `node-repo-module-pack.yml`. So what each artifact needs is decided per declaration, by its
+  readers. Lowering the repository cap below 7 days would also clamp the cross-run
+  `module-bundle-*` copies, whose 7-day retention is a contract: publication reuse reads them
+  across runs (see [Supported backend and retention](#supported-backend-and-retention)). Any further
+  cut belongs in a declaration whose readers are all inside one run, not in the cap.
+
+**The bill, per repository.** These are October GB-hours per full day from
+`organizations/Systemorph/settings/billing/usage?year=2026&month=10`, SKU `Actions storage`.
+Actions storage cost **$263.29** net from 1 to 20 October. Actions compute was **$0**.
+
+| repository | GB-h per day | what the artifact and cache APIs show |
+|---|--:|---|
+| MeshWeaver.Plugins | 40,173 (10-12) → 31,569 (10-19), falling | no new artifacts since 10-16; 11.9 GB of caches, last restored 10-16 |
+| MeshWeaver.Education | 1,190–1,660 (before the 10-21 switch) | ~10 GB live before the switch: `bake-<sha>` 7.1 GB, `e2e-upstream` 2.8 GB; 1.2 GB of caches |
+| MeshWeaver.Reinsurance | **863, every full day since 09-22** | 7 MB of `gate-log-*`, no caches |
+| MeshWeaver.SocialMedia | ~550 | no live artifacts; 11.6 GB of caches, last restored 10-16 |
+| MeshWeaver.Crm | **514, every full day since 09-22** | 3 MB of `gate-log-*`, no caches |
+| MeshWeaver.Manufacturing | **48, every full day since 09-22** | 1.5 MB of `gate-log-*`, no caches |
+| MeshWeaver (public) | ~125,000 | not billed |
+
+What to expect, and what is not explained:
+
+- **Plugins, SocialMedia and Education drain on their own.** Education's last GitHub artifacts
+  were written before its 2026-10-21 switch and expire within 7 days of it. The newest Plugins `module-bundle-*` was
+  created on 2026-10-16T18:04Z and expires around 10-23. The deletion lag described below follows
+  that. Their caches stop being restored, and cache is not billed anyway (see below). Re-read the
+  usage endpoint after **2026-10-30**. Plugins should then be near zero.
+- 🚨 **The nightly sweeper cannot help with Plugins.** `GET repos/Systemorph/MeshWeaver.Plugins/actions/artifacts`
+  answers **HTTP 500** on page 1, even at `per_page=1`. A `name=`-filtered listing answers 200.
+  Memex `actions-cleanup.yml` was therefore red every night from 2026-09-26 and deleted nothing in
+  Plugins. Memex#796 takes Plugins off its list, because Plugins no longer writes there. If Plugins
+  ever returns to `gha`, the walk must first stop using the unfiltered listing.
+- 🚨 **Reinsurance, Crm and Manufacturing are billed a constant that no API explains.** Their
+  meter is identical to the GB-hour on every full day for a month, while their visible artifacts
+  churn nightly and total a few MB. Nothing in this repository changes that number. It is a
+  question for GitHub billing support: what is metered for those three repositories? Moving them
+  to the own store would remove only their few MB of `gate-log-*`.
+- **Education was the one repository whose own bytes still mattered, and it has moved.** Its e2e
+  jobs read `bake-<sha>` and `e2e-upstream` within the run. MeshWeaver.Education#402 wired those
+  uploads and downloads through `Systemorph/MeshWeaver/.github/actions/{upload,download}-artifact@main`
+  plus the store wiring above, and only *then* was it added to the selection. That was worth about
+  $0.45/day.
+
 ## The measurement (2026-09-17, REST only)
 
 Org net Actions storage, 1–17 September: **$66.24**, rising — **$8.70 on 09-16 alone**, i.e. a
@@ -329,6 +409,9 @@ the move to `azblob:` this page already recommends.
 
 #### The stopgap that is in place, and what lifts it (measured 2026-09-20)
 
+> **Lifted on 2026-10-16.** All eight overrides were deleted after the Memex#420 proof run. What
+> that did and did not move is under [Where it stands](#where-it-stands-measured-2026-10-21-rest-only).
+
 **`MW_ARTIFACT_STORE=gha` is set as a REPOSITORY variable on eight repositories** — `MeshWeaver`,
 `.Plugins`, `.Education`, `.Reinsurance`, `.SocialMedia`, `.Manufacturing`, `.Crm`, `.Feedback` —
 since 2026-09-19T05:35Z, on the maintainer's instruction, after ~9 h in which every
@@ -512,6 +595,57 @@ first, then whichever handoff this run used, and a refusal that now names both.
 `--retention-days` the ledger record states were two independent literals until 2026-09-17. They now
 read one expression, so **a record can never outlive the artifact it names**.
 
+### Reading a run's artifacts when you are not on the runner pool
+
+A `file:` store is a share mounted only on the in-cluster runner pods. A workstation, a
+GitHub-hosted runner and the GitHub UI cannot open it, so failure evidence a lane uploaded there
+(Playwright reports, mesh diagnostics, test output) is unreadable from outside unless a job on
+that pool prints it.
+
+`.github/workflows/read-store-artifact.yml` is that job. It is a `workflow_call` lane, not a
+`workflow_dispatch` one: this repository is public, the org runner group does not admit public
+repositories, and a dispatch here could never reach a runner with the share mounted. A private
+repository calls it from its own dispatchable workflow (the caller template is in the lane's
+header). The lane:
+
+- resolves the store from the caller's `vars.MW_ARTIFACT_STORE` and runs on the caller's
+  `vars.MW_RUNNER_DOCKER` pool;
+- downloads `pattern` from `repository`/`run-id` through the shared download action, which verifies
+  the store identity, archive size and inventory before extraction;
+- prints, into its job log, every non-passing test of each Playwright HTML report with each
+  attempt's status, duration and error text, the report's `.md` error contexts, and every `.txt`
+  and `.csv` file. A report is recognised by the data embedded in its `index.html` — either the
+  older `playwrightReportBase64 = "data:…"` script or the current
+  `<template id="playwrightReportBase64">` — not by a `playwright-report` directory name: an upload
+  whose only path is that directory strips it, and the report then sits at `<artifact>/index.html`;
+- prints the **live results** of a run that was CUT. The HTML reporter writes its file when the run
+  ends, so a job cancelled at its `timeout-minutes` has none. A suite that also appends one
+  `{"kind":"live-results"}` JSON line per attempt as it finishes (MeshWeaver.Education's
+  `e2e/live-results-reporter.ts`, uploaded as `e2e/live-results`) keeps every finished attempt's
+  errors and error context, and names the attempt the cut killed: it began and never ended. A file
+  with no `end` record is reported as cut. Failures the same artifact's HTML report already printed
+  are not printed twice;
+- prints each `.log` file as whole RECORDS — a header line plus its indented continuation lines,
+  because a .NET console record puts the category and the message on separate lines. A record is
+  selected when it matches `log-pattern` (trouble), matches `focus-pattern` (the categories that
+  carry the work; default Activity, Kernel and IoPool), or falls within five seconds of a failing
+  or in-flight attempt's time window from the live results of the same artifact. Over `max-lines`
+  (default 2000) every minute the selection spans is first RESERVED an equal share — a minute whose
+  every record is longer than its share prints its shortest one cut to the share, and says so — and
+  only then is the remainder redistributed, so a long early record cannot starve the end of the
+  run. Omissions are counted per minute. `.github/scripts/test-read-store-artifact.py` runs the
+  embedded printer verbatim over fixtures on every pull request;
+- goes RED when nothing matched, because an expired, swept or wrong-store selection must not read
+  as "no failures".
+
+It uses no secret and no token. Everything derived from an artifact or an input is printed with
+workflow commands suspended (`::stop-commands::` under a random token, resumed afterwards), so a
+test title or log line cannot raise an annotation, add a mask or end the suspension. Indenting the
+lines is not a guard the runner promises to honour, so the lane does not rely on it.
+
+`retention-days: 0` on an upload to the own store means the 7-day default
+(`ci-run-artifacts.py upload`), not "delete immediately".
+
 ## Supported backend and retention
 
 The named-artifact adapter currently supports **`file:` only**, alongside the compatible `gha`
@@ -537,6 +671,10 @@ two-day handoff rule to every named artifact:
 | `runs/` | legacy handoffs from the earlier workflow implementation | legacy 2-day rule, never applied to `named/` |
 
 ## What the migration still needs (maintainer)
+
+Status as of 2026-10-21: items 1 and 4 are done for `MeshWeaver.Plugins` and
+`MeshWeaver.SocialMedia`. Item 5 is under way: the GitHub-side bytes are ageing out, and the
+sweeper cannot list Plugins (see [Where it stands](#where-it-stands-measured-2026-10-21-rest-only)).
 
 1. **One backing share, proved across pools.** A producer on one runner pool and a consumer on the
    other must report the same physical identity and read the same digest-verified bytes. Exercise

@@ -341,6 +341,50 @@ folder has both, and the harness carries that case.
 That placement is not incidental: it is the first moment every copy is in one hand, **and** the
 moment the damage is done, since what the bake loads is what every consumer must then match.
 
+### 🚨 …and again over the set it SEALS, because the per-package carry replaces copies afterwards
+
+The composition verdict above judges the bundles the bake COMPOSED — this run's own, all built in one
+compilation. It cannot see what happens next: when a package waits (the per-package seal,
+`seal-packages.py withhold`), its fresh bundle **and its module package** are deleted and the
+previously sealed ones are carried back in their place. A carried module package brings every
+assembly it carries at the OLD build — its declared module and every module-owned sibling riding in
+it. A fresh module package riding one of those names then seals it at THIS commit's build beside the
+carried one.
+
+Measured on MeshWeaver.Plugins run 39476483432 (publication
+`Systemorph-MeshWeaver.Plugins-39476483432-1`, identity `c003e001`, 2026-10-20 20:09Z): Hosting was
+withheld; Store waited with it (its sources are compiled by Hosting's NodeTypes), and Essentials
+waited because its NodeTypes compile Store's moved sources — so `essentials.module.nupkg` was carried
+from publication `…-39434704390-1`, declaring `MeshWeaver.Markdown.Collaboration` at `1d59587d…`,
+while the fresh `ai.module.nupkg` (AI bakes no bundle, so nothing held it) rode the same assembly at
+`4959162f…`. The compose-time verdict had read `0 carried at more than one BUILD` twenty minutes
+earlier, over the fresh pair. Every satellite gate composing AI and Essentials from that publication
+then refused it (`sealed 1d59587d64a3a4e3 as the declared module of essentials.module.nupkg` /
+`sealed 4959162fe5738a14 as a sibling riding ai.module.nupkg`) — MeshWeaver.Crm, .SocialMedia and
+.Manufacturing, from their 20:11Z `meshweaver-upstream-published` runs on. The fleet registry
+recorded the same thing from the other side: the `essentials` bundle manifest pushed at 20:10Z had
+the byte-identical digest (`sha256:0f55c103…`) of the one pushed at 15:44Z.
+
+Two changes close it, one per half:
+
+* **`withhold` holds every rider of a carried name** (`module_step`, one move at a time to the same
+  fixpoint as the requires and source-include closures): a fresh module package carrying any
+  `MeshWeaver.*` assembly a held package's module package carries waits too, and is carried from the
+  same publication — transitively, so AI held pulls in every package riding `MeshWeaver.AI`. A rider
+  the sealed publication never held stays OUT (never sealed), never sealed fresh beside the carried
+  name. The decision is taken on NAMES before the carry fetches anything, since the sealed copy's
+  bytes are not on hand; a fresh copy that happens to be byte-identical waits as well, which is the
+  conservative direction.
+* **`listing` asserts one build per name over the module set it is about to seal**, after withhold
+  and both carries, and REFUSES otherwise — naming each name, each digest and each module package. It
+  prints its denominator on every run, and a module package that is not a readable archive is
+  refused, never read as carrying nothing. Nothing is written, and the publication that is sealed
+  stays sealed and intact.
+
+`seal-packages.py --self-test` carries the incident reduced to four module packages, with the
+pre-fix set as its negative control (named torn, and refused by `listing`), and fails four of its
+cases with the hold removed.
+
 ### The consumer asserts it again, and turns a violation into a HOLD
 
 **`PublishedBundleCatalogue.ArtifactsForIdentity` reads the MVID of every `MeshWeaver.*` assembly

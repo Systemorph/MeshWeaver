@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Layout;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Graph;
 
@@ -95,7 +97,36 @@ public static class SuppliedNavigationRail
 
         /// <summary>The sort choices for the group's entries — a dropdown on its heading.</summary>
         public IReadOnlyList<NavSortOption> SortOptions { get; init; } = [];
+
+        /// <summary>
+        /// Where the group's children load from when they are not in <see cref="Items"/> — a folder
+        /// off the reader's path (<see cref="NodeNavigationEntry.HasUnloadedChildren"/>). The group
+        /// renders this area after its own link; the renderers draw a group's items only while it is
+        /// open, so the folder is read when the reader opens it, never before. Null for a group
+        /// whose children are all in <see cref="Items"/>.
+        /// </summary>
+        public RailFolder? Folder { get; init; }
     }
+
+    /// <summary>The area that lists a folder's children on demand.</summary>
+    /// <param name="Address">The hub that serves the area — the page being read.</param>
+    /// <param name="Reference">The area, naming the folder (<see cref="FolderReference"/>).</param>
+    public sealed record RailFolder(string Address, LayoutAreaReference Reference);
+
+    /// <summary>
+    /// The area that lists ONE folder of the index on demand — the children of the folder named by
+    /// its <see cref="FolderParameter"/> parameter, each line a link or a group exactly as in the
+    /// rail. Served by every node hub (<c>MeshNodeLayoutAreas</c>), so the page being read answers it.
+    /// </summary>
+    public const string FolderArea = "IndexFolder";
+
+    /// <summary>The parameter of <see cref="FolderArea"/> that names the folder.</summary>
+    public const string FolderParameter = "folder";
+
+    /// <summary>The reference of <see cref="FolderArea"/> for <paramref name="folder"/>. Pure.</summary>
+    /// <param name="folder">The folder whose children the area lists.</param>
+    public static LayoutAreaReference FolderReference(string folder)
+        => new(FolderArea) { Id = $"?{FolderParameter}={Uri.EscapeDataString(folder)}" };
 
     /// <summary>The whole rail: the heading link, then the supplied entries in the supplied order.</summary>
     /// <param name="Home">The index root — a link, not a collapsible heading.</param>
@@ -166,7 +197,15 @@ public static class SuppliedNavigationRail
     /// </summary>
     private static RailItem Project(NodeNavigationEntry entry, string currentPath)
         => entry.Children.Count == 0
-            ? Link(entry)
+            ? entry.HasUnloadedChildren
+                // A folder whose children are not loaded is STILL a group: it shows its chevron,
+                // and its children load from the page's own hub when the reader opens it.
+                ? new RailGroup(entry.Label, entry.Path, false, [Link(entry)], entry.Icon)
+                {
+                    SortOptions = entry.SortOptions,
+                    Folder = new RailFolder(currentPath, FolderReference(entry.Path)),
+                }
+                : Link(entry)
             : new RailGroup(
                 entry.Label,
                 entry.Path,
@@ -244,7 +283,42 @@ public static class SuppliedNavigationRail
                 _ => throw new NotSupportedException(
                     $"Unknown rail item '{item.GetType().Name}' — extend {nameof(RenderGroup)} when adding a {nameof(RailItem)} case."),
             };
+        if (group.Folder is { } folder)
+            rendered = rendered.WithView(Controls.LayoutArea(new Address(folder.Address), folder.Reference).WithShowProgress(false));
         return rendered;
+    }
+
+    /// <summary>
+    /// Renders rail items as the body of <see cref="FolderArea"/>: the lines one after another, each
+    /// a link or a group exactly as <see cref="Render(Rail, int, bool)"/> draws it — so a folder
+    /// opened on demand reads like one that was loaded with the page.
+    /// </summary>
+    /// <param name="items">The folder's lines, in order.</param>
+    public static StackControl RenderItems(IEnumerable<RailItem> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        var stack = Controls.Stack.WithVerticalGap(2).WithWidth("100%");
+        foreach (var item in items)
+            stack = item switch
+            {
+                RailGroup group => stack.WithView(RenderGroup(group)),
+                RailLink link => stack.WithView(RenderLink(link)),
+                _ => throw new NotSupportedException(
+                    $"Unknown rail item '{item.GetType().Name}' — extend {nameof(RenderItems)} when adding a {nameof(RailItem)} case."),
+            };
+        return stack;
+    }
+
+    /// <summary>
+    /// The rail items for a folder's entries — each projected as <see cref="Plan"/> projects an
+    /// entry, so a child with unloaded children is again a group that loads on demand. Pure.
+    /// </summary>
+    /// <param name="entries">The folder's entries, in order.</param>
+    /// <param name="currentPath">The page being read — the hub that serves nested folders.</param>
+    public static IReadOnlyList<RailItem> PlanItems(IEnumerable<NodeNavigationEntry> entries, string currentPath)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        return [.. entries.Select(entry => Project(entry, currentPath))];
     }
 
     private static RailLink Link(NodeNavigationEntry entry)

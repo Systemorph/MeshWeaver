@@ -264,7 +264,7 @@ Access that reaches many people, or that the platform writes for someone else, i
 
 A `Denied` assignment only removes access and always passes; a person sharing their own space with a colleague is not a broad grant.
 
-**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, and the public-link standards `link.publish`, `link.revoke` and `group.org-create` (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
+**The one way through.** The governance executor opens System with `AccessService.ImpersonateAsSystemFor(governedBy: <activity path>, …)`, and the node it writes carries `content.governedBy` with the same path. The boundary then checks (`IGovernedActivityVerifier`, default: read the activity node) that the activity is `Executing` a standard on the allowlist — `access.grant-broad`, `access.revoke`, `access.policy-change`, `package.provision`, `package.provision-set`, `package.remove`, `store.enroll`, `pr.steward.admin-access`, the public-link standards `link.publish`, `link.revoke` and `group.org-create`, and `group.scoped-create` — a group holding one non-Admin role at one path, whose one grant and whose proposer's Admin on the group node are written as System after the executor re-checks proposer and signer (`Access:BroadGrantGuard:Standards` replaces it). A public link (MeshWeaver#4306) is the one shape that grants `Anonymous`/`Public`/an org group anything, and it grants `Viewer` on the LINK node only (`l/{publicId}`); the target is served as a delegated read re-checked at every render — design of record in MeshWeaver.Plugins `Essentials/PublicLinks`.
 
 **Modes** (`Access:BroadGrantGuard:Mode`): `LogOnly` (the default for the first week after it ships), `Enforce`, `Off` (test harness only). In `LogOnly` every finding is one line, `[BroadGrantGuard] WOULD REFUSE {Kind} {Path} subject= writer= onBehalfOf= seat= governedBy=`. That grep is the inventory of legitimate writers that still have to stamp their context (the partition bootstrap's creator grant, invitation acceptance, the Store's root gating) before the mode flips to `Enforce`.
 
@@ -454,6 +454,22 @@ Reading per SCOPE instead multiplied that one read by the depth of the path **an
 |---|---|---|---|
 | grants | `path:{partition} scope:descendants nodeType:AccessAssignment` | **satellite-targeted** — `PartitionDefinition.IsSatelliteNodeType("AccessAssignment")` is true (`_Access`→`access`) | the in-repo `StorageAdapterMeshQueryProvider` on every backend (`DefersToNativeProvider` returns **false** for a scoped satellite read) |
 | policies | `path:{partition} scope:descendants id:_Policy nodeType:PartitionAccessPolicy` | **content** — `_Policy` is not a configured satellite segment, so these live in `mesh_nodes` | deferred to the native per-schema delegate on Postgres |
+
+🚨 **The same classification puts a `_Policy` under a satellite segment out of the fold's reach.** The policy read is a CONTENT query, so it never returns a `_Policy` whose scope lies under a configured satellite segment, such as `{partition}/_Storage/_Policy` or `{node}/_Thread/_Policy`. On Postgres that row is stored in the segment's table. In memory it is dropped like every other satellite row. The fold also reads only the id `_Policy`. Until `PolicyPlacementValidator`, both placements could be created, read back by path, and **never applied**. A `BreaksInheritance` policy at `{partition}/_Storage` left the inherited partition grant in force. The same node declared statically DID apply, because `CollectStaticPolicies` reads the static providers directly and never passes through the query. `PolicyPlacementValidator` now refuses a runtime `PartitionAccessPolicy` CREATE in either placement.
+
+**A `PartitionAccessPolicy` is create-only, and ONE guard enforces it: `PolicyCommitGuard`, at the owner's COMMIT point.** It is created as `{scope}/_Policy`. Retyping an existing node into one is unsupported by design on every route. The guard is an `IEntityCommitGuard`, consulted in the turn that applies a write, against the entity exactly as it would commit and the entity the owner holds under that key. Two places commit into an owner, and both consult it:
+- `ApplyMeshNodePatchInTurn`, the merge turn of a merge patch. This covers every `GetMeshNodeStream(path).Update` from another hub, `IMeshService.UpdateNode`, and the upsert's update branch.
+- `WorkspaceOperations`, the apply turn of a `DataChangeRequest`. This covers a synced write-back, an entity-reference patch, a full entity or an `EntityDeltaUpdate`, and a node carried to a hub that is not its own.
+
+It refuses two things:
+- **A node held as another type that would commit as a policy.** This applies whatever produced the value: a literal, a string splice, a stale-base three-way merge, or a patch queued behind another that changed the type first.
+- **A policy committed to a hub that is not its own node's.** A delta that changes a policy's id lands this way too.
+
+A policy that already is one commits, so a legacy policy stays editable. A first commit of a hub's own node is the create path's.
+
+There is no delivery-time interpretation of patches. Judging the patch TEXT when it arrived had to re-implement the owner's merge, and it saw a predecessor that a queued write could change before the merge. The one case the commit point cannot see is a data change to an owner that has not loaded its node, since nothing is held under the key. `PolicyPlacementDataValidator` covers it: it establishes the node from storage first, and refuses as not loaded when the read answers nothing. The layout read behind create-time placement is established only by a complete answer. An incomplete snapshot, or a record that does not read as a `PartitionDefinition`, refuses the create as Unavailable.
+
+Every route matches the type name case-insensitively, as NodeType resolution does. The upsert's transition gate (`NodeTypeTransitionGate`) reads the stored node when the caller did not, which covers a lost create race. It also holds each validator to one verdict: an empty completion is a refusal. An update of a node that is already a policy is not judged, so a legacy policy stays editable. A partition layout that could not be read refuses the write as Unavailable. It is never taken to be the standard layout. "Under a satellite segment" means what the partition's EFFECTIVE storage mappings say: `PartitionDefinition.TableMappings` on its `Admin/Partition` record, read as System, or the standard layout when it has none. They are matched as `ResolveTable` matches them, case-insensitively, so `_storage` and a custom segment count. The refusal is localized, and it names the main-node scope where the policy belongs, which is where a satellite's access is decided (`SatelliteAccessRule` delegates to the `MainNode`; a storage binding asks for Update on the partition root). A static declaration under a satellite segment still applies to that path's own fold. It is code-reviewed and the platform ships none. Pinned by `RuntimeInheritanceBreakingPolicyTest`.
 
 That classification is what makes the grant read correct rather than lucky: a query that did NOT target satellites has satellite-path rows filtered out of its result (`RunQueryNodes`, mirroring PG's separate-table routing), so an anchored `scope:descendants` read of `{partition}` would silently return no `_Access` rows at all. It is the `nodeType:` filter — configuration, not the `_` character — that keeps them in.
 
@@ -714,6 +730,46 @@ When an `AccessAssignment` is created at scope `S`:
 When a user joins or leaves a group, the `GroupMembership` node change lands on the global `$security-memberships` query, the viewer's transitive group set is re-expanded in memory, and subsequent checks see the updated set.
 
 > On PostgreSQL the *SQL listing* path is a separate materialisation — `user_effective_permissions`, rebuilt by trigger (see "PostgreSQL integration" below). The evaluator above answers exact reads and every UI gate; the SQL fold answers query listing. They must agree.
+
+### 🚨 A cached read verdict follows the fold's inputs, not a clock
+
+The exact-node read gate in `MeshNodeStreamCache` caches each `(path, user)` verdict so a hot
+`GetMeshNodeStream` path does not re-walk the scope chain on every subscribe. That entry used to be
+valid for a flat 30 s, with nothing tying it to what it was computed from. Found chasing the
+intermittent Education e2e denial on a freshly installed package page: a viewer who opened a page
+**while its package was installing** — before the partition's `_Policy` existed — was denied, the
+denial was cached, the installer then wrote the root, the PublicRead `_Policy` and the page, the
+fold answered Read = true at once, and `get` (which reads through this gate) still answered
+`Not found` for the rest of the TTL. A withdrawn grant was the mirror image: a cached grant kept
+serving reads after the fold had stopped conferring it.
+
+The rule now: **an entry is served only while the fold's inputs are the ones it was computed
+from.** Every fold input is a cached query whose id starts `$security-`
+(`SecurityQueries.QueryIdPrefix` — grants, policies and the sync config per partition; root grants
+and policy, roles, memberships and gated nodes globally). Each committed snapshot of such a query
+advances a generation — the partition's for a partition-anchored read, the global one otherwise —
+and a verdict is stamped with the generation current when its evaluation *started*. A hit whose
+stamp no longer matches is re-evaluated.
+
+- **The commit is two-phase, around the delivery.** A new snapshot is committed as *begin*
+  (in-flight +1, generation +1) → buffer the snapshot and notify the subscribers → *end*
+  (generation +1, in-flight -1) (`FoldInputReplay`). A verdict reads the generations *before* the
+  in-flight counts and is cached only when nothing was in flight. Either the read sees the commit
+  in flight, and the verdict is answered but not cached, or the commit begins later and moves the
+  generation past the stamp. Both single-phase orders are wrong. Advancing only *after* delivery let
+  a read opened from a subscriber's own change callback (which runs inside the delivery) take the
+  verdict cached under the previous snapshot. Advancing only *before* buffering would let a read in
+  between stamp an old-snapshot verdict with the new generation.
+- **Not a timer, not a re-subscribe.** The bump is a counter increment on the emitting thread; the
+  next natural read re-evaluates. The TTL still bounds what the fold's queries do not carry — a node
+  type's own read rule, re-decided only on a fold denial.
+- **The delivery gate was never affected.** `AccessControlPipeline` asks the fold on every delivery
+  and caches nothing; this applies to the stream cache's read gate only.
+
+Pinned by `APolicyLandingAfterAProbeIsSeenTest` (`test/MeshWeaver.Graph.Test/`): both directions
+fail on the unfixed build, on a single read taken right after the fold converged. A third test opens
+the read from inside the fold's own change callback; it fails when the generation advances only
+after delivery.
 
 ## Closest-wins semantics
 
@@ -1590,8 +1646,8 @@ Concretely:
 
 - **Reads / subscriptions** — `MeshNodeStreamCache` gates each subscription by
   evaluating `hub.GetEffectivePermissions(path, user)` **locally** (the same
-  evaluator every other decision uses), cached per `(path, user)` for the
-  AccessControl TTL. It does **not** post a `GetPermissionRequest` to the leaf
+  evaluator every other decision uses), cached per `(path, user)` until a fold
+  input changes (see "A cached read verdict follows the fold's inputs"). It does **not** post a `GetPermissionRequest` to the leaf
   path's hub. A satellite / cell sub-path (e.g. a `{thread}/{messageId}` the GUI
   subscribed to that was never persisted, or a brand-new thread) has no hub of
   its own — routing returns NotFound — so a leaf-hub probe would block on a grain
@@ -2069,6 +2125,105 @@ stream keeps following the verdict and faults an admitted subscription with the 
 refusal the moment the admission ends (revocation, expiry, a changed audience, a removed
 declaration). Later revisions are therefore never delivered to a caller who lost the read.
 
+**An open subscription ends with the read, and the revision that ends it is never sent.** Two
+windows used to let an open subscription briefly outlive a revoked or expired admission (#4306,
+follow-ups 1 and 2). Both are now closed by one rule: every revision is decided before it is
+forwarded (`RevisionAdmission.AdmitEachRevision`, `MeshWeaver.Data`).
+
+- **The node-stream read gate.** It used to switch on ONE live verdict. The revision that revokes
+  the read therefore reached the caller before the verdict could turn, because the verdict only
+  follows the node after that revision exists, and for a stored type the declaration is looked up
+  asynchronously. Now each revision waits for its own verdict: the declaration decided on that
+  revision's content (`DeclaredPointRead.AdmitsRevision`) and the live verdict from the owner's
+  current state (`DeclaredPointRead.Admits`). The first refused revision ends the stream.
+- **A direct owner-side subscription.** A `SubscribeRequest` to the node's own hub is admitted by
+  the delivery gate on its first verdict. The owner's synchronization stream then forwarded every
+  later revision for the subscription's life, after a revocation and after an expiry alike. Every
+  per-node hub now registers a `ClientSubscriptionReadAdmission`
+  (`DeclaredReadSubscriptionFollow`) beside its gate. A subscription the gate can have admitted
+  through the declaration is followed per revision: a point-read shape, a trusted caller context,
+  and no standing Read through the fold or the type's rule (the first outcome of
+  `DeclaredPointRead.ObserveStandardRead`, as the caller). The
+  first refusal posts a `StreamErrorEvent` ("Access denied: …"), and the server-side stream is
+  unregistered and disposed. A resubscribe then meets the gate afresh.
+
+Nothing is dropped or reordered: a revision waits behind an earlier one whose verdict is pending,
+so a patch chain stays contiguous. A verdict that stalls past the permission-establishment budget,
+faults or answers nothing is a refusal. The expiry ends the subscription at its instant with
+nothing else emitting. A standing GRANT on an open direct subscription is not followed by this
+mechanism. Withdrawing it live belongs to `ObserveStandardRead`, not to the declaration's signal,
+and an owner-side subscription does not yet follow it (still open on #4306).
+Tests: `test/MeshWeaver.Graph.Test/OpenSubscriptionEndsWithTheReadTest.cs` (the revoking revision
+never delivered, on the node stream of a stored type and on a direct subscription; a direct
+subscription ended at the expiry; a link that is not revoked still streaming, as the negative
+control).
+
+**What a follow holds belongs to its subscription, never to the node hub.** The follow's standing
+Read is decided once and replayed to every later revision of the same subscription. Its connection
+is released when the followed sequence ends (`ClientReadFollow.Lifetime`), on a refusal, a
+completion or an unsubscribe. It used to be registered on the node hub, and a hub registration
+lives until the hub shuts down, so every open-and-close of a direct subscription on a long-lived
+node hub retained one. Measured: 20 closed followed subscriptions grew the owner's disposal
+registry by exactly 20 before, and by 0 after
+(`OpenSubscriptionEndsWithTheReadTest.ClosedFollowedSubscriptions_DoNotGrowTheOwnerHubsDisposalRegistry`).
+
+**The cache exemption covers the INTERNAL cache only.** A participant ingress re-stamps a
+delivery's identity but keeps the participant's own `Sender`, and `SubscribeRequest` is
+participant-postable. A `cache/…` sender on an ingress-stamped delivery is therefore a claim, and
+that subscription is followed like any other
+(`OpenSubscriptionEndsWithTheReadTest.AParticipantDeliveryClaimingTheCacheSender_IsStillFollowed`).
+
+**A refused subscription stays ended.** Both sides end it.
+- **Owner:** it does not announce a `StreamEndedEvent` for a refused read, because that event is
+  what the subscriber's recovery re-subscribes on.
+- **Subscriber:** on a `StreamErrorEvent` it disposes its sync stream instead of only faulting
+  it, which releases the change-feed staleness latch and the end/recycle re-arm.
+
+Those recovery paths used to re-subscribe as System, which the follow exempts. Before this fix
+they re-opened the revoked read, unfollowed, about two seconds after the refusal. The test
+measures the owner's registry: it serves neither the refused stream nor a new one
+(`ARefusedDirectSubscription_LeavesNoOwnerSubscriptionBehind`).
+
+**Recovery re-subscribes as the subscriber.** A client stream recovers by itself. It posts a
+fresh `SubscribeRequest` when the owner announces the end of the server-side half
+(`StreamEndedEvent`, a recycle or deactivation), when the change feed proves the mirror is
+behind, and when a frame is lost (`RequestFreshSnapshot`). Each of these is a NEW admission on
+the owner. All three used to run as System, and the gate admits System. So when an owner was
+recycled after a reader's grant was deleted, the reader's stream re-opened and received the
+next revision. Now every re-subscribe runs under the identity the stream was opened for. That
+identity is captured once, when the client stream is created
+(`SynchronizationStream.SubscriberContext`), and applied explicitly with `RunAs`, never read
+from the ambient context of the turn that triggers the recovery. A revoked reader's re-subscribe
+is refused and the stream ends with the denial. An infrastructure mirror keeps its own identity:
+one opened with no user (System, a hub address) re-subscribes as System, and the node-stream
+cache re-subscribes as `cache/mesh-node-cache`. A mirror opened as its hub (`GetRemoteStreamAsHub`)
+re-subscribes as that hub on every path, the frame-loss re-ask included. This holds even when a
+user was ambient when the mirror opened (`FrameLossResubscribeKeepsTheHubCredentialTest`). Pinned by `RecoveryResubscribesAsTheSubscriberTest`.
+A revoked reader is not served after a recycle, and the reader who keeps the grant recovers
+(negative control). A reader who never had Read is never served by recovery; that case already
+held before the fix.
+
+What this does NOT cover, measured on the same fixture: an OPEN subscription does not follow a
+revoked standard grant. The owner decides a `SubscribeRequest` once, at admission, and the
+node-stream cache's read gate is likewise decided once per `GetStream`. Its 30-second
+`AccessTtl` only bounds new reads. A revoked reader's open direct subscription, or open cache
+read, therefore keeps receiving revisions until it ends or a recovery re-subscribes it. Declared
+point reads are followed (above); standard grants are not yet.
+
+**A stored type's ownership is followed live.** A stored type's declaration counts only while
+its partition is system-owned, meaning a one-way `_GitSync` that names a repository.
+`DeclarationOf` re-reads that config on every commit to it and on every feed gap. Turning the
+sync two-way, emptying it or deleting it therefore ends an open admission without any write to
+the node itself (`AnOpenSubscription_EndsWhenTheTypesPartitionStopsBeingSystemOwned`, with a
+config change that keeps ownership as the negative control).
+
+**The follow runs as the subscriber, and only the follow does.** The owner hub's own work never
+takes the subscriber's identity: a watcher on the node reacts to each write as its writer (or as
+System, or a hub credential), with a direct subscriber followed or not
+(`FollowedSubscriptionOwnerIdentityTest`). Two seeded leaks did not turn that test red, so it pins
+the outcome for a direct subscriber and does not reproduce the shape measured in MeshWeaver.Plugins
+for a stream the node-stream cache opened (that shape is excluded from the follow).
+
 | Seam | Point read? | Consults the declaration |
 |---|---|---|
 | The node hub's own data read (`GetDataRequest` on `MeshNodeReference`), through `RlsNodeValidator` with `NodeValidationContext.IsPointRead` | yes | yes |
@@ -2082,8 +2237,99 @@ declaration). Later revisions are therefore never delivered to a caller who lost
 `IsPointRead` defaults to false. A seam that does not say it serves a point read is treated as a
 listing, which is the closed direction. A page that must follow whether its viewer may still read
 the node it shows uses `DeclaredPointRead.ObservePointRead(hub, path, viewer)`, with the viewer's
-whole context so a virtual visitor or an API token keeps its flags: the standard check, or the
-declaration when that denies. It is never used to filter a listing.
+whole context so a virtual visitor or an API token keeps its flags. It is never used to filter a
+listing. It decides the way `RlsNodeValidator` decides a point read, live:
+
+1. `Access:DenyAnonymous` refuses a logged-out viewer before anything else.
+2. The node type's `INodeTypeAccessRule` for Read decides when one governs: a denying rule
+   outranks a grant the fold would give, and a granting rule admits. Otherwise the permission fold
+   decides. Either leg is composed **under the viewer's context**, never the ambient one, because
+   the fold reads the caller's flags off the ambient context. Composed under the ambient context,
+   it answered a Bearer viewer as a browser (the API-token clamp never ran) and a browser viewer as
+   a token whenever a token was ambient.
+3. A rule or fold that faults, or completes with no verdict, is undetermined. That fails closed and
+   is never re-decided through the declaration.
+4. Only a definitive denial consults `DeclaredPointRead.Admits`.
+
+Steps 2 and 3 are `DeclaredPointRead.ObserveStandardRead(hub, path, viewer)`. It is **the** live
+standard-read path, and any seam that must follow a read for a whole subscription builds on it. It
+stays live in every input:
+
+- **The node is the owner's current revision.** Storage is only an existence probe, because a
+  stored snapshot may trail a write the owner has acknowledged and never re-emits. Each revision
+  the owner acknowledges re-selects the rule and re-supplies its `Node`. So a repointed `MainNode`
+  or a changed `NodeType` decides the next verdict. A node the owner no longer holds is denied.
+- **One input set, both branches.** The evaluation is the type's Read rule when one governs,
+  otherwise the permission fold. Either way it is one verdict, asked again on every signal of one
+  shared input set. A rule's contract is one verdict (the lease takes the first, and so does
+  `SpaceAccessRule`). The fold resolves a custom role from one value of the role catalog and does
+  not re-emit when a role changes, so keeping an evaluation subscribed would not keep it current.
+  Liveness comes from the signals alone.
+
+**The contract: any input the evaluation reads must be in this set.** The set is derived from what
+`PermissionEvaluator` and the platform's access rules actually consult:
+
+| Input the evaluation reads | Who reads it | Signal |
+|---|---|---|
+| Grants and policies on the node's scope chain; group memberships; type gates; the partition's `_GitSync` (content ownership) | the fold (`ObserveEffectiveAssignments`, `ObserveScopePolicies`, `ObserveAllMembershipNodes`, `ObserveGatedNodes`, `ObserveRepositoryOwnedContent`) | the viewer's live fold on the **node** |
+| The fold on the `MainNode` | `SatelliteAccessRule` | the viewer's live fold on the **MainNode** |
+| Update on the **partition root**, which a descendant `_Policy` can cut off from the node's own fold | `StorageBindingAccessRule` | the viewer's live fold on the **root** of the node and of its MainNode |
+| The platform-admin predicate (`IsGlobalAdmin`) | `SpaceAccessRule`, `GitHubSyncConfigAccessRule` | the viewer's live fold on **`Admin`** |
+| Custom role definitions | the fold (`GetRole`, one catalog value per evaluation) | the **role catalog's** own emissions, changes and deletions alike |
+| `{space}/_GitSync` content read from storage | `SpaceAccessRule` | feed commits on the node's scopes |
+| Anything committed elsewhere and lost | — | feed **gaps** |
+
+Feed commits count when they can reach the node:
+- grants (`{scope}/_Access/…`), policies (`{scope}/_Policy`) and sync configs (`{scope}/_GitSync`)
+  on an ancestor-or-self of the node or its `MainNode`, on the root, or on `Admin`, matched by
+  namespace and id so a typeless deletion still counts;
+- any typed group membership or role;
+- a typeless deletion only when its path places it: the node, one of its scopes, or a membership
+  (`{group}/{member}_Membership`). A typeless role deletion is carried by the role catalog.
+
+A fold's or the catalog's first value establishes the verdict; every later signal withdraws it.
+
+**Rules that only test the caller or the context read nothing from the mesh**: `VUserAccessRule`,
+`SystemOnlyAccessRule`, the functional rule sets, and the denying placeholders.
+`ReadInputSetGuardTest` lists every `INodeTypeAccessRule` in the core assemblies the suite loads,
+with what its Read consults. A new rule fails the test until someone checks its inputs against this
+table and adds its line. The guard cannot see what a rule reads, so it forces that review instead.
+Rules in MeshWeaver.Plugins are outside it: `ThreadNodeType`, `ThreadMessageNodeType`,
+`TokenUsage`, `PortalNodeType`, `DocumentPartNodeTypes`, `SessionPresenceNodeType` and
+`DispatchSwitchAccessRule`. Each of them must also read only inputs in this table.
+- **Fail closed while pending.** Every signal after the verdict is established withdraws it
+  first. The verdict becomes undetermined ("re-check pending", refused), and only that re-check's
+  own answer can grant again. So a stalled re-check stays refused, and a stream of signals cannot
+  keep an earlier grant alive by restarting the check that would replace it. Each check is also
+  one verdict held to the permission-establishment budget. The idle subscription is never timed
+  out. The signals that establish the verdict (the first check, each fold's first value) withdraw
+  nothing, so opening a page does not blink.
+- **The cost of failing closed.** An open page may show "no access" for the length of one
+  re-check after a matching signal, even when the answer comes back unchanged. The filters are
+  kept tight for that reason: an access input matches only on the node's own scopes, and an
+  ordinary content change never matches. A typeless deletion matches only by its path (the
+  node, its scopes, or a membership), never wholesale. Because the delete pipeline publishes
+  every deletion untyped, a wholesale match would blink every open rule-governed page on every
+  delete in the mesh. What remains broad cannot be narrowed from the event: a typed membership
+  or role change anywhere, and a declared gap.
+- **Off every source gate.** Each signal (revision, fold emission, feed commit, gap) is re-emitted
+  as its own pool work item, in order, before anything is evaluated. This is the `HopOffGate`
+  shape, never a long-lived `ObserveOn`. So a re-evaluation that enters another fold never runs
+  inside the gate that signalled it, and no thread is held per open subscription.
+- **Fan-out cost.** Each open subscription holds the following, whether or not a rule governs the
+  node:
+  - up to five folds (node, `MainNode`, the root of each, `Admin`, deduplicated);
+  - one subscription to the process-wide cached role catalog;
+  - one feed handler and one gap subscription.
+
+  On every commit anywhere in the mesh, the handler runs a string match against the node's scope
+  set (a few entries). Only a matching signal costs a re-evaluation: one rule call or one fold read.
+  An in-flight evaluation is superseded by the next (`Switch`).
+- **Every evaluation is re-established as the viewer** at the moment it subscribes. A
+  re-evaluation triggered on another thread never inherits that thread's context.
+
+The RLS validator's own-scope shortcut (a user reading inside the partition named after them) is
+not mirrored. Where the fold does not already grant such a read, the verdict errs closed.
 
 Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
 - a point read admitted while no listing sees the node, and the restored grant row leaking into the
@@ -2096,6 +2342,10 @@ Tests: `test/MeshWeaver.Graph.Test/DeclaredPointReadTest.cs`. The cases cover:
   at expiry, and a refusal right after the owner acknowledged a revocation;
 - an undetermined type rule not re-decided, and a borrowed System stamp not making a node
   platform-issued;
+- the page's live verdict consulting the type's rule like the RLS validator (a denying rule
+  outranks a grant, a granting rule admits, an undetermined rule is not re-decided, a definitive
+  rule denial reaches the declaration), and evaluating the fold as the viewer rather than the
+  ambient context (an API-token viewer clamped, an ambient token not clamping a browser viewer);
 - a collection read or subscription on an admitted node's hub refused (no satellite returned), an
   undeclared layout area refused, and a declared one admitted.
 

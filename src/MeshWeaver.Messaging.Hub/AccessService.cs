@@ -54,6 +54,28 @@ public class AccessService
         string.Equals(objectId, SystemObjectId, StringComparison.OrdinalIgnoreCase)
         || LooksLikeHubPrincipal(objectId);
 
+    /// <summary>
+    /// The READER a mesh read restores around its emissions, or <c>null</c> when
+    /// <paramref name="context"/> is not one. Only a person is a reader: a signed-in user, an API
+    /// token, or a logged-out visitor — including a context that names NOBODY (an empty
+    /// <c>ObjectId</c> is the anonymous visitor, see <see cref="AccessContext"/>, never
+    /// infrastructure). The platform (System), a hub, and every address-shaped infrastructure
+    /// identity (<c>cache/…</c>, <c>sync/…</c>, …) are not. Restoring one of those
+    /// would hand its identity to every other subscriber of a shared upstream. The cache's
+    /// hydration subscription, for example, would make each identity-less subscriber act as the
+    /// read-only <c>cache/mesh-node-cache</c>. Pure. See Doc/Architecture/AccessContextPropagation →
+    /// "Emissions arrive as the reader".
+    /// </summary>
+    /// <param name="context">The identity captured with the read.</param>
+    /// <returns>The context to restore, or null to leave emissions unchanged.</returns>
+    public static AccessContext? ReaderOf(AccessContext? context) =>
+        context is null
+        || context.IsHub
+        || (!string.IsNullOrEmpty(context.ObjectId)
+            && (IsPlatformPrincipal(context.ObjectId) || context.ObjectId.Contains('/')))
+            ? null
+            : context;
+
     private readonly AsyncLocal<AccessContext?> context = new();
 
     /// <summary>
