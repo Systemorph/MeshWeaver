@@ -111,6 +111,14 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
         var space = exactName is null
             ? await CreateSpace("Ownerless")
             : await CreateSpace(exactName, exactName: true);
+        await RemoveGrantsFromStorage(space);
+        return space;
+    }
+
+    /// <summary>Removes every durable grant under <c>{scope}/_Access</c>, straight from storage.</summary>
+    private async Task RemoveGrantsFromStorage(string scope)
+    {
+        var space = scope;
         var storage = Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>();
         var grants = await storage.ListChildPaths($"{space}/_Access").Take(1)
             .Should().Within(Budget).Emit("the grant folder must list",
@@ -123,7 +131,6 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
             .Should().Within(Budget).Emit("the grant folder must list",
                 cancellationToken: TestContext.Current.CancellationToken);
         Assert.Empty(after.NodePaths);
-        return space;
     }
 
     private IObservable<CreateNodeResponse> GrantAs(string caller, string space, string subject, string role)
@@ -296,6 +303,53 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     }
 
     /// <summary>
+    /// 🚨 The GROUP partitions are platform partitions (MeshWeaver.Plugins#4048 review). Their roots
+    /// are provisioned by governed executors with no grant and no <c>_Policy</c> — exactly the
+    /// OWNERLESS state, prepared here the same way — and a grant there would let a global
+    /// administrator who holds nothing on the group's target issue themselves the right to change an
+    /// existing group's membership, and with it the group's rights at its target. Refused at the
+    /// partition root AND under an existing group, for every role. The positive control is
+    /// <see cref="APlatformAdmin_GrantsOnAnOwnerlessSpace_ANonAdminCannot"/>: the same ownerless shape
+    /// under an ordinary name is granted.
+    /// </summary>
+    [Theory(Timeout = 240_000)]
+    [InlineData("ScopedGroups")]
+    [InlineData("Groups")]
+    public async Task APlatformAdmin_CannotGrant_OnAGroupPartition_NorUnderAnExistingGroup(string groupPartition)
+    {
+        var space = await PrepareOwnerlessSpace(groupPartition);
+        var group = $"{space}/team";
+        await NodeFactory.CreateNode(new MeshNode("team", space)
+        {
+            NodeType = "Markdown", Name = "team", State = MeshNodeState.Active,
+        }).Should().Within(Budget).Emit("the existing group fixture must be created",
+            cancellationToken: TestContext.Current.CancellationToken);
+        // The executors write a group's grants as System; none of them is the global admin's. Strip
+        // whatever the fixture's create left, so the partition is in the executor's ownerless state.
+        await RemoveGrantsFromStorage(space);
+        await RemoveGrantsFromStorage(group);
+        await AssertIsPlatformAdmin();
+        await PartitionWriteGuardValidator.IsUngrantable(Mesh, space).Should().Within(Budget).Match(u => u,
+            "precondition: the group partition is in the ownerless state the repair would otherwise open",
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        foreach (var scope in new[] { space, group })
+        foreach (var role in new[] { "Viewer", "Admin" })
+        {
+            var refused = await Answer(GrantAs(PlatformAdmin, scope, PlatformAdmin, role),
+                TestContext.Current.CancellationToken);
+            Assert.False(refused.Success,
+                $"a global admin's own {role} grant at '{scope}' must be refused — it would manage the group");
+            Assert.Contains("Access denied", refused.Error);
+        }
+
+        await Mesh.GetEffectivePermissions(group, PlatformAdmin).Should().Within(Budget)
+            .Match(p => !p.HasFlag(Permission.Update),
+                "the global admin holds nothing on an existing group after the refusals",
+                cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
     /// A FLEET partition (here an ownerless <c>Ops</c>, no sync) takes an entitlement from the
     /// platform admin and NOTHING more — the cap holds where no system-owned guard would.
     /// </summary>
@@ -377,7 +431,11 @@ public class PlatformAdminCanGrantOnAnUngrantableSpaceTest(ITestOutputHelper out
     public void ThePlatformAndFleetSets_AreExactlyTheProtectedPartitions()
     {
         Assert.Equal(
-            new[] { "Admin", "Anonymous", "ApiToken", "Auth", "Kernel", "Portal", "User", "system-security" },
+            new[]
+            {
+                "Admin", "Anonymous", "ApiToken", "Auth", "Groups", "Kernel", "Portal", "ScopedGroups", "User",
+                "system-security",
+            },
             WellKnownPartitions.Platform.OrderBy(p => p, StringComparer.Ordinal).ToArray());
         Assert.Equal(
             new[]

@@ -39,10 +39,18 @@ public static class WellKnownPartitions
     /// <c>ProtectedPartitions</c>), hosted HERE so both repositories read one list. None of them is
     /// ever a Space somebody lost: the platform-admin grant repair (#5904) refuses them outright.
     /// <c>_</c>-prefixed framework namespaces are refused by shape, not listed.
+    /// <para>🚨 The GROUP partitions belong here too: <c>Groups</c> (org-wide groups) and
+    /// <c>ScopedGroups</c> (groups holding one role at one path), both written only by governed
+    /// executors in MeshWeaver.Plugins (<c>Governance/Activity</c>), which provision their roots with
+    /// no grant and no <c>_Policy</c>. That is the OWNERLESS state the repair otherwise opens, and a
+    /// grant at <c>{group partition}/_Access</c> — or under an existing group — would let a global
+    /// administrator change a group's membership and acquire the rights the group holds elsewhere
+    /// without the executor's proposer and signer checks.</para>
     /// </summary>
     public static readonly ImmutableHashSet<string> Platform = ImmutableHashSet.Create(
         StringComparer.OrdinalIgnoreCase,
-        "Admin", "Auth", "User", "Portal", "Kernel", "ApiToken", "system-security", "Anonymous");
+        "Admin", "Auth", "User", "Portal", "Kernel", "ApiToken", "system-security", "Anonymous",
+        "Groups", "ScopedGroups");
 
     /// <summary>
     /// The FLEET's partitions — the records and shipped content every instance runs on. The rest of
