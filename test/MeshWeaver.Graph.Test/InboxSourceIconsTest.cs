@@ -252,7 +252,7 @@ public class InboxStateAndFilterTest
     {
         var node = new MeshNode("run3", "alice/_Activity") { NodeType = "Activity", Content = System.Text.Json.JsonSerializer.SerializeToElement(new
         {
-            messages = new object[] { new { message = "Running", logLevel = 2, messageKey = "inbox.state.running" } },
+            messages = new object[] { new { message = "Running", logLevel = "Information", messageKey = "inbox.state.running" } },
         }) };
         var section = new InboxSection(InboxBand.Running, "Activities", 10, "q");
         InboxRows.Of(node, section, null, null, null, 0, null, null, null, "de").StepMessage.Should().Be("Läuft");

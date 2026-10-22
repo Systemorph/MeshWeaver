@@ -443,6 +443,12 @@ public static class InboxRows
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);
 
+    // The mesh writes enums as names ("logLevel":"Information"); numbers are accepted too.
+    private static readonly JsonSerializerOptions LogEntryOptions = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
+
     /// <summary>
     /// When <paramref name="node"/> happened as its source times it: the content property
     /// <paramref name="timeField"/> (a stored UTC instant), read in whatever shape the content arrived
@@ -530,7 +536,7 @@ public static class InboxRows
             return null;
         try
         {
-            if (entry.Deserialize<MeshWeaver.Data.LogMessage>(ContentOptions) is { } message)
+            if (entry.Deserialize<MeshWeaver.Data.LogMessage>(LogEntryOptions) is { } message)
                 return MeshWeaver.Data.LogMessageLocalizationExtensions.Localize(message, locale);
         }
         catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
