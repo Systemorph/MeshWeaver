@@ -203,7 +203,7 @@ public static class UserNodeType
             [NodeOperation.Read],
             (context, userId) =>
             {
-                if (!WellKnownUsers.IsAuthenticated(userId)) return false;
+                if (!WellKnownUsers.IsSignedIn(context.AccessContext, userId)) return false;
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath)) return false;
                 // Root-level user node ("Alice") with no namespace separator: public.
@@ -244,15 +244,23 @@ public static class UserNodeType
                 var nodePath = context.Node.Path;
                 if (string.IsNullOrEmpty(nodePath))
                     return Observable.Return(false);
-                // Root-level user node ({userId}) — readable by any authenticated user.
+                // Root-level user node ({userId}) — readable by any AUTHENTICATED user, the same
+                // test WithUserNodePublicRead applies. 🚨 Never "non-empty": a logged-out visitor
+                // arrives NAMED (WellKnownUsers.Anonymous), and `!IsNullOrEmpty` admitted it to every
+                // profile without any grant. A visitor still reads a profile an explicit grant opens
+                // to Anonymous, through the permission fold.
                 if (!nodePath.Contains('/'))
-                    return Observable.Return(!string.IsNullOrEmpty(userId));
+                    return WellKnownUsers.IsSignedIn(context.AccessContext, userId)
+                        ? Observable.Return(true)
+                        : hub.CheckPermission(nodePath, WellKnownUsers.FallbackSubject(context.AccessContext, userId), Permission.Read);
                 // Legacy "User" namespace passthrough (transitional).
                 if (nodePath.Equals("User", StringComparison.OrdinalIgnoreCase))
                     return Observable.Return(true);
                 if (nodePath.StartsWith("User/", StringComparison.OrdinalIgnoreCase)
                     && !nodePath["User/".Length..].Contains('/'))
-                    return Observable.Return(!string.IsNullOrEmpty(userId));
+                    return WellKnownUsers.IsSignedIn(context.AccessContext, userId)
+                        ? Observable.Return(true)
+                        : hub.CheckPermission(nodePath, WellKnownUsers.FallbackSubject(context.AccessContext, userId), Permission.Read);
                 if (string.IsNullOrEmpty(userId))
                     return Observable.Return(false);
                 return hub.CheckPermission(nodePath, userId, Permission.Read);
