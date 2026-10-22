@@ -259,10 +259,11 @@ public static class InboxLayoutArea
         var shown = new BehaviorSubject<(ImmutableList<InboxRow> Rows, int? NeedsYou)>((ImmutableList<InboxRow>.Empty, null));
         host.RegisterForDisposal(shown);
         var rows = Rows(host, sections, owner, zone, acts.Rereads, (list, needsYou) => shown.OnNext((list, needsYou)));
-        host.RegisterForDisposal(shown.CombineLatest(host.RowSelection(InboxRows.SelectionId),
+        // The framework owns the subscription: it is disposed with the area and a feed failure goes to the area-error boundary.
+        host.SubscribeToDataStream(DecideStyleId, shown.CombineLatest(host.RowSelection(InboxRows.SelectionId),
                 (feed, selected) => ToolbarOf(feed.Rows, selected, owner, feed.NeedsYou))
             .DistinctUntilChanged()
-            .Subscribe(toolbar => host.UpdateData(DecideStyleId, toolbar.Decide ? string.Empty : HiddenStyle)));
+            .Select(toolbar => toolbar.Decide ? string.Empty : HiddenStyle));
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
 
@@ -274,13 +275,13 @@ public static class InboxLayoutArea
                 // The CLR type NAME the client resolves through its registry — "String", never the
                 // C# keyword: "string" is not a type name, and the menu failed with "Type not found".
                 typeof(string).Name)
-            with { DataContext = filterContext })
+            with { DataContext = filterContext, AriaLabel = host.Localize("inbox.section.kind") })
             .WithOrientation(Orientation.Vertical);
         // The tags a triage gave — GitHub's label filter: Important first, then each tag by how
         // often it is used. A tag narrows whatever folder and sources are shown.
         var tags = (Controls.RadioGroup(new JsonPointerReference("tag"),
                 new JsonPointerReference(LayoutAreaReference.GetDataPointer(TagOptionsId)), typeof(string).Name)
-            with { DataContext = filterContext })
+            with { DataContext = filterContext, AriaLabel = host.Localize("inbox.section.tags") })
             .WithOrientation(Orientation.Vertical);
         // Source: Only narrows to the one source picked and wins over the switches; below it ONE row
         // per source — the SAME symbol the grid's first column shows, then a switch named for it. A
@@ -288,7 +289,7 @@ public static class InboxLayoutArea
         var sourceList = Controls.Stack.WithVerticalGap(4)
             .WithView(Controls.Select(new JsonPointerReference("only"),
                     new JsonPointerReference(LayoutAreaReference.GetDataPointer(SourceOptionsId)))
-                with { DataContext = filterContext }, "Only");
+                with { DataContext = filterContext, AriaLabel = host.Localize("inbox.only") }, "Only");
         foreach (var source in sources)
         {
             var key = InboxRows.SourceKey(source.Id);
