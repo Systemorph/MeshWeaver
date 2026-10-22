@@ -537,6 +537,29 @@ A zero over a window in which a chart or pivot page was rendered by two sessions
 for #6584. For #6588 the window must contain one session ending while another works on a module
 service.
 
+**The first reading named a ROOT singleton holding scoped validators (MeshWeaver#6584).** The image that
+carried the diagnostics wrote the first line twice per pod on both public portals, for two module
+`INodeValidator` write guards — the Hosting module's `InstanceActionRequestWriteGuard` and the AI
+module's `ModelCeilingWriteGuard` — and the second line never. The route: the mesh's query providers
+(`StorageAdapterMeshQueryProvider`, `StaticNodeQueryProvider`) are ROOT singletons, and their Read filter
+took the validator set from the root container (`IEnumerable<Lazy<INodeValidator>>`). Every
+`INodeValidator` is registered SCOPED — it runs on the hub that validates the write — so that was a
+captive dependency: a module's scoped validator, forwarded for no caller, was built in the module
+container's own root scope, once per generation, only for the filter to read its `SupportedOperations`
+and discard it as a write-only validator. Registering the guards as singletons would have hidden the
+line and changed what they validate against (each reads the VALIDATING hub's configuration); the
+consumer was the defect. Now a singleton consumer takes the set from `SingletonNodeValidators`, a root
+singleton that begins a scope of its own and resolves the set there: that scope is the caller, a module's
+scoped validator is built in the module scope it owns, and everything the scope built is disposed with
+the root. A native backend whose query provider filters reads the same way must take its validators from
+the same holder; the Sqlite and Cosmos providers in MeshWeaver.Plugins still take them from the root and
+move once this holder is on their platform pin (the public portals run Postgres, whose provider
+consults no validator). `AModuleNodeValidatorIsNeverBuiltForNoCallerTest` installs a module with a write-only scoped
+validator, reads a stored node as a user through the query providers, and asserts that no build of the
+validator had no caller; its control asserts that the query really materialised every validator of the
+set the providers hold. Against the old registration it fails with one build in a hub's scope (the
+write) and one with no caller (the query).
+
 **A withdrawn module is absent from the installed-module set (MeshWeaver#6557).** A container's
 registrations are fixed once it is built; the module set is not. Each held module used to get its own
 transient `InstalledModuleAssembly` registration, and a module withdrawn after the container was built
