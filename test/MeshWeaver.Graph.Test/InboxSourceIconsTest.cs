@@ -234,6 +234,31 @@ public class InboxStateAndFilterTest
             .Should().HaveLength(InboxRows.StepMessageLimit).And.EndWith("…");
     }
 
+    /// <summary>Children may overlap and finish out of order: the step is the first unfinished one.</summary>
+    [Fact]
+    public void TheStep_IsTheFirstUnfinishedSubActivity_WhenTheyFinishOutOfOrder()
+    {
+        ActivityRow(new { subActivities = new object[] { new { status = "Running" }, new { status = "Succeeded" }, new { status = "Running" } } })
+            .StepNumber.Should().Be("1/3");
+        ActivityRow(new { subActivities = new object[] { new { status = "Succeeded" }, new { status = "Running" }, new { status = "Succeeded" } } })
+            .StepNumber.Should().Be("2/3");
+        ActivityRow(new { subActivities = new object[] { new { status = "Succeeded" }, new { status = "Failed" } } })
+            .StepNumber.Should().Be("2/2", "never past the last");
+    }
+
+    /// <summary>A localizable log entry is read in the viewer's locale; the English text is the fallback.</summary>
+    [Fact]
+    public void TheStepMessage_IsLocalizedForTheViewer()
+    {
+        var node = new MeshNode("run3", "alice/_Activity") { NodeType = "Activity", Content = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            messages = new object[] { new { message = "Running", logLevel = 2, messageKey = "inbox.state.running" } },
+        }) };
+        var section = new InboxSection(InboxBand.Running, "Activities", 10, "q");
+        InboxRows.Of(node, section, null, null, null, 0, null, null, null, "de").StepMessage.Should().Be("Läuft");
+        InboxRows.Of(node, section, null, null, null, 0, null, null, null, null).StepMessage.Should().Be("Running", "no locale: the English fallback");
+    }
+
     /// <summary>Only a running activity carries a step; a failed one and a mail do not.</summary>
     [Fact]
     public void OnlyARunningActivity_CarriesAStep()
@@ -253,6 +278,7 @@ public class InboxStateAndFilterTest
         var leg = InboxQueries.BuiltIn.Single(l => l.Source == "Activities" && l.Band == InboxBand.Running);
         leg.TimeField.Should().Be("start");
         InboxQueries.Bounded(leg.Query, leg.TimeField).Should().Contain("content");
+        leg.Query.Should().Contain("sort:content.start-desc", "the bound is chosen by the stamp the rows are shown by");
     }
 
     private static InboxRow StateRow(string name, string state)

@@ -372,6 +372,25 @@ public static class InboxRows
     /// <param name="options">The hub's serializer options; Web defaults when null.</param>
     public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
         string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options)
+        => Of(node, section, zone, blockedReason, band, rank, sourceLabel, culture, options, locale: null);
+
+    /// <summary>
+    /// <see cref="Of(MeshNode, InboxSection, string?, string?, string?, int, string?, CultureInfo?, JsonSerializerOptions?)"/>
+    /// with the viewer's locale, in which a running activity's latest log line is localized. A separate overload —
+    /// never an added optional parameter, which would replace the released signature.
+    /// </summary>
+    /// <param name="node">The node the leg returned.</param>
+    /// <param name="section">The leg that returned it.</param>
+    /// <param name="zone">The viewer's time zone.</param>
+    /// <param name="blockedReason">Why the row cannot be selected, or null when it can.</param>
+    /// <param name="band">The band's title as the viewer reads it.</param>
+    /// <param name="rank">The band's rank.</param>
+    /// <param name="sourceLabel">The source's display name.</param>
+    /// <param name="culture">The viewer's culture.</param>
+    /// <param name="options">The hub's serializer options; Web defaults when null.</param>
+    /// <param name="locale">The viewer's locale, or null for the English fallback.</param>
+    public static InboxRow Of(MeshNode node, InboxSection section, string? zone, string? blockedReason,
+        string? band, int rank, string? sourceLabel, CultureInfo? culture, JsonSerializerOptions? options, string? locale)
     {
         // ONE read of the row's content — its time, sender, link and read state all come from it, and
         // that conversion is paid per row on every render.
@@ -389,7 +408,7 @@ public static class InboxRows
         var state = InboxState.Of(section.Source, section.Band, section.Ledger == ApprovalLedgerKind.Requested, unread, StringOf(content, "status"));
         var running = string.Equals(section.Source, "Activities", StringComparison.Ordinal)
                       && string.Equals(state, InboxState.Running, StringComparison.Ordinal);
-        var step = running ? StepOf(content) : (Number: string.Empty, Message: string.Empty);
+        var step = running ? StepOf(content, locale) : (Number: string.Empty, Message: string.Empty);
         return new()
         {
             Path = node.Path,
@@ -482,24 +501,43 @@ public static class InboxRows
     /// messages). Pure; unreadable or absent content gives two empty strings.
     /// </summary>
     /// <param name="content">The row's content, or null.</param>
-    internal static (string Number, string Message) StepOf(JsonElement? content)
+    internal static (string Number, string Message) StepOf(JsonElement? content, string? locale = null)
     {
         var number = string.Empty;
         if (PropertyOf(content, "subActivities") is { ValueKind: JsonValueKind.Array } subs && subs.GetArrayLength() > 0)
         {
             var total = subs.GetArrayLength();
-            var finished = subs.EnumerateArray().Count(sub => IsTerminal(sub));
+            // Leading finished children only: they may overlap and finish out of order, so [Running, Succeeded, Running] is on step 1.
+            var finished = subs.EnumerateArray().TakeWhile(IsTerminal).Count();
             number = $"{Math.Min(finished + 1, total).ToString(CultureInfo.InvariantCulture)}/{total.ToString(CultureInfo.InvariantCulture)}";
         }
         var message = string.Empty;
         if (PropertyOf(content, "messages") is { ValueKind: JsonValueKind.Array } messages && messages.GetArrayLength() > 0)
         {
             var last = messages.EnumerateArray().Last();
-            var text = last.ValueKind == JsonValueKind.Object ? StringOf(last, "message") : null;
+            var text = LogLineOf(last, locale);
             var line = (text ?? string.Empty).Split('\n', 2)[0].Trim();
             message = line.Length > StepMessageLimit ? line[..(StepMessageLimit - 1)] + "…" : line;
         }
         return (number, message);
+    }
+
+    // The log entry as the viewer reads it: a localizable entry (messageKey + messageArgs) is resolved in
+    // the viewer's locale, anything else keeps its English fallback text.
+    private static string? LogLineOf(JsonElement entry, string? locale)
+    {
+        if (entry.ValueKind != JsonValueKind.Object)
+            return null;
+        try
+        {
+            if (entry.Deserialize<MeshWeaver.Data.LogMessage>(ContentOptions) is { } message)
+                return MeshWeaver.Data.LogMessageLocalizationExtensions.Localize(message, locale);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or JsonException or InvalidOperationException)
+        {
+            // Unreadable entry: fall back to its plain text below.
+        }
+        return StringOf(entry, "message");
     }
 
     // A sub-activity is finished once its status is a terminal ActivityStatus, as a name or a number.

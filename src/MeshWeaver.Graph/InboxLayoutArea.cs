@@ -583,7 +583,8 @@ public static class InboxLayoutArea
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
-        var culture = ViewerCulture(host.ViewerLocale());
+        var locale = host.ViewerLocale();
+        var culture = ViewerCulture(locale);
         // Per row only the person differs: the sentences are resolved ONCE here, with "{0}" kept for them.
         var ledgerTexts = InboxApprovalLedger.Texts.Of(
             host.Localize("inbox.approvals.requestedFrom", "{0}"),
@@ -625,7 +626,7 @@ public static class InboxLayoutArea
                         InboxRows.Of(node, section, zone,
                             BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
                             bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
-                            hub.JsonSerializerOptions),
+                            hub.JsonSerializerOptions, locale),
                         node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts, stepFormat))
                     .ToImmutableList(), (string?)null))
                 .Catch((Exception ex) =>
