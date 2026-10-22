@@ -98,8 +98,16 @@ public static class PartitionNodeType
 
         public IObservable<bool> HasAccess(NodeValidationContext context, string? userId)
         {
+            // 🚨 Any SIGNED-IN reader, never "any non-empty id": a logged-out visitor arrives named
+            // (Anonymous, or a virtual per-visitor id), and the old test handed it every partition
+            // record without a grant. A visitor reads one only through a grant made to Anonymous.
             if (context.Operation == NodeOperation.Read)
-                return Observable.Return(!string.IsNullOrEmpty(userId));
+                return WellKnownUsers.IsSignedIn(context.AccessContext, userId)
+                    ? Observable.Return(true)
+                    : string.IsNullOrEmpty(context.Node.Path)
+                        ? Observable.Return(false)
+                        : hub.CheckPermission(context.Node.Path,
+                            WellKnownUsers.FallbackSubject(context.AccessContext, userId), Permission.Read);
 
             if (string.IsNullOrEmpty(userId))
                 return Observable.Return(false);

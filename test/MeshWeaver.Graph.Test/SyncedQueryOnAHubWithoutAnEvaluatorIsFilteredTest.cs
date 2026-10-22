@@ -1,0 +1,357 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reactive.Linq;
+using System.Threading.Tasks;
+using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// 🚨 <b>A synced query (<c>hub.GetQuery</c>) opened on a hub that carries no permission evaluator of
+/// its own is still filtered to what its reader may read.</b>
+///
+/// <para>The shape: every Blazor view reads through the circuit's PORTAL hub, and a hub's
+/// configuration starts empty — the mesh's <c>EffectivePermissionsDelegate</c> is not inherited.
+/// <c>WrapWithPerUserRls</c> asked the CALLING hub whether row-level security was on, got "no
+/// evaluator", and handed the System-loaded snapshot through unfiltered, whatever the reader's
+/// identity. Measured before the fix: the stranger, who holds no grant on the vault, was shown the
+/// secret by a synced query opened on a client hub, under their OWN identity. The filter is now
+/// judged by the mesh hub, which carries the evaluator the owner's RLS check runs. The keeper, who
+/// holds Read, still sees it (positive control); a query opened on the mesh hub itself is the
+/// control that was always filtered.</para>
+/// <para>Found while fixing the Blazor render-identity leak (triage
+/// <c>rbuergi/Feedback/blazor-render-reads-ambient-identity-2026-10-21</c>; Refs #7038).</para>
+/// </summary>
+public class SyncedQueryOnAHubWithoutAnEvaluatorIsFilteredTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string Stranger = "synced-stranger";
+    private const string Keeper = "synced-keeper";
+    private const string Lobby = "SyncedLobby";
+    private const string Vault = "SyncedVault";
+    private const string OpenName = "LOBBY-OPEN-5e11";
+    private const string SecretName = "VAULT-SECRET-0c3a";
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => ConfigureMeshBase(builder)
+            .AddMeshNodes(
+                Person(Stranger, "Synced Stranger"),
+                AssignmentNodeFactory.UserRole(Stranger, "Admin", Stranger),
+                Person(Keeper, "Synced Keeper"),
+                AssignmentNodeFactory.UserRole(Keeper, "Admin", Keeper),
+                new MeshNode(Lobby) { Name = "Synced Lobby", NodeType = "Space" },
+                new MeshNode(Vault) { Name = "Synced Vault", NodeType = "Space" },
+                AssignmentNodeFactory.UserRole(Stranger, "Viewer", Lobby),
+                AssignmentNodeFactory.UserRole(Keeper, "Viewer", Lobby),
+                AssignmentNodeFactory.UserRole(Keeper, "Viewer", Vault),
+                // The stranger's OWN partition withholds API reach: an API token holds nothing there,
+                // however the row is otherwise admitted (the own-scope shortcut).
+                AssignmentNodeFactory.Policy(Stranger, new PartitionAccessPolicy { Api = false }),
+                // The keeper's partition withholds API reach too: its root profile, which only the
+                // User type rule opens to a signed-in reader, must not reach an API token.
+                AssignmentNodeFactory.Policy(Keeper, new PartitionAccessPolicy { Api = false }),
+                // An uncapped profile, explicitly opened to the anonymous visitor.
+                Person(PublicPerson, "Synced Public"),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", PublicPerson),
+                // Legacy User/{id} profiles: one opened to Anonymous, one not.
+                LegacyProfile(LegacyOpen), LegacyProfile(LegacyClosed),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", $"User/{LegacyOpen}"),
+                // Partition records: one opened to Anonymous, one not.
+                PartitionRecord(PartitionOpen), PartitionRecord(PartitionClosed),
+                AssignmentNodeFactory.UserRole(WellKnownUsers.Anonymous, "Viewer", $"{PartitionNodeType.Namespace}/{PartitionOpen}"))
+            .ConfigureServices(services => services.AddSingleton<INodeValidator>(new SilentOnShadowValidator()));
+
+    private const string ShadowName = "VAULT-SHADOW-77d4";
+    private const string DiaryName = "STRANGER-DIARY-3b90";
+    private const string PublicPerson = "synced-public";
+
+    /// <summary>
+    /// Opens a synced query on a client hub (no evaluator of its own) as <paramref name="reader"/>
+    /// and returns the paths in its first snapshot — the reader's identity is captured at the call.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> SnapshotAs(AccessContext reader, string expect, params string[] queries)
+    {
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<IEnumerable<MeshNode>> query;
+        using (access.SwitchAccessContext(reader))
+            query = client.GetQuery($"synced-snapshot-{Guid.NewGuid():N}", queries);
+        return await query
+            .Select(nodes => (IReadOnlyList<string>)nodes.Select(n => n.Path ?? n.Id).ToList())
+            .Do(paths => Output.WriteLine($"{reader.ObjectId} (token={reader.IsApiToken}): [{string.Join(", ", paths)}]"))
+            .Where(paths => paths.Contains(expect))
+            .Should().Within(TestTimeouts.Convergence).Emit($"{reader.ObjectId}'s synced query shows {expect}");
+    }
+
+    /// <summary>
+    /// 🚨 The named ANONYMOUS visitor is not a signed-in reader: the User type rule opens root
+    /// profiles to authenticated readers only, and the visitor reads one solely through an explicit
+    /// grant to Anonymous. The granted profile is the positive control in the SAME snapshot, so the
+    /// negative cannot pass on an empty answer.
+    /// </summary>
+    [Fact]
+    public async Task TheAnonymousVisitorReadsOnlyTheProfileAGrantOpensToIt()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous, IsVirtual = true }, PublicPerson,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+
+        paths.Should().Contain(PublicPerson, "an explicit Read grant to Anonymous opens that profile to the visitor");
+        paths.Should().NotContain(Keeper, "no grant opens the keeper's profile to a visitor, and the visitor is not signed in");
+    }
+
+    private const string LegacyOpen = "legacy-open";
+    private const string LegacyClosed = "legacy-closed";
+    private const string PartitionOpen = "SyncedOpenPartition";
+    private const string PartitionClosed = "SyncedClosedPartition";
+
+    private static MeshNode LegacyProfile(string id) => new(id, "User")
+    {
+        NodeType = UserNodeType.NodeType,
+        Name = id,
+        State = MeshNodeState.Active,
+        Content = new User { FullName = id, Email = $"{id}@meshweaver.io" },
+    };
+
+    private static MeshNode PartitionRecord(string id) => new(id, PartitionNodeType.Namespace)
+    {
+        NodeType = PartitionNodeType.NodeType,
+        Name = id,
+        Content = new PartitionDefinition { Namespace = id },
+    };
+
+    /// <summary>
+    /// 🚨 A logged-out visitor with a per-visitor VIRTUAL id (not literally "Anonymous") is no
+    /// signed-in reader either: it reads a root or legacy <c>User/{id}</c> profile only through a
+    /// grant made to Anonymous. Granted and denied controls of both shapes share one snapshot.
+    /// </summary>
+    [Fact]
+    public async Task AVirtualVisitorReadsOnlyTheProfilesAGrantOpensToAnonymous()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = "guest-7f3a", Name = "Guest", IsVirtual = true }, $"User/{LegacyOpen}",
+            $"path:{PublicPerson}", $"path:{Keeper}", $"path:User/{LegacyOpen}", $"path:User/{LegacyClosed}");
+
+        paths.Should().Contain([PublicPerson, $"User/{LegacyOpen}"], "a grant to Anonymous opens these to every visitor");
+        paths.Should().NotContain(Keeper, "a virtual visitor is not signed in, whatever id it carries");
+        paths.Should().NotContain($"User/{LegacyClosed}", "the legacy profile shape follows the same rule");
+    }
+
+    /// <summary>
+    /// 🚨 Partition records are not open to a logged-out visitor: the Partition type's Read rule
+    /// admits signed-in readers, and a visitor only the record a grant to Anonymous opens.
+    /// </summary>
+    [Fact]
+    public async Task TheAnonymousVisitorReadsOnlyThePartitionRecordAGrantOpensToIt()
+    {
+        var paths = await SnapshotAs(
+            new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous, IsVirtual = true },
+            $"{PartitionNodeType.Namespace}/{PartitionOpen}",
+            $"path:{PartitionNodeType.Namespace}/{PartitionOpen}", $"path:{PartitionNodeType.Namespace}/{PartitionClosed}");
+
+        paths.Should().NotContain($"{PartitionNodeType.Namespace}/{PartitionClosed}",
+            "no grant opens that partition record to a visitor");
+
+        var asSignedIn = await SnapshotAs(new AccessContext { ObjectId = Stranger, Name = Stranger },
+            $"{PartitionNodeType.Namespace}/{PartitionClosed}",
+            $"path:{PartitionNodeType.Namespace}/{PartitionOpen}", $"path:{PartitionNodeType.Namespace}/{PartitionClosed}");
+        asSignedIn.Should().Contain($"{PartitionNodeType.Namespace}/{PartitionOpen}", "a signed-in reader still reads partition records");
+    }
+
+    /// <summary>
+    /// 🚨 The API POLICY binds a row a node type's own rule admits: the keeper's partition sets
+    /// <c>api: false</c>, so an API token of a signed-in stranger does not read the keeper's root
+    /// profile, while the uncapped profile — admitted by the same rule — still arrives (positive
+    /// control, same snapshot). The same person in a browser reads both.
+    /// </summary>
+    [Fact]
+    public async Task AnApiTokenReadsATypeRuleGrantOnlyWhereThePolicyAllowsTheApi()
+    {
+        var asToken = await SnapshotAs(
+            new AccessContext { ObjectId = Stranger, Name = Stranger, IsApiToken = true }, PublicPerson,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+        asToken.Should().Contain(PublicPerson, "an uncapped profile the User rule opens stays readable to an API token");
+        asToken.Should().NotContain(Keeper, "the keeper's partition withholds API reach, however the row was admitted");
+
+        var asBrowser = await SnapshotAs(
+            new AccessContext { ObjectId = Stranger, Name = Stranger }, Keeper,
+            $"path:{PublicPerson}", $"path:{Keeper}");
+        asBrowser.Should().Contain([PublicPerson, Keeper], "the API cap does not touch the same person in a browser");
+    }
+
+    private static MeshNode Person(string id, string name) => new(id)
+    {
+        NodeType = UserNodeType.NodeType,
+        Name = name,
+        State = MeshNodeState.Active,
+        Content = new User { FullName = name, Email = $"{id}@meshweaver.io" },
+    };
+
+    /// <summary>🚨 THE DEFECT: the stranger's synced query on a hub without an evaluator does not show the vault.</summary>
+    [Fact]
+    public async Task AStrangersSyncedQueryOnAClientHubDoesNotShowTheVault()
+    {
+        await Seed();
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        client.Configuration.Get<EffectivePermissionsDelegate>().Should().BeNull(
+            "the premise: the client hub, like a portal hub, carries no permission evaluator of its own");
+
+        var snapshot = await FirstWith(client, Stranger, OpenName);
+        snapshot.Should().NotContain(SecretName, "the stranger holds no grant on the vault");
+    }
+
+    /// <summary>Control: the same query opened on the mesh hub, which carries the evaluator.</summary>
+    [Fact]
+    public async Task AStrangersSyncedQueryOnTheMeshHubDoesNotShowTheVault()
+    {
+        await Seed();
+        var snapshot = await FirstWith(Mesh, Stranger, OpenName);
+        snapshot.Should().NotContain(SecretName, "the stranger holds no grant on the vault");
+    }
+
+    /// <summary>🚨 POSITIVE CONTROL: the keeper's synced query on the same client hub shows the vault.</summary>
+    [Fact]
+    public async Task AKeepersSyncedQueryOnAClientHubShowsTheVault()
+    {
+        await Seed();
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        await FirstWith(client, Keeper, SecretName);
+    }
+
+    /// <summary>
+    /// 🚨 A node type's own READ rule holds in the filter exactly as in a query: <c>UserAccessRule</c>
+    /// opens every root User profile to any signed-in reader, with no scope grant. The scope fold
+    /// alone would hide the keeper's profile from the stranger; the read-validator chain shows it.
+    /// </summary>
+    [Fact]
+    public async Task ATypeRulesReadGrantHoldsInASyncedQueryOnAClientHub()
+    {
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+        var premise = await Mesh.GetEffectivePermissions(Keeper, Stranger)
+            .Should().Within(TestTimeouts.Convergence).Emit("the fold answers for the stranger on the keeper's profile");
+        premise.HasFlag(Permission.Read).Should().BeFalse(
+            "the premise: no scope grant gives the stranger Read on the keeper's profile — only the type rule does");
+
+        IObservable<IEnumerable<MeshNode>> query;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = Stranger, Name = Stranger }))
+            query = client.GetQuery($"synced-type-rule-{Guid.NewGuid():N}", $"path:{Keeper}");
+
+        await query
+            .Do(nodes => Output.WriteLine($"{Stranger}: [{string.Join(", ", nodes.Select(n => n.Path))}]"))
+            .Where(nodes => nodes.Any(n => n.Path == Keeper))
+            .Should().Within(TestTimeouts.Convergence).Emit(
+                "UserAccessRule grants every signed-in reader the root User profiles, and the synced query honours it");
+    }
+
+    /// <summary>
+    /// 🚨 NO VERDICT IS NOT CONSENT: a registered Read validator that completes WITHOUT emitting
+    /// refuses the row. The keeper may read the vault and every other validator admits the shadow
+    /// node, but one validator stays silent on it, so it must not reach the keeper's synced query.
+    /// </summary>
+    [Fact]
+    public async Task AReadValidatorThatGivesNoVerdictHidesTheRow()
+    {
+        await Seed();
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode(SilentOnShadowValidator.ShadowId, Vault) { Name = ShadowName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the shadow node");
+        var client = GetClient(c => ConfigureClient(c).AddData());
+
+        var snapshot = await FirstWith(client, Keeper, SecretName);
+        snapshot.Should().NotContain(ShadowName,
+            "a validator that completed without a verdict gave no consent, so the row is refused");
+    }
+
+    /// <summary>
+    /// 🚨 The API-token clamp holds on the synced-query path: the stranger's OWN partition withholds
+    /// API reach, so the stranger's API token sees nothing there, although the own-scope shortcut
+    /// admits the row before the permission fold (where the clamp lives) is reached. The same person
+    /// in a browser sees it (positive control).
+    /// </summary>
+    [Fact]
+    public async Task AnApiTokenReadsNothingInAnApiCappedOwnScope()
+    {
+        await Seed();
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+            .CreateNode(new MeshNode("Diary", Stranger) { Name = DiaryName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the stranger's own node");
+        var client = GetClient(c => ConfigureClient(c).AddData());
+        var access = client.ServiceProvider.GetRequiredService<AccessService>();
+
+        IObservable<IEnumerable<MeshNode>> Open(bool apiToken)
+        {
+            using (access.SwitchAccessContext(new AccessContext { ObjectId = Stranger, Name = Stranger, IsApiToken = apiToken }))
+                return client.GetQuery($"synced-api-{apiToken}-{Guid.NewGuid():N}",
+                    $"namespace:{Lobby}", $"namespace:{Stranger}");
+        }
+
+        await Open(apiToken: false)
+            .Where(nodes => nodes.Any(n => n.Name == DiaryName))
+            .Should().Within(TestTimeouts.Convergence).Emit("the stranger in a browser reads their own node");
+
+        var asToken = await Open(apiToken: true)
+            .Select(nodes => nodes.Select(n => n.Name ?? n.Id).ToList())
+            .Do(names => Output.WriteLine($"token: [{string.Join(", ", names)}]"))
+            .Where(names => names.Contains(OpenName))
+            .Should().Within(TestTimeouts.Convergence).Emit("the token's snapshot arrives (the lobby is not API-capped)");
+        asToken.Should().NotContain(DiaryName, "the partition's policy withholds API reach from every token");
+    }
+
+    private async Task Seed()
+    {
+        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        await mesh.CreateNode(new MeshNode("Open", Lobby) { Name = OpenName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the open node");
+        await mesh.CreateNode(new MeshNode("Secret", Vault) { Name = SecretName, NodeType = "Markdown" })
+            .Should().Within(TestTimeouts.Convergence).Emit("the admin seeds the secret");
+    }
+
+    /// <summary>
+    /// Opens one synced query over both spaces on <paramref name="hub"/> as <paramref name="reader"/>
+    /// (the identity is captured when the query is opened) and returns the names in the first
+    /// snapshot that shows <paramref name="expected"/>.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> FirstWith(IMessageHub hub, string reader, string expected)
+    {
+        var access = hub.ServiceProvider.GetRequiredService<AccessService>();
+        IObservable<IEnumerable<MeshNode>> query;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = reader, Name = reader }))
+            query = hub.GetQuery($"synced-evaluator-{Guid.NewGuid():N}", $"namespace:{Lobby}", $"namespace:{Vault}");
+
+        return await query
+            .Select(nodes => (IReadOnlyList<string>)nodes.Select(n => n.Name ?? n.Id).ToList())
+            .Do(names => Output.WriteLine($"{reader}: [{string.Join(", ", names)}]"))
+            .Where(names => names.Contains(expected))
+            .Should().Within(TestTimeouts.Convergence).Emit($"{reader}'s synced query shows {expected}");
+    }
+}
+
+/// <summary>
+/// A Read validator that admits everything except the vault's shadow node, on which it completes
+/// WITHOUT emitting a verdict: the contract violation the filter must treat as a refusal.
+/// </summary>
+internal sealed class SilentOnShadowValidator : INodeValidator
+{
+    /// <summary>The id of the node this validator gives no verdict on.</summary>
+    public const string ShadowId = "Shadow";
+
+    /// <inheritdoc />
+    public IReadOnlyCollection<NodeOperation> SupportedOperations => [NodeOperation.Read];
+
+    /// <inheritdoc />
+    public IObservable<NodeValidationResult> Validate(NodeValidationContext context)
+        => context.Node.Id == ShadowId && context.Node.Namespace == "SyncedVault"
+            ? Observable.Empty<NodeValidationResult>()
+            : Observable.Return(NodeValidationResult.Valid());
+}

@@ -266,25 +266,94 @@ public static class SyncedQueryDataSourceExtensions
 
         return Observable.Defer(() =>
         {
-            var hub = workspace.Hub;
-            if (hub.Configuration.Get<EffectivePermissionsDelegate>() is null)
+            // 🚨 The MESH hub judges the read, never the calling workspace's own hub. A hub's
+            // configuration starts empty and the permission evaluator is not inherited: a portal /
+            // circuit hub carries no EffectivePermissionsDelegate, and asking IT whether to filter
+            // answered "no RLS here" — so every synced query a Blazor view opened on the portal hub
+            // handed the System-loaded snapshot to whoever was viewing, unfiltered, whatever their
+            // identity. The mesh hub carries the evaluator the owner's RLS check runs; a mesh built
+            // WITHOUT row-level security has none there either, and stays unfiltered as before.
+            // See Doc/Architecture/AccessContextPropagation → "A render reads as its viewer".
+            var meshHub = workspace.Hub.GetMeshHub();
+            if (meshHub.Configuration.Get<EffectivePermissionsDelegate>() is null)
                 return upstream;
-            // Per-user filter: for each emission, filter to nodes the user
-            // has Read on. PermissionEvaluator caches per-scope via the
-            // process-wide IMeshNodeStreamCache so repeated checks for the
-            // same user are cheap.
+            // Per-user filter: for each emission, keep the nodes the reader may READ — decided by
+            // the SAME read-validator chain a mesh query applies per row (RlsNodeValidator: hub
+            // rule → the node type's INodeTypeAccessRule → the permission fold), so a type rule's
+            // grant or refusal holds here exactly as it does in a query, and never only the scope
+            // fold (which hides, for instance, the User root profiles UserAccessRule opens to every
+            // signed-in reader). Resolved here, at subscribe — see the SecurityService cycle above.
             //
-            // 🚨 The filter itself runs under the READER, not only the callback after it. The
-            // permission check takes the user's id explicitly, but the evaluator ALSO reads the
-            // ambient context: IsVirtual (a logged-out visitor is anonymous under
-            // Access:DenyAnonymous) and IsApiToken (a token's API-permission restriction). Upstream
-            // snapshots arrive on the query pool or on the turn that changed the result set, so
-            // filtered there, a virtual guest's id was evaluated as a signed-in user.
+            // 🚨 The filter itself runs under the READER, not only the callback after it (#7038):
+            // upstream snapshots arrive on the query pool or on the turn that changed the result set,
+            // and the fold ALSO reads the ambient context's IsVirtual (Access:DenyAnonymous) and
+            // IsApiToken. So the snapshots are carried as the reader into the filter, and each row's
+            // check installs the reader's whole context (CanRead → RunAs).
+            var validators = meshHub.ServiceProvider.GetServices<INodeValidator>()
+                .Where(v => v.SupportedOperations.Count == 0
+                            || v.SupportedOperations.Contains(NodeOperation.Read))
+                .ToList();
+            var subject = captured!;
             return FilterByReadPermission(
                 upstream.CarryAccessContext(sp, reader),
-                node => hub.CheckPermission(node.Path ?? string.Empty, userId, Permission.Read));
+                node => CanRead(meshHub, accessService, subject, validators, node));
         }).CarryAccessContext(sp, reader);
     }
+
+    /// <summary>
+    /// Whether <paramref name="reader"/> may read <paramref name="node"/>: every read validator
+    /// admits it (or, on a mesh that registers none, the permission fold grants Read).
+    ///
+    /// <para>🚨 Evaluated with the reader's WHOLE context installed — <c>accessService.RunAs</c>
+    /// around the call and the subscribe — never only its id. The fold also reads the ambient
+    /// context's <c>IsVirtual</c> (<c>Access:DenyAnonymous</c>) and <c>IsApiToken</c> (the API
+    /// permission restriction), and this runs on the thread of whichever turn emitted the snapshot,
+    /// which for a System-loaded synced query is the platform's.</para>
+    /// </summary>
+    private static IObservable<bool> CanRead(
+        IMessageHub meshHub, AccessService accessService, AccessContext reader,
+        IReadOnlyList<INodeValidator> validators, MeshNode node)
+        => accessService.RunAs(reader, () =>
+        {
+            if (validators.Count == 0)
+                return meshHub.CheckPermission(node.Path ?? string.Empty, reader.ObjectId, Permission.Read);
+            var context = new NodeValidationContext
+            {
+                Operation = NodeOperation.Read,
+                Node = node,
+                AccessContext = reader,
+            };
+            // 🚨 EXACTLY ONE VERDICT PER VALIDATOR, and NO VERDICT IS NOT CONSENT (#2742, #6391 —
+            // the creation-validator runner's rule). A validator that completes without emitting
+            // gave no verdict; Concat used to skip it and All admitted the row on the others' say.
+            // DefaultIfEmpty(false) turns that silence into a refusal before the concatenation.
+            var chain = validators
+                .Select(v => v.Validate(context).Take(1).Select(result => result.IsValid).DefaultIfEmpty(false))
+                .ToInlineObservable()
+                .Concat()
+                .All(valid => valid);
+            return reader.IsApiToken
+                ? chain.Zip(ApiTokenCapAllows(meshHub, node), (valid, capAllows) => valid && capAllows)
+                : chain;
+        });
+
+    /// <summary>
+    /// The API-token clamp's POLICY half, enforced on the synced-query path whatever admitted the row.
+    ///
+    /// <para>🚨 The validator chain can admit a row without the permission fold ever deciding it —
+    /// <c>RlsNodeValidator</c>'s own-scope shortcut, or a node type's own Read rule
+    /// (<c>UserAccessRule</c> on a root profile) — and the fold is where the clamp lives. So the
+    /// API capability is evaluated SEPARATELY from any Read grant: the scope chain's policy cap must
+    /// still carry <see cref="Permission.Api"/> (<see cref="PermissionEvaluator.GetApiCapability"/>).
+    /// A capped scope refuses the token however the row was admitted; an uncapped one keeps a type
+    /// rule's grant and an API-only role's grant alike. The grant half — a token whose own roles
+    /// carry no Api on a scope with no public surface — stays in the fold the validator chain
+    /// reaches, evaluated as the token.</para>
+    /// </summary>
+    private static IObservable<bool> ApiTokenCapAllows(IMessageHub meshHub, MeshNode node)
+        => PermissionEvaluator.GetApiCapability(meshHub, node.Path ?? string.Empty)
+            .Take(1)
+            .DefaultIfEmpty(false);
 
     /// <summary>
     /// The RLS filter itself, with the permission probe as a parameter so it can be exercised
