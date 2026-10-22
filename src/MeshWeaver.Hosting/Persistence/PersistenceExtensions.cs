@@ -685,7 +685,7 @@ public static class PersistenceExtensions
         // PartitionLifecycleTests.LazyCreate_FirstWrite_EnablesSubsequentReads).
         // The CoreAndWrapperServicesMarker idempotency guard above guarantees
         // we only register this once per service collection.
-        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        AddStorageAdapterMeshQueryProvider(services);
         services.AddSingleton<IMeshQueryProvider>(sp =>
             sp.GetRequiredService<StorageAdapterMeshQueryProvider>());
 
@@ -724,8 +724,9 @@ public static class PersistenceExtensions
                 sp.GetService<ILoggerFactory>(),
                 sp.GetService<ModuleContexts>(),
                 // Declared nodes on a satellite path (a declared access grant) are row-filtered
-                // with the same validators the storage providers use — resolved lazily, see there.
-                sp.GetService<IEnumerable<Lazy<INodeValidator>>>(),
+                // with the same validators the storage providers use — resolved lazily, in the scope
+                // SingletonNodeValidators owns (MeshWeaver#6584), see there.
+                sp.GetRequiredService<SingletonNodeValidators>().Validators,
                 sp.GetService<AccessService>());
         });
 
@@ -750,6 +751,26 @@ public static class PersistenceExtensions
     }
 
     /// <summary>
+    /// Registers the pedestrian <see cref="StorageAdapterMeshQueryProvider"/> — a ROOT singleton — with the
+    /// node-validator set its Read filter consults taken from <see cref="SingletonNodeValidators"/>, never
+    /// from the root container. Every <see cref="INodeValidator"/> is scoped; resolved at the root, a module's
+    /// was built in the module container's own root scope for no caller (MeshWeaver#6584).
+    /// </summary>
+    private static void AddStorageAdapterMeshQueryProvider(IServiceCollection services)
+    {
+        services.TryAddSingleton<SingletonNodeValidators>();
+        services.TryAddSingleton(sp => new StorageAdapterMeshQueryProvider(
+            sp.GetRequiredService<IStorageAdapter>(),
+            sp.GetService<AccessService>(),
+            sp.GetService<MeshConfiguration>(),
+            sp.GetRequiredService<SingletonNodeValidators>().Validators,
+            sp.GetServices<IPartitionStorageProvider>(),
+            sp.GetService<ILogger<StorageAdapterMeshQueryProvider>>(),
+            sp.GetService<IoPoolRegistry>(),
+            sp.GetService<StorageAdapterQueryProviderOptions>()));
+    }
+
+    /// <summary>
     /// Helper method to register common services and wrapper services.
     /// Shares the <see cref="CoreAndWrapperServicesMarker"/> sentinel with the
     /// partitioned overload so mixed callers (e.g. <c>UseOrleansMeshServer</c>
@@ -761,7 +782,7 @@ public static class PersistenceExtensions
         if (services.Any(d => d.ServiceType == typeof(CoreAndWrapperServicesMarker)))
             return services;
 
-        services.TryAddSingleton<StorageAdapterMeshQueryProvider>();
+        AddStorageAdapterMeshQueryProvider(services);
         // 🚨 AddSingleton, not TryAddSingleton — see the same-shape comment in
         // AddPartitionedCoreAndWrapperServices. Backends that register their own
         // IMeshQueryProvider (Postgres, Cosmos) BEFORE this method runs would
@@ -796,8 +817,9 @@ public static class PersistenceExtensions
                 sp.GetService<ILoggerFactory>(),
                 sp.GetService<ModuleContexts>(),
                 // Declared nodes on a satellite path (a declared access grant) are row-filtered
-                // with the same validators the storage providers use — resolved lazily, see there.
-                sp.GetService<IEnumerable<Lazy<INodeValidator>>>(),
+                // with the same validators the storage providers use — resolved lazily, in the scope
+                // SingletonNodeValidators owns (MeshWeaver#6584), see there.
+                sp.GetRequiredService<SingletonNodeValidators>().Validators,
                 sp.GetService<AccessService>());
         });
         services.AddSingleton<IMeshQueryProvider>(sp => sp.GetRequiredService<StaticNodeQueryProvider>());
