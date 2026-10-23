@@ -35,7 +35,9 @@ public record MarkdownContent : IJsonOnDeserialized
     /// bind — see <see cref="IJsonOnDeserialized.OnDeserialized"/>. Its text is in the store under another key, and an
     /// empty document over it would render the "No content yet" invitation whose first save
     /// overwrites that text (#4600). Every writer of this record emits <c>content</c> (the getter
-    /// never returns null), so an absent member is never this record's own output.</para>
+    /// never returns null), so an absent member is never this record's own output. A payload with
+    /// no <c>content</c> but a stored <c>prerenderedHtml</c> is refused the same way: its source
+    /// is MISSING, not empty, and the renderer must fall back to that HTML (review on #7097).</para>
     /// </summary>
     public string Content
     {
@@ -147,6 +149,16 @@ public record MarkdownContent : IJsonOnDeserialized
                 + $"'{string.Join("', '", stray)}', which it does not "
                 + "declare — the body may be stored under one of them, so it is not bound as an empty "
                 + "document (Systemorph/MeshWeaver#4600, #5736).");
+        // 🚨 A stored RENDERING without its source is a document whose source is MISSING, not an
+        // empty one (review on #7097). Bound with Content == "", MarkdownBody.Render would render
+        // the empty source and never reach its stored-HTML fallback, so GetPreRenderedHtml would
+        // drop the document. It stays an unbound payload, exactly as before: the renderer falls
+        // back to the stored HTML, and an EXPLICIT "content":"" (a deliberate clear) still binds
+        // and renders empty.
+        if (!string.IsNullOrWhiteSpace(PrerenderedHtml))
+            throw new JsonException(
+                $"{nameof(MarkdownContent)} has no 'content' member but carries 'prerenderedHtml' — a "
+                + "rendering whose source is missing, so it is not bound as an empty document.");
         content = string.Empty;
     }
 

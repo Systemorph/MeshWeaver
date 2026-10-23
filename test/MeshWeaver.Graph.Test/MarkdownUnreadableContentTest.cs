@@ -280,6 +280,76 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
         Read(node).State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable);
     }
 
+    /// <summary>
+    /// 🚨 Review on #7097, thread one. A stored RENDERING without its source
+    /// (<c>prerenderedHtml</c>, no <c>content</c>) is a document whose source is MISSING. Through
+    /// the hub serializer and <see cref="MarkdownBody.Render"/> (what <c>GetPreRenderedHtml</c>
+    /// answers) it must still render the stored HTML — binding it as an empty document rendered
+    /// the empty source and dropped the document. An EXPLICIT empty source is a deliberate clear
+    /// and must keep rendering empty, never reviving the stale HTML.
+    /// </summary>
+    [Fact]
+    public void RenderingWithoutItsSource_StillRendersTheStoredHtml_WhileAnExplicitClearStaysEmpty()
+    {
+        const string storedHtml = "<p>Existing document</p>";
+        var options = GetHost().JsonSerializerOptions;
+
+        var sourceless = JsonSerializer.Deserialize<MeshNode>(
+            $$$"""{"id":"Rendered","namespace":"test/read","nodeType":"Markdown","content":{"$type":"MarkdownContent","prerenderedHtml":"{{{storedHtml}}}"}}""",
+            options)!;
+        MarkdownBody.Render(sourceless).Should().Be(storedHtml,
+            "no source is available, so the stored rendering is the document");
+        var read = Read(sourceless);
+        read.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+            "the overview must not invite an edit over a document that is there");
+        read.Shape.Should().Be("prerenderedHtml");
+
+        var cleared = JsonSerializer.Deserialize<MeshNode>(
+            $$$"""{"id":"Cleared","namespace":"test/read","nodeType":"Markdown","content":{"$type":"MarkdownContent","content":"","prerenderedHtml":"{{{storedHtml}}}"}}""",
+            options)!;
+        cleared.Content.Should().BeOfType<MarkdownContent>();
+        (MarkdownBody.Render(cleared) ?? string.Empty).Should().NotContain("Existing document",
+            "an explicit empty source is a deliberate clear — the stale HTML must not come back");
+        Read(cleared).State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent);
+    }
+
+    /// <summary>
+    /// 🚨 Review on #7097, thread two. A DECLARED member holding a value of the wrong shape
+    /// (<c>"tags": "# Stored document"</c>, an object under <c>abstract</c>) is not an empty
+    /// document because its NAME is declared: <c>ReadMarkdownContent</c> must stay Unreadable and
+    /// name that member. Raw content, and the hub serializer where its contract refuses the value.
+    ///
+    /// <para>Not through the hub for <c>tags</c>: the hub's <c>ReadOnlyListConverter</c> reads any
+    /// non-array as an EMPTY list instead of refusing it, so that payload binds there with the
+    /// string dropped. That is a property of every <c>IReadOnlyList</c> member on every hub, not of
+    /// markdown, and is filed as its own finding.</para>
+    /// </summary>
+    /// <param name="member">The declared member.</param>
+    /// <param name="value">A JSON value of the wrong shape for it.</param>
+    /// <param name="throughHub">Whether to read it through the hub serializer as well.</param>
+    [Theory]
+    [InlineData("tags", "\"# Stored document\"", false)]
+    [InlineData("abstract", "{\"text\":\"# Stored document\"}", true)]
+    [InlineData("thumbnail", "[\"# Stored document\"]", true)]
+    public void DeclaredMemberWithAMalformedValue_StaysUnreadable(string member, string value, bool throughHub)
+    {
+        var raw = Read(Node(Json($$$"""{"authors":["a"],"{{{member}}}":{{{value}}}}""")));
+        raw.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+            "a member that is there and cannot be read is not an empty document");
+        raw.Shape.Should().Be(member, "the diagnostic names the offending member, not the valid one beside it");
+
+        if (!throughHub)
+            return;
+        var options = GetHost().JsonSerializerOptions;
+        var node = JsonSerializer.Deserialize<MeshNode>(
+            $$$"""{"id":"Malformed","namespace":"test/read","nodeType":"Markdown","content":{"$type":"MarkdownContent","{{{member}}}":{{{value}}}}}""",
+            options)!;
+        node.Content.Should().BeOfType<JsonElement>("the value does not fit the declared member");
+        var read = Read(node);
+        read.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable);
+        read.Shape.Should().Be(member);
+    }
+
     private static MarkdownOverviewLayoutArea.MarkdownRead Read(MeshNode? node) =>
         MarkdownOverviewLayoutArea.ReadMarkdownContent(node);
 

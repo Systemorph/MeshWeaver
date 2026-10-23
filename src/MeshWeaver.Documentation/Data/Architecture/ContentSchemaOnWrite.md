@@ -127,6 +127,12 @@ record tells them apart when it is read (`IJsonOnDeserialized`):
 |---|---|---|
 | only members `MarkdownContent` declares (`{"$type":"MarkdownContent"}`, `{"tags":[…]}`) | an **empty** `MarkdownContent`, other members kept | a document with no body yet. Nothing else could be the body |
 | any member it does NOT declare (`{"body": …}`, `{"markdown": …}`, `{"text": …}`) | **refused** (`JsonException` naming the stray members, never their values) | the body is probably under that key, and an empty document would put the "No content yet" placeholder over it (#4600) |
+| a stored `prerenderedHtml` | **refused** | the source is MISSING, not empty: `MarkdownBody.Render` must fall back to the stored HTML. An explicit `"content": ""` is a deliberate clear and still binds and renders empty |
+
+The overview's raw-JSON reader (`ReadMarkdownContent`) asks the record's own contract the same
+question, so a declared member holding a value of the wrong shape (`"tags": "# text"`, an object
+under `abstract`) stays **Unreadable** and is named, rather than reading as empty because its name
+is declared.
 
 `Content` is therefore no longer `required`. Its getter never returns null, so every writer emits
 `content` and a stored row heals on its next save. The refused kind is still a DATA defect. Raw, it
