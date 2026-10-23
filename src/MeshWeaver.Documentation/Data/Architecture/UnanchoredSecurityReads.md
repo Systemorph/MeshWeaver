@@ -166,6 +166,26 @@ explicit allow-file of offender shapes (`unanchored-queries.allow`, MeshWeaver.P
 fans out with a warning instead of throwing; the file may only shrink, a listed shape no longer
 issued is a stale entry that fails the build, and an empty file is the refuse-everything default.
 
+## A reference-form path is not a partition (#7090)
+
+The per-partition legs take the partition from the FIRST SEGMENT of the path being checked. A path
+written in reference form — `@/acme/x` or `@acme/x`, the spelling of markdown links, autocomplete and
+every tool argument — has `@` there, and the fold used to take it verbatim. It then issued
+`path:@ scope:descendants nodeType:AccessAssignment … limit:all` and the matching `_Policy` read; the
+query parser strips the `@` from a `path:` value (#6828), leaving no first segment, so the Postgres
+planner served both as a UNION over every partition schema (`[FanOut] UNANCHORED` on a production
+portal). Nothing on the log line named the caller, because the shape LOOKED like a deliberate
+root-wide read rather than an anchored one gone wrong.
+
+The verdict was wrong as well as expensive: the scope chain became `@`, `@/acme`, `@/acme/x`, and no
+grant lives at any of those, so a viewer holding a grant on `acme/x` was refused — fail CLOSED.
+
+The fold now strips the reference prefix at every public entry (`GetEffectivePermissions`,
+`GetApiCapability`, `GetPolicy`, `GetRedirectOnDenied`, `GetPublicPreview`) with the same rule the query
+parser applies, so `@/acme/x` is checked as `acme/x` and its reads are anchored on `acme`. Pinned by
+`ReferencePrefixedPermissionPathTest` (MeshWeaver.Graph.Test), which records the queries the fold issues
+and checks that the grant on the real path applies.
+
 ## What IS tractable, and what needs a decision
 
 Measured on `origin/main`, core only. The provider (`MeshWeaver.Hosting.PostgreSql`) left this
