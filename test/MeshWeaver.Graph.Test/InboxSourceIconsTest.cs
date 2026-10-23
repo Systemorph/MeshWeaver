@@ -30,12 +30,68 @@ public class InboxSourceIconsTest
         Sources.Select(s => InboxSourceIcons.Resolve(s, null)).Should().OnlyHaveUniqueItems("one source, one look");
     }
 
-    /// <summary>The inline marks are well-formed SVG documents.</summary>
+    /// <summary>The outside channels the inbox legs declare (Outlook, Gmail, iMessage, WhatsApp, Teams).</summary>
+    private static readonly string[] OutsideChannels = ["Outlook", "Gmail", "iMessage", "WhatsApp", "Teams"];
+
+    /// <summary>The inline marks are well-formed, self-contained SVG documents with a 24x24 viewBox.</summary>
     [Fact]
-    public void TheInlineMarks_AreWellFormedSvg()
+    public void TheInlineMarks_AreWellFormedSelfContainedSvg_WithA24ViewBox()
     {
-        foreach (var source in new[] { "Outlook", "Gmail", "iMessage", "WhatsApp", "Teams" })
-            XDocument.Parse(InboxSourceIcons.Resolve(source, null)).Root!.Name.LocalName.Should().Be("svg", source);
+        foreach (var source in OutsideChannels)
+            AssertSafeMark(source, InboxSourceIcons.Resolve(source, null));
+    }
+
+    /// <summary>The checks every mark must pass — also used to prove they fail on a broken entry.</summary>
+    internal static void AssertSafeMark(string source, string svg)
+    {
+        var root = XDocument.Parse(svg).Root!;
+        root.Name.LocalName.Should().Be("svg", source);
+        (root.Attribute("viewBox")?.Value).Should().Be("0 0 24 24", $"{source}: sized to a 24x24 viewBox");
+        var all = root.DescendantsAndSelf().ToArray();
+        all.Select(e => e.Name.LocalName).Should().NotContain(["script", "image", "foreignObject", "iframe"], $"{source}: self-contained, nothing executable or raster");
+        foreach (var href in all.SelectMany(e => e.Attributes()).Where(a => a.Name.LocalName == "href"))
+            href.Value.Should().StartWith("#", $"{source}: no external reference");
+        all.SelectMany(e => e.Attributes()).Where(a => a.Name.LocalName.StartsWith("on", StringComparison.OrdinalIgnoreCase))
+            .Should().BeEmpty($"{source}: no event handlers");
+        (root.Attribute("data-mw-mark")?.Value).Should().Be("official", $"{source}: declared an official mark");
+        svg.ToLowerInvariant().Should().NotContain("javascript:", $"{source}");
+        svg.ToLowerInvariant().Should().NotContain("url(http", $"{source}: no remote paint server");
+    }
+
+    /// <summary>Revert-check: the safety checks really reject a broken entry.</summary>
+    [Fact]
+    public void ABrokenMark_FailsTheChecks()
+    {
+        var good = InboxSourceIcons.Resolve("Gmail", null);
+        var broken = new[]
+        {
+            good.Replace("viewBox=\"0 0 24 24\"", "viewBox=\"0 0 32 32\""),
+            good.Replace("</svg>", "<script>alert(1)</script></svg>"),
+            good.Replace("</svg>", "<image href=\"https://example.com/x.png\"/></svg>"),
+            good.Replace("<path ", "<path onclick=\"x()\" "),
+            good.Replace(" viewBox=\"0 0 24 24\"", ""),
+            good.Replace(" data-mw-mark=\"official\"", ""),
+            good[..^6],
+        };
+        foreach (var svg in broken)
+            Assert.ThrowsAny<Exception>(() => AssertSafeMark("Gmail", svg));
+    }
+
+    /// <summary>The table covers every outside-channel source id the legs declare.</summary>
+    [Fact]
+    public void EveryOutsideChannelLeg_IsCovered()
+    {
+        var table = InboxSourceIcons.KnownSources.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        table.Should().Contain(OutsideChannels);
+        foreach (var source in OutsideChannels)
+        {
+            var svg = InboxSourceIcons.Resolve(source, null);
+            Icon.Parse(svg)!.Provider.Should().Be(Icon.InlineSvgProvider, $"{source} shows its real logo");
+            IconBackplate.IsOfficialMark(svg).Should().BeTrue($"{source} is an official mark");
+            var plated = IconBackplate.Ensure(svg);
+            plated.Should().Contain($"fill='{IconBackplate.OfficialPlate}'", $"{source}: official marks sit on the white plate, not a hash hue");
+            IconBackplate.Palette.Should().NotContain(c => plated.Contains($"fill='{c}' stroke='none'"), $"{source}: no house-icon hue");
+        }
     }
 
     /// <summary>Lookup ignores case; an unknown source keeps its leg's symbol, and with none gets the fallback.</summary>
