@@ -140,21 +140,10 @@ public static class InboxReadingView
         var access = hub.ServiceProvider.GetService<AccessService>();
         // Captured on the render turn: the read lands on another one.
         var viewer = access?.Context ?? access?.CircuitContext;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxReadingView));
         var own = Observable.Return<UiControl?>(page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
-        var redirect = InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
-            .Where(exists => exists)
-            .Take(1)
-            .CarryAccessContext(hub.ServiceProvider, viewer)
-            .SelectMany(_ => hub.GetMeshNodeStream(path).Take(1))
-            .Select(node => InboxApprovalTargets.TargetOf(node, hub.JsonSerializerOptions))
-            .Where(target => target is not null)
-            .Select(target => (UiControl?)Controls.Redirect("/" + target!.TrimStart('/')))
-            .Catch((Exception ex) =>
-            {
-                logger?.LogWarning(ex, "Inbox: could not tell whether {Path} announces an approval; showing the item itself", path);
-                return Observable.Empty<UiControl?>();
-            });
+        // What the item announces is read on the DATA side (InboxApprovalTargets): the page only decides what to show.
+        var redirect = InboxApprovalTargets.AnnouncedTarget(hub, viewer, owner, path)
+            .Select(target => (UiControl?)Controls.Redirect("/" + target.TrimStart('/')));
         return own.Concat(redirect);
     }
 

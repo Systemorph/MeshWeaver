@@ -273,12 +273,43 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         seen.Should().Equal(["saved"], "an answer in time suppresses the fallback for good");
 
         var silent = new System.Reactive.Subjects.Subject<string>();
-        var late = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        using var second = InboxLayoutArea.FirstAnswerWithin(silent, wait, "fallback").Subscribe(late.Enqueue);
-        await Task.Delay(wait * 3, ct);
-        late.Should().Equal(["fallback"], "a silent source reads as the fallback, once");
+        var late = new System.Reactive.Subjects.ReplaySubject<string>();
+        using var second = InboxLayoutArea.FirstAnswerWithin(silent, wait, "fallback").Subscribe(late);
+        (await late.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Be("fallback", "a silent source reads as the fallback, once");
         silent.OnNext("saved");
-        late.Should().Equal(["fallback", "saved"], "a late real answer still replaces it");
+        (await late.Take(2).ToList().FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal(["fallback", "saved"], "a late real answer still replaces it");
+    }
+
+    /// <summary>
+    /// Presence is read from the listing's answers and never conflated: a matching row is present, a COMPLETE empty answer
+    /// is absent, and an INCOMPLETE empty one (a silent provider, an unfinished storage read) says nothing — so no node
+    /// stream is opened on it.
+    /// </summary>
+    [Fact]
+    public void Presence_KeepsAnIncompleteEmptyAnswer_ApartFromAConfirmedOne()
+    {
+        QueryResultChange<MeshNode> Change(QueryChangeType type, bool silent = false, bool incomplete = false, params MeshNode[] items)
+            => new() { ChangeType = type, Items = [.. items], SilentProviders = silent ? ["Postgres"] : null, SnapshotIncomplete = incomplete };
+        var node = new MeshNode("n", "x");
+        InboxApprovalTargets.Fold(null, Change(QueryChangeType.Initial, items: node)).Should().BeTrue("a matching row was observed");
+        InboxApprovalTargets.Fold(null, Change(QueryChangeType.Initial)).Should().BeFalse("a complete empty answer: absent");
+        InboxApprovalTargets.Fold(false, Change(QueryChangeType.Initial, silent: true)).Should().BeNull("a silent provider says nothing");
+        InboxApprovalTargets.Fold(false, Change(QueryChangeType.Initial, incomplete: true)).Should().BeNull("an unfinished read says nothing");
+        InboxApprovalTargets.Fold(null, Change(QueryChangeType.Added, items: node)).Should().BeTrue();
+        InboxApprovalTargets.Fold(true, Change(QueryChangeType.Removed, items: node)).Should().BeFalse("deleted while observed");
+    }
+
+    /// <summary>A path with a space or a query metacharacter is ONE path in the existence listing, never a path and a free-text term.</summary>
+    [Theory]
+    [InlineData("Ops/My Request")]
+    [InlineData("Ops/Actions/roll-pearl-3-1-11315")]
+    [InlineData("Ops/a:b (c)")]
+    public void TheExistenceListing_QuotesThePath(string path)
+    {
+        var parsed = new QueryParser().Parse(InboxApprovalTargets.ExistsQuery(path));
+        parsed.Path.Should().Be(path, "the whole path is the anchor");
+        parsed.TextSearch.Should().BeNullOrEmpty("nothing of the path leaks into the free-text search");
     }
 
     // ── 3: the default, and the persisted choice ──────────────────────────────────────────────

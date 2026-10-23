@@ -59,20 +59,67 @@ internal static class InboxApprovalTargets
     /// <summary>
     /// Whether a node exists at <paramref name="path"/>, as <paramref name="owner"/> sees it — a LIVE exact-path
     /// listing (empty when the node is absent: never a point read of a maybe-absent path, which would mint a
-    /// NotFound that opens the stream cache's storm-breaker on the path). An INCOMPLETE empty answer (a silent
-    /// provider, an unfinished storage read) reads as "exists": only a complete empty one says it is gone.
+    /// NotFound that opens the stream cache's storm-breaker on the path). Three answers, never conflated:
+    /// <c>true</c> — a matching row was OBSERVED; <c>false</c> — a COMPLETE empty answer; <c>null</c> — an INCOMPLETE
+    /// empty one (a silent provider, an unfinished storage read), which says nothing. A caller opens the node's own
+    /// stream only on <c>true</c> and leaves <c>null</c> to its own fallback.
     /// </summary>
     /// <param name="mesh">The mesh service.</param>
     /// <param name="path">The node's path.</param>
     /// <param name="owner">The identity the listing runs as.</param>
-    internal static IObservable<bool> Exists(IMeshService mesh, string path, string owner)
-        => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path} select:path,id,nodeType", owner) with { Limit = 1 })
-            .Scan(false, (_, change) => change.ChangeType switch
+    internal static IObservable<bool?> Exists(IMeshService mesh, string path, string owner)
+        => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery(ExistsQuery(path), owner) with { Limit = 1 })
+            .Scan((bool?)false, Fold);
+
+    /// <summary>
+    /// The exact-path listing that finds <paramref name="path"/>. The path is a quoted LITERAL
+    /// (<see cref="QueryParser.QuoteLiteral"/>): a path with a space or a query metacharacter stays ONE path
+    /// instead of becoming a path and a free-text term. Pure.
+    /// </summary>
+    /// <param name="path">The node's path.</param>
+    internal static string ExistsQuery(string path)
+        => $"path:{QueryParser.QuoteLiteral(path)} select:path,id,nodeType";
+
+    /// <summary>One step of <see cref="Exists"/>: what <paramref name="change"/> says about presence. Pure.</summary>
+    /// <param name="known">What was known before.</param>
+    /// <param name="change">The listing's next answer.</param>
+    internal static bool? Fold(bool? known, QueryResultChange<MeshNode> change)
+        => change.ChangeType switch
+        {
+            QueryChangeType.Removed => false,
+            QueryChangeType.Added or QueryChangeType.Updated => true,
+            _ => change.Items.Count > 0 ? true
+                : change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 } ? null
+                : false,
+        };
+
+    /// <summary>
+    /// The approval an item ANNOUNCES, once it is known: the target of a notification that announces an approval,
+    /// read from the item's authoritative stream after a listing observed it — nothing for any other item, and
+    /// nothing while its presence is uncertain (the caller keeps showing the item itself). Failures end quietly
+    /// (logged): a redirect is an improvement on the item's page, never a condition of it.
+    /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="viewer">The viewer's identity, re-established around the read.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="path">The item's path.</param>
+    internal static IObservable<string> AnnouncedTarget(IMessageHub hub, AccessContext? viewer, string owner, string path)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
+        return Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
+            .Where(exists => exists == true)
+            .Take(1)
+            .CarryAccessContext(hub.ServiceProvider, viewer)
+            .SelectMany(_ => hub.GetMeshNodeStream(path).Take(1))
+            .Select(node => TargetOf(node, hub.JsonSerializerOptions))
+            .Where(target => target is not null)
+            .Select(target => target!)
+            .Catch((Exception ex) =>
             {
-                QueryChangeType.Removed => false,
-                QueryChangeType.Added or QueryChangeType.Updated => true,
-                _ => change.Items.Count > 0 || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 },
+                logger?.LogWarning(ex, "Inbox: could not tell whether {Path} announces an approval; showing the item itself", path);
+                return Observable.Empty<string>();
             });
+    }
 
     /// <summary>
     /// Whether the approval at <paramref name="target"/> still awaits a decision, LIVE: existence is a listing,
@@ -90,6 +137,9 @@ internal static class InboxApprovalTargets
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
         var observed = Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner)
+            // An uncertain answer says nothing: the request keeps showing (the fallback) until a definite one.
+            .Where(exists => exists is not null)
+            .Select(exists => exists!.Value)
             .DistinctUntilChanged()
             .CarryAccessContext(hub.ServiceProvider, viewer)
             .Select(exists => exists

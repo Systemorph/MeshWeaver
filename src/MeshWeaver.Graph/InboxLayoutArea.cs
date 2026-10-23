@@ -579,6 +579,8 @@ public static class InboxLayoutArea
         var path = InboxPreferencePaths.PathFor(owner);
         var options = hub.JsonSerializerOptions;
         var answers = InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
+            .Where(exists => exists is not null)
+            .Select(exists => exists!.Value)
             .DistinctUntilChanged()
             .CarryAccessContext(hub.ServiceProvider, viewer)
             .Select(exists => exists
@@ -603,15 +605,16 @@ public static class InboxLayoutArea
             var gate = new object();
             var answered = false;
             var timer = Observable.Timer(wait).Subscribe(_ =>
-            {
-                lock (gate)
                 {
-                    if (answered)
-                        return;
-                    answered = true;
-                    observer.OnNext(fallback);
-                }
-            });
+                    lock (gate)
+                    {
+                        if (answered)
+                            return;
+                        answered = true;
+                        observer.OnNext(fallback);
+                    }
+                },
+                error => { lock (gate) { answered = true; observer.OnError(error); } });
             var subscription = source.Subscribe(
                 value => { lock (gate) { answered = true; observer.OnNext(value); } },
                 error => { lock (gate) { answered = true; observer.OnError(error); } },
@@ -716,6 +719,10 @@ public static class InboxLayoutArea
     {
         // Resolved ONCE, on the render turn — the connection reads answer on another thread.
         var allSources = host.Localize("inbox.only.all");
+        // The viewer's identity, captured HERE with the texts: RowsOf is built inside the connection result's callback,
+        // which a timeout reaches through a timer, where no identity is ambient. Its reads and its seed write run as the viewer.
+        var viewerAccess = host.Hub.ServiceProvider.GetService<AccessService>();
+        var viewer = viewerAccess?.Context ?? viewerAccess?.CircuitContext;
         var sourceOptions = sections.GroupBy(s => s.Source, StringComparer.Ordinal)
             .Select(source => (Id: source.Key, Key: InboxRows.SourceKey(source.Key), Label: SourceLabel(host, source.First()),
                 Icon: source.Select(s => s.SourceIcon).FirstOrDefault(i => i.Length > 0) ?? string.Empty))
@@ -730,13 +737,13 @@ public static class InboxLayoutArea
                 host.UpdateData(SourceOptionsId, SourceOptions(allSources,
                     sourceOptions.Where(s => connected.Contains(s.Id)).Select(s => (s.Key, s.Label, s.Icon))));
             })
-            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, rereads, onShown))
+            .Select(connected => RowsOf(host, [.. sections.Where(s => connected.Contains(s.Source))], owner, zone, viewer, rereads, onShown))
             .Switch();
     }
 
     /// <summary>The rows of <paramref name="sections"/> — the connected sources' legs.</summary>
     private static IObservable<ImmutableList<InboxRow>> RowsOf(
-        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone,
+        LayoutAreaHost host, ImmutableArray<InboxSection> sections, string owner, string? zone, AccessContext? viewerContext,
         IObservable<long>? rereads, Action<ImmutableList<InboxRow>, int?>? onShown = null)
     {
         var hub = host.Hub;
@@ -778,8 +785,6 @@ public static class InboxLayoutArea
         var seedFor = InboxPreferencesNodeType.SeedForExisting(sections);
         var preferencesPath = InboxPreferencePaths.PathFor(owner);
         var viewerAccess = hub.ServiceProvider.GetService<AccessService>();
-        // Captured on the render turn: the reads and the seed write below run on later turns, where the ambient identity is gone.
-        var viewerContext = viewerAccess?.Context ?? viewerAccess?.CircuitContext;
         var preferences = PreferencesOf(host, owner, viewerContext);
         var tagItems = host.GetDataStream<ImmutableList<InboxTagItem>>(TagItemsId).Select(items => items ?? [])
             .DistinctUntilChanged(items => string.Join('\n', items.Select(item => $"{item.Key}|{item.Label}|{item.Checked}")), StringComparer.Ordinal);
