@@ -36,7 +36,7 @@ public class StoreRecoveryRerunTest
 
     private static readonly StoreRecoveryRerunPolicy NoTimer = new() { MaxTimedReruns = 0 };
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task ATransientFault_IsReRun_OnTheStoresRecoverySignal()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -73,7 +73,7 @@ public class StoreRecoveryRerunTest
         Volatile.Read(ref attempts).Should().Be(2);
     }
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task ARecoveryDeclaredWhileTheFaultIsBeingRecorded_IsNotLost()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -93,7 +93,7 @@ public class StoreRecoveryRerunTest
             .Should().Be("re-ran");
     }
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public void TheTimer_RacesTheSignal_ForTheTimedReRunsOnly_ThenOnlyTheSignalCanReRun()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
@@ -126,7 +126,7 @@ public class StoreRecoveryRerunTest
         attempts.Should().Be(4, "the store's recovery signal still re-runs it — the fault is never final");
     }
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task ANonTransientFault_SurfacesUnchanged_AndIsNeverReRun()
     {
         var ct = TestContext.Current.CancellationToken;

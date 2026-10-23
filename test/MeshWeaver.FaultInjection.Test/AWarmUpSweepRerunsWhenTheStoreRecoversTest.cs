@@ -98,7 +98,7 @@ public class AWarmUpSweepRerunsWhenTheStoreRecoversTest(ITestOutputHelper output
                 "The IConfiguration registration is neither a factory nor an instance, so this test "
                 + "cannot layer onto it.");
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task ATransientStoreRefusal_FaultsTheSweep_AndTheStoresRecovery_ReRunsIt_OnTheSamePod()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -135,7 +135,7 @@ public class AWarmUpSweepRerunsWhenTheStoreRecoversTest(ITestOutputHelper output
             + "not an unproven one waved through");
     }
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task NegativeControl_TheSweepAsItWasHeldBefore_StaysFaulted_AfterTheStoreRecovers()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -174,7 +174,7 @@ public class AWarmUpSweepRerunsWhenTheStoreRecoversTest(ITestOutputHelper output
             .Emit("after the recovery a sweep passes — what the faulted gate lacked was only a re-run", ct);
     }
 
-    [Fact(Timeout = TestTimeouts.TestMilliseconds)]
+    [HubFact]
     public async Task ANonTransientFault_IsNotReRun_AndStaysANamedFailure()
     {
         var ct = TestContext.Current.CancellationToken;
