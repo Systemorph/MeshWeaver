@@ -179,6 +179,108 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         own.Should().NotBeNull();
     }
 
+    /// <summary>
+    /// A decision taken on the approval's OWN page never touches the notification — and an inbox that is already
+    /// open drops the request all the same: the target is observed live through its own stream, not read once.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ADecisionTakenElsewhere_DropsTheRequestFromAnOpenInbox()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-live";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("live", "TestActions") { NodeType = ActionType, Name = "live", Content = new TestActionContent() }, ct);
+        var request = await Notify(owner, "n-live", NotificationType.ApprovalRequired, "TestActions/live", ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        var rows = RowPaths(Open(owner));
+
+        (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal([request], "listed while it awaits");
+
+        // The approval is decided on its own page: only the TARGET changes.
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream("TestActions/live")
+                .Update(node => node with { Content = new TestActionContent { ApprovedBy = "someone-else" } }))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await rows.Where(p => p.Length == 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the open inbox follows the approval, with the notification untouched");
+    }
+
+    /// <summary>
+    /// A request written before the feature key existed — and the default type, omitted from stored JSON — is an
+    /// approval request all the same: it is filtered by its target, its row names the target, and its inbox
+    /// address redirects.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ALegacyApprovalRequest_WithoutAFeature_IsFilteredAndRedirectedLikeAnyOther()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-legacy";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("open", "TestActions") { NodeType = ActionType, Name = "open", Content = new TestActionContent() }, ct);
+        await CreateAsync(new MeshNode("decided", "TestActions") { NodeType = ActionType, Name = "decided", Content = new TestActionContent { ApprovedBy = "someone-else" } }, ct);
+        var open = await Notify(owner, "legacy-open", NotificationType.ApprovalRequired, "TestActions/open", ct, legacy: true);
+        await Notify(owner, "legacy-decided", NotificationType.ApprovalRequired, "TestActions/decided", ct, legacy: true);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+
+        (await RowPaths(Open(owner)).Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([open], "the legacy request of a decided approval is dropped, the open one kept");
+        var redirect = await GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+                new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(open) })
+            .GetControlStream(InboxLayoutArea.AreaName).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is RedirectControl, "a legacy request redirects too", ct);
+        ((RedirectControl)redirect!).Href.Should().Be("/TestActions/open");
+    }
+
+    /// <summary>
+    /// The "capped" notice reads what each leg FETCHED, not what the page kept: a window of decided requests that all
+    /// drop out still leaves older open ones unread. (Counting the kept rows read zero here and hid the warning.)
+    /// </summary>
+    [Fact]
+    public void TheCappedNotice_ReadsWhatTheLegFetched_NotWhatThePageKept()
+    {
+        var query = "namespace:alice/_Notification nodeType:Notification";
+        InboxLayoutArea.Capped([(query, InboxQueries.LegLimit)]).Should().BeTrue("a full window may hide older rows, whatever is kept of it");
+        InboxLayoutArea.Capped([(query, InboxQueries.LegLimit - 1)]).Should().BeFalse("a window that was not full hides nothing");
+        InboxLayoutArea.Capped([(query, 0), (query + " limit:3", 3)]).Should().BeTrue("each leg against ITS OWN bound");
+    }
+
+    /// <summary>A comma inside a quoted display name is not a recipient separator; a bare token or garbage still resolves or yields nothing.</summary>
+    [Theory]
+    [InlineData("\"Roe, Jane\" <Jane.Roe@Example.com>", "jane.roe@example.com")]
+    [InlineData("\"Roe, Jane\" <jane.roe@example.com>, Max <max@example.com>", "jane.roe@example.com")]
+    [InlineData("max@example.com; other@example.com", "max@example.com")]
+    [InlineData("  MAX@example.com ", "max@example.com")]
+    [InlineData("not an address", "")]
+    [InlineData("", "")]
+    public void AnAddress_IsReadAsAMailbox_NotSplitAtAQuotedComma(string recipient, string expected)
+        => InboxRows.AddressOf(recipient).Should().Be(expected);
+
+    /// <summary>
+    /// A silent source reads as the fallback ONCE; a real answer after it is forwarded; and a source that answers in
+    /// time is never followed by the fallback — the saved choice is never replaced by defaults.
+    /// </summary>
+    [Fact]
+    public async Task TheFallback_IsEmittedOnce_AndNeverAfterARealAnswer()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var wait = TimeSpan.FromMilliseconds(150);
+
+        var timely = new System.Reactive.Subjects.Subject<string>();
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var first = InboxLayoutArea.FirstAnswerWithin(timely, wait, "fallback").Subscribe(seen.Enqueue);
+        timely.OnNext("saved");
+        await Task.Delay(wait * 3, ct);
+        seen.Should().Equal(["saved"], "an answer in time suppresses the fallback for good");
+
+        var silent = new System.Reactive.Subjects.Subject<string>();
+        var late = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var second = InboxLayoutArea.FirstAnswerWithin(silent, wait, "fallback").Subscribe(late.Enqueue);
+        await Task.Delay(wait * 3, ct);
+        late.Should().Equal(["fallback"], "a silent source reads as the fallback, once");
+        silent.OnNext("saved");
+        late.Should().Equal(["fallback", "saved"], "a late real answer still replaces it");
+    }
+
     // ── 3: the default, and the persisted choice ──────────────────────────────────────────────
 
     /// <summary>
@@ -436,7 +538,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         => stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
             .Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x, StringComparer.Ordinal).ToArray() : []);
 
-    private async Task<string> Notify(string owner, string id, NotificationType type, string? target, CancellationToken ct, string? feature = null)
+    private async Task<string> Notify(string owner, string id, NotificationType type, string? target, CancellationToken ct, string? feature = null, bool legacy = false)
     {
         var ns = $"{owner}/{NotificationService.SatelliteSegment}";
         await CreateAsync(new MeshNode(id, ns)
@@ -445,7 +547,8 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
             Content = new Notification
             {
                 Id = id, Title = id, Recipient = owner, NotificationType = type, TargetNodePath = target,
-                Feature = feature ?? (type is NotificationType.ApprovalRequired or NotificationType.ApprovalGiven or NotificationType.ApprovalRejected
+                // A legacy notification predates the feature key: none is stored.
+                Feature = legacy ? null : feature ?? (type is NotificationType.ApprovalRequired or NotificationType.ApprovalGiven or NotificationType.ApprovalRejected
                     ? NotificationFeatures.Approvals : null),
             },
         }, ct);

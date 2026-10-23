@@ -128,29 +128,34 @@ public static class InboxReadingView
     }
 
     /// <summary>
-    /// The reading view of a STORED item: the notification of an approval request redirects to the approval
-    /// it names (<see cref="InboxApprovalTargets.TargetOf"/>); every other item shows its own page. The node is
-    /// asked of an exact-path query (empty-on-absent), as the owner. Until it answers the page shows the item's own
-    /// page — a redirect is the exception, and no wait may hide the item.
+    /// The reading view of a STORED item: its own page AT ONCE, replaced by a redirect when the item turns out to
+    /// announce an approval (<see cref="InboxApprovalTargets.TargetOf"/>) — the notification of an approval request
+    /// takes the viewer to the approval it names. The classification reads the item's AUTHORITATIVE content (the
+    /// node's own stream, once an exact-path listing says it exists — an index snapshot can trail a delivery) and
+    /// never delays the page: a slow, failing or absent read leaves the item's own page where it is.
     /// </summary>
     private static IObservable<UiControl?> StoredItem(LayoutAreaHost host, string owner, string path, Func<UiControl, UiControl> page)
     {
         var hub = host.Hub;
-        UiControl? Own() => page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea));
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        // Captured on the render turn: the read lands on another one.
+        var viewer = access?.Context ?? access?.CircuitContext;
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxReadingView));
-        return hub.ServiceProvider.GetRequiredService<IMeshService>()
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path} select:path,nodeType,content", owner) with { Limit = 1 })
+        var own = Observable.Return<UiControl?>(page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
+        var redirect = InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
+            .Where(exists => exists)
             .Take(1)
-            .Select(change => InboxApprovalTargets.TargetOf(change.Items.FirstOrDefault(), hub.JsonSerializerOptions) is { } target
-                ? Controls.Redirect("/" + target.TrimStart('/'))
-                : Own())
-            .Timeout(InboxApprovalTargets.ReadWithin)
+            .CarryAccessContext(hub.ServiceProvider, viewer)
+            .SelectMany(_ => hub.GetMeshNodeStream(path).Take(1))
+            .Select(node => InboxApprovalTargets.TargetOf(node, hub.JsonSerializerOptions))
+            .Where(target => target is not null)
+            .Select(target => (UiControl?)Controls.Redirect("/" + target!.TrimStart('/')))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Inbox: could not tell whether {Path} announces an approval; showing the item itself", path);
-                return Observable.Return(Own());
-            })
-            .DefaultIfEmpty(Own());
+                return Observable.Empty<UiControl?>();
+            });
+        return own.Concat(redirect);
     }
 
     /// <summary>The texts a reading view shows, resolved on the render turn.</summary>

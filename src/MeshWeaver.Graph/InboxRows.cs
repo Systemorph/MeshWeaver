@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -458,7 +459,7 @@ public static class InboxRows
             Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() is { Length: > 0 } judged
                 ? judged
                 : NotificationImportance(section.Source, content),
-            Target = ApprovalTargetOf(content),
+            Target = ApprovalTargetOf(node.NodeType, content),
             Tags = tags,
             TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
@@ -497,31 +498,60 @@ public static class InboxRows
     }
 
     /// <summary>
-    /// The node an APPROVAL REQUEST announces — the content's <c>targetNodePath</c> when its
-    /// <c>feature</c> is <c>approvals</c> — else empty. A row about an approval opens the approval, not the
-    /// notification that mentioned it. Pure.
+    /// The node an APPROVAL REQUEST announces — the <c>targetNodePath</c> of a NOTIFICATION whose feature is
+    /// <c>approvals</c> — else empty. A row about an approval opens the approval, not the notification that
+    /// mentioned it. The feature is the notification's EFFECTIVE one (<see cref="NotificationFeatures.FeatureOf"/>):
+    /// stored when it was raised with one, else derived from its type — so a notification written before the
+    /// feature key existed, and the default <see cref="NotificationType.ApprovalRequired"/> (omitted from stored
+    /// JSON), are approval requests too. Pure.
     /// </summary>
+    /// <param name="nodeType">The node's type; only a <c>Notification</c> announces anything.</param>
     /// <param name="content">The row's content, or null.</param>
-    internal static string ApprovalTargetOf(JsonElement? content)
-        => string.Equals(StringOf(content, "feature"), NotificationFeatures.Approvals, StringComparison.Ordinal)
+    internal static string ApprovalTargetOf(string? nodeType, JsonElement? content)
+        => string.Equals(nodeType, NotificationNodeType.NodeType, StringComparison.Ordinal)
+           && string.Equals(EffectiveFeature(content), NotificationFeatures.Approvals, StringComparison.Ordinal)
            && StringOf(content, "targetNodePath")?.Trim().Trim('/') is { Length: > 0 } target
             ? target
             : string.Empty;
 
+    /// <summary>A notification's feature: its own, else the one its <c>notificationType</c> implies (omitted ⇒ the default, an approval request). Pure.</summary>
+    private static string EffectiveFeature(JsonElement? content)
+    {
+        if (StringOf(content, "feature") is { Length: > 0 } feature)
+            return feature;
+        var type = PropertyOf(content, "notificationType") is { } value
+            ? value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n)
+                ? Enum.GetName(typeof(NotificationType), n)
+                : value.ValueKind == JsonValueKind.String ? value.GetString() : null
+            : null;
+        return type is null ? NotificationFeatures.Approvals
+            : Enum.TryParse<NotificationType>(type, ignoreCase: true, out var parsed) ? parsed.ToFeature() : NotificationFeatures.System;
+    }
+
     /// <summary>
-    /// The address in a recipient field — <c>Max Muster &lt;max@example.com&gt;</c> or a bare address —
-    /// lower-cased and trimmed; empty when there is none. The first recipient, where several are listed. Pure.
+    /// The address in a recipient field — <c>Max Muster &lt;max@example.com&gt;</c>, <c>"Roe, Jane" &lt;jane@example.com&gt;</c>
+    /// or a bare address — lower-cased and trimmed; empty when there is none. The first recipient, where several
+    /// are listed. Read as a mailbox list, so a comma inside a quoted display name is not a separator. Pure.
     /// </summary>
     /// <param name="recipient">A <c>to</c> value, or null.</param>
     internal static string AddressOf(string? recipient)
     {
         if (string.IsNullOrWhiteSpace(recipient))
             return string.Empty;
-        var first = recipient.Split(',', ';')[0].Trim();
-        var open = first.IndexOf('<', StringComparison.Ordinal);
-        var close = open < 0 ? -1 : first.IndexOf('>', open + 1);
-        var address = (open >= 0 && close > open ? first[(open + 1)..close] : first).Trim();
-        return address.Contains('@', StringComparison.Ordinal) ? address.ToLowerInvariant() : string.Empty;
+        try
+        {
+            var list = new System.Net.Mail.MailAddressCollection();
+            list.Add(recipient.Replace(';', ','));
+            return list.Count > 0 ? list[0].Address.Trim().ToLowerInvariant() : string.Empty;
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            // Not a mailbox list: a bare token that carries an @ is still an address.
+            var first = recipient.Split(',', ';')[0].Trim();
+            return first.Contains('@', StringComparison.Ordinal) && !first.Contains(' ', StringComparison.Ordinal)
+                ? first.ToLowerInvariant()
+                : string.Empty;
+        }
     }
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);

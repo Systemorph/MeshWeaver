@@ -1,8 +1,10 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -23,11 +25,8 @@ namespace MeshWeaver.Graph;
 /// </summary>
 internal static class InboxApprovalTargets
 {
-    /// <summary>How long one target read may take before its request is kept (and the read logged): an unreadable target must not hide a request.</summary>
+    /// <summary>How long a target read may stay silent before its request is kept: an unreadable target must not hide a request.</summary>
     internal static readonly TimeSpan ReadWithin = TimeSpan.FromSeconds(5);
-
-    /// <summary>How many targets are read at once.</summary>
-    private const int Parallel = 8;
 
     /// <summary>The content properties whose presence says the approval was decided (an approver id or a decision time).</summary>
     internal static readonly ImmutableArray<string> DecisionStamps =
@@ -55,42 +54,84 @@ internal static class InboxApprovalTargets
     /// <param name="options">The hub's serializer options.</param>
     internal static string? TargetOf(MeshNode? node, JsonSerializerOptions? options)
         => node is null ? null
-            : InboxRows.ApprovalTargetOf(InboxRows.ContentOf(node, options)) is { Length: > 0 } target ? target : null;
+            : InboxRows.ApprovalTargetOf(node.NodeType, InboxRows.ContentOf(node, options)) is { Length: > 0 } target ? target : null;
 
     /// <summary>
-    /// <paramref name="rows"/> without the approval requests whose target is no longer awaiting a decision,
-    /// read as <paramref name="owner"/>. A request whose target cannot be read in time, or whose read
-    /// fails, is KEPT (logged); one whose target answers COMPLETELY with nothing — gone, or not the
-    /// approver's to see — has nothing left to decide and is dropped. Rows that announce nothing pass.
+    /// Whether a node exists at <paramref name="path"/>, as <paramref name="owner"/> sees it — a LIVE exact-path
+    /// listing (empty when the node is absent: never a point read of a maybe-absent path, which would mint a
+    /// NotFound that opens the stream cache's storm-breaker on the path). An INCOMPLETE empty answer (a silent
+    /// provider, an unfinished storage read) reads as "exists": only a complete empty one says it is gone.
     /// </summary>
-    /// <param name="services">Resolves the mesh service and the logger.</param>
+    /// <param name="mesh">The mesh service.</param>
+    /// <param name="path">The node's path.</param>
+    /// <param name="owner">The identity the listing runs as.</param>
+    internal static IObservable<bool> Exists(IMeshService mesh, string path, string owner)
+        => mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path} select:path,id,nodeType", owner) with { Limit = 1 })
+            .Scan(false, (_, change) => change.ChangeType switch
+            {
+                QueryChangeType.Removed => false,
+                QueryChangeType.Added or QueryChangeType.Updated => true,
+                _ => change.Items.Count > 0 || change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 },
+            });
+
+    /// <summary>
+    /// Whether the approval at <paramref name="target"/> still awaits a decision, LIVE: existence is a listing,
+    /// the content is the node's own authoritative stream (an index snapshot can trail a decision), so a decision
+    /// taken on the approval's own page — which never touches the notification — drops the request from an open
+    /// inbox. Gone ⇒ nothing left to decide (false). A stream that fails keeps the request (logged), and so does a
+    /// target that answers nothing within <see cref="ReadWithin"/>; later answers still replace that fallback.
+    /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="viewer">The viewer's identity, re-established around each answer (the read runs on another turn).</param>
+    /// <param name="target">The approval's path.</param>
+    /// <param name="owner">The inbox's owner.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    internal static IObservable<bool> Awaits(IMessageHub hub, AccessContext? viewer, string target, string owner, JsonSerializerOptions? options)
+    {
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
+        var observed = Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner)
+            .DistinctUntilChanged()
+            .CarryAccessContext(hub.ServiceProvider, viewer)
+            .Select(exists => exists
+                ? hub.GetMeshNodeStream(target)
+                    .Select(node => IsPending(node, options))
+                    .Catch((Exception ex) =>
+                    {
+                        // A node deleted while observed has nothing left to decide; any other failure keeps the request.
+                        if (ex is MeshNodeReadEndedWithDeleteException)
+                            return Observable.Return(false);
+                        logger?.LogWarning(ex, "Inbox: could not read the approval {Target}; keeping its request", target);
+                        return Observable.Return(true);
+                    })
+                : Observable.Return(false))
+            .Switch()
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Inbox: could not tell whether the approval {Target} is still open; keeping its request", target);
+                return Observable.Return(true);
+            });
+        return InboxLayoutArea.FirstAnswerWithin(observed, ReadWithin, true);
+    }
+
+    /// <summary>
+    /// <paramref name="rows"/> without the approval requests whose target is no longer awaiting a decision, LIVE
+    /// (<see cref="Awaits"/>): each emission is the answer for the rows it was asked about, and the caller
+    /// SWITCHES to the latest — an obsolete batch never replaces a newer row set. Rows that announce nothing pass.
+    /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="viewer">The viewer's identity.</param>
     /// <param name="rows">One leg's rows.</param>
-    /// <param name="owner">The inbox's owner — whose identity the reads run as.</param>
+    /// <param name="owner">The inbox's owner — whose identity the listings run as.</param>
     /// <param name="options">The hub's serializer options.</param>
     internal static IObservable<ImmutableList<InboxRow>> OnlyPending(
-        IServiceProvider services, ImmutableList<InboxRow> rows, string owner, JsonSerializerOptions? options)
+        IMessageHub hub, AccessContext? viewer, ImmutableList<InboxRow> rows, string owner, JsonSerializerOptions? options)
     {
         var targets = rows.Select(r => r.Target).Where(t => t.Length > 0).Distinct(StringComparer.Ordinal).ToImmutableArray();
         if (targets.IsEmpty)
             return Observable.Return(rows);
-        var mesh = services.GetRequiredService<IMeshService>();
-        var logger = services.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
-        IObservable<(string Target, bool Pending)> Read(string target) =>
-            mesh.Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{target} select:path,nodeType,content", owner) with { Limit = 1 })
-                .Take(1)
-                .Select(change => change.Items.Count > 0
-                    ? IsPending(change.Items[0], options)
-                    // Only a COMPLETE empty answer says the target is gone; an incomplete one is no answer.
-                    : change.SnapshotIncomplete || change.SilentProviders is { Count: > 0 })
-                .DefaultIfEmpty(true)
-                .Timeout(ReadWithin)
-                .Catch((Exception ex) =>
-                {
-                    logger?.LogWarning(ex, "Inbox: could not tell whether the approval {Target} is still open; keeping its request", target);
-                    return Observable.Return(true);
-                })
-                .Select(pending => (target, pending));
-        return targets.ToObservable().Select(Read).Merge(Parallel).ToList()
+        return targets
+            .Select(target => Awaits(hub, viewer, target, owner, options).Select(pending => (Target: target, Pending: pending)))
+            .CombineLatest()
             .Select(read =>
             {
                 var pending = read.ToDictionary(r => r.Target, r => r.Pending, StringComparer.Ordinal);

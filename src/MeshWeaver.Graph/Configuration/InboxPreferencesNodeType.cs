@@ -150,17 +150,9 @@ public static class InboxPreferencesNodeType
                     })
                     .Select(_ => path)
                     // Idempotent: a concurrent first writer won the create race.
-                    .Catch<string, Exception>(ex => IsAlreadyExists(ex)
+                    .Catch<string, Exception>(ex => ex.IsNodeAlreadyExists()
                         ? Observable.Return(path)
                         : Observable.Throw<string>(ex));
             });
-    }
-
-    private static bool IsAlreadyExists(Exception ex)
-    {
-        for (var e = ex; e is not null; e = e.InnerException)
-            if (e.Message?.Contains("already exists", StringComparison.OrdinalIgnoreCase) == true)
-                return true;
-        return false;
     }
 }

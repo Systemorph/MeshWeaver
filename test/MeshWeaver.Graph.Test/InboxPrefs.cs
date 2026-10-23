@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -34,7 +35,8 @@ internal static class InboxPrefs
                     Content = change(new InboxPreferences()),
                 })))
             .Select(node => (MeshNode?)node)
-            .Catch((Exception _) => Observable.Return<MeshNode?>(null))
+            // Only an ALREADY-EXISTING node is recovered from (and updated below); any other failure is the test's.
+            .Catch((Exception ex) => ex.IsNodeAlreadyExists() ? Observable.Return<MeshNode?>(null) : Observable.Throw<MeshNode?>(ex))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         if (created is not null)
             return;
@@ -43,13 +45,22 @@ internal static class InboxPrefs
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
     }
 
-    /// <summary>Reads the preferences node of <paramref name="owner"/> once it holds something <paramref name="until"/> accepts.</summary>
+    /// <summary>
+    /// Reads the preferences node of <paramref name="owner"/> once it holds something <paramref name="until"/> accepts:
+    /// an exact-path listing says whether it exists, and the node's own AUTHORITATIVE stream says what it holds — an
+    /// index snapshot can trail a write, which would let a stale choice satisfy an assertion.
+    /// </summary>
     public static async Task<InboxPreferences> ReadAsync(IMessageHub mesh, string owner, Func<InboxPreferences, bool> until, CancellationToken ct)
     {
         var options = mesh.JsonSerializerOptions;
+        var path = InboxPreferencePaths.PathFor(owner);
+        var access = mesh.ServiceProvider.GetRequiredService<AccessService>();
         return await mesh
-            .GetQuery($"test:prefs:{Guid.NewGuid():N}", $"path:{InboxPreferencePaths.PathFor(owner)} nodeType:{InboxPreferencePaths.NodeType}")
-            .Select(nodes => nodes.FirstOrDefault()?.ContentAs<InboxPreferences>(options))
+            .GetQuery($"test:prefs:{Guid.NewGuid():N}", $"path:{path} nodeType:{InboxPreferencePaths.NodeType} select:path,id,nodeType")
+            .Where(nodes => nodes.Any())
+            .Take(1)
+            .SelectMany(_ => access.RunAsSystem(() => mesh.GetMeshNodeStream(path)))
+            .Select(node => node.ContentAs<InboxPreferences>(options))
             .Where(p => p is not null && until(p))
             .Select(p => p!)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);

@@ -567,38 +567,57 @@ public static class InboxLayoutArea
     /// <summary>
     /// The person's preferences, live: the node's own stream once the node exists, nothing known (null)
     /// while it does not. Existence is asked of a query (empty-on-absent) and the content of the node's
-    /// stream — never a point read of a maybe-absent path (Doc/Architecture/CqrsAndContentAccess).
+    /// stream — never a point read of a maybe-absent path (Doc/Architecture/CqrsAndContentAccess). The read is
+    /// built under the VIEWER's identity, re-established around each existence answer (it lands on another turn).
+    /// 🚨 Nothing is emitted before the first answer: the rows of a person whose node exists must never flash the
+    /// defaults while it is read; an answer that does not come within <see cref="PreferencesWait"/> reads as "none
+    /// stored" (<see cref="FirstAnswerWithin{T}"/>), and a later real answer still replaces it.
     /// </summary>
-    internal static IObservable<InboxPreferences?> PreferencesOf(LayoutAreaHost host, string owner)
+    internal static IObservable<InboxPreferences?> PreferencesOf(LayoutAreaHost host, string owner, AccessContext? viewer)
     {
         var hub = host.Hub;
         var path = InboxPreferencePaths.PathFor(owner);
         var options = hub.JsonSerializerOptions;
-        // 🚨 Nothing is emitted before the first answer: the rows of a person whose node exists must never flash
-        // the defaults while it is read. An answer that does not come within PreferencesWait reads as "none stored".
-        var answers = hub.GetWorkspace()
-            .GetQuery($"{InboxPreferencesNodeType.NodeType}|exists|{path}",
-                $"path:{path} nodeType:{InboxPreferencesNodeType.NodeType} select:path,id,nodeType")
-            .Select(nodes => nodes.Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
+        var answers = InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
             .DistinctUntilChanged()
+            .CarryAccessContext(hub.ServiceProvider, viewer)
             .Select(exists => exists
                 ? hub.GetMeshNodeStream(path).Select(node => InboxPreferencesNodeType.Parse(node, options))
                 : Observable.Return<InboxPreferences?>(null))
             .Switch();
-        return Observable.Create<InboxPreferences?>(observer =>
+        return FirstAnswerWithin(answers, PreferencesWait, (InboxPreferences?)null);
+    }
+
+    /// <summary>
+    /// <paramref name="source"/>, with <paramref name="fallback"/> emitted ONCE when it has said nothing within
+    /// <paramref name="wait"/>. The arbitration is serialized: the fallback is emitted only while no real answer
+    /// has been, a real answer after it is forwarded as ever, and the observer never sees two notifications
+    /// at once.
+    /// </summary>
+    /// <param name="source">The answers.</param>
+    /// <param name="wait">How long the source may stay silent.</param>
+    /// <param name="fallback">What a silent source reads as.</param>
+    internal static IObservable<T> FirstAnswerWithin<T>(IObservable<T> source, TimeSpan wait, T fallback)
+        => Observable.Create<T>(observer =>
         {
-            var answered = 0;
-            var timer = Observable.Timer(PreferencesWait).Subscribe(_ =>
+            var gate = new object();
+            var answered = false;
+            var timer = Observable.Timer(wait).Subscribe(_ =>
             {
-                if (Interlocked.CompareExchange(ref answered, 1, 0) == 0)
-                    observer.OnNext(null);
+                lock (gate)
+                {
+                    if (answered)
+                        return;
+                    answered = true;
+                    observer.OnNext(fallback);
+                }
             });
-            var subscription = answers.Subscribe(
-                value => { Interlocked.Exchange(ref answered, 1); observer.OnNext(value); },
-                observer.OnError, observer.OnCompleted);
+            var subscription = source.Subscribe(
+                value => { lock (gate) { answered = true; observer.OnNext(value); } },
+                error => { lock (gate) { answered = true; observer.OnError(error); } },
+                () => { lock (gate) { answered = true; observer.OnCompleted(); } });
             return new System.Reactive.Disposables.CompositeDisposable(timer, subscription);
         });
-    }
 
     /// <summary>How long the page waits for the person's preferences before it lists with the defaults.</summary>
     internal static readonly TimeSpan PreferencesWait = TimeSpan.FromSeconds(5);
@@ -634,8 +653,8 @@ public static class InboxLayoutArea
     /// A pass that finds the same keys missing again after writing them would be a loop — it is logged as an
     /// error and not repeated (rule 2: never feed a reconcile its own writes).
     /// </summary>
-    private static void SeedMissing(IMessageHub hub, ILogger? logger, string path, InboxPreferences stored,
-        InboxPreferences expected, SeededKeys seeded)
+    private static void SeedMissing(IMessageHub hub, AccessService? access, AccessContext? viewer, ILogger? logger, string path,
+        InboxPreferences stored, InboxPreferences expected, SeededKeys seeded)
     {
         if (InboxPreferencesNodeType.Completed(stored, expected) is not { } completed)
             return;
@@ -648,12 +667,14 @@ public static class InboxLayoutArea
             return;
         }
         var options = hub.JsonSerializerOptions;
-        hub.GetMeshNodeStream(path)
-            .Update(node => node.ContentAs<InboxPreferences>(options) is { } current
-                            && InboxPreferencesNodeType.Completed(current, expected) is { } merged
-                ? node with { Content = merged }
-                : node)
-            .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Inbox: could not add the missing keys to {Path}", path));
+        // The write is the person's own, under their identity — this runs on whatever turn the rows landed on.
+        using (access?.SwitchAccessContext(viewer))
+            hub.GetMeshNodeStream(path)
+                .Update(node => node.ContentAs<InboxPreferences>(options) is { } current
+                                && InboxPreferencesNodeType.Completed(current, expected) is { } merged
+                    ? node with { Content = merged }
+                    : node)
+                .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Inbox: could not add the missing keys to {Path}", path));
     }
 
     /// <summary>The addresses the rows reached — each once, by <see cref="InboxRows.AccountKey"/>, in alphabetical order. Pure.</summary>
@@ -756,7 +777,10 @@ public static class InboxLayoutArea
         var expected = InboxPreferencesNodeType.Defaults(sections);
         var seedFor = InboxPreferencesNodeType.SeedForExisting(sections);
         var preferencesPath = InboxPreferencePaths.PathFor(owner);
-        var preferences = PreferencesOf(host, owner);
+        var viewerAccess = hub.ServiceProvider.GetService<AccessService>();
+        // Captured on the render turn: the reads and the seed write below run on later turns, where the ambient identity is gone.
+        var viewerContext = viewerAccess?.Context ?? viewerAccess?.CircuitContext;
+        var preferences = PreferencesOf(host, owner, viewerContext);
         var tagItems = host.GetDataStream<ImmutableList<InboxTagItem>>(TagItemsId).Select(items => items ?? [])
             .DistinctUntilChanged(items => string.Join('\n', items.Select(item => $"{item.Key}|{item.Label}|{item.Checked}")), StringComparer.Ordinal);
 
@@ -766,7 +790,7 @@ public static class InboxLayoutArea
         // read again when the viewer changes the search or reopens the page, never on a timer: a
         // provider that stays broken would otherwise be re-queried, and re-logged, for as long as
         // any inbox is open.
-        IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
+        IObservable<(ImmutableList<InboxRow> Rows, string? Unread, int Fetched)> Leg(InboxSection section, string term) =>
             Nodes(hub, section, term, owner)
                 .Select(nodes => nodes
                     .Select(node => WithStateText(InboxApprovalLedger.Decorate(
@@ -776,15 +800,18 @@ public static class InboxLayoutArea
                             hub.JsonSerializerOptions, locale),
                         node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts, stepFormat))
                     .ToImmutableList())
-                // An approval request stays only while the approval it names awaits a decision.
-                .SelectMany(legRows => section.Ledger is null && string.Equals(section.Source, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
-                    ? InboxApprovalTargets.OnlyPending(hub.ServiceProvider, legRows, owner, hub.JsonSerializerOptions)
-                    : Observable.Return(legRows))
-                .Select(legRows => (legRows, (string?)null))
+                // An approval request stays only while the approval it names awaits a decision — observed LIVE, and
+                // always the latest batch: a newer notification snapshot is never replaced by an older read. What the
+                // leg FETCHED is carried beside the rows, so the "capped" notice still reads the window it asked of.
+                .Select(legRows => section.Ledger is null && string.Equals(section.Source, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
+                    ? InboxApprovalTargets.OnlyPending(hub, viewerContext, legRows, owner, hub.JsonSerializerOptions)
+                        .Select(kept => (kept, (string?)null, legRows.Count))
+                    : Observable.Return((legRows, (string?)null, legRows.Count)))
+                .Switch()
                 .Catch((Exception ex) =>
                 {
                     logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
-                    return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source]));
+                    return Observable.Return((ImmutableList<InboxRow>.Empty, (string?)labels[section.Source], 0));
                 });
 
         IObservable<ImmutableList<InboxRow>> Merged(string term) => sections
@@ -794,7 +821,7 @@ public static class InboxLayoutArea
             {
                 host.UpdateData(UnreadId, UnreadNotice(host, legs.Select(leg => leg.Unread)));
                 // Each leg against ITS OWN bound — a provider may ask for fewer than the page's.
-                host.UpdateData(CappedId, sections.Zip(legs).Any(leg => leg.Second.Rows.Count >= InboxQueries.EffectiveLimit(leg.First.Query))
+                host.UpdateData(CappedId, Capped(sections.Zip(legs, (section, leg) => (section.Query, leg.Fetched)))
                     ? host.Localize("inbox.capped")
                     : string.Empty);
             })
@@ -819,7 +846,7 @@ public static class InboxLayoutArea
                 // The view's filter (search, Only) with the person's persisted choices.
                 var asked = WithPreferences(viewFilter, stored ?? expected);
                 if (stored is not null)
-                    SeedMissing(hub, logger, preferencesPath, stored, seedFor, seeded);
+                    SeedMissing(hub, viewerAccess, viewerContext, logger, preferencesPath, stored, seedFor, seeded);
                 host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), AccountsOf(rows)));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
@@ -837,6 +864,15 @@ public static class InboxLayoutArea
                 return shown;
             });
     }
+
+    /// <summary>
+    /// Whether any leg answered as many nodes as it was asked for — each against ITS OWN bound — so the list may
+    /// hide older ones. Counted on what the leg FETCHED, never on the rows kept after the page filtered them: a
+    /// window of decided requests that all drop out still leaves older open ones unread. Pure.
+    /// </summary>
+    /// <param name="legs">Each leg's query and how many nodes it fetched.</param>
+    internal static bool Capped(IEnumerable<(string Query, int Fetched)> legs)
+        => legs.Any(leg => leg.Fetched >= InboxQueries.EffectiveLimit(leg.Query));
 
     /// <summary>
     /// The notice for the sources that could not be read: empty when every leg answered, else the
