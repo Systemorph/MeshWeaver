@@ -585,7 +585,12 @@ The log line said the retry was meaningful, and no component on the live pod mad
    `Unavailable` again, commits have been shown not to be evidence for this write, and from then on
    only a feed reconnect starts a re-issue. A failed attempt started by a reconnect disproves nothing
    about commits. A busy partition therefore cannot turn this into a retry loop, and no count or
-   clock is involved.
+   clock is involved. Two orderings keep that true under synchronous re-entry. The watch connects
+   its own outcome stream BEFORE the evidence feed, so evidence a feed delivers while it is being
+   subscribed cannot start an attempt whose answer has nowhere to go. And a failed attempt stays in
+   flight until its outcome has been weighed, so a commit published from inside the
+   still-unavailable callback is retained and judged like any other evidence. It never starts a
+   nested attempt that would clear a retained reconnect.
 4. **A verdict on a re-issue is written back.** If the store comes back and answers the re-issue
    with a verdict (`Refused`, `Faulted`), `RecordReissueVerdict` replaces the stamp's reason and
    class with that verdict's, through the owner stream, and only while the record still holds the

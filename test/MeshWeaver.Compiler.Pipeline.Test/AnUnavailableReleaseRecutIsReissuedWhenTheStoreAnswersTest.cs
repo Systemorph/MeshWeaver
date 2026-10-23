@@ -304,7 +304,9 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
     {
         private readonly IDisposable _subscription;
 
-        public Rig()
+        /// <param name="whenStillUnavailable">Runs inside the still-unavailable callback, so a case can
+        /// make the callback itself produce evidence (it re-enters the sequence synchronously).</param>
+        public Rig(Action<Rig>? whenStillUnavailable = null)
         {
             Feed = new InProcessMeshChangeFeed(Store);
             _subscription = Feed
@@ -317,9 +319,17 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
                         return attempt;
                     },
                     outcome => outcome == Unavailable,
-                    outcome => StillUnavailable = StillUnavailable.Add(outcome))
+                    outcome =>
+                    {
+                        StillUnavailable = StillUnavailable.Add(outcome);
+                        whenStillUnavailable?.Invoke(this);
+                        AttemptsWhenCallbackReturned = AttemptsWhenCallbackReturned.Add(Attempts.Count);
+                    })
                 .Subscribe(r => Results = Results.Add(r));
         }
+
+        /// <summary>How many attempts existed as each still-unavailable callback returned.</summary>
+        public ImmutableList<int> AttemptsWhenCallbackReturned { get; private set; } = [];
 
         public FaultInjectingStorageAdapter Store { get; } = new(new InMemoryStorageAdapter());
         public InProcessMeshChangeFeed Feed { get; }
@@ -416,6 +426,81 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         rig.Gap();
         rig.Commit();
         rig.Attempts.Should().HaveCount(1);
+    }
+
+    /// <summary>
+    /// Review on #7087: the still-unavailable callback can itself publish a commit in the partition,
+    /// which re-enters the sequence synchronously. That commit must not start an attempt while the
+    /// failed one is still being weighed: a commit-started failure disproves commits, the callback's
+    /// own commit included, so nothing is re-issued until a reconnect.
+    /// </summary>
+    [Fact]
+    public void ACommitFromTheStillUnavailableCallback_IsWeighedAfterTheFailure_NotStartedInsideIt()
+    {
+        using var rig = new Rig(r => r.Commit());
+        rig.Commit();
+        rig.Answer(0, Unavailable);
+
+        rig.AttemptsWhenCallbackReturned.Should().Equal([1],
+            "no attempt starts from inside the callback that reports the failed one");
+        rig.Attempts.Should().HaveCount(1,
+            "the commit-started failure disproved commits, including the one its own callback made");
+
+        rig.Gap();
+        rig.Attempts.Should().HaveCount(2, "a reconnect still counts");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Review on #7087: the same re-entrant commit while a reconnect is RETAINED. The retained
+    /// reconnect starts the next attempt once the failure is weighed — it is not cleared by an attempt
+    /// the callback's commit started from inside the callback.
+    /// </summary>
+    [Fact]
+    public void ACommitFromTheStillUnavailableCallback_KeepsTheRetainedReconnect()
+    {
+        using var rig = new Rig(r => r.Commit());
+        rig.Commit();
+        rig.Gap();
+        rig.Answer(0, Unavailable);
+
+        rig.AttemptsWhenCallbackReturned.Should().Equal([1],
+            "no attempt starts from inside the callback that reports the failed one");
+        rig.Attempts.Should().HaveCount(2, "the retained reconnect starts the next attempt");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Review on #7087: evidence that arrives WHILE the sequence is being subscribed — a feed that
+    /// announces its reconnect as it is subscribed — with an attempt that answers at once. The outcome
+    /// must reach the sequence; with the evidence connected before the outcomes, it was published into
+    /// a subject nobody had subscribed yet, and the sequence stayed "in flight" for good.
+    /// </summary>
+    [Fact]
+    public void EvidenceDuringSubscription_WithAnImmediateAnswer_IsNotLost()
+    {
+        var feed = new GapOnSubscribeFeed();
+        var results = ImmutableList<string>.Empty;
+        using var subscription = feed
+            .ReissueWhenStoreAnswers("P", () => Observable.Return(Landed), outcome => outcome == Unavailable)
+            .Subscribe(r => results = results.Add(r));
+
+        results.Should().Equal([Landed], "the attempt the subscription-time reconnect started answered");
+    }
+
+    /// <summary>
+    /// A feed whose backend reconnected as it was subscribed: <see cref="IMeshInvalidationFeed.Gaps"/>
+    /// delivers one declared gap synchronously on subscription. It carries no commits.
+    /// </summary>
+    private sealed class GapOnSubscribeFeed : IMeshInvalidationFeed
+    {
+        public IDisposable Subscribe(Action<MeshChangeEvent> handler, MeshChangeKind? filter = null)
+            => System.Reactive.Disposables.Disposable.Empty;
+
+        public IObservable<ChangeFeedGap> Gaps => Observable.Return(new ChangeFeedGap(
+            "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow));
     }
 
     [Fact]

@@ -221,9 +221,14 @@ public static class StoreReachability
                     });
             }
 
-            var events = EvidenceBySource(feed, partition)
-                .Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T)))
-                .Merge(outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome)));
+            // 🚨 The OUTCOMES are connected FIRST (review on #7087). Merge subscribes its sources in
+            // order, and a feed may deliver evidence while it is being subscribed; with the evidence
+            // first, that evidence ran Start before the hot `outcomes` subject had a subscriber, an
+            // attempt that answered in that window lost its outcome, and InFlight stayed true for good
+            // — every later piece of evidence was retained and none ever started an attempt.
+            var events = outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome))
+                .Merge(EvidenceBySource(feed, partition)
+                    .Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T))));
 
             var subscription = events.Subscribe(e =>
             {
@@ -244,11 +249,18 @@ public static class StoreReachability
                     return;
                 }
 
-                state.InFlight = false;
+                // 🚨 The attempt stays IN FLIGHT until its outcome is fully weighed (review on #7087).
+                // Merge allows synchronous re-entry, so a commit published from inside wasUnavailable
+                // or onStillUnavailable arrives HERE before this branch finishes; marked idle, it
+                // started a nested attempt before a commit-started failure had disproved commits, and
+                // that nested Start cleared any retained reconnect — an Unavailable answer to it then
+                // left the write waiting for a reconnect that had already happened. In flight, the
+                // re-entrant evidence is retained and judged below like any other.
                 var outcome = e.Outcome!;
                 if (!wasUnavailable(outcome))
                 {
                     state.Done = true;
+                    state.InFlight = false;
                     observer.OnNext(outcome);
                     observer.OnCompleted();
                     return;
@@ -260,6 +272,7 @@ public static class StoreReachability
                     state.CommitsCount = false;
                     state.PendingCommit = false;
                 }
+                state.InFlight = false;
                 if (state.PendingGap)
                     Start(byGap: true);
                 else if (state.PendingCommit)
