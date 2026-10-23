@@ -104,6 +104,15 @@ scan at all writes `ABORTED before planning: …` instead, and a pass whose refe
 incomplete writes `ABORTED: …` with the plan's summary — both are failures, never passes.
 `TheReportNamesItsDenominator_SoAnUnexaminedStoreCannotReadAsACleanOne` pins the distinction.
 
+**A pass that the pod's shutdown cuts short says so** (#7049). The pass runs as a blocking leaf
+on the file-system I/O pool and checks the pool's token at every step. If teardown cancels it
+during the scan, it writes nothing and stops. If teardown cancels it during collection, it stops at
+the next removal and writes an `ABORTED: interrupted by the pool's cancel (teardown) …` line. That
+line carries what it DID remove, and the same `pass outcome — INTERRUPTED` Warning goes to the log.
+The rest of the plan stays on the share for the next pass. An interruption never changes what is
+collectable, only how much of it one pass reaches
+([Controlled I/O Pooling — a blocking leaf that WALKS](../ControlledIoPooling)).
+
 **Reading it today is break-glass.** `PrebuiltBundleRetentionStatus` is written and has no reader:
 the ledger is a file on the data volume and the log line is in Loki — since #6991 as one
 `PrebuiltBundleRetention: pass outcome` Warning per pass, carrying the denominator and the kept
