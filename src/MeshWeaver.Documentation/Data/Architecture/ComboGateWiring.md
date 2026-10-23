@@ -866,6 +866,47 @@ Pinned by `ComboVerifiesTheRecordedCommitTest` (the assembler and verifier over 
 repository whose `HEAD` has moved) and `InstallRecordsTheServedCommitTest` (the registry's answer
 and the install record). Each test file carries its own negative controls.
 
+## The module half of the combo is composed too (#4413)
+
+An instance runs two halves of every installed package: its **content** (node definitions, at the
+recorded commit) and, for most packages, its **compiled module** (`MeshWeaver.AI`,
+`MeshWeaver.Blazor.Chat`, …). The portal image carries only its boot modules; every other module
+is landed per package from the registry. The combo records the second half as
+`package.compiledModule` on each install record.
+
+Until #4413 the verifier composed only the first half. It materialised the content and ran
+`mw-plugin-test` with no `--module`, and the tester image ships no module of its own. So no
+`Skill` or `Agent` NodeType was registered. `Store`, first in install order, failed
+`NodeType(s) not registered: Skill`, and every later package failed `NodeType 'Store/Plugin' is not
+registered`. Measured on run `40002536862`, slot 0: 54 packages, 0 passed, 54 failed. The verdict
+blamed the content, but the cause was the instrument. A tree holding one `Space` package with one
+`Skill` node reproduces it locally with the tester alone, in the same words.
+
+What the lane does now:
+
+1. **The lander fetches the sealed module set.** `combo-verify-instance.sh` reads the sources of
+   every package that declares a compiled module. For each source it runs
+   `compose-sealed-modules.sh --packages '*'` against the publication sealed for the candidate's
+   framework identity. It uses the same share (`vars.BAKE_PUBLISH_TARGETS`) and the same OIDC
+   login as main-cd's `published-modules` job. The rule is the one every gate follows: the
+   publication is the unit of consistency, and there is no registry fallback. A source with no seal
+   for the identity is red at this step.
+2. **The verifier loads only what the combo declares.** `ComboModuleSet` reads the bundles with
+   the platform's own `BundleReader`, which applies the closure, static-asset and native rules the
+   portal's landing applies. It lands each declared module under `modules/<Name>/`. A sealed module
+   the instance does not install is not loaded, because it would register types the instance lacks.
+   A declared module that no seal carries is not loaded either, which matches the producing
+   repository's own gate (its seal holds only the modules its content compiles against). The
+   verdict names those modules in a caveat.
+3. **The gate mounts the modules and passes each as `--module`.** `DockerImageGate.RunArgs` mounts
+   the composed root read-only at `/ext` and appends `--module /ext/modules/<Name>/<Name>.dll`, the
+   same argv the node-repo gate lane builds.
+
+A combo that declares compiled modules while the verifier was given no `--module-bundles` is
+refused with the instrument exit code (3), and no verdict is written. A run without the modules
+would land a content-shaped Red on the instance. Pinned by `ComboComposesTheModuleHalfTest`, whose
+argv test fails when `RunArgs` drops the `--module` entries.
+
 ## Known boundary: the combo moves
 
 A verdict names the `ComboReadAt` of the snapshot it verified. An instance whose modules sync forward
