@@ -57,12 +57,36 @@ public class BinaryAndOversizedContentGuardTest : HubTestBase
         // Legacy single-byte text (Latin-1 'é' = 0xE9) is text, not binary.
         File.WriteAllBytes(Path.Combine(_contentBasePath, "legacy.csv"), [(byte)'c', (byte)'a', (byte)'f', 0xE9, (byte)'\n']);
         File.WriteAllBytes(Path.Combine(_contentBasePath, "report.docx"), [0x50, 0x4B, 0x03, 0x04, 0x00, 0x00]);
+
+        // UTF-32 text with a byte-order mark, both byte orders. UTF-32LE's mark (FF FE 00 00) begins
+        // with the UTF-16LE mark, so the 4-byte marks must be checked first.
+        File.WriteAllBytes(Path.Combine(_contentBasePath, "utf32le.txt"), new UTF32Encoding(false, true).GetPreamble()
+            .Concat(new UTF32Encoding(false, true).GetBytes(Utf32Text)).ToArray());
+        File.WriteAllBytes(Path.Combine(_contentBasePath, "utf32be.txt"), new UTF32Encoding(true, true).GetPreamble()
+            .Concat(new UTF32Encoding(true, true).GetBytes(Utf32Text)).ToArray());
+
+        // A protobuf message: valid UTF-8, no NUL — and still binary (control bytes 08 01 12 03).
+        File.WriteAllBytes(Path.Combine(_contentBasePath, "message.pb"), [0x08, 0x01, 0x12, 0x03, 0x61, 0x62, 0x63]);
+
+        // Latin-1 text whose first non-ASCII byte lies AFTER the 8 KiB sample: the sample alone reads
+        // as UTF-8, so the encoding must be decided over the whole bounded head.
+        File.WriteAllBytes(Path.Combine(_contentBasePath, "late-latin1.csv"),
+            Encoding.ASCII.GetBytes(string.Concat(Enumerable.Repeat("row,value\n", 1000)))
+                .Concat(new byte[] { (byte)'c', (byte)'a', (byte)'f', 0xE9, (byte)'\n' }).ToArray());
+
+        Directory.CreateDirectory(_pipedBasePath);
     }
+
+    private const string Utf32Text = "héllo 🌍\n";
+    private const string NonSeekableSourceType = "NonSeekableTest";
+    private readonly string _pipedBasePath = Path.Combine(AppContext.BaseDirectory, "Files", "BinaryGuardTestPiped");
 
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
     {
         return base.ConfigureClient(configuration)
-            .WithServices(services => services.AddSingleton<IContentTransformer, DocxTestTransformer>())
+            .WithServices(services => services
+                .AddSingleton<IContentTransformer, DocxTestTransformer>()
+                .AddKeyedScoped<IStreamProviderFactory, EndlessStreamFactory>(NonSeekableSourceType))
             .AddContentCollection(_ => new ContentCollectionConfig
             {
                 Name = "content",
@@ -71,6 +95,12 @@ public class BinaryAndOversizedContentGuardTest : HubTestBase
                 ExposeInChildren = true,
                 BasePath = _contentBasePath,
                 Settings = new Dictionary<string, string> { ["BasePath"] = _contentBasePath }
+            })
+            .AddContentCollection(_ => new ContentCollectionConfig
+            {
+                Name = "piped",
+                SourceType = NonSeekableSourceType,
+                BasePath = _pipedBasePath,
             });
     }
 
@@ -153,6 +183,132 @@ public class BinaryAndOversizedContentGuardTest : HubTestBase
 
         result.Success.Should().BeTrue();
         result.Content.Should().Be(ConvertedMarkdown);
+    }
+
+    [Theory]
+    [InlineData("utf32le.txt")]
+    [InlineData("utf32be.txt")]
+    public async Task Utf32_Text_With_A_Byte_Order_Mark_Is_Decoded_As_Utf32(string file)
+    {
+        var result = await Files.GetFileContent("content", file).Should().Emit();
+
+        Output.WriteLine(result.Content ?? result.Error ?? "<null>");
+        result.Success.Should().BeTrue();
+        result.Content.Should().Be(Utf32Text);
+    }
+
+    [Fact]
+    public async Task Valid_Utf8_With_Control_Bytes_And_No_Nul_Is_Binary()
+    {
+        var result = await Files.GetFileContent("content", "message.pb").Should().Emit();
+
+        Output.WriteLine(result.Content ?? result.Error ?? "<null>");
+        result.Success.Should().BeTrue();
+        result.Content.Should().StartWith("[binary file: message.pb");
+        result.Content.Should().Contain("control bytes");
+        result.Content.Should().Contain("7 bytes");
+    }
+
+    [Fact]
+    public async Task Encoding_Is_Decided_Over_The_Whole_Head_Not_The_Sample()
+    {
+        var result = await Files.GetFileContent("content", "late-latin1.csv").Should().Emit();
+
+        result.Success.Should().BeTrue();
+        var content = result.Content!;
+        Output.WriteLine($"tail={content[^20..]}");
+        content.Should().NotContain("\uFFFD", "a Latin-1 byte past the sample must not be decoded as UTF-8");
+        content.Should().EndWith("café\n");
+    }
+
+    [Fact]
+    public async Task Binary_Refusal_On_A_NonSeekable_Stream_Does_Not_Drain_It_And_Reports_An_Unknown_Size()
+    {
+        // The stream never ends: draining it to measure its size would never return.
+        var result = await Files.GetFileContent("piped", "endless.bin")
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Emit("a refusal reads the sample only — it never drains the stream to count its size",
+                TestContext.Current.CancellationToken);
+
+        Output.WriteLine(result.Content ?? result.Error ?? "<null>");
+        result.Success.Should().BeTrue();
+        result.Content.Should().StartWith("[binary file: endless.bin");
+        result.Content.Should().Contain("size unknown");
+        result.Content.Should().NotContain("-1 bytes");
+    }
+
+    [Fact]
+    public async Task Truncated_Text_On_A_NonSeekable_Stream_Does_Not_Drain_It_And_Says_The_Size_Is_Unknown()
+    {
+        var result = await Files.GetFileContent("piped", "endless.txt")
+            .Should().Within(TimeSpan.FromSeconds(10))
+            .Emit("a bounded read stops at the bound — it never drains the stream to count its size",
+                TestContext.Current.CancellationToken);
+
+        result.Success.Should().BeTrue();
+        var content = result.Content!;
+        Output.WriteLine($"length={content.Length}; tail={content[^200..]}");
+        content.Should().Contain("[truncated: endless.txt is larger than 262144 bytes (total size unknown)");
+        content.Should().NotContain("-1 bytes");
+    }
+
+    /// <summary>Hands out <see cref="EndlessStreamProvider"/> over an empty directory.</summary>
+    private sealed class EndlessStreamFactory : IStreamProviderFactory
+    {
+        public IObservable<IStreamProvider> Create(ContentCollectionConfig config)
+            => System.Reactive.Linq.Observable.Return<IStreamProvider>(
+                new EndlessStreamProvider(new FileSystemStreamProvider(config.BasePath ?? "")));
+    }
+
+    /// <summary>
+    /// A real file-system provider whose file reads answer a NON-SEEKABLE stream that never ends —
+    /// the shape of a piped or remote store that reports no length. <c>.bin</c> yields NUL bytes,
+    /// anything else yields text lines.
+    /// </summary>
+    private sealed class EndlessStreamProvider(IStreamProvider inner) : IStreamProvider
+    {
+        public string ProviderType => NonSeekableSourceType;
+
+        public Task<Stream?> GetStreamAsync(string reference, CancellationToken ct = default)
+            => Task.FromResult<Stream?>(new EndlessStream(reference.EndsWith(".bin") ? (byte)0 : (byte)'a'));
+        public IDisposable? AttachMonitor(Action<string> onChanged) => inner.AttachMonitor(onChanged);
+        public Task<(Stream? Stream, string Path, DateTime LastModified)> GetStreamWithMetadataAsync(
+            string path, CancellationToken ct = default) => inner.GetStreamWithMetadataAsync(path, ct);
+        public Task WriteStreamAsync(string reference, Stream content, CancellationToken ct = default)
+            => inner.WriteStreamAsync(reference, content, ct);
+        public IAsyncEnumerable<(Stream? Stream, string Path, DateTime LastModified)> GetStreamsAsync(
+            Func<string, bool> filter, CancellationToken ct = default) => inner.GetStreamsAsync(filter, ct);
+        public IAsyncEnumerable<FolderItem> GetFolders(string path, CancellationToken ct = default)
+            => inner.GetFolders(path, ct);
+        public IAsyncEnumerable<FileItem> GetFiles(string path, CancellationToken ct = default)
+            => inner.GetFiles(path, ct);
+        public Task SaveFileAsync(string path, string fileName, Stream content, CancellationToken ct = default)
+            => inner.SaveFileAsync(path, fileName, content, ct);
+        public Task CreateFolderAsync(string folderPath) => inner.CreateFolderAsync(folderPath);
+        public Task DeleteFolderAsync(string folderPath) => inner.DeleteFolderAsync(folderPath);
+        public Task DeleteFileAsync(string filePath) => inner.DeleteFileAsync(filePath);
+        public Task<System.Collections.Immutable.ImmutableDictionary<string, Author>> LoadAuthorsAsync(
+            CancellationToken ct = default) => inner.LoadAuthorsAsync(ct);
+    }
+
+    /// <summary>A read-only, non-seekable stream that never reaches its end.</summary>
+    private sealed class EndlessStream(byte fill) : Stream
+    {
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            for (var i = 0; i < count; i++)
+                buffer[offset + i] = fill != 0 && i % 64 == 63 ? (byte)'\n' : fill;
+            return count;
+        }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private sealed class DocxTestTransformer : IContentTransformer

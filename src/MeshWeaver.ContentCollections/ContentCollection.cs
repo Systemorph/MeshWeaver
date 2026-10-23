@@ -198,7 +198,9 @@ public class ContentCollection : IDisposable
     /// (<see cref="BinaryContentSniffer.KnownBinaryTypes"/>) or a leading sample that is not text is
     /// never decoded — the result names the reason and the size instead. Otherwise at most
     /// <paramref name="maxBytes"/> bytes are decoded and <see cref="BoundedTextRead.Truncated"/> says
-    /// whether the file was larger; nothing beyond the bound is held in memory.
+    /// whether the file was larger; nothing beyond the bound is held in memory or read. The encoding is
+    /// decided over the whole bounded head, never the sample alone. A size the store does not report
+    /// (a non-seekable stream) is <c>-1</c>, never measured by draining the file.
     /// </summary>
     /// <param name="path">The file path within the collection.</param>
     /// <param name="maxBytes">The most bytes of the file decoded into text.</param>
@@ -215,22 +217,17 @@ public class ContentCollection : IDisposable
         {
             var ext = System.IO.Path.GetExtension(path);
             if (BinaryContentSniffer.KnownBinaryTypes.ContainsKey(ext))
-            {
-                var size = await CountRemainingAsync(stream, 0, ct).ConfigureAwait(false);
-                return new BoundedTextRead(null, size, 0, false, $"'{ext.ToLowerInvariant()}' is a binary format");
-            }
+                return new BoundedTextRead(null, ReportedSize(stream), 0, false, $"'{ext.ToLowerInvariant()}' is a binary format");
 
             var buffer = new byte[Math.Max(0, maxBytes)];
             var sampleLength = await FillAsync(stream, buffer, 0, Math.Min(BinaryContentSniffer.SampleBytes, buffer.Length), ct).ConfigureAwait(false);
             var read = sampleLength;
             // Only a sample that stopped short of its request is known to be the whole file.
             var sampleIsWholeFile = sampleLength < Math.Min(BinaryContentSniffer.SampleBytes, buffer.Length);
-            var (encoding, binaryReason) = BinaryContentSniffer.Classify(buffer, sampleLength, sampleIsWholeFile);
-            if (encoding is null)
-            {
-                var size = await CountRemainingAsync(stream, read, ct).ConfigureAwait(false);
-                return new BoundedTextRead(null, size, 0, false, binaryReason);
-            }
+            // Early refusal on the sample, so a binary file is never read up to the bound.
+            var (sampleEncoding, sampleReason) = BinaryContentSniffer.Classify(buffer, sampleLength, sampleIsWholeFile);
+            if (sampleEncoding is null)
+                return new BoundedTextRead(null, sampleIsWholeFile ? read : ReportedSize(stream), 0, false, sampleReason);
 
             if (!sampleIsWholeFile)
                 read += await FillAsync(stream, buffer, read, buffer.Length - read, ct).ConfigureAwait(false);
@@ -239,9 +236,14 @@ public class ContentCollection : IDisposable
             var probe = new byte[1];
             var truncated = read == buffer.Length
                 && await stream.ReadAsync(probe.AsMemory(0, 1), ct).ConfigureAwait(false) == 1;
-            var total = truncated
-                ? await CountRemainingAsync(stream, read + 1, ct).ConfigureAwait(false)
-                : read;
+            var total = truncated ? ReportedSize(stream) : read;
+
+            // Reclassify over the WHOLE bounded head: the encoding that decodes the text must be the
+            // one the text was classified under — a Latin-1 'é' past the first 8 KiB must not be
+            // decoded as UTF-8. An incomplete final sequence is allowed only when the head is cut.
+            var (encoding, binaryReason) = BinaryContentSniffer.Classify(buffer, read, sampleIsWholeFile: !truncated);
+            if (encoding is null)
+                return new BoundedTextRead(null, total, 0, false, binaryReason);
 
             // A truncated head may end inside a multi-byte sequence: decode without flushing so the
             // incomplete tail is dropped rather than turned into a replacement character.
@@ -287,19 +289,10 @@ public class ContentCollection : IDisposable
         return total;
     }
 
-    // The file's total size: the stream's length when seekable, else the bytes already consumed plus
-    // the rest drained in fixed chunks (never held in memory).
-    private static async Task<long> CountRemainingAsync(Stream stream, long consumed, CancellationToken ct)
-    {
-        if (stream.CanSeek)
-            return stream.Length;
-        var chunk = new byte[81920];
-        var total = consumed;
-        int n;
-        while ((n = await stream.ReadAsync(chunk, ct).ConfigureAwait(false)) > 0)
-            total += n;
-        return total;
-    }
+    // The file's total size as the store reports it — the stream's length when seekable, else -1
+    // (unknown), exactly as GetContentSize answers. Never measured by draining the stream: that would
+    // hold this pool slot until EOF for a refusal or a one-row read.
+    private static long ReportedSize(Stream stream) => stream.CanSeek ? stream.Length : -1;
 
 
 

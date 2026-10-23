@@ -93,9 +93,9 @@ public static class BinaryContentSniffer
     /// Classifies a leading sample of a file. Returns the encoding to decode it with when it is text,
     /// or a reason (and a <c>null</c> encoding) when it is binary.
     /// </summary>
-    /// <param name="sample">The buffer holding the sample.</param>
+    /// <param name="sample">The buffer holding the bytes — the early sample, or the whole bounded head.</param>
     /// <param name="count">How many bytes of <paramref name="sample"/> are valid.</param>
-    /// <param name="sampleIsWholeFile">True when the sample is the entire file, so a multi-byte
+    /// <param name="sampleIsWholeFile">True when the bytes are the entire file, so a multi-byte
     /// sequence cut at its end is invalid rather than merely incomplete.</param>
     public static (Encoding? Encoding, string? BinaryReason) Classify(byte[] sample, int count, bool sampleIsWholeFile)
     {
@@ -103,7 +103,12 @@ public static class BinaryContentSniffer
         if (span.Length == 0)
             return (new UTF8Encoding(false), null);
 
-        // A byte-order mark decides the encoding outright (UTF-16 text legitimately carries NULs).
+        // A byte-order mark decides the encoding outright (UTF-16/32 text legitimately carries NULs).
+        // The 4-byte UTF-32 marks come FIRST: UTF-32LE (FF FE 00 00) begins with the UTF-16LE mark.
+        if (span.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE, 0x00, 0x00]))
+            return (new UTF32Encoding(bigEndian: false, byteOrderMark: true), null);
+        if (span.StartsWith((ReadOnlySpan<byte>)[0x00, 0x00, 0xFE, 0xFF]))
+            return (new UTF32Encoding(bigEndian: true, byteOrderMark: true), null);
         if (span.StartsWith((ReadOnlySpan<byte>)[0xEF, 0xBB, 0xBF]))
             return (new UTF8Encoding(false), null);
         if (span.StartsWith((ReadOnlySpan<byte>)[0xFF, 0xFE]))
@@ -114,14 +119,16 @@ public static class BinaryContentSniffer
         if (span.IndexOf((byte)0) >= 0)
             return (null, "it contains NUL bytes");
 
+        // Control bytes other than whitespace mark binary data whatever the encoding: a protobuf
+        // message (08 01 12 03 61 62 63) is valid UTF-8 with no NULs, and is still not text.
+        foreach (var b in span)
+            if (b < 0x20 && b is not ((byte)'\t' or (byte)'\n' or (byte)'\r' or 0x0B or 0x0C))
+                return (null, "it contains control bytes that text does not");
+
         if (IsValidUtf8(span, sampleIsWholeFile))
             return (new UTF8Encoding(false), null);
 
-        // Not UTF-8. Legacy single-byte text (a Latin-1 CSV) has no control characters beyond
-        // whitespace; binary data is full of them.
-        foreach (var b in span)
-            if (b < 0x20 && b is not ((byte)'\t' or (byte)'\n' or (byte)'\r' or 0x0C))
-                return (null, "it is not valid UTF-8 text");
+        // Not UTF-8, but free of control bytes: legacy single-byte text (a Latin-1 CSV).
         return (Encoding.Latin1, null);
     }
 
@@ -146,7 +153,8 @@ public static class BinaryContentSniffer
 /// states — or <see cref="BinaryReason"/> names why the file is binary and no text was decoded.
 /// </summary>
 /// <param name="Text">The decoded text, or <c>null</c> when the file is binary.</param>
-/// <param name="TotalBytes">The file's size in bytes.</param>
+/// <param name="TotalBytes">The file's size in bytes, or <c>-1</c> when the store does not report it (a
+/// non-seekable stream) — the size is never measured by draining the file.</param>
 /// <param name="ReturnedBytes">How many of the file's bytes <see cref="Text"/> was decoded from.</param>
 /// <param name="Truncated">True when the file is larger than the bound and <see cref="Text"/> is its head only.</param>
 /// <param name="BinaryReason">Why the file was classified as binary, or <c>null</c> when it is text.</param>

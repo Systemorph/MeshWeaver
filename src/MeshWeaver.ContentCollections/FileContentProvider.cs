@@ -124,7 +124,9 @@ public class FileContentProvider : IFileContentProvider
         if (read.IsBinary)
         {
             var (mediaType, description) = BinaryContentSniffer.Describe(ext);
-            return $"{BinaryPlaceholderPrefix}{name} ({description}, {mediaType}, {read.TotalBytes} bytes)] "
+            // A size the store does not report (-1) is said to be unknown, never printed as a byte count.
+            var sizeText = read.TotalBytes >= 0 ? $"{read.TotalBytes} bytes" : "size unknown";
+            return $"{BinaryPlaceholderPrefix}{name} ({description}, {mediaType}, {sizeText})] "
                 + $"Its content is not returned as text because {read.BinaryReason}, and no text converter is "
                 + $"registered for '{(ext.Length > 0 ? ext : name)}'. To read it, convert it to a text format "
                 + "(for example export it as PDF, Markdown or CSV) and read that file, or process it server-side "
@@ -134,8 +136,11 @@ public class FileContentProvider : IFileContentProvider
         if (!read.Truncated)
             return read.Text ?? string.Empty;
 
+        var totalText = read.TotalBytes >= 0
+            ? $"{name} is {read.TotalBytes} bytes"
+            : $"{name} is larger than {read.ReturnedBytes} bytes (total size unknown)";
         return read.Text
-            + $"\n\n{TruncationMarkerPrefix}{name} is {read.TotalBytes} bytes; only the first {read.ReturnedBytes} "
+            + $"\n\n{TruncationMarkerPrefix}{totalText}; only the first {read.ReturnedBytes} "
             + $"bytes are returned (limit {MaxTextBytes} bytes). Read fewer rows or split the file to see the rest.]";
     }
 
