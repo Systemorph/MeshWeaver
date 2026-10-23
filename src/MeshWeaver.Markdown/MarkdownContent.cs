@@ -1,5 +1,7 @@
 using Markdig;
 using Markdig.Syntax;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using MeshWeaver.Kernel;
 
 namespace MeshWeaver.Markdown;
@@ -9,12 +11,39 @@ namespace MeshWeaver.Markdown;
 /// When persisted to the file system, only the Content property is written (as .md file).
 /// When stored in-memory or Cosmos, the full document including PrerenderedHtml and CodeSubmissions is preserved.
 /// </summary>
-public record MarkdownContent
+public record MarkdownContent : IJsonOnDeserialized
 {
+    // 🚨 Null ONLY while a JSON read has not met a `content` member — the one fact
+    // OnDeserialized needs to tell "the payload carries no body" from "the body is the empty
+    // string". Every reader sees Content, which is never null.
+    private string? content;
+
     /// <summary>
-    /// The raw markdown content (without YAML front matter).
+    /// The raw markdown content (without YAML front matter). Empty when the document has no body.
+    ///
+    /// <para>🚨 <b>Not <c>required</c>, and absent means EMPTY — but only when nothing else could
+    /// be the body</b> (Systemorph/MeshWeaver#5736, #6639). A payload that omits <c>content</c> and
+    /// carries nothing but members this record declares (<c>{"$type":"MarkdownContent"}</c>,
+    /// <c>{"tags":[…]}</c>) is a document with no body yet, and it binds as one. When it was
+    /// <c>required</c> that payload THREW: the read seam degraded the node to raw JSON (the
+    /// <c>ObjectPolymorphicConverter</c> "could not be deserialized; preserving raw JSON" line),
+    /// the overview called it Unreadable, and every update of the node logged
+    /// <c>As&lt;MarkdownContent&gt; … could not recover value: JsonException</c> at Error.</para>
+    ///
+    /// <para>🚨 A payload that omits <c>content</c> but carries a member this record does NOT
+    /// declare (<c>{"markdown": …}</c>, <c>{"body": …}</c>, <c>{"text": …}</c>) still refuses to
+    /// bind — see <see cref="IJsonOnDeserialized.OnDeserialized"/>. Its text is in the store under another key, and an
+    /// empty document over it would render the "No content yet" invitation whose first save
+    /// overwrites that text (#4600). Every writer of this record emits <c>content</c> (the getter
+    /// never returns null), so an absent member is never this record's own output. A payload with
+    /// no <c>content</c> but a stored <c>prerenderedHtml</c> is refused the same way: its source
+    /// is MISSING, not empty, and the renderer must fall back to that HTML (review on #7097).</para>
     /// </summary>
-    public required string Content { get; init; }
+    public string Content
+    {
+        get => content ?? string.Empty;
+        init => content = value ?? string.Empty;
+    }
 
     /// <summary>
     /// Pre-rendered HTML from the markdown content.
@@ -94,6 +123,44 @@ public record MarkdownContent
     [System.ComponentModel.Browsable(false)]
     [System.Text.Json.Serialization.JsonExtensionData]
     public IDictionary<string, System.Text.Json.JsonElement>? UnknownMembers { get; init; }
+
+    /// <summary>
+    /// Completes a JSON read: an absent <c>content</c> member becomes the empty body, unless the
+    /// payload carries members this record does not declare — then the body may be under one of
+    /// them, and binding an empty document over it would hide it (#4600). That case throws a
+    /// <see cref="JsonException"/> naming the stray members (never their values), which every read
+    /// seam already handles as "stored JSON does not bind": the converter preserves the raw JSON,
+    /// <c>ReadMarkdownContent</c> reports it Unreadable, and the update pipeline reports it.
+    /// </summary>
+    /// <exception cref="JsonException">The payload has no <c>content</c> and carries undeclared members.</exception>
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (content is not null)
+            return;
+        // `$`-prefixed keys ($type, $id, …) are serializer metadata, never a body. Under options
+        // without the polymorphic resolver they land in the extension buffer.
+        var stray = UnknownMembers?.Keys
+            .Where(k => !k.StartsWith('$'))
+            .Order(StringComparer.Ordinal)
+            .ToArray() ?? [];
+        if (stray.Length > 0)
+            throw new JsonException(
+                $"{nameof(MarkdownContent)} has no 'content' member but carries "
+                + $"'{string.Join("', '", stray)}', which it does not "
+                + "declare — the body may be stored under one of them, so it is not bound as an empty "
+                + "document (Systemorph/MeshWeaver#4600, #5736).");
+        // 🚨 A stored RENDERING without its source is a document whose source is MISSING, not an
+        // empty one (review on #7097). Bound with Content == "", MarkdownBody.Render would render
+        // the empty source and never reach its stored-HTML fallback, so GetPreRenderedHtml would
+        // drop the document. It stays an unbound payload, exactly as before: the renderer falls
+        // back to the stored HTML, and an EXPLICIT "content":"" (a deliberate clear) still binds
+        // and renders empty.
+        if (!string.IsNullOrWhiteSpace(PrerenderedHtml))
+            throw new JsonException(
+                $"{nameof(MarkdownContent)} has no 'content' member but carries 'prerenderedHtml' — a "
+                + "rendering whose source is missing, so it is not bound as an empty document.");
+        content = string.Empty;
+    }
 
     /// <summary>
     /// Creates a MarkdownContent from raw content by parsing and rendering.
