@@ -147,9 +147,17 @@ buffer the whole file in memory, and base64 adds a third — prefer the REST rou
 | `.docx` | Converted to **markdown** (DocSharp transformer) |
 | `.pdf` | Extracted to **page text** (PdfPig transformer) |
 | `.xlsx`, `.xls` | Converted to **markdown tables**, one per worksheet (ClosedXML transformer) |
-| `.md`, `.csv`, `.txt`, source files | Returned as text verbatim |
+| `.md`, `.csv`, `.txt`, source files | Returned as text verbatim, **bounded** — see below |
 | images (`.png`, `.jpg`, `.gif`, `.webp`, `.tif`/`.tiff`, …) | **Never returned as bytes.** `get` returns the image's `Document` node (name + AI description) when content indexing has captioned it; otherwise a short placeholder (name, media type, size). |
-| other binaries | **No transformer** — bytes would decode as corrupted text (binary is not JSON-safe); do not `get` these into an agent context |
+| other binaries (`.pptx`, `.zip`, audio, video, fonts, … and any file whose bytes are not text) | **Never returned as bytes.** A named placeholder: `[binary file: deck.pptx (PowerPoint presentation, <media type>, N bytes)]`, the reason, and how to read it instead |
+
+The `.docx`, `.pdf` and `.xlsx`/`.xls` transformers live in the optional `MeshWeaver.Markdown.Export` module. On a host without it those formats fall under "other binaries" and answer the named placeholder, never raw bytes.
+
+**Binary detection.** `FileContentProvider` reads every file that has no transformer and is not a raster image through `ContentCollection.GetBoundedText`. That read refuses to decode a file in two cases. The first is a known binary extension (`BinaryContentSniffer.KnownBinaryTypes`), which is decided without reading the content. The second is a leading 8 KiB sample that contains NUL bytes, or that is neither valid UTF-8 nor plain single-byte text. A byte-order mark still selects UTF-8 or UTF-16 text, and legacy Latin-1 text with no control characters is still read as text. A file of this kind used to be decoded raw. In one case an agent's `Get` of a `.pptx` put the ZIP container's bytes into the conversation, and the provider refused the next model request for its size (issue #7064). Below such a cap, the model would have worked from garbage without any error.
+
+**Size bound.** A text read decodes at most `FileContentProvider.MaxTextBytes` (256 KiB). A larger file returns its head followed by an explicit marker, `[truncated: big.txt is N bytes; only the first M bytes are returned …]`, so the cut is never silent. A transformer's converted text is bounded to the same number of characters and carries the same marker. A row limit (`numberOfRows`) is a cut the caller asked for, so it carries no marker. `ContentCollection.GetContentAsText` stays unbounded for callers that are not a model or a wire, such as the layout area that renders a converted document.
+
+**`.pptx` has no text converter.** Its OpenXML parsing would belong in `MeshWeaver.Markdown.Export`, next to the `.docx` transformer. The content-collection core deliberately carries no office-document dependency, so core answers `.pptx` with the named placeholder.
 
 The transformer seam is a single registration (`AddContentService`), so the agent `Get` tool and the MCP `get` tool return byte-for-byte the same text for a given file — there is no second code path.
 
