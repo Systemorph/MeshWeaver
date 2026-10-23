@@ -337,6 +337,33 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
             .Should().Equal(["fallback", "saved"], "a late real answer still replaces it");
     }
 
+    /// <summary>A source that COMPLETES without an answer reads as the fallback, once, and ends — the consumer never waits on a silence.</summary>
+    [Fact]
+    public async Task ASourceThatCompletesSilently_ReadsAsTheFallback()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await InboxLayoutArea.FirstAnswerWithin(Observable.Empty<string>(), TimeSpan.FromMinutes(5), "fallback").ToList()
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal(["fallback"]);
+        (await InboxLayoutArea.FirstAnswerWithin(Observable.Return("saved"), TimeSpan.FromMinutes(5), "fallback").ToList()
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal(["saved"], "an answered source is not followed by the fallback");
+    }
+
+    /// <summary>
+    /// "N items needing you are hidden" counts only what Show all can reveal: a mail hidden by its switched-off SOURCE
+    /// is counted while its kind is ticked; with its kind unticked it stays hidden after the action, so it is not counted.
+    /// </summary>
+    [Fact]
+    public void TheHiddenNotice_CountsOnlyWhatShowAllCanReveal()
+    {
+        var mail = new InboxRow { Path = "m", Category = "Mail", SourceId = "Mail", Rank = 0, Stamp = "2026-10-21T06:22:13.0000000Z" };
+        var off = new InboxFilter { Sources = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), false) };
+        InboxRows.HiddenObligations([mail], off, needsYouRank: 0).Should().Be(1, "no kind restricts: switching the source on shows it");
+        InboxRows.HiddenObligations([mail], off with { Kinds = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Mail"), true) }, needsYouRank: 0)
+            .Should().Be(1, "its kind is ticked: switching the source on shows it");
+        InboxRows.HiddenObligations([mail], off with { Kinds = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.SourceKey("Approvals"), true) }, needsYouRank: 0)
+            .Should().Be(0, "its kind is not ticked: Show all would not reveal it, so the notice does not advertise it");
+    }
+
     /// <summary>
     /// Presence is read from the listing's answers and never conflated: a matching row is present, a COMPLETE empty answer
     /// is absent, and an INCOMPLETE empty one (a silent provider, an unfinished storage read) says nothing — so no node

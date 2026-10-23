@@ -588,7 +588,7 @@ public static class InboxLayoutArea
 
     /// <summary>
     /// <paramref name="source"/>, with <paramref name="fallback"/> emitted ONCE when it has said nothing within
-    /// <paramref name="wait"/>. The arbitration is serialized: the fallback is emitted only while no real answer
+    /// <paramref name="wait"/> — or when it COMPLETES without having said anything. The arbitration is serialized: the fallback is emitted only while no real answer
     /// has been, a real answer after it is forwarded as ever, and the observer never sees two notifications
     /// at once.
     /// </summary>
@@ -614,7 +614,17 @@ public static class InboxLayoutArea
             var subscription = source.Subscribe(
                 value => { lock (gate) { answered = true; observer.OnNext(value); } },
                 error => { lock (gate) { answered = true; observer.OnError(error); } },
-                () => { lock (gate) { answered = true; observer.OnCompleted(); } });
+                () =>
+                {
+                    lock (gate)
+                    {
+                        // A source that ends without an answer reads as the fallback, once: the consumer never waits on a silence.
+                        if (!answered)
+                            observer.OnNext(fallback);
+                        answered = true;
+                        observer.OnCompleted();
+                    }
+                });
             return new System.Reactive.Disposables.CompositeDisposable(timer, subscription);
         });
 

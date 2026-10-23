@@ -924,7 +924,11 @@ public static class InboxRows
         // source filter hides nothing then — counting would report a visible obligation as hidden.
         => needsYouRank is not { } rank || filter.Category.Length > 0
             ? 0
-            : rows.Count(row => row.Rank == rank && (!Shown(row, filter) || !AccountShown(row, filter)));
+            // Only what "Show all" can REVEAL is counted: rows the other filters (kinds, states, tags, ignorable, dates)
+            // would list if the source and account restrictions were lifted. A row hidden by an unticked kind stays hidden
+            // after the action, so counting it would advertise something the button does not deliver.
+            : Apply(rows, filter with { Sources = ImmutableDictionary<string, bool>.Empty, Only = string.Empty, Account = string.Empty }, filter.Category)
+                .Count(row => row.Rank == rank && (!Shown(row, filter) || !AccountShown(row, filter)));
 
     /// <summary>
     /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand
