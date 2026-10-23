@@ -91,6 +91,9 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
                 NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
                 Content = new Notification { NotificationType = NotificationType.General, Id = id, Title = id, Recipient = owner },
             }, ct);
+        // General notifications are quiet (only important ones are listed by default); this test is about
+        // them, so the person has chosen to see them — the field the "Show ignorable" checkbox writes.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { ShowIgnorable = true }, ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
 
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -106,10 +109,6 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
                  && r.EnumerateArray().Select(x => x.GetProperty("path").GetString()).OrderBy(x => x)
                      .SequenceEqual(ids.Select(id => $"{ns}/{id}").OrderBy(x => x)),
             because, ct);
-        // Notifications are a switch away by default (the feed is long); this test is about them,
-        // so it switches them on — the same field the source toggle writes.
-        stream.UpdatePointer(JsonValue.Create(true), LayoutAreaReference.GetDataPointer(InboxRows.FilterId),
-            new JsonPointerReference($"sources/{InboxRows.SourceKey("Notifications")}"));
         await Listed("every notification is listed", "keep", "bin", "bin2");
 
         var pointer = grid.SelectedItems.Should().BeOfType<JsonPointerReference>().Subject.Pointer;
@@ -157,6 +156,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
             Content = new Notification { NotificationType = NotificationType.General, Id = "alpha", Title = "Alpha invoice", Recipient = owner },
         }, ct);
         await CreateAsync(Mail("zulu", mail, owner, new Email { Id = "zulu", From = "a.buyer@acme.example", Subject = "Zulu workshop" }), ct);
+        // Every kind and every state: this test is about the switches, not the defaults.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
 
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -171,9 +172,9 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         void Set(string field, JsonNode value) => stream.UpdatePointer(value, filter, new JsonPointerReference(field));
 
         // Both are in "Needs you"; the mail was created last, so it is the newer one.
-        await Titles("notifications are off by default: only the mail is listed", "Zulu workshop");
-        Set($"sources/{InboxRows.SourceKey("Notifications")}", JsonValue.Create(true));
-        await Titles("switched on, the notification joins — newest first, the default order", "Zulu workshop", "Alpha invoice");
+        await Titles("a general notification is quiet (only important ones pass): only the mail is listed", "Zulu workshop");
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { ShowIgnorable = true }, ct);
+        await Titles("with ignorable shown, the notification joins — newest first, the default order", "Zulu workshop", "Alpha invoice");
 
         // The page must settle: its own row writes re-emit the data section, and a page that read
         // those as filter changes would rewrite the rows without end (dozens of writes in this window).
@@ -194,12 +195,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         Pick(string.Empty);
         await Titles("All lists everything again", "Zulu workshop", "Alpha invoice");
 
-        Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(false));
+        var mailKey = InboxRows.SourceKey("Mail");
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { Sources = p.Sources.SetItem(mailKey, false) }, ct);
         await Titles("a source switched off leaves the grid", "Alpha invoice");
         await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
             .Should().Within(TestTimeouts.Convergence).Match(t => t != null && t.StartsWith("1 "),
                 "the switch hides a mail that needs the viewer, and the page says so", ct);
-        Set($"sources/{InboxRows.SourceKey("Mail")}", JsonValue.Create(true));
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { Sources = p.Sources.SetItem(mailKey, true) }, ct);
         await Titles("and returns when switched on, newest first", "Zulu workshop", "Alpha invoice");
         await stream.GetDataStream<string>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.HiddenId)))
             .Should().Within(TestTimeouts.Convergence).Match(t => string.IsNullOrEmpty(t), "nothing is hidden any more", ct);
@@ -213,7 +215,7 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
     /// <summary>
     /// The page as a mail client shows it: an unread mail is bold and a read one is not, every row
     /// carries its source's symbol, Delete answers Backspace, and each source has a one-click icon
-    /// toggle beside the command row — notifications start switched off.
+    /// toggle beside the command row, bound to the person's preferences.
     /// </summary>
     [Fact(Timeout = 120000)]
     public async Task UnreadIsBold_RowsCarryTheirSourceSymbol_AndDeleteAnswersBackspace()
@@ -224,6 +226,8 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
         var mail = $"{owner}/{EmailNodeType.UserEmailSegment}";
         await CreateAsync(Mail("fresh", mail, owner, new Email { Id = "fresh", Subject = "Fresh one" }), ct);
         await CreateAsync(Mail("seen", mail, owner, new Email { Id = "seen", Subject = "Seen one", Status = EmailStatus.Read }), ct);
+        // Every kind and every state: this test is about how rows look, not about what is listed by default.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
         TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
 
         var stream = GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
@@ -273,9 +277,13 @@ public class InboxSelectAndDeleteTest(ITestOutputHelper output) : MonolithMeshTe
                 $"{InboxLayoutArea.AreaName}/Filters/Source/Content/Source{InboxRows.SourceKey("Notifications")}/Icon{InboxRows.SourceKey("Notifications")}")
             .Should().Within(TestTimeouts.Convergence).Match(c => c is IconControl, "the notifications source's symbol", ct))!;
         sourceIcon.Data.Should().Be(InboxSourceIcons.Resolve("Notifications", null));
-        (await stream.GetDataStream<InboxFilter>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.FilterId)))
-                .Should().Within(TestTimeouts.Convergence).Match(f => f is not null, "the filter", ct))!
-            .Sources[InboxRows.SourceKey("Notifications")].Should().BeFalse("notifications start switched off");
+        // The switches that persist are bound to the person's preferences NODE, not to the page's data section.
+        var switchBox = (CheckBoxControl)(await stream.GetControlStream(
+                $"{InboxLayoutArea.AreaName}/Filters/Source/Content/Source{InboxRows.SourceKey("Notifications")}/Show{InboxRows.SourceKey("Notifications")}")
+            .Should().Within(TestTimeouts.Convergence).Match(c => c is CheckBoxControl, "the notifications switch", ct))!;
+        switchBox.DataContext.Should().Be(LayoutAreaReference.GetMeshNodeDataContext(InboxPreferencePaths.PathFor(owner)),
+            "the checkbox is bound straight to the preferences node — no copy in the data section");
+        ((JsonPointerReference)switchBox.Data).Pointer.Should().Be($"sources/{InboxRows.SourceKey("Notifications")}");
     }
 
     private static async Task Click(ISynchronizationStream<JsonElement> stream, string area, string summary, CancellationToken ct)

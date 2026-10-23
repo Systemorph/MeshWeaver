@@ -80,6 +80,7 @@ public static class GraphConfigurationExtensions
                 .AddNotificationSettingsType()
                 .AddNotificationFeaturePreferenceType()
                 .AddNotificationAppPreferenceType()
+                .AddInboxPreferencesType()
                 .AddCompletionMemoryType()
                 // NotificationRule/NotificationChannel ride the MeshWeaver.Notifications.Channels
                 // MODULE (Modules:Assemblies / AddNotificationChannels()) together with the triage

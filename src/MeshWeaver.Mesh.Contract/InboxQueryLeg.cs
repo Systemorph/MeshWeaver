@@ -143,4 +143,23 @@ public record InboxQueryLeg
     /// connection queries finds a node, or when one of its legs names none.</para>
     /// </summary>
     public string? ConnectedWhen { get; init; }
+
+    /// <summary>
+    /// Whether the source needs no connection: it is the platform's own and there is nothing for the
+    /// viewer to configure (approvals, notifications, activities). 🚨 A leg that names no
+    /// <see cref="ConnectedWhen"/> and is not <see cref="AlwaysOn"/> is NOT connected — its source is
+    /// never listed and its rows never shown — because "no declaration" is not a connection: a provider
+    /// that forgets to say what its connection is would otherwise appear for every viewer, configured or
+    /// not (owner, 2026-10-23: "only if they are really configured"). A provider names the query that
+    /// finds ITS connection; only the platform's own sources are always on.
+    /// </summary>
+    public bool AlwaysOn { get; init; }
+
+    /// <summary>
+    /// Whether the source's kind (<see cref="Category"/>, else the source) is ticked in the Kind filter
+    /// for a viewer who never chose. The default is empty-handed: a provider's kind is one tick away,
+    /// never forced on the viewer. The platform ticks only what needs the viewer (open approvals) and
+    /// what matters (important notifications).
+    /// </summary>
+    public bool DefaultKind { get; init; }
 }

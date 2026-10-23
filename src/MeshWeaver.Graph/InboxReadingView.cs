@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -86,8 +87,9 @@ public static class InboxReadingView
 
         var hub = host.Hub;
         if (ReaderFor(hub.ServiceProvider.GetServices<IInboxItemReader>(), path) is not { } reader)
-            // A stored item: its own page, as its type renders it.
-            return Observable.Return<UiControl?>(Page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
+            // A stored item: its own page, as its type renders it — except an approval request, which
+            // is only the announcement of an approval: opening it goes to THAT node.
+            return StoredItem(host, owner, path, Page);
 
         // Resolved ONCE, on the render turn: the read answers on another thread.
         var locale = host.ViewerLocale();
@@ -123,6 +125,26 @@ public static class InboxReadingView
                     logger?.LogWarning(ex, "Inbox: the reader for {Path} faulted", path);
                     return Observable.Return<UiControl?>(Page(Controls.Markdown(texts.Failed)));
                 }));
+    }
+
+    /// <summary>
+    /// The reading view of a STORED item: its own page AT ONCE, replaced by a redirect when the item turns out to
+    /// announce an approval (<see cref="InboxApprovalTargets.TargetOf"/>) — the notification of an approval request
+    /// takes the viewer to the approval it names. The classification reads the item's AUTHORITATIVE content (the
+    /// node's own stream, once an exact-path listing says it exists — an index snapshot can trail a delivery) and
+    /// never delays the page: a slow, failing or absent read leaves the item's own page where it is.
+    /// </summary>
+    private static IObservable<UiControl?> StoredItem(LayoutAreaHost host, string owner, string path, Func<UiControl, UiControl> page)
+    {
+        var hub = host.Hub;
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        // Captured on the render turn: the read lands on another one.
+        var viewer = access?.Context ?? access?.CircuitContext;
+        var own = Observable.Return<UiControl?>(page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
+        // What the item announces is read on the DATA side (InboxApprovalTargets): the page only decides what to show.
+        var redirect = InboxApprovalTargets.AnnouncedTarget(hub, viewer, owner, path)
+            .Select(target => (UiControl?)Controls.Redirect("/" + target.TrimStart('/')));
+        return own.Concat(redirect);
     }
 
     /// <summary>The texts a reading view shows, resolved on the render turn.</summary>
