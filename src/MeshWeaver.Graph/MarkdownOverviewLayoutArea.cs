@@ -598,6 +598,20 @@ public static class MarkdownOverviewLayoutArea
                 : new MarkdownRead(MarkdownContentState.Present, value, string.Empty);
     }
 
+    /// <summary>
+    /// The JSON names of the members <see cref="MarkdownContent"/> declares BESIDE its body
+    /// (camelCase, as every hub serialises them) — immutable, computed once from the record so it
+    /// cannot drift from it. <c>content</c> itself is excluded: a non-string <c>content</c> is
+    /// unreadable, never a metadata member; so is the extension-data buffer.
+    /// </summary>
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> DeclaredMarkdownMembers =
+        typeof(MarkdownContent)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.Name != nameof(MarkdownContent.Content)
+                        && !p.IsDefined(typeof(System.Text.Json.Serialization.JsonExtensionDataAttribute), true))
+            .Select(p => JsonNamingPolicy.CamelCase.ConvertName(p.Name))
+            .ToImmutableHashSet(StringComparer.Ordinal);
+
     private static MarkdownRead FromJson(JsonElement jsonElement)
     {
         switch (jsonElement.ValueKind)
@@ -632,10 +646,14 @@ public static class MarkdownOverviewLayoutArea
             return Content(fallbackContent);
 
         // Nothing here carries markdown. An object with NO authored member is an empty node; one
-        // that carries members is a payload holding something nobody can read.
+        // that carries members is a payload holding something nobody can read. 🚨 A member
+        // MarkdownContent itself declares (tags, authors, abstract, …) is not "something nobody
+        // can read": `{"tags":["x"]}` is a document with no body yet, and MarkdownContent binds it
+        // as exactly that (#5736, #6639). Only a member it does NOT declare can be holding the body.
         var members = jsonElement.EnumerateObject()
             .Select(p => p.Name)
-            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal))
+            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal)
+                        && !DeclaredMarkdownMembers.Contains(n))
             .ToArray();
         return members.Length == 0
             ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
