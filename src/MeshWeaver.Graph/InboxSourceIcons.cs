@@ -10,8 +10,7 @@ namespace MeshWeaver.Graph;
 /// source list and the tooltip names all read it, so one source looks the same everywhere.
 ///
 /// <para>The outside channels (Outlook, Gmail, iMessage, WhatsApp, Teams) carry the services' REAL,
-/// full-colour logos, each in a 24×24 viewBox (maintainer decision, 2026-10: real icons, not self-drawn
-/// look-alikes). The marks are trademarks of their owners and are used nominatively, only to identify
+/// full-colour logos, each in a 24×24 viewBox (not self-drawn look-alikes). The marks are trademarks of their owners and are used nominatively, only to identify
 /// the channel an item arrived through; each entry names its source and licence. The mesh's own
 /// sources stay Fluent symbols.</para>
 ///
