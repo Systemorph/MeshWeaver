@@ -170,10 +170,45 @@ if [ "$mode" = check ]; then
   hosting::step "Ask the API server what applying deploy/aks/manifests/${manifest} would change"
   # The server's own answer (admission, RBAC escalation checks, schema) — persisted nowhere. Each line
   # names an object and created/configured/unchanged; no field value is printed.
-  if ! kubectl apply --dry-run=server -f "$file_real" > "$work/out" 2>"$work/err"; then
+  # 🚨 A Namespace this file CREATES does not exist yet, and a server dry run persists nothing — so every
+  # namespaced object the file puts INTO it is answered `namespaces "<ns>" not found`, and the first
+  # apply of a file that introduces a namespace could never pass its own check (measured on the secret
+  # writer's file: 10 objects, `memex-secrets` new). Those objects are validated above (the kinds, the
+  # rules, the bindings) but cannot be dry-run until the namespace exists; the server is asked about
+  # everything else, and each object left out is NAMED, never silently dropped. An existing namespace, or
+  # a file that creates none, takes the unchanged path: the file itself goes to the server.
+  : > "$work/newns"
+  jq -r '(if .kind == "List" then .items else [.] end)[] | select(.kind == "Namespace") | .metadata.name' "$work/objects.json" > "$work/filens" 2>"$work/err" \
+    || hosting::die "could not read the namespaces of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+  while IFS= read -r ns; do
+    [ -n "$ns" ] || continue
+    if ! live="$(kubectl get namespace "$ns" --ignore-not-found -o name 2>"$work/err")"; then
+      hosting::die "could not read namespace ${ns}: $(head -1 "$work/err"). Whether it exists is UNKNOWN, so no dry run was decided."
+    fi
+    [ -n "$live" ] || printf '%s\n' "$ns" >> "$work/newns"
+  done < "$work/filens"
+  dry_target="$file_real"
+  if [ -s "$work/newns" ]; then
+    jq -Rn '[inputs | select(length > 0)]' < "$work/newns" > "$work/newns.json"
+    jq --slurpfile n "$work/newns.json" '
+      {kind: "List", apiVersion: "v1", items: [(if .kind == "List" then .items else [.] end)[]
+        | select((.metadata.namespace // "") as $o | ($n[0] | index($o)) == null)]}' "$work/objects.json" > "$work/checkable.json" 2>"$work/err" \
+      || hosting::die "could not split the objects of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
+    jq -r --slurpfile n "$work/newns.json" '
+      (if .kind == "List" then .items else [.] end)[]
+      | select((.metadata.namespace // "") as $o | $o != "" and ($n[0] | index($o)) != null)
+      | "\(.kind | ascii_downcase)/\(.metadata.name) in namespace \(.metadata.namespace)"' "$work/objects.json" > "$work/deferred"
+    dry_target="$work/checkable.json"
+  fi
+  if ! kubectl apply --dry-run=server -f "$dry_target" > "$work/out" 2>"$work/err"; then
     hosting::die "the API server refused a dry run of deploy/aks/manifests/${manifest}: $(head -1 "$work/err")"
   fi
   while IFS= read -r line; do hosting::log "would     ${line% (server dry run)}"; done < "$work/out"
+  if [ -s "$work/newns" ]; then
+    while IFS= read -r line; do
+      hosting::log "deferred  ${line} — the namespace does not exist yet, so the server cannot dry-run into it; validated above, created by the apply"
+    done < "$work/deferred"
+  fi
   hosting::say manifest_check "sha256:${digest}"
   exit 0
 fi

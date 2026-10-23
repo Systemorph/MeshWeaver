@@ -3077,6 +3077,31 @@ ma_tok MW_LIVE_TOKEN_SA=example
 ma_tok MW_LIVE_TOKEN_FORBIDDEN=1
 [ "$_ma_rc" -ne 0 ] && case "$_ma_out" in *"is UNKNOWN"*) true ;; *) false ;; esac \
   && ok "…and a refused read is UNKNOWN, never 'absent'" || bad "token read refused" "rc ${_ma_rc}; ${_ma_out}"
+ma_nsfile() {  # ma_nsfile <env…>: check demo/newns.yaml, whose Namespace "fresh" the file itself creates
+  _ma_state="$(mktemp -d)"
+  _ma_out="$(env "$@" PATH="$MA_STUBS:$PATH" HOSTING_MA_STATE="$_ma_state" HOSTING_MANIFESTS_ROOT="$_ma_root" hosting-manifest-apply check --manifest demo/newns.yaml 2>&1)"; _ma_rc=$?
+  _ma_log="$(cat "$_ma_state/kubectl.log" 2>/dev/null || true)"; _ma_sent="$(cat "$_ma_state/dryrun.last" 2>/dev/null || true)"; rm -rf "$_ma_state"
+}
+ma_fixture newns 'kind: Namespace # fixture' \
+  '{"apiVersion":"v1","kind":"Namespace","metadata":{"name":"fresh"}}
+{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"w","namespace":"fresh"}}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"Role","metadata":{"name":"r","namespace":"fresh"},"rules":[{"apiGroups":["batch"],"resources":["jobs"],"verbs":["get"]}]}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"ClusterRole","metadata":{"name":"c"},"rules":[{"apiGroups":[""],"resources":["pods"],"verbs":["get"]}]}
+{"apiVersion":"rbac.authorization.k8s.io/v1","kind":"RoleBinding","metadata":{"name":"b","namespace":"control"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"ServiceAccount","name":"w","namespace":"fresh"}]}'
+# A namespace the file creates and the cluster lacks: the server cannot dry-run INTO it (it persists nothing),
+# so the objects inside are deferred BY NAME and the rest still go to the server.
+ma_nsfile MW_LIVE_NS=
+if [ "$_ma_rc" -eq 0 ] \
+   && case "$_ma_out" in *"deferred  serviceaccount/w in namespace fresh"*"deferred  role/r in namespace fresh"*"::hosting:: manifest_check=sha256:"*) true ;; *) false ;; esac \
+   && printf '%s' "$_ma_sent" | jq -e '[.items[] | .kind] | sort == ["ClusterRole","Namespace","RoleBinding"]' >/dev/null 2>&1; then
+  ok "a namespace the file creates is new: its objects are deferred by name, everything else is dry-run by the server"
+else bad "new namespace deferral" "rc ${_ma_rc}; sent: ${_ma_sent}; ${_ma_out}"; fi
+if printf '%s\n' "$_ma_log" | grep -q '^kubectl apply -f'; then bad "…and the check still sends no real apply" "kubectl saw: ${_ma_log}"; else ok "…and the check still sends no real apply"; fi
+# The same file once the namespace exists: nothing is deferred and the FILE itself goes to the server.
+ma_nsfile MW_LIVE_NS=fresh
+if [ "$_ma_rc" -eq 0 ] && case "$_ma_out" in *"deferred"*) false ;; *) true ;; esac && printf '%s' "$_ma_sent" | grep -q '^kind: Namespace # fixture'; then
+  ok "an existing namespace defers nothing — the file is dry-run whole"
+else bad "existing namespace" "rc ${_ma_rc}; sent: ${_ma_sent}; ${_ma_out}"; fi
 ma_refuses() {  # ma_refuses <what> <phrase> <parsed json>
   ma_fixture bad "kind: x" "$3"
   ma check --manifest demo/bad.yaml
@@ -3093,7 +3118,7 @@ ma_refuses "a binding to cluster-admin is refused" "binds cluster-admin" '{"kind
 ma_refuses "a binding to a system: role is refused" "binds system:" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"ClusterRole","name":"system:auth-delegator"},"subjects":[{"kind":"ServiceAccount","name":"x","namespace":"y"}]}'
 ma_refuses "a binding to a person or group is refused" "subject Group devs is not a ServiceAccount" '{"kind":"RoleBinding","metadata":{"name":"b","namespace":"n"},"roleRef":{"kind":"Role","name":"r"},"subjects":[{"kind":"Group","name":"devs"}]}'
 rm -rf "$_ma_root"
-unset _ma_out _ma_rc _ma_log _ma_root _ma_good
+unset _ma_out _ma_rc _ma_log _ma_sent _ma_root _ma_good
 
 echo "── hosting-kv-status / hosting-kv-state: status and lifecycle from METADATA, never a value ──"
 # The write-only secret GUI's read side (policy secrets-write-only-entry): existence, enabled,
