@@ -11,6 +11,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -39,22 +40,6 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         public ImmutableDictionary<string, string>? StepUpReceipts { get; init; }
     }
 
-    /// <summary>Only <see cref="IStepUpService.Options"/> is read by the inbox; the test turns the requirement on and off.</summary>
-    private sealed class SwitchableStepUp : IStepUpService
-    {
-        public volatile bool Required;
-
-        public StepUpOptions Options => new() { Enabled = Required };
-
-        public IObservable<StepUpVerdict> Consume(string? receiptId, string approver, string actionPath, string binding)
-            => throw new NotSupportedException();
-
-        public IObservable<StepUpVerdict> Check(string? receiptId, string approver, string actionPath, string binding)
-            => throw new NotSupportedException();
-    }
-
-    private readonly SwitchableStepUp stepUp = new();
-
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
         => base.ConfigureClient(configuration).AddLayoutClient();
@@ -66,7 +51,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
                 new MeshNode("Approval", "Approvals") { HubConfiguration = config => config.WithContentType<Approval>() },
                 new MeshNode(ActionType) { HubConfiguration = config => config.WithContentType<TestActionContent>() })
             // A provider that declared no connection and is not always on: the "forgetful" leg of requirement 4.
-            .ConfigureServices(services => services.AddSingleton(Forgetful).AddSingleton<IStepUpService>(stepUp));
+            .ConfigureServices(services => services.AddSingleton(Forgetful));
 
     private static readonly InboxQueryLeg Forgetful = new()
     {
@@ -413,7 +398,8 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         var ct = TestContext.Current.CancellationToken;
         const string owner = "inbox-open-held";
         await CreateUserAsync(owner, ct);
-        stepUp.Required = true;
+        // The REAL step-up service reads its requirement from the host configuration on every access.
+        Mesh.ServiceProvider.GetRequiredService<IConfiguration>()[StepUpOptions.EnabledKey] = "true";
         await CreateAsync(new MeshNode("held", "TestActions") { NodeType = ActionType, Name = "held", Content = new TestActionContent { ApprovedBy = owner } }, ct);
         var request = await Notify(owner, "n-held", NotificationType.ApprovalRequired, "TestActions/held", ct);
         await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
@@ -437,6 +423,8 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     [InlineData("""{"approvedBy":"jane","stepUpReceipts":{"jane":"r1"}}""", true, false)]
     [InlineData("""{"status":"Approved","stepUpReceipts":{"jane":"r1"}}""", true, false)]
     [InlineData("""{"status":"Approved"}""", true, true)]
+    [InlineData("""{"status":"Expired"}""", true, false)]
+    [InlineData("""{"status":"Expired"}""", false, false)]
     [InlineData("""{}""", true, true)]
     public void ARecordedDecision_IsHeldUntilAReceiptIsStamped_WhenStepUpIsRequired(string content, bool stepUpRequired, bool awaits)
         => InboxApprovalTargets.IsPending(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null, stepUpRequired)

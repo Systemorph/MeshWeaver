@@ -49,7 +49,11 @@ internal static class InboxApprovalTargets
     internal static bool IsPending(MeshNode target, JsonSerializerOptions? options, bool stepUpRequired = false)
     {
         var content = InboxRows.ContentOf(target, options);
-        var decided = InboxState.FromStatus(InboxRows.StringOf(content, "status")) is InboxState.Approved or InboxState.Rejected or InboxState.Expired
+        var status = InboxState.FromStatus(InboxRows.StringOf(content, "status"));
+        // A lapsed request is terminal: nothing can be approved any more, receipts or not.
+        if (status == InboxState.Expired)
+            return false;
+        var decided = status is InboxState.Approved or InboxState.Rejected
                       || DecisionStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp)));
         return !decided || (stepUpRequired && !HasReceipt(content));
     }
