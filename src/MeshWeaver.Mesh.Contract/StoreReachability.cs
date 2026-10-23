@@ -1,4 +1,9 @@
-﻿using MeshWeaver.Data;
+﻿using System.Reactive;
+using System.Reactive.Disposables;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
+using MeshWeaver.Data;
+using MeshWeaver.Mesh.Services;
 
 namespace MeshWeaver.Mesh;
 
@@ -93,6 +98,235 @@ public static class StoreReachability
            + "started, so an UNKNOWN subset may already be durable. This is an availability failure, "
            + "not a refusal — but read the current state before retrying, because re-sending the "
            + "whole request could duplicate whatever landed.";
+
+    // ── What a caller DOES with "retrying is meaningful" (#7072) ─────────────────────────────────
+    //
+    // The sentence above tells a caller that a retry with the same id is meaningful, and until #7072
+    // nothing in the platform said WHEN. A NodeType release re-cut refused this way during a 40-second
+    // database restart (#7068) was never re-issued by the pod that stamped it, although the pod stayed
+    // up and ready all night: the release came 76 minutes to 3 hours later, from an unrelated event.
+    // The answer is not a timer that retries in case the store is back (the band-aid this class
+    // already refuses above), but a FACT that it is.
+
+    /// <summary>
+    /// The EVIDENCE that the store answers again, as this process can observe it (#7072): each
+    /// declared <see cref="ChangeFeedGap"/> — the backend's cross-process feed lost its connection
+    /// and RESUMED, which a database restart always produces — and each commit announced in
+    /// <paramref name="partition"/>, since a commit is announced only after the store accepted it.
+    ///
+    /// <para>🚨 Facts, never a clock. Nothing here fires because time passed; while the store is
+    /// unreachable no commit lands and no feed resumes, so the signal stays silent exactly as long as
+    /// re-issuing a write would be pointless. Never emits on a host without an invalidation feed —
+    /// such a host has one process and no cross-process store to lose.</para>
+    /// </summary>
+    /// <param name="feed">The mesh's invalidation feed, or <c>null</c>.</param>
+    /// <param name="partition">The partition whose commits count (its first path segment), or
+    /// <c>null</c> to count every commit.</param>
+    /// <returns>An infinite signal; one element per piece of evidence.</returns>
+    public static IObservable<Unit> StoreAnswersAgain(this IMeshInvalidationFeed? feed, string? partition)
+        => EvidenceBySource(feed, partition).Select(_ => Unit.Default);
+
+    /// <summary>
+    /// <see cref="StoreAnswersAgain"/> with its SOURCE kept: <c>true</c> for a declared gap (the feed
+    /// resumed), <c>false</c> for a commit in the partition. The two are different kinds of evidence —
+    /// a commit can be shown not to count for one particular write, a reconnect cannot — so a caller
+    /// that weighs them must be able to tell which fired.
+    /// </summary>
+    private static IObservable<bool> EvidenceBySource(IMeshInvalidationFeed? feed, string? partition)
+    {
+        if (feed is null)
+            return Observable.Never<bool>();
+        // The handler is forwarded as-is and the filter runs as an operator, so a fault in it reaches
+        // the subscriber's OnError instead of being thrown out of the feed's delivery callback.
+        var commits = Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+            .Where(change => partition is null || InPartition(change.Path, partition))
+            .Select(_ => false);
+        return commits.Merge(feed.Gaps.Select(_ => true));
+    }
+
+    /// <summary>
+    /// Re-issues a write that was answered <c>Unavailable</c> — "not attempted, nothing written,
+    /// retrying the same request is meaningful" — once the store is evidenced to answer again (#7072).
+    /// The ONE shape for every such site: the caller supplies the SAME request (same node id), how
+    /// to tell an Unavailable outcome, and the partition the write lands in.
+    ///
+    /// <para><b>How it waits.</b> A re-issue starts on the first piece of
+    /// <see cref="StoreAnswersAgain"/> evidence — a feed that resumed, or a commit in the partition.
+    /// The evidence is observed for the WHOLE life of the sequence, never only between attempts:
+    /// evidence that arrives while an attempt is in flight is RETAINED (the event that started the
+    /// attempt is not), and if the attempt is answered Unavailable it starts the next one at once. A
+    /// feed's gaps are not replayed, so a reconnect that landed during the attempt would otherwise be
+    /// lost for good.</para>
+    ///
+    /// <para><b>Which evidence still counts.</b> A re-issue STARTED BY A COMMIT that is answered
+    /// Unavailable again shows that a commit in the partition is not evidence for this write (the
+    /// store took someone else's commit and still never saw ours), so from then on only a reconnect
+    /// starts a re-issue. A re-issue started by a reconnect that fails disproves nothing about commits,
+    /// and commits keep counting. That is what keeps a busy partition from becoming a retry loop,
+    /// without any count or clock.</para>
+    ///
+    /// <para><b>What it never does.</b> It never re-issues a write that was JUDGED: an outcome
+    /// <paramref name="wasUnavailable"/> rejects is emitted and the sequence completes, so a refusal
+    /// stays a named failure. It never runs two attempts at once. And it never issues the FIRST
+    /// attempt — the caller made it, and is here because it came back Unavailable.</para>
+    ///
+    /// <para><b>Evidence the caller already holds.</b> A caller that learns of the obligation only
+    /// from a record the store accepted AFTER the write failed (a stamp written after the refused
+    /// create) holds evidence the feed will never replay: a reconnect or a commit that preceded the
+    /// subscription is gone. It passes <paramref name="storeAnsweredBeforeSubscription"/>, and the
+    /// first re-issue starts at once (review on #7087). That evidence disproves nothing if the
+    /// re-issue is answered Unavailable — the record may have been accepted locally ahead of the
+    /// store — so commits keep counting, exactly as after a reconnect-started failure.</para>
+    /// </summary>
+    /// <typeparam name="T">The write's outcome.</typeparam>
+    /// <param name="feed">The mesh's invalidation feed, or <c>null</c> (then nothing is re-issued).</param>
+    /// <param name="partition">The partition the write lands in.</param>
+    /// <param name="attempt">The SAME write, cold — subscribed once per re-issue.</param>
+    /// <param name="wasUnavailable">True when an outcome means "not attempted, retry meaningful".</param>
+    /// <param name="onStillUnavailable">Told about each re-issue that was answered Unavailable again,
+    /// with whether a commit in the partition still starts the next one (<c>false</c>: only a
+    /// reconnect does, because this failure was started by a commit).</param>
+    /// <param name="storeAnsweredBeforeSubscription">The caller holds evidence, from before this
+    /// subscription, that the store answered after the write failed: start the first re-issue at once.</param>
+    /// <returns>The first outcome that is not Unavailable; never completes while the store stays away.</returns>
+    public static IObservable<T> ReissueWhenStoreAnswers<T>(
+        this IMeshInvalidationFeed? feed,
+        string partition,
+        Func<IObservable<T>> attempt,
+        Func<T, bool> wasUnavailable,
+        Action<T, bool>? onStillUnavailable = null,
+        bool storeAnsweredBeforeSubscription = false)
+    {
+        if (feed is null)
+            return Observable.Never<T>();
+        return Observable.Create<T>(observer =>
+        {
+            // Every transition runs inside the ONE merged subscription below, which Rx serialises, so
+            // this state is touched by one callback at a time. An attempt that answers synchronously
+            // re-enters that callback; every transition therefore finishes its state change BEFORE it
+            // starts an attempt, so a re-entrant call always sees a consistent state.
+            var state = new ReissueState();
+            var outcomes = new Subject<(T Outcome, bool ByGap)>();
+            var inFlight = new SerialDisposable();
+
+            void Start(bool byGap)
+            {
+                // 🚨 Never start a write once the subscription is disposed (review on #7087). A
+                // callback may dispose it and then return into this path with evidence retained;
+                // assigning a slot to a disposed SerialDisposable disposes the slot, but only AFTER
+                // the cold write below would already have been subscribed.
+                if (state.Stopped)
+                    return;
+                state.InFlight = true;
+                state.PendingGap = false;
+                state.PendingCommit = false;
+                var slot = new SingleAssignmentDisposable();
+                inFlight.Disposable = slot;
+                var answered = false;
+                slot.Disposable = Observable.Defer(attempt).Take(1).Subscribe(
+                    outcome =>
+                    {
+                        answered = true;
+                        outcomes.OnNext((outcome, byGap));
+                    },
+                    observer.OnError,
+                    () =>
+                    {
+                        if (!answered)
+                            observer.OnError(new InvalidOperationException(
+                                "A re-issued write completed without an outcome, so whether the store "
+                                + "saw it is unknown — refusing to wait on evidence for an answer that "
+                                + "will never come."));
+                    });
+            }
+
+            // 🚨 The OUTCOMES are connected FIRST (review on #7087). Merge subscribes its sources in
+            // order, and a feed may deliver evidence while it is being subscribed; with the evidence
+            // first, that evidence ran Start before the hot `outcomes` subject had a subscriber, an
+            // attempt that answered in that window lost its outcome, and InFlight stayed true for good
+            // — every later piece of evidence was retained and none ever started an attempt.
+            // Evidence the caller holds from before the subscription is delivered first, after the
+            // outcomes are connected, as the non-disproving kind (see the summary).
+            var evidence = EvidenceBySource(feed, partition);
+            if (storeAnsweredBeforeSubscription)
+                evidence = evidence.StartWith(true);
+            var events = outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome))
+                .Merge(evidence.Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T))));
+
+            var subscription = events.Subscribe(e =>
+            {
+                if (state.Done || state.Stopped)
+                    return;
+                if (!e.IsOutcome)
+                {
+                    if (!e.ByGap && !state.CommitsCount)
+                        return;
+                    if (state.InFlight)
+                    {
+                        // Retained: newer than the event that started the attempt in flight.
+                        if (e.ByGap) state.PendingGap = true;
+                        else state.PendingCommit = true;
+                        return;
+                    }
+                    Start(e.ByGap);
+                    return;
+                }
+
+                // 🚨 The attempt stays IN FLIGHT until its outcome is fully weighed (review on #7087).
+                // Merge allows synchronous re-entry, so a commit published from inside wasUnavailable
+                // or onStillUnavailable arrives HERE before this branch finishes; marked idle, it
+                // started a nested attempt before a commit-started failure had disproved commits, and
+                // that nested Start cleared any retained reconnect — an Unavailable answer to it then
+                // left the write waiting for a reconnect that had already happened. In flight, the
+                // re-entrant evidence is retained and judged below like any other.
+                var outcome = e.Outcome!;
+                if (!wasUnavailable(outcome))
+                {
+                    state.Done = true;
+                    state.InFlight = false;
+                    observer.OnNext(outcome);
+                    observer.OnCompleted();
+                    return;
+                }
+                onStillUnavailable?.Invoke(outcome, state.CommitsCount && e.ByGap);
+                if (!e.ByGap)
+                {
+                    // A commit started it and the store still never saw it: commits are disproved.
+                    state.CommitsCount = false;
+                    state.PendingCommit = false;
+                }
+                state.InFlight = false;
+                if (state.PendingGap)
+                    Start(byGap: true);
+                else if (state.PendingCommit)
+                    Start(byGap: false);
+            }, observer.OnError);
+
+            // The stop flag goes FIRST, so the state machine is stopped before anything it owns is
+            // torn down — including a disposal that happens from inside one of its own callbacks.
+            return new CompositeDisposable(
+                Disposable.Create(() => state.Stopped = true), subscription, inFlight, outcomes);
+        });
+    }
+
+    /// <summary>The state of one <see cref="ReissueWhenStoreAnswers{T}"/> subscription — owned by
+    /// that subscription alone and touched only from its serialised callback.</summary>
+    private sealed class ReissueState
+    {
+        public bool InFlight;
+        public bool CommitsCount = true;
+        public bool PendingGap;
+        public bool PendingCommit;
+        public bool Done;
+
+        /// <summary>Set when the subscription is disposed; read on every transition, from any thread.</summary>
+        public volatile bool Stopped;
+    }
+
+    private static bool InPartition(string? path, string partition)
+        => !string.IsNullOrEmpty(path)
+           && string.Equals(path.Trim('/').Split('/', 2)[0], partition.Trim('/'),
+               StringComparison.OrdinalIgnoreCase);
 
     // ── The same verdicts, keyed (#4507) ───────────────────────────────────────────────────────
     //

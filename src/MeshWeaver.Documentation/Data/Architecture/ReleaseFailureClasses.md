@@ -539,6 +539,123 @@ SIGTERM on that replica against those two creates. The first attempts' failures 
 partition-root creates. #6088 stops a root-read fault from being misread as absence. Why those
 reads faulted is still not recorded.
 
+## A re-cut the store never saw is re-issued when the store answers again (#7072)
+
+### What was still live after the next-activation obligation
+
+The next activation honours a stamp, but nothing honoured it on the activation that WROTE it. On memex
+on 2026-10-22 a managed database restart (#7068) refused writes for about 40 seconds. Between
+21:22:55Z and 21:23:04Z three Hosting NodeTypes settled on pod `85cf49759f-77plc`. For `PrWatch`,
+`TriageItem` and `TriageStatus`, the release create and its same-id re-cut were both answered
+`[CreateNode] STORE UNREACHABLE` → *"could not be attempted: the data store was unreachable … retrying
+the same request (with the same node id) is meaningful"*. Each settle stamped `unreleasedBuildPath`.
+The store answered again at about 21:23:34Z. The pod stayed up and ready all night, and in the next
+76 minutes no line at all mentions these three types:
+
+- late adoption re-subscribed after its query faulted (`[LateReleaseAdoption] … faulted …
+  re-establish`), but it can only adopt a node somebody writes;
+- the next-activation obligation runs on the FIRST emission of a NEW activation;
+- so the release came from unrelated events. A replacement pod's boot cut two of them at 22:39:16Z.
+  `TriageItem`'s next compile, at 00:18Z, minted a NEW release, and its stamped id was never created.
+
+The log line said the retry was meaningful, and no component on the live pod made it.
+
+### The change: the class is stamped, and an `Unavailable` stamp is re-issued on a FACT
+
+1. **The failure carries a class.** `ReleaseCreateOutcome.FailureClass` is a `ReleaseFailureClass`
+   (`Unavailable`, `Expired`, `Refused`, `Faulted`: an open set of string constants). It is
+   classified in `NodeTypeBuildState.Classify` at the arm that received the exception, from the typed
+   `NodeCreationRejectionReason` that `IMeshService.CreateNode` puts on `Exception.Data`. The sentence
+   is never parsed. The settle stamps it as `NodeTypeDefinition.UnreleasedBuildFailureClass` beside
+   the path and the reason, the batch bake does the same, and adoption clears it with them.
+2. **The activation that holds an `Unavailable` stamp re-issues it.** `LateReleaseAdoption.Install`
+   runs `ReissueWhenTheStoreAnswers`. `UnavailableObligation` is its pure gate: the
+   `InheritedObligation` guards (settled, this framework, the stamped id names the recorded bytes)
+   plus class `Unavailable`. The re-issue is the same `TryCreateReleaseNode` at the SAME id, as
+   System, and a landing is adopted in one owner write.
+3. **It waits for evidence, never for time.** `StoreReachability.ReissueWhenStoreAnswers` in
+   `MeshWeaver.Mesh.Contract` waits for `StoreAnswersAgain`. That signal fires on a declared
+   `ChangeFeedGap`, which is the LISTEN connection resuming after a database restart, or on a commit
+   announced in the type's partition, which the store must have accepted. While the store is away,
+   neither fires and nothing is re-issued. Evidence is observed for the whole life of the watch:
+   evidence that arrives while an attempt is in flight is kept (the event that started the attempt
+   is not), and starts the next attempt as soon as that one is answered `Unavailable`. A feed does
+   not replay its gaps, so a reconnect seen only between attempts would be lost. Each attempt
+   remembers which kind of evidence started it. If an attempt STARTED BY A COMMIT is answered
+   `Unavailable` again, commits have been shown not to be evidence for this write, and from then on
+   only a feed reconnect starts a re-issue. A failed attempt started by a reconnect disproves nothing
+   about commits. A busy partition therefore cannot turn this into a retry loop, and no count or
+   clock is involved. Two orderings keep that true under synchronous re-entry. The watch connects
+   its own outcome stream BEFORE the evidence feed, so evidence a feed delivers while it is being
+   subscribed cannot start an attempt whose answer has nowhere to go. And a failed attempt stays in
+   flight until its outcome has been weighed, so a commit published from inside the
+   still-unavailable callback is retained and judged like any other evidence. It never starts a
+   nested attempt that would clear a retained reconnect. The stamp itself is evidence too: it is a
+   record the store accepted after the refused create, and a reconnect or commit that came before
+   the watch saw the stamp is never replayed to it. So the watch makes its first re-issue as soon as
+   it sees the stamp. That re-issue proves nothing if it is answered `Unavailable` (the stamp may
+   have been accepted only locally), so commits keep counting after it. The warning for a re-issue
+   answered `Unavailable` names the evidence that will start the next one. It names a commit as
+   the cause only when a commit actually started that re-issue. An activation that INHERITS an
+   `Unavailable` stamp leaves it to this watch alone: the inherited cut (#6056) skips that class.
+   Otherwise two attempts met the store at the same id, and a verdict the inherited cut received
+   was only logged, so the watch would later re-issue a create the store had already judged. A
+   watch that is disposed never starts another write, even from evidence it had retained.
+4. **A verdict on a re-issue is written back.** If the store comes back and answers the re-issue
+   with a verdict (`Refused`, `Faulted`), `RecordReissueVerdict` replaces the stamp's reason and
+   class with that verdict's, through the owner stream, and only while the record still holds the
+   SAME `Unavailable` obligation. The stamp keeps its path. A watch rebuilt from the record (a
+   transient own-stream fault re-establishes it) then has no obligation and never re-issues a create
+   the store has judged.
+
+Every other class stays standing. A `Refused` create would be refused again. An `Expired` one may
+still land, and late adoption takes it when it does. A stamp written before the class existed has
+no class and is left to the next activation, as before.
+
+**Why this signal and not a store health probe or a timer.** A timer that retries "in case the store
+is back" is the band-aid `StoreReachability` already refuses, and on a store that is the bottleneck
+it adds load at the worst moment. A health probe would be a second, weaker opinion of what the
+LISTEN connection and the commit feed already report as facts. Both signals are mesh-scoped, already
+consumed by the path-resolution and stream caches for the same reason, and silent exactly as long as
+a re-issue would be pointless.
+
+**It generalises.** `ReissueWhenStoreAnswers(feed, partition, attempt, wasUnavailable)` is the one
+shape for any write answered `Unavailable`: the same request with the same id, re-issued when the
+store is evidenced back. The release re-cut is its first caller. Other sites of the same class can
+adopt it in their own changes, for example the control-instance finding
+`rbuergi/Feedback/unavailable-write-retried-76-min-later`.
+
+### The control
+
+`AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest` (MeshWeaver.Compiler.Pipeline.Test)
+runs on a real monolith mesh with the shared fault injector. `RefuseWritesAsUnreachable` answers
+every write of the ONE release path with a driver connection failure (SQLSTATE `08006`). The owner
+is activated before any stamp exists, so the next-activation obligation cannot be what repairs it.
+The re-cut runs through `TryCreateReleaseNode` and must come back `Unavailable`. The stamp is written
+through `ApplyCompileSuccess`. While the store still refuses, the pointer must not move. Releasing
+the switch and declaring a feed gap must then leave `latestReleasePath` on the ORIGINAL stamped id,
+with the stamp, its reason and its class cleared and a release node there for the recorded build.
+`ARefusedRecut_IsNeverReissued_HoweverOftenTheStoreAnswers` is the negative control: a `Refused`
+stamp under the same signals is never re-issued. With the re-issue watch removed from `Install`,
+the main case is red at its final wait. `ReleaseRecutReportsWhyItFailedTest` pins the
+classification through the real `Bounded` chain.
+
+The evidence handling is pinned deterministically against the real `InProcessMeshChangeFeed`, with
+a write the test answers by hand. `AGapDuringAnAttempt_StartsTheNextAttempt_WhenThatOneIsUnavailable`
+covers a reconnect that lands during an attempt. `AGapStartedFailure_KeepsCommitsAsEvidence` and
+`ACommitStartedFailure_LeavesOnlyReconnectsAsEvidence` cover which source a failure disproves.
+`AReissueTheStoreRefuses_RecordsTheRefusal_AndIsNotReissuedAgain` (`RefuseWritesAsJudged`) covers
+the written-back verdict. With the first shape of `ReissueWhenStoreAnswers` (evidence observed only
+between attempts, any failure switching to reconnect-only) the first two are red. With
+`RecordReissueVerdict` disabled, the last is red.
+
+### Not established
+
+The memex pod's own `StoreAnswersAgain` evidence for that night was not read. Whether its LISTEN
+connection dropped and declared a gap during the 40-second refusal is inferred from how a managed
+restart behaves, not from a log line. A commit in `Hosting` after 21:23:34Z would have triggered the
+re-issue either way.
+
 ## A re-cut cut short by the process's own shutdown is a Warning (#6056, second half)
 
 ### What the logs and the version history show

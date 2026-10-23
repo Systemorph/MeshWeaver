@@ -550,6 +550,22 @@ public record NodeTypeDefinition
     public string? UnreleasedBuildReason { get; init; }
 
     /// <summary>
+    /// 🚨 The CLASS of <see cref="UnreleasedBuildReason"/> — a <see cref="ReleaseFailureClass"/>
+    /// value — so the mesh can act on the stamp without parsing a sentence (#7072). <c>null</c>
+    /// whenever <see cref="UnreleasedBuildPath"/> is, and for a stamp written before the class
+    /// existed.
+    ///
+    /// <para>It decides one thing: a stamp of class <see cref="ReleaseFailureClass.Unavailable"/>
+    /// (the store could not be reached, nothing was written) is RE-ISSUED at the stamped id by the
+    /// activation that holds it, once the store is evidenced to answer again — a declared change-feed
+    /// gap or a commit in the type's partition. Before this, such a stamp stood until another pod
+    /// booted or the next compile ran: measured on memex on 2026-10-22, 76 minutes to 3 hours after
+    /// the store had recovered. Any other class is never re-issued on that activation.
+    /// Mesh-owned, never authored.</para>
+    /// </summary>
+    public string? UnreleasedBuildFailureClass { get; init; }
+
+    /// <summary>
     /// Content-collection name where the latest compiled assembly for this NodeType
     /// lives (e.g. <c>"nodetype-cache"</c>). Pair with <see cref="LatestAssemblyPath"/>
     /// to fetch the bytes via <c>IContentCollection</c>. Set by the compile watcher

@@ -4586,7 +4586,8 @@ internal static class NodeTypeCompilationHelpers
         string? modulesHash = null,
         string? unreleasedBuildPath = null,
         string? unreleasedBuildReason = null,
-        NodeTypeDefinition? compiledInput = null)
+        NodeTypeDefinition? compiledInput = null,
+        string? unreleasedBuildFailureClass = null)
     {
         var assemblyMvid = ServedBuildIdentity.OfFile(result.AssemblyLocation);
         var dependencies = result.CompiledDependencies;
@@ -4672,6 +4673,11 @@ internal static class NodeTypeCompilationHelpers
             UnreleasedBuildReason = releasePath is not null || unreleasedBuildPath is null
                 ? null
                 : unreleasedBuildReason,
+            // #7072 — the CLASS travels with the reason, so the activation holding the stamp can
+            // tell a create the store never saw (re-issued when it answers again) from a verdict.
+            UnreleasedBuildFailureClass = releasePath is not null || unreleasedBuildPath is null
+                ? null
+                : unreleasedBuildFailureClass,
             ReleaseNotes = releasePath is not null ? null : def.ReleaseNotes,
             CompiledSources = result.CompiledSources
                 ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
@@ -5667,7 +5673,9 @@ internal static class NodeTypeCompilationHelpers
                                 // #6831 — the record the compile READ, so the bytes carry its
                                 // module version and not one that landed while it ran.
                                 compiledInput: outcome.PendingNode.ContentAs<NodeTypeDefinition>(
-                                    SettleHub().JsonSerializerOptions, logger));
+                                    SettleHub().JsonSerializerOptions, logger),
+                                // #7072 — whether the stamp is one the store never saw.
+                                unreleasedBuildFailureClass: settle.UnreleasedBuildFailureClass);
                             lifted = BuildDeliveryHold.EventOf(def, succeeded);
                             liftedDef = succeeded;
                             return curr with { Content = succeeded };
