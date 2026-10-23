@@ -3,6 +3,7 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -35,15 +36,34 @@ internal static class InboxApprovalTargets
     /// <summary>
     /// Whether <paramref name="target"/> still awaits a decision. Pure; unreadable content counts as open
     /// (a request is never dropped on what could not be read).
+    /// <para>🚨 A decision that is RECORDED but not yet CONFIRMED is not decided. With step-up required
+    /// (<paramref name="stepUpRequired"/>, <c>Doc/Architecture/ApprovalStepUp</c>) a decision counts only once its
+    /// decider's receipt is stamped on the node (<see cref="StepUpPaths.StampProperty"/>) and the owning control plane
+    /// has ratified it; until then it is HELD — and an approver who walked away from the confirmation must still find
+    /// the request in the inbox (<see cref="InboxApprovals"/> keeps it for the same reason). So a recorded decision with
+    /// no receipt stamped at all stays pending while step-up is required.</para>
     /// </summary>
     /// <param name="target">The node the request names.</param>
     /// <param name="options">The hub's serializer options.</param>
-    internal static bool IsPending(MeshNode target, JsonSerializerOptions? options)
+    /// <param name="stepUpRequired">Whether the instance requires a step-up receipt for every approval.</param>
+    internal static bool IsPending(MeshNode target, JsonSerializerOptions? options, bool stepUpRequired = false)
     {
         var content = InboxRows.ContentOf(target, options);
-        if (InboxState.FromStatus(InboxRows.StringOf(content, "status")) is InboxState.Approved or InboxState.Rejected or InboxState.Expired)
+        var decided = InboxState.FromStatus(InboxRows.StringOf(content, "status")) is InboxState.Approved or InboxState.Rejected or InboxState.Expired
+                      || DecisionStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp)));
+        return !decided || (stepUpRequired && !HasReceipt(content));
+    }
+
+    /// <summary>Whether any decider's step-up receipt is stamped on the content (<see cref="StepUpPaths.StampProperty"/>). Pure.</summary>
+    private static bool HasReceipt(JsonElement? content)
+    {
+        if (content is not { } c)
             return false;
-        return !DecisionStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp)));
+        foreach (var property in c.EnumerateObject())
+            if (string.Equals(property.Name, StepUpPaths.StampProperty, StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind == JsonValueKind.Object)
+                return property.Value.EnumerateObject().Any(r => r.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(r.Value.GetString()));
+        return false;
     }
 
     /// <summary>
@@ -137,7 +157,9 @@ internal static class InboxApprovalTargets
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
         var observed = ObserveNode(hub, viewer, target, Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner),
-                node => node is not null && IsPending(node, options), absent: false)
+                // Read live per state: the instance's step-up requirement may change while the inbox is open.
+                node => node is not null && IsPending(node, options, hub.ServiceProvider.GetService<IStepUpService>()?.Options.Enabled == true),
+                absent: false)
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Inbox: could not read the approval {Target}; keeping its request", target);

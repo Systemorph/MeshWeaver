@@ -490,7 +490,7 @@ approved yet"*). So the Approvals source keeps a request only while the node it 
 (`Notification.TargetNodePath`, `InboxRow.Target`) still awaits a decision (`InboxApprovalTargets`): the target
 is DECIDED when its content has a `status` of approved/rejected/expired, or a stamped decision — an
 `approvedBy`/`approvedAt`/`approvalDate`/`rejectedBy`/`rejectedAt`/`decidedBy`/`decidedAt`. The inbox knows no
-approval kind; any approval-gated type shares that vocabulary. A target read that fails or times out keeps the
+approval kind; any approval-gated type shares that vocabulary. 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
 request (logged); a target that answers completely with nothing — gone, or not the approver's to see — has
 nothing left to decide and the request leaves. A **click on the row opens the approval** (`InboxLayoutArea.OpenTarget`),
 and the inbox address of such a notification (`/{user}/Inbox/{item}`, an old link) redirects to it

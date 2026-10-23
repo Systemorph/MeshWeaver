@@ -34,7 +34,26 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     {
         /// <summary>Who approved it; absent while it awaits an approver.</summary>
         public string? ApprovedBy { get; init; }
+
+        /// <summary>The step-up receipts stamped by the decider (<see cref="StepUpPaths.StampProperty"/>).</summary>
+        public ImmutableDictionary<string, string>? StepUpReceipts { get; init; }
     }
+
+    /// <summary>Only <see cref="IStepUpService.Options"/> is read by the inbox; the test turns the requirement on and off.</summary>
+    private sealed class SwitchableStepUp : IStepUpService
+    {
+        public volatile bool Required;
+
+        public StepUpOptions Options => new() { Enabled = Required };
+
+        public IObservable<StepUpVerdict> Consume(string? receiptId, string approver, string actionPath, string binding)
+            => throw new NotSupportedException();
+
+        public IObservable<StepUpVerdict> Check(string? receiptId, string approver, string actionPath, string binding)
+            => throw new NotSupportedException();
+    }
+
+    private readonly SwitchableStepUp stepUp = new();
 
     /// <inheritdoc />
     protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
@@ -47,7 +66,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
                 new MeshNode("Approval", "Approvals") { HubConfiguration = config => config.WithContentType<Approval>() },
                 new MeshNode(ActionType) { HubConfiguration = config => config.WithContentType<TestActionContent>() })
             // A provider that declared no connection and is not always on: the "forgetful" leg of requirement 4.
-            .ConfigureServices(services => services.AddSingleton(Forgetful));
+            .ConfigureServices(services => services.AddSingleton(Forgetful).AddSingleton<IStepUpService>(stepUp));
 
     private static readonly InboxQueryLeg Forgetful = new()
     {
@@ -382,6 +401,46 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         InboxApprovalTargets.Fold(null, Change(QueryChangeType.Added, items: node)).Should().BeTrue();
         InboxApprovalTargets.Fold(true, Change(QueryChangeType.Removed, items: node)).Should().BeFalse("deleted while observed");
     }
+
+    /// <summary>
+    /// With step-up required, a decision that is RECORDED but not confirmed (no receipt stamped) is held: its request
+    /// stays in the inbox, so an approver who abandoned the confirmation still finds it — and leaves once a receipt is
+    /// stamped. Without the requirement a recorded decision is a decision.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ARecordedDecisionAwaitingItsStepUp_KeepsTheRequest_UntilTheReceiptIsStamped()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-held";
+        await CreateUserAsync(owner, ct);
+        stepUp.Required = true;
+        await CreateAsync(new MeshNode("held", "TestActions") { NodeType = ActionType, Name = "held", Content = new TestActionContent { ApprovedBy = owner } }, ct);
+        var request = await Notify(owner, "n-held", NotificationType.ApprovalRequired, "TestActions/held", ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        var rows = RowPaths(Open(owner));
+
+        (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([request], "recorded, not confirmed: the decision is held and the request stays");
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream("TestActions/held")
+                .Update(node => node with { Content = new TestActionContent { ApprovedBy = owner, StepUpReceipts = ImmutableDictionary<string, string>.Empty.Add(owner, "receipt-1") } }))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await rows.Where(p => p.Length == 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeEmpty("the receipt is stamped: the decision is confirmed and the request leaves");
+    }
+
+    /// <summary>The held rule in isolation: it applies only while step-up is required, and any stamped receipt confirms.</summary>
+    [Theory]
+    [InlineData("""{"approvedBy":"jane"}""", false, false)]
+    [InlineData("""{"approvedBy":"jane"}""", true, true)]
+    [InlineData("""{"approvedBy":"jane","stepUpReceipts":{}}""", true, true)]
+    [InlineData("""{"approvedBy":"jane","stepUpReceipts":{"jane":"r1"}}""", true, false)]
+    [InlineData("""{"status":"Approved","stepUpReceipts":{"jane":"r1"}}""", true, false)]
+    [InlineData("""{"status":"Approved"}""", true, true)]
+    [InlineData("""{}""", true, true)]
+    public void ARecordedDecision_IsHeldUntilAReceiptIsStamped_WhenStepUpIsRequired(string content, bool stepUpRequired, bool awaits)
+        => InboxApprovalTargets.IsPending(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null, stepUpRequired)
+            .Should().Be(awaits);
 
     /// <summary>
     /// A presence snapshot that COMPLETES (a finite provider listing) must not end the content read it opened for a
