@@ -136,31 +136,99 @@ internal static class InboxApprovalTargets
     internal static IObservable<bool> Awaits(IMessageHub hub, AccessContext? viewer, string target, string owner, JsonSerializerOptions? options)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
-        var observed = Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner)
-            // An uncertain answer says nothing: the request keeps showing (the fallback) until a definite one.
-            .Where(exists => exists is not null)
-            .Select(exists => exists!.Value)
-            .DistinctUntilChanged()
-            .CarryAccessContext(hub.ServiceProvider, viewer)
-            .Select(exists => exists
-                ? hub.GetMeshNodeStream(target)
-                    .Select(node => IsPending(node, options))
-                    .Catch((Exception ex) =>
-                    {
-                        // A node deleted while observed has nothing left to decide; any other failure keeps the request.
-                        if (ex is MeshNodeReadEndedWithDeleteException)
-                            return Observable.Return(false);
-                        logger?.LogWarning(ex, "Inbox: could not read the approval {Target}; keeping its request", target);
-                        return Observable.Return(true);
-                    })
-                : Observable.Return(false))
-            .Switch()
+        var observed = ObserveNode(hub, viewer, target, Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner),
+                node => node is not null && IsPending(node, options), absent: false)
             .Catch((Exception ex) =>
             {
-                logger?.LogWarning(ex, "Inbox: could not tell whether the approval {Target} is still open; keeping its request", target);
+                logger?.LogWarning(ex, "Inbox: could not read the approval {Target}; keeping its request", target);
                 return Observable.Return(true);
             });
         return InboxLayoutArea.FirstAnswerWithin(observed, ReadWithin, true);
+    }
+
+    /// <summary>
+    /// The projection of the node at <paramref name="path"/>, LIVE, following its whole lifecycle: the node's own
+    /// authoritative stream is opened when <paramref name="presence"/> says a matching row was observed
+    /// (<see cref="Exists"/>; an uncertain answer says nothing), the projection of each of its states is emitted,
+    /// and <paramref name="absent"/> is emitted when it is gone — by a complete empty listing, or by the read ending
+    /// on the deletion (the stream cache ends its readers with <see cref="MeshNodeReadEndedWithDeleteException"/>
+    /// or a NotFound for the path, which can arrive BEFORE the listing reports it). Nothing is terminated by a
+    /// deletion: a node deleted and recreated — even when a provider reports both as one Updated frame, so that
+    /// presence never reads <c>false</c> in between — is picked up again by the next presence observation, and a read
+    /// that is still healthy is never restarted by an ordinary update. Any other failure is propagated.
+    /// <para>The stream is opened under <paramref name="viewer"/>'s identity, re-established around each presence answer.</para>
+    /// </summary>
+    /// <param name="hub">The hub the inbox renders on.</param>
+    /// <param name="viewer">The viewer's identity.</param>
+    /// <param name="path">The node's path.</param>
+    /// <param name="presence">Whether the node exists (<see cref="Exists"/>); each answer is observed, not only changes.</param>
+    /// <param name="project">The projection of the node's content (null while it has none).</param>
+    /// <param name="absent">What the projection is while the node is gone.</param>
+    internal static IObservable<T> ObserveNode<T>(IMessageHub hub, AccessContext? viewer, string path,
+        IObservable<bool?> presence, Func<MeshNode?, T> project, T absent)
+        => Observable.Create<T>(observer =>
+        {
+            var gate = new object();
+            var reading = false;
+            var read = new System.Reactive.Disposables.SerialDisposable();
+            var watch = presence
+                .Where(exists => exists is not null)
+                .CarryAccessContext(hub.ServiceProvider, viewer)
+                .Subscribe(
+                    exists =>
+                    {
+                        lock (gate)
+                        {
+                            if (exists != true)
+                            {
+                                read.Disposable = System.Reactive.Disposables.Disposable.Empty;
+                                reading = false;
+                                observer.OnNext(absent);
+                                return;
+                            }
+                            // A healthy read is never restarted by an ordinary update; one that ended by deletion reattaches here.
+                            if (reading)
+                                return;
+                            reading = true;
+                            read.Disposable = hub.GetMeshNodeStream(path).Subscribe(
+                                node => { lock (gate) { observer.OnNext(project(node)); } },
+                                error =>
+                                {
+                                    lock (gate)
+                                    {
+                                        reading = false;
+                                        if (IsGone(error, path))
+                                            observer.OnNext(absent);
+                                        else
+                                            observer.OnError(error);
+                                    }
+                                },
+                                () => { lock (gate) { reading = false; } });
+                        }
+                    },
+                    error => { lock (gate) { observer.OnError(error); } },
+                    () => { lock (gate) { observer.OnCompleted(); } });
+            return new System.Reactive.Disposables.CompositeDisposable(watch, read);
+        });
+
+    /// <summary>
+    /// Whether <paramref name="error"/> says the node at <paramref name="path"/> is gone: its read ended by a
+    /// deletion, or the router answered NotFound for exactly this path. Anything else is a fault. Pure.
+    /// </summary>
+    /// <param name="error">What ended the read.</param>
+    /// <param name="path">The node's path.</param>
+    internal static bool IsGone(Exception error, string path)
+    {
+        for (var current = error; current is not null; current = current.InnerException)
+        {
+            if (current is MeshNodeReadEndedWithDeleteException deleted
+                && string.Equals(deleted.NodePath, path, StringComparison.Ordinal))
+                return true;
+            if (current is DeliveryFailureException { Failure.ErrorType: ErrorType.NotFound } failure
+                && failure.Message.StartsWith($"No node found at '{path}'", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>

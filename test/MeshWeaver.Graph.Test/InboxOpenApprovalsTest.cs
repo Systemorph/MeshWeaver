@@ -206,6 +206,62 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     }
 
     /// <summary>
+    /// An approval deleted while its request is listed leaves the list, and one RECREATED afterwards — awaiting again — brings
+    /// the request back: the observation follows the node's whole lifecycle and a deletion ends nothing for good.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AnApprovalDeletedAndRecreated_DropsTheRequest_ThenBringsItBack()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-recreate";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("again", "TestActions") { NodeType = ActionType, Name = "again", Content = new TestActionContent() }, ct);
+        var request = await Notify(owner, "n-again", NotificationType.ApprovalRequired, "TestActions/again", ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        var rows = RowPaths(Open(owner));
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+
+        (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal([request]);
+        await access.RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().DeleteNode("TestActions/again"))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await rows.Where(p => p.Length == 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeEmpty("nothing is left to decide");
+        await CreateAsync(new MeshNode("again", "TestActions") { NodeType = ActionType, Name = "again", Content = new TestActionContent() }, ct);
+        (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([request], "the recreated approval awaits again, and the request is back");
+    }
+
+    /// <summary>
+    /// The person's preferences node deleted while the inbox is open does not end the feed: the defaults apply while it is
+    /// gone, and a node created again — with another choice — is followed.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task APreferencesNodeDeletedAndRecreated_NeverEndsTheFeed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-prefs-recreate";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("open", "TestActions") { NodeType = ActionType, Name = "open", Content = new TestActionContent() }, ct);
+        var approval = await Notify(owner, "need", NotificationType.ApprovalRequired, "TestActions/open", ct);
+        var mail = $"{owner}/{EmailNodeType.UserEmailSegment}/m1";
+        await CreateAsync(Mail("m1", $"{owner}/{EmailNodeType.UserEmailSegment}", owner, new Email { Id = "m1", Subject = "Hello" }), ct);
+        var approvalsKey = InboxRows.SourceKey("Approvals");
+        var mailKey = InboxRows.SourceKey("Mail");
+        Task Choose() => InboxPrefs.SetAsync(Mesh, owner, p => p with { Kinds = p.Kinds.SetItem(mailKey, true).SetItem(approvalsKey, false) }, ct);
+        await Choose();
+        var rows = RowPaths(Open(owner));
+
+        (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal([mail], "the chosen kinds");
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().DeleteNode(InboxPreferencePaths.PathFor(owner)))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await rows.Where(p => p.SequenceEqual([approval])).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([approval], "with the node gone the defaults apply — and the feed is still alive");
+        await Choose();
+        (await rows.Where(p => p.SequenceEqual([mail])).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([mail], "the recreated node is followed");
+    }
+
+    /// <summary>
     /// A request written before the feature key existed — and the default type, omitted from stored JSON — is an
     /// approval request all the same: it is filtered by its target, its row names the target, and its inbox
     /// address redirects.
@@ -298,6 +354,26 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         InboxApprovalTargets.Fold(false, Change(QueryChangeType.Initial, incomplete: true)).Should().BeNull("an unfinished read says nothing");
         InboxApprovalTargets.Fold(null, Change(QueryChangeType.Added, items: node)).Should().BeTrue();
         InboxApprovalTargets.Fold(true, Change(QueryChangeType.Removed, items: node)).Should().BeFalse("deleted while observed");
+    }
+
+    /// <summary>Only a node's OWN definitive "gone" signal reads as absence; a failure carrying similar text is a fault and propagates.</summary>
+    [Fact]
+    public void OnlyTheNodesOwnDeletionSignal_ReadsAsAbsence()
+    {
+        const string path = "Ops/Actions/roll";
+        InboxApprovalTargets.IsGone(new MeshNodeReadEndedWithDeleteException(path), path).Should().BeTrue("the read ended by the node's deletion");
+        InboxApprovalTargets.IsGone(new MeshNodeReadEndedWithDeleteException("Ops/Actions/other"), path).Should().BeFalse("another node's deletion");
+        var routingMiss = new DeliveryFailureException(new DeliveryFailure(null!, $"No node found at '{path}'. Closest ancestor is 'Ops'")
+        {
+            ErrorType = ErrorType.NotFound,
+        });
+        InboxApprovalTargets.IsGone(routingMiss, path).Should().BeTrue("the router's NotFound for exactly this path");
+        InboxApprovalTargets.IsGone(routingMiss, path + "x").Should().BeFalse("a different path");
+        InboxApprovalTargets.IsGone(new DeliveryFailureException(new DeliveryFailure(null!, $"No node found at '{path}'")
+        {
+            ErrorType = ErrorType.Failed,
+        }), path).Should().BeFalse("a failed route with similar text is not an authoritative NotFound");
+        InboxApprovalTargets.IsGone(new InvalidOperationException($"No node found at '{path}'"), path).Should().BeFalse("an unrelated exception is a fault");
     }
 
     /// <summary>A path with a space or a query metacharacter is ONE path in the existence listing, never a path and a free-text term.</summary>

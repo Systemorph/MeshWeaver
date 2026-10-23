@@ -578,15 +578,11 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var path = InboxPreferencePaths.PathFor(owner);
         var options = hub.JsonSerializerOptions;
-        var answers = InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner)
-            .Where(exists => exists is not null)
-            .Select(exists => exists!.Value)
-            .DistinctUntilChanged()
-            .CarryAccessContext(hub.ServiceProvider, viewer)
-            .Select(exists => exists
-                ? hub.GetMeshNodeStream(path).Select(node => InboxPreferencesNodeType.Parse(node, options))
-                : Observable.Return<InboxPreferences?>(null))
-            .Switch();
+        // The node's whole lifecycle is followed (ObserveNode): deleted — absent, so the defaults apply — and recreated, or
+        // deleted and recreated in one Updated frame, the grid keeps feeding and picks the new content up.
+        var answers = InboxApprovalTargets.ObserveNode<InboxPreferences?>(hub, viewer, path,
+            InboxApprovalTargets.Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), path, owner),
+            node => InboxPreferencesNodeType.Parse(node, options), absent: null);
         return FirstAnswerWithin(answers, PreferencesWait, (InboxPreferences?)null);
     }
 
