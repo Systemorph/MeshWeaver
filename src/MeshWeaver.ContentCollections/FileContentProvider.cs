@@ -5,7 +5,8 @@ namespace MeshWeaver.ContentCollections;
 
 /// <summary>
 /// Implementation of <see cref="IFileContentProvider"/> that uses <see cref="IContentService"/> to access file content.
-/// Automatically converts binary documents (.docx, .pptx, etc.) to markdown via <see cref="IContentTransformer"/>.
+/// Converts binary documents to markdown via a registered <see cref="IContentTransformer"/>; any other
+/// binary file is answered with a named placeholder and any text read is bounded (issue #7064).
 /// Pure reactive composition over the (pooled) observable <see cref="ContentCollection"/> surface —
 /// every I/O leaf runs on the collection's own <c>IIoPool</c>, never on the subscriber's thread.
 /// </summary>
@@ -69,7 +70,7 @@ public class FileContentProvider : IFileContentProvider
                     return collection.GetContentAsText(filePath, [transformer])
                         .Select(markdown => markdown is null
                             ? FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'")
-                            : FileContentResult.Ok(markdown));
+                            : FileContentResult.Ok(BoundConverted(filePath, markdown)));
 
                 if (ImageMediaTypes.TryGetValue(ext, out var imageMediaType))
                     // A binary image has no text transformer. NEVER decode its bytes as text (issue #379 —
@@ -88,15 +89,68 @@ public class FileContentProvider : IFileContentProvider
                                 + "AI-generated description is available on the file's Document node.");
                         });
 
-                return collection.GetContentAsText(filePath, null, numberOfRows)
-                    .Select(content => content is null
+                // Everything else is read BOUNDED and BINARY-SAFE (issue #7064): a binary file (a .pptx is a
+                // ZIP container) is never decoded into text — its raw bytes reached an agent's conversation
+                // and the next model request was refused for its size; below that cap the model would have
+                // worked from garbage. A text file larger than the bound returns its head plus a marker
+                // stating the total size — never a silent cut.
+                return collection.GetBoundedText(filePath, MaxTextBytes, numberOfRows)
+                    .Select(read => read is null
                         ? FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'")
-                        : FileContentResult.Ok(content));
+                        : FileContentResult.Ok(Describe(filePath, read)));
             })
             .Catch((FileNotFoundException _) => Observable.Return(
                 FileContentResult.Fail($"File '{filePath}' not found in collection '{collectionName}'")))
             .Catch((Exception ex) => Observable.Return(
                 FileContentResult.Fail($"Error accessing file '{filePath}' from collection '{collectionName}': {ex.Message}")));
+
+    /// <summary>
+    /// The most bytes of a file a text read decodes and returns (256 KiB — tens of thousands of model
+    /// tokens). A larger file returns its head followed by <see cref="TruncationMarkerPrefix"/> and the
+    /// total size. The same bound, in characters, applies to a transformer's converted text.
+    /// </summary>
+    public const int MaxTextBytes = 256 * 1024;
+
+    /// <summary>The opening of the marker appended to a text read cut at <see cref="MaxTextBytes"/>.</summary>
+    public const string TruncationMarkerPrefix = "[truncated: ";
+
+    /// <summary>The opening of the placeholder returned instead of a binary file's bytes.</summary>
+    public const string BinaryPlaceholderPrefix = "[binary file: ";
+
+    private static string Describe(string filePath, BoundedTextRead read)
+    {
+        var name = Path.GetFileName(filePath);
+        var ext = Path.GetExtension(filePath).ToLowerInvariant();
+        if (read.IsBinary)
+        {
+            var (mediaType, description) = BinaryContentSniffer.Describe(ext);
+            // A size the store does not report (-1) is said to be unknown, never printed as a byte count.
+            var sizeText = read.TotalBytes >= 0 ? $"{read.TotalBytes} bytes" : "size unknown";
+            return $"{BinaryPlaceholderPrefix}{name} ({description}, {mediaType}, {sizeText})] "
+                + $"Its content is not returned as text because {read.BinaryReason}, and no text converter is "
+                + $"registered for '{(ext.Length > 0 ? ext : name)}'. To read it, convert it to a text format "
+                + "(for example export it as PDF, Markdown or CSV) and read that file, or process it server-side "
+                + "in a script that opens the collection stream.";
+        }
+
+        if (!read.Truncated)
+            return read.Text ?? string.Empty;
+
+        var totalText = read.TotalBytes >= 0
+            ? $"{name} is {read.TotalBytes} bytes"
+            : $"{name} is larger than {read.ReturnedBytes} bytes (total size unknown)";
+        return read.Text
+            + $"\n\n{TruncationMarkerPrefix}{totalText}; only the first {read.ReturnedBytes} "
+            + $"bytes are returned (limit {MaxTextBytes} bytes). Read fewer rows or split the file to see the rest.]";
+    }
+
+    private static string BoundConverted(string filePath, string markdown)
+        => markdown.Length <= MaxTextBytes
+            ? markdown
+            // Never split a surrogate pair at the cut.
+            : markdown[..(char.IsHighSurrogate(markdown[MaxTextBytes - 1]) ? MaxTextBytes - 1 : MaxTextBytes)]
+              + $"\n\n{TruncationMarkerPrefix}the converted text of {Path.GetFileName(filePath)} is {markdown.Length} "
+              + $"characters; only the first {MaxTextBytes} characters are returned.]";
 
     // A collection-relative path as ContentStaging.IsStagingPath reads it: forward slashes, no
     // leading slash (a FileSystem provider can answer '\' separators on Windows).
