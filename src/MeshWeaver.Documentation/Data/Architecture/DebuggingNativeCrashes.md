@@ -181,9 +181,10 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
    `mcr.microsoft.com/dotnet/sdk:10.0` and installs the pinned `dotnet-dump` into its own `/tmp`.
 3. Inside the Job, the script resolves the selected file and refuses it unless its real path lies
    under the mount, so a symlink cannot walk out. It then runs a **fixed** command set: `eeversion`,
-   `threadpool`, `syncblk`, `clrthreads`, `clrstack -all` and `dumpasync --coalesce`. None of them
-   prints object fields, string values or the environment, and the text is also passed through a
-   key=value secret redaction.
+   `threadpool`, `gcheapstat`, `dumpheap -stat`, `syncblk`, `clrthreads`, `clrstack -all` and
+   `dumpasync --coalesce`. None of them prints object fields, string values or the environment
+   (`dumpheap -stat` prints one row per *type*, never an object), and the text is also passed
+   through a key=value secret redaction.
 4. Reads the Job's log and deletes the Job. It groups `clrstack -all` threads by identical stack and
    reports **one gzip+base64 fact** that fits the operations lane's 24 KB log tail. Every cap it
    applies is stated as shown-versus-found.
@@ -198,16 +199,32 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
    of a monitor 21 threads waited on and cut that thread's stack to fit
    ([Reading a Silo Eviction](../ReadingASiloEviction)).
 
+   **What holds the heap is answered for an out-of-memory dump.** `gcheapstat` gives the size of
+   each generation (gen0, gen1, gen2, LOH, POH) per GC heap, kept as printed. `dumpheap -stat` is
+   turned into a table of the types that hold the most bytes, **largest first**. Each row carries
+   the type's bytes, object count and share of the heap's `Total … bytes` line, and the table opens
+   with that total. SOS prints the types smallest first and ends with the total, so the Job keeps
+   the **tail** of a table longer than its section cap: the largest types and the total survive,
+   and the table says the type count is then a floor. The table shows the 40 largest types, fewer
+   if the fact must shrink to fit. It is never left out, and it states shown-versus-found. The
+   `Free` row is kept, because free space is fragmentation, not retention. A heap walk stopped by
+   the per-command bound prints no total, and the table says it did not finish rather than
+   reporting an empty heap. Without these two commands the read of
+   [#7082](https://github.com/Systemorph/MeshWeaver/issues/7082), a 14.6 GB dump of a process that
+   ran out of memory, could name every thread and still not say what filled the heap.
+
 The answer lands on the action node (`dumpAnalysis`) and as a Markdown page at `Ops/Dumps/<action id>`.
 The page carries the listing of every dump on the volume (the denominator), the file read with its
-size and write instant, the thread pool, the lock owners, and the stack groups: the group of each
+size and write instant, the thread pool, the generation sizes and the largest types on the heap, the
+lock owners, and the stack groups: the group of each
 thread that owns a monitor first, then every other group, largest first. The raw dump never leaves
 the cluster. A selector that is not that shape is refused before anything
 reaches the cluster, and so is a pod refusal, a failed Job or a log that never reached the end. None
 of them reports an analysis. The Job needs egress to nuget.org (the tool) and Microsoft's symbol
 server (the DAC matching the dump). A namespace that forbids either fails the read by name.
 
-What it does **not** give you is the dump itself. For `verifyheap`, object inspection or the native
+What it does **not** give you is the dump itself, or *why* an object is alive. For `gcroot`,
+`verifyheap`, object inspection or the native
 `NT_SIGINFO` walk below you still need the file. Copying it off the volume is a **break-glass** read
 (OperatingFromThePortal), and from there the procedure is the same as for a CI dump: start at the
 macOS section below.
