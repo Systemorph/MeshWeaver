@@ -110,7 +110,8 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
     /// settle's terminal stamp, through the production field-set (<c>ApplyCompileSuccess</c>).
     /// </summary>
     private async Task<NodeTypeBuildState.ReleaseCreateOutcome> RecutRefusedAndStampAsync(
-        string typePath, NodeCompilationResult build, string stamped, MeshNode seeded, string? classOverride = null)
+        string typePath, NodeCompilationResult build, string stamped, MeshNode seeded, string? classOverride = null,
+        Action? beforeStamp = null)
     {
         var ct = TestContext.Current.CancellationToken;
         var logger = Mesh.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger("MeshWeaver.Graph.CompileWatcher");
@@ -129,6 +130,7 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
             "a create the store never saw is classified Unavailable AT THE ARM, from the typed rejection "
             + "reason — never parsed out of the sentence");
 
+        beforeStamp?.Invoke();
         await Mesh.GetMeshNodeStream(typePath).Update(current =>
             {
                 var def = current.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
@@ -213,6 +215,66 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
     }
 
     /// <summary>
+    /// Review on #7087: an activation that INHERITS an Unavailable stamp has one owner for it. The
+    /// store has come back and judges the create: exactly one attempt reaches it, the verdict is
+    /// written to the record, and later recovery evidence re-issues nothing. With the inherited cut
+    /// (#6056) also running, two attempts met the store and the inherited one's verdict was only
+    /// logged.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AnInheritedUnavailableStamp_HasOneOwner_AndItsVerdictIsRecorded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typePath = $"{TestPartition}/PrInherit{Guid.NewGuid().ToString("N")[..8]}";
+        var bytes = File.ReadAllBytes(typeof(AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest).Assembly.Location);
+        var location = await Mesh.ServiceProvider.GetRequiredService<IAssemblyStore>()
+            .PutWithLocation(typePath, 736, bytes, null)
+            .Should().Within(TestTimeouts.WriteConvergence).Emit(cancellationToken: ct);
+        var definition = new NodeTypeDefinition
+        {
+            Configuration = "config => config",
+            CompilationStatus = CompilationStatus.Ok,
+            LastCompiledVersion = 736,
+            LatestReleasePath = $"{typePath}/{PreviousRelease}",
+            LatestAssemblyCollection = location.Collection,
+            LatestAssemblyPath = location.ContentPath,
+            CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+            CompiledSources = ImmutableDictionary<string, long>.Empty,
+        };
+        var build = LateReleaseAdoption.RecordedBuild(definition)!;
+        var stamped = $"{typePath}/{GraphNodeTypeNames.ReleaseSegment}/20261022212254-{NodeTypeBuildState.ContentHashOf(build)}";
+
+        using var judged = Storage.RefuseWritesAsJudged(stamped);
+        await MeshService.CreateNode(MeshNode.FromPath(typePath) with
+            {
+                Name = typePath,
+                NodeType = MeshNode.NodeTypePath,
+                State = MeshNodeState.Active,
+                Content = definition with
+                {
+                    UnreleasedBuildPath = stamped,
+                    UnreleasedBuildReason = "the data store was unreachable (an earlier activation)",
+                    UnreleasedBuildFailureClass = ReleaseFailureClass.Unavailable,
+                },
+            })
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the NodeType exists with an inherited Unavailable stamp", cancellationToken: ct);
+
+        var recorded = await Mesh.GetMeshNodeStream(typePath)
+            .Should().Within(TestTimeouts.CrossSilo)
+            .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && d.UnreleasedBuildFailureClass == ReleaseFailureClass.Refused,
+                "the activation's one attempt met the verdict and wrote it to the record", ct);
+        recorded.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!.UnreleasedBuildPath
+            .Should().Be(stamped, "this build still has no release");
+
+        TheStoreAnswersAgain();
+        await judged.Arrivals.Skip(1)
+            .Should().NotEmit(TestTimeouts.Quick,
+                "one owner, one attempt: no second cut at the same id, and no re-issue of a judged create");
+    }
+
+    /// <summary>
     /// Negative control 2: a stamp the store DID judge (class <see cref="ReleaseFailureClass.Refused"/>)
     /// is a named failure, never re-issued — the same refusal and the same recovery signals as the
     /// case above, and the stamp stands.
@@ -257,13 +319,17 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         var typePath = $"{TestPartition}/TriageStatus{Guid.NewGuid().ToString("N")[..8]}";
         var (build, stamped, seeded) = await SeedActivatedAsync(typePath);
 
+        // The store comes back JUDGING between the refused create and the stamp: the stamp is itself
+        // evidence the store answers, so the watch re-issues as soon as it sees it, and that re-issue
+        // meets the verdict (a judged write takes precedence over the unreachable switch).
+        FaultSwitch? judgedSwitch = null;
         using (Storage.RefuseWritesAsUnreachable(stamped))
-            await RecutRefusedAndStampAsync(typePath, build, stamped, seeded);
+            await RecutRefusedAndStampAsync(typePath, build, stamped, seeded,
+                beforeStamp: () => judgedSwitch = Storage.RefuseWritesAsJudged(stamped));
 
-        var judged = Storage.RefuseWritesAsJudged(stamped);
+        var judged = judgedSwitch!;
         try
         {
-            TheStoreAnswersAgain();
             await judged.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the store came back and the re-issue reached it", ct);
 
@@ -306,7 +372,7 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
 
         /// <param name="whenStillUnavailable">Runs inside the still-unavailable callback, so a case can
         /// make the callback itself produce evidence (it re-enters the sequence synchronously).</param>
-        public Rig(Action<Rig>? whenStillUnavailable = null)
+        public Rig(Action<Rig>? whenStillUnavailable = null, bool storeAnsweredBeforeSubscription = false)
         {
             Feed = new InProcessMeshChangeFeed(Store);
             _subscription = Feed
@@ -319,14 +385,19 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
                         return attempt;
                     },
                     outcome => outcome == Unavailable,
-                    outcome =>
+                    (outcome, commitsStillCount) =>
                     {
                         StillUnavailable = StillUnavailable.Add(outcome);
+                        CommitsStillCount = CommitsStillCount.Add(commitsStillCount);
                         whenStillUnavailable?.Invoke(this);
                         AttemptsWhenCallbackReturned = AttemptsWhenCallbackReturned.Add(Attempts.Count);
-                    })
+                    },
+                    storeAnsweredBeforeSubscription)
                 .Subscribe(r => Results = Results.Add(r));
         }
+
+        /// <summary>What each still-unavailable callback was told: does a commit still start a re-issue.</summary>
+        public ImmutableList<bool> CommitsStillCount { get; private set; } = [];
 
         /// <summary>How many attempts existed as each still-unavailable callback returned.</summary>
         public ImmutableList<int> AttemptsWhenCallbackReturned { get; private set; } = [];
@@ -344,6 +415,9 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
             "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow));
 
         public void Answer(int attempt, string outcome) => Attempts[attempt].OnNext(outcome);
+
+        /// <summary>Disposes the re-issue subscription, as its owner going away does.</summary>
+        public void StopWatching() => _subscription.Dispose();
 
         public void Dispose()
         {
@@ -413,6 +487,63 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         rig.Attempts.Should().HaveCount(2, "a reconnect always counts");
         rig.Answer(1, Landed);
         rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Review on #7087: the callback is told which evidence still counts. A reconnect-started failure
+    /// leaves commits counting; a commit-started one leaves only reconnects — so a caller's report
+    /// never claims a commit started an attempt that a reconnect started.
+    /// </summary>
+    [Fact]
+    public void TheStillUnavailableCallback_IsToldWhetherCommitsStillCount()
+    {
+        using var rig = new Rig();
+        rig.Gap();
+        rig.Answer(0, Unavailable);
+        rig.Commit();
+        rig.Answer(1, Unavailable);
+        rig.CommitsStillCount.Should().Equal([true, false],
+            "a reconnect-started failure disproves nothing; a commit-started one disproves commits");
+    }
+
+    /// <summary>
+    /// Review on #7087: a caller that already holds evidence from before the subscription (the stamp,
+    /// accepted by the store after the refused create) starts the first re-issue at once — the feed
+    /// never replays what preceded it. That evidence disproves nothing if the re-issue fails.
+    /// </summary>
+    [Fact]
+    public void EvidenceHeldBeforeSubscription_StartsTheFirstReissue_AndDisprovesNothing()
+    {
+        using var rig = new Rig(storeAnsweredBeforeSubscription: true);
+        rig.Attempts.Should().HaveCount(1, "the evidence the caller holds starts a re-issue with no feed event");
+        rig.Answer(0, Unavailable);
+        rig.CommitsStillCount.Should().Equal([true], "evidence held before the subscription disproves nothing");
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(2, "commits still count");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Review on #7087: a subscription disposed from inside the still-unavailable callback, with a
+    /// reconnect retained, starts no further write — the attempt factory is not invoked again.
+    /// </summary>
+    [Fact]
+    public void DisposedFromTheCallback_WithAGapPending_StartsNoFurtherWrite()
+    {
+        using var rig = new Rig(r => r.StopWatching());
+        rig.Commit();
+        rig.Gap();
+        rig.Answer(0, Unavailable);
+        rig.Attempts.Should().HaveCount(1, "a disposed re-issue never subscribes another write");
+    }
+
+    /// <summary>Without that evidence, nothing is re-issued before the feed says the store answers.</summary>
+    [Fact]
+    public void WithoutEvidence_NothingIsReissued()
+    {
+        using var rig = new Rig();
+        rig.Attempts.Should().BeEmpty("the caller made the first attempt; only evidence starts a re-issue");
     }
 
     /// <summary>A verdict ends the sequence: it is emitted, and no evidence after it starts anything.</summary>

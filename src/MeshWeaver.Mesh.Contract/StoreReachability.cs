@@ -169,20 +169,33 @@ public static class StoreReachability
     /// <paramref name="wasUnavailable"/> rejects is emitted and the sequence completes, so a refusal
     /// stays a named failure. It never runs two attempts at once. And it never issues the FIRST
     /// attempt — the caller made it, and is here because it came back Unavailable.</para>
+    ///
+    /// <para><b>Evidence the caller already holds.</b> A caller that learns of the obligation only
+    /// from a record the store accepted AFTER the write failed (a stamp written after the refused
+    /// create) holds evidence the feed will never replay: a reconnect or a commit that preceded the
+    /// subscription is gone. It passes <paramref name="storeAnsweredBeforeSubscription"/>, and the
+    /// first re-issue starts at once (review on #7087). That evidence disproves nothing if the
+    /// re-issue is answered Unavailable — the record may have been accepted locally ahead of the
+    /// store — so commits keep counting, exactly as after a reconnect-started failure.</para>
     /// </summary>
     /// <typeparam name="T">The write's outcome.</typeparam>
     /// <param name="feed">The mesh's invalidation feed, or <c>null</c> (then nothing is re-issued).</param>
     /// <param name="partition">The partition the write lands in.</param>
     /// <param name="attempt">The SAME write, cold — subscribed once per re-issue.</param>
     /// <param name="wasUnavailable">True when an outcome means "not attempted, retry meaningful".</param>
-    /// <param name="onStillUnavailable">Told about each re-issue that was answered Unavailable again.</param>
+    /// <param name="onStillUnavailable">Told about each re-issue that was answered Unavailable again,
+    /// with whether a commit in the partition still starts the next one (<c>false</c>: only a
+    /// reconnect does, because this failure was started by a commit).</param>
+    /// <param name="storeAnsweredBeforeSubscription">The caller holds evidence, from before this
+    /// subscription, that the store answered after the write failed: start the first re-issue at once.</param>
     /// <returns>The first outcome that is not Unavailable; never completes while the store stays away.</returns>
     public static IObservable<T> ReissueWhenStoreAnswers<T>(
         this IMeshInvalidationFeed? feed,
         string partition,
         Func<IObservable<T>> attempt,
         Func<T, bool> wasUnavailable,
-        Action<T>? onStillUnavailable = null)
+        Action<T, bool>? onStillUnavailable = null,
+        bool storeAnsweredBeforeSubscription = false)
     {
         if (feed is null)
             return Observable.Never<T>();
@@ -198,6 +211,12 @@ public static class StoreReachability
 
             void Start(bool byGap)
             {
+                // 🚨 Never start a write once the subscription is disposed (review on #7087). A
+                // callback may dispose it and then return into this path with evidence retained;
+                // assigning a slot to a disposed SerialDisposable disposes the slot, but only AFTER
+                // the cold write below would already have been subscribed.
+                if (state.Stopped)
+                    return;
                 state.InFlight = true;
                 state.PendingGap = false;
                 state.PendingCommit = false;
@@ -226,13 +245,17 @@ public static class StoreReachability
             // first, that evidence ran Start before the hot `outcomes` subject had a subscriber, an
             // attempt that answered in that window lost its outcome, and InFlight stayed true for good
             // — every later piece of evidence was retained and none ever started an attempt.
+            // Evidence the caller holds from before the subscription is delivered first, after the
+            // outcomes are connected, as the non-disproving kind (see the summary).
+            var evidence = EvidenceBySource(feed, partition);
+            if (storeAnsweredBeforeSubscription)
+                evidence = evidence.StartWith(true);
             var events = outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome))
-                .Merge(EvidenceBySource(feed, partition)
-                    .Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T))));
+                .Merge(evidence.Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T))));
 
             var subscription = events.Subscribe(e =>
             {
-                if (state.Done)
+                if (state.Done || state.Stopped)
                     return;
                 if (!e.IsOutcome)
                 {
@@ -265,7 +288,7 @@ public static class StoreReachability
                     observer.OnCompleted();
                     return;
                 }
-                onStillUnavailable?.Invoke(outcome);
+                onStillUnavailable?.Invoke(outcome, state.CommitsCount && e.ByGap);
                 if (!e.ByGap)
                 {
                     // A commit started it and the store still never saw it: commits are disproved.
@@ -279,7 +302,10 @@ public static class StoreReachability
                     Start(byGap: false);
             }, observer.OnError);
 
-            return new CompositeDisposable(subscription, inFlight, outcomes);
+            // The stop flag goes FIRST, so the state machine is stopped before anything it owns is
+            // torn down — including a disposal that happens from inside one of its own callbacks.
+            return new CompositeDisposable(
+                Disposable.Create(() => state.Stopped = true), subscription, inFlight, outcomes);
         });
     }
 
@@ -292,6 +318,9 @@ public static class StoreReachability
         public bool PendingGap;
         public bool PendingCommit;
         public bool Done;
+
+        /// <summary>Set when the subscription is disposed; read on every transition, from any thread.</summary>
+        public volatile bool Stopped;
     }
 
     private static bool InPartition(string? path, string partition)

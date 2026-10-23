@@ -220,6 +220,14 @@ public static class LateReleaseAdoption
                     || InheritedObligation(definition, hubPath, NodeTypeCompilationHelpers.FrameworkVersion)
                         is not { } stamped)
                     return Observable.Empty<string>();
+                // 🚨 An inherited UNAVAILABLE stamp has exactly ONE owner on this activation: the
+                // recovery watch (ReissueWhenTheStoreAnswers), which counts the stamp itself as
+                // evidence and re-issues at once, and writes a verdict back to the record. Cutting it
+                // here as well ran two attempts at the same id concurrently, and a verdict this branch
+                // received was only logged — the watch then re-issued a create the store had already
+                // judged, from the stale class (review on #7087).
+                if (UnavailableObligation(definition, hubPath, NodeTypeCompilationHelpers.FrameworkVersion) is not null)
+                    return Observable.Empty<string>();
                 logger?.LogInformation(
                     "[ReleasePostCondition] {HubPath}: this activation inherits a build with no "
                     + "release — unreleasedBuildPath={ReleasePath} ({Reason}). Cutting it at that id "
@@ -362,7 +370,8 @@ public static class LateReleaseAdoption
                 logger?.LogInformation(
                     "[ReleasePostCondition] {HubPath}: the release at {ReleasePath} was not created "
                     + "because the store could not be reached ({Reason}). It is re-issued at that id "
-                    + "as soon as the store is evidenced to answer again — a change-feed reconnect or a "
+                    + "now, since the store accepted this stamp after the failed create, and again on "
+                    + "each later piece of evidence that the store answers — a change-feed reconnect or a "
                     + "commit in partition '{Partition}' (#7072).",
                     hubPath, stamped, definition.UnreleasedBuildReason ?? "(no reason recorded)", partition);
                 var pending = x.Node with { Content = definition with { RequestedReleaseBy = null } };
@@ -374,12 +383,18 @@ public static class LateReleaseAdoption
                             hub, hubPath, build, pending, definition.LastCompilationActivityPath,
                             logger, reusePath: stamped)),
                         outcome => outcome.WasUnavailable,
-                        outcome => logger?.LogWarning(
+                        (outcome, commitsStillCount) => logger?.LogWarning(
                             "[ReleasePostCondition] {HubPath}: re-issuing the release at {ReleasePath} "
-                            + "was answered Unavailable again{Because}. A commit landed in the partition "
-                            + "and still the store never saw this create, so the next re-issue waits for "
-                            + "the change feed to reconnect (#7072).",
-                            hubPath, stamped, outcome.Because))
+                            + "was answered Unavailable again{Because}. The next re-issue waits for {Next} (#7072).",
+                            hubPath, stamped, outcome.Because,
+                            commitsStillCount
+                                ? $"a change-feed reconnect or a commit in partition '{partition}'"
+                                : "a change-feed reconnect: this re-issue was started by a commit in the "
+                                  + "partition and the store still never saw this create"),
+                        // The stamp is itself a record the store accepted after the create failed, and
+                        // a reconnect or commit that preceded it is never replayed to this watch — an
+                        // idle partition would leave the release unpublished (review on #7087).
+                        storeAnsweredBeforeSubscription: true)
                     .SelectMany(outcome =>
                     {
                         if (outcome.ReleasePath is not { } landed)

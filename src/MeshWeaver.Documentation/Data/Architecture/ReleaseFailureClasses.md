@@ -590,7 +590,17 @@ The log line said the retry was meaningful, and no component on the live pod mad
    subscribed cannot start an attempt whose answer has nowhere to go. And a failed attempt stays in
    flight until its outcome has been weighed, so a commit published from inside the
    still-unavailable callback is retained and judged like any other evidence. It never starts a
-   nested attempt that would clear a retained reconnect.
+   nested attempt that would clear a retained reconnect. The stamp itself is evidence too: it is a
+   record the store accepted after the refused create, and a reconnect or commit that came before
+   the watch saw the stamp is never replayed to it. So the watch makes its first re-issue as soon as
+   it sees the stamp. That re-issue proves nothing if it is answered `Unavailable` (the stamp may
+   have been accepted only locally), so commits keep counting after it. The warning for a re-issue
+   answered `Unavailable` names the evidence that will start the next one. It names a commit as
+   the cause only when a commit actually started that re-issue. An activation that INHERITS an
+   `Unavailable` stamp leaves it to this watch alone: the inherited cut (#6056) skips that class.
+   Otherwise two attempts met the store at the same id, and a verdict the inherited cut received
+   was only logged, so the watch would later re-issue a create the store had already judged. A
+   watch that is disposed never starts another write, even from evidence it had retained.
 4. **A verdict on a re-issue is written back.** If the store comes back and answers the re-issue
    with a verdict (`Refused`, `Faulted`), `RecordReissueVerdict` replaces the stamp's reason and
    class with that verdict's, through the owner stream, and only while the record still holds the
