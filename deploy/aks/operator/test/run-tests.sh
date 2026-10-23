@@ -4321,8 +4321,18 @@ case "$_da_out" in *"::hosting:: dump_listing=2"*"::hosting:: dump_file=${_da_po
 [ "$(printf '%s\n' "$_da_out" | tail -1 | cut -c1-28)" = "::hosting:: dump_analysis=H4" ] && ok "…and the gzip+base64 analysis is the LAST line, inside the lane's log tail" || bad "analysis is the last line" "last: $(printf '%s\n' "$_da_out" | tail -1 | cut -c1-80)"
 [ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, .stacks.lockOwners, .stacks.groups[0].threads, .stacks.groups[0].threadIds[0], .stacks.groups[0].frames[0], .stacks.groups[0].frames[2]' | tr '\n' '|')" = "3|3|1|1|0x2c|HOLDS MONITOR #7 (1 thread(s) waiting) — thread 0x2c, see syncblk|Orleans.Runtime.Catalog.GetOrCreateActivation(Orleans.Runtime.GrainId)|" ] \
   && ok "the thread syncblk names as a monitor's owner is its OWN group, FIRST, labelled with the monitor and its waiters, frames without SP/IP" || bad "lock owner first" "json: ${_da_json}"
-[ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,syncblk,clrthreads,dumpasync" ] \
-  && ok "…with the fixed text sections beside it" || bad "sections" "json: ${_da_json}"
+[ "$(printf '%s' "$_da_json" | jq -r '[.sections[].name] | join(",")')" = "eeversion,threadpool,gcheapstat,dumpheap,syncblk,clrthreads,dumpasync" ] \
+  && ok "…with the fixed text sections beside it, the heap's generation sizes and type statistics included" || bad "sections" "json: ${_da_json}"
+# 🚨 What HOLDS the heap (MeshWeaver#7082: an out-of-memory dump the read could not explain, because it
+# carried no heap statistics). `dumpheap -stat` lists types SMALLEST first; the read reports them
+# LARGEST first, with the heap's total and each type's share of it — the Free row included, since
+# free space is fragmentation, not retention.
+[ "$(printf '%s' "$_da_json" | jq -r '.heap | .totalObjects, .totalBytes, .typeCount, .typesShown, .types[0].type, .types[0].bytes, .types[0].objects, .types[0].share, (.types | map(.type) | index("Free")), ([.types[].bytes] | . == (sort | reverse))' | tr '\n' '|')" = "49060311|5336264024|6|6|System.String|3200000000|40000000|59.9|2|true|" ] \
+  && ok "the heap: total objects and bytes, every type counted, the LARGEST first with its share — thousands separators read, the Free row kept" || bad "heap statistics" "heap: $(printf '%s' "$_da_json" | jq -c '.heap')"
+_da_heap_text="$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .text')"
+case "$_da_heap_text" in "Total 49,060,311 objects, 5,336,264,024 bytes on the managed heap."*"3,200,000,000   59.9%      40,000,000  System.String"*"<0.1%"*) ok "…and the dumpheap section the page renders is that table, total first, largest type first" ;; *) bad "heap section text" "text: ${_da_heap_text}" ;; esac
+case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "gcheapstat") | .text')" in *"Gen2"*"6,912,345,678"*) ok "…beside the generation sizes (gcheapstat), kept as printed" ;; *) bad "gcheapstat text" "json: ${_da_json}" ;; esac
+unset _da_heap_text
 case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "syncblk") | .text')" in *"2c  12"*"System.Object"*) ok "…the lock owner (syncblk) survives intact" ;; *) bad "syncblk text" "json: ${_da_json}" ;; esac
 [ "$(printf '%s' "$_da_json" | jq -r '[.sections[].truncated] | any')" = false ] \
   && ok "…and a section that fits is never marked cut (only the pod's byte cap or the text cap cuts)" || bad "no false truncation" "json: ${_da_json}"
@@ -4407,6 +4417,36 @@ _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p'
 [ "$(printf '%s' "$_da_json" | jq -r '.stacks.threadCount, .stacks.groupCount, (.stacks.groupsShown < .stacks.groupCount), ((.stacks.groups | length) == .stacks.groupsShown), (.stacks.framesCap < 40)' | tr '\n' ' ')" = "400 400 true true true " ] \
   && ok "…stating what it kept: every thread counted, groups shown < groups found, the frame cap shrunk to fit" || bad "caps stated" "json: $(printf '%s' "$_da_json" | jq -c '.stacks | del(.groups)')"
 rm -f "$_da_large"
+
+# A heap with tens of thousands of types (a real portal's `dumpheap -stat` runs to ~20,000 rows): the
+# table is cut to the LARGEST types, never the first ones printed, and the cut is stated.
+_da_heap="$(mktemp)"
+{
+  printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
+  printf '@@MW-DUMP selected\tp/coredump.1.1791622450\t17179869184\t1791622450\n'
+  printf '@@MW-DUMP section\tdumpheap\tdumpheap -stat\n'
+  printf 'Statistics:\n          MT     Count     TotalSize Class Name\n'
+  awk 'BEGIN { for (i = 1; i <= 20000; i++) printf "7f12a%07x %9d %13d Generated.N%06d.Holder`1[[Generated.N%06d.Payload, Generated]]\n", i, i, i * 1000, i, i }'
+  printf 'Total 200010000 objects, 200010000000 bytes\n'
+  printf '@@MW-DUMP end\tdumpheap\t0\t2400000\n@@MW-DUMP done\n'
+} > "$_da_heap"
+da HOSTING_DA_LOG="$_da_heap" -- --namespace memex-cloud
+_da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p' | tail -1)"
+[ "$_da_rc" -eq 0 ] && [ "${#_da_fact}" -le 14000 ] && [ "$(printf '%s' "$_da_json" | jq -r '.heap | .typeCount, (.typesShown < .typeCount), (.typesShown == (.types | length)), .types[0].type, .types[-1].bytes > 19000000, .rowsCut' | tr '\n' '|')" = "20000|true|true|Generated.N020000.Holder\`1[[Generated.N020000.Payload, Generated]]|true|true|" ] \
+  && ok "a 20,000-type heap keeps the LARGEST types within the lane's budget (${#_da_fact} bytes), stating shown < found and that the pod cut rows" || bad "heap cap" "rc ${_da_rc}; ${#_da_fact} bytes; heap: $(printf '%s' "$_da_json" | jq -c '.heap | del(.types)'); first: $(printf '%s' "$_da_json" | jq -c '.heap.types[0]')"
+case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .text')" in *"largest of at least 20000 type(s) by total size; the rest are cut."*) ok "…and says so in the section the page renders" ;; *) bad "heap cut stated" "json: $(printf '%s' "$_da_json" | jq -c '.sections')" ;; esac
+# A heap walk that did not finish (the per-command bound): no Total line — said, never read as an empty heap.
+{
+  printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
+  printf '@@MW-DUMP selected\tp/coredump.1.1791622450\t17179869184\t1791622450\n'
+  printf '@@MW-DUMP section\tdumpheap\tdumpheap -stat\n'
+  printf '@@MW-DUMP end\tdumpheap\t124\t0\n@@MW-DUMP done\n'
+} > "$_da_heap"
+da HOSTING_DA_LOG="$_da_heap" -- --namespace memex-cloud
+[ "$_da_rc" -eq 0 ] && [ "$(printf '%s' "$_da_json" | jq -r '.heap | .exit, .totalBytes, .typeCount' | tr '\n' '|')" = "124|null|0|" ] \
+  && case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .text')" in *"the heap walk did not finish (exit 124)"*) true ;; *) false ;; esac \
+  && ok "a heap walk cut by its bound says it did not finish (exit 124) — no total, never a zero-byte heap" || bad "unfinished heap walk" "rc ${_da_rc}; json: ${_da_json}"
+rm -f "$_da_heap"
 
 # 🚨 The read that MATTERS on a wedged process: who holds the monitor everyone waits on, and what is
 # that thread doing. Shaped on the first real read (memex-cloud, the 2026-10-10 18:16Z dump,
@@ -4500,8 +4540,17 @@ if find /dev/null -maxdepth 0 -printf '' >/dev/null 2>&1 && realpath -e / >/dev/
   dap MW_DUMP=podA/coredump.10.1791621003
   [ "$_dap_rc" -eq 0 ] && [ "$_dap_analyzed" = "$(realpath -e "$_dap_root/podA/coredump.10.1791621003")" ] \
     && ok "in the pod: the named dump is the ONE file dotnet-dump analyses" || bad "pod positive" "rc ${_dap_rc}; analysed: ${_dap_analyzed}; out: ${_dap_out}"
-  [ "$(printf '%s\n' "$_dap_out" | grep -c '^@@MW-DUMP section	')" = 6 ] && case "$_dap_out" in *"@@MW-DUMP done"*) true ;; *) false ;; esac \
-    && ok "…running the six fixed commands and reaching done" || bad "pod sections" "out: ${_dap_out}"
+  [ "$(printf '%s\n' "$_dap_out" | sed -n 's/^@@MW-DUMP section	\([^	]*\)	.*/\1/p' | tr '\n' ',')" = "eeversion,threadpool,gcheapstat,dumpheap,syncblk,clrthreads,clrstack,dumpasync," ] && case "$_dap_out" in *"@@MW-DUMP done"*) true ;; *) false ;; esac \
+    && ok "…running the eight fixed commands and reaching done" || bad "pod sections" "out: ${_dap_out}"
+  # dumpheap -stat prints ~168 KB here against a 100 KB section cap: the pod keeps the TAIL (the largest
+  # types and the Total line), from a whole line, and reports the full byte count.
+  _dap_heap="$(printf '%s\n' "$_dap_out" | sed -n '/^@@MW-DUMP section	dumpheap	/,/^@@MW-DUMP end	dumpheap	/p')"
+  case "$_dap_heap" in *"Generated.Type003000"*"Total 4501500 objects, 4501500000 bytes"*) true ;; *) false ;; esac \
+    && case "$_dap_heap" in *"Generated.Type000001"*|*"Statistics:"*) false ;; *) true ;; esac \
+    && [ "$(printf '%s\n' "$_dap_heap" | sed -n '2p' | grep -c '^7f12a[0-9a-f]\{7\} ')" = 1 ] \
+    && [ "$(printf '%s\n' "$_dap_heap" | tail -1 | cut -f4)" -gt 100000 ] \
+    && ok "in the pod: a dumpheap -stat over the section cap keeps its TAIL — largest types and Total — from a whole line, counting every byte" || bad "pod heap tail" "heap section: $(printf '%s\n' "$_dap_heap" | head -3) … $(printf '%s\n' "$_dap_heap" | tail -3)"
+  unset _dap_heap
   [ "$(printf '%s\n' "$_dap_out" | sed -n '/^@@MW-DUMP listing/,/^@@MW-DUMP selected/p' | grep -c 'coredump')" = 3 ] \
     && ok "…listing every regular dump file (symlinks are not dumps) beside the selection" || bad "pod listing" "out: ${_dap_out}"
   dap MW_POD=podB
