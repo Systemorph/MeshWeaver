@@ -170,7 +170,15 @@ internal static class InboxApprovalTargets
         {
             var gate = new object();
             var reading = false;
+            var presenceEnded = false;
             var read = new System.Reactive.Disposables.SerialDisposable();
+            // The observation ends when presence has ended AND no read is open: a finite presence snapshot (a provider that
+            // completes its listing) must not dispose the content read it just opened for a `true`.
+            void CompleteIfDone()
+            {
+                if (presenceEnded && !reading)
+                    observer.OnCompleted();
+            }
             var watch = presence
                 .Where(exists => exists is not null)
                 .CarryAccessContext(hub.ServiceProvider, viewer)
@@ -197,17 +205,20 @@ internal static class InboxApprovalTargets
                                     lock (gate)
                                     {
                                         reading = false;
-                                        if (IsGone(error, path))
-                                            observer.OnNext(absent);
-                                        else
+                                        if (!IsGone(error, path))
                                             observer.OnError(error);
+                                        else
+                                        {
+                                            observer.OnNext(absent);
+                                            CompleteIfDone();
+                                        }
                                     }
                                 },
-                                () => { lock (gate) { reading = false; } });
+                                () => { lock (gate) { reading = false; CompleteIfDone(); } });
                         }
                     },
                     error => { lock (gate) { observer.OnError(error); } },
-                    () => { lock (gate) { observer.OnCompleted(); } });
+                    () => { lock (gate) { presenceEnded = true; CompleteIfDone(); } });
             return new System.Reactive.Disposables.CompositeDisposable(watch, read);
         });
 

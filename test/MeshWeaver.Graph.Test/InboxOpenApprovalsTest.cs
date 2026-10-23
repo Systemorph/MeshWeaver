@@ -383,6 +383,33 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         InboxApprovalTargets.Fold(true, Change(QueryChangeType.Removed, items: node)).Should().BeFalse("deleted while observed");
     }
 
+    /// <summary>
+    /// A presence snapshot that COMPLETES (a finite provider listing) must not end the content read it opened for a
+    /// `true`: the node's later state still arrives. Here presence is one finite `true` and the approval is decided
+    /// afterwards — the observation says "awaiting", then "decided", and only then would it have ended.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AFinitePresenceSnapshot_DoesNotEndTheContentRead()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-finite";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("finite", "TestActions") { NodeType = ActionType, Name = "finite", Content = new TestActionContent() }, ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        var seen = new System.Reactive.Subjects.ReplaySubject<bool>();
+        using var subscription = InboxApprovalTargets.ObserveNode(Mesh, null, "TestActions/finite", Observable.Return<bool?>(true),
+            node => node is not null && InboxApprovalTargets.IsPending(node, Mesh.JsonSerializerOptions), absent: false).Subscribe(seen);
+        (await seen.FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().BeTrue("awaiting");
+
+        await Mesh.ServiceProvider.GetRequiredService<AccessService>()
+            .RunAsSystem(() => Mesh.GetMeshNodeStream("TestActions/finite")
+                .Update(node => node with { Content = new TestActionContent { ApprovedBy = "someone-else" } }))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        (await seen.Where(pending => !pending).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().BeFalse("the later state arrives although the presence snapshot is long complete");
+    }
+
     /// <summary>Only a node's OWN definitive "gone" signal reads as absence; a failure carrying similar text is a fault and propagates.</summary>
     [Fact]
     public void OnlyTheNodesOwnDeletionSignal_ReadsAsAbsence()
