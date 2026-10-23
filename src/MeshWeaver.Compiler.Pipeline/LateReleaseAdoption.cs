@@ -73,6 +73,7 @@ public static class LateReleaseAdoption
             LatestReleasePath = stamped,
             UnreleasedBuildPath = null,
             UnreleasedBuildReason = null,
+            UnreleasedBuildFailureClass = null,
             ReleaseNotes = null,
         };
     }
@@ -255,6 +256,123 @@ public static class LateReleaseAdoption
     }
 
     /// <summary>
+    /// 🚨 #7072 — the stamp THIS activation must re-issue when the store answers again, or <c>null</c>.
+    /// Pure.
+    ///
+    /// <para><b>The shape, as measured.</b> On memex on 2026-10-22 a managed database restart (#7068)
+    /// refused every write for about 40 seconds. Three Hosting NodeTypes settled inside it, and both
+    /// the release create and its same-id re-cut were answered <i>"could not be attempted: the data
+    /// store was unreachable … retrying the same request (with the same node id) is
+    /// meaningful"</i>. The settle stamped <see cref="NodeTypeDefinition.UnreleasedBuildPath"/>,
+    /// correctly, and then nothing on that pod ever made the create again: <see cref="Landings"/>
+    /// waits for a node nobody is writing, and <see cref="CompleteInheritedRelease"/> runs only on
+    /// the NEXT activation. The pod stayed up and ready all night, so the types advertised builds no
+    /// release named for 76 minutes (a different pod's boot cut two of them) and 3 hours (the next
+    /// compile superseded the third, whose stamped id was never created).</para>
+    ///
+    /// <para>So a stamp of class <see cref="ReleaseFailureClass.Unavailable"/> is an obligation of
+    /// the activation that HOLDS it, not only of the next one. The same guards as
+    /// <see cref="InheritedObligation"/> apply — a settled build of this framework whose recorded
+    /// bytes the stamped id names — so a re-issue can only ever mint the release for these bytes, at
+    /// the id already stamped. Every other class stands: a refusal re-issued would be refused again,
+    /// and an expiry's create may still land and is adopted by <see cref="Landings"/>.</para>
+    /// </summary>
+    /// <param name="definition">The definition as the owner currently holds it.</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="frameworkVersion">The live framework build identity.</param>
+    internal static string? UnavailableObligation(
+        NodeTypeDefinition? definition, string hubPath, string frameworkVersion)
+        => string.Equals(definition?.UnreleasedBuildFailureClass, ReleaseFailureClass.Unavailable,
+               StringComparison.Ordinal)
+            ? InheritedObligation(definition, hubPath, frameworkVersion)
+            : null;
+
+    /// <summary>
+    /// #7072 — the activation's half of <see cref="UnavailableObligation"/>: while the own record
+    /// carries such a stamp, re-issue the release create at the stamped id once the store is
+    /// evidenced to answer again (<see cref="StoreReachability.ReissueWhenStoreAnswers{T}"/> — a
+    /// change-feed gap, or a commit in this type's partition), and adopt it in one owner write when
+    /// it lands. Emits the adopted path.
+    ///
+    /// <para>🚨 No timer, no poll, no widened bound: the re-issue fires on a FACT that the store is
+    /// back, and while it is not, nothing happens. Idempotent by construction: the create is made at
+    /// the stamped id, so an earlier attempt that did land after all is met as
+    /// <c>NodeAlreadyExists</c> and adopted (<see cref="NodeTypeBuildState.Bounded"/>), and the
+    /// adoption re-checks the stamp in the owner write (<see cref="Adopt"/>). A new stamp supersedes
+    /// the watch (<c>Switch</c>); a cleared one ends it.</para>
+    /// </summary>
+    /// <param name="hub">The per-NodeType hub.</param>
+    /// <param name="workspace">Its workspace.</param>
+    /// <param name="accessService">Runs the create and the write as System.</param>
+    /// <param name="logger">Where the outcome is published.</param>
+    internal static IObservable<string> ReissueWhenTheStoreAnswers(
+        IMessageHub hub,
+        IWorkspace workspace,
+        AccessService? accessService,
+        ILogger? logger)
+    {
+        var hubPath = hub.Address.Path;
+        var options = hub.JsonSerializerOptions;
+        var feed = hub.ServiceProvider.GetService<IMeshInvalidationFeed>();
+        var partition = hubPath.Trim('/').Split('/', 2)[0];
+        return workspace.GetMeshNodeStream()
+            .Where(node => node is not null)
+            .Select(node => (Node: node!, Stamped: UnavailableObligation(
+                node!.ContentAs<NodeTypeDefinition>(options), hubPath,
+                NodeTypeCompilationHelpers.FrameworkVersion)))
+            .DistinctUntilChanged(x => x.Stamped)
+            .Select(x =>
+            {
+                if (x.Stamped is not { } stamped
+                    || x.Node.ContentAs<NodeTypeDefinition>(options) is not { } definition)
+                    return Observable.Empty<string>();
+                logger?.LogInformation(
+                    "[ReleasePostCondition] {HubPath}: the release at {ReleasePath} was not created "
+                    + "because the store could not be reached ({Reason}). It is re-issued at that id "
+                    + "as soon as the store is evidenced to answer again — a change-feed reconnect or a "
+                    + "commit in partition '{Partition}' (#7072).",
+                    hubPath, stamped, definition.UnreleasedBuildReason ?? "(no reason recorded)", partition);
+                var pending = x.Node with { Content = definition with { RequestedReleaseBy = null } };
+                var build = RecordedBuild(definition)!;
+                return feed
+                    .ReissueWhenStoreAnswers(
+                        partition,
+                        () => accessService.RunAsSystem(() => NodeTypeBuildState.TryCreateReleaseNode(
+                            hub, hubPath, build, pending, definition.LastCompilationActivityPath,
+                            logger, reusePath: stamped)),
+                        outcome => outcome.WasUnavailable,
+                        outcome => logger?.LogWarning(
+                            "[ReleasePostCondition] {HubPath}: re-issuing the release at {ReleasePath} "
+                            + "was answered Unavailable again{Because}. A commit landed in the partition "
+                            + "and still the store never saw this create, so the next re-issue waits for "
+                            + "the change feed to reconnect (#7072).",
+                            hubPath, stamped, outcome.Because))
+                    .SelectMany(outcome =>
+                    {
+                        if (outcome.ReleasePath is not { } landed)
+                        {
+                            // A verdict, not an outage: the stamp stands and is the report; the next
+                            // activation cuts it once more (#6056).
+                            logger?.LogWarning(
+                                "[ReleasePostCondition] {HubPath}: re-issuing the release at "
+                                + "{ReleasePath} after the store answered again did not land{Because}. "
+                                + "The stamp stands (#7072).",
+                                hubPath, stamped, outcome.Because);
+                            return Observable.Empty<string>();
+                        }
+                        return accessService.RunAsSystem(() => workspace.GetMeshNodeStream()
+                                .Update(current =>
+                                    Adopt(current.ContentAs<NodeTypeDefinition>(options), landed) is { } adopted
+                                        ? current with { Content = adopted }
+                                        : current))
+                            .Take(1)
+                            .Select(_ => landed);
+                    });
+            })
+            .Switch();
+    }
+
+    /// <summary>
     /// Installs the watch on a per-NodeType hub, next to the compile and release-request watchers.
     /// Returns the subscription so the caller can register it for disposal with the hub.
     ///
@@ -309,6 +427,18 @@ public static class LateReleaseAdoption
                 hubPath, landed),
             logger,
             $"[LateReleaseAdoption] {hubPath}");
-        return new CompositeDisposable(completion, landings);
+        // #7072 — a stamp the store never saw is re-issued on THIS activation when the store is back.
+        var reissue = ActivityControlPlaneExtensions.SubscribeHubWatcher(
+            hub,
+            () => ReissueWhenTheStoreAnswers(hub, workspace, accessService, logger),
+            landed => logger?.LogInformation(
+                "[ReleasePostCondition] {HubPath}: the store answered again and the release was "
+                + "re-issued at {ReleasePath} and adopted: latestReleasePath names it and "
+                + "unreleasedBuildPath is cleared (#7072).",
+                hubPath, landed),
+            logger,
+            $"[ReleaseReissue] {hubPath}");
+
+        return new CompositeDisposable(completion, landings, reissue);
     }
 }

@@ -44,6 +44,9 @@
     <ProjectReference Include="..\..\src\MeshWeaver.PluginCatalog\MeshWeaver.PluginCatalog.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
     <ProjectReference Include="..\MeshWeaver.Hosting.Monolith.TestBase\MeshWeaver.Hosting.Monolith.TestBase.csproj" />
+    <!-- AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest (#7072) refuses one write as an
+         unreachable store with the shared deterministic injector. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
   </ItemGroup>
 
 </Project>

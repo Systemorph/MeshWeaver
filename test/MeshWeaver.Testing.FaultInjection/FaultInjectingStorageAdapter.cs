@@ -50,6 +50,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _conditionalWriteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteManyFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteFaults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _unreachableWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
@@ -120,6 +121,23 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _conditionalWriteFaults.GetOrAdd(key, k => new FaultSwitch($"{Name}: fail conditional writes of {k}",
             s => _conditionalWriteFaults.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every write of <paramref name="path"/> (<c>Write</c>, <c>WriteIfVersion</c>, a
+    /// <c>WriteMany</c> naming it) FAULTS with a driver-shaped CONNECTION failure — a
+    /// <see cref="System.Data.Common.DbException"/> with SQLSTATE <c>08006</c>, which is what a
+    /// managed PostgreSQL restart answers (MeshWeaver#7068) — and writes nothing. The create
+    /// handler classifies it as an unreachable store and answers <c>Unavailable</c>, exactly as
+    /// production did (MeshWeaver#7072). Releasing the switch is the store coming back. Each refused
+    /// write is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose writes cannot reach the store.</param>
+    public FaultSwitch RefuseWritesAsUnreachable(string path)
+    {
+        var key = Norm(path);
+        return _unreachableWrites.GetOrAdd(key, k => new FaultSwitch($"{Name}: store unreachable for writes of {k}",
+            s => _unreachableWrites.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -269,7 +287,25 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => HeldWrite(node, () => _inner.Write(node, options));
+        => Observable.Defer(() => Unreachable<MeshNode?>(node.Path, $"Write {node.Path}")
+            ?? HeldWrite(node, () => _inner.Write(node, options)));
+
+    /// <summary>The refusal a closed <see cref="RefuseWritesAsUnreachable"/> answers for
+    /// <paramref name="path"/>, or <c>null</c> when the store is reachable for it.</summary>
+    private IObservable<T>? Unreachable<T>(string path, string what)
+    {
+        if (!_unreachableWrites.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
+            return null;
+        fault.NoteArrival(what);
+        return Observable.Throw<T>(new UnreachableStoreException(
+            $"{Name}: injected fault — failed to connect to the store for {path}"));
+    }
+
+    /// <summary>A driver connection failure (SQLSTATE 08006, <c>connection_failure</c>).</summary>
+    private sealed class UnreachableStoreException(string message) : System.Data.Common.DbException(message)
+    {
+        public override string? SqlState => "08006";
+    }
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<MeshNode>> WriteMany(IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
@@ -278,6 +314,9 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
             // One held node holds the batch: the batch is one flush, and it lands or waits as one.
             // Capture each switch ONCE: a release between two lookups would otherwise hand the
             // gate a switch that is no longer registered.
+            if (nodes.Select(n => Unreachable<IReadOnlyList<MeshNode>>(n.Path, $"WriteMany {n.Path}"))
+                    .FirstOrDefault(r => r is not null) is { } refused)
+                return refused;
             var held = nodes.Select(n => (Node: n, Hold: WriteHold(n.Path)))
                 .Where(h => h.Hold is not null).ToList();
             if (held.Count == 0 || held[0].Hold is not { } gate)
@@ -293,6 +332,8 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
+            if (Unreachable<bool?>(node.Path, $"WriteIfVersion {node.Path}") is { } refused)
+                return refused;
             if (_conditionalWriteFaults.TryGetValue(Norm(node.Path), out var fault) && fault.IsClosed)
             {
                 fault.NoteArrival($"WriteIfVersion {node.Path} v{node.Version}");

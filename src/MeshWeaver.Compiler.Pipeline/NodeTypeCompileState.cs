@@ -102,6 +102,9 @@ public record NodeTypeCompileState
     /// <summary>See <see cref="NodeTypeDefinition.UnreleasedBuildReason"/>.</summary>
     public string? UnreleasedBuildReason { get; init; }
 
+    /// <summary>See <see cref="NodeTypeDefinition.UnreleasedBuildFailureClass"/> (#7072).</summary>
+    public string? UnreleasedBuildFailureClass { get; init; }
+
     /// <summary>See <see cref="NodeTypeDefinition.ReleaseNotes"/>.</summary>
     public string? ReleaseNotes { get; init; }
 
@@ -239,6 +242,7 @@ public record NodeTypeCompileState
                 LastReleaseRequestHandledAt = definition.LastReleaseRequestHandledAt,
                 UnreleasedBuildPath = definition.UnreleasedBuildPath,
                 UnreleasedBuildReason = definition.UnreleasedBuildReason,
+                UnreleasedBuildFailureClass = definition.UnreleasedBuildFailureClass,
                 ReleaseNotes = definition.ReleaseNotes,
                 LatestAssemblyCollection = definition.LatestAssemblyCollection,
                 LatestAssemblyPath = definition.LatestAssemblyPath,
@@ -279,6 +283,7 @@ public record NodeTypeCompileState
         && RequestedReleaseAt is null && !RequestedReleaseForce && RequestedReleaseBy is null
         && LastReleaseRequestHandledAt is null && ReleaseNotes is null
         && UnreleasedBuildPath is null && UnreleasedBuildReason is null
+        && UnreleasedBuildFailureClass is null
         && LatestAssemblyCollection is null && LatestAssemblyPath is null
         && LatestAssemblyMvid is null
         && CompiledSources is null && CurrentSourceVersions is null
