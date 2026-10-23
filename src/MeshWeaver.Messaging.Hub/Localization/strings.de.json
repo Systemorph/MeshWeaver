@@ -2089,6 +2089,8 @@
   "inbox.state.failed": "Fehlgeschlagen",
   "inbox.state.cancelled": "Abgebrochen",
   "inbox.state.unread": "Ungelesen",
+  "inbox.state.refused": "Verweigert",
+  "inbox.state.stale": "Veraltet",
   "inbox.section.kind": "Art",
   "inbox.section.tags": "Tags",
   "inbox.section.source": "Quelle",
