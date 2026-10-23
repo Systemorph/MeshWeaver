@@ -577,10 +577,21 @@ The log line said the retry was meaningful, and no component on the live pod mad
    `MeshWeaver.Mesh.Contract` waits for `StoreAnswersAgain`. That signal fires on a declared
    `ChangeFeedGap`, which is the LISTEN connection resuming after a database restart, or on a commit
    announced in the type's partition, which the store must have accepted. While the store is away,
-   neither fires and nothing is re-issued. If a re-issue is answered `Unavailable` again after a
-   partition commit, that commit has been shown not to be evidence for this write. Later re-issues
-   then wait for a feed reconnect only. A busy partition therefore cannot turn this into a retry
-   loop, and no count or clock is involved.
+   neither fires and nothing is re-issued. Evidence is observed for the whole life of the watch:
+   evidence that arrives while an attempt is in flight is kept (the event that started the attempt
+   is not), and starts the next attempt as soon as that one is answered `Unavailable`. A feed does
+   not replay its gaps, so a reconnect seen only between attempts would be lost. Each attempt
+   remembers which kind of evidence started it. If an attempt STARTED BY A COMMIT is answered
+   `Unavailable` again, commits have been shown not to be evidence for this write, and from then on
+   only a feed reconnect starts a re-issue. A failed attempt started by a reconnect disproves nothing
+   about commits. A busy partition therefore cannot turn this into a retry loop, and no count or
+   clock is involved.
+4. **A verdict on a re-issue is written back.** If the store comes back and answers the re-issue
+   with a verdict (`Refused`, `Faulted`), `RecordReissueVerdict` replaces the stamp's reason and
+   class with that verdict's, through the owner stream, and only while the record still holds the
+   SAME `Unavailable` obligation. The stamp keeps its path. A watch rebuilt from the record (a
+   transient own-stream fault re-establishes it) then has no obligation and never re-issues a create
+   the store has judged.
 
 Every other class stays standing. A `Refused` create would be refused again. An `Expired` one may
 still land, and late adoption takes it when it does. A stamp written before the class existed has
@@ -613,6 +624,15 @@ with the stamp, its reason and its class cleared and a release node there for th
 stamp under the same signals is never re-issued. With the re-issue watch removed from `Install`,
 the main case is red at its final wait. `ReleaseRecutReportsWhyItFailedTest` pins the
 classification through the real `Bounded` chain.
+
+The evidence handling is pinned deterministically against the real `InProcessMeshChangeFeed`, with
+a write the test answers by hand. `AGapDuringAnAttempt_StartsTheNextAttempt_WhenThatOneIsUnavailable`
+covers a reconnect that lands during an attempt. `AGapStartedFailure_KeepsCommitsAsEvidence` and
+`ACommitStartedFailure_LeavesOnlyReconnectsAsEvidence` cover which source a failure disproves.
+`AReissueTheStoreRefuses_RecordsTheRefusal_AndIsNotReissuedAgain` (`RefuseWritesAsJudged`) covers
+the written-back verdict. With the first shape of `ReissueWhenStoreAnswers` (evidence observed only
+between attempts, any failure switching to reconnect-only) the first two are red. With
+`RecordReissueVerdict` disabled, the last is red.
 
 ### Not established
 

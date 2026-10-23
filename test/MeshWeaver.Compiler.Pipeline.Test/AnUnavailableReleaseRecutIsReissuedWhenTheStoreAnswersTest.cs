@@ -7,6 +7,8 @@ using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph;
 using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting;
+using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
@@ -238,6 +240,217 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
             .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
                         && (d.UnreleasedBuildPath is null || d.LatestReleasePath == stamped))
             .Should().NotEmit(TestTimeouts.Quick, "a verdict is never re-issued — the stamp is the report");
+    }
+
+    /// <summary>
+    /// Review on #7087, thread 3: a re-issue that the store answers with a VERDICT must leave that
+    /// verdict on the record. The stamp is Unavailable; the store comes back and REFUSES the re-issue.
+    /// The record must then carry the refusal's class and reason, so a watch rebuilt from it (a
+    /// transient own-stream fault re-establishes it) has no Unavailable obligation and never re-issues
+    /// a create the store has judged. Without the owner write the record keeps <c>Unavailable</c> and
+    /// the old reason, and this case is red at its first <c>Match</c>.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AReissueTheStoreRefuses_RecordsTheRefusal_AndIsNotReissuedAgain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var typePath = $"{TestPartition}/TriageStatus{Guid.NewGuid().ToString("N")[..8]}";
+        var (build, stamped, seeded) = await SeedActivatedAsync(typePath);
+
+        using (Storage.RefuseWritesAsUnreachable(stamped))
+            await RecutRefusedAndStampAsync(typePath, build, stamped, seeded);
+
+        var judged = Storage.RefuseWritesAsJudged(stamped);
+        try
+        {
+            TheStoreAnswersAgain();
+            await judged.Arrivals.Should().Within(TestTimeouts.Convergence)
+                .Emit("the store came back and the re-issue reached it", ct);
+
+            var recorded = await Mesh.GetMeshNodeStream(typePath)
+                .Should().Within(TestTimeouts.WriteConvergence)
+                .Match(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                            && d.UnreleasedBuildFailureClass == ReleaseFailureClass.Refused,
+                    "the re-issue's verdict replaces the stale Unavailable class on the record", ct);
+            var def = recorded.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions)!;
+            def.UnreleasedBuildPath.Should().Be(stamped, "this build still has no release");
+            def.UnreleasedBuildReason.Should().Contain("the store refused the write",
+                "the reason is the verdict's own, not the earlier outage's");
+            LateReleaseAdoption.UnavailableObligation(def, typePath, NodeTypeCompilationHelpers.FrameworkVersion)
+                .Should().BeNull("a watch rebuilt from this record has nothing to re-issue");
+        }
+        finally
+        {
+            judged.Release();
+        }
+
+        // Watcher recovery: more evidence, the store now taking writes; a judged stamp is never re-issued.
+        TheStoreAnswersAgain();
+        await Mesh.GetMeshNodeStream(typePath)
+            .Where(n => n.ContentAs<NodeTypeDefinition>(Mesh.JsonSerializerOptions) is { } d
+                        && (d.LatestReleasePath == stamped || d.UnreleasedBuildPath is null))
+            .Should().NotEmit(TestTimeouts.Quick, "a create the store judged is not re-issued on this activation");
+    }
+
+    // ───────────── the re-issue's evidence handling, deterministic (review on #7087) ─────────────
+    //
+    // Driven against the REAL InProcessMeshChangeFeed over the fault-injecting store, with a write
+    // the test answers by hand, so every ordering is chosen rather than raced.
+
+    private const string Unavailable = "unavailable";
+    private const string Landed = "landed";
+
+    private sealed class Rig : IDisposable
+    {
+        private readonly IDisposable _subscription;
+
+        public Rig()
+        {
+            Feed = new InProcessMeshChangeFeed(Store);
+            _subscription = Feed
+                .ReissueWhenStoreAnswers(
+                    "P",
+                    () =>
+                    {
+                        var attempt = new System.Reactive.Subjects.Subject<string>();
+                        Attempts = Attempts.Add(attempt);
+                        return attempt;
+                    },
+                    outcome => outcome == Unavailable,
+                    outcome => StillUnavailable = StillUnavailable.Add(outcome))
+                .Subscribe(r => Results = Results.Add(r));
+        }
+
+        public FaultInjectingStorageAdapter Store { get; } = new(new InMemoryStorageAdapter());
+        public InProcessMeshChangeFeed Feed { get; }
+        public ImmutableList<System.Reactive.Subjects.Subject<string>> Attempts { get; private set; } = [];
+        public ImmutableList<string> Results { get; private set; } = [];
+        public ImmutableList<string> StillUnavailable { get; private set; } = [];
+
+        public void Commit() => Feed.Publish(new MeshChangeEvent(
+            "P", "other", "P/other", MeshChangeKind.Updated, null, 1, DateTimeOffset.UtcNow));
+
+        public void Gap() => Store.DeliverChangeFeedGap(new ChangeFeedGap(
+            "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow));
+
+        public void Answer(int attempt, string outcome) => Attempts[attempt].OnNext(outcome);
+
+        public void Dispose()
+        {
+            _subscription.Dispose();
+            Feed.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Thread 1: a reconnect that lands WHILE an attempt is in flight is retained, and starts the next
+    /// attempt the moment that one is answered Unavailable. A feed's gaps are not replayed, so the old
+    /// shape, which looked for evidence only after the failure, lost it for good.
+    /// </summary>
+    [Fact]
+    public void AGapDuringAnAttempt_StartsTheNextAttempt_WhenThatOneIsUnavailable()
+    {
+        using var rig = new Rig();
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(1, "a commit in the partition is evidence");
+        rig.Gap();
+        rig.Attempts.Should().HaveCount(1, "never two attempts at once");
+
+        rig.Answer(0, Unavailable);
+        rig.Attempts.Should().HaveCount(2, "the gap that arrived during the attempt is retained, not lost");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Thread 2: a failed attempt that a GAP started disproves nothing about commits, so a later commit
+    /// in the partition still starts a re-issue. The old shape went reconnect-only after ANY failure.
+    /// </summary>
+    [Fact]
+    public void AGapStartedFailure_KeepsCommitsAsEvidence()
+    {
+        using var rig = new Rig();
+        rig.Gap();
+        rig.Answer(0, Unavailable);
+        rig.Attempts.Should().HaveCount(1);
+
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(2, "a commit is still evidence; only a commit-started failure disproves it");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// The other side: a failed attempt that a COMMIT started shows commits are not evidence for this
+    /// write. Later commits start nothing (no retry loop on a busy partition), a reconnect does, and a
+    /// commit retained during that attempt is discarded with the rest.
+    /// </summary>
+    [Fact]
+    public void ACommitStartedFailure_LeavesOnlyReconnectsAsEvidence()
+    {
+        using var rig = new Rig();
+        rig.Commit();
+        rig.Commit();
+        rig.Answer(0, Unavailable);
+        rig.Attempts.Should().HaveCount(1, "the commit retained during a commit-started failure is disproved too");
+
+        rig.Commit();
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(1, "commits no longer start a re-issue");
+        rig.StillUnavailable.Should().HaveCount(1);
+
+        rig.Gap();
+        rig.Attempts.Should().HaveCount(2, "a reconnect always counts");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>A verdict ends the sequence: it is emitted, and no evidence after it starts anything.</summary>
+    [Fact]
+    public void AVerdict_IsEmitted_AndNothingIsReissuedAfterIt()
+    {
+        using var rig = new Rig();
+        rig.Gap();
+        rig.Answer(0, "refused");
+        rig.Results.Should().Equal("refused");
+        rig.Gap();
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void RecordReissueVerdict_ReplacesTheClass_OnlyWhileTheSameObligationStands()
+    {
+        const string collection = "assemblies";
+        const string contentPath = "T/v736-build.dll";
+        var hash = NodeTypeBuildState.ContentHashOf(new NodeCompilationResult(
+            null, [], Collection: collection, ContentPath: contentPath));
+        var stamped = $"T/Release/20261022212254-{hash}";
+        var owed = new NodeTypeDefinition
+        {
+            CompilationStatus = CompilationStatus.Ok,
+            LatestAssemblyCollection = collection,
+            LatestAssemblyPath = contentPath,
+            CompiledFrameworkVersion = NodeTypeCompilationHelpers.FrameworkVersion,
+            UnreleasedBuildPath = stamped,
+            UnreleasedBuildReason = "the data store was unreachable",
+            UnreleasedBuildFailureClass = ReleaseFailureClass.Unavailable,
+        };
+        var refused = NodeTypeBuildState.ReleaseCreateOutcome.Failed("refused", stamped, ReleaseFailureClass.Refused);
+
+        var recorded = LateReleaseAdoption.RecordReissueVerdict(owed, "T", stamped, refused)!;
+        recorded.UnreleasedBuildPath.Should().Be(stamped);
+        recorded.UnreleasedBuildReason.Should().Be("refused");
+        recorded.UnreleasedBuildFailureClass.Should().Be(ReleaseFailureClass.Refused);
+
+        LateReleaseAdoption.RecordReissueVerdict(owed, "T", stamped,
+                NodeTypeBuildState.ReleaseCreateOutcome.Failed("again", stamped, ReleaseFailureClass.Unavailable))
+            .Should().BeNull("an Unavailable answer leaves the obligation standing");
+        LateReleaseAdoption.RecordReissueVerdict(owed with { UnreleasedBuildPath = null }, "T", stamped, refused)
+            .Should().BeNull("a later writer moved the stamp on");
+        LateReleaseAdoption.RecordReissueVerdict(
+                owed with { UnreleasedBuildFailureClass = ReleaseFailureClass.Expired }, "T", stamped, refused)
+            .Should().BeNull("only the SAME unavailable obligation is overwritten");
     }
 
     // ───────────── the decision, pure ─────────────

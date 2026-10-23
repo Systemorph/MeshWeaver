@@ -51,6 +51,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteManyFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _deleteFaults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, FaultSwitch> _unreachableWrites = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, FaultSwitch> _judgedWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
@@ -138,6 +139,21 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         var key = Norm(path);
         return _unreachableWrites.GetOrAdd(key, k => new FaultSwitch($"{Name}: store unreachable for writes of {k}",
             s => _unreachableWrites.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
+    }
+
+    /// <summary>
+    /// From now on, every write of <paramref name="path"/> FAULTS with an
+    /// <see cref="InvalidOperationException"/> — a store that was reached and REFUSED the write, which
+    /// the create handler answers <c>ValidationFailed</c>: a verdict, not an outage. The counterpart of
+    /// <see cref="RefuseWritesAsUnreachable"/>, for a case that needs the store to judge a write it
+    /// earlier could not see (MeshWeaver#7087). Each refused write is an arrival on the switch.
+    /// </summary>
+    /// <param name="path">The node path whose writes the store refuses.</param>
+    public FaultSwitch RefuseWritesAsJudged(string path)
+    {
+        var key = Norm(path);
+        return _judgedWrites.GetOrAdd(key, k => new FaultSwitch($"{Name}: store refuses writes of {k}",
+            s => _judgedWrites.TryRemove(new KeyValuePair<string, FaultSwitch>(k, s))));
     }
 
     /// <summary>
@@ -290,10 +306,17 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         => Observable.Defer(() => Unreachable<MeshNode?>(node.Path, $"Write {node.Path}")
             ?? HeldWrite(node, () => _inner.Write(node, options)));
 
-    /// <summary>The refusal a closed <see cref="RefuseWritesAsUnreachable"/> answers for
-    /// <paramref name="path"/>, or <c>null</c> when the store is reachable for it.</summary>
+    /// <summary>The refusal a closed <see cref="RefuseWritesAsJudged"/> or
+    /// <see cref="RefuseWritesAsUnreachable"/> answers for <paramref name="path"/>, or <c>null</c> when
+    /// the store takes the write.</summary>
     private IObservable<T>? Unreachable<T>(string path, string what)
     {
+        if (_judgedWrites.TryGetValue(Norm(path), out var judged) && judged.IsClosed)
+        {
+            judged.NoteArrival(what);
+            return Observable.Throw<T>(new InvalidOperationException(
+                $"{Name}: injected fault — the store refused the write of {path}"));
+        }
         if (!_unreachableWrites.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
             return null;
         fault.NoteArrival(what);

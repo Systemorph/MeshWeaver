@@ -1,5 +1,7 @@
 ﻿using System.Reactive;
+using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using MeshWeaver.Data;
 using MeshWeaver.Mesh.Services;
 
@@ -122,15 +124,24 @@ public static class StoreReachability
     /// <c>null</c> to count every commit.</param>
     /// <returns>An infinite signal; one element per piece of evidence.</returns>
     public static IObservable<Unit> StoreAnswersAgain(this IMeshInvalidationFeed? feed, string? partition)
+        => EvidenceBySource(feed, partition).Select(_ => Unit.Default);
+
+    /// <summary>
+    /// <see cref="StoreAnswersAgain"/> with its SOURCE kept: <c>true</c> for a declared gap (the feed
+    /// resumed), <c>false</c> for a commit in the partition. The two are different kinds of evidence —
+    /// a commit can be shown not to count for one particular write, a reconnect cannot — so a caller
+    /// that weighs them must be able to tell which fired.
+    /// </summary>
+    private static IObservable<bool> EvidenceBySource(IMeshInvalidationFeed? feed, string? partition)
     {
         if (feed is null)
-            return Observable.Never<Unit>();
+            return Observable.Never<bool>();
         // The handler is forwarded as-is and the filter runs as an operator, so a fault in it reaches
         // the subscriber's OnError instead of being thrown out of the feed's delivery callback.
         var commits = Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
             .Where(change => partition is null || InPartition(change.Path, partition))
-            .Select(_ => Unit.Default);
-        return commits.Merge(feed.Gaps.Select(_ => Unit.Default));
+            .Select(_ => false);
+        return commits.Merge(feed.Gaps.Select(_ => true));
     }
 
     /// <summary>
@@ -139,17 +150,25 @@ public static class StoreReachability
     /// The ONE shape for every such site: the caller supplies the SAME request (same node id), how
     /// to tell an Unavailable outcome, and the partition the write lands in.
     ///
-    /// <para><b>How it waits.</b> The first re-issue waits for <see cref="StoreAnswersAgain"/> —
-    /// a feed that resumed, or a commit in the partition. If THAT re-issue is answered Unavailable
-    /// again, a commit in the partition has just been shown not to be evidence for this write (the
-    /// store took someone else's commit and still never saw ours), so every later re-issue waits for
-    /// the feed to RESUME instead — a reconnect, which is rare. That is what keeps this from turning a
-    /// busy partition into a retry loop, without any count or clock.</para>
+    /// <para><b>How it waits.</b> A re-issue starts on the first piece of
+    /// <see cref="StoreAnswersAgain"/> evidence — a feed that resumed, or a commit in the partition.
+    /// The evidence is observed for the WHOLE life of the sequence, never only between attempts:
+    /// evidence that arrives while an attempt is in flight is RETAINED (the event that started the
+    /// attempt is not), and if the attempt is answered Unavailable it starts the next one at once. A
+    /// feed's gaps are not replayed, so a reconnect that landed during the attempt would otherwise be
+    /// lost for good.</para>
+    ///
+    /// <para><b>Which evidence still counts.</b> A re-issue STARTED BY A COMMIT that is answered
+    /// Unavailable again shows that a commit in the partition is not evidence for this write (the
+    /// store took someone else's commit and still never saw ours), so from then on only a reconnect
+    /// starts a re-issue. A re-issue started by a reconnect that fails disproves nothing about commits,
+    /// and commits keep counting. That is what keeps a busy partition from becoming a retry loop,
+    /// without any count or clock.</para>
     ///
     /// <para><b>What it never does.</b> It never re-issues a write that was JUDGED: an outcome
     /// <paramref name="wasUnavailable"/> rejects is emitted and the sequence completes, so a refusal
-    /// stays a named failure. And it never issues the FIRST attempt — the caller made it, and is here
-    /// because it came back Unavailable.</para>
+    /// stays a named failure. It never runs two attempts at once. And it never issues the FIRST
+    /// attempt — the caller made it, and is here because it came back Unavailable.</para>
     /// </summary>
     /// <typeparam name="T">The write's outcome.</typeparam>
     /// <param name="feed">The mesh's invalidation feed, or <c>null</c> (then nothing is re-issued).</param>
@@ -167,19 +186,99 @@ public static class StoreReachability
     {
         if (feed is null)
             return Observable.Never<T>();
-        var reconnects = feed.Gaps.Select(_ => Unit.Default);
-        IObservable<T> After(IObservable<Unit> evidence) =>
-            evidence
-                .Take(1)
-                .SelectMany(_ => Observable.Defer(attempt).Take(1))
-                .SelectMany(outcome =>
+        return Observable.Create<T>(observer =>
+        {
+            // Every transition runs inside the ONE merged subscription below, which Rx serialises, so
+            // this state is touched by one callback at a time. An attempt that answers synchronously
+            // re-enters that callback; every transition therefore finishes its state change BEFORE it
+            // starts an attempt, so a re-entrant call always sees a consistent state.
+            var state = new ReissueState();
+            var outcomes = new Subject<(T Outcome, bool ByGap)>();
+            var inFlight = new SerialDisposable();
+
+            void Start(bool byGap)
+            {
+                state.InFlight = true;
+                state.PendingGap = false;
+                state.PendingCommit = false;
+                var slot = new SingleAssignmentDisposable();
+                inFlight.Disposable = slot;
+                var answered = false;
+                slot.Disposable = Observable.Defer(attempt).Take(1).Subscribe(
+                    outcome =>
+                    {
+                        answered = true;
+                        outcomes.OnNext((outcome, byGap));
+                    },
+                    observer.OnError,
+                    () =>
+                    {
+                        if (!answered)
+                            observer.OnError(new InvalidOperationException(
+                                "A re-issued write completed without an outcome, so whether the store "
+                                + "saw it is unknown — refusing to wait on evidence for an answer that "
+                                + "will never come."));
+                    });
+            }
+
+            var events = EvidenceBySource(feed, partition)
+                .Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T)))
+                .Merge(outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome)));
+
+            var subscription = events.Subscribe(e =>
+            {
+                if (state.Done)
+                    return;
+                if (!e.IsOutcome)
                 {
-                    if (!wasUnavailable(outcome))
-                        return Observable.Return(outcome);
-                    onStillUnavailable?.Invoke(outcome);
-                    return Observable.Defer(() => After(reconnects));
-                });
-        return Observable.Defer(() => After(feed.StoreAnswersAgain(partition)));
+                    if (!e.ByGap && !state.CommitsCount)
+                        return;
+                    if (state.InFlight)
+                    {
+                        // Retained: newer than the event that started the attempt in flight.
+                        if (e.ByGap) state.PendingGap = true;
+                        else state.PendingCommit = true;
+                        return;
+                    }
+                    Start(e.ByGap);
+                    return;
+                }
+
+                state.InFlight = false;
+                var outcome = e.Outcome!;
+                if (!wasUnavailable(outcome))
+                {
+                    state.Done = true;
+                    observer.OnNext(outcome);
+                    observer.OnCompleted();
+                    return;
+                }
+                onStillUnavailable?.Invoke(outcome);
+                if (!e.ByGap)
+                {
+                    // A commit started it and the store still never saw it: commits are disproved.
+                    state.CommitsCount = false;
+                    state.PendingCommit = false;
+                }
+                if (state.PendingGap)
+                    Start(byGap: true);
+                else if (state.PendingCommit)
+                    Start(byGap: false);
+            }, observer.OnError);
+
+            return new CompositeDisposable(subscription, inFlight, outcomes);
+        });
+    }
+
+    /// <summary>The state of one <see cref="ReissueWhenStoreAnswers{T}"/> subscription — owned by
+    /// that subscription alone and touched only from its serialised callback.</summary>
+    private sealed class ReissueState
+    {
+        public bool InFlight;
+        public bool CommitsCount = true;
+        public bool PendingGap;
+        public bool PendingCommit;
+        public bool Done;
     }
 
     private static bool InPartition(string? path, string partition)

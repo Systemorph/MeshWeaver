@@ -288,6 +288,39 @@ public static class LateReleaseAdoption
             : null;
 
     /// <summary>
+    /// The record after a re-issue ended in a VERDICT rather than another Unavailable answer (review on
+    /// #7087), or <c>null</c> to leave it alone. Pure.
+    ///
+    /// <para>The stamp keeps its path — this build still has no release — but its reason and class
+    /// become the re-issue's own, so the record says what the store answered last and
+    /// <see cref="UnavailableObligation"/> no longer names it: a watch rebuilt from this record does not
+    /// re-issue a create the store has judged. Applied only while the record still holds the SAME
+    /// unavailable obligation; a later settle, an adoption or another writer that moved the stamp on
+    /// owns it now.</para>
+    /// </summary>
+    /// <param name="definition">The definition as the owner currently holds it.</param>
+    /// <param name="hubPath">The NodeType's path.</param>
+    /// <param name="stamped">The stamped path the re-issue was for.</param>
+    /// <param name="verdict">The re-issue's outcome — a failure that was not Unavailable.</param>
+    internal static NodeTypeDefinition? RecordReissueVerdict(
+        NodeTypeDefinition? definition, string hubPath, string stamped,
+        NodeTypeBuildState.ReleaseCreateOutcome verdict)
+    {
+        if (verdict.Succeeded || verdict.WasUnavailable
+            || !string.Equals(
+                UnavailableObligation(definition, hubPath, NodeTypeCompilationHelpers.FrameworkVersion),
+                stamped, StringComparison.Ordinal))
+            return null;
+        return definition! with
+        {
+            UnreleasedBuildReason = verdict.Failure is { Length: > 0 } reason
+                ? reason
+                : "the re-issue reported no reason, which is itself a defect in this pipeline",
+            UnreleasedBuildFailureClass = verdict.FailureClass ?? ReleaseFailureClass.Faulted,
+        };
+    }
+
+    /// <summary>
     /// #7072 — the activation's half of <see cref="UnavailableObligation"/>: while the own record
     /// carries such a stamp, re-issue the release create at the stamped id once the store is
     /// evidenced to answer again (<see cref="StoreReachability.ReissueWhenStoreAnswers{T}"/> — a
@@ -351,14 +384,28 @@ public static class LateReleaseAdoption
                     {
                         if (outcome.ReleasePath is not { } landed)
                         {
-                            // A verdict, not an outage: the stamp stands and is the report; the next
-                            // activation cuts it once more (#6056).
+                            // A verdict, not an outage. The stamp stands and is the report — so it
+                            // must report THIS verdict (review on #7087): left at Unavailable with the
+                            // old reason, it would misstate the failure, and a rebuilt watch (a
+                            // transient fault on the own stream re-establishes it from the record)
+                            // would re-issue a create the store has now judged. The new class and
+                            // reason go to the record through the owner, and only while the record
+                            // still holds the SAME unavailable obligation; the next activation cuts
+                            // the stamp once more (#6056).
                             logger?.LogWarning(
                                 "[ReleasePostCondition] {HubPath}: re-issuing the release at "
                                 + "{ReleasePath} after the store answered again did not land{Because}. "
-                                + "The stamp stands (#7072).",
-                                hubPath, stamped, outcome.Because);
-                            return Observable.Empty<string>();
+                                + "The stamp stands, now with this verdict's class {FailureClass} (#7072).",
+                                hubPath, stamped, outcome.Because,
+                                outcome.FailureClass ?? ReleaseFailureClass.Faulted);
+                            return accessService.RunAsSystem(() => workspace.GetMeshNodeStream()
+                                    .Update(current =>
+                                        RecordReissueVerdict(current.ContentAs<NodeTypeDefinition>(options),
+                                                hubPath, stamped, outcome) is { } recorded
+                                            ? current with { Content = recorded }
+                                            : current))
+                                .Take(1)
+                                .SelectMany(_ => Observable.Empty<string>());
                         }
                         return accessService.RunAsSystem(() => workspace.GetMeshNodeStream()
                                 .Update(current =>
