@@ -466,6 +466,21 @@ to prune entries from a walk that did not finish. The existing synchronous `Read
 surface remains available for callers with no worker token; pooled callers use the overload
 whose token is required.
 
+`PrebuiltBundleStore.Sweep` — the prebuilt-bundle retention pass — was the third walk written to
+the #2480 shape (#7049): `pool.InvokeBlocking(_ => SweepCore(…))`, named at teardown as
+`FileSystem=1 [MeshWeaver.Hosting.PrebuiltBundleStore+<>c__DisplayClass7_0.<Sweep>b__0]`. The pass
+stats every file of every identity on the share and, where collection is armed, removes its plan
+one directory at a time; none of those steps looked at the token. `Sweep` now hands the pool's
+token to `SweepCore`, whose token parameter is REQUIRED (as is `Scan`'s). The store walk checks it
+per identity, per file and per source, and the collection checks it before every removal. A
+cancelled walk propagates `OperationCanceledException` — never "store could not be read", never an
+aborted-pass ledger entry. A cancel mid-collection stops at the next removal, appends what it DID
+remove to the ledger, and then throws. It changes how much of the plan one pass gets through, never
+what the plan collects: whatever was not reached is re-planned by the next pass. Pinned by
+`RetentionSweepUnwindsOnTheDrainTest`, which parks the pass inside a removal, drains the pool and
+requires residual 0 with the rest of the plan untouched. Run against the pre-fix leaf, it measured
+residual 1.
+
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
 stands; a blocking leaf that **walks** — a directory tree, a list of archives, a sweep — takes the

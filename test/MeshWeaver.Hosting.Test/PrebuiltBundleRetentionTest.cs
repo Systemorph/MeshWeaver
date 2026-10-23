@@ -123,7 +123,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     private PrebuiltBundleSweepPlan PlanNow(
         string? liveVersion = "3.1.0-ci.9000", ImmutableHashSet<string>? stamps = null,
         ImmutableList<PinnedPlatformReference>? pinned = null) =>
-        PrebuiltBundleStore.Plan(Live, liveVersion, PrebuiltBundleStore.Scan(root), stamps ?? [], pinned ?? [], retention, Now);
+        PrebuiltBundleStore.Plan(Live, liveVersion, PrebuiltBundleStore.Scan(root, CancellationToken.None), stamps ?? [], pinned ?? [], retention, Now);
 
     private static string[] Ids(PrebuiltBundleSweepPlan plan) => plan.Collectable.Select(i => i.Identity).OrderBy(i => i, StringComparer.Ordinal).ToArray();
 
@@ -302,7 +302,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         plan.AbortReason.Should().Contain("inventory is incomplete");
         Ids(plan).Should().BeEmpty();
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now, CancellationToken.None);
         File.ReadAllText(PrebuiltBundleStore.LedgerPathOf(root))
             .Should().Contain("unresolved consumer references (cleanup blocked): Deployment Deployments/ghost=3.0.0-ci.1");
         result.Plan!.UnresolvedPins.Should().HaveCount(1);
@@ -379,7 +379,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Marker("3.0.0-ci.3", "s-coming", writtenAt: Now - TimeSpan.FromMinutes(1));
 
         var removed = new System.Collections.Generic.List<string>();
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "4.0.0-ci.1", [], [], retention, Now,
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "4.0.0-ci.1", [], [], retention, Now, CancellationToken.None,
             deleteDirectory: dir => { removed.Add(Path.GetFileName(dir)); Directory.Delete(dir, true); });
 
         result.Deleted.Should().BeTrue();
@@ -409,7 +409,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-old", "plugins", DaysAgo(500));
         Sealed("s-recent", "plugins", DaysAgo(2));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now, CancellationToken.None);
 
         result.Deleted.Should().BeFalse();
         result.Plan!.Collectable.Select(i => i.Identity).Should().Equal("s-old");
@@ -426,7 +426,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-recent", "plugins", DaysAgo(2));
 
         var log = new OutcomeLogger();
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, CancellationToken.None, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("s-a", StringComparison.Ordinal))
@@ -448,7 +448,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     [Fact]
     public void SweepCore_AnAbsentRoot_CollectsNothing()
     {
-        var result = PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, CancellationToken.None);
         result.Plan.Should().BeNull();
         result.AbortReason.Should().Contain("does not exist");
     }
@@ -813,7 +813,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Generation(Live, "plugins", "gen-new", DaysAgo(1));
         Pointer(Live, "plugins", "gen-new");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, CancellationToken.None);
 
         result.AbortReason.Should().BeNull();
         result.Deleted.Should().BeTrue();
@@ -838,7 +838,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Generation(Live, "plugins", "gen-new", DaysAgo(1));
         Pointer(Live, "plugins", "gen-new");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = false }, Now, CancellationToken.None);
 
         result.DeletedGenerations.Should().Be(0);
         result.Plan!.CollectableGenerations.Select(g => g.Name).Should().Equal("gen-old");
@@ -855,7 +855,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Pointer(Live, "plugins", "gen-new");
 
         var log = new OutcomeLogger();
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, log,
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention, Now, CancellationToken.None, log,
             deleteDirectory: dir =>
             {
                 if (dir.EndsWith("gen-a", StringComparison.Ordinal))
@@ -919,7 +919,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var configured = PrebuiltBundleRetentionExtensions.FromConfiguration(configuration);
         configured.MinimumAge.Should().Be(TimeSpan.FromDays(days));
         Sealed("s-recent", "plugins", DaysAgo(29));
-        PrebuiltBundleStore.Plan(Live, null, PrebuiltBundleStore.Scan(root), [], [], configured, Now)
+        PrebuiltBundleStore.Plan(Live, null, PrebuiltBundleStore.Scan(root, CancellationToken.None), [], [], configured, Now)
             .Collectable.Should().BeEmpty();
     }
 
@@ -975,7 +975,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         try
         {
             var unexamined = PrebuiltBundleStore.Plan(
-                Live, "3.1.0-ci.9000", PrebuiltBundleStore.Scan(emptyRoot), [], [], retention, Now);
+                Live, "3.1.0-ci.9000", PrebuiltBundleStore.Scan(emptyRoot, CancellationToken.None), [], [], retention, Now);
 
             unexamined.Collectable.Should().BeEmpty();
             unexamined.Summary.Should().StartWith("0 identity directory(ies)");
@@ -1009,7 +1009,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Sealed("s-recent", "plugins", DaysAgo(2));
         var log = new OutcomeLogger();
 
-        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now, log);
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], [], retention with { Delete = armed }, Now, CancellationToken.None, log);
 
         var warnings = log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
         warnings.Should().ContainSingle("one outcome line per pass is what keeps Warning+ affordable");
@@ -1034,7 +1034,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         var log = new OutcomeLogger();
 
-        PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, log);
+        PrebuiltBundleStore.SweepCore(Path.Combine(root, "missing"), Live, null, [], [], retention, Now, CancellationToken.None, log);
 
         log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
             .Which.Message.Should().Contain("pass outcome — ABORTED").And.Contain("nothing collected",
@@ -1115,7 +1115,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         plan.ProtectedSurfaces["3.0.0-ci.3"].Should().Contain("pins");
         plan.Summary.Should().Contain("release surfaces to retire=2");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, CancellationToken.None);
 
         result.Deleted.Should().BeTrue();
         result.DeletedSurfaces.Should().Be(2);
@@ -1131,7 +1131,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         // A consumer names a version no marker resolves: who reads which surface is unknown.
         var pinned = ImmutableList.Create(new PinnedPlatformReference("Deployment Deployments/ghost", "3.0.0-ci.77", null));
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, CancellationToken.None);
 
         result.AbortReason.Should().Contain("inventory is incomplete");
         result.Plan!.CollectableSurfaces.Should().BeEmpty();
@@ -1146,7 +1146,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var marker = Marker("3.0.0-ci.5", "s-c5");
         File.WriteAllText(marker, "");
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, CancellationToken.None);
 
         result.AbortReason.Should().Contain("3.0.0-ci.5");
         result.Plan!.CollectableSurfaces.Should().BeEmpty();
@@ -1158,7 +1158,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         var pinned = SurfaceStore();
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention with { Delete = false }, Now, CancellationToken.None);
 
         result.Deleted.Should().BeFalse();
         result.Plan!.CollectableSurfaces.Select(s => s.Version).Should().Equal("3.0.0-ci.0", "3.0.0-ci.1");
@@ -1234,7 +1234,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
     {
         var pinned = SemVerStore();
 
-        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.11300", [], pinned, retention, Now);
+        var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.11300", [], pinned, retention, Now, CancellationToken.None);
 
         result.Deleted.Should().BeTrue();
         Directory.Exists(Path.Combine(root, "s-cd")).Should().BeFalse();
@@ -1258,7 +1258,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var pinned = SurfaceStore();
         var log = new OutcomeLogger();
 
-        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+        PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, CancellationToken.None, log);
 
         log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).Should().ContainSingle()
             .Which.Message.Should().Contain("pass outcome — COLLECTED")
@@ -1280,7 +1280,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         var log = new OutcomeLogger();
         try
         {
-            var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, log);
+            var result = PrebuiltBundleStore.SweepCore(root, Live, "3.1.0-ci.9000", [], pinned, retention, Now, CancellationToken.None, log);
             result.DeletedSurfaces.Should().Be(0);
         }
         finally
@@ -1303,7 +1303,7 @@ public class PrebuiltBundleRetentionTest : IDisposable
         Marker("3.1.0-ci.9000", Live); Surface("3.1.0-ci.9000");
         Sealed(Live, "plugins", DaysAgo(1));
 
-        var scan = PrebuiltBundleStore.Scan(root);
+        var scan = PrebuiltBundleStore.Scan(root, CancellationToken.None);
 
         scan.Markers.Select(m => m.Version).Should().Equal("3.1.0-ci.9000");
         scan.Surfaces.Select(s => s.Version).Should().Equal("3.1.0-ci.9000");
