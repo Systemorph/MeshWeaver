@@ -384,7 +384,7 @@ function of the filter and the legs.
 
 > **Layout (2026-10).** Every filter below lives in a side panel beside the list (a platform `LayoutGrid`: the
 > panel stacks ABOVE the list on a narrow page), grouped under small titles — Kind, Tags, Source, Options. The
-> toolbar over the list holds the bulk acts only, icon-only (the name is the tooltip and accessible name):
+> toolbar over the list holds the bulk acts only, icon-only (the name is the tooltip and accessible name; all four buttons share one quiet appearance — none is picked out in the accent colour):
 > Delete, Undo and — only while the list or the ticked rows hold an approval request the viewer decides
 > (`InboxLayoutArea.ToolbarOf`) — Approve and Reject. The grid's first column is headed **Source** and shows the
 > MEDIUM the item came through; `InboxSourceIcons` maps the leg's source id to a Fluent symbol (Approvals,
@@ -486,13 +486,22 @@ DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
 stays in the approver's partition after the request is decided, wherever it was decided (the inbox's
 Approve, the approval's own page, an operator's button), and listing it for ever made the inbox a log of
 decisions long taken (*"something announcing i had an approval?! … i should just see approvals which are not
-approved yet"*). So the Approvals source keeps a request only while the node it names
-(`Notification.TargetNodePath`, `InboxRow.Target`) still awaits a decision (`InboxApprovalTargets`): the target
-is DECIDED when its content has a `status` of approved/rejected/expired, or a stamped decision — an
-`approvedBy`/`approvedAt`/`approvalDate`/`rejectedBy`/`rejectedAt`/`decidedBy`/`decidedAt`. The inbox knows no
-approval kind; any approval-gated type shares that vocabulary. 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
+approved yet"*). So the Approvals source files a request by what the node it names
+(`Notification.TargetNodePath`, `InboxRow.Target`) says about it (`InboxApprovalTargets.Read`), **judged by the target's own
+lifecycle, never by the absence of an approver** (2026-10-23, second round: a reconcile the control plane had REFUSED as stale
+carried no `approvedBy` and so still read "Awaiting decision"). The target is OPEN only while it still waits: its lifecycle word
+(`state`, then `status`) is not final and nothing closes it. It is CLOSED when that word is final — `Refused`, `Failed`,
+`Cancelled`, `Stale`/`Superseded`, `Expired`, `Done`/`Completed`/`Closed`/`Merged`, or a decision being carried out
+(`Running`, `Requested`) — when an end stamp (`finishedAt`, `closedAt`, `completedAt`) is set, or when it carries a
+recorded decision: a `status` of approved/rejected, or an `approvedBy`/`approvedAt`/`approvalDate`/`rejectedBy`/`rejectedAt`/
+`decidedBy`/`decidedAt`. The inbox knows no approval kind; any approval-gated type shares that vocabulary. A closed target keeps
+its request as a **closed row**: its State is the outcome — **Stale** for a target retired because what it was planned against
+moved on (a word `stale`/`superseded`, or a refusal whose `error` begins "stale"), else Approved, Rejected, Refused, Failed,
+Cancelled, Expired or Done — and it is listed only under the *Done* state filter, so the default (*Open*) view lists the
+requests that still wait. The grid's **Status** column carries the detailed text (`Refused · stale`, `Done`, `Awaiting
+decision`; for a running activity `Running · step 3/7`), beside the short State badge. 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
 request (logged); a target that answers completely with nothing — gone, or not the approver's to see — has
-nothing left to decide and the request leaves. A **click on the row opens the approval** (`InboxLayoutArea.OpenTarget`),
+nothing left to decide and the request leaves altogether. A **click on the row opens the approval** (`InboxLayoutArea.OpenTarget`),
 and the inbox address of such a notification (`/{user}/Inbox/{item}`, an old link) redirects to it
 (`InboxReadingView`). A notification raised for the approvals feature is never a row of the Notifications
 source, whatever its type: what became of an approval is the ledger's row below.
@@ -543,7 +552,7 @@ A person who never chose gets the node on first open, seeded with `InboxPreferen
 
 - **Kinds** — ticked: those whose legs say `InboxQueryLeg.DefaultKind` (Approvals and Notifications); every other
   kind is one tick away. Kinds and sources now **both** apply (a ticked kind used to replace the source switches).
-- **States** — only *Open*: an approval awaiting a decision, never one already decided; *Done* is one tick away.
+- **States** — only *Open*: an approval awaiting a decision, never one already decided, refused or retired as stale; *Done* is one tick away.
 - **Important notifications only.** A notification is `important` when it is a platform/system event and
   `ignorable` otherwise (`InboxRows.NotificationImportance`; a triage's own judgement wins), so the quiet ones stay
   out until *Show ignorable* is ticked, and the notice above the grid counts what it hides.

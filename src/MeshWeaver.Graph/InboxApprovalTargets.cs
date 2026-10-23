@@ -34,29 +34,89 @@ internal static class InboxApprovalTargets
         ["approvedAt", "approvedBy", "approvalDate", "rejectedAt", "rejectedBy", "decidedAt", "decidedBy"];
 
     /// <summary>
-    /// Whether <paramref name="target"/> still awaits a decision. Pure; unreadable content counts as open
-    /// (a request is never dropped on what could not be read).
-    /// <para>🚨 A decision that is RECORDED but not yet CONFIRMED is not decided. With step-up required
-    /// (<paramref name="stepUpRequired"/>, <c>Doc/Architecture/ApprovalStepUp</c>) a decision counts only once its
-    /// decider's receipt is stamped on the node (<see cref="StepUpPaths.StampProperty"/>) and the owning control plane
-    /// has ratified it; until then it is HELD — and an approver who walked away from the confirmation must still find
-    /// the request in the inbox (<see cref="InboxApprovals"/> keeps it for the same reason). So a recorded decision with
-    /// no receipt stamped at all stays pending while step-up is required.</para>
+    /// Whether <paramref name="target"/> still awaits a decision — <see cref="Read"/>'s <see cref="TargetReading.Open"/>.
+    /// Pure; unreadable content counts as open (a request is never dropped on what could not be read).
     /// </summary>
     /// <param name="target">The node the request names.</param>
     /// <param name="options">The hub's serializer options.</param>
     /// <param name="stepUpRequired">Whether the instance requires a step-up receipt for every approval.</param>
     internal static bool IsPending(MeshNode target, JsonSerializerOptions? options, bool stepUpRequired = false)
+        => Read(target, options, stepUpRequired).Open;
+
+    /// <summary>The content properties that carry a target's own lifecycle word, in the order they are read.</summary>
+    internal static readonly ImmutableArray<string> LifecycleProperties = ["state", "status"];
+
+    /// <summary>The content properties whose presence says the target's life is over (a finish or close time).</summary>
+    internal static readonly ImmutableArray<string> EndStamps = ["finishedAt", "closedAt", "completedAt"];
+
+    /// <summary>
+    /// What a target's own lifecycle says about its request — judged by the target's state, never by the ABSENCE of an
+    /// approver. A target the system refused, retired as stale, failed or cancelled will never be approved, and one that
+    /// is running or done was decided; only a target that still waits (its state says so, or it says nothing and no
+    /// decision is stamped) is OPEN.
+    /// <para>Order: a terminal lifecycle word (<c>state</c>, then <c>status</c>) or an end stamp closes it; otherwise the
+    /// shared decision vocabulary (<see cref="DecisionStamps"/>) decides.</para>
+    /// <para>🚨 A decision that is RECORDED but not yet CONFIRMED is not decided. With step-up required
+    /// (<paramref name="stepUpRequired"/>, <c>Doc/Architecture/ApprovalStepUp</c>) a decision counts only once its
+    /// decider's receipt is stamped on the node (<see cref="StepUpPaths.StampProperty"/>) and the owning control plane
+    /// has ratified it; until then it is HELD — and an approver who walked away from the confirmation must still find
+    /// the request in the inbox. So a recorded decision with no receipt stamped at all stays open while step-up is
+    /// required. Pure; unreadable content reads as open.</para>
+    /// </summary>
+    /// <param name="target">The node the request names.</param>
+    /// <param name="options">The hub's serializer options.</param>
+    /// <param name="stepUpRequired">Whether the instance requires a step-up receipt for every approval.</param>
+    internal static TargetReading Read(MeshNode target, JsonSerializerOptions? options, bool stepUpRequired = false)
     {
         var content = InboxRows.ContentOf(target, options);
+        foreach (var property in LifecycleProperties)
+            if (Terminal(InboxRows.StringOf(content, property)) is { } ended
+                && ended is not (InboxState.Approved or InboxState.Rejected)) // a recorded decision is the vocabulary's below (step-up holds it)
+                return Closed(ended, StaleError(content));
+        if (EndStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp))))
+            return Closed(InboxState.Done, false);
         var status = InboxState.FromStatus(InboxRows.StringOf(content, "status"));
-        // A lapsed request is terminal: nothing can be approved any more, receipts or not.
-        if (status == InboxState.Expired)
-            return false;
         var decided = status is InboxState.Approved or InboxState.Rejected
                       || DecisionStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp)));
-        return !decided || (stepUpRequired && !HasReceipt(content));
+        if (decided && !(stepUpRequired && !HasReceipt(content)))
+            return Closed(status == InboxState.Rejected || RejectedStamp(content) ? InboxState.Rejected : InboxState.Approved, false);
+        return TargetReading.Awaiting;
     }
+
+    private static TargetReading Closed(string word, bool staleError)
+        => new(false, word is InboxState.Stale || (staleError && word is InboxState.Refused or InboxState.Failed or InboxState.Cancelled or InboxState.Expired)
+                ? InboxState.Stale
+                : word is InboxState.Running or InboxState.Requested ? InboxState.Approved : word, word);
+
+    private static bool RejectedStamp(JsonElement? content)
+        => InboxRows.StringOf(content, "rejectedAt") is { Length: > 0 } || InboxRows.StringOf(content, "rejectedBy") is { Length: > 0 };
+
+    /// <summary>
+    /// The outcome a lifecycle word names when it is final — or a decision already taken and being carried out
+    /// (<c>running</c>, <c>requested</c>) — else null: a word that is not part of the vocabulary, or that says the
+    /// target still waits, closes nothing. Pure.
+    /// </summary>
+    /// <param name="word">The stored word, in any case or spelling.</param>
+    internal static string? Terminal(string? word)
+        => new string((word ?? string.Empty).Where(char.IsLetter).ToArray()).ToLowerInvariant() switch
+        {
+            "refused" => InboxState.Refused,
+            "failed" or "error" => InboxState.Failed,
+            "cancelled" or "canceled" => InboxState.Cancelled,
+            "stale" or "superseded" => InboxState.Stale,
+            "expired" => InboxState.Expired,
+            "approved" => InboxState.Approved,
+            "rejected" or "declined" => InboxState.Rejected,
+            "done" or "completed" or "succeeded" or "warning" or "closed" or "merged" => InboxState.Done,
+            "running" or "inprogress" => InboxState.Running,
+            "requested" or "queued" => InboxState.Requested,
+            _ => null,
+        };
+
+    /// <summary>Whether the target's <c>error</c> says it went STALE (retired because what it was planned against moved on). Pure.</summary>
+    private static bool StaleError(JsonElement? content)
+        => InboxRows.StringOf(content, "error") is { Length: > 0 } error
+           && new string(error.SkipWhile(c => !char.IsLetter(c)).Take(5).ToArray()).Equals("stale", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Whether any decider's step-up receipt is stamped on the content (<see cref="StepUpPaths.StampProperty"/>). Pure.</summary>
     private static bool HasReceipt(JsonElement? content)
@@ -146,10 +206,10 @@ internal static class InboxApprovalTargets
     }
 
     /// <summary>
-    /// Whether the approval at <paramref name="target"/> still awaits a decision, LIVE: existence is a listing,
-    /// the content is the node's own authoritative stream (an index snapshot can trail a decision), so a decision
-    /// taken on the approval's own page — which never touches the notification — drops the request from an open
-    /// inbox. Gone ⇒ nothing left to decide (false). A stream that fails keeps the request (logged), and so does a
+    /// What the approval at <paramref name="target"/> says about its request, LIVE (<see cref="Read"/>): existence is a
+    /// listing, the content is the node's own authoritative stream (an index snapshot can trail a decision), so a decision
+    /// taken on the approval's own page — which never touches the notification — moves the request out of an open
+    /// inbox. Gone ⇒ <see cref="TargetReading.Gone"/>. A stream that fails keeps the request open (logged), and so does a
     /// target that answers nothing within <see cref="ReadWithin"/>; later answers still replace that fallback.
     /// </summary>
     /// <param name="hub">The hub the inbox renders on.</param>
@@ -157,19 +217,19 @@ internal static class InboxApprovalTargets
     /// <param name="target">The approval's path.</param>
     /// <param name="owner">The inbox's owner.</param>
     /// <param name="options">The hub's serializer options.</param>
-    internal static IObservable<bool> Awaits(IMessageHub hub, AccessContext? viewer, string target, string owner, JsonSerializerOptions? options)
+    internal static IObservable<TargetReading> Reading(IMessageHub hub, AccessContext? viewer, string target, string owner, JsonSerializerOptions? options)
     {
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxApprovalTargets));
         var observed = ObserveNode(hub, viewer, target, Exists(hub.ServiceProvider.GetRequiredService<IMeshService>(), target, owner),
                 // Read live per state: the instance's step-up requirement may change while the inbox is open.
-                node => node is not null && IsPending(node, options, hub.ServiceProvider.GetService<IStepUpService>()?.Options.Enabled == true),
-                absent: false)
+                node => node is null ? TargetReading.Gone : Read(node, options, hub.ServiceProvider.GetService<IStepUpService>()?.Options.Enabled == true),
+                absent: TargetReading.Gone)
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "Inbox: could not read the approval {Target}; keeping its request", target);
-                return Observable.Return(true);
+                return Observable.Return(TargetReading.Awaiting);
             });
-        return InboxLayoutArea.FirstAnswerWithin(observed, ReadWithin, true);
+        return InboxLayoutArea.FirstAnswerWithin(observed, ReadWithin, TargetReading.Awaiting);
     }
 
     /// <summary>
@@ -269,28 +329,80 @@ internal static class InboxApprovalTargets
     }
 
     /// <summary>
-    /// <paramref name="rows"/> without the approval requests whose target is no longer awaiting a decision, LIVE
-    /// (<see cref="Awaits"/>): each emission is the answer for the rows it was asked about, and the caller
-    /// SWITCHES to the latest — an obsolete batch never replaces a newer row set. Rows that announce nothing pass.
+    /// <paramref name="row"/> as its target's lifecycle reads: the target's outcome as the row's state (a request still
+    /// waiting stays <see cref="InboxState.Awaiting"/>; one retired as stale reads <see cref="InboxState.Stale"/>; a refused, failed,
+    /// cancelled, expired, approved or rejected one reads its outcome) and the detailed <see cref="InboxRow.Status"/>
+    /// text. Pure.
+    /// </summary>
+    /// <param name="row">The request's row.</param>
+    /// <param name="reading">What its target says.</param>
+    /// <param name="texts">Every state's label, with its mark (<see cref="InboxLayoutArea"/> resolves them once on the render turn).</param>
+    internal static InboxRow WithOutcome(InboxRow row, TargetReading reading, ImmutableDictionary<string, string> texts)
+    {
+        var moved = InboxLayoutArea.WithStateText(row with { State = reading.State }, texts);
+        return moved with { Status = StatusText(reading, texts) };
+    }
+
+    /// <summary>
+    /// The detailed status of a target: its outcome word, and what retired it — <c>Refused · stale</c>, <c>Done</c>,
+    /// <c>Awaiting decision</c>. Pure.
+    /// </summary>
+    /// <param name="reading">What the target says.</param>
+    /// <param name="texts">Every state's label, with its mark.</param>
+    internal static string StatusText(TargetReading reading, ImmutableDictionary<string, string> texts)
+    {
+        var word = InboxLayoutArea.LabelOf(texts, reading.Word);
+        return reading.State == InboxState.Stale && reading.Word != InboxState.Stale
+            ? $"{word} · {InboxLayoutArea.LabelOf(texts, InboxState.Stale).ToLowerInvariant()}"
+            : word;
+    }
+
+    /// <summary>
+    /// <paramref name="rows"/> with each approval request carrying its target's outcome (<see cref="WithOutcome"/>), LIVE
+    /// (<see cref="Reading"/>): a request whose target still awaits is open, one whose target ended is a closed row — listed only
+    /// under the Done state — and one whose target is gone has nothing left to decide and is dropped. Each emission is the
+    /// answer for the rows it was asked about, and the caller SWITCHES to the latest — an obsolete batch never replaces a
+    /// newer row set. Rows that announce nothing pass.
     /// </summary>
     /// <param name="hub">The hub the inbox renders on.</param>
     /// <param name="viewer">The viewer's identity.</param>
     /// <param name="rows">One leg's rows.</param>
     /// <param name="owner">The inbox's owner — whose identity the listings run as.</param>
     /// <param name="options">The hub's serializer options.</param>
-    internal static IObservable<ImmutableList<InboxRow>> OnlyPending(
-        IMessageHub hub, AccessContext? viewer, ImmutableList<InboxRow> rows, string owner, JsonSerializerOptions? options)
+    /// <param name="texts">Every state's label, with its mark.</param>
+    internal static IObservable<ImmutableList<InboxRow>> WithOutcomes(
+        IMessageHub hub, AccessContext? viewer, ImmutableList<InboxRow> rows, string owner, JsonSerializerOptions? options,
+        ImmutableDictionary<string, string> texts)
     {
         var targets = rows.Select(r => r.Target).Where(t => t.Length > 0).Distinct(StringComparer.Ordinal).ToImmutableArray();
         if (targets.IsEmpty)
             return Observable.Return(rows);
         return targets
-            .Select(target => Awaits(hub, viewer, target, owner, options).Select(pending => (Target: target, Pending: pending)))
+            .Select(target => Reading(hub, viewer, target, owner, options).Select(reading => (Target: target, Reading: reading)))
             .CombineLatest()
             .Select(read =>
             {
-                var pending = read.ToDictionary(r => r.Target, r => r.Pending, StringComparer.Ordinal);
-                return rows.Where(r => r.Target.Length == 0 || pending.GetValueOrDefault(r.Target, true)).ToImmutableList();
+                var readings = read.ToDictionary(r => r.Target, r => r.Reading, StringComparer.Ordinal);
+                return rows
+                    .Where(r => r.Target.Length == 0 || !readings.GetValueOrDefault(r.Target, TargetReading.Awaiting).IsGone)
+                    .Select(r => r.Target.Length == 0 ? r : WithOutcome(r, readings.GetValueOrDefault(r.Target, TargetReading.Awaiting), texts))
+                    .ToImmutableList();
             });
     }
+}
+
+/// <summary>What a request's target says about it (<see cref="InboxApprovalTargets.Read"/>).</summary>
+/// <param name="Open">Whether the target still awaits a decision.</param>
+/// <param name="State">The state the request's row shows (an <see cref="InboxState"/> constant).</param>
+/// <param name="Word">The target's own outcome word (an <see cref="InboxState"/> constant) — what the detailed status says.</param>
+internal sealed record TargetReading(bool Open, string State, string Word)
+{
+    /// <summary>The target still waits for a decision.</summary>
+    internal static readonly TargetReading Awaiting = new(true, InboxState.Awaiting, InboxState.Awaiting);
+
+    /// <summary>The target does not exist: nothing is left to decide.</summary>
+    internal static readonly TargetReading Gone = new(false, string.Empty, string.Empty);
+
+    /// <summary>Whether the target does not exist.</summary>
+    internal bool IsGone => State.Length == 0;
 }
