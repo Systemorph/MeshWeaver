@@ -1516,7 +1516,7 @@ public static class DataExtensions
     /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
     /// consumer GUI so the gap is diagnosable, not silent.</para>
     /// </summary>
-    private static MeshNodeError ClassifyPatchException(Exception ex, string path)
+    internal static MeshNodeError ClassifyPatchException(Exception ex, string path)
     {
         if (IsOwnerTeardown(ex))
             return new MeshNodeError(
@@ -1541,7 +1541,15 @@ public static class DataExtensions
             ArgumentException => (MeshNodeErrorCode.Validation, "Validation failed"),
             _ => (MeshNodeErrorCode.Unknown, ex.GetType().Name),
         };
-        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace);
+        // 🚨 MeshWeaver#7066 — classify transience HERE, where the exception still has its type.
+        // The caller only ever sees this record (the exception never crosses the hub boundary), so
+        // a store that refused the owner's read or write for a moment and an owner that answered
+        // with a defect were the same `Unknown` on the far side, told apart only by message text.
+        // The code is unchanged; the flag is an additional fact the caller may act on.
+        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace)
+        {
+            Transient = InfrastructureFault.IsTransient(ex) || StorageFaults.IsTransientConnectFault(ex),
+        };
     }
 
     /// <summary>

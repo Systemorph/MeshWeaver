@@ -587,6 +587,11 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
             // Remembered so a retraction arriving AFTER the sweep can land on the Complete verdict
             // this call would have produced, instead of leaving the pod stuck mid-sweep forever.
             completedMessage = message;
+            // 🚨 #7066 — a sweep that COMPLETED after an earlier attempt faulted (a re-run once the
+            // store was reachable again, MarkRerunning) measured what the faulted attempt could
+            // not. The fault is superseded, so a retraction arriving later lands on Complete, not
+            // back on the stale Faulted.
+            faultedMessage = null;
 
             if (!regressions.IsEmpty)
             {
@@ -632,6 +637,52 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
 
             Interlocked.Exchange(ref phase, (int)BakePhase.Faulted);
             detail = FaultedDetail(message);
+        }
+    }
+
+    /// <summary>
+    /// 🚨 <b>The sweep is RE-RUNNING after an attempt that faulted on a transient store fault</b>
+    /// (MeshWeaver#7066) — the store is reachable again, so the measurement the faulted attempt could
+    /// not make is being made now, on this same pod. Before this, a <see cref="BakePhase.Faulted"/>
+    /// sweep was final: nothing ran it again, and under the readiness-only policy nothing replaces a
+    /// refused pod, so a 40-second database restart held one pod out of its Service for 74 minutes.
+    ///
+    /// <para><b>What the phase becomes depends on what the fault ALREADY granted</b>, because a
+    /// re-run must never take a pod OUT of rotation that its fault left in it:</para>
+    /// <list type="bullet">
+    /// <item>A standing regression keeps <see cref="BakePhase.Regressed"/> — it is a measurement the
+    /// re-run does not erase; its recovery watch retracts it if the type builds.</item>
+    /// <item>A fault that grants readiness anyway (<see cref="AllowUnprovenBake"/>, or this image has
+    /// served here — <see cref="ServedBefore"/>) stays <see cref="BakePhase.Faulted"/>, with the
+    /// re-run named in the detail, until the re-run reaches its own terminal.</item>
+    /// <item>Otherwise the pod is back to <see cref="BakePhase.Running"/>: still not ready (exactly as
+    /// before the re-run) and now honestly "measuring" rather than "gave up", so its progress is named
+    /// again through <see cref="MarkProgress"/>.</item>
+    /// </list>
+    ///
+    /// <para>The fault is remembered until the re-run completes (<see cref="MarkComplete"/> clears
+    /// it): a retraction arriving mid-re-run lands on <see cref="BakePhase.Faulted"/>, the terminal the
+    /// last FINISHED attempt reached.</para>
+    /// </summary>
+    /// <param name="message">What is being re-run and why, in one sentence.</param>
+    public void MarkRerunning(string message)
+    {
+        lock (verdict)
+        {
+            if (!regressions.IsEmpty)
+            {
+                detail = RegressedDetail();
+                return;
+            }
+
+            if (Phase is BakePhase.Faulted && ReadinessGranted)
+            {
+                detail = $"{FaultedDetail(faultedMessage ?? "the previous attempt faulted")} — {message}";
+                return;
+            }
+
+            Interlocked.Exchange(ref phase, (int)BakePhase.Running);
+            detail = message;
         }
     }
 

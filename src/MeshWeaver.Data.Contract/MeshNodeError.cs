@@ -101,7 +101,34 @@ public sealed record MeshNodeError(
     MeshNodeErrorCode Code,
     string Path,
     string Message,
-    string? Diagnostic = null);
+    string? Diagnostic = null)
+{
+    /// <summary>
+    /// 🚨 <b>The owner's fault was a TRANSIENT INFRASTRUCTURE fault</b> — the store could not be
+    /// reached (a connection refused, reset or timed out; a name that did not resolve), as
+    /// classified on the owner by <see cref="MeshWeaver.Messaging.InfrastructureFault.IsTransient"/> /
+    /// <see cref="MeshWeaver.Data.StorageFaults.IsTransientConnectFault"/>, where the exception
+    /// still has its type (MeshWeaver#7066).
+    ///
+    /// <para><b>Why it travels on the wire.</b> The exception never crosses a hub boundary — only
+    /// this record does, and the consumer synthesizes a <see cref="MeshNodeStreamException"/> with
+    /// no inner exception. So a caller that has to tell "the store was away for a moment" from "the
+    /// owner answered with a defect" could only read the MESSAGE text, which is not a contract. The
+    /// incident it exists for: a pod's warm-up sweep met
+    /// <c>MeshNode Unknown at 'Admin/Build': NpgsqlException: Failed to connect</c> during a
+    /// 40-second database restart, could not classify it, treated it as final, and held the pod
+    /// unready for 74 minutes after the database was back.</para>
+    ///
+    /// <para>An init-only property rather than a positional parameter, so the record's primary
+    /// constructor keeps its signature (a positional addition is binary-breaking for every module
+    /// built against the old shape — <c>scripts/check-record-signatures.py</c>). It says nothing
+    /// about the <see cref="Code"/>: a transient fault keeps its code (usually
+    /// <see cref="MeshNodeErrorCode.Unknown"/>), and the code's own retry contract is unchanged.
+    /// <c>false</c> when the owner did not classify the fault, which is also what an older owner
+    /// sends.</para>
+    /// </summary>
+    public bool Transient { get; init; }
+}
 
 /// <summary>
 /// Consumer-side exception synthesized from a wire <see cref="MeshNodeError"/>.
