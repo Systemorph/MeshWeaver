@@ -5,7 +5,9 @@
 #
 #   HOSTING_MA_STATE  directory: kubectl.log (every argv)
 #   kubectl create --dry-run=client -f <file> -o json  → <file>.json
-#   kubectl apply --dry-run=server -f <file>           → one "… unchanged (server dry run)" line
+#   kubectl apply --dry-run=server -f <file>           → one "… unchanged (server dry run)" line; the file it was
+#                                                        handed is kept as $HOSTING_MA_STATE/dryrun.last
+#   kubectl get namespace <ns> --ignore-not-found …    → "namespace/<ns>" when <ns> is a word of MW_LIVE_NS, nothing otherwise
 #   kubectl apply -f <file>                            → one "… configured" line
 #   kubectl -n <ns> get secret <name> …                → "<name>\t$MW_LIVE_TOKEN_SA" when MW_LIVE_TOKEN_SA is set,
 #                                                        nothing (absent) otherwise; MW_LIVE_TOKEN_FORBIDDEN → refused
@@ -16,7 +18,9 @@ file=""; prev=""
 for a in "$@"; do [ "$prev" = "-f" ] && file="$a"; prev="$a"; done
 case "$*" in
   "create --dry-run=client -f "*) cat "${file}.json" ;;
-  "apply --dry-run=server -f "*)  echo "serviceaccount/example unchanged (server dry run)" ;;
+  "apply --dry-run=server -f "*)  cp "$file" "$state/dryrun.last"; echo "serviceaccount/example unchanged (server dry run)" ;;
+  "get namespace "*)
+    for n in ${MW_LIVE_NS:-}; do [ "$n" = "$3" ] && echo "namespace/$n"; done; true ;;
   "apply -f "*)                   echo "serviceaccount/example configured" ;;
   "-n "*" get secret "*)
     [ -z "${MW_LIVE_TOKEN_FORBIDDEN:-}" ] || { echo 'Error from server (Forbidden): secrets "t" is forbidden' >&2; exit 1; }
