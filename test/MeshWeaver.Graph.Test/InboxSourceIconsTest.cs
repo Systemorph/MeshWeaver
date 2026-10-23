@@ -75,7 +75,11 @@ public class InboxSourceIconsTest
     private const int NeedsYou = 0;
 
     private static InboxRow Row(string source, string name, int rank = NeedsYou)
-        => new() { Path = "alice/" + name, Title = name, SourceId = source, Rank = rank };
+        => new()
+        {
+            Path = "alice/" + name, Title = name, SourceId = source, Rank = rank,
+            State = source == InboxQueries.ApprovalsSource ? InboxState.Awaiting : string.Empty,
+        };
 
     /// <summary>Approve / Reject show for approvals the viewer decides — never for a mailbox.</summary>
     [Fact]
@@ -91,6 +95,16 @@ public class InboxSourceIconsTest
         InboxLayoutArea.ToolbarOf([mail], [], "alice", null).Decide.Should().BeFalse("a viewer who decides no approvals has no such band");
         InboxLayoutArea.ToolbarOf([approval], [], "alice", null).Decide.Should().BeFalse("no obligations band, nothing to decide");
         InboxLayoutArea.ToolbarOf([decided, mail], [], "alice", NeedsYou).Decide.Should().BeFalse("a decided approval in the ledger is not a request");
+        // A request whose target ended (retired as stale, refused, failed, already decided) stays viewable and deletable — never decidable.
+        foreach (var closed in new[] { InboxState.Stale, InboxState.Refused, InboxState.Failed, InboxState.Approved })
+        {
+            var gone = approval with { Path = "alice/closed", State = closed };
+            InboxLayoutArea.ToolbarOf([gone], [], "alice", NeedsYou).Decide.Should().BeFalse($"a {closed} request cannot be decided");
+            InboxLayoutArea.ToolbarOf([gone, approval], [gone.Path], "alice", NeedsYou).Decide.Should().BeFalse($"a ticked {closed} request cannot be decided");
+            InboxLayoutArea.ToolbarOf([gone, approval], [gone.Path, approval.Path], "alice", NeedsYou).Decide.Should().BeTrue("the open one in the selection still can");
+            InboxRows.IsDecidable(gone).Should().BeFalse();
+        }
+        InboxRows.IsDecidable(approval).Should().BeTrue();
     }
 
     /// <summary>With rows ticked, only those count.</summary>

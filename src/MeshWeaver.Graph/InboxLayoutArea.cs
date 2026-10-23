@@ -437,7 +437,7 @@ public static class InboxLayoutArea
     {
         var candidates = selected.Count > 0 ? InboxRows.Targets(listed, selected, owner) : listed;
         return new ToolbarState(needsYouRank is { } rank && candidates.Any(row =>
-            row.Rank == rank && string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)));
+            row.Rank == rank && InboxRows.IsDecidable(row)));
     }
 
     /// <summary>
@@ -1162,7 +1162,7 @@ public static class InboxLayoutArea
         var approve = decision == ApprovalDecisions.Approve;
         return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
             .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner)
-                .Where(row => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal))
+                .Where(InboxRows.IsDecidable)
                 .ToImmutableList())
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))

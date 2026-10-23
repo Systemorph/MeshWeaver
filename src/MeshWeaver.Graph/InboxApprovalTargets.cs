@@ -75,7 +75,9 @@ internal static class InboxApprovalTargets
                 return Closed(ended, StaleError(content));
         if (EndStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp))))
             return Closed(InboxState.Done, false);
-        var status = InboxState.FromStatus(InboxRows.StringOf(content, "status"));
+        // A decision may be recorded in the lifecycle word itself (`state: Approved`) or in `status`: either feeds the receipt-gated check.
+        var status = LifecycleProperties.Select(property => InboxState.FromStatus(InboxRows.StringOf(content, property)))
+            .FirstOrDefault(word => word is InboxState.Approved or InboxState.Rejected) ?? string.Empty;
         var decided = status is InboxState.Approved or InboxState.Rejected
                       || DecisionStamps.Any(stamp => !string.IsNullOrWhiteSpace(InboxRows.StringOf(content, stamp)));
         if (decided && !(stepUpRequired && !HasReceipt(content)))

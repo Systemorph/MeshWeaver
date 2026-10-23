@@ -182,6 +182,8 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     [InlineData("""{"title":"x","finishedAt":"2026-10-12T19:09:51+00:00"}""", false, InboxState.Done, InboxState.Done)]
     [InlineData("""{"status":"Approved"}""", false, InboxState.Approved, InboxState.Approved)]
     [InlineData("""{"status":"Rejected"}""", false, InboxState.Rejected, InboxState.Rejected)]
+    [InlineData("""{"state":"Approved"}""", false, InboxState.Approved, InboxState.Approved)]
+    [InlineData("""{"state":"Rejected"}""", false, InboxState.Rejected, InboxState.Rejected)]
     [InlineData("""{"state":"AwaitingApproval"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
     [InlineData("""{"state":"AwaitingApproval","parkedAt":"2026-10-20T17:28:53+00:00"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
     [InlineData("""{"status":"New"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
@@ -561,6 +563,10 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     [InlineData("""{"status":"Approved"}""", true, true)]
     [InlineData("""{"status":"Expired"}""", true, false)]
     [InlineData("""{"status":"Expired"}""", false, false)]
+    [InlineData("""{"state":"Approved"}""", true, true)]
+    [InlineData("""{"state":"Approved"}""", false, false)]
+    [InlineData("""{"state":"Rejected","stepUpReceipts":{"jane":"r1"}}""", true, false)]
+    [InlineData("""{"state":"Rejected"}""", true, true)]
     [InlineData("""{}""", true, true)]
     public void ARecordedDecision_IsHeldUntilAReceiptIsStamped_WhenStepUpIsRequired(string content, bool stepUpRequired, bool awaits)
         => InboxApprovalTargets.IsPending(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null, stepUpRequired)
