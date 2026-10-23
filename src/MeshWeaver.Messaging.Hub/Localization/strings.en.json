@@ -2103,6 +2103,8 @@
   "inbox.category.all": "All",
   "inbox.only": "Only",
   "inbox.only.all": "All sources",
+  "inbox.account": "Account",
+  "inbox.account.all": "All accounts",
   "inbox.tags": "Tags",
   "inbox.tag.all": "All tags",
   "inbox.tag.important": "Important",

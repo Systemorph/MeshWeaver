@@ -1,0 +1,472 @@
+using System.Collections.Immutable;
+using System.Reactive.Linq;
+using System.Text.Json;
+using MeshWeaver.Data;
+using MeshWeaver.Fixture;
+using MeshWeaver.Graph.Configuration;
+using MeshWeaver.Hosting.Monolith.TestBase;
+using MeshWeaver.Layout;
+using MeshWeaver.Layout.Client;
+using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
+using MeshWeaver.Messaging;
+using Microsoft.Extensions.DependencyInjection;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// What the inbox shows by default and what it keeps: an approval request is the APPROVAL (listed only while it
+/// awaits a decision, opening it goes to the approval), the Kind filter is the person's own and persists, a
+/// source is listed only when the person configured it, and a multi-account source is filtered by ADDRESS.
+/// Owner, 2026-10-23: "something announcing i had an approval?! wtf?! bring me to approvals … i should just see
+/// approvals which are not approved yet … default only open approvals and important notifications … i should not
+/// see those, only if they are really configured … for mail etc they should be by address."
+/// </summary>
+public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
+{
+    private const string ActionType = "TestAction";
+    private const string GridArea = InboxLayoutArea.AreaName + "/Main/Grid";
+
+    /// <summary>The shape of an approval-gated action: undecided until an approver is stamped (an instance action's).</summary>
+    public sealed record TestActionContent
+    {
+        /// <summary>Who approved it; absent while it awaits an approver.</summary>
+        public string? ApprovedBy { get; init; }
+    }
+
+    /// <inheritdoc />
+    protected override MessageHubConfiguration ConfigureClient(MessageHubConfiguration configuration)
+        => base.ConfigureClient(configuration).AddLayoutClient();
+
+    /// <inheritdoc />
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
+        => base.ConfigureMesh(builder)
+            .AddMeshNodes(
+                new MeshNode("Approval", "Approvals") { HubConfiguration = config => config.WithContentType<Approval>() },
+                new MeshNode(ActionType) { HubConfiguration = config => config.WithContentType<TestActionContent>() })
+            // A provider that declared no connection and is not always on: the "forgetful" leg of requirement 4.
+            .ConfigureServices(services => services.AddSingleton(Forgetful));
+
+    private static readonly InboxQueryLeg Forgetful = new()
+    {
+        Source = "Forgetful",
+        Query = $"namespace:{InboxQueries.ViewerToken}/_Forgetful nodeType:{EmailNodeType.NodeType} sort:LastModified-desc {InboxQueries.RowProjection}",
+    };
+
+    // ── 1 + 2: the approval is the row, and only while it awaits ───────────────────────────────
+
+    /// <summary>
+    /// The request for an approval is listed while the approval awaits its approver and leaves the list once the
+    /// approval is decided — wherever it was decided, the notification is never touched. A request whose target
+    /// is gone has nothing left to decide. The open one is the negative control: a list that drops everything
+    /// would pass the other halves.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AnApprovalRequest_IsListedWhileItsTargetAwaits_AndDropsOutOnceDecided()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-approvals";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("open", "TestActions") { NodeType = ActionType, Name = "open", Content = new TestActionContent() }, ct);
+        await CreateAsync(new MeshNode("decided", "TestActions") { NodeType = ActionType, Name = "decided", Content = new TestActionContent { ApprovedBy = "someone-else" } }, ct);
+        await CreateAsync(new MeshNode("record", "TestApprovals") { NodeType = InboxQueries.ApprovalNodeType, Name = "record",
+            Content = new Approval { Approver = owner, Status = ApprovalStatus.Approved, ApprovalDate = DateTimeOffset.UtcNow } }, ct);
+        var openRequest = await Notify(owner, "n-open", NotificationType.ApprovalRequired, "TestActions/open", ct);
+        await Notify(owner, "n-decided", NotificationType.ApprovalRequired, "TestActions/decided", ct);
+        await Notify(owner, "n-record", NotificationType.ApprovalRequired, "TestApprovals/record", ct);
+        await Notify(owner, "n-gone", NotificationType.ApprovalRequired, "TestActions/gone", ct);
+        // Every kind and state: this test is about which requests survive, not about the defaults.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+
+        var rows = Open(owner).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
+        var paths = await rows.Select(r => r.ValueKind == JsonValueKind.Array
+                ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x, StringComparer.Ordinal).ToArray() : [])
+            .Where(p => p.Length > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // The decided Approval RECORD is the ledger's own row (Recent): it is listed as the approval it is, once —
+        // and the notification that announced it is not.
+        paths.Should().Equal(new[] { openRequest, "TestApprovals/record" }.OrderBy(x => x, StringComparer.Ordinal),
+            "only the request whose approval still awaits is listed — not a decided one, not one whose approval is gone");
+        var row = await rows.Where(r => r.ValueKind == JsonValueKind.Array && r.EnumerateArray().Any(x => x.GetProperty("path").GetString() == openRequest))
+            .Select(r => r.EnumerateArray().First(x => x.GetProperty("path").GetString() == openRequest))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        row.GetProperty("target").GetString().Should().Be("TestActions/open", "the row knows the approval it announces");
+    }
+
+    /// <summary>
+    /// A notification raised for the approvals feature is never a row of the Notifications source, whatever its
+    /// type: what became of an approval is the ledger's row. Here a decided "approval given" notification (a
+    /// stamped type the old source listed) stays out even with every kind and the quiet notifications shown.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AnApprovalNotification_IsNeverARowOfTheNotificationsSource()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-approval-notice";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("decided", "TestActions") { NodeType = ActionType, Name = "decided", Content = new TestActionContent { ApprovedBy = "someone-else" } }, ct);
+        await Notify(owner, "given", NotificationType.ApprovalGiven, "TestActions/decided", ct);
+        await Notify(owner, "stamped-general", NotificationType.General, "TestActions/decided", ct, feature: NotificationFeatures.Approvals);
+        var plain = await Notify(owner, "plain", NotificationType.System, null, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { ShowIgnorable = true }, ct);
+
+        var paths = await Open(owner).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
+            .Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).ToArray() : [])
+            .Where(p => p.Length > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        paths.Should().Equal([plain], "an ordinary notification is the control; the two approval notifications are not rows");
+
+        var legs = InboxQueries.Resolve(InboxQueries.BuiltIn, owner).Where(l => l.Source == InboxQueries.NotificationsSource).ToArray();
+        legs.Should().OnlyContain(l => l.Query.Contains("-content.feature:approvals") && !l.Query.Contains(nameof(NotificationType.ApprovalGiven)));
+    }
+
+    /// <summary>The decided/open rule itself: a status or a stamped approver/decision time decides; nothing stamped awaits.</summary>
+    [Theory]
+    [InlineData("""{"status":"Approved"}""", false)]
+    [InlineData("""{"status":"Rejected"}""", false)]
+    [InlineData("""{"status":"Expired"}""", false)]
+    [InlineData("""{"approvedBy":"jane"}""", false)]
+    [InlineData("""{"approvedAt":"2026-10-21T06:22:13+00:00"}""", false)]
+    [InlineData("""{"approvalDate":"2026-10-21T06:22:13+00:00"}""", false)]
+    [InlineData("""{"rejectedBy":"jane"}""", false)]
+    [InlineData("""{"status":"Pending"}""", true)]
+    [InlineData("""{"title":"roll","approvedBy":""}""", true)]
+    [InlineData("""{}""", true)]
+    public void ATarget_AwaitsUnlessItsContentSaysItWasDecided(string content, bool awaits)
+    {
+        var node = new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() };
+        InboxApprovalTargets.IsPending(node, null).Should().Be(awaits);
+    }
+
+    // ── 1: opening it goes to the approval ────────────────────────────────────────────────────
+
+    /// <summary>The click on an approval request opens the approval; every other row opens in the reading view.</summary>
+    [Fact]
+    public void AClickOnAnApprovalRequest_OpensTheApproval_NotTheNotification()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var request = new InboxRow { Path = "alice/_Notification/n1", NodeType = "Notification", Target = "Ops/Actions/roll" };
+        InboxLayoutArea.OpenTarget(request, options, "alice", _ => false).Should().Be(("/Ops/Actions/roll", false));
+        InboxLayoutArea.OpenTarget(request with { Target = string.Empty }, options, "alice", _ => false)!.Value.Url
+            .Should().Be(InboxReadingView.Url("alice", "alice/_Notification/n1"), "a row that announces nothing opens in the reading view");
+    }
+
+    /// <summary>
+    /// The inbox address of an approval request's notification (<c>/{owner}/Inbox/{id}</c>, what a link in an old
+    /// mail or a bookmark holds) redirects to its target; an ordinary notification still shows its own page.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheInboxAddressOfAnApprovalRequest_RedirectsToItsTarget()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-redirect";
+        await CreateUserAsync(owner, ct);
+        var request = await Notify(owner, "req", NotificationType.ApprovalRequired, "TestActions/open", ct);
+        var plain = await Notify(owner, "plain", NotificationType.General, "TestActions/open", ct);
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+
+        ISynchronizationStream<JsonElement> Item(string path) => GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName) { Id = InboxReadingView.ItemId(path) });
+
+        var redirect = await Item(request).GetControlStream(InboxLayoutArea.AreaName).Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is RedirectControl, "the approval request redirects", ct);
+        ((RedirectControl)redirect!).Href.Should().Be("/TestActions/open");
+        // The negative control: the same target on a notification that is NOT an approval request is not followed.
+        var own = await Item(plain).GetControlStream($"{InboxLayoutArea.AreaName}/Item").Should().Within(TestTimeouts.Convergence)
+            .Match(c => c is LayoutAreaControl, "an ordinary notification shows its own page", ct);
+        own.Should().NotBeNull();
+    }
+
+    // ── 3: the default, and the persisted choice ──────────────────────────────────────────────
+
+    /// <summary>
+    /// A person who never chose gets the open approvals and the important notifications: the approval kind and
+    /// the notification kind ticked, every other kind unticked, only the open state group, every source shown.
+    /// </summary>
+    [Fact]
+    public void TheDefault_TicksOpenApprovalsAndImportantNotificationsOnly()
+    {
+        var sections = InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice");
+        var defaults = InboxPreferencesNodeType.Defaults(sections);
+        defaults.Kinds[InboxRows.SourceKey("Approvals")].Should().BeTrue();
+        defaults.Kinds[InboxRows.SourceKey("Notifications")].Should().BeTrue();
+        defaults.Kinds[InboxRows.SourceKey("Mail")].Should().BeFalse("a provider's kind is one tick away");
+        defaults.Kinds[InboxRows.SourceKey("Activities")].Should().BeFalse();
+        defaults.States[InboxRows.OpenKey].Should().BeTrue("only what is still open");
+        defaults.States[InboxRows.DoneKey].Should().BeFalse();
+        defaults.Sources.Values.Should().OnlyContain(on => on, "every source is shown; the kinds and states narrow");
+        defaults.ShowIgnorable.Should().BeFalse();
+    }
+
+    /// <summary>What the default lists: the awaiting approval and the important notification — not a decided approval, a quiet notification, or mail.</summary>
+    [Fact]
+    public void TheDefaultFilter_ListsOpenApprovals_AndImportantNotifications_Only()
+    {
+        var sections = InboxLayoutArea.Sections(InboxQueries.BuiltIn, "alice");
+        var filter = InboxLayoutArea.WithPreferences(new InboxFilter(), InboxPreferencesNodeType.Defaults(sections));
+        InboxRow Row(string path, string category, string state, string importance = "", bool unread = false) => new()
+        {
+            Path = path, Category = category, SourceId = category, State = state, Importance = importance, Unread = unread,
+            Stamp = "2026-10-21T06:22:13.0000000Z",
+        };
+        var rows = new[]
+        {
+            Row("awaiting", "Approvals", InboxState.Awaiting),
+            Row("decided", "Approvals", InboxState.Approved),
+            Row("important", "Notifications", InboxState.Unread, InboxImportance.Important, unread: true),
+            Row("quiet", "Notifications", InboxState.Unread, InboxImportance.Ignorable, unread: true),
+            Row("mail", "Mail", InboxState.Unread, unread: true),
+            Row("failed-run", "Activities", InboxState.Failed),
+        };
+        InboxRows.Apply(rows, filter).Select(r => r.Path).OrderBy(x => x, StringComparer.Ordinal).Should().Equal("awaiting", "important");
+    }
+
+    /// <summary>
+    /// A notification is important when it is a platform/system event and quiet otherwise — and a triage's own
+    /// judgement wins either way. Any other source is judged by its own triage, or not at all.
+    /// </summary>
+    [Fact]
+    public void ANotification_IsImportantWhenItIsASystemEvent_AndQuietOtherwise()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, InboxQueries.NotificationsSource, 10, "q") { TimeField = "createdAt" };
+        InboxRow Of(object content, InboxSection? s = null) => InboxRows.Of(new MeshNode("n", "alice/_Notification") { Name = "n", Content = JsonSerializer.SerializeToElement(content) }, s ?? section, null, null);
+        Of(new { notificationType = "System" }).Importance.Should().Be(InboxImportance.Important);
+        Of(new { notificationType = "General" }).Importance.Should().Be(InboxImportance.Ignorable);
+        Of(new { notificationType = "ChatReady" }).Importance.Should().Be(InboxImportance.Ignorable);
+        Of(new { notificationType = "General", importance = "important" }).Importance.Should().Be(InboxImportance.Important, "a triage's judgement wins");
+        Of(new { notificationType = "General" }, section with { Source = "Mail" }).Importance.Should().BeEmpty("only notifications are judged by their type");
+    }
+
+    /// <summary>
+    /// The first open of a person who never chose creates their preferences node holding the defaults, and the
+    /// default view lists exactly the open approval and the important notification.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheFirstOpen_StoresTheDefaults_AndListsOnlyWhatMatters()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-default";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("open", "TestActions") { NodeType = ActionType, Name = "open", Content = new TestActionContent() }, ct);
+        var approval = await Notify(owner, "need", NotificationType.ApprovalRequired, "TestActions/open", ct);
+        var important = await Notify(owner, "alarm", NotificationType.System, null, ct);
+        await Notify(owner, "chatter", NotificationType.General, null, ct);
+        await CreateAsync(Mail("m1", $"{owner}/{EmailNodeType.UserEmailSegment}", owner, new Email { Id = "m1", Subject = "Hello", To = "jane.roe@example.com" }), ct);
+
+        var rows = Open(owner).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
+        var paths = await rows.Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x).ToArray() : [])
+            .Where(p => p.Length > 0)
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        paths.Should().Equal(new[] { approval, important }.OrderBy(x => x, StringComparer.Ordinal), "the open approval and the important notification — not the chatter, not the mail");
+
+        var stored = await InboxPrefs.ReadAsync(Mesh, owner, p => p.Kinds.Count > 0, ct);
+        stored.Kinds[InboxRows.SourceKey("Approvals")].Should().BeTrue();
+        stored.Kinds[InboxRows.SourceKey("Mail")].Should().BeFalse();
+        stored.States[InboxRows.OpenKey].Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The choice outlives the page: a person who ticked other kinds finds them ticked in a NEW session — the page
+    /// reads the node, it does not reset it — and the very same open session follows a change to the node live.
+    /// </summary>
+    [Fact(Timeout = 180000)]
+    public async Task APersistedChoice_IsReappliedByANewSession_AndFollowedLive()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-persist";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(new MeshNode("open", "TestActions") { NodeType = ActionType, Name = "open", Content = new TestActionContent() }, ct);
+        var approval = await Notify(owner, "need", NotificationType.ApprovalRequired, "TestActions/open", ct);
+        var mail = $"{owner}/{EmailNodeType.UserEmailSegment}/m1";
+        await CreateAsync(Mail("m1", $"{owner}/{EmailNodeType.UserEmailSegment}", owner, new Email { Id = "m1", Subject = "Hello" }), ct);
+        var approvalsKey = InboxRows.SourceKey("Approvals");
+        var mailKey = InboxRows.SourceKey("Mail");
+
+        // The person's earlier choice: mail yes, approvals no, done too.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with
+        {
+            Kinds = p.Kinds.SetItem(mailKey, true).SetItem(approvalsKey, false),
+            States = p.States.SetItem(InboxRows.OpenKey, true).SetItem(InboxRows.DoneKey, true),
+        }, ct);
+
+        var first = RowPaths(Open(owner));
+        (await first.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([mail], "the stored choice is applied on open: mail ticked, approvals not");
+        (await InboxPrefs.ReadAsync(Mesh, owner, p => p.Kinds.Count > 0, ct)).Kinds[mailKey].Should().BeTrue("opening never resets the choice");
+
+        // Live: the same session follows the node.
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { Kinds = p.Kinds.SetItem(approvalsKey, true).SetItem(mailKey, false) }, ct);
+        (await first.Where(p => p.SequenceEqual([approval])).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([approval], "a change to the node re-feeds the grid with no re-render");
+    }
+
+    // ── 4: only configured sources ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Every leg core brings is either the platform's own (always on) or names the query that finds its
+    /// connection — the declaration is the leg's, so no source can be listed for being forgotten.
+    /// </summary>
+    [Fact]
+    public void EveryBuiltInLeg_IsAlwaysOn_OrNamesItsConnection()
+    {
+        InboxQueries.BuiltIn.Should().OnlyContain(l => l.AlwaysOn || !string.IsNullOrWhiteSpace(l.ConnectedWhen));
+        InboxQueries.BuiltIn.Where(l => l.AlwaysOn).Select(l => l.Source).Distinct().OrderBy(x => x, StringComparer.Ordinal)
+            .Should().Equal(["Activities", "Approvals", "Notifications"], "the platform's own sources need no connection");
+        InboxQueries.BuiltIn.Single(l => l.Source == "Mail" && l.Unread).ConnectedWhen.Should().NotBeNullOrEmpty("mail is a provider");
+    }
+
+    /// <summary>
+    /// A source is connected when it is always on or its connection query finds a node. A source that declares
+    /// NEITHER is not connected — the old reading ("no query means listed") showed it for everyone. The
+    /// always-on and the found connection are the negative controls.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ASourceWithNoConnectionDeclared_IsNotConnected()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-connected";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(Mail("m1", $"{owner}/{EmailNodeType.UserEmailSegment}", owner, new Email { Id = "m1", Subject = "Hello" }), ct);
+        InboxSection Section(string source, string? connectedWhen, bool alwaysOn = false)
+            => new(InboxBand.NeedsYou, source, 1, "q") { ConnectedWhen = connectedWhen, AlwaysOn = alwaysOn };
+        var sections = ImmutableArray.Create(
+            Section("Own", null, alwaysOn: true),
+            Section("Forgot", null),
+            Section("Nothing", $"namespace:{owner}/_Nowhere nodeType:{EmailNodeType.NodeType} {InboxQueries.ConnectionProbe}"),
+            Section("Found", $"namespace:{owner}/{EmailNodeType.UserEmailSegment} nodeType:{EmailNodeType.NodeType} {InboxQueries.ConnectionProbe}"));
+
+        var connected = await InboxLayoutArea.Connected(Mesh, sections, owner).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        connected.OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["Found", "Own"]);
+        InboxLayoutArea.Unprobed(sections).Should().Equal(["Own"], "only the platform's own sources are listed before any read answers");
+    }
+
+    /// <summary>
+    /// End to end: a provider's leg that names no connection is not offered — no switch, no Only entry, and its
+    /// rows are not shown even though nodes match its query. The notification source is the control.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task AForgetfulProvider_IsNeitherOfferedNorShown()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-forgetful";
+        await CreateUserAsync(owner, ct);
+        await CreateAsync(Mail("f1", $"{owner}/_Forgetful", owner, new Email { Id = "f1", Subject = "From a forgetful provider" }), ct);
+        var important = await Notify(owner, "alarm", NotificationType.System, null, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        var stream = Open(owner);
+
+        (await RowPaths(stream).Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([important], "the forgetful provider's row is not listed");
+        var styles = await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.SourceStylesId)))
+            .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Object
+                && o.TryGetProperty(InboxRows.SourceKey("Notifications"), out var n) && n.GetString() == string.Empty
+                && o.TryGetProperty(InboxRows.SourceKey("Forgetful"), out var f) && f.GetString() == InboxLayoutArea.HiddenStyle,
+                "its switch is hidden, the platform's own is shown", ct);
+        styles.Should().NotBeNull();
+    }
+
+    // ── 5: mail by address ────────────────────────────────────────────────────────────────────
+
+    /// <summary>A stored mail names the address it reached (its recipient); a live mailbox row names its stamped account.</summary>
+    [Fact]
+    public void ARow_NamesTheAddressItReached()
+    {
+        var section = new InboxSection(InboxBand.NeedsYou, "Mail", 20, "q") { TimeField = "receivedAt" };
+        InboxRow Of(object content) => InboxRows.Of(new MeshNode("m", "alice/_Email") { Name = "m", Content = JsonSerializer.SerializeToElement(content) }, section, null, null);
+        Of(new { to = "Jane Roe <Jane.Roe@Example.com>" }).Account.Should().Be("jane.roe@example.com");
+        Of(new { to = "max@example.com, other@example.com" }).Account.Should().Be("max@example.com", "the first recipient");
+        Of(new { to = "no address here" }).Account.Should().BeEmpty();
+        Of(new { account = "Work Mailbox", to = "jane.roe@example.com" }).Account.Should().Be("Work Mailbox", "a stamped account wins");
+    }
+
+    /// <summary>One option per configured ADDRESS — each once, whatever its spelling — and picking one lists only what reached it.</summary>
+    [Fact]
+    public void TheAccountFilter_OffersOneOptionPerAddress_AndNarrowsToIt()
+    {
+        InboxRow Mail(string path, string account) => new() { Path = path, Category = "Mail", SourceId = "Mail", Account = account, Stamp = "2026-10-21T06:22:13.0000000Z" };
+        var rows = new[]
+        {
+            Mail("a1", "jane.roe@example.com"), Mail("a2", "Jane.Roe@Example.com"), Mail("b1", "max@example.com"),
+            new InboxRow { Path = "chat", Category = "Conversations", SourceId = "Chat", Stamp = "2026-10-21T06:22:13.0000000Z" },
+        };
+        var accounts = InboxLayoutArea.AccountsOf(rows);
+        accounts.Select(a => a.Address.ToLowerInvariant()).Should().Equal("jane.roe@example.com", "max@example.com");
+        InboxLayoutArea.AccountOptions("All accounts", accounts).Select(o => ((Option<string>)o).Item)
+            .Should().Equal(string.Empty, InboxRows.AccountKey("jane.roe@example.com"), InboxRows.AccountKey("max@example.com"));
+
+        InboxRows.Apply(rows, new InboxFilter { Account = InboxRows.AccountKey("JANE.roe@example.com") }).Select(r => r.Path)
+            .OrderBy(x => x, StringComparer.Ordinal).Should().Equal(["a1", "a2"], "one address, whatever its case; the chat reached no address");
+        InboxRows.Apply(rows, new InboxFilter()).Should().HaveCount(4, "no address picked lists everything");
+    }
+
+    /// <summary>End to end: stored mail to two addresses yields two options in the page's Account select, and the preference narrows the grid.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task TwoMailboxes_GiveTwoAddressOptions_AndThePreferenceNarrowsTheList()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-address";
+        await CreateUserAsync(owner, ct);
+        var ns = $"{owner}/{EmailNodeType.UserEmailSegment}";
+        await CreateAsync(Mail("w1", ns, owner, new Email { Id = "w1", Subject = "Work", To = "jane.roe@example.com" }), ct);
+        await CreateAsync(Mail("p1", ns, owner, new Email { Id = "p1", Subject = "Private", To = "jane@home.example" }), ct);
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        var stream = Open(owner);
+
+        var options = await stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxLayoutArea.AccountOptionsId)))
+            .Should().Within(TestTimeouts.Convergence).Match(o => o.ValueKind == JsonValueKind.Array && o.GetArrayLength() == 3, "all, then one per address", ct);
+        options.EnumerateArray().Select(o => o.GetProperty("text").GetString()).Should().Equal("All accounts", "jane.roe@example.com", "jane@home.example");
+
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { Account = InboxRows.AccountKey("jane@home.example") }, ct);
+        (await RowPaths(stream).Where(p => p.SequenceEqual([$"{ns}/p1"])).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([$"{ns}/p1"], "only the mail that reached the picked address");
+    }
+
+    // ── helpers ───────────────────────────────────────────────────────────────────────────────
+
+    private ISynchronizationStream<JsonElement> Open(string owner)
+    {
+        TestUsers.DevLogin(Mesh, new AccessContext { ObjectId = owner, Name = owner, Email = $"{owner}@meshweaver.io" });
+        return GetClient().GetWorkspace().GetRemoteStream<JsonElement, LayoutAreaReference>(
+            new Address(owner), new LayoutAreaReference(InboxLayoutArea.AreaName));
+    }
+
+    private static IObservable<string[]> RowPaths(ISynchronizationStream<JsonElement> stream)
+        => stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
+            .Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x, StringComparer.Ordinal).ToArray() : []);
+
+    private async Task<string> Notify(string owner, string id, NotificationType type, string? target, CancellationToken ct, string? feature = null)
+    {
+        var ns = $"{owner}/{NotificationService.SatelliteSegment}";
+        await CreateAsync(new MeshNode(id, ns)
+        {
+            NodeType = NotificationNodeType.NodeType, Name = id, MainNode = owner, State = MeshNodeState.Active,
+            Content = new Notification
+            {
+                Id = id, Title = id, Recipient = owner, NotificationType = type, TargetNodePath = target,
+                Feature = feature ?? (type is NotificationType.ApprovalRequired or NotificationType.ApprovalGiven or NotificationType.ApprovalRejected
+                    ? NotificationFeatures.Approvals : null),
+            },
+        }, ct);
+        return $"{ns}/{id}";
+    }
+
+    private static MeshNode Mail(string id, string ns, string owner, Email mail) => new(id, ns)
+    {
+        NodeType = EmailNodeType.NodeType, Name = mail.Subject, MainNode = owner, State = MeshNodeState.Active, Content = mail,
+    };
+
+    private async Task CreateAsync(MeshNode node, CancellationToken ct)
+        => await Mesh.ServiceProvider.GetService<AccessService>()
+            .RunAsSystem(() => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(node))
+            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+
+    /// <summary>Creates the user's partition root as onboarding does — as System.</summary>
+    private Task CreateUserAsync(string path, CancellationToken ct)
+        => CreateAsync(MeshNode.FromPath(path) with
+        {
+            NodeType = UserNodeType.NodeType, Name = path, State = MeshNodeState.Active,
+            Content = new User { FullName = path },
+        }, ct);
+}

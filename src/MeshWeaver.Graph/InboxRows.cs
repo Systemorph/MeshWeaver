@@ -42,6 +42,12 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>The resolved query that finds the source's connection (<see cref="InboxQueryLeg.ConnectedWhen"/>), or null.</summary>
     public string? ConnectedWhen { get; init; }
+
+    /// <summary>Whether the source needs no connection (<see cref="InboxQueryLeg.AlwaysOn"/>).</summary>
+    public bool AlwaysOn { get; init; }
+
+    /// <summary>Whether the kind is ticked for a viewer who never chose (<see cref="InboxQueryLeg.DefaultKind"/>).</summary>
+    public bool DefaultKind { get; init; }
 }
 
 /// <summary>
@@ -128,6 +134,13 @@ public sealed record InboxRow
 
     /// <summary>The side-menu category the row is filed under (<see cref="InboxSection.Category"/>).</summary>
     public string Category { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The node the row is ABOUT, when the row only announces it — the <c>targetNodePath</c> of an
+    /// approval request. A click on the row opens THAT node (the approval), never the announcement;
+    /// empty for every item that is its own subject.
+    /// </summary>
+    public string Target { get; init; } = string.Empty;
 
     /// <summary>
     /// How much the item matters to the viewer, when a triage said (the content's <c>importance</c>):
@@ -225,6 +238,12 @@ public sealed record InboxFilter
     /// shown: a leg a package brings later must not arrive switched off.
     /// </summary>
     public ImmutableDictionary<string, bool> Sources { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The one account (mailbox address) the viewer narrowed the list to, by <see cref="InboxRows.AccountKey"/>,
+    /// or empty for every account. While set only rows that reached that address are listed.
+    /// </summary>
+    public string Account { get; init; } = string.Empty;
 
     /// <summary>
     /// The one source the viewer narrowed the list to, by <see cref="InboxRows.SourceKey"/>, or empty
@@ -328,13 +347,23 @@ public static class InboxRows
         => "s" + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(source)).ToLowerInvariant();
 
     /// <summary>
+    /// The key of <paramref name="account"/> (a mailbox address) as <see cref="InboxFilter.Account"/> names it —
+    /// the value of its option in the Account select. The address trimmed and lower-cased (an
+    /// address is not case-sensitive in practice), hex-encoded like <see cref="SourceKey"/> and prefixed
+    /// <c>a</c>, so one address is one key whatever its spelling and it never collides with a source key.
+    /// </summary>
+    /// <param name="account">The address.</param>
+    public static string AccountKey(string account)
+        => "a" + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(account.Trim().ToLowerInvariant())).ToLowerInvariant();
+
+    /// <summary>
     /// <paramref name="filter"/> by VALUE — what the page compares to tell a change the viewer made
     /// from a re-emission of the same state. The record's own equality cannot: its dictionary is
     /// compared by reference, and every read of the data section deserializes a new one.
     /// </summary>
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
-        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
+        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Account, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}"))
             .Concat(filter.Kinds.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"kind:{s.Key}={s.Value}"))
             .Concat(filter.States.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"state:{s.Key}={s.Value}"))
@@ -426,7 +455,10 @@ public static class InboxRows
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Category = section.Category.Length > 0 ? section.Category : section.Source,
-            Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() ?? string.Empty,
+            Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() is { Length: > 0 } judged
+                ? judged
+                : NotificationImportance(section.Source, content),
+            Target = ApprovalTargetOf(content),
             Tags = tags,
             TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
@@ -435,10 +467,61 @@ public static class InboxRows
             StepMessage = running ? step.Message : string.Empty,
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
-            Account = StringOf(content, "account")?.Trim() ?? string.Empty,
+            Account = StringOf(content, "account")?.Trim() is { Length: > 0 } account ? account : AddressOf(StringOf(content, "to")),
             Link = StringOf(content, "webLink") is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri)
                    && uri.Scheme == Uri.UriSchemeHttps ? link : string.Empty,
         };
+    }
+
+    /// <summary>
+    /// How much a NOTIFICATION matters when nothing judged it: a platform/system event (a failure, an
+    /// alert) is <see cref="InboxImportance.Important"/>, every other notification — access granted, chat
+    /// ready, general — is <see cref="InboxImportance.Ignorable"/>, which the inbox hides until the
+    /// viewer asks (owner, 2026-10-23: "default only open approvals and important notifications"). Any
+    /// other source gets nothing: its rows are judged by their own triage, or not at all. Pure.
+    /// </summary>
+    /// <param name="source">The leg's source.</param>
+    /// <param name="content">The row's content, or null.</param>
+    internal static string NotificationImportance(string source, JsonElement? content)
+    {
+        if (!string.Equals(source, InboxQueries.NotificationsSource, StringComparison.Ordinal))
+            return string.Empty;
+        var type = PropertyOf(content, "notificationType") is { } value
+            ? value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n)
+                ? Enum.GetName(typeof(NotificationType), n)
+                : value.ValueKind == JsonValueKind.String ? value.GetString() : null
+            : null;
+        return string.Equals(type, nameof(NotificationType.System), StringComparison.OrdinalIgnoreCase)
+            ? InboxImportance.Important
+            : InboxImportance.Ignorable;
+    }
+
+    /// <summary>
+    /// The node an APPROVAL REQUEST announces — the content's <c>targetNodePath</c> when its
+    /// <c>feature</c> is <c>approvals</c> — else empty. A row about an approval opens the approval, not the
+    /// notification that mentioned it. Pure.
+    /// </summary>
+    /// <param name="content">The row's content, or null.</param>
+    internal static string ApprovalTargetOf(JsonElement? content)
+        => string.Equals(StringOf(content, "feature"), NotificationFeatures.Approvals, StringComparison.Ordinal)
+           && StringOf(content, "targetNodePath")?.Trim().Trim('/') is { Length: > 0 } target
+            ? target
+            : string.Empty;
+
+    /// <summary>
+    /// The address in a recipient field — <c>Max Muster &lt;max@example.com&gt;</c> or a bare address —
+    /// lower-cased and trimmed; empty when there is none. The first recipient, where several are listed. Pure.
+    /// </summary>
+    /// <param name="recipient">A <c>to</c> value, or null.</param>
+    internal static string AddressOf(string? recipient)
+    {
+        if (string.IsNullOrWhiteSpace(recipient))
+            return string.Empty;
+        var first = recipient.Split(',', ';')[0].Trim();
+        var open = first.IndexOf('<', StringComparison.Ordinal);
+        var close = open < 0 ? -1 : first.IndexOf('>', open + 1);
+        var address = (open >= 0 && close > open ? first[(open + 1)..close] : first).Trim();
+        return address.Contains('@', StringComparison.Ordinal) ? address.ToLowerInvariant() : string.Empty;
     }
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);
@@ -582,7 +665,7 @@ public static class InboxRows
             : null;
     }
 
-    private static string? StringOf(JsonElement? content, string name)
+    internal static string? StringOf(JsonElement? content, string name)
         => PropertyOf(content, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
     /// <summary>The content's <c>tags</c>: its strings, trimmed, lower-cased, each once, in order. Pure.</summary>
@@ -642,11 +725,13 @@ public static class InboxRows
     {
         var (_, before, after) = SplitDates(filter.Search);
         var kinds = TickedKinds(filter);
+        // 🚨 The source switches and the account switches ALWAYS apply; the ticked kinds narrow further.
+        // (They used to replace the switches, so a default that ticks kinds would have made every switch dead.)
+        // A category picked in the legacy single-category select still lists everything filed under it.
         var shown = !string.IsNullOrEmpty(category)
             ? rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal))
-            : kinds.Count > 0
-                ? rows.Where(row => kinds.Contains(SourceKey(row.Category)))
-                : rows.Where(row => Shown(row, filter));
+            : rows.Where(row => (kinds.Count == 0 || kinds.Contains(SourceKey(row.Category)))
+                                && Shown(row, filter) && AccountShown(row, filter));
         var tags = ActiveTags(filter);
         var states = TickedStates(filter);
         return shown.Where(row => InRange(row.Stamp, before, after))
@@ -747,6 +832,13 @@ public static class InboxRows
             : !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on;
 
     /// <summary>
+    /// Whether <paramref name="row"/> reached the account the viewer narrowed the list to: always, while no
+    /// account is picked; else only a row that carries that very address. Pure.
+    /// </summary>
+    internal static bool AccountShown(InboxRow row, InboxFilter filter)
+        => filter.Account.Length == 0 || (row.Account.Length > 0 && string.Equals(AccountKey(row.Account), filter.Account, StringComparison.Ordinal));
+
+    /// <summary>
     /// The side menu's counts: how many rows each category holds, and how many of them are unread —
     /// read off the merged rows BEFORE the switches and the category apply, so a category's count is
     /// never filtered away with its rows. Pure.
@@ -800,9 +892,9 @@ public static class InboxRows
     public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
         // A picked category shows every row filed under it whatever the source filter says, so the
         // source filter hides nothing then — counting would report a visible obligation as hidden.
-        => needsYouRank is not { } rank || filter.Category.Length > 0 || TickedKinds(filter).Count > 0
+        => needsYouRank is not { } rank || filter.Category.Length > 0
             ? 0
-            : rows.Count(row => row.Rank == rank && !Shown(row, filter));
+            : rows.Count(row => row.Rank == rank && (!Shown(row, filter) || !AccountShown(row, filter)));
 
     /// <summary>
     /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand

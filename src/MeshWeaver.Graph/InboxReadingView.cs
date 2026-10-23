@@ -8,6 +8,7 @@ using MeshWeaver.Data;
 using MeshWeaver.Layout;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -86,8 +87,9 @@ public static class InboxReadingView
 
         var hub = host.Hub;
         if (ReaderFor(hub.ServiceProvider.GetServices<IInboxItemReader>(), path) is not { } reader)
-            // A stored item: its own page, as its type renders it.
-            return Observable.Return<UiControl?>(Page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea)));
+            // A stored item: its own page, as its type renders it — except an approval request, which
+            // is only the announcement of an approval: opening it goes to THAT node.
+            return StoredItem(host, owner, path, Page);
 
         // Resolved ONCE, on the render turn: the read answers on another thread.
         var locale = host.ViewerLocale();
@@ -123,6 +125,32 @@ public static class InboxReadingView
                     logger?.LogWarning(ex, "Inbox: the reader for {Path} faulted", path);
                     return Observable.Return<UiControl?>(Page(Controls.Markdown(texts.Failed)));
                 }));
+    }
+
+    /// <summary>
+    /// The reading view of a STORED item: the notification of an approval request redirects to the approval
+    /// it names (<see cref="InboxApprovalTargets.TargetOf"/>); every other item shows its own page. The node is
+    /// asked of an exact-path query (empty-on-absent), as the owner. Until it answers the page shows the item's own
+    /// page — a redirect is the exception, and no wait may hide the item.
+    /// </summary>
+    private static IObservable<UiControl?> StoredItem(LayoutAreaHost host, string owner, string path, Func<UiControl, UiControl> page)
+    {
+        var hub = host.Hub;
+        UiControl? Own() => page(Controls.LayoutArea(new Address(path), MeshNodeLayoutAreas.OverviewArea));
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxReadingView));
+        return hub.ServiceProvider.GetRequiredService<IMeshService>()
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path} select:path,nodeType,content", owner) with { Limit = 1 })
+            .Take(1)
+            .Select(change => InboxApprovalTargets.TargetOf(change.Items.FirstOrDefault(), hub.JsonSerializerOptions) is { } target
+                ? Controls.Redirect("/" + target.TrimStart('/'))
+                : Own())
+            .Timeout(InboxApprovalTargets.ReadWithin)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Inbox: could not tell whether {Path} announces an approval; showing the item itself", path);
+                return Observable.Return(Own());
+            })
+            .DefaultIfEmpty(Own());
     }
 
     /// <summary>The texts a reading view shows, resolved on the render turn.</summary>

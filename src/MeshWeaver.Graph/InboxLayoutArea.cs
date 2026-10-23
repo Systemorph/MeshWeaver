@@ -78,6 +78,9 @@ public static class InboxLayoutArea
     /// <summary>The data id of the Only select's options — all sources, then each source by name.</summary>
     public const string SourceOptionsId = "inboxSourceOptions";
 
+    /// <summary>The data id of the Account select's options — all addresses, then each address the rows name.</summary>
+    public const string AccountOptionsId = "inboxAccountOptions";
+
     /// <summary>The data id of the side menu's tag options — all tags, Important, then each tag with its count.</summary>
     public const string TagOptionsId = "inboxTagOptions";
 
@@ -138,9 +141,10 @@ public static class InboxLayoutArea
     internal static readonly TimeSpan ConnectionWait = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// The sources <paramref name="owner"/> has connected: every source with a leg that names no
-    /// connection query (<see cref="InboxQueryLeg.ConnectedWhen"/>), and every other whose connection
-    /// query finds a node. Answers ONCE, when every source has answered.
+    /// The sources <paramref name="owner"/> has connected: every source with a leg that needs no
+    /// connection (<see cref="InboxQueryLeg.AlwaysOn"/>), and every other whose connection query
+    /// (<see cref="InboxQueryLeg.ConnectedWhen"/>) finds a node. A source that is neither is not connected.
+    /// Answers ONCE, when every source has answered.
     /// <para>🚨 A connection query that cannot be read, or that does not answer within
     /// <see cref="ConnectionWait"/>, LISTS its source — and is logged: an unreadable connection must
     /// not hide a source the viewer did connect. Its leg then says itself whether it could be read.</para>
@@ -170,13 +174,16 @@ public static class InboxLayoutArea
                     return Observable.Return(true);
                 });
         var bySource = sections.GroupBy(section => section.Source, StringComparer.Ordinal)
-            .Select(source => source.Any(s => s.ConnectedWhen is null)
+            .Select(source => source.Any(s => s.AlwaysOn)
                 ? Observable.Return((Source: source.Key, Connected: true))
-                : source.Select(s => s.ConnectedWhen!).Distinct(StringComparer.Ordinal)
-                    .Select(query => Probe(source.Key, query))
-                    .CombineLatest()
-                    .Take(1)
-                    .Select(found => (Source: source.Key, Connected: found.Any(f => f))))
+                // 🚨 No connection query and not always on: nothing says the viewer configured it, so it is NOT connected.
+                : !source.Any(s => s.ConnectedWhen is not null)
+                    ? Observable.Return((Source: source.Key, Connected: false))
+                    : source.Where(s => s.ConnectedWhen is not null).Select(s => s.ConnectedWhen!).Distinct(StringComparer.Ordinal)
+                        .Select(query => Probe(source.Key, query))
+                        .CombineLatest()
+                        .Take(1)
+                        .Select(found => (Source: source.Key, Connected: found.Any(f => f))))
             .ToImmutableArray();
         return bySource.IsEmpty
             ? Observable.Return(ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal))
@@ -204,9 +211,9 @@ public static class InboxLayoutArea
     /// <summary>The pointer of one source's style in <see cref="SourceStylesId"/>.</summary>
     internal static string SourceStylePointer(string key) => LayoutAreaReference.GetDataPointer(SourceStylesId) + "/" + key;
 
-    /// <summary>The sources listed without a connection read — a leg of theirs names no <see cref="InboxQueryLeg.ConnectedWhen"/>.</summary>
+    /// <summary>The sources listed without a connection read — the platform's own, which need none (<see cref="InboxQueryLeg.AlwaysOn"/>).</summary>
     internal static ImmutableHashSet<string> Unprobed(ImmutableArray<InboxSection> sections)
-        => [.. sections.GroupBy(s => s.Source, StringComparer.Ordinal).Where(g => g.Any(s => s.ConnectedWhen is null)).Select(g => g.Key)];
+        => [.. sections.GroupBy(s => s.Source, StringComparer.Ordinal).Where(g => g.Any(s => s.AlwaysOn)).Select(g => g.Key)];
 
     /// <summary>Each source's style: shown when <paramref name="connected"/> holds it, hidden otherwise. Pure.</summary>
     internal static ImmutableDictionary<string, string> SourceStyles(ImmutableArray<InboxSection> sections, ImmutableHashSet<string> connected)
@@ -234,12 +241,11 @@ public static class InboxLayoutArea
         // Seeded ONCE per session: a re-render must not reset what the viewer typed, switched or ticked.
         if (host.TryMarkEditStateInitialized("inbox:" + InboxRows.FilterId))
         {
-            host.UpdateData(InboxRows.FilterId, new InboxFilter
-            {
-                // A source is shown at first when any of its legs says so — the noisy ones are a
-                // switch away, never removed.
-                Sources = sources.ToImmutableDictionary(source => InboxRows.SourceKey(source.Id), source => source.Shown),
-            });
+            // The view's own state — search, Only, tags. What persists (kinds, sources, states, the address,
+            // ignorable) is the person's InboxPreferences node, which the checkboxes are bound to directly.
+            host.UpdateData(InboxRows.FilterId, new InboxFilter());
+            host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), []));
+            EnsurePreferences(host, owner, sections);
             host.UpdateData(UnreadId, string.Empty);
             host.UpdateData(CappedId, string.Empty);
             host.UpdateData(HiddenId, string.Empty);
@@ -279,6 +285,8 @@ public static class InboxLayoutArea
             .Select(toolbar => toolbar.Decide ? string.Empty : HiddenStyle));
 
         var filterContext = LayoutAreaReference.GetDataPointer(InboxRows.FilterId);
+        // The checkboxes that PERSIST are bound to the person's preferences NODE, never to a copy of it.
+        var preferences = LayoutAreaReference.GetMeshNodeDataContext(InboxPreferencePaths.PathFor(owner));
 
         // ── The side panel: every filter, grouped under a small title. ─────────────────────────
         // Kind: one checkbox per kind (side-menu category), the symbol before it, its name and count
@@ -293,7 +301,7 @@ public static class InboxLayoutArea
                     .WithView(Controls.Icon(category.Icon).WithWidth("20px"), "Icon" + key)
                     .WithView(Controls.CheckBox(new JsonPointerReference($"kinds/{key}")) with
                     {
-                        DataContext = filterContext,
+                        DataContext = preferences,
                         Label = new JsonPointerReference(LayoutAreaReference.GetDataPointer(KindLabelsId) + "/" + key),
                     }, "Kind" + key), "Row" + key);
         }
@@ -303,7 +311,7 @@ public static class InboxLayoutArea
         foreach (var (key, labelKey) in new[] { (InboxRows.OpenKey, "inbox.filter.open"), (InboxRows.DoneKey, "inbox.filter.done") })
             stateGroups = stateGroups.WithView(Controls.CheckBox(new JsonPointerReference($"states/{key}")) with
             {
-                DataContext = filterContext, Label = host.Localize(labelKey),
+                DataContext = preferences, Label = host.Localize(labelKey),
             }, "State" + key);
         // Tags: one checkbox per tag the triage gave — Important first, then each by use. They are
         // known only once the rows are, so the list is a bound collection, one checkbox per item.
@@ -328,9 +336,13 @@ public static class InboxLayoutArea
                 .WithView(Controls.Icon(source.Icon).WithWidth("20px"), "Icon" + key)
                 .WithView(Controls.CheckBox(new JsonPointerReference($"sources/{key}")) with
                 {
-                    DataContext = filterContext, Label = source.Label,
+                    DataContext = preferences, Label = source.Label,
                 }, "Show" + key), "Source" + key);
         }
+        // Account: one option per configured ADDRESS (a mailbox), not per provider — bound to the preference.
+        sourceList = sourceList.WithView(Controls.Select(new JsonPointerReference("account"),
+                new JsonPointerReference(LayoutAreaReference.GetDataPointer(AccountOptionsId)))
+            with { DataContext = preferences, AriaLabel = host.Localize("inbox.account") }, "Account");
         var side = Controls.Stack.WithVerticalGap(16)
             .WithView(Controls.Text(new JsonPointerReference("search")) with
             {
@@ -344,7 +356,7 @@ public static class InboxLayoutArea
             // Spam, promotions and noise stay out of the list until the viewer asks for them.
             .WithView(Section(host.Localize("inbox.section.options"), Controls.CheckBox(new JsonPointerReference("showIgnorable")) with
             {
-                DataContext = filterContext, Label = host.Localize("inbox.showIgnorable"),
+                DataContext = preferences, Label = host.Localize("inbox.showIgnorable"),
             }), "Options");
 
         // ── The toolbar: the bulk acts only, icon-only, the name its tooltip and accessible name. ─
@@ -372,7 +384,7 @@ public static class InboxLayoutArea
             .WithView(Controls.Label(new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenId))), "Text")
             .WithView((Controls.Button(host.Localize("inbox.showAll")).WithAppearance(Appearance.Lightweight)
                 with { Style = new JsonPointerReference(LayoutAreaReference.GetDataPointer(HiddenActionStyleId)) })
-                .WithReactiveClickAction(ctx => ShowAll(ctx.Host)), "ShowAll");
+                .WithReactiveClickAction(ctx => ShowAll(ctx.Host, owner)), "ShowAll");
 
         var main = Controls.Stack.WithWidth("100%").WithVerticalGap(8)
             .WithView(Controls.H2(host.Localize("inbox.title")).WithStyle("margin: 0;"), "Title")
@@ -428,18 +440,26 @@ public static class InboxLayoutArea
             row.Rank == rank && string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)));
     }
 
-    /// <summary>Gives the source switches back as they were: no Only, every source on.</summary>
-    private static IObservable<Unit> ShowAll(LayoutAreaHost host)
-        => host.GetDataStream<InboxFilter>(InboxRows.FilterId).Take(1).Select(filter =>
-        {
-            var current = filter ?? new InboxFilter();
-            host.UpdateData(InboxRows.FilterId, current with
+    /// <summary>
+    /// Gives the source switches back as they were: no Only, no picked address, every source on — the first in
+    /// the view's own filter, the rest in the person's preferences node (one per-field-safe merge of the current
+    /// content, never a copy).
+    /// </summary>
+    private static IObservable<Unit> ShowAll(LayoutAreaHost host, string owner)
+    {
+        var hub = host.Hub;
+        var options = hub.JsonSerializerOptions;
+        return host.GetDataStream<InboxFilter>(InboxRows.FilterId).Take(1)
+            .SelectMany(filter =>
             {
-                Only = string.Empty,
-                Sources = current.Sources.ToImmutableDictionary(kv => kv.Key, _ => true),
+                host.UpdateData(InboxRows.FilterId, (filter ?? new InboxFilter()) with { Only = string.Empty });
+                return hub.GetMeshNodeStream(InboxPreferencePaths.PathFor(owner))
+                    .Update(node => node.ContentAs<InboxPreferences>(options) is { } stored
+                        ? node with { Content = stored with { Account = string.Empty, Sources = stored.Sources.ToImmutableDictionary(kv => kv.Key, _ => true, StringComparer.Ordinal) } }
+                        : node)
+                    .Select(_ => Unit.Default);
             });
-            return Unit.Default;
-        });
+    }
 
     /// <summary>The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden.</summary>
     internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts, string? stepFormat = null)
@@ -531,6 +551,127 @@ public static class InboxLayoutArea
                 + $"  {c.Count}")),
         ];
 
+    /// <summary>
+    /// Creates the person's preferences node when it is absent, seeded with what a person who never chose
+    /// gets (<see cref="InboxPreferencesNodeType.Defaults"/>: the open approvals and the important
+    /// notifications). Runs once per page, off the render's critical path: the template is returned at
+    /// once and the checkboxes follow the node when it appears.
+    /// </summary>
+    private static void EnsurePreferences(LayoutAreaHost host, string owner, ImmutableArray<InboxSection> sections)
+    {
+        var logger = host.Hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        host.RegisterForDisposal(InboxPreferencesNodeType.EnsureExists(host.Hub, owner, InboxPreferencesNodeType.Defaults(sections), logger)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Inbox: the preferences of {Owner} could not be created", owner)));
+    }
+
+    /// <summary>
+    /// The person's preferences, live: the node's own stream once the node exists, nothing known (null)
+    /// while it does not. Existence is asked of a query (empty-on-absent) and the content of the node's
+    /// stream — never a point read of a maybe-absent path (Doc/Architecture/CqrsAndContentAccess).
+    /// </summary>
+    internal static IObservable<InboxPreferences?> PreferencesOf(LayoutAreaHost host, string owner)
+    {
+        var hub = host.Hub;
+        var path = InboxPreferencePaths.PathFor(owner);
+        var options = hub.JsonSerializerOptions;
+        // 🚨 Nothing is emitted before the first answer: the rows of a person whose node exists must never flash
+        // the defaults while it is read. An answer that does not come within PreferencesWait reads as "none stored".
+        var answers = hub.GetWorkspace()
+            .GetQuery($"{InboxPreferencesNodeType.NodeType}|exists|{path}",
+                $"path:{path} nodeType:{InboxPreferencesNodeType.NodeType} select:path,id,nodeType")
+            .Select(nodes => nodes.Any(n => string.Equals(n.Path, path, StringComparison.OrdinalIgnoreCase)))
+            .DistinctUntilChanged()
+            .Select(exists => exists
+                ? hub.GetMeshNodeStream(path).Select(node => InboxPreferencesNodeType.Parse(node, options))
+                : Observable.Return<InboxPreferences?>(null))
+            .Switch();
+        return Observable.Create<InboxPreferences?>(observer =>
+        {
+            var answered = 0;
+            var timer = Observable.Timer(PreferencesWait).Subscribe(_ =>
+            {
+                if (Interlocked.CompareExchange(ref answered, 1, 0) == 0)
+                    observer.OnNext(null);
+            });
+            var subscription = answers.Subscribe(
+                value => { Interlocked.Exchange(ref answered, 1); observer.OnNext(value); },
+                observer.OnError, observer.OnCompleted);
+            return new System.Reactive.Disposables.CompositeDisposable(timer, subscription);
+        });
+    }
+
+    /// <summary>How long the page waits for the person's preferences before it lists with the defaults.</summary>
+    internal static readonly TimeSpan PreferencesWait = TimeSpan.FromSeconds(5);
+
+    /// <summary><paramref name="view"/> with the persisted choices <paramref name="stored"/> laid over it. Pure.</summary>
+    /// <param name="view">The view's own filter (search, Only, tags).</param>
+    /// <param name="stored">The person's preferences, or the defaults while none are stored.</param>
+    internal static InboxFilter WithPreferences(InboxFilter view, InboxPreferences stored)
+        => view with
+        {
+            Kinds = stored.Kinds, Sources = stored.Sources, States = stored.States,
+            Account = stored.Account, ShowIgnorable = stored.ShowIgnorable,
+        };
+
+    /// <summary>The keys already seeded into the preferences node by this page — so a pass that rewrites them is loud, not a storm.</summary>
+    private sealed class SeededKeys
+    {
+        private ImmutableHashSet<string> done = [];
+
+        /// <summary>Records <paramref name="fingerprint"/>; false when it was recorded before.</summary>
+        public bool Add(string fingerprint)
+        {
+            var added = false;
+            ImmutableInterlocked.Update(ref done, set => (added = !set.Contains(fingerprint)) ? set.Add(fingerprint) : set);
+            return added;
+        }
+    }
+
+    /// <summary>
+    /// Writes the entries <paramref name="stored"/> lacks (a kind or a source a package brought since the
+    /// node was created) into the node, ONCE per set of keys: the write is a merge of the missing keys into
+    /// the node's CURRENT content, so it never overwrites a choice, and the next pass finds nothing missing.
+    /// A pass that finds the same keys missing again after writing them would be a loop — it is logged as an
+    /// error and not repeated (rule 2: never feed a reconcile its own writes).
+    /// </summary>
+    private static void SeedMissing(IMessageHub hub, ILogger? logger, string path, InboxPreferences stored,
+        InboxPreferences expected, SeededKeys seeded)
+    {
+        if (InboxPreferencesNodeType.Completed(stored, expected) is not { } completed)
+            return;
+        var missing = completed.Kinds.Keys.Except(stored.Kinds.Keys).Select(k => "k:" + k)
+            .Concat(completed.Sources.Keys.Except(stored.Sources.Keys).Select(k => "s:" + k))
+            .Order(StringComparer.Ordinal).ToArray();
+        if (!seeded.Add(string.Join(',', missing)))
+        {
+            logger?.LogError("Inbox: the preference keys {Keys} were written this session and are still missing from {Path}; not writing again", string.Join(", ", missing), path);
+            return;
+        }
+        var options = hub.JsonSerializerOptions;
+        hub.GetMeshNodeStream(path)
+            .Update(node => node.ContentAs<InboxPreferences>(options) is { } current
+                            && InboxPreferencesNodeType.Completed(current, expected) is { } merged
+                ? node with { Content = merged }
+                : node)
+            .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "Inbox: could not add the missing keys to {Path}", path));
+    }
+
+    /// <summary>The addresses the rows reached — each once, by <see cref="InboxRows.AccountKey"/>, in alphabetical order. Pure.</summary>
+    /// <param name="rows">The merged rows.</param>
+    internal static ImmutableList<(string Key, string Address)> AccountsOf(IEnumerable<InboxRow> rows)
+        => [.. rows.Where(r => r.Account.Length > 0)
+            .GroupBy(r => InboxRows.AccountKey(r.Account), StringComparer.Ordinal)
+            .Select(g => (Key: g.Key, Address: g.First().Account))
+            .OrderBy(a => a.Address, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>The Account select's options: every address (empty key), then each configured address. Pure.</summary>
+    internal static ImmutableList<Option> AccountOptions(string allLabel, IEnumerable<(string Key, string Address)> accounts)
+        =>
+        [
+            new Option<string>(string.Empty, allLabel),
+            .. accounts.Select(a => (Option)new Option<string>(a.Key, a.Address)),
+        ];
+
     /// <summary>The Only select's options: every source (empty key), then each source with its symbol. Pure.</summary>
     internal static ImmutableList<Option> SourceOptions(string allLabel,
         IEnumerable<(string Key, string Label, string Icon)> sources)
@@ -580,6 +721,7 @@ public static class InboxLayoutArea
         var hub = host.Hub;
         var handlers = hub.ServiceProvider.GetServices<IInboxItemHandler>().ToImmutableArray();
         var logger = hub.ServiceProvider.GetService<ILoggerFactory>()?.CreateLogger(typeof(InboxLayoutArea));
+        var seeded = new SeededKeys();
         // Resolved ONCE, on the render turn: every text a row may carry.
         var running = host.Localize("inbox.blocked.running");
         var noHandler = host.Localize("inbox.blocked.noHandler");
@@ -610,6 +752,11 @@ public static class InboxLayoutArea
         // writes: rows written → filter "changes" → rows written again, without end.
         var filter = host.GetDataStream<InboxFilter>(InboxRows.FilterId).Select(f => f ?? new InboxFilter())
             .DistinctUntilChanged(InboxRows.Fingerprint, StringComparer.Ordinal);
+        // What persists: the person's own node, read live — absent until the first open creates it, in which case the defaults apply.
+        var expected = InboxPreferencesNodeType.Defaults(sections);
+        var seedFor = InboxPreferencesNodeType.SeedForExisting(sections);
+        var preferencesPath = InboxPreferencePaths.PathFor(owner);
+        var preferences = PreferencesOf(host, owner);
         var tagItems = host.GetDataStream<ImmutableList<InboxTagItem>>(TagItemsId).Select(items => items ?? [])
             .DistinctUntilChanged(items => string.Join('\n', items.Select(item => $"{item.Key}|{item.Label}|{item.Checked}")), StringComparer.Ordinal);
 
@@ -621,14 +768,19 @@ public static class InboxLayoutArea
         // any inbox is open.
         IObservable<(ImmutableList<InboxRow> Rows, string? Unread)> Leg(InboxSection section, string term) =>
             Nodes(hub, section, term, owner)
-                .Select(nodes => (nodes
+                .Select(nodes => nodes
                     .Select(node => WithStateText(InboxApprovalLedger.Decorate(
                         InboxRows.Of(node, section, zone,
                             BlockedReason(section.Band, InboxItemHandlers.For(handlers, node.NodeType), running, noHandler),
                             bands[section.Band].Title, bands[section.Band].rank, labels[section.Source], culture,
                             hub.JsonSerializerOptions, locale),
                         node, section.Ledger, ledgerTexts, hub.JsonSerializerOptions), stateTexts, stepFormat))
-                    .ToImmutableList(), (string?)null))
+                    .ToImmutableList())
+                // An approval request stays only while the approval it names awaits a decision.
+                .SelectMany(legRows => section.Ledger is null && string.Equals(section.Source, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
+                    ? InboxApprovalTargets.OnlyPending(hub.ServiceProvider, legRows, owner, hub.JsonSerializerOptions)
+                    : Observable.Return(legRows))
+                .Select(legRows => (legRows, (string?)null))
                 .Catch((Exception ex) =>
                 {
                     logger?.LogWarning(ex, "Inbox leg {Source} ({Band}) could not be read", section.Source, section.Band);
@@ -662,8 +814,13 @@ public static class InboxLayoutArea
             .CombineLatest(rereads ?? Observable.Return(0L), (term, _) => term)
             .Select(Merged)
             .Switch()
-            .CombineLatest(filter, tagItems, (rows, asked, items) =>
+            .CombineLatest(filter, tagItems, preferences, (rows, viewFilter, items, stored) =>
             {
+                // The view's filter (search, Only) with the person's persisted choices.
+                var asked = WithPreferences(viewFilter, stored ?? expected);
+                if (stored is not null)
+                    SeedMissing(hub, logger, preferencesPath, stored, seedFor, seeded);
+                host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), AccountsOf(rows)));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
                 var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked);
@@ -875,6 +1032,9 @@ public static class InboxLayoutArea
     {
         if (item.As<InboxRow>(options) is not { Path: { Length: > 0 } path } row || owner.Length == 0)
             return null;
+        // An approval request is the approval: the click opens the node it names, never the notification that announced it.
+        if (row.Target.Length > 0)
+            return ("/" + row.Target.TrimStart('/'), false);
         // An approval of the ledger lives beside its document, in ANY partition: the owner's reading view
         // would refuse it ("not in your inbox"), so it opens at its own page, under the normal access check.
         if (string.Equals(row.NodeType, InboxQueries.ApprovalNodeType, StringComparison.Ordinal) && !InboxQueries.InPartition(path, owner))
@@ -1120,6 +1280,7 @@ public static class InboxLayoutArea
                     Category = string.IsNullOrWhiteSpace(leg.Category) ? leg.Source : leg.Category,
                     CategoryLabelKey = string.IsNullOrWhiteSpace(leg.CategoryLabelKey) ? leg.SourceLabelKey : leg.CategoryLabelKey,
                     ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen) ? null : leg.ConnectedWhen,
+                    AlwaysOn = leg.AlwaysOn, DefaultKind = leg.DefaultKind,
                     Ledger = InboxQueries.LedgerKindOf(leg.Query),
                 })
         ];

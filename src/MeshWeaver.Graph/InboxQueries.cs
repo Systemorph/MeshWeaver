@@ -263,6 +263,7 @@ public static class InboxQueries
             Source = "Activities",
             SourceLabelKey = "inbox.source.Activities",
             SourceIcon = ActivitiesIcon,
+            AlwaysOn = true,
             Band = InboxBand.Running,
             Order = 10,
             // Timed by when the run STARTED, and the content stays in the projection: the State badge
@@ -280,6 +281,7 @@ public static class InboxQueries
             Source = "Activities",
             SourceLabelKey = "inbox.source.Activities",
             SourceIcon = ActivitiesIcon,
+            AlwaysOn = true,
             Band = InboxBand.NeedsYou,
             Order = 50,
             Query = $"namespace:{ViewerToken}/_Activity nodeType:Activity content.showInInbox:true "
@@ -294,23 +296,31 @@ public static class InboxQueries
 
     private static InboxQueryLeg Notifications(bool unread) => new()
     {
-        Source = "Notifications",
+        Source = NotificationsSource,
         SourceLabelKey = "inbox.source.Notifications",
         SourceIcon = NotificationsIcon,
-        ShownByDefault = false,
+        // Listed like every source: what keeps the long feed out of the default view is that only
+        // IMPORTANT notifications pass (InboxRows.NotificationImportance), not a switch that is off.
+        AlwaysOn = true,
+        DefaultKind = true,
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 10 : 11,
         // Timed by when it ARRIVED: reading a notification flips isRead, and that write must not
         // move it ahead of newer ones.
         TimeField = "createdAt",
-        // Every notification that is NOT an approval request: those are the Approvals source.
+        // Every notification that is NOT an approval: approval requests are the Approvals source (the
+        // approval itself is the row), and what became of one is the approvals ledger's. A notification
+        // raised for the approvals FEATURE never appears here, whatever its type.
         Query = $"namespace:{ViewerToken}/{NotificationService.SatelliteSegment} "
-                + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true "
-                + $"content.notificationType:{string.Join("|", StampedNotificationTypes)} "
+                + $"nodeType:{NotificationNodeType.NodeType} -content.dismissed:true -content.feature:{NotificationFeatures.Approvals} "
+                + $"content.notificationType:{string.Join("|", NotificationFeedTypes)} "
                 + (unread ? "-content.isRead:true " : "content.isRead:true ")
                 + $"sort:CreatedAt-desc {TimedRowProjection}",
     };
+
+    /// <summary>The source id of the notification feed.</summary>
+    public const string NotificationsSource = "Notifications";
 
     /// <summary>
     /// The approval requests addressed to the viewer — the "approval required" notifications every
@@ -324,6 +334,8 @@ public static class InboxQueries
         Source = ApprovalsSource,
         SourceLabelKey = "inbox.source.Approvals",
         SourceIcon = ApprovalsIcon,
+        AlwaysOn = true,
+        DefaultKind = true,
         Unread = unread,
         Band = InboxBand.NeedsYou,
         Order = unread ? 5 : 6,
@@ -359,6 +371,8 @@ public static class InboxQueries
         Source = ApprovalsSource,
         SourceLabelKey = "inbox.source.Approvals",
         SourceIcon = ApprovalsIcon,
+        AlwaysOn = true,
+        DefaultKind = true,
         Band = band,
         Order = order,
         // Pending ones by when they were asked; decided ones by when they were decided.
@@ -415,6 +429,20 @@ public static class InboxQueries
     [
         nameof(NotificationType.ApprovalGiven),
         nameof(NotificationType.ApprovalRejected),
+        nameof(NotificationType.General),
+        nameof(NotificationType.AccessGranted),
+        nameof(NotificationType.ChatReady),
+        nameof(NotificationType.System),
+    ];
+
+    /// <summary>
+    /// The notification types the Notifications source lists: every stamped type but the approval ones
+    /// (<see cref="NotificationType.ApprovalGiven"/>, <see cref="NotificationType.ApprovalRejected"/>) —
+    /// what became of an approval is the approvals ledger's row, never a notification announcing it.
+    /// A computed property, for the same reason as <see cref="StampedNotificationTypes"/>.
+    /// </summary>
+    internal static ImmutableArray<string> NotificationFeedTypes =>
+    [
         nameof(NotificationType.General),
         nameof(NotificationType.AccessGranted),
         nameof(NotificationType.ChatReady),
