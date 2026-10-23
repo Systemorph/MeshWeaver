@@ -46,13 +46,14 @@ public class InboxSourceIconsTest
     {
         var root = XDocument.Parse(svg).Root!;
         root.Name.LocalName.Should().Be("svg", source);
-        root.Attribute("viewBox")?.Value.Should().Be("0 0 24 24", $"{source}: sized to a 24x24 viewBox");
+        (root.Attribute("viewBox")?.Value).Should().Be("0 0 24 24", $"{source}: sized to a 24x24 viewBox");
         var all = root.DescendantsAndSelf().ToArray();
         all.Select(e => e.Name.LocalName).Should().NotContain(["script", "image", "foreignObject", "iframe"], $"{source}: self-contained, nothing executable or raster");
         foreach (var href in all.SelectMany(e => e.Attributes()).Where(a => a.Name.LocalName == "href"))
             href.Value.Should().StartWith("#", $"{source}: no external reference");
         all.SelectMany(e => e.Attributes()).Where(a => a.Name.LocalName.StartsWith("on", StringComparison.OrdinalIgnoreCase))
             .Should().BeEmpty($"{source}: no event handlers");
+        (root.Attribute("data-mw-mark")?.Value).Should().Be("official", $"{source}: declared an official mark");
         svg.ToLowerInvariant().Should().NotContain("javascript:", $"{source}");
         svg.ToLowerInvariant().Should().NotContain("url(http", $"{source}: no remote paint server");
     }
@@ -68,6 +69,8 @@ public class InboxSourceIconsTest
             good.Replace("</svg>", "<script>alert(1)</script></svg>"),
             good.Replace("</svg>", "<image href=\"https://example.com/x.png\"/></svg>"),
             good.Replace("<path ", "<path onclick=\"x()\" "),
+            good.Replace(" viewBox=\"0 0 24 24\"", ""),
+            good.Replace(" data-mw-mark=\"official\"", ""),
             good[..^6],
         };
         foreach (var svg in broken)
@@ -81,7 +84,14 @@ public class InboxSourceIconsTest
         var table = InboxSourceIcons.KnownSources.ToHashSet(StringComparer.OrdinalIgnoreCase);
         table.Should().Contain(OutsideChannels);
         foreach (var source in OutsideChannels)
-            Icon.Parse(InboxSourceIcons.Resolve(source, null))!.Provider.Should().Be(Icon.InlineSvgProvider, $"{source} shows its real logo");
+        {
+            var svg = InboxSourceIcons.Resolve(source, null);
+            Icon.Parse(svg)!.Provider.Should().Be(Icon.InlineSvgProvider, $"{source} shows its real logo");
+            IconBackplate.IsOfficialMark(svg).Should().BeTrue($"{source} is an official mark");
+            var plated = IconBackplate.Ensure(svg);
+            plated.Should().Contain($"fill='{IconBackplate.OfficialPlate}'", $"{source}: official marks sit on the white plate, not a hash hue");
+            IconBackplate.Palette.Should().NotContain(c => plated.Contains($"fill='{c}' stroke='none'"), $"{source}: no house-icon hue");
+        }
     }
 
     /// <summary>Lookup ignores case; an unknown source keeps its leg's symbol, and with none gets the fallback.</summary>
