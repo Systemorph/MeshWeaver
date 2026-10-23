@@ -476,7 +476,10 @@ share is a step boundary:
 
 - **Listings.** Each listing (identities, sources, generations, markers, surfaces) is materialized
   by `ShippedPrebuiltBundles.OrdinalListing`, which checks the token per entry before sorting. It is
-  never `Enumerate….OrderBy(…)`, whose sort drains the whole listing before any check.
+  never `Enumerate….OrderBy(…)`, whose sort drains the whole listing before any check. The
+  per-identity file walk goes one directory at a time, checking the token before each directory.
+  It is never `EnumerateFiles(…, AllDirectories)`, which crosses a subtree of empty directories
+  inside one `MoveNext()` without reaching a per-file check.
 - **Pointer.** The publication pointer is resolved under the token, in the scan and in the
   removal.
 - **Seal.** The archive-existence probes check the token between them.
@@ -495,7 +498,7 @@ whatever was not reached is re-planned by the next pass. Pinned by `RetentionSwe
 - The armed pass is parked inside a removal and the pool is drained. The test requires residual 0
   with the rest of the plan untouched. Run against the pre-fix leaf, it measured residual 1.
 - A `BundleShareIo` that cancels inside one chosen round trip (the root listing, a generation
-  listing, a pointer probe, a seal probe, or a pointer resolution during removal) must see no
+  listing, an empty subtree, a pointer probe, a seal probe, or a pointer resolution during removal) must see no
   further IO call.
 - The guarded pass must report a drained pass as cancelled, never as faulted.
 

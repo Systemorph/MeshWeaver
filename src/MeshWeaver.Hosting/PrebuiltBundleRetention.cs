@@ -560,6 +560,42 @@ public static class PrebuiltBundleStore
         return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable()) { Surfaces = surfaces.ToImmutable() };
     }
 
+    /// <summary>
+    /// Every file under <paramref name="directory"/>, walked ONE directory at a time, with a token
+    /// check before each directory's listings and per entry.
+    ///
+    /// <para>🚨 Never <c>EnumerateFiles(…, SearchOption.AllDirectories)</c> here. A recursive
+    /// enumeration crosses a whole subtree of directories that hold no file inside ONE
+    /// <c>MoveNext()</c>, so a check placed per FILE never runs while it reads them, and on the share
+    /// each directory read is a round trip (second review on #7096). The walk's tallies are
+    /// order-independent, so visiting order does not matter.</para>
+    ///
+    /// <para>Reparse-point directories (symlinks, junctions) are not descended into, as the
+    /// recursive enumeration this replaces did not follow them: a link can lead outside the identity
+    /// or back into it.</para>
+    /// </summary>
+    private static IEnumerable<string> FilesUnder(string directory, CancellationToken cancellationToken, BundleShareIo io)
+    {
+        var pending = ImmutableStack.Create(directory);
+        while (!pending.IsEmpty)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            pending = pending.Pop(out var current);
+            foreach (var file in io.ListFiles(current))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var child in io.ListDirectories(current))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                    pending = pending.Push(child);
+            }
+        }
+    }
+
     private static PrebuiltIdentityEntry ReadIdentity(
         string identityDirectory, string identity, ILogger? logger, CancellationToken cancellationToken, BundleShareIo io)
     {
@@ -575,7 +611,7 @@ public static class PrebuiltBundleStore
         // run" — the cost would grow with exactly the thing the sweep is here to remove.
         var sourceNewest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var generationTallies = new Dictionary<(string Source, string Name), GenerationTally>();
-        foreach (var file in io.ListFiles(identityDirectory, SearchOption.AllDirectories))
+        foreach (var file in FilesUnder(identityDirectory, cancellationToken, io))
         {
             // One stat per file on the share — the step boundary of the longest part of the walk.
             cancellationToken.ThrowIfCancellationRequested();

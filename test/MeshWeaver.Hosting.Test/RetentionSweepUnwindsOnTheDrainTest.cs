@@ -271,12 +271,17 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
     [InlineData("pointer probe")]
     // The first of three seal probes.
     [InlineData("seal probe")]
+    // A subtree of EMPTY directories inside an identity: a recursive enumeration crosses it inside
+    // one MoveNext without yielding a file, so a per-file check never runs (second review on #7096).
+    [InlineData("empty subtree")]
     public void ADrainInsideTheStoreWalk_StopsItBeforeTheNextRoundTrip(string where)
     {
         StoreWithThreeCollectable();
         SealedWithThreeArchives("s-c2", "plugins", Now - TimeSpan.FromDays(220));
-        using var cts = new CancellationTokenSource();
         var c1 = SourceOf("s-c1");
+        var emptySubtree = Path.Combine(c1, "empty", "a");
+        Directory.CreateDirectory(Path.Combine(emptySubtree, "b", "c", "d"));
+        using var cts = new CancellationTokenSource();
         var io = new CancelAt(cts, where switch
         {
             "root listing" => (op, path) => op == nameof(BundleShareIo.ListDirectories) && path == root,
@@ -285,6 +290,9 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
                 && path == Path.Combine(c1, ShippedPrebuiltBundles.PublicationPointerFileName),
             "seal probe" => (op, path) => op == nameof(BundleShareIo.FileExists)
                 && path == Path.Combine(SourceOf("s-c2"), "A.zip"),
+            // The drain lands while the walk is reading the first directory of the empty subtree;
+            // the three directories below it must never be read.
+            "empty subtree" => (_, path) => path == emptySubtree,
             _ => throw new ArgumentOutOfRangeException(nameof(where)),
         });
 
