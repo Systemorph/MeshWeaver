@@ -471,15 +471,33 @@ the #2480 shape (#7049): `pool.InvokeBlocking(_ => SweepCore(…))`, named at te
 `FileSystem=1 [MeshWeaver.Hosting.PrebuiltBundleStore+<>c__DisplayClass7_0.<Sweep>b__0]`. The pass
 stats every file of every identity on the share and, where collection is armed, removes its plan
 one directory at a time; none of those steps looked at the token. `Sweep` now hands the pool's
-token to `SweepCore`, whose token parameter is REQUIRED (as is `Scan`'s). The store walk checks it
-per identity, per file and per source, and the collection checks it before every removal. A
-cancelled walk propagates `OperationCanceledException` — never "store could not be read", never an
-aborted-pass ledger entry. A cancel mid-collection stops at the next removal, appends what it DID
-remove to the ledger, and then throws. It changes how much of the plan one pass gets through, never
-what the plan collects: whatever was not reached is re-planned by the next pass. Pinned by
-`RetentionSweepUnwindsOnTheDrainTest`, which parks the pass inside a removal, drains the pool and
-requires residual 0 with the rest of the plan untouched. Run against the pre-fix leaf, it measured
-residual 1.
+token to `SweepCore`, whose token parameter is REQUIRED (as is `Scan`'s). Every round trip to the
+share is a step boundary:
+
+- **Listings.** Each listing (identities, sources, generations, markers, surfaces) is materialized
+  by `ShippedPrebuiltBundles.OrdinalListing`, which checks the token per entry before sorting. It is
+  never `Enumerate….OrderBy(…)`, whose sort drains the whole listing before any check.
+- **Pointer.** The publication pointer is resolved under the token, in the scan and in the
+  removal.
+- **Seal.** The archive-existence probes check the token between them.
+- **Removal.** The token is checked between source unseals and before the recursive removal.
+
+A cancel propagates `OperationCanceledException`. The broad "unreadable seal" and "could not list
+generations" catches exclude it, so it never becomes "store could not be read" or an aborted-pass
+ledger entry. A cancel during collection appends what the pass DID remove to the ledger and then
+throws. A cancelled removal is never counted as a failed one. The hosted service's `GuardedPass`
+reports a cancelled pass separately from a faulted one, so an interrupted pass cannot also log
+`FAULTED … nothing was collected`.
+
+A cancel changes how much of the plan one pass gets through, never what the plan collects:
+whatever was not reached is re-planned by the next pass. Pinned by `RetentionSweepUnwindsOnTheDrainTest`:
+
+- The armed pass is parked inside a removal and the pool is drained. The test requires residual 0
+  with the rest of the plan untouched. Run against the pre-fix leaf, it measured residual 1.
+- A `BundleShareIo` that cancels inside one chosen round trip (the root listing, a generation
+  listing, a pointer probe, a seal probe, or a pointer resolution during removal) must see no
+  further IO call.
+- The guarded pass must report a drained pass as cancelled, never as faulted.
 
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it

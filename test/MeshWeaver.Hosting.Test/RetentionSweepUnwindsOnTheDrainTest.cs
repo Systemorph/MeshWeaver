@@ -194,4 +194,172 @@ public class RetentionSweepUnwindsOnTheDrainTest : IDisposable
             "a pass the pool cancelled before it read anything is not an aborted pass to record");
         new[] { "s-c1", "s-c2", "s-c3" }.Should().OnlyContain(id => Directory.Exists(Path.Combine(root, id)));
     }
+
+    // ---- review on #7096: every round trip of the walk is a step boundary -----------------------
+
+    /// <summary>
+    /// The real file system, with ONE chosen operation turned into "the drain arrives here": the
+    /// trigger cancels the token while that operation is in flight, and every IO call the walk makes
+    /// after it is counted. A walk that honours its token makes none.
+    /// </summary>
+    private sealed class CancelAt(CancellationTokenSource cts, Func<string, string, bool> trigger) : BundleShareIo
+    {
+        private int fired;
+
+        /// <summary>IO calls issued after the cancel.</summary>
+        public int CallsAfterCancel;
+
+        private void Step(string op, string path)
+        {
+            if (cts.IsCancellationRequested)
+            {
+                Interlocked.Increment(ref CallsAfterCancel);
+                return;
+            }
+            if (trigger(op, path) && Interlocked.Exchange(ref fired, 1) == 0)
+                cts.Cancel();
+        }
+
+        private IEnumerable<string> Lazily(string op, string path, IEnumerable<string> entries)
+        {
+            Step(op, path);
+            foreach (var entry in entries)
+            {
+                // The entry the in-flight read already produced is returned; asking for ANOTHER one
+                // after the cancel is a further round trip.
+                yield return entry;
+                if (cts.IsCancellationRequested)
+                    Interlocked.Increment(ref CallsAfterCancel);
+            }
+        }
+
+        public override bool DirectoryExists(string path) { Step(nameof(DirectoryExists), path); return base.DirectoryExists(path); }
+        public override bool FileExists(string path) { Step(nameof(FileExists), path); return base.FileExists(path); }
+        public override string[] ReadAllLines(string path) { Step(nameof(ReadAllLines), path); return base.ReadAllLines(path); }
+        public override string ReadAllText(string path) { Step(nameof(ReadAllText), path); return base.ReadAllText(path); }
+        public override IEnumerable<string> ListDirectories(string path) =>
+            Lazily(nameof(ListDirectories), path, base.ListDirectories(path));
+        public override IEnumerable<string> ListFiles(string path, SearchOption option = SearchOption.TopDirectoryOnly) =>
+            Lazily(nameof(ListFiles), path, base.ListFiles(path, option));
+    }
+
+    /// <summary>A sealed source whose seal lists THREE archives — three existence probes.</summary>
+    private void SealedWithThreeArchives(string identity, string source, DateTimeOffset sealedAt)
+    {
+        Sealed(identity, source, sealedAt);
+        var dir = Path.Combine(root, identity, source);
+        foreach (var name in new[] { "B.zip", "C.zip" })
+        {
+            File.WriteAllBytes(Path.Combine(dir, name), new byte[16]);
+            File.SetLastWriteTimeUtc(Path.Combine(dir, name), sealedAt.UtcDateTime);
+        }
+        var sentinel = Path.Combine(dir, ShippedPrebuiltBundles.CompletionSentinelFileName);
+        File.WriteAllText(sentinel, "A.zip\nB.zip\nC.zip\n");
+        File.SetLastWriteTimeUtc(sentinel, sealedAt.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(dir, sealedAt.UtcDateTime);
+        Directory.SetLastWriteTimeUtc(Path.Combine(root, identity), sealedAt.UtcDateTime);
+    }
+
+    private string SourceOf(string identity) => Path.Combine(root, identity, "plugins");
+
+    [Theory]
+    // The identity listing: the drain lands while the root is being listed.
+    [InlineData("root listing")]
+    // The generation listing of one source.
+    [InlineData("generation listing")]
+    // The publication pointer of one source.
+    [InlineData("pointer probe")]
+    // The first of three seal probes.
+    [InlineData("seal probe")]
+    public void ADrainInsideTheStoreWalk_StopsItBeforeTheNextRoundTrip(string where)
+    {
+        StoreWithThreeCollectable();
+        SealedWithThreeArchives("s-c2", "plugins", Now - TimeSpan.FromDays(220));
+        using var cts = new CancellationTokenSource();
+        var c1 = SourceOf("s-c1");
+        var io = new CancelAt(cts, where switch
+        {
+            "root listing" => (op, path) => op == nameof(BundleShareIo.ListDirectories) && path == root,
+            "generation listing" => (op, path) => op == nameof(BundleShareIo.ListDirectories) && path == c1,
+            "pointer probe" => (op, path) => op == nameof(BundleShareIo.FileExists)
+                && path == Path.Combine(c1, ShippedPrebuiltBundles.PublicationPointerFileName),
+            "seal probe" => (op, path) => op == nameof(BundleShareIo.FileExists)
+                && path == Path.Combine(SourceOf("s-c2"), "A.zip"),
+            _ => throw new ArgumentOutOfRangeException(nameof(where)),
+        });
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            PrebuiltBundleStore.Scan(root, cts.Token, logger: null, io));
+
+        io.CallsAfterCancel.Should().Be(0,
+            $"a drain arriving during the {where} must end the walk before its next round trip to the share — "
+            + "a listing sorted before it is checked, a pointer resolved without the token, or a seal probed to the "
+            + "end each keep the silo's teardown join waiting (review on #7096)");
+    }
+
+    [Fact]
+    public void ADrainWhileAnIdentityIsBeingUnsealed_LeavesItInPlace_AndIsNotCountedAsAFailedRemoval()
+    {
+        StoreWithThreeCollectable();
+        using var cts = new CancellationTokenSource();
+        var pointer = Path.Combine(SourceOf("s-c1"), ShippedPrebuiltBundles.PublicationPointerFileName);
+        var pointerProbes = 0;
+        // The scan probes s-c1's pointer once; the removal resolves it again before unsealing. The
+        // drain lands on that second probe — inside the removal of the first collectable identity.
+        var io = new CancelAt(cts, (op, path) =>
+            op == nameof(BundleShareIo.FileExists) && path == pointer && Interlocked.Increment(ref pointerProbes) == 2);
+        var removed = 0;
+
+        Assert.ThrowsAny<OperationCanceledException>(() => PrebuiltBundleStore.SweepCore(
+            root, Live, "4.0.0-ci.1", [], [], retention, Now, cts.Token, logger: null,
+            deleteDirectory: dir => { removed++; Directory.Delete(dir, recursive: true); }, io));
+
+        removed.Should().Be(0, "the recursive removal is its own step, and the drain arrived before it");
+        Directory.Exists(Path.Combine(root, "s-c1")).Should().BeTrue("a removal the drain interrupted leaves the identity for the next pass");
+        File.Exists(Path.Combine(SourceOf("s-c1"), ShippedPrebuiltBundles.CompletionSentinelFileName)).Should().BeTrue(
+            "the seal is removed only after the pointer resolved under the token");
+        var ledger = File.ReadAllLines(PrebuiltBundleStore.LedgerPathOf(root));
+        ledger.Should().ContainSingle(l => l.Contains("interrupted by the pool's cancel"),
+            "the pool's cancel takes the interrupted-ledger path");
+        ledger.Should().NotContain(l => l.Contains("failed"), "a cancelled removal is not a failed removal");
+    }
+
+    [Fact]
+    public async Task TheHostedServiceWrapper_ReportsADrainedPassAsCancelled_NeverAsAFault()
+    {
+        // The schedule wraps every pass in GuardedPass. A pass the pool ended — here an armed pass
+        // parked in its first removal and then drained — must reach the CANCELLED report and never the
+        // fault report, whose "FAULTED … nothing was collected" would contradict the INTERRUPTED
+        // outcome of a pass that had already removed an identity.
+        StoreWithThreeCollectable();
+        using var pool = new IoPool(2, drainTimeout: DrainBudget, drainGrace: TimeSpan.FromMilliseconds(200));
+        var entered = new AsyncSubject<Unit>();
+        var ended = new AsyncSubject<Unit>();
+        var faults = 0;
+        var cancellations = 0;
+        var records = 0;
+
+        PrebuiltBundleRetentionHostedService.GuardedPass(
+                SweepThroughThePool(pool, (dir, ct) =>
+                {
+                    entered.OnNext(Unit.Default);
+                    entered.OnCompleted();
+                    SpinWait.SpinUntil(() => ct.IsCancellationRequested, Bound);
+                    Directory.Delete(dir, recursive: true);
+                }),
+                _ => Interlocked.Increment(ref records),
+                _ => Interlocked.Increment(ref faults),
+                _ => Interlocked.Increment(ref cancellations))
+            .Subscribe(_ => { }, _ => { }, () => { ended.OnNext(Unit.Default); ended.OnCompleted(); });
+
+        await entered.Should().Within(Bound).Emit("the armed pass reaches its first removal");
+        var residual = await Task.Run(pool.Drain, TestContext.Current.CancellationToken)
+            .WaitAsync(Bound, TestContext.Current.CancellationToken);
+        await ended.Should().Within(Bound).Emit("the guarded pass completes as one pass");
+
+        residual.Should().Be(0);
+        Volatile.Read(ref cancellations).Should().Be(1, "the drained pass is reported once, as cancelled");
+        Volatile.Read(ref faults).Should().Be(0, "a pass the pool cancelled is not a faulted pass");
+        Volatile.Read(ref records).Should().Be(0, "an interrupted pass records no finished result");
+    }
 }

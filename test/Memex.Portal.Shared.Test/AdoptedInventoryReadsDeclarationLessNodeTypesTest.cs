@@ -150,6 +150,7 @@ public class AdoptedInventoryReadsDeclarationLessNodeTypesTest(ITestOutputHelper
                         return Observable.Return(1);
                     }),
                 _ => recorded++,
+                ex => faulted = ex,
                 ex => faulted = ex)
             .Subscribe(_ => passes++, ex => scheduleDied = ex);
 
