@@ -42,7 +42,7 @@ if [ -f "$CHART/files/build-run.py" ]; then
   report "deploy/helm/files/build-run.py exists — the chart must not carry a second copy of the runner; it ships in the mw-build-host image"
 fi
 if [ -f "$DOCKERFILE" ] \
-   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py /opt/build-host/$' "$DOCKERFILE" \
+   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py .github/scripts/ci-artifact-store.py /opt/build-host/$' "$DOCKERFILE" \
    && grep -q '^COPY artifacts/plugin-build/ /opt/build-host/plugin-build/$' "$DOCKERFILE" \
    && grep -q 'bubblewrap' "$DOCKERFILE" \
    && grep -q 'sandbox-postgres.sh --self-test' "$DOCKERFILE" \
@@ -141,6 +141,10 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
         problems.append(f"{ch}: the gate host must be composed into /host/app (the composer removes its output; /host is a mount point)")
     if any(c["name"] == "postgres" for c in pod.get("containers", []) + pod.get("initContainers", [])):
         problems.append(f"{ch}: a shared Postgres container renders — a stage's database is disposable, inside its own sandbox")
+    _vols = {v["name"]: v for v in pod.get("volumes", [])}
+    if env.get("MW_BUILD_ARTIFACT_STORE", {}).get("value") != "file:/ci-artifacts" \
+            or _vols.get("ci-artifacts", {}).get("persistentVolumeClaim", {}).get("claimName") != "ci-artifacts":
+        problems.append(f"{ch}: the H9 artifact store is not wired (file:/ci-artifacts on its claim): {env.get('MW_BUILD_ARTIFACT_STORE')}")
     if env.get("MW_REGISTRY_URL", {}).get("value") != "https://portal.example.com" or env.get("MW_REGISTRY_KEY_FILE", {}).get("value") != "/run/registry-key/key":
         problems.append(f"{ch}: the registry bundle index (H8) is not wired: {env.get('MW_REGISTRY_URL')}")
     rk = vols.get("registry-key", {}).get("secret", {}) if (vols := {v["name"]: v for v in pod.get("volumes", [])}) else {}

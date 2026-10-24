@@ -2411,6 +2411,10 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/sandbox-postgres.sh --self-test
 
+    - name: "A host-executed run's modules are staged only by verified receipt (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-artifacts-fetch.py --self-test
+
     # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
     # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
     # were baked from, PER PACKAGE — never the upstream's HEAD, never the publication commit for a

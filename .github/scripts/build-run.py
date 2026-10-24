@@ -414,6 +414,11 @@ def load_stages(path: str) -> list[dict]:
     return validate_stages(doc)
 
 
+# The shared-cache entries a stage may DECLARE it reads (`needs`), each bound read-only into its
+# sandbox: the plugins layer, its repository's own compile outputs, the NuGet package cache.
+STAGE_NEEDS = {"plugins", "outputs", "nuget"}
+
+
 def validate_stages(doc: object) -> list[dict]:
     stages = doc.get("stages") if isinstance(doc, dict) else None
     if not isinstance(stages, list) or not stages:
@@ -439,7 +444,11 @@ def validate_stages(doc: object) -> list[dict]:
         tmo = s.get("timeoutMinutes", DEFAULT_STAGE_TIMEOUT_MINUTES)
         if not isinstance(tmo, (int, float)) or not (0 < tmo <= DEFAULT_STAGE_TIMEOUT_MINUTES):
             raise Refusal(f"stage {name!r} timeoutMinutes {tmo!r} must be in (0, {DEFAULT_STAGE_TIMEOUT_MINUTES}]")
-        out.append({"name": name, "kind": kind, "command": cmd, "timeoutMinutes": float(tmo)})
+        needs = s.get("needs", [])
+        if not isinstance(needs, list) or not all(isinstance(n, str) and n in STAGE_NEEDS for n in needs):
+            raise Refusal(f"stage {name!r} needs {needs!r} must be a list drawn from {sorted(STAGE_NEEDS)} — "
+                          f"the shared-cache entries the stage may read (its own repository's mirror always)")
+        out.append({"name": name, "kind": kind, "command": cmd, "timeoutMinutes": float(tmo), "needs": list(needs)})
     return out
 
 
@@ -802,18 +811,24 @@ class Sandbox:
         self.bwrap = bwrap
         self.readonly = tuple(readonly)
 
-    def argv(self, command: str, checkout: str, outputs: str, env: dict) -> list[str]:
+    def argv(self, command: str, checkout: str, outputs: str, env: dict,
+             readonly: Iterable[str] = (), writable: Iterable[str] = ()) -> list[str]:
+        """`readonly` are the cache entries THIS stage may read (its own repository's mirror and the
+        dependency artifacts it declares) — never the cache root; `writable` the run's extra output
+        directories (artifacts) beside the checkout and the outputs."""
         a = [self.bwrap, "--die-with-parent", "--new-session",
              "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
              "--clearenv"]
         for k in sorted(env):
             a += ["--setenv", k, env[k]]
-        for p in self.SYSTEM_RO + self.readonly:
+        for p in self.SYSTEM_RO + self.readonly + tuple(readonly):
             a += ["--ro-bind-try", p, p]
         a += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
               "--tmpfs", SCRATCH, "--dir", f"{SCRATCH}/home", "--dir", f"{SCRATCH}/tmp", "--dir", f"{SCRATCH}/nuget",
-              "--bind", checkout, checkout, "--bind", outputs, outputs, "--chdir", checkout,
-              "--", "/bin/bash", "-c", command]
+              "--bind", checkout, checkout, "--bind", outputs, outputs]
+        for w in writable:
+            a += ["--bind", w, w]
+        a += ["--chdir", checkout, "--", "/bin/bash", "-c", command]
         return a
 
     def probe(self, run: Callable[[list[str]], tuple[int, str]]) -> None:
@@ -887,6 +902,44 @@ def boundary_check(sandbox, env: dict, run: Callable[[list[str]], tuple[int, str
         raise Fatal("the network boundary does not hold — from inside a stage's sandbox these ANSWERED: "
                     + "; ".join(holes) + ". The host refuses to start: fix the build-host NetworkPolicy "
                     "(169.254.0.0/16, 168.63.129.16 and the private ranges must be unreachable)")
+
+
+def scoping_check(host, run: Callable[[list[str]], tuple[int, str]]) -> None:
+    """A PUBLIC repository's sandbox must not be able to read a PRIVATE repository's mirror or
+    cache entry — nor the cache root. Seeded entries for two scratch repositories are created in the
+    real cache, a sandbox is built for the public one exactly as for a stage that declares every
+    `needs`, and it must read its own entry and fail to read the other's and to list the root. Any
+    other outcome — including a check that cannot run — and the host refuses to start."""
+    cache = host.cache
+    pub, priv = ".boundary-public", ".boundary-private"
+    entries = {
+        "pub-mirror": os.path.join(cache, "git", f"{pub}.git", "PUBLIC"),
+        "priv-mirror": os.path.join(cache, "git", f"{priv}.git", "SECRET"),
+        "priv-outputs": os.path.join(outputs_root(cache, priv), "SECRET"),
+        "root-canary": os.path.join(cache, ".boundary-root-canary"),
+    }
+    for f in entries.values():
+        os.makedirs(os.path.dirname(f), exist_ok=True)
+        with open(f, "w") as fh:
+            fh.write("boundary\n")
+    d = tempfile.mkdtemp(prefix="scoping-", dir=host.work if os.path.isdir(host.work) else None)
+    try:
+        ro = host.stage_readonly(pub, {"needs": sorted(STAGE_NEEDS)})
+        if any(os.path.realpath(p) in (os.path.realpath(cache), os.path.realpath(os.path.join(cache, "outputs")),
+                                       os.path.realpath(os.path.join(cache, "git"))) for p in ro):
+            raise Fatal(f"a stage would be bound a cache ROOT ({ro}) — the host refuses to start")
+        script = (f"cat {shlex_quote(entries['pub-mirror'])} >/dev/null || {{ echo own-unreadable; exit 3; }}; "
+                  f"if cat {shlex_quote(entries['priv-mirror'])} >/dev/null 2>&1; then echo private-mirror-readable; exit 4; fi; "
+                  f"if cat {shlex_quote(entries['priv-outputs'])} >/dev/null 2>&1; then echo private-outputs-readable; exit 5; fi; "
+                  f"if cat {shlex_quote(entries['root-canary'])} >/dev/null 2>&1; then echo cache-root-readable; exit 6; fi; echo scoped")
+        rc, out = run(host.sandbox.argv(script, d, d, {"PATH": "/usr/bin:/bin"}, readonly=ro))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    if rc != 0 or "scoped" not in out:
+        reason = {3: "its own mirror is not readable", 4: "a PRIVATE repository's mirror is readable",
+                  5: "a PRIVATE repository's compile outputs are readable", 6: "a file at the cache ROOT is readable"}.get(rc, out.strip()[-200:])
+        raise Fatal(f"the cache-scoping self-check failed: from a public repository's sandbox, {reason} — "
+                    f"the host refuses to start")
 
 
 def shlex_quote(v: str) -> str:
@@ -1001,13 +1054,25 @@ def cache_key_of(checkout: str, spec: object, env: dict, run=None) -> str:
     raise Refusal(f"{CACHE_KEY_FILE} kind must be nodetype or module (got {spec.get('kind')!r})")
 
 
+def refset_key(tester_digest: str, portal_digest: str) -> str:
+    """The staged reference set's key: BOTH images' digests — the compiler (tester) and the
+    reference assemblies (portal) — never one of them alone."""
+    return hashlib.sha256(f"tester={tester_digest}\nportal={portal_digest}".encode()).hexdigest()[:40]
+
+
+def outputs_root(cache: str, repo: str) -> str:
+    """A repository's OWN compile-output cache: outputs are scoped by repository, so a stage of one
+    repository can never be bound another's compiled bytes (a private repo's into a public run)."""
+    return os.path.join(cache, "outputs", repo)
+
+
 def promote_outputs(outputs: str, cache: str, log: Callable[[str], None],
-                    verify: Callable[[str], Optional[str]] = None) -> tuple[int, int, list[str]]:
+                    verify: Callable[[str], Optional[str]] = None, repo: str = "") -> tuple[int, int, list[str]]:
     """Copy a TRUNK stage's content-addressed outputs (`<outputs>/<key>/…`) into the shared cache
     (`<cache>/outputs/<key>/`). A key already present is kept (same key ⇒ same content); a name
     that is not a content key is not promoted. Symlinks are copied as links, never followed.
     Returns (promoted, kept, refused names)."""
-    root = os.path.join(cache, "outputs")
+    root = outputs_root(cache, repo) if repo else os.path.join(cache, "outputs")
     promoted = kept = 0
     refused: list[str] = []
     if not os.path.isdir(outputs):
@@ -1179,6 +1244,13 @@ def _post_form(url: str, form: dict) -> dict:
         return {"error": str(e)}
 
 
+def _run_capture_stdout(argv: list[str]) -> tuple[int, str]:
+    """A HOST helper (ci-artifact-store.py): no credential but the Azure workload identity's."""
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=1800,
+                       env={k: v for k, v in os.environ.items() if not SECRET_ENV.search(k) or k.startswith("AZURE_")})
+    return r.returncode, (r.stdout or "") + ("\n" + r.stderr if r.returncode else "")
+
+
 def _run_capture(argv: list[str]) -> tuple[int, str]:
     r = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
                        timeout=120)
@@ -1191,6 +1263,7 @@ class Host:
                  sandbox=None, leftovers: Callable[[], list[int]] = None,
                  registry_get: Callable[[str, str], tuple[int, object]] = None,
                  fetch_runner: Callable[[list[str], dict], int] = None,
+                 store_runner: Callable[[list[str]], tuple[int, str]] = None,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.env = env
@@ -1200,11 +1273,13 @@ class Host:
         self.checkout = checkout or default_checkout
         self.cache = env.get("MW_BUILD_CACHE", "/cache")
         self.work = env.get("MW_BUILD_WORK", "/work")
+        # NEVER the cache root: what a stage may read of the shared cache is bound per stage
+        # (stage_readonly) — its own repository's mirror and the dependency artifacts it declares.
         self.sandbox = sandbox or Sandbox(env.get("BWRAP", "bwrap"), [
-            self.cache, *[p for p in (env.get("MW_BUILD_GATE_HOST"), env.get("MeshWeaverRefs"),
-                                      "/portal", "/tester", "/tools") if p]])
+            p for p in (env.get("MW_BUILD_GATE_HOST"), env.get("MeshWeaverRefs"), "/portal", "/tester", "/tools") if p])
         self.leftovers = leftovers or pid_namespace_leftovers
         self.registry_get = registry_get or _registry_get
+        self.store_runner = store_runner or _run_capture_stdout
         self.fetch_runner = fetch_runner or (lambda argv, env: subprocess.run(argv, env=env, timeout=600).returncode)
         self.sleep = sleep
         self.clock = clock
@@ -1228,6 +1303,7 @@ class Host:
         self.plugins_dir: Optional[str] = None
         self.plugins_known = False
         self.held: list[EventSink] = []
+        self.artifacts_dir = ""
         self.plugins_key: Optional[str] = None
         self.heartbeat: Optional[Heartbeat] = None
         self.run_sinks: dict[str, EventSink] = {}
@@ -1399,21 +1475,30 @@ class Host:
             self.log(f"claim {path!r} carries an unusable repo/sha ({repo!r}, {sha!r}) — not running it")
             return "idle"
         started = self.clock()
+        self.sweep_workspaces()
         workdir = tempfile.mkdtemp(prefix=f"{repo}-{sha[:12]}-", dir=self.work)
         checkout_dir = os.path.join(workdir, "src")
         outputs_dir = os.path.join(workdir, "out")
+        self.artifacts_dir = os.path.join(workdir, "artifacts")
         stages: list[dict] = []
         self.run_sinks: dict[str, EventSink] = {}       # seq restarts at 1 for every assignment
         if claim.get("claimId"):
             self.claim_id = str(claim["claimId"])
         with Heartbeat() as hb:
             self.heartbeat = hb
+            outcome = "lost"
             try:
-                return self._run(claim, repo, sha, path, publish, trunk, started, workdir, checkout_dir,
-                                 outputs_dir, stages)
+                outcome = self._run(claim, repo, sha, path, publish, trunk, started, workdir, checkout_dir,
+                                    outputs_dir, stages)
+                return outcome
             finally:
                 self.heartbeat = None
-                shutil.rmtree(workdir, ignore_errors=True)
+                if outcome == "undelivered" and os.listdir(self.artifacts_dir or workdir):
+                    # H9: the workspace goes only after every receipt was ACKNOWLEDGED. It is kept
+                    # (and named) for the instance's re-queue, and swept once older than two deadlines.
+                    self.log(f"{path}: receipts not acknowledged — keeping the workspace {workdir}")
+                else:
+                    shutil.rmtree(workdir, ignore_errors=True)
 
     def _sink_for(self, repo: str, sha: str, stage: str) -> EventSink:
         """ONE sink per stage route for the whole run, so its batch numbers are one sequence."""
@@ -1425,6 +1510,7 @@ class Host:
         return sink
 
     def _run(self, claim, repo, sha, path, publish, trunk, started, workdir, checkout_dir, outputs_dir, stages) -> str:
+        artifacts_dir = self.artifacts_dir
         try:
             fallback = [c.get("name") if isinstance(c, dict) else c for c in (claim.get("stages") or [])]
             last_stage = next((s[len("build/"):] if s.startswith("build/") else s
@@ -1453,6 +1539,7 @@ class Host:
             plan.add([{"kind": "plan", "stages": [st["name"] for st in stages]}])
             self.deliver(plan)
             os.makedirs(outputs_dir, exist_ok=True)
+            os.makedirs(artifacts_dir, exist_ok=True)
             # MW_BUILD_PUBLISH is INFORMATIONAL: a host holds no publication credential, so a stage
             # cannot publish whatever it says; publication is the publish lane's, on build/verdict.
             extra = {
@@ -1462,13 +1549,14 @@ class Host:
                 "MW_BUILD_PLATFORM_VERSION": self.platform_version,
                 "MW_BUILD_FRAMEWORK_IDENTITY": self.identity,
                 "MW_PLUGINS_DIR": self.plugins_dir or "", "MW_PLUGINS_DIGEST": self.plugins_digest or "",
-                "MW_BUILD_CACHE": self.cache, "MW_BUILD_CACHE_OUTPUTS": os.path.join(self.cache, "outputs"),
+                "MW_BUILD_CACHE_OUTPUTS": outputs_root(self.cache, repo), "MW_BUILD_ARTIFACTS": artifacts_dir,
                 "MW_BUILD_OUTPUTS": outputs_dir,
                 # What a stage needs to compute the cross-run cache keys the host will recompute.
                 "MW_BUILD_TESTER_DIGEST": self.env.get("MW_BUILD_TESTER_DIGEST", ""),
                 "MW_BUILD_PORTAL_DIGEST": self.env.get("MW_BUILD_PORTAL_DIGEST", ""),
                 "MW_BUILD_PLATFORM_REF": self.env.get("MW_BUILD_PLATFORM_REF", ""),
                 "MW_PLUGINS_KEY": self.plugins_key or "",
+                "MW_BUILD_REFSET_KEY": self.env.get("MW_BUILD_REFSET_KEY", ""),
             }
             failed_at = None
             why = ""
@@ -1485,7 +1573,9 @@ class Host:
                     continue
                 self.drain_held(attempts=2)
                 ok = self.run_stage(dict(st, timeoutMinutes=min(st["timeoutMinutes"], remaining / 60)),
-                                    checkout_dir, outputs_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]})
+                                    checkout_dir, outputs_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]},
+                                    readonly=self.stage_readonly(repo, st), writable=[artifacts_dir],
+                                    hand_over=lambda: self.hand_over_artifacts(repo, sha, st["name"], artifacts_dir))
                 self.assert_clean()
                 if not ok:
                     failed_at = st["name"]
@@ -1493,7 +1583,8 @@ class Host:
                     # Only COMPILATION is reused across runs — never a test verdict — and only a key
                     # the host can RECOMPUTE from the inputs the output names (cache_key_problem).
                     promoted, kept, refused = promote_outputs(outputs_dir, self.cache, self.log,
-                                                              verify=lambda d: self.cache_key_problem(d, checkout_dir))
+                                                              verify=lambda d: self.cache_key_problem(d, checkout_dir),
+                                                              repo=repo)
                     if promoted or kept or refused:
                         sink.add([{"kind": "line", "text": f"cache: {promoted} output(s) promoted, {kept} already "
                                                            f"present" + (f", NOT promoted (not a content key): "
@@ -1538,14 +1629,85 @@ class Host:
         self.log(f"no installation token for {claim.get('repo')} (HTTP {status}) — cloning anonymously")
         return None
 
-    def run_stage(self, st: dict, checkout: str, outputs: str, sink: EventSink, extra: dict) -> bool:
+    def stage_refset(self) -> Optional[str]:
+        """The composed gate host (the portal's /app with the tester beside it) staged into the
+        shared cache keyed by BOTH digests — `<cache>/refsets/<sha256(tester|portal)>/host` — so a
+        reference set is never reused across a change of either image. Rebinds MW_BUILD_GATE_HOST
+        (and the sandbox's read-only bind) to the staged copy. None when there is nothing to stage."""
+        src = self.env.get("MW_BUILD_GATE_HOST", "")
+        tester, portal = self.env.get("MW_BUILD_TESTER_DIGEST", ""), self.env.get("MW_BUILD_PORTAL_DIGEST", "")
+        if not src or not os.path.isdir(src):
+            return None
+        if not DIGEST.match(tester) or not DIGEST.match(portal):
+            raise Fatal("the reference set cannot be keyed: MW_BUILD_TESTER_DIGEST / MW_BUILD_PORTAL_DIGEST are not both sha256 digests")
+        key = refset_key(tester, portal)
+        root = os.path.join(self.cache, "refsets")
+        final = os.path.join(root, key)
+        if not os.path.isfile(os.path.join(final, ".complete")):
+            os.makedirs(root, exist_ok=True)
+            tmp = tempfile.mkdtemp(prefix=".refset-", dir=root)
+            shutil.copytree(src, os.path.join(tmp, "host"), symlinks=True)
+            with open(os.path.join(tmp, ".complete"), "w") as fh:
+                fh.write(f"tester {tester}\nportal {portal}\n")
+            try:
+                os.rename(tmp, final)
+            except OSError:
+                shutil.rmtree(tmp, ignore_errors=True)
+        staged = os.path.join(final, "host")
+        self.env["MW_BUILD_GATE_HOST"] = staged
+        self.env["MW_BUILD_REFSET_KEY"] = key
+        if isinstance(self.sandbox, Sandbox):
+            self.sandbox.readonly = tuple(p for p in self.sandbox.readonly if p != src) + (staged,)
+        return staged
+
+    def sweep_workspaces(self, now: Optional[float] = None) -> list[str]:
+        """Remove kept workspaces older than two run deadlines (their receipts were never
+        acknowledged; the instance re-queued the run long since). Returns what was removed."""
+        now = time.time() if now is None else now
+        gone = []
+        try:
+            names = os.listdir(self.work)
+        except OSError:
+            return gone
+        for n in names:
+            full = os.path.join(self.work, n)
+            try:
+                if os.path.isdir(full) and not os.path.islink(full) and now - os.path.getmtime(full) > 2 * self.run_deadline:
+                    shutil.rmtree(full, ignore_errors=True)
+                    gone.append(n)
+            except OSError:
+                continue
+        return gone
+
+    def stage_readonly(self, repo: str, st: dict) -> list[str]:
+        """What of the SHARED cache this stage may read, read-only: its own repository's git mirror
+        (the checkout's alternates point there) and what the stage DECLARES (`needs`) — never the
+        cache root, never another repository's mirror or outputs."""
+        ro = [os.path.join(self.cache, "git", f"{repo}.git")]
+        needs = st.get("needs") or []
+        if "plugins" in needs and self.plugins_dir:
+            ro.append(self.plugins_dir)
+            for name in sorted(os.listdir(self.plugins_dir)) if os.path.isdir(self.plugins_dir) else []:
+                link = os.path.join(self.plugins_dir, name)
+                if os.path.islink(link):
+                    ro.append(os.path.realpath(link))     # a plugin set's links point into /cache/bundles
+        if "outputs" in needs:
+            ro.append(outputs_root(self.cache, repo))
+        if "nuget" in needs:
+            ro.append(os.path.join(self.cache, "nuget"))
+        return ro
+
+    def run_stage(self, st: dict, checkout: str, outputs: str, sink: EventSink, extra: dict,
+                  readonly: Iterable[str] = (), writable: Iterable[str] = (),
+                  hand_over: Callable[[], tuple[list[dict], Optional[str]]] = None) -> bool:
         """Run ONE stage in a fresh sandboxed process tree; post its events; return success."""
         name, started = st["name"], self.clock()
         parser = OutputParser(checkout, name)
         sink.add([{"kind": "line", "text": f"[00:00:00] {st['kind']}/{name} on build-{self.channel} "
                                            f"({self.platform_version}, plugins {(self.plugins_digest or '-')[:19]})"}])
         try:
-            argv = self.sandbox.argv(st["command"], checkout, outputs, sandbox_env(self.env, extra, self.cache))
+            argv = self.sandbox.argv(st["command"], checkout, outputs, sandbox_env(self.env, extra, self.cache),
+                                     readonly=readonly, writable=writable)
             proc = subprocess.Popen(argv, cwd=checkout, env={"PATH": self.env.get("PATH", "/usr/bin:/bin")},
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                     start_new_session=True, text=True, errors="replace", bufsize=1)
@@ -1607,6 +1769,14 @@ class Host:
             # nothing structured explains the failure — the tail is the evidence
             events += [{"kind": "line", "text": "│ " + t} for t in parser.tail if t.strip()]
         note = f"timed out after {st['timeoutMinutes']:g} min" if timed_out else ""
+        if ok and hand_over is not None:
+            # H9: every artifact the stage produced is in the shared CI store, its stored hash re-read,
+            # BEFORE the stage can succeed — a receipt the instance holds is a byte the store holds.
+            receipts, problem = hand_over()
+            events += receipts
+            if problem:
+                ok = False
+                note = (note + "; " if note else "") + f"artifact hand-over failed: {problem}"
         events.append({"kind": "stage-finished", "state": "succeeded" if ok else "failed",
                        "summary": parser.summary(rc, self.clock() - started, note)})
         sink.add(events)
@@ -1627,6 +1797,49 @@ class Host:
         except Refusal as r:
             return str(r)
         return None if key == os.path.basename(output_dir.rstrip("/")) else f"the recomputed key is {key[:16]}…, not the directory's name"
+
+    def hand_over_artifacts(self, repo: str, sha: str, stage: str, artifacts_dir: str) -> tuple[list[dict], Optional[str]]:
+        """H9: upload every file a stage left under `$MW_BUILD_ARTIFACTS/<unit>/` (a module bundle,
+        its publication record, the gate bake) to the shared CI artifact store with core's
+        `ci-artifact-store.py` (content-addressed, SHA-256), READ IT BACK and re-hash it, and only
+        then return its receipt `{"kind":"artifact","unit","key","sha256","bytes"}`. Returns
+        (receipts, the first problem or None); a stage with artifacts and no store is a problem."""
+        files = []
+        for root, _dirs, names in os.walk(artifacts_dir):
+            for n in sorted(names):
+                full = os.path.join(root, n)
+                if os.path.islink(full) or not os.path.isfile(full):
+                    return [], f"{os.path.relpath(full, artifacts_dir)} is not a regular file"
+                files.append(full)
+        if not files:
+            return [], None
+        store = self.env.get("MW_BUILD_ARTIFACT_STORE", "").strip()
+        if not store:
+            return [], "the stage produced artifacts but no artifact store is configured (MW_BUILD_ARTIFACT_STORE)"
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ci-artifact-store.py")
+        receipts = []
+        for full in sorted(files):
+            unit = os.path.relpath(full, artifacts_dir).replace(os.sep, "/")
+            if "/" not in unit:
+                return receipts, f"{unit} is not under a unit directory ($MW_BUILD_ARTIFACTS/<unit>/<file>)"
+            digest, size = _sha256_file(full), os.path.getsize(full)
+            key = f"build-hosts/{repo}/{sha}/{self.channel}/{stage}/{unit}"
+            rc, out = self.store_runner([sys.executable, script, "put", "--store", store, "--key", key, "--file", full])
+            locator = next((l.split("=", 1)[1] for l in out.splitlines() if l.startswith("locator=")), "")
+            if rc != 0 or not locator:
+                return receipts, f"ci-artifact-store put {unit} failed (exit {rc}): {out.strip()[-200:]}"
+            if not locator.endswith(f"#sha256={digest}"):
+                return receipts, f"the store's locator for {unit} names another hash ({locator[-80:]})"
+            readback = tempfile.mkdtemp(prefix=".readback-", dir=self.work)
+            try:
+                back = os.path.join(readback, "f")
+                rc, out = self.store_runner([sys.executable, script, "get", "--store", store, "--locator", locator, "--out", back])
+                if rc != 0 or not os.path.isfile(back) or _sha256_file(back) != digest:
+                    return receipts, f"the stored {unit} did not read back as sha256 {digest[:12]}… (exit {rc}): {out.strip()[-160:]}"
+            finally:
+                shutil.rmtree(readback, ignore_errors=True)
+            receipts.append({"kind": "artifact", "unit": unit, "key": locator, "sha256": digest, "bytes": size})
+        return receipts, None
 
     # -- terminal events are never lost -----------------------------------------------------
     def deliver(self, sink: EventSink) -> bool:
@@ -1698,6 +1911,8 @@ def main(argv: list[str]) -> int:
         host.preflight()
         host.sandbox.probe(_run_capture)
         boundary_check(host.sandbox, env, _run_capture)
+        host.stage_refset()
+        scoping_check(host, _run_capture)
     except (Refusal, Fatal) as r:
         print(f"build-run: {r}", file=sys.stderr, flush=True)
         return 1
@@ -1740,7 +1955,10 @@ class _EnvSandbox:
     """The self-test's stand-in for bwrap on a machine without it: `env -i` gives the same
     clear-env + allow-list semantics, so what a stage SEES is still what the host chose."""
 
-    def argv(self, command, checkout, outputs, env):
+    last_readonly: list = []
+
+    def argv(self, command, checkout, outputs, env, readonly=(), writable=()):
+        _EnvSandbox.last_readonly = list(readonly)
         return ["/usr/bin/env", "-i", *[f"{k}={v}" for k, v in sorted(env.items())], "/bin/bash", "-c", command]
 
 
@@ -2022,6 +2240,66 @@ def self_test() -> int:
                       dict(wi, MW_PLUGINS_REGISTRY="cr.example.com"), pull_with_cfg, fake_post)
         check("wi/the pull carries the config, and it is deleted after", seen_cfg and not os.path.exists(seen_cfg[0]), seen_cfg)
 
+        # ── 5d. cache scoping: a stage is bound its own mirror + what it declares, never a root ──
+        sc_env = {"MW_BUILD_CHANNEL": "latest", "MW_BUILD_PLATFORM_VERSION": "3.1.10412", "PATH": "/usr/bin:/bin",
+                  "MW_BUILD_FRAMEWORK_IDENTITY": "c3e1", "MW_BUILD_CACHE": os.path.join(tmp, "sc-cache"), "MW_BUILD_WORK": tmp}
+        hs_ = Host(sc_env, _FakeApi({}), log=lambda m: None, sandbox=Sandbox("/usr/bin/bwrap", ["/portal"]),
+                   leftovers=lambda: [], sleep=lambda x: None)
+        hs_.plugins_dir = os.path.join(tmp, "sc-cache", "plugin-sets", "k")
+        ro = hs_.stage_readonly("MeshWeaver.Plugins", {"needs": []})
+        check("scope/no needs: only the repository's own mirror", ro == [os.path.join(tmp, "sc-cache", "git", "MeshWeaver.Plugins.git")], ro)
+        ro = hs_.stage_readonly("MeshWeaver.Plugins", {"needs": ["plugins", "outputs", "nuget"]})
+        check("scope/declared needs are bound, repository-scoped",
+              os.path.join(tmp, "sc-cache", "outputs", "MeshWeaver.Plugins") in ro and hs_.plugins_dir in ro
+              and os.path.join(tmp, "sc-cache", "nuget") in ro, ro)
+        check("scope/never the cache root, never another repository",
+              os.path.join(tmp, "sc-cache") not in ro and not any("MeshWeaver.Education" in p for p in ro), ro)
+        av = hs_.sandbox.argv("x", "/w/s", "/w/o", {"PATH": "/bin"}, readonly=ro, writable=["/w/a"])
+        check("scope/the binds are read-only, the artifacts dir writable",
+              all(f"--ro-bind-try {p} {p}" in " ".join(av) for p in ro) and "--bind /w/a /w/a" in " ".join(av)
+              and f"--bind {os.path.join(tmp, 'sc-cache')}" not in " ".join(av), av)
+        try:
+            validate_stages({"stages": [{"name": "a", "kind": "build", "command": "t", "needs": ["everything"]}]})
+            check("scope/an undeclarable need is refused", False, "accepted")
+        except Refusal:
+            pass
+        scripts_seen: list[str] = []
+
+        def sc_run(rc_, out_):
+            def run(argv):
+                scripts_seen.append(argv[-1])
+                return rc_, out_
+            return run
+        scoping_check(hs_, sc_run(0, "scoped"))
+        check("scope/the self-check runs in a sandbox bound like a public stage, reading a private entry",
+              scripts_seen and ".boundary-private" in scripts_seen[0] and ".boundary-root-canary" in scripts_seen[0], scripts_seen[:1])
+        for rc_, why in ((4, "PRIVATE repository's mirror"), (5, "compile outputs"), (6, "cache ROOT"), (3, "own mirror"), (1, "")):
+            try:
+                scoping_check(hs_, sc_run(rc_, "nope"))
+                check(f"scope/self-check exit {rc_} refuses to start", False, "started")
+            except Fatal as e:
+                check(f"scope/the refusal names it ({rc_})", why in str(e), e)
+        # the reference set is keyed by BOTH digests
+        rs_src = os.path.join(tmp, "composed")
+        os.makedirs(rs_src)
+        open(os.path.join(rs_src, "mw-plugin-test.dll"), "w").close()
+        rs_env = dict(sc_env, MW_BUILD_GATE_HOST=rs_src, MW_BUILD_TESTER_DIGEST="sha256:" + "1" * 64,
+                      MW_BUILD_PORTAL_DIGEST="sha256:" + "2" * 64)
+        hr = Host(rs_env, _FakeApi({}), log=lambda m: None, sandbox=Sandbox("bwrap", [rs_src]), leftovers=lambda: [])
+        staged = hr.stage_refset()
+        check("refset/keyed by both digests", refset_key("sha256:" + "1" * 64, "sha256:" + "2" * 64) in staged
+              and refset_key("sha256:" + "1" * 64, "sha256:" + "2" * 64) != refset_key("sha256:" + "1" * 64, "sha256:" + "3" * 64)
+              and refset_key("sha256:" + "1" * 64, "sha256:" + "2" * 64) != refset_key("sha256:" + "4" * 64, "sha256:" + "2" * 64), staged)
+        check("refset/the gate host and the bind move to the staged copy",
+              hr.env["MW_BUILD_GATE_HOST"] == staged and staged in hr.sandbox.readonly and rs_src not in hr.sandbox.readonly
+              and os.path.isfile(os.path.join(staged, "mw-plugin-test.dll")), (hr.env["MW_BUILD_GATE_HOST"], hr.sandbox.readonly))
+        try:
+            Host(dict(rs_env, MW_BUILD_PORTAL_DIGEST=""), _FakeApi({}), log=lambda m: None, sandbox=Sandbox("bwrap", []),
+                 leftovers=lambda: []).stage_refset()
+            check("refset/one digest alone cannot key it", False, "keyed")
+        except Fatal:
+            pass
+
         # ── 6. the plugins layer is refreshed BEFORE the claim ─────────────────────────────
         order: list[str] = []
         d1 = "sha256:" + "1" * 64
@@ -2190,7 +2468,7 @@ def self_test() -> int:
         rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
         check("run/green run-finished", rf_ == [{"kind": "run-finished", "succeeded": True, "error": None}], rf_)
         check("run/a PR run's outputs never enter the shared cache",
-              not os.path.exists(os.path.join(cache, "outputs", key2)))
+              not os.path.exists(os.path.join(cache, "outputs", "MeshWeaver.Plugins", key2)))
         keyed_env = dict(env_s, MW_BUILD_TESTER_DIGEST="sha256:" + "7" * 64, MW_BUILD_PORTAL_DIGEST="sha256:" + "8" * 64)
         me = os.path.abspath(__file__)
         keyed = ("echo 'public class A {}' > A.cs; "
@@ -2203,9 +2481,9 @@ def self_test() -> int:
         h6t.run(dict(claim, isTrunk=True))
         k1 = open(os.path.join(tmp, "KEY")).read().strip() if os.path.exists(os.path.join(tmp, "KEY")) else ""
         check("run/a trunk BUILD stage's output is promoted under the key the host recomputes",
-              k1 and os.path.isfile(os.path.join(cache, "outputs", k1, "A.dll")), (k1, os.listdir(os.path.join(cache, "outputs")) if os.path.isdir(os.path.join(cache, "outputs")) else None))
+              k1 and os.path.isfile(os.path.join(cache, "outputs", "MeshWeaver.Plugins", k1, "A.dll")), k1)
         check("run/a TEST stage's output is never promoted (no test verdict is reused)",
-              not os.path.exists(os.path.join(cache, "outputs", "ab" * 20)))
+              not os.path.exists(os.path.join(cache, "outputs", "MeshWeaver.Plugins", "ab" * 20)))
         # a stage asserting a key the inputs do not produce is refused
         lie = "f" * 64
         h6l = host(api_ev(), env=keyed_env, checkout=checkout_with({"stages": [
@@ -2213,7 +2491,7 @@ def self_test() -> int:
              "printf '{\"kind\":\"nodetype\",\"sources\":[\"A.cs\"]}' > s.json; "
              f"mkdir -p $MW_BUILD_OUTPUTS/{lie} && cp s.json $MW_BUILD_OUTPUTS/{lie}/.cache-key.json"}]}))
         h6l.run(dict(claim, isTrunk=True))
-        check("run/an output whose name is not its recomputed key is refused", not os.path.exists(os.path.join(cache, "outputs", lie)))
+        check("run/an output whose name is not its recomputed key is refused", not os.path.exists(os.path.join(cache, "outputs", "MeshWeaver.Plugins", lie)))
         # the key covers sources, reference set, options and compiler
         kd = os.path.join(tmp, "keydir")
         os.makedirs(kd)
@@ -2314,6 +2592,67 @@ def self_test() -> int:
             check("checkout/a passed deadline is a Refusal", False, "checked out")
         except Refusal as e:
             check("checkout/names the deadline", "deadline" in str(e), e)
+        # H9: artifacts go to the store, read back, and only then are their receipts posted
+        store_dir = os.path.join(tmp, "store")
+        os.makedirs(store_dir)
+        store_calls: list[list[str]] = []
+
+        def fake_store(argv):
+            store_calls.append(argv)
+            verb = argv[2]
+            if verb == "put":
+                src = argv[argv.index("--file") + 1]
+                h = _sha256_file(src)
+                shutil.copy(src, os.path.join(store_dir, h))
+                return 0, f"locator={argv[argv.index('--store') + 1]}#sha256={h}\n"
+            if verb == "get":
+                loc = argv[argv.index("--locator") + 1]
+                shutil.copy(os.path.join(store_dir, loc.rsplit("=", 1)[1]), argv[argv.index("--out") + 1])
+                return 0, ""
+            return 1, "?"
+        art_cmd = "mkdir -p $MW_BUILD_ARTIFACTS/Store && echo bundle > $MW_BUILD_ARTIFACTS/Store/Store-1.4.2.zip && echo '{}' > $MW_BUILD_ARTIFACTS/Store/Store.publication.json"
+        posted.clear()
+        ha = host(api_ev(), env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=fake_store,
+                  checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]}))
+        check("h9/a run with artifacts", ha.run(claim) == "ran")
+        evs = [e for _, es in posted for e in es]
+        arts = [e for e in evs if e["kind"] == "artifact"]
+        check("h9/one receipt per artifact, with unit, key, sha256 and bytes",
+              sorted(a["unit"] for a in arts) == ["Store/Store-1.4.2.zip", "Store/Store.publication.json"]
+              and all(a["key"].endswith("#sha256=" + a["sha256"]) and a["bytes"] > 0 for a in arts), arts)
+        kinds_order = [e["kind"] for e in evs if e["kind"] in ("artifact", "stage-finished")]
+        check("h9/receipts precede the stage's verdict", kinds_order[-1] == "stage-finished" and kinds_order.count("artifact") == 2, kinds_order)
+        check("h9/every upload was read back", [c[2] for c in store_calls] == ["put", "get", "put", "get"], [c[2] for c in store_calls])
+        fin = [e for e in evs if e["kind"] == "stage-finished"]
+        check("h9/the stage succeeded", fin and fin[-1]["state"] == "succeeded", fin)
+        # a store that reads back other bytes, and a missing store, fail the stage
+        def lying_store(argv):
+            if argv[2] == "get":
+                open(argv[argv.index("--out") + 1], "w").write("other")
+                return 0, ""
+            return fake_store(argv)
+        posted.clear()
+        host(api_ev(), env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=lying_store,
+             checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]})).run(claim)
+        fin = [e for _, es in posted for e in es if e["kind"] == "stage-finished"]
+        check("h9/a read-back that does not match fails the stage", fin and fin[-1]["state"] == "failed"
+              and "did not read back" in fin[-1]["summary"], fin)
+        posted.clear()
+        host(api_ev(), env=env_s, store_runner=fake_store,
+             checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]})).run(claim)
+        fin = [e for _, es in posted for e in es if e["kind"] == "stage-finished"]
+        check("h9/artifacts with no store fail the stage", fin and fin[-1]["state"] == "failed" and "no artifact store" in fin[-1]["summary"], fin)
+        # the workspace stays until every receipt was acknowledged
+        hk = host(_FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): [(503, None)]}),
+                  env=dict(env_s, MW_BUILD_ARTIFACT_STORE="file:" + store_dir), store_runner=fake_store,
+                  checkout=checkout_with({"stages": [{"name": "modules", "kind": "build", "command": art_cmd}]}))
+        before = set(os.listdir(tmp))
+        check("h9/unacknowledged receipts", hk.run(claim) == "undelivered")
+        kept = [n for n in set(os.listdir(tmp)) - before if n.startswith("MeshWeaver.Plugins-")]
+        check("h9/the workspace is kept while receipts are unacknowledged", len(kept) == 1, kept)
+        old = time.time() + 3 * hk.run_deadline
+        check("h9/a kept workspace is swept after two deadlines", kept and kept[0] in hk.sweep_workspaces(now=old), kept)
+
         # the PLAN: host-emitted first, naming every stage it will run; seq numbers per stage
         posted.clear()
         seen_seq: list[tuple] = []
@@ -2407,7 +2746,7 @@ def self_test() -> int:
         return 1
     print("build-run self-test: all cases passed (diagnostics, dedup, vstest + xunit results, structured events, "
           "stage declaration, the bwrap argv, the env allow-list, the token file, the startup sandbox probe, "
-          "pid-namespace leftovers, the network-boundary self-check, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
+          "pid-namespace leftovers, the network-boundary self-check, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, cache scoping per stage, the refset key, the H9 artifact hand-over, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
           "stage, fail-fast, channel + publish, 409, undeclared stages, stage timeout, run deadline)")
     return 0
 

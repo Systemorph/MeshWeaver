@@ -50,6 +50,12 @@ The refusals, and why each one exists:
 {{- if ($b.postgres | default dict).enabled -}}
 {{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
 {{- end -}}
+{{- $as := ($b.artifactStore | default dict) -}}
+{{- $asClaim := ($as.claimName | default "") -}}
+{{- $asSpec := ($as.spec | default (ternary "file:/ci-artifacts" "" (ne $asClaim ""))) -}}
+{{- if and $asSpec (not (hasPrefix "file:" $asSpec)) -}}
+{{- fail (printf "buildHosts.artifactStore.spec %q must be a file: store — the runner image carries no az CLI, and the host holds no cloud credential to write a blob container" $asSpec) -}}
+{{- end -}}
 {{- $reg := ($b.registry | default dict) -}}
 {{- $regUrl := trimSuffix "/" ($reg.url | default "") -}}
 {{- $regSecret := "" -}}
@@ -100,6 +106,7 @@ The refusals, and why each one exists:
                             "dnsNamespaceSelector" ($np.dnsNamespaceSelector | default (dict "kubernetes.io/metadata.name" "kube-system"))
                             "dnsPodSelector" ($np.dnsPodSelector | default (dict "k8s-app" "kube-dns"))
                             "apiPort" (int ($np.apiPort | default 8080)) "privateCidrs" ($np.privateCidrs | default list))
+      "artifactStore" (dict "spec" $asSpec "claimName" $asClaim)
       "registry" (dict "url" $regUrl "keySecret" $regSecret "keySecretKey" ((($reg.instanceKeySecret | default dict).key) | default "key"))
       "channels" $channels) -}}
 {{- end -}}

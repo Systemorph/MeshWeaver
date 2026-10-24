@@ -198,6 +198,11 @@ spec:
             - { name: ORAS, value: "/tools/oras" }
             - { name: MW_PLUGINS_REGISTRY, value: {{ $b.pluginsRegistry | quote }} }
             - { name: MW_PLUGINS_SOURCE, value: {{ $b.pluginsSource | quote }} }
+            {{- if $b.artifactStore.spec }}
+            # H9: every module bundle a stage produces is handed to the shared CI artifact store by the
+            # HOST (content-addressed, read back) before its receipt is posted.
+            - { name: MW_BUILD_ARTIFACT_STORE, value: {{ $b.artifactStore.spec | quote }} }
+            {{- end }}
             {{- if $b.registry.url }}
             # H8: the plugins layer from the REGISTRY's bundle index, read with a read-only `mwi_`
             # instance key — a file in this container, never bound into a stage's sandbox.
@@ -230,6 +235,9 @@ spec:
             - { name: "work", mountPath: "/work" }
             - { name: "cache", mountPath: "/cache" }
             - { name: "worker-token", mountPath: "/run/build-worker", readOnly: true }
+            {{- if $b.artifactStore.claimName }}
+            - { name: "ci-artifacts", mountPath: "/ci-artifacts" }
+            {{- end }}
             {{- if $b.registry.url }}
             - { name: "registry-key", mountPath: "/run/registry-key", readOnly: true }
             {{- end }}
@@ -242,6 +250,10 @@ spec:
           emptyDir: { sizeLimit: {{ $b.workSizeLimit | quote }} }
         - name: "cache"
           persistentVolumeClaim: { claimName: {{ $b.cacheClaim | quote }} }
+        {{- if $b.artifactStore.claimName }}
+        - name: "ci-artifacts"
+          persistentVolumeClaim: { claimName: {{ $b.artifactStore.claimName | quote }} }
+        {{- end }}
         - name: "worker-token"
           secret:
             secretName: {{ $b.tokenSecret | quote }}

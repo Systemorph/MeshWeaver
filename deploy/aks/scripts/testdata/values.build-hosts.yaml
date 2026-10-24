@@ -13,6 +13,8 @@ buildHosts:
     clientId: "00000000-0000-0000-0000-000000000001"
   sandbox:
     seccompProfile: "Unconfined"
+  artifactStore:
+    claimName: "ci-artifacts"
   registry:
     url: "https://portal.example.com"
     instanceKeySecret:

@@ -4,7 +4,8 @@
 # `bwrap` sandbox — the host refuses to start without it), the .NET 10 SDK (the src/ half still
 # builds with it), the PostgreSQL SERVER BINARIES (no server runs: a stage that needs a database
 # starts a disposable one inside its own sandbox with sandbox-postgres.sh), and the runner with its
-# helpers — module-build-key.py (the host recomputes every module cache key before promoting it)
+# helpers — module-build-key.py (the host recomputes every module cache key before promoting it),
+# ci-artifact-store.py (H9: the host hands every module bundle to the shared CI artifact store)
 # and core's `meshweaver-plugin-build` (module-fetch: the plugins layer from the registry's index). The PLATFORM (the compiler and the reference set) is NOT
 # here: it is the set's tester and portal images, copied in by the host's init containers by digest.
 #
@@ -25,7 +26,7 @@ RUN apt-get update \
 
 # The runner and the composer, from the SAME commit as the rest of this platform build — one
 # implementation, versioned with the image (the chart ships no copy).
-COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py /opt/build-host/
+COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py .github/scripts/ci-artifact-store.py /opt/build-host/
 COPY artifacts/plugin-build/ /opt/build-host/plugin-build/
 RUN chmod 0555 /opt/build-host/*.py /opt/build-host/*.sh \
  && test -f /opt/build-host/plugin-build/MeshWeaver.Plugin.Build.dll \

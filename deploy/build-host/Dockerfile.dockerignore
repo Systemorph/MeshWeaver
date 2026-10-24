@@ -5,5 +5,6 @@
 !.github/scripts/compose-gate-host.sh
 !.github/scripts/sandbox-postgres.sh
 !.github/scripts/module-build-key.py
+!.github/scripts/ci-artifact-store.py
 !artifacts/plugin-build/
 !artifacts/plugin-build/**

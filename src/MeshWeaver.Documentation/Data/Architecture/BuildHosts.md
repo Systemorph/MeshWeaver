@@ -25,6 +25,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
+| the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, staged for the unchanged module publish lane |
 | the host runner | `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (`deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
 | the CD hand-over | `main-cd.yml` jobs `build-host-image`, `build-host-latest`; `.github/workflows/build-host-stable.yml`; `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | the runner image per set; in the run that arms a set, a signed event that moves `build-latest` to it; daily, `build-stable` to the main-passed ceiling |
@@ -129,6 +130,7 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
                {"name": "modules", "kind": "test", "command": "…"}]}
    ```
 
+   A stage may declare `needs` — `plugins`, `outputs`, `nuget` — the shared-cache entries it reads.
    Stages run in declaration order, fail-fast: after a failed stage the rest are finished `failed`
    with "not run". When the claim names `stages`, only those run, and a claimed stage the repository
    does not declare is RED; so is a repository that declares none. A run past
@@ -153,6 +155,16 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    - **Nothing survives a stage.** `--die-with-parent` and the PID namespace end the whole tree with
      the stage; the host then checks no process remains in another pid namespace, kills any it
      finds, and **exits** (the container is replaced) if one still survives — before it claims again.
+   - **The cache is bound per stage, never at its root.** A stage's sandbox is bound, read-only,
+     ONLY its own repository's git mirror (`/cache/git/<repo>.git`) and what the stage declares in
+     `needs`: the plugins layer (the set and the bundles its links point to), its repository's OWN
+     compile outputs (`/cache/outputs/<repo>/` — outputs are scoped by repository) and the NuGet
+     cache. At start the host proves it: from a sandbox built for a public scratch repository it must
+     read its own mirror and FAIL to read a private scratch repository's mirror and outputs and a file
+     at the cache root, or the host refuses to start, naming which.
+   - **The reference set is keyed by BOTH digests.** The composed gate host is staged once into
+     `/cache/refsets/<sha256(tester|portal)>/host` and bound read-only from there
+     (`MW_BUILD_REFSET_KEY` names it); a change of either image is a new entry, never a reuse.
    - **The network boundary is checked at start.** From INSIDE a sandbox the host probes the
      instance metadata service (`http://169.254.169.254/metadata/instance`, `Metadata: true`), a
      cluster-private address (`MW_BUILD_BOUNDARY_PRIVATE_URL`, default `http://10.0.0.1/`) and the
@@ -189,7 +201,23 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    `eval "$(/opt/build-host/sandbox-postgres.sh)"` — a disposable server inside its own sandbox, data
    on the stage's tmpfs, a random per-stage password, a Unix socket only (`listen_addresses=''`, no
    TCP), torn down with the stage's process tree.
-7. **Progress events**, batched (≤ 200 per POST, every 2 s) to
+7. **Artifacts are handed over by the HOST (H9).** A stage leaves every module bundle (and its
+   `<module>.publication.json` record, in the module pack lane's format) and the gate bake under
+   `$MW_BUILD_ARTIFACTS/<unit>/` (writable; outside the outputs cache). After the stage exits, the
+   host uploads each file to the shared CI artifact store with core's `ci-artifact-store.py`
+   (`MW_BUILD_ARTIFACT_STORE`, a `file:` store on the runners' shared share), READS IT BACK and
+   re-hashes it, and only then posts `{"kind":"artifact","unit","key","sha256","bytes"}` — before
+   the stage's verdict; a failed upload or read-back fails the stage, and artifacts with no store
+   configured fail it too. The run's workspace is removed only after every receipt was
+   acknowledged; a workspace whose receipts were not is kept and swept after two run deadlines.
+   On the publishing side, `build-host-publication.yml` (OIDC, the same gate as the log) reads
+   `GET /api/builds/{repo}/{sha}/artifacts?channel=`, fetches every object by its receipt
+   (`build-artifacts-fetch.py`), verifies hash AND size against the receipt, and uploads them as
+   `module-publication-<lane>-host` — so the UNCHANGED `node-repo-module-publish.yml` publishes a
+   host-executed run's modules from the same staged shape as an Actions-built one. It is its own lane
+   because it needs `id-token: write`, and adding that to the publish lane would be a new hard
+   requirement on every existing caller.
+8. **Progress events**, batched (≤ 200 per POST, every 2 s) to
    `POST {api}/{repo}/{sha}/stages/{stage}/events?channel=<c>` with the worker token:
    compiler `file(line,col): error|warning CODE: message` and `::error file=…,line=…::` lines become
    `diagnostic` (deduplicated — MSBuild repeats each in its summary — paths made repository-relative,
@@ -200,7 +228,7 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    which only the host decides. Everything else the stage prints stays in a 60-line local tail,
    forwarded only when a stage failed with no diagnostic or failed test to explain it. 409 = the run
    is claimed by another host: the stage is killed and nothing more is posted.
-8. **SIGTERM** (a roll or a scale-in) stops claiming; the run in hand finishes within the pod's
+9. **SIGTERM** (a roll or a scale-in) stops claiming; the run in hand finishes within the pod's
    grace period, which equals the run deadline.
 
 `run-finished` is posted on the route of the last stage that ran (the route is per stage); a run
