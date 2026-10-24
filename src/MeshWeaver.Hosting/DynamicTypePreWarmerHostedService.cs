@@ -1029,6 +1029,16 @@ internal sealed class RecoveryWatchSet : IDisposable
         var slot = new SingleAssignmentDisposable();
         if (!live.TryAdd(typePath, slot))
             return false;
+        // 🚨 Re-checked AFTER the insert (review on #7088): a Dispose that ran between the check above
+        // and the insert has already drained the set, so this slot would never be disposed and the
+        // watch would outlive the service, rooting the mesh. Any Dispose either ran before this read
+        // (seen here) or runs after the insert (and finds the slot in the set) — no window is left.
+        if (Volatile.Read(ref disposed) != 0)
+        {
+            live.TryRemove(new KeyValuePair<string, SingleAssignmentDisposable>(typePath, slot));
+            slot.Dispose();
+            return false;
+        }
         // Removes THIS slot only: a newer watch registered after this one ended is left alone.
         slot.Disposable = start(() => live.TryRemove(
             new KeyValuePair<string, SingleAssignmentDisposable>(typePath, slot)));

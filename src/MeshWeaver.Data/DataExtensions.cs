@@ -1567,20 +1567,36 @@ public static class DataExtensions
     /// <param name="ex">The owner's fault.</param>
     internal static bool IsTransientStoreFault(Exception? ex)
     {
-        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
-        return IsTransientStoreFault(ex, seen);
+        var budget = MaxFaultNodes;
+        return IsTransientStoreFault(
+            ex, ImmutableHashSet.Create<Exception>(ReferenceEqualityComparer.Instance), ref budget);
     }
 
-    private static bool IsTransientStoreFault(Exception? ex, HashSet<Exception> seen)
+    /// <summary>Bounds the walk over a caller-supplied fault graph, however it is shared.</summary>
+    private const int MaxFaultNodes = 256;
+
+    /// <remarks>
+    /// 🚨 A CYCLE is detected on the current PATH only (review on #7088). A visited-set shared across
+    /// branches read a REPEATED reference — <c>Aggregate(fault, fault)</c>, two wrappers over one
+    /// inner — as a cycle and answered "not transient", so a refused connection crossed the wire as a
+    /// defect and was never re-run. The total visit count still bounds the walk.
+    /// </remarks>
+    private static bool IsTransientStoreFault(Exception? ex, ImmutableHashSet<Exception> path, ref int budget)
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
-            if (!seen.Add(e) || seen.Count > 256)
+            if (path.Contains(e) || --budget < 0)
                 return false;
+            path = path.Add(e);
             if (e is AggregateException aggregate)
             {
                 var branches = aggregate.Flatten().InnerExceptions;
-                return branches.Count > 0 && branches.All(branch => IsTransientStoreFault(branch, seen));
+                if (branches.Count == 0)
+                    return false;
+                foreach (var branch in branches)
+                    if (!IsTransientStoreFault(branch, path, ref budget))
+                        return false;
+                return true;
             }
         }
         // A chain with no aggregate in it: either shared predicate decides.

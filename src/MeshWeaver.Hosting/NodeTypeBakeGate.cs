@@ -347,7 +347,18 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     public bool MarkOutcome(PreWarmOutcome outcome)
     {
         if (outcome.ReachedUsableBuild)
+        {
+            // 🚨 #7066 review — a LATER measurement of the same type on the same image. Within one
+            // sweep a type is measured once, so a usable outcome for a type that already stands
+            // regressed comes from a RE-RUN after a transient store fault. The regression's recovery
+            // watch may have died in that outage, and then nothing else would ever retract it: the
+            // pod stayed Regressed after the re-run rebuilt the type. This is RetractRegression's own
+            // rule (a fresh measurement supersedes an earlier one), applied to the re-run's verdict.
+            if (regressions.ContainsKey(outcome.TypePath))
+                RetractRegression(outcome.TypePath,
+                    $"a later sweep attempt measured it usable on this image ({outcome.Status})");
             return false;
+        }
 
         // 🚨 A TIMEOUT IS NOT A VERDICT. The per-type budget elapsing means the sweep never got an
         // answer — it says nothing about whether the type builds. During a roll the baking pod and
@@ -660,24 +671,28 @@ public sealed class NodeTypeBakeGateState : IMeshAdmissionAuthority
     /// again through <see cref="MarkProgress"/>.</item>
     /// </list>
     ///
-    /// <para>The fault is remembered until the re-run completes (<see cref="MarkComplete"/> clears
-    /// it): a retraction arriving mid-re-run lands on <see cref="BakePhase.Faulted"/>, the terminal the
-    /// last FINISHED attempt reached.</para>
+    /// <para>The fault is forgotten when the re-run starts, except on a pod the fault let serve: the
+    /// re-run is now measuring, so a retraction arriving mid-re-run (a recovery watch, or the re-run
+    /// itself measuring a regressed type usable) lands on <see cref="BakePhase.Running"/>, not back on
+    /// a <see cref="BakePhase.Faulted"/> that would refuse the pod's publications while it measures. A
+    /// pod the fault let serve keeps it, so a retraction there lands on the Faulted verdict that keeps
+    /// it in rotation; <see cref="MarkComplete"/> clears it.</para>
     /// </summary>
     /// <param name="message">What is being re-run and why, in one sentence.</param>
     public void MarkRerunning(string message)
     {
         lock (verdict)
         {
-            if (!regressions.IsEmpty)
-            {
-                detail = RegressedDetail();
-                return;
-            }
-
             if (Phase is BakePhase.Faulted && ReadinessGranted)
             {
                 detail = $"{FaultedDetail(faultedMessage ?? "the previous attempt faulted")} — {message}";
+                return;
+            }
+
+            faultedMessage = null;
+            if (!regressions.IsEmpty)
+            {
+                detail = RegressedDetail();
                 return;
             }
 

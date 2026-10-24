@@ -66,6 +66,30 @@ public class PatchFaultCarriesTransienceTest
             .Transient.Should().BeTrue("every branch transient is transient");
     }
 
+    /// <summary>
+    /// A REPEATED reference is not a cycle (review on #7088): an aggregate whose branches share one
+    /// transient fault, or two wrappers over the same transient inner, is transient. A shared
+    /// visited-set classified the second visit as "seen" and sent Transient=false.
+    /// </summary>
+    [Fact]
+    public void ARepeatedTransientReference_IsStillTransient()
+    {
+        var refused = new DriverException("Failed to connect to 10.0.0.1:5432", new SocketException(111), transient: true);
+
+        DataExtensions.ClassifyPatchException(new AggregateException(refused, refused), "Admin/Build")
+            .Transient.Should().BeTrue("the same transient fault twice is still only transient faults");
+        DataExtensions.ClassifyPatchException(
+                new AggregateException(
+                    new InvalidOperationException("first wrapper", refused),
+                    new InvalidOperationException("second wrapper", refused)),
+                "Admin/Build")
+            .Transient.Should().BeTrue("two wrappers over one transient inner are both transient");
+        DataExtensions.ClassifyPatchException(
+                new AggregateException(refused, new InvalidOperationException("defect", refused), new InvalidOperationException("a real defect")),
+                "Admin/Build")
+            .Transient.Should().BeFalse("a genuine defect branch still decides, repeated references or not");
+    }
+
     [Fact]
     public void TheFlag_SurvivesTheWire()
     {

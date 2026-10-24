@@ -287,6 +287,43 @@ public class StoreRecoveryRerunTest
     }
 
     /// <summary>
+    /// A regression recorded by the faulted attempt, whose recovery watch then died in the outage, is
+    /// RETRACTED when the re-run measures that same type usable on this image (review on #7088).
+    /// Without that, a successful re-run left the pod Regressed for good.
+    /// </summary>
+    [Fact]
+    public void ASuccessfulReRunOutcome_RetractsTheRegressionTheFaultedAttemptRecorded()
+    {
+        var gate = new NodeTypeBakeGateState { GatesReadiness = true };
+        gate.MarkRunning("enumerating dynamic NodeTypes");
+        gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.CompileError, "CS0103 against a half-read source set"));
+        gate.Phase.Should().Be(BakePhase.Regressed);
+        gate.MarkFaulted("transient store fault — re-runs when the store answers again");
+        // …its recovery watch faulted during the outage: nothing else will ever retract it.
+        gate.MarkRerunning("re-running the NodeType sweep (re-run 1)");
+
+        gate.MarkOutcome(new PreWarmOutcome("Crm/Contact", PreWarmStatus.Compiled));
+        gate.MarkComplete("baked");
+
+        gate.Regressions.Should().BeEmpty("the re-run measured the type usable on this image");
+        gate.Retracted.Keys.Should().Contain("Crm/Contact");
+        gate.Phase.Should().Be(BakePhase.Complete);
+        gate.ReadinessGranted.Should().BeTrue();
+    }
+
+    /// <summary>A Watch arriving after Dispose starts nothing that could outlive the service.</summary>
+    [Fact]
+    public void AWatchAfterDispose_StartsNothing()
+    {
+        var watches = new RecoveryWatchSet();
+        watches.Dispose();
+        var started = 0;
+        watches.Watch("Crm/Contact", _ => { started++; return System.Reactive.Disposables.Disposable.Empty; })
+            .Should().BeFalse();
+        started.Should().Be(0);
+    }
+
+    /// <summary>
     /// If the evidence itself faults, nothing can say the store answers again: a re-run waiting on
     /// it must surface that fault, never wait on a dead signal in silence.
     /// </summary>
