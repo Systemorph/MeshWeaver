@@ -1548,8 +1548,43 @@ public static class DataExtensions
         // The code is unchanged; the flag is an additional fact the caller may act on.
         return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace)
         {
-            Transient = InfrastructureFault.IsTransient(ex) || StorageFaults.IsTransientConnectFault(ex),
+            Transient = IsTransientStoreFault(ex),
         };
+    }
+
+    /// <summary>
+    /// Whether the owner's fault was a TRANSIENT store fault — the classification
+    /// <see cref="ClassifyPatchException"/> sends on <see cref="MeshNodeError.Transient"/> (#7066).
+    ///
+    /// <para>🚨 <b>An aggregate qualifies only when EVERY branch does</b>, at any depth — the rule
+    /// <see cref="InfrastructureFault.IsTransient"/> states. <see cref="StorageFaults.IsTransientConnectFault"/>
+    /// walks only <c>InnerException</c>, which on an aggregate is its FIRST branch, so asking it of
+    /// <c>Aggregate(connection refused, InvalidOperationException)</c> answered "transient" for a fault
+    /// that carries a genuine defect. The record loses the aggregate on the wire, so the caller could
+    /// never correct that and would re-run the defect. Hence the aggregate is decided here, branch by
+    /// branch, before either predicate is asked about a chain.</para>
+    /// </summary>
+    /// <param name="ex">The owner's fault.</param>
+    internal static bool IsTransientStoreFault(Exception? ex)
+    {
+        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        return IsTransientStoreFault(ex, seen);
+    }
+
+    private static bool IsTransientStoreFault(Exception? ex, HashSet<Exception> seen)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (!seen.Add(e) || seen.Count > 256)
+                return false;
+            if (e is AggregateException aggregate)
+            {
+                var branches = aggregate.Flatten().InnerExceptions;
+                return branches.Count > 0 && branches.All(branch => IsTransientStoreFault(branch, seen));
+            }
+        }
+        // A chain with no aggregate in it: either shared predicate decides.
+        return InfrastructureFault.IsTransient(ex) || StorageFaults.IsTransientConnectFault(ex);
     }
 
     /// <summary>

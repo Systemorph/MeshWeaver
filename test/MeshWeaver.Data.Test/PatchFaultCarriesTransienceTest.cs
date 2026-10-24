@@ -42,6 +42,30 @@ public class PatchFaultCarriesTransienceTest
             .Transient.Should().BeFalse("a query/schema error is the provider's own non-transient verdict");
     }
 
+    /// <summary>
+    /// 🚨 An aggregate is transient only when EVERY branch is (review on #7088). The record loses the
+    /// aggregate on the wire, so a mixed one flagged transient would have the caller re-run a defect.
+    /// </summary>
+    [Fact]
+    public void AMixedAggregate_IsNotTransient_OnTheWire()
+    {
+        Exception Refused() =>
+            new DriverException("Failed to connect to 10.0.0.1:5432", new SocketException(111), transient: true);
+
+        DataExtensions.ClassifyPatchException(
+                new AggregateException(Refused(), new InvalidOperationException("a real defect")), "Admin/Build")
+            .Transient.Should().BeFalse("the refused-connection branch must not launder the defect branch");
+        DataExtensions.ClassifyPatchException(
+                new InvalidOperationException("wrapped",
+                    new AggregateException(Refused(), new InvalidOperationException("a real defect"))), "Admin/Build")
+            .Transient.Should().BeFalse("a mixed aggregate deeper in the chain is still mixed");
+        DataExtensions.ClassifyPatchException(
+                new AggregateException(new InvalidOperationException("a real defect"), Refused()), "Admin/Build")
+            .Transient.Should().BeFalse("branch order must not matter");
+        DataExtensions.ClassifyPatchException(new AggregateException(Refused(), Refused()), "Admin/Build")
+            .Transient.Should().BeTrue("every branch transient is transient");
+    }
+
     [Fact]
     public void TheFlag_SurvivesTheWire()
     {

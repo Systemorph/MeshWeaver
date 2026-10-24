@@ -139,7 +139,7 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// here and disposed with the service; a discarded subscription would root the hub.
     /// Empty on a healthy bake, which is the overwhelmingly common case.
     /// </summary>
-    private readonly CompositeDisposable _recoveryWatches = new();
+    private readonly RecoveryWatchSet _recoveryWatches = new();
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -486,14 +486,22 @@ public sealed class DynamicTypePreWarmerHostedService(
         // catalog and write adopted builds onto its rows, which is the database input a closed
         // process must not read. The probe/sweep behind this then report the empty set themselves.
         var closedTypeSet = services.IsClosedTypeSet();
+        // The cold seeding stages, as a factory: a sweep re-run after a transient store fault runs them
+        // AGAIN (#7066 review). The fault refused the pod, and that discarded every publication the
+        // first seeding held — including its adoption stamps — while this process's adoption registry
+        // kept the adoptions. Re-run, the sweep would overlay those retained adoptions, classify the
+        // types as baked, and admit the pod with the shared records still naming the old builds.
+        // Seeding again re-offers the stamps, held until the re-run's verdict exactly as at boot.
+        IObservable<int> SeedBundles() =>
+            (closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
         var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .Do(_ => progress?.Invoke(closedTypeSet
                 ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
                 : "adopting the prebuilt bundles shipped for this framework before enumerating"))
-            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
-            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
+            .SelectMany(_ => SeedBundles());
 
         if (!sweepEnabled)
         {
@@ -552,11 +560,6 @@ public sealed class DynamicTypePreWarmerHostedService(
         // transient is re-run; a compile error or a query defect still ends the sweep below, named.
         var rerunPolicy = services.GetService<StoreRecoveryRerunPolicy>() ?? StoreRecoveryRerunPolicy.Default;
 
-        // One recovery watch per condemned type, however many attempts condemn it: a re-run that
-        // re-measures a standing regression must not add a second watch on the same node.
-        var watchedForRecovery = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>(
-            StringComparer.OrdinalIgnoreCase);
-
         void BeginRerun(int rerun)
         {
             // The summary describes the attempt that FINISHED, not the sum of every attempt.
@@ -612,13 +615,12 @@ public sealed class DynamicTypePreWarmerHostedService(
 
         _warmSubscription = seeded
             .SelectMany(_ => StoreRecoveryRerun.RerunOnStoreRecovery(
-                rerun =>
-                {
-                    if (rerun > 0)
-                        BeginRerun(rerun);
-                    return DynamicTypePreWarmer.WarmDynamicTypes(
-                        mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress);
-                },
+                rerun => SweepAttempt(
+                    rerun,
+                    BeginRerun,
+                    SeedBundles,
+                    () => DynamicTypePreWarmer.WarmDynamicTypes(
+                        mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress)),
                 StoreRecoveryRerun.EvidenceFor(mesh.ServiceProvider.GetService<IMeshInvalidationFeed>()),
                 rerunPolicy,
                 System.Reactive.Concurrency.Scheduler.Default,
@@ -654,7 +656,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // is exactly what "validate before running" means for a sweep whose verdict
                     // arrives at type 50 of 240.
                     admission?.Reconsider();
-                    if (gate is not null && gated && watchedForRecovery.TryAdd(outcome.TypePath, 0))
+                    if (gate is not null && gated)
                     {
                         if (outcome.SourcesMovedDuringCompile)
                             logger.LogWarning(
@@ -664,8 +666,11 @@ public sealed class DynamicTypePreWarmerHostedService(
                                 + "landing mid-bake), not this image. It STANDS until the type is "
                                 + "seen to build here, and is retracted automatically when it does.",
                                 outcome.TypePath);
-                        _recoveryWatches.Add(
-                            DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger));
+                        // One LIVE watch per condemned type: a re-run that re-measures a regression
+                        // already being watched adds none, and a type whose watch has ENDED (it saw
+                        // a recovery, or faulted) gets a fresh one when it regresses again.
+                        _recoveryWatches.Watch(outcome.TypePath, ended =>
+                            DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger, ended));
                     }
                     // Rank by cost before classifying — a type that TIMED OUT is exactly the one
                     // whose duration the summary must name, so this deliberately does not filter on
@@ -937,7 +942,34 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// test instead of quietly inflating the fault count.</para>
     /// </summary>
     /// <param name="status">The outcome's status.</param>
-    internal static string CounterFor(PreWarmStatus status) => status switch
+    internal static string CounterFor(PreWarmStatus status) => CounterForStatus(status);
+
+    /// <summary>
+    /// 🚨 One attempt of the sweep (#7066). The first attempt (<paramref name="rerun"/> 0) is the sweep
+    /// alone — the boot seeding already ran ahead of it. A RE-RUN first marks itself
+    /// (<paramref name="beginRerun"/>), then runs the cold seeding stages AGAIN, then the sweep: the
+    /// transient fault that refused the pod discarded every publication the first seeding held,
+    /// including its adoption stamps, so the re-run must offer them again before the sweep overlays
+    /// this process's retained adoptions and calls those types baked.
+    /// </summary>
+    /// <typeparam name="T">The sweep's emission.</typeparam>
+    /// <param name="rerun">The attempt's re-run number, 0 for the first run.</param>
+    /// <param name="beginRerun">Marks a re-run (gate, counters, witness, log).</param>
+    /// <param name="reseed">The cold seeding stages.</param>
+    /// <param name="sweep">The cold sweep.</param>
+    internal static IObservable<T> SweepAttempt<T>(
+        int rerun, Action<int> beginRerun, Func<IObservable<int>> reseed, Func<IObservable<T>> sweep)
+        => rerun == 0
+            ? Observable.Defer(sweep)
+            : Observable.Defer(() =>
+            {
+                beginRerun(rerun);
+                return reseed().TakeLast(1).DefaultIfEmpty().SelectMany(_ => sweep());
+            });
+
+    /// <summary>The <see cref="CounterFor"/> table itself.</summary>
+    /// <param name="status">The outcome's status.</param>
+    private static string CounterForStatus(PreWarmStatus status) => status switch
     {
         PreWarmStatus.Compiled => PreWarmCounters.Compiled,
         PreWarmStatus.AlreadyBaked => PreWarmCounters.AlreadyBaked,
@@ -969,6 +1001,55 @@ public sealed class DynamicTypePreWarmerHostedService(
 /// <c>open-vocabulary-string-constants</c>: named exactly as the enum members would have been, so
 /// every call site reads identically.
 /// </summary>
+/// <summary>
+/// The LIVE recovery watches, one per condemned NodeType (#1214, #7066 review). A sweep re-run
+/// re-measures a regression that may already be watched, so a watch is started only when its type
+/// has none running; and a watch that has ENDED — it saw its recovery (it watches for exactly one),
+/// or it faulted — leaves the set, so a later regression of the same type gets a fresh watch instead
+/// of being suppressed for good, which would leave the pod Regressed after the type is repaired.
+/// Instance state of one hosted service; disposed with it.
+/// </summary>
+internal sealed class RecoveryWatchSet : IDisposable
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SingleAssignmentDisposable> live =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int disposed;
+
+    /// <summary>
+    /// Starts a watch on <paramref name="typePath"/> unless one is live. <paramref name="start"/> is
+    /// given the callback the watch calls when it ends, however it ends.
+    /// </summary>
+    /// <param name="typePath">The condemned NodeType.</param>
+    /// <param name="start">Starts the watch.</param>
+    /// <returns><c>true</c> when a watch was started.</returns>
+    public bool Watch(string typePath, Func<Action, IDisposable> start)
+    {
+        if (Volatile.Read(ref disposed) != 0)
+            return false;
+        var slot = new SingleAssignmentDisposable();
+        if (!live.TryAdd(typePath, slot))
+            return false;
+        // Removes THIS slot only: a newer watch registered after this one ended is left alone.
+        slot.Disposable = start(() => live.TryRemove(
+            new KeyValuePair<string, SingleAssignmentDisposable>(typePath, slot)));
+        return true;
+    }
+
+    /// <summary>Whether a watch on <paramref name="typePath"/> is live.</summary>
+    /// <param name="typePath">The NodeType.</param>
+    public bool IsWatching(string typePath) => live.ContainsKey(typePath);
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+        foreach (var watch in live.Values)
+            watch.Dispose();
+        live.Clear();
+    }
+}
+
 internal static class PreWarmCounters
 {
     /// <summary>Reached a usable compiled build on this sweep.</summary>

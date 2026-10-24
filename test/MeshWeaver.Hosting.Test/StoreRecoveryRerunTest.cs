@@ -218,6 +218,75 @@ public class StoreRecoveryRerunTest
     }
 
     /// <summary>
+    /// A recovery watch is de-duplicated only while it is LIVE (review on #7088): once it ended — it
+    /// saw its recovery, or it faulted — a later regression of the same type gets a fresh watch.
+    /// </summary>
+    [Fact]
+    public void ARecoveryWatch_IsReplaced_AfterItCompletes_AndAfterItFaults()
+    {
+        using var watches = new RecoveryWatchSet();
+        var started = 0;
+        var ends = new System.Collections.Generic.List<Action>();
+        IDisposable Start(Action ended)
+        {
+            started++;
+            ends.Add(ended);
+            return System.Reactive.Disposables.Disposable.Empty;
+        }
+
+        watches.Watch("Crm/Contact", Start).Should().BeTrue();
+        watches.Watch("Crm/Contact", Start).Should().BeFalse("a live watch is not duplicated by a re-run");
+        started.Should().Be(1);
+
+        ends[0](); // it saw its recovery (Take(1) completed)
+        watches.IsWatching("Crm/Contact").Should().BeFalse();
+        watches.Watch("Crm/Contact", Start).Should().BeTrue("the type regressed again: it needs a fresh watch");
+
+        ends[1](); // the watch faulted during the outage
+        watches.Watch("Crm/Contact", Start).Should().BeTrue("a faulted watch must not suppress its replacement");
+        started.Should().Be(3);
+
+        ends[0](); // a LATE end of an old watch must not remove the live one
+        watches.IsWatching("Crm/Contact").Should().BeTrue();
+    }
+
+    /// <summary>
+    /// The real watch tells its owner when it ends on a fault — the path that used to leave the type
+    /// marked as watched for good (review on #7088).
+    /// </summary>
+    [Fact]
+    public void TheRealWatch_ReportsItsEnd_SoTheSetFreesTheType()
+    {
+        using var watches = new RecoveryWatchSet();
+        var faulting = Observable.Throw<string>(new InvalidOperationException("read fault"));
+        watches.Watch("Crm/Contact", ended => faulting.Finally(ended).Subscribe(_ => { }, _ => { }))
+            .Should().BeTrue();
+        watches.IsWatching("Crm/Contact").Should().BeFalse("the watch ended on its fault and left the set");
+    }
+
+    /// <summary>
+    /// A re-run RE-SEEDS before it sweeps (review on #7088): the fault that refused the pod discarded
+    /// the first seeding's held adoption stamps, so they are offered again before the sweep relies on
+    /// this process's retained adoptions. The first run sweeps alone — boot seeding preceded it.
+    /// </summary>
+    [Fact]
+    public void AReRun_MarksItself_ThenReSeeds_ThenSweeps()
+    {
+        var order = new System.Collections.Generic.List<string>();
+        IObservable<int> Reseed() => Observable.Defer(() => { order.Add("seed"); return Observable.Return(3); });
+        IObservable<string> Sweep() => Observable.Defer(() => { order.Add("sweep"); return Observable.Return("ok"); });
+
+        DynamicTypePreWarmerHostedService.SweepAttempt(0, n => order.Add($"begin {n}"), Reseed, Sweep)
+            .Subscribe(_ => { }, _ => { });
+        order.Should().Equal("sweep");
+
+        order.Clear();
+        DynamicTypePreWarmerHostedService.SweepAttempt(2, n => order.Add($"begin {n}"), Reseed, Sweep)
+            .Subscribe(_ => { }, _ => { });
+        order.Should().Equal("begin 2", "seed", "sweep");
+    }
+
+    /// <summary>
     /// If the evidence itself faults, nothing can say the store answers again: a re-run waiting on
     /// it must surface that fault, never wait on a dead signal in silence.
     /// </summary>
