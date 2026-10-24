@@ -42,7 +42,7 @@ THE LOOP, and the order that matters:
      instance metadata service, a cluster-private address or the Kubernetes API ANSWERS (the
      boundary self-check): the NetworkPolicy, not the sandbox, is the network boundary. `MW_BUILD_PUBLISH=true|false` (from the claim) is
      informational: a host holds no publication credential and mounts no bake share; publication
-     is the publish lane's, on `build/verdict`.
+     is the publish lane's, on the aggregate check `build`.
   4. The child's output is translated into PROGRESS EVENTS (§7a) and POSTed in batches to
      `{api}/{repo}/{sha}/stages/{stage}/events?channel=<c>`: compiler `file(line,col): error CODE:
      message` → `diagnostic`; test results (vstest `Passed/Failed/Skipped` and xunit `[FAIL]`) →
@@ -62,7 +62,9 @@ THE LOOP, and the order that matters:
 `.github/build-stages.json` (declared by each repository; validated here):
     {"stages": [{"name": "compile-check", "kind": "build", "command": "python3 …",
                  "timeoutMinutes": 40}, …]}
-  * `name` is ONE path segment ([a-z0-9][a-z0-9._-]*); its Check Run is `build/<name>`.
+  * `name` is ONE path segment ([a-z0-9][a-z0-9._-]*); its Check Run is `build/<name>`
+    on latest and `build-<channel>/<name>` otherwise; the run's AGGREGATE check is `build` /
+    `build-<channel>` (no slash), so no stage — not even one named `verdict` — can publish under it.
   * `kind` is `build` or `test`; `timeoutMinutes` defaults to 45.
   * stages run in declaration order, fail-fast: after a failed stage the rest are finished
     `failed` with "not run" — never left open, never silently skipped. When the claim names
@@ -431,7 +433,7 @@ def validate_stages(doc: object) -> list[dict]:
         name = str(s.get("name") or "")
         if not STAGE_NAME.match(name):
             raise Refusal(f"stage #{i} name {name!r} is not one path segment [a-z0-9][a-z0-9._-]* "
-                          f"(its Check Run is build/<name>)")
+                          f"(its Check Run is build/<name>, or build-<channel>/<name>)")
         if name in seen:
             raise Refusal(f"stage {name!r} is declared twice")
         seen.add(name)
@@ -452,6 +454,14 @@ def validate_stages(doc: object) -> list[dict]:
     return out
 
 
+CHECK_PREFIX = re.compile(r"^build(-[a-z0-9][a-z0-9._-]*)?/")
+
+
+def bare_stage(name: str) -> str:
+    """A stage from its check name: `build/<stage>` (latest) or `build-<channel>/<stage>`."""
+    return CHECK_PREFIX.sub("", name, count=1)
+
+
 def select_stages(declared: list[dict], claimed: object) -> list[dict]:
     """The stages this run executes: all declared, or — when the claim names stages — those, in
     declaration order. A claimed stage the repository does not declare is a Refusal."""
@@ -459,7 +469,7 @@ def select_stages(declared: list[dict], claimed: object) -> list[dict]:
     for c in claimed or []:
         n = c.get("name") if isinstance(c, dict) else c
         if isinstance(n, str) and n:
-            names.append(n[len("build/"):] if n.startswith("build/") else n)
+            names.append(bare_stage(n))
     if not names:
         return declared
     known = {s["name"] for s in declared}
@@ -1255,6 +1265,11 @@ def _post_form(url: str, form: dict) -> dict:
         return {"error": str(e)}
 
 
+def _git_run(args: list[str], env: dict) -> tuple[int, str]:
+    r = subprocess.run(["git", *args], env=env, capture_output=True, text=True, timeout=900)
+    return r.returncode, (r.stdout or "") + (r.stderr or "")
+
+
 def _run_capture_stdout(argv: list[str]) -> tuple[int, str]:
     """A HOST helper (ci-artifact-store.py): no credential but the Azure workload identity's."""
     r = subprocess.run(argv, capture_output=True, text=True, timeout=1800,
@@ -1275,6 +1290,7 @@ class Host:
                  registry_get: Callable[[str, str], tuple[int, object]] = None,
                  fetch_runner: Callable[[list[str], dict], int] = None,
                  store_runner: Callable[[list[str]], tuple[int, str]] = None,
+                 git_runner: Callable[[list[str], dict], tuple[int, str]] = None,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.env = env
@@ -1291,6 +1307,7 @@ class Host:
         self.leftovers = leftovers or pid_namespace_leftovers
         self.registry_get = registry_get or _registry_get
         self.store_runner = store_runner or _run_capture_stdout
+        self.git_runner = git_runner or _git_run
         self.fetch_runner = fetch_runner or (lambda argv, env: subprocess.run(argv, env=env, timeout=600).returncode)
         self.sleep = sleep
         self.clock = clock
@@ -1524,8 +1541,7 @@ class Host:
         artifacts_dir = self.artifacts_dir
         try:
             fallback = [c.get("name") if isinstance(c, dict) else c for c in (claim.get("stages") or [])]
-            last_stage = next((s[len("build/"):] if s.startswith("build/") else s
-                               for s in fallback if isinstance(s, str) and s), "verdict")
+            last_stage = next((bare_stage(s) for s in fallback if isinstance(s, str) and s), "verdict")
             # The lease is kept from the first second — a first clone into an empty mirror can take
             # longer than the instance's lease, and the checkout posts nothing else.
             self._sink_for(repo, sha, last_stage)
@@ -1544,15 +1560,33 @@ class Host:
                           {"kind": "stage-finished", "state": "failed", "summary": str(r)[:MAX_LINE]},
                           {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
                 return "ran" if sink.flush(attempts=12) else "undelivered"
+            # ONE merged tree per attempt (policy suites-test-fresh-merge): a pull-request run's head
+            # is merged onto ONE base — the claim's `mergeBaseSha`, or main's tip resolved ONCE from
+            # the mirror when the claim names none — and every stage runs on that tree. Trunk and
+            # probe runs are not merged. The base is named in the plan; the instance refuses a PR
+            # success whose plan names another sha, or none.
+            merge_base = None
+            if not trunk and str(claim.get("kind") or "").lower() != "probe":
+                try:
+                    merge_base = self.merge_onto_base(repo, checkout_dir, claim.get("mergeBaseSha"), token)
+                except Refusal as r:
+                    sink = self._sink_for(repo, sha, stages[0]["name"])
+                    sink.add([{"kind": "line", "text": f"run refused before any stage: {r}"},
+                              {"kind": "stage-finished", "state": "failed", "summary": str(r)[:MAX_LINE]},
+                              {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
+                    return "ran" if sink.flush(attempts=12) else "undelivered"
             # The PLAN, host-emitted and never a child's: the instance refuses a host-run success
             # unless every planned stage reported success.
             plan = self._sink_for(repo, sha, stages[0]["name"])
-            plan.add([{"kind": "plan", "stages": [st["name"] for st in stages]}])
+            plan_event = {"kind": "plan", "stages": [st["name"] for st in stages]}
+            if merge_base:
+                plan_event["mergeBase"] = merge_base
+            plan.add([plan_event])
             self.deliver(plan)
             os.makedirs(outputs_dir, exist_ok=True)
             os.makedirs(artifacts_dir, exist_ok=True)
             # MW_BUILD_PUBLISH is INFORMATIONAL: a host holds no publication credential, so a stage
-            # cannot publish whatever it says; publication is the publish lane's, on build/verdict.
+            # cannot publish whatever it says; publication is the publish lane's, on the aggregate check `build`.
             extra = {
                 "MW_BUILD_PUBLISH": "true" if publish else "false",
                 "MW_BUILD_CHANNEL": self.channel, "MW_BUILD_REPO": repo, "MW_BUILD_SHA": sha,
@@ -1670,6 +1704,37 @@ class Host:
         if isinstance(self.sandbox, Sandbox):
             self.sandbox.readonly = tuple(p for p in self.sandbox.readonly if p != src) + (staged,)
         return staged
+
+    def merge_onto_base(self, repo: str, checkout: str, claimed: object, token: Optional[str]) -> str:
+        """Merge the checked-out head onto ONE base and return that base's sha. `claimed` is the
+        claim's `mergeBaseSha`: used VERBATIM (fetched if absent) when given; when null, main's tip
+        is resolved ONCE from the repository's mirror (its HEAD — the default branch, fetched just
+        before the checkout). The merge happens once, in the run's checkout, so every stage tests the
+        same merged tree; a conflict is a Refusal naming the base."""
+        genv = {**{k: self.env[k] for k in ("PATH", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR") if self.env.get(k)},
+                "HOME": os.path.dirname(checkout), **git_auth_env(token),
+                "GIT_AUTHOR_NAME": "build host", "GIT_AUTHOR_EMAIL": "build-host@invalid",
+                "GIT_COMMITTER_NAME": "build host", "GIT_COMMITTER_EMAIL": "build-host@invalid"}
+        if claimed is not None:
+            base = str(claimed).strip().lower()
+            if not SHA.match(base):
+                raise Refusal(f"the claim's mergeBaseSha {claimed!r} is not a full commit")
+        else:
+            mirror = os.path.join(self.cache, "git", f"{repo}.git")
+            rc, out = self.git_runner(["--git-dir", mirror, "rev-parse", "--verify", "HEAD^{commit}"], genv)
+            base = out.strip().splitlines()[-1].strip().lower() if rc == 0 and out.strip() else ""
+            if not SHA.match(base):
+                raise Refusal(f"main's tip could not be resolved from the mirror (exit {rc}): {out.strip()[-160:]}")
+        rc, out = self.git_runner(["-C", checkout, "fetch", "--quiet", "origin", base], genv)
+        if rc != 0:
+            raise Refusal(f"the merge base {base[:12]} could not be fetched (exit {rc}): {out.strip()[-160:]}")
+        rc, out = self.git_runner(["-C", checkout, "merge", "--no-ff", "--no-edit", "-m",
+                                   f"build host: merge onto {base}", base], genv)
+        if rc != 0:
+            self.git_runner(["-C", checkout, "merge", "--abort"], genv)
+            raise Refusal(f"the head does not merge onto {base[:12]} (exit {rc}) — a conflict is red, never a test of the unmerged head: {out.strip()[-200:]}")
+        self.log(f"merged the head onto {base[:12]} — every stage of this attempt tests that tree")
+        return base
 
     def sweep_workspaces(self, now: Optional[float] = None) -> list[str]:
         """Remove kept workspaces older than two run deadlines (their receipts were never
@@ -2065,6 +2130,7 @@ def self_test() -> int:
             pass
     d = validate_stages(good)
     check("stages/claim selects", [x["name"] for x in select_stages(d, ["build/gate"])] == ["gate"])
+    check("stages/a stable stage check selects its stage", [x["name"] for x in select_stages(d, ["build-stable/gate"])] == ["gate"])
     try:
         select_stages(d, ["portal-hosts"])
         check("stages/undeclared claim is red", False, "accepted")
@@ -2341,6 +2407,8 @@ def self_test() -> int:
 
         def host(api, **kw):
             kw.setdefault("pull", pull)
+            # a pull-request run merges onto a base: a fake git that resolves and merges cleanly
+            kw.setdefault("git_runner", lambda args, env_: (0, "e" * 40 + "\n" if "rev-parse" in args else ""))
             return Host(env if "env" not in kw else kw.pop("env"), api, log=lambda s: None, sandbox=_EnvSandbox(),
                         leftovers=lambda: [], sleep=lambda s: None, **kw)
 
@@ -2677,7 +2745,8 @@ def self_test() -> int:
                                                      {"name": "b", "kind": "test", "command": "true"}]}))
         hp.run(claim)
         kinds = [e for _, evs in posted for e in evs if e["kind"] == "plan"]
-        check("plan/one plan, naming every stage the host will run", kinds == [{"kind": "plan", "stages": ["a", "b"]}], kinds)
+        check("plan/one plan, naming every stage the host will run (and, for a PR run, its merge base)",
+              kinds == [{"kind": "plan", "stages": ["a", "b"], "mergeBase": "e" * 40}], kinds)
         firsts = [k for _, _, ks in seen_seq for k in ks if k != "line"]
         check("plan/the plan precedes every stage verdict", firsts and firsts[0] == "plan", firsts)
         per_stage: dict = {}
@@ -2735,6 +2804,45 @@ def self_test() -> int:
         hc.claim()
         check("claim/a new claim attempt carries a fresh claimId", len(ids) == 4 and ids[3] != ids[0], ids)
         check("claim/the claimId is a uuid", all(len(i) == 36 and i.count("-") == 4 for i in ids), ids)
+        # ONE merged tree per attempt: null → main's tip resolved ONCE and reused; non-null → verbatim;
+        # trunk → no merge
+        def merge_host(gitlog, tip="e" * 40, merge_rc=0):
+            def git(args, env_):
+                gitlog.append(args)
+                if "rev-parse" in args:
+                    return 0, tip + "\n"
+                if "merge" in args and "--abort" not in args:
+                    return merge_rc, "CONFLICT" if merge_rc else ""
+                return 0, ""
+            posted.clear()
+            return host(api_ev(), env=env_s, git_runner=git, checkout=checkout_with({"stages": [
+                {"name": "a", "kind": "build", "command": "true"}, {"name": "b", "kind": "test", "command": "true"}]}))
+        plans = lambda: [e for _, es in posted for e in es if e["kind"] == "plan"]
+        gl: list = []
+        merge_host(gl).run(dict(claim, isTrunk=False, mergeBaseSha=None))
+        check("merge/null: main's tip resolved ONCE", sum(1 for a in gl if "rev-parse" in a) == 1, gl)
+        check("merge/null: merged ONCE for every stage", sum(1 for a in gl if "merge" in a) == 1, gl)
+        check("merge/null: the plan names the resolved base", plans() and plans()[0].get("mergeBase") == "e" * 40, plans())
+        gl = []
+        merge_host(gl).run(dict(claim, isTrunk=False, mergeBaseSha="F" * 40))
+        check("merge/non-null: used VERBATIM, never re-resolved", not any("rev-parse" in a for a in gl)
+              and any(a[-1] == "f" * 40 and "fetch" in a for a in gl) and plans()[0].get("mergeBase") == "f" * 40, (gl, plans()))
+        gl = []
+        merge_host(gl).run(dict(claim, isTrunk=True, mergeBaseSha=None))
+        check("merge/trunk: no merge, no mergeBase", gl == [] and "mergeBase" not in plans()[0], (gl, plans()))
+        gl = []
+        merge_host(gl).run(dict(claim, isTrunk=False, kind="probe", mergeBaseSha=None))
+        check("merge/probe: no merge, no mergeBase", gl == [] and "mergeBase" not in plans()[0], (gl, plans()))
+        gl = []
+        merge_host(gl, merge_rc=1).run(dict(claim, isTrunk=False, mergeBaseSha=None))
+        rf = [e for _, es in posted for e in es if e["kind"] == "run-finished"]
+        check("merge/a conflict is red, never a test of the unmerged head",
+              rf and rf[0]["succeeded"] is False and "does not merge" in rf[0]["error"] and not plans(), (rf, plans()))
+        gl = []
+        merge_host(gl).run(dict(claim, isTrunk=False, mergeBaseSha="not-a-sha"))
+        rf = [e for _, es in posted for e in es if e["kind"] == "run-finished"]
+        check("merge/a malformed mergeBaseSha is refused", rf and "not a full commit" in rf[0]["error"], rf)
+
         # every batch carries the assignment's claimId; a stale-claim 409 ends the run; 503 is retried
         bodies: list[dict] = []
         hci = host(_FakeApi({("POST", "/claim"): [(200, dict(claim, stages=[]))], ("POST", "/token"): [(404, None)],
@@ -2770,7 +2878,7 @@ def self_test() -> int:
         return 1
     print("build-run self-test: all cases passed (diagnostics, dedup, vstest + xunit results, structured events, "
           "stage declaration, the bwrap argv, the env allow-list, the token file, the startup sandbox probe, "
-          "pid-namespace leftovers, the network-boundary self-check, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, cache scoping per stage, the refset key, the H9 artifact hand-over, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
+          "pid-namespace leftovers, one merged tree per PR attempt, the network-boundary self-check, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, cache scoping per stage, the refset key, the H9 artifact hand-over, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
           "stage, fail-fast, channel + publish, 409, undeclared stages, stage timeout, run deadline)")
     return 0
 

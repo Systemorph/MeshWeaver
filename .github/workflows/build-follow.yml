@@ -44,7 +44,7 @@ on:
         required: true
         type: string
       stage:
-        description: The stage to follow, as the repository's .github/build-stages.json names it (e.g. modules; build/modules is accepted). Its Check Run is build/<stage>.
+        description: The stage to follow, as the repository's .github/build-stages.json names it (e.g. modules; its check name build/modules — build-<channel>/modules off latest — is accepted). The aggregate check (build / build-<channel>) is not a stage and is refused.
         required: true
         type: string
       repo:

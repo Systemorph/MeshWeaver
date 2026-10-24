@@ -87,8 +87,12 @@ So callers pass `sha: ${{ github.event.pull_request.head.sha || github.sha }}` (
 means exactly that). The endpoint binds the OIDC token to the build by the token's `run_id` (the
 Actions run recorded on the run node), not by its `sha` claim, so the two never have to agree.
 
-A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is `build/<name>`.
-`build/<name>` is accepted as input and normalised.
+A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is `build/<name>` on
+`latest` and `build-<channel>/<name>` otherwise, either accepted as input and normalised. The
+run's AGGREGATE check is `build` (`build-<channel>` off latest) — no slash, so the two namespaces
+are disjoint: no stage, not even one named `verdict`, can publish under the aggregate, and a
+follower given the aggregate's name is refused rather than matched to a stage. A Check Run's
+`external_id` is the instance's opaque `mwb_<32 hex>`; nothing here parses it.
 
 ## 2. The host runner
 
@@ -135,6 +139,13 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    `GitHubAppTokenService.GetScopedInstallationToken(owner, [repo], {"contents":"read"})` — ONE
    repository, read-only, one hour — and only for the host that holds the run's claim. It never
    leaves the host process; git receives it through the environment, never argv or a URL.
+   **One merged tree per attempt** (policy `suites-test-fresh-merge`): on a pull-request run the
+   host merges the head onto ONE base before any stage — the claim's `mergeBaseSha` verbatim (fetched
+   if absent), or, when the claim names none, main's tip resolved ONCE from the repository's mirror
+   (its HEAD, fetched just before) — and every stage tests that tree; the base is never re-resolved
+   per stage. The plan names it as `"mergeBase":"<40 hex>"` (the instance refuses a PR success whose
+   plan names another sha, or none). A conflict is red, never a test of the unmerged head. Trunk and
+   probe runs are not merged and carry no `mergeBase`.
 4. **Run every stage** the repository declares in `.github/build-stages.json`:
 
    ```json
@@ -193,7 +204,7 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
      credential written to a host-private file for the one ORAS pull, then deleted.
    - `MW_BUILD_PUBLISH=true|false` (from the claim) is **informational**: a host holds no
      publication credential and mounts no bake share. Publication stays in the publish lane, which
-     consumes `build/verdict` — "only latest publishes" is that lane's property.
+     consumes the aggregate check `build` — "only latest publishes" is that lane's property.
 6. **Cache promotion is the host's: trunk-only, BUILD stages only, recomputed keys.** Only
    compilation is reused across runs — never a test verdict — so only a SUCCEEDED `build` stage of
    a trunk run (`isTrunk: true`) has its outputs promoted. A stage writes each reusable output to

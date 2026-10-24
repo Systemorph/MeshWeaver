@@ -1131,7 +1131,7 @@ buildHosts:
   imagePullSecret: ""             # the KUBELET's image pull (never in the pod's filesystem)
   # The sealed plugins publication the host stages before every claim (GET /hosts/inputs). Pulled
   # WITHOUT a credential: a host holds no registry token and mounts no bake share (publication is
-  # the publish lane's, on build/verdict) — a pluginsPullSecret or bakeShares key is refused.
+  # the publish lane's, on the aggregate check build) — a pluginsPullSecret or bakeShares key is refused.
   pluginsRegistry: ""             # e.g. cr.example.com — `<registry>/plugins/<source>@<digest>`
   pluginsSource: "plugins"
   # ORAS, copied into the runner by an init container — the same pinned image the bundle fetch uses.

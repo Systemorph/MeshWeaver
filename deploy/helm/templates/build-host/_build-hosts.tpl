@@ -44,7 +44,7 @@ The refusals, and why each one exists:
 {{- fail "buildHosts.pluginsPullSecret is not supported — a build host holds NO registry credential (Hosting/StandingBuildHosts §2); the plugins publication is pulled without one" -}}
 {{- end -}}
 {{- if $b.bakeShares -}}
-{{- fail "buildHosts.bakeShares is not supported — a build host mounts NO bake share; publication is the publish lane's, on build/verdict" -}}
+{{- fail "buildHosts.bakeShares is not supported — a build host mounts NO bake share; publication is the publish lane's, on the aggregate check build" -}}
 {{- end -}}
 {{- $cache := required "buildHosts.cacheClaimName is required — the shared RWX build-cache claim" $b.cacheClaimName -}}
 {{- if ($b.postgres | default dict).enabled -}}

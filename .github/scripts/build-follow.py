@@ -86,6 +86,35 @@ INERT = "› "
 LEGACY = "##["
 LEGACY_BROKEN = "##\u200b["
 SHA = re.compile(r"^[0-9a-f]{40}$")
+STAGE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def aggregate_check(channel: str) -> str:
+    """The run's AGGREGATE Check Run: `build` on latest, `build-<channel>` otherwise — no slash, so
+    it can never collide with a stage's check (a stage named `verdict` is `build/verdict`)."""
+    return "build" if channel == "latest" else f"build-{channel}"
+
+
+def stage_check(stage: str, channel: str) -> str:
+    """A stage's Check Run: `build/<stage>` on latest, `build-<channel>/<stage>` otherwise."""
+    return f"{aggregate_check(channel)}/{stage}"
+
+
+def stage_of(name: str, channel: str) -> str:
+    """The stage a `--stage` value names: a bare stage, or its check name on THIS channel. The
+    aggregate check is not a stage — following it is refused, never matched to a stage."""
+    name = (name or "").strip()
+    if name == aggregate_check(channel) or re.fullmatch(r"build(-[a-z0-9][a-z0-9._-]*)?", name):
+        raise Failure(f"--stage {name!r} names an AGGREGATE check, not a stage — follow a stage (e.g. modules)")
+    prefix = aggregate_check(channel) + "/"
+    if name.startswith(prefix):
+        name = name[len(prefix):]
+    elif "/" in name:
+        raise Failure(f"--stage {name!r} is not a stage of channel {channel} (its checks are {prefix}<stage>)")
+    if not STAGE.match(name):
+        raise Failure(f"--stage {name!r} is not a stage name (one segment [a-z0-9][a-z0-9._-]*, "
+                      f"as .github/build-stages.json declares it)")
+    return name
 
 
 class Http:
@@ -178,7 +207,7 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
     first_404: Optional[float] = None
     state = ""
     summary = ""
-    out(f"::group::build/{stage} — on build-{query['channel']} ({repo}@{sha[:12]})")
+    out(f"::group::{stage_check(stage, query['channel'])} — on build-{query['channel']} ({repo}@{sha[:12]})")
     try:
         while True:
             if clock() > deadline:
@@ -291,6 +320,8 @@ def resolve_args(a: argparse.Namespace, env: dict) -> argparse.Namespace:
     a.repo = (a.repo or env.get("GITHUB_REPOSITORY", "").split("/", 1)[-1]).strip()
     a.sha = (a.sha or env.get("GITHUB_SHA", "")).strip().lower()
     a.channel = (a.channel or "latest").strip()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", a.channel):
+        raise Failure(f"--channel {a.channel!r} is not a channel name")
     parsed = urllib.parse.urlparse(a.api_url)
     host = (parsed.hostname or "").lower()
     local = parsed.scheme == "http" and host in ("localhost", "127.0.0.1", "::1") and "@" not in parsed.netloc
@@ -301,14 +332,9 @@ def resolve_args(a: argparse.Namespace, env: dict) -> argparse.Namespace:
         raise Failure(f"--repo {a.repo!r} must be the bare repository name (the API path is /{{repo}}/…)")
     if not SHA.match(a.sha):
         raise Failure(f"--sha {a.sha!r} is not a full 40-hex commit")
-    # A stage is ONE path segment (its Check Run is build/<name>); `build/<name>` is accepted and
-    # normalised, so a caller may pass either the stage or its Check Run name.
-    a.stage = (a.stage or "").strip()
-    if a.stage.startswith("build/"):
-        a.stage = a.stage[len("build/"):]
-    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", a.stage):
-        raise Failure(f"--stage {a.stage!r} is not a stage name (one segment [a-z0-9][a-z0-9._-]*, "
-                      f"as .github/build-stages.json declares it)")
+    # A stage is ONE path segment; its Check Run is build/<stage> (latest) or build-<channel>/<stage>,
+    # either accepted and normalised. The aggregate (`build` / `build-<channel>`) is refused.
+    a.stage = stage_of(a.stage, a.channel)
     if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", a.channel):
         raise Failure(f"--channel {a.channel!r} is not a channel name")
     if not (0 < a.timeout_minutes <= MAX_TIMEOUT_MINUTES):
@@ -549,6 +575,26 @@ def self_test() -> int:
         return ns
     check("args/audience derived", resolve_args(args(), {}).audience == "https://control.example.com")
     check("args/build/ prefix normalised", resolve_args(args(stage="build/modules"), {}).stage == "modules")
+    check("args/a stable stage check normalised", resolve_args(args(stage="build-stable/gate", channel="stable"), {}).stage == "gate")
+    # The aggregate and the stage checks are DISJOINT: a follower waiting on the aggregate never
+    # matches a stage's check, even a stage named like the old aggregate (`verdict`).
+    for ch in ("latest", "stable"):
+        agg = aggregate_check(ch)
+        check(f"names/the aggregate of {ch} carries no slash", "/" not in agg and agg == ("build" if ch == "latest" else "build-stable"))
+        for st in ("verdict", "modules", "build", "gate"):
+            check(f"names/{agg} never equals {stage_check(st, ch)}", stage_check(st, ch) != agg and stage_check(st, ch).startswith(agg + "/"))
+        for name in (agg, "build", "build-stable"):
+            try:
+                stage_of(name, ch)
+                check(f"names/following the aggregate {name!r} on {ch} is refused", False, "matched a stage")
+            except Failure:
+                pass
+    try:
+        stage_of("build-stable/gate", "latest")
+        check("names/another channel's stage check is refused", False, "matched")
+    except Failure:
+        pass
+    check("names/a stage named verdict is a stage", stage_of("build/verdict", "latest") == "verdict")
     check("args/http to localhost allowed", resolve_args(args(api_url="http://localhost:8080/api/builds"), {}).api_url.startswith("http://localhost"))
     for bad in (dict(api_url="http://evil.example/api"), dict(api_url="http://localhost.example.com/api/builds"),
                 dict(api_url="http://localhost@remote.example.com/api/builds"), dict(sha="abc"), dict(timeout_minutes=50),
