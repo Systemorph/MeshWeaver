@@ -91,9 +91,20 @@ public sealed class AssemblyCacheRetentionHostedService(
             .SelectMany(_ => AssemblyCacheGenerations.Sweep(root, tag, retention, pool, logger))
             .Subscribe(
                 _ => { },
-                ex => logger.LogWarning(ex,
-                    "AssemblyCacheRetention: pass outcome — FAULTED: the sweep of {Root} faulted — nothing was collected, and "
-                    + "the next pod start plans it again", root));
+                ex =>
+                {
+                    // A pass the pool ended (teardown) is not a faulted pass: an armed one has already
+                    // logged its INTERRUPTED outcome with what it DID remove, which "FAULTED … nothing
+                    // was collected" would contradict.
+                    if (ex is OperationCanceledException)
+                        logger.LogInformation(
+                            "AssemblyCacheRetention: the sweep of {Root} was cancelled by the pool (teardown); the next "
+                            + "pod start plans it again", root);
+                    else
+                        logger.LogWarning(ex,
+                            "AssemblyCacheRetention: pass outcome — FAULTED: the sweep of {Root} faulted — nothing was "
+                            + "collected, and the next pod start plans it again", root);
+                });
     }
 
     /// <inheritdoc />
