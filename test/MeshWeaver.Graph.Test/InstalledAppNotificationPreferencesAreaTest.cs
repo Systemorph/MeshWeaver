@@ -62,6 +62,25 @@ public class InstalledAppNotificationPreferencesAreaTest(ITestOutputHelper outpu
         Assert.Equal(preferencePath, editor.NodePath);
     }
 
+    /// <summary>The switch labels follow the VIEWER's language — the type's own <c>[Translation]</c>s.</summary>
+    [Fact]
+    public void TheSwitchLabels_FollowTheViewer_German()
+    {
+        var stack = AppNodeType.NotificationPreferencesFor(
+            AppNodeType.PathFor("alice", App), NotificationAppPreferencePaths.PathFor("alice", App), "de");
+
+        var editor = Assert.IsType<MeshNodeContentEditorControl>(Views(stack)[1]);
+        Assert.Equal("Mitteilungen erlauben",
+            editor.Fields.Single(f => f.Key == "allowNotifications").Label);
+        Assert.Equal("Ohne Ton zustellen (nur Glocke)",
+            editor.Fields.Single(f => f.Key == "deliverQuietly").Label);
+
+        var english = Assert.IsType<MeshNodeContentEditorControl>(Views(AppNodeType.NotificationPreferencesFor(
+            AppNodeType.PathFor("alice", App), NotificationAppPreferencePaths.PathFor("alice", App)))[1]);
+        Assert.NotEqual("Mitteilungen erlauben",
+            english.Fields.Single(f => f.Key == "allowNotifications").Label);
+    }
+
     /// <summary>
     /// Rendered on a real installed-app record, the area creates the person's preference node —
     /// which is what makes opening the tab change no delivery while still giving the editor a node

@@ -78,11 +78,14 @@ public static class AppNodeType
     /// </summary>
     /// <param name="appPath">The installed-app record's path.</param>
     /// <param name="preferencePath">The person's preference node for that app.</param>
+    /// <param name="locale">The viewer's language for the switch labels (each field's
+    /// <c>[Translation]</c>); null renders English.</param>
     /// <returns>The control.</returns>
-    public static UiControl NotificationPreferencesFor(string appPath, string preferencePath)
+    public static UiControl NotificationPreferencesFor(string appPath, string preferencePath, string? locale = null)
         => Controls.Stack
             .WithView(MeshNodeThumbnailControl.ForPath(appPath))
-            .WithView(MeshNodeContentEditorControl.ForType(preferencePath, typeof(NotificationAppPreference)));
+            .WithView(MeshNodeContentEditorControl.ForType(preferencePath, typeof(NotificationAppPreference))
+                with { Fields = MeshNodeEditorField.FromType(typeof(NotificationAppPreference), locale) });
 
     /// <summary>
     /// <see cref="NotificationPreferencesArea"/>: shows the loading line at once, creates the
@@ -96,10 +99,12 @@ public static class AppNodeType
     public static IObservable<UiControl?> NotificationPreferences(LayoutAreaHost host, RenderingContext _)
     {
         var appPath = host.Hub.Address.ToString();
+        // Read on the render turn: the viewer's language, before any continuation leaves it.
+        var locale = host.ViewerLocale();
         if (!TryParsePath(appPath, out var user, out var appId))
             return Observable.Return<UiControl?>(Controls.Markdown(host.Localize("ui.mdNotifPrefsUnavailable")));
         return NotificationAppPreferenceNodeType.EnsureExists(host.Hub, user, appId)
-            .Select(preferencePath => (UiControl?)NotificationPreferencesFor(appPath, preferencePath))
+            .Select(preferencePath => (UiControl?)NotificationPreferencesFor(appPath, preferencePath, locale))
             .Catch((Exception _) => Observable.Return<UiControl?>(
                 Controls.Markdown(host.Localize("ui.mdNotifPrefsUnavailable"))))
             .StartWith((UiControl?)Controls.Markdown(host.Localize("ui.mdLoadingNotifPrefs")));
