@@ -11,22 +11,10 @@ namespace MeshWeaver.Hosting;
 public static class SampleDataExtensions
 {
     // === Domain data partitions ===
-
-    /// <summary>Includes the Northwind sample data (customers, products, employees, orders).</summary>
-    public static TBuilder AddNorthwind<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("Northwind");
-
-    /// <summary>Includes the FutuRe insurance/reinsurance sample data.</summary>
-    public static TBuilder AddFutuRe<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("FutuRe");
-
-    /// <summary>Includes the ACME project management sample data.</summary>
-    public static TBuilder AddAcme<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("ACME");
-
-    /// <summary>Includes the PensionFund balance-sheet data-cube sample data.</summary>
-    public static TBuilder AddPensionFund<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
-        => builder.IncludePartition("PensionFund");
+    //
+    // The product demos (ACME, FutuRe, Northwind, PensionFund) are not here: they live in
+    // MeshWeaver.Plugins' test/samples tree with the suites that load them, and those suites call
+    // IncludePartition("<Name>") — the primitive these helpers wrapped — exactly as Cornerstone's do.
 
     /// <summary>Includes the Systemorph sample data.</summary>
     public static TBuilder AddSystemorph<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
@@ -91,10 +79,6 @@ public static class SampleDataExtensions
     /// </summary>
     public static TBuilder AddAllSampleData<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
         => builder
-            .AddNorthwind()
-            .AddFutuRe()
-            .AddAcme()
-            .AddPensionFund()
             .AddSystemorph()
             .AddTestSpace()
             .AddMeshWeaverDocs()
