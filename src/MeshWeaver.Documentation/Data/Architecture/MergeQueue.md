@@ -312,8 +312,8 @@ base-is-the-default-branch condition. What still holds the property in core is
 `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowArmsAutoMerge`: no workflow in the directory arms
 auto-merge at all, so a stacked pull request can no longer be armed by a workflow here. The other
 lanes were checked structurally, not by luck: `arm-credential.yml` mints and inspects a token and arms
-nothing; the steward acts only on a `dequeued` event; `release.yml` and
-`node-repo-platform-ref-bump.yml` OPEN pull requests (`--base main`) without arming them.
+nothing; the steward acts only on a `dequeued` event; `release.yml` OPENS
+pull requests (`--base main`) without arming them (the retired `node-repo-platform-ref-bump.yml` did the same).
 
 ## Working with the queue
 
