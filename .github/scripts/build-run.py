@@ -1457,24 +1457,46 @@ class Host:
         """`POST /claim` with a FRESH `claimId` per claim attempt. A network error (or a 5xx) is
         retried with the SAME claimId: the instance then answers the assignment it already made, so a
         lost answer never strands a run claimed for a host that does not know it. A host keeps no
-        claim across a restart — after one it claims afresh, never resumes an old claim."""
-        body = {"host": self.host, "channel": self.channel, "platformVersion": self.platform_version,
-                "frameworkIdentity": self.identity, "pluginsDigest": self.plugins_digest,
-                "pluginsKey": self.plugins_key, "claimId": str(uuid.uuid4())}
-        self.claim_id = body["claimId"]
-        delay = 2.0
-        for attempt in range(4):
-            status, answer = self.api.call("POST", "/claim", body)
-            if status == 204:
+        claim across a restart — after one it claims afresh, never resumes an old claim.
+
+        409 answers, by `error`:
+          * `stale-claim-id` — that id is SPENT (its reservation names a run no longer held under this
+            host and id) and nothing was handed out: mint a FRESH id and claim again, ONCE — never a
+            retry of the spent id, never a loop on it;
+          * `stale-set` — this host's platform set is no longer its channel's: DRAIN (stop claiming;
+            the run in hand, if any, finishes; the replacement replica runs the new set)."""
+        for fresh in range(2):
+            body = {"host": self.host, "channel": self.channel, "platformVersion": self.platform_version,
+                    "frameworkIdentity": self.identity, "pluginsDigest": self.plugins_digest,
+                    "pluginsKey": self.plugins_key, "claimId": str(uuid.uuid4())}
+            self.claim_id = body["claimId"]
+            delay = 2.0
+            status, answer = 0, None
+            for attempt in range(4):
+                status, answer = self.api.call("POST", "/claim", body)
+                if status == 204:
+                    return None
+                if status == 200 and isinstance(answer, dict):
+                    return answer
+                if status != 0 and status < 500:
+                    break
+                self.log(f"claim {body['claimId']} answered HTTP {status} — retrying with the SAME claimId")
+                self.sleep(delay)
+                delay *= 2
+            error = str(answer.get("error") or "") if status == 409 and isinstance(answer, dict) else ""
+            if error.startswith("stale-claim-id"):
+                if fresh == 0:
+                    self.log(f"claim id {body['claimId']} is spent (stale-claim-id) — claiming again with a FRESH id")
+                    continue
+                self.log("a fresh claim id was answered stale-claim-id too — not claiming again this cycle")
                 return None
-            if status == 200 and isinstance(answer, dict):
-                return answer
-            if status != 0 and status < 500:
-                break
-            self.log(f"claim {body['claimId']} answered HTTP {status} — retrying with the SAME claimId")
-            self.sleep(delay)
-            delay *= 2
-        self.log(f"claim answered HTTP {status} — retrying after a pause")
+            if error.startswith("stale-set"):
+                self.log(f"the instance answers stale-set: this host's set {self.platform_version} is no longer "
+                         f"channel {self.channel}'s — DRAINING (no further claims)")
+                self.stopping = True
+                return None
+            self.log(f"claim answered HTTP {status} — retrying after a pause")
+            return None
         return None
 
     def cycle(self) -> str:
@@ -2867,6 +2889,20 @@ def self_test() -> int:
         check("503/retried with the same batch and seq, never a failure", s503.flush(attempts=6) and tries503 == [1, 1, 1], tries503)
         check("sandbox/TMPDIR is the stage's tmpfs scratch", sandbox_env({}, {}, "/cache")["TMPDIR"] == f"{SCRATCH}/tmp"
               and f"--tmpfs {SCRATCH}" in " ".join(Sandbox("bwrap", []).argv("x", "/w/s", "/w/o", {"PATH": "/bin"})))
+        # 409 stale-claim-id: a FRESH id, once; 409 stale-set: drain, no new claim
+        sid: list[str] = []
+        sans = [(409, {"error": "stale-claim-id"}), (204, None)]
+        hsc = host(_FakeApi({("POST", "/claim"): lambda p_, b: (sid.append(b["claimId"]), sans.pop(0))[1]}))
+        hsc.claim()
+        check("claim/stale-claim-id → the next request carries a DIFFERENT claimId", len(sid) == 2 and sid[0] != sid[1], sid)
+        sid.clear()
+        sans2 = [(409, {"error": "stale-claim-id"}), (409, {"error": "stale-claim-id"}), (204, None)]
+        hsc2 = host(_FakeApi({("POST", "/claim"): lambda p_, b: (sid.append(b["claimId"]), sans2.pop(0))[1]}))
+        check("claim/stale-claim-id twice → once more only, never a loop", hsc2.claim() is None and len(sid) == 2 and not hsc2.stopping, sid)
+        sid.clear()
+        hss = host(_FakeApi({("POST", "/claim"): lambda p_, b: (sid.append(b["claimId"]), (409, {"error": "stale-set"}))[1]}))
+        check("claim/stale-set → drain, no new claim", hss.claim() is None and len(sid) == 1 and hss.stopping, sid)
+        check("claim/a draining host claims nothing more", hss.cycle() == "stopping" and len(sid) == 1, sid)
         plan_from_child = OutputParser("/w", "x").feed('::mw-event::{"kind":"plan","stages":["x"]}')
         check("plan/a child cannot emit the plan", plan_from_child and "refused" in plan_from_child[0]["text"], plan_from_child)
     finally:
