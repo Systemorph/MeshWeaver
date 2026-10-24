@@ -129,7 +129,9 @@ public static class MailAttachments
             MailAttachmentKinds.File when info.Size > MaxBytes => MailAttachmentSkips.TooLarge,
             MailAttachmentKinds.File => null,
             MailAttachmentKinds.Reference => MailAttachmentSkips.Reference,
-            _ => MailAttachmentSkips.Item,
+            MailAttachmentKinds.Item => MailAttachmentSkips.Item,
+            // Kind is an open vocabulary: a value no rule claims is reported as such, never reinterpreted as an item.
+            _ => MailAttachmentSkips.Unsupported,
         };
 
     private static MailAttachmentCopy Described(MailAttachmentInfo info) => new()

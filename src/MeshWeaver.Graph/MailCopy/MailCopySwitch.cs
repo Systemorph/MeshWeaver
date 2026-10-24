@@ -86,8 +86,10 @@ public sealed class MailCopySwitch(IEnumerable<IMailAccountCopy> providers) : IM
 
     /// <inheritdoc />
     public IObservable<bool> IsOn(string owner, string provider, string accountId)
-        => Offer(owner).Select(accounts => accounts.Any(a =>
-            string.Equals(a.Provider, provider, StringComparison.Ordinal) && string.Equals(a.AccountId, accountId, StringComparison.Ordinal) && a.IsOn));
+        // A provider that cannot be read is an ERROR here, never "off": an unverified off state must not be reported.
+        => Find(provider) is { } p
+            ? p.Accounts(owner).Take(1).Select(accounts => accounts.Any(a => string.Equals(a.AccountId, accountId, StringComparison.Ordinal) && a.IsOn))
+            : Observable.Return(false);
 
     /// <inheritdoc />
     public IObservable<bool> Enable(string owner, string provider, string accountId, int windowDays = MailCopyNodeTypes.WindowDays)

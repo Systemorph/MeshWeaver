@@ -78,6 +78,9 @@ public sealed class MailCopyEngine(
     /// <summary>Whether a copy exists for <paramref name="owner"/> on this installation. Cold; emits once.</summary>
     public IObservable<bool> IsOn(string owner) => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null).Select(source => source is not null);
 
+    /// <summary>The copy's source, or null while it is off. Cold; emits once.</summary>
+    public IObservable<MailCopySource?> Source(string owner) => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null);
+
     /// <summary>Switches the copy ON (a no-op when it is on) and starts the backfill. Cold.</summary>
     public IObservable<MailCopySource> Enable(string owner, int windowDays)
         => Observable.Defer(() =>
@@ -285,7 +288,9 @@ public sealed class MailCopyEngine(
                 : prior?.Attachments is { } existing && existing.Any(a => a.StoredPath is not null) ? existing
                 : message.HasAttachments == false ? ImmutableList<MailAttachmentCopy>.Empty
                 : prior?.Attachments;
-            var copy = message with { Attachments = known };
+            // 🚨 A marker that said "has attachments" is never overwritten by "none": an interrupted save leaves
+            // files with no list, and removal finds them through the marker.
+            var copy = message with { Attachments = known, HasAttachments = message.HasAttachments == false && prior?.HasAttachments == true ? true : message.HasAttachments };
             return store.WriteIfNewer(owner, copy).SelectMany(wrote => wrote
                 ? Attach(owner, copy, files).Select(_ => true)
                 : Observable.Return(false));
@@ -349,7 +354,11 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
             : Observable.Return(false));
 
     /// <inheritdoc />
-    public IObservable<bool> Disable(string owner, string accountId) => engine.Disable(owner);
+    public IObservable<bool> Disable(string owner, string accountId)
+        // Only the copy OF THIS ACCOUNT: a different account id deletes nothing.
+        => engine.Source(owner).SelectMany(source => source is null || (source.MailboxId is { } bound && bound != accountId)
+            ? Observable.Return(false)
+            : engine.Disable(owner));
 
     /// <inheritdoc />
     public void KickAll(string owner) => engine.Kick(owner);

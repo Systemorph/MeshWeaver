@@ -266,6 +266,9 @@ public static class MailAttachmentSkips
     /// <summary>Larger than <see cref="MailAttachments.MaxBytes"/>; it stays with the provider.</summary>
     public const string TooLarge = "too-large";
 
+    /// <summary>The kind is one no rule knows; it is not stored.</summary>
+    public const string Unsupported = "unsupported";
+
     /// <summary>It could not be fetched or stored.</summary>
     public const string FetchFailed = "fetch-failed";
 }
