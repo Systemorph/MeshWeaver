@@ -1,6 +1,7 @@
 #pragma warning disable CS1591
 
 using System;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -58,6 +59,9 @@ internal static class WorkflowJobText
     /// </summary>
     internal static (string? Body, string? Refusal) Read(string text, string lane, string job)
     {
+        // A CRLF checkout (core.autocrlf on Windows) must read exactly as LF does: the header and
+        // body patterns below are written against `\n`.
+        text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
         var header = Regex.Match(text, @"\n  " + Regex.Escape(job) + @":\n");
         if (!header.Success)
             return (null, $"{lane} must have a `{job}` job");
@@ -100,6 +104,96 @@ internal static class WorkflowJobText
 
         return $"{lane}: the `{job}` job's body could not be read through to the next job key.";
     }
+
+    /// <summary>
+    /// A line that opens a job: exactly two spaces, then a key of letters, digits, <c>-</c> or
+    /// <c>_</c>, then <c>:</c> and nothing else but an optional trailing comment. The key is matched
+    /// WHOLE — the shared answer to the prefix collision the hand-rolled slicers carried, where
+    /// <c>IndexOf("\n  " + "build")</c> lands on <c>build-image:</c> when that job comes first.
+    /// </summary>
+    internal static bool IsJobKey(string line) => JobKeyOf(line) is not null;
+
+    /// <summary>The key a job-opening line names, or <c>null</c> when the line opens no job.</summary>
+    internal static string? JobKeyOf(string line)
+    {
+        var m = Regex.Match(line, @"\A  (?<key>[A-Za-z0-9_-]+):[ \t]*(?:#.*)?\z");
+        return m.Success ? m.Groups["key"].Value : null;
+    }
+
+    /// <summary>
+    /// Every job's <c>(Key, Start, End)</c> line range, in file order: its key line through the line
+    /// before the next job key — or before the next column-0 key, which ends the <c>jobs:</c> map.
+    /// The scan starts after the <c>jobs:</c> line when the text has one, so a trigger key such as
+    /// <c>  push:</c> under <c>on:</c> (also a two-space key) is never taken for a job. Comment lines
+    /// inside a range are KEPT: what a caller strips is its own call.
+    /// </summary>
+    internal static ImmutableList<(string Key, int Start, int End)> Ranges(string[] lines)
+    {
+        // Detection reads each line WITHOUT a trailing `\r` (a CRLF file split on `\n` keeps one,
+        // and `\z` would then reject every bare `jobs:` / `  build:`); the ranges index the caller's
+        // lines, so a returned block keeps them verbatim.
+        var jobsLine = Array.FindIndex(lines, l => Regex.IsMatch(l.TrimEnd('\r'), @"\Ajobs:[ \t]*(?:#.*)?\z"));
+        var result = ImmutableList.CreateBuilder<(string, int, int)>();
+        (string Key, int Start)? open = null;
+        for (var i = jobsLine + 1; i < lines.Length; i++)
+        {
+            var key = JobKeyOf(lines[i].TrimEnd('\r'));
+            var endsMap = EndsJobsMap(lines[i]);
+            if (key is null && !endsMap)
+                continue;
+            if (open is { } o)
+                result.Add((o.Key, o.Start, i));
+            open = key is null ? null : (key, i);
+            if (endsMap)
+                break;
+        }
+        if (open is { } last)
+            result.Add((last.Key, last.Start, lines.Length));
+        return result.ToImmutable();
+    }
+
+    /// <summary>The <c>[Start, End)</c> line range of <paramref name="job"/> (see <see cref="Ranges"/>), or <c>null</c> when it is absent.</summary>
+    internal static (int Start, int End)? Range(string[] lines, string job) =>
+        Ranges(lines).FirstOrDefault(r => r.Key == job) is { Key: not null } r ? (r.Start, r.End) : null;
+
+    /// <summary>
+    /// <paramref name="job"/>'s block, verbatim — key line included, comments kept — or <c>null</c>
+    /// when the job is absent. The text-in, text-out form of <see cref="Range"/>.
+    /// </summary>
+    internal static string? Block(string text, string job)
+    {
+        var lines = text.Split('\n');
+        return Range(lines, job) is { } r ? string.Join("\n", lines[r.Start..r.End]) : null;
+    }
+
+    /// <summary>
+    /// The step whose <c>- name:</c> line contains <paramref name="nameFragment"/>: that line through
+    /// the line before the next non-comment line at the same or a shallower indentation — the next
+    /// step, or the end of the <c>steps:</c> list. Bounded at BOTH ends, so the last step of a job
+    /// never swallows the job after it: the hand-rolled <c>IndexOf("\n      - name:")</c> slicers
+    /// ran on to the next step ANYWHERE, which for a job's last step is the first step of the
+    /// following job. <c>null</c> when no step's name carries the fragment.
+    /// </summary>
+    internal static string? Step(string text, string nameFragment)
+    {
+        var lines = text.Split('\n');
+        var start = Array.FindIndex(lines, l =>
+            l.TrimStart().StartsWith("- name:", StringComparison.Ordinal)
+            && l.Contains(nameFragment, StringComparison.Ordinal));
+        if (start < 0)
+            return null;
+        var indent = Indent(lines[start]);
+        var end = Array.FindIndex(lines, start + 1, l =>
+            l.Trim().Length > 0 && !l.TrimStart().StartsWith('#') && Indent(l) <= indent);
+        return string.Join("\n", lines[start..(end < 0 ? lines.Length : end)]);
+    }
+
+    private static int Indent(string line) => line.Length - line.TrimStart(' ').Length;
+
+    /// <summary>A column-0 key (<c>env:</c>, <c>on:</c>, …) after the jobs ends the <c>jobs:</c> map.
+    /// A column-0 COMMENT does not — YAML allows it anywhere, and it ends nothing.</summary>
+    private static bool EndsJobsMap(string line) =>
+        line.Length > 0 && line[0] is not (' ' or '#' or '\t' or '\r');
 
     internal static string FindRepoRoot()
     {
@@ -177,5 +271,120 @@ public class WorkflowJobTextTest
         // above keeps, 7 the continuation it appends — which is the one that loses its indentation.
         Assert.Contains("stops at line 7", refusal!, StringComparison.Ordinal);
         Assert.Contains("column 0", refusal!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A workflow whose jobs collide by PREFIX (<c>build-image</c> before <c>build</c>, as
+    /// <c>portal-image</c> / <c>portal-image-mirror</c> do in main-cd.yml), with a trigger key that
+    /// looks like a job and a last step that a step slicer could run past.
+    /// </summary>
+    private const string PrefixLane = """
+on:
+  build:
+    types: [requested]
+
+jobs:
+  build-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push the image
+        run: echo IMAGE
+
+  build:
+    needs: [build-image]
+    runs-on: ubuntu-latest
+  # a two-space comment between the job's keys
+    steps:
+      - name: Compile
+        run: echo COMPILE
+      - name: Last step of build
+        run: echo LAST
+
+  verdict:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report
+        run: echo VERDICT
+""";
+
+    /// <summary>
+    /// 🚨 The prefix collision, with its negative control. The shape the guards hand-rolled —
+    /// <c>IndexOf("\n  " + job)</c> with the job named WITHOUT its colon — lands on
+    /// <c>build-image:</c>, so every assertion about <c>build</c> would have judged the image job.
+    /// The shared reader matches the key whole, skips the <c>on:</c> trigger of the same name,
+    /// and keeps a two-space comment inside the job rather than ending the job at it.
+    /// </summary>
+    [Fact]
+    public void AJobWhoseNameIsAPrefixOfAnother_IsSlicedByItsWholeKey()
+    {
+        // Negative control: the old shape picks the wrong job.
+        var old = PrefixLane.IndexOf("\n  " + "build", StringComparison.Ordinal);
+        Assert.StartsWith("\n  build:\n    types:", PrefixLane[old..], StringComparison.Ordinal); // the TRIGGER
+        var oldAfterJobs = PrefixLane.IndexOf("\n  " + "build", PrefixLane.IndexOf("\njobs:", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.StartsWith("\n  build-image:", PrefixLane[oldAfterJobs..], StringComparison.Ordinal); // the WRONG job
+
+        var block = WorkflowJobText.Block(PrefixLane, "build");
+
+        Assert.NotNull(block);
+        Assert.StartsWith("  build:\n    needs: [build-image]", block, StringComparison.Ordinal);
+        Assert.Contains("echo COMPILE", block, StringComparison.Ordinal);
+        Assert.Contains("echo LAST", block, StringComparison.Ordinal);
+        Assert.Contains("# a two-space comment", block, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo IMAGE", block, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo VERDICT", block, StringComparison.Ordinal);
+        Assert.DoesNotContain("types: [requested]", block, StringComparison.Ordinal);
+
+        Assert.Contains("echo IMAGE", WorkflowJobText.Block(PrefixLane, "build-image")!, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo COMPILE", WorkflowJobText.Block(PrefixLane, "build-image")!, StringComparison.Ordinal);
+        Assert.Null(WorkflowJobText.Block(PrefixLane, "buil"));
+        Assert.Equal(new[] { "build-image", "build", "verdict" }, WorkflowJobText.Ranges(PrefixLane.Split('\n')).Select(r => r.Key));
+    }
+
+    /// <summary>
+    /// A CRLF file (a Windows checkout read with <c>File.ReadAllText</c>) slices exactly as its LF
+    /// twin does. Negative control: before the reader trimmed the <c>\r</c> a split on <c>\n</c>
+    /// leaves, <c>jobs:</c> and every bare job key failed their <c>\z</c> anchor and
+    /// <see cref="WorkflowJobText.Block"/> answered <c>null</c> for a job that is there.
+    /// </summary>
+    [Fact]
+    public void ACrlfWorkflow_SlicesLikeItsLfTwin()
+    {
+        var crlf = PrefixLane.Replace("\n", "\r\n", StringComparison.Ordinal);
+        Assert.Contains("\r\n", crlf, StringComparison.Ordinal);
+
+        var block = WorkflowJobText.Block(crlf, "build");
+
+        Assert.NotNull(block);
+        Assert.Contains("\r\n", block, StringComparison.Ordinal); // verbatim: the caller's lines are returned as they were
+        Assert.Equal(WorkflowJobText.Block(PrefixLane, "build"), block.Replace("\r", "", StringComparison.Ordinal));
+        Assert.Equal(new[] { "build-image", "build", "verdict" }, WorkflowJobText.Ranges(crlf.Split('\n')).Select(r => r.Key));
+        Assert.Contains("echo LAST", WorkflowJobText.Step(crlf, "Last step of build")!, StringComparison.Ordinal);
+        Assert.DoesNotContain("verdict:", WorkflowJobText.Step(crlf, "Last step of build")!, StringComparison.Ordinal);
+
+        var (body, refusal) = WorkflowJobText.Read(("on: push\n" + Job).Replace("\n", "\r\n", StringComparison.Ordinal), Lane, "select");
+        Assert.Null(refusal);
+        Assert.Contains("- name: Something", body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("next:", body!, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The step slice ends with its job. Negative control: the hand-rolled shape — from the name to
+    /// the next <c>"\n      - name:"</c> anywhere — runs from the last step of <c>build</c> into the
+    /// first step of <c>verdict</c>.
+    /// </summary>
+    [Fact]
+    public void TheLastStepOfAJob_DoesNotSwallowTheNextJob()
+    {
+        var at = PrefixLane.IndexOf("Last step of build", StringComparison.Ordinal);
+        var next = PrefixLane.IndexOf("\n      - name:", at, StringComparison.Ordinal);
+        Assert.Contains("verdict:", PrefixLane[at..next], StringComparison.Ordinal); // the old slice crossed a job
+
+        var step = WorkflowJobText.Step(PrefixLane, "Last step of build");
+
+        Assert.NotNull(step);
+        Assert.Contains("echo LAST", step, StringComparison.Ordinal);
+        Assert.DoesNotContain("verdict:", step, StringComparison.Ordinal);
+        Assert.DoesNotContain("echo COMPILE", WorkflowJobText.Step(PrefixLane, "Last step of build")!, StringComparison.Ordinal);
+        Assert.Equal("      - name: Compile\n        run: echo COMPILE", WorkflowJobText.Step(PrefixLane, "Compile"));
     }
 }
