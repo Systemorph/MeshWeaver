@@ -40,7 +40,7 @@ GetDataResponse	src/MeshWeaver.ContentCollections/ContentCollectionsExtensions.c
 GetDataResponse	src/MeshWeaver.ContentCollections/ContentFileResolver.cs	2
 GetDataResponse	src/MeshWeaver.ContentCollections/HubStreamProviderFactory.cs	1
 GetDataResponse	src/MeshWeaver.Graph/Configuration/GraphConfigurationExtensions.cs	2
-GetDataResponse	src/MeshWeaver.Graph/MeshDataSource.cs	9
+GetDataResponse	src/MeshWeaver.Graph/MeshDataSource.cs	8
 GetDataResponse	src/MeshWeaver.Layout/LayoutExtensions.cs	2
 GetDataResponse	src/MeshWeaver.Mesh.Contract/MeshNodeStreamExtensions.cs	2
 GetDataResponse	src/MeshWeaver.Mesh.Operations/MeshOperations.cs	7
