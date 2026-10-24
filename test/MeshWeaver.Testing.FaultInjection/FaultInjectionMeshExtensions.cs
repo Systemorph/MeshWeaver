@@ -54,33 +54,51 @@ public static class FaultInjectionMeshExtensions
     /// must be in force from the mesh's first operation.</param>
     public static MeshBuilder AddFaultInjectingStorageOverTheChain(
         this MeshBuilder builder, Action<FaultInjectingStorageAdapter>? arm = null)
-        => builder.ConfigureServices(services =>
-        {
-            var outermost = services.LastOrDefault(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService)
-                ?? throw new InvalidOperationException(
-                    "No IStorageAdapter is registered yet, so there is no chain to wrap — call "
-                    + "AddFaultInjectingStorageOverTheChain after the base configuration adds persistence.");
-            services.Remove(outermost);
-            services.AddSingleton(sp =>
-            {
-                var adapter = new FaultInjectingStorageAdapter(Materialise(outermost, sp), "mesh (over the chain)");
-                arm?.Invoke(adapter);
-                return adapter;
-            });
-            services.AddSingleton<IStorageAdapter>(sp => sp.GetRequiredService<FaultInjectingStorageAdapter>());
-            return services;
-        });
+        => builder.ConfigureServices(services => WrapOutermostStorageAdapter(services, arm));
 
-    /// <summary>Builds the adapter a removed registration described, whichever form it took.</summary>
-    private static IStorageAdapter Materialise(ServiceDescriptor descriptor, IServiceProvider sp)
-        => descriptor.ImplementationInstance as IStorageAdapter
-           ?? (descriptor.ImplementationFactory is { } factory
-               ? (IStorageAdapter)factory(sp)
-               : descriptor.ImplementationType is { } type
-                   ? (IStorageAdapter)ActivatorUtilities.CreateInstance(sp, type)
-                   : throw new InvalidOperationException(
-                       "The IStorageAdapter registration is neither an instance, a factory nor a type, "
-                       + "so it cannot be wrapped."));
+    /// <summary>
+    /// The private key the wrapped chain stays registered under, so the container still OWNS what it
+    /// built: a factory- or type-registered adapter (the production chain's outermost decorator,
+    /// <c>SubtreeDeletionGuardStorageAdapter</c>, releases its admitted-write connections on
+    /// <c>Dispose</c>) is disposed with the provider, and an instance registration stays non-owned.
+    /// </summary>
+    private const string WrappedChainKey = "MeshWeaver.Testing.FaultInjection.WrappedStorageChain";
+
+    /// <summary>
+    /// Moves the outermost <see cref="IStorageAdapter"/> registration under <see cref="WrappedChainKey"/>
+    /// — same lifetime, same form — and registers a <see cref="FaultInjectingStorageAdapter"/> over it.
+    /// </summary>
+    internal static IServiceCollection WrapOutermostStorageAdapter(
+        IServiceCollection services, Action<FaultInjectingStorageAdapter>? arm)
+    {
+        var outermost = services.LastOrDefault(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService)
+            ?? throw new InvalidOperationException(
+                "No IStorageAdapter is registered yet, so there is no chain to wrap — call "
+                + "AddFaultInjectingStorageOverTheChain after the base configuration adds persistence.");
+        services.Remove(outermost);
+        services.Add(Rekeyed(outermost));
+        services.AddSingleton(sp =>
+        {
+            var adapter = new FaultInjectingStorageAdapter(
+                sp.GetRequiredKeyedService<IStorageAdapter>(WrappedChainKey), "mesh (over the chain)");
+            arm?.Invoke(adapter);
+            return adapter;
+        });
+        services.AddSingleton<IStorageAdapter>(sp => sp.GetRequiredService<FaultInjectingStorageAdapter>());
+        return services;
+    }
+
+    /// <summary>The removed registration, unchanged but for its key — whichever form it took.</summary>
+    private static ServiceDescriptor Rekeyed(ServiceDescriptor descriptor)
+        => descriptor.ImplementationInstance is { } instance
+            ? new ServiceDescriptor(typeof(IStorageAdapter), WrappedChainKey, instance)
+            : descriptor.ImplementationFactory is { } factory
+                ? new ServiceDescriptor(typeof(IStorageAdapter), WrappedChainKey, (sp, _) => factory(sp), descriptor.Lifetime)
+                : descriptor.ImplementationType is { } type
+                    ? new ServiceDescriptor(typeof(IStorageAdapter), WrappedChainKey, type, descriptor.Lifetime)
+                    : throw new InvalidOperationException(
+                        "The IStorageAdapter registration is neither an instance, a factory nor a type, "
+                        + "so it cannot be wrapped.");
 
     /// <summary>
     /// Adds a <see cref="HeldFirstFrameQueryProvider"/> for <paramref name="partition"/> to the query
