@@ -409,7 +409,7 @@ public sealed class PluginBundleClient
                 return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
-                        : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger)));
+                        : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger))); // atomic-blocking-leaf: one parse of a bundle already downloaded into memory, no IO and no step boundary
             })
             .Catch((Exception ex) =>
             {
@@ -723,6 +723,7 @@ public sealed class PluginBundleClient
     internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
         string? advertisedFrameworkMvid = null) =>
+        // atomic-blocking-leaf: one parse of module bundle bytes already in memory, no IO and no step boundary
         _httpPool.InvokeBlocking(_ => BundleReader.ReadModule(bundleBytes))
             .SelectMany(payload =>
             {
@@ -1271,6 +1272,7 @@ public sealed class PluginBundleClient
     /// buys nothing (the writes serialise there anyway) while making the log order meaningless.</para>
     /// </summary>
     private IObservable<int> SeedAll(string pluginId, byte[] bundleBytes) =>
+        // atomic-blocking-leaf: one parse of bundle bytes already in memory, no IO and no step boundary
         _httpPool.InvokeBlocking(_ => BundleReader.Read(bundleBytes))
             .SelectMany(payload =>
             {
