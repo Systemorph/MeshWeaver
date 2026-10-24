@@ -252,6 +252,7 @@ still carry it:
 | `SuspendedAt` | the `Suspend` / `Reactivate` actions |
 | `SuspensionReason` | the `Suspend` action |
 | `WebhookInboxTargets` | legacy of `WebhookInbox` — read when the typed list is empty, never written |
+| `BuildHosts` | the operations record's author (`Enabled`, a channel's `MaxReplicas`) and core CD's signed `build-host-update-available` event through the operations instance (a channel's set — `PlatformVersion`, `TesterDigest`, `PortalDigest`, `RunnerDigest`); [Build Hosts](../BuildHosts) |
 
 ## Retired: generating the Helm chart from Aspire
 
