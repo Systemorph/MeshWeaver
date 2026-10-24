@@ -58,12 +58,19 @@ public static class DeploymentRecordJson
     /// is read BY a control instance ABOUT this deployment — the App the control instance dispatches
     /// this deployment's pipelines as — and it never belongs in the described portal's configuration:
     /// a client portal handed the ops client id would advertise, in its own environment, the App that
-    /// can start its infrastructure. So the portal-bound projection drops it. Everything else is the
+    /// can start its infrastructure. So the portal-bound projection drops it, and likewise
+    /// <see cref="HostingOperatorSpec.SelfServiceSecrets"/>. Everything else is the
     /// record unchanged, and <see cref="Write"/> (the control-side, round-tripping form) keeps the
     /// block — the two are different audiences, not two serialisations of one.
     /// </summary>
     public static DeploymentContent ForPortal(DeploymentContent record) =>
-        record with { OpsGitHubApp = null };
+        record with
+        {
+            OpsGitHubApp = null,
+            // Same audience rule: the self-service secret allow-list is read by the control plane ABOUT this
+            // deployment, so its vault object names never travel to the described portal either.
+            Operator = record.Operator is { } op ? op with { SelfServiceSecrets = [] } : null,
+        };
 
     /// <summary>The <c>Deployment__Record</c> payload handed to the described portal — <see cref="Write"/> over <see cref="ForPortal"/>.</summary>
     public static string WritePortal(DeploymentContent record, bool indented = false) =>
