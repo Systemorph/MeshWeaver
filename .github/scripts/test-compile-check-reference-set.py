@@ -36,6 +36,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 ROOT = Path(__file__).resolve().parents[2]
 LANE = ROOT / ".github" / "workflows" / "node-repo-compile-check.yml"
 
@@ -92,15 +95,11 @@ sys.stderr.write(f"stub docker: unhandled {args}\n"); sys.exit(2)
 
 
 def extract_step() -> str:
-    doc = yaml.safe_load(LANE.read_text(encoding="utf-8"))
-    steps = [s for s in doc["jobs"]["compile-check"]["steps"] if s.get("id") == "image"]
-    if len(steps) != 1:
-        raise SystemExit(f"RED: expected exactly one `id: image` step in {LANE.name}, found {len(steps)}")
-    body = steps[0]["run"].replace("${{ inputs.allow-unpinned }}", "false")
-    if "${{" in body:
-        raise SystemExit(f"RED: the `image` step grew a ${{{{ }}}} expression this harness cannot supply "
-                         "— teach it, do not skip it")
-    return body
+    try:
+        return workflow_yaml.step_run(LANE, "image", job_name="compile-check",
+                                      expressions={"inputs.allow-unpinned": "false"})
+    except workflow_yaml.WorkflowYamlError as e:
+        raise SystemExit(f"RED: {e}")
 
 
 def make_image(images: Path, ref: str, *, tester: bool, identity: str, manifest: bool = True) -> None:

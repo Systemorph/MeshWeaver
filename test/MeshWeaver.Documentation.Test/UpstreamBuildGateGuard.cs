@@ -76,15 +76,14 @@ public class UpstreamBuildGateGuard
 
 
 
-    /// <summary>Everything from <paramref name="marker"/> to the next step boundary at the same
-    /// indent, so an assertion about one step cannot be satisfied by another.</summary>
+    /// <summary>The step whose name carries <paramref name="marker"/>, bounded by the next step and
+    /// by the end of its job, so an assertion about one step cannot be satisfied by another.</summary>
     private static string SectionAfter(string body, string marker)
     {
-        var start = body.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"'{marker}' is gone from {Workflow} — the gate it belongs to has "
+        var step = WorkflowJobText.Step(body, marker);
+        Assert.True(step is not null, $"'{marker}' is gone from {Workflow} — the gate it belongs to has "
                                 + "been removed or renamed, which no other check would catch.");
-        var next = body.IndexOf("\n      - name:", start + marker.Length, StringComparison.Ordinal);
-        return next < 0 ? body[start..] : body[start..next];
+        return step!;
     }
 
     private static string FindRepoRoot()
@@ -116,7 +115,7 @@ public class UpstreamBuildGateGuard
         Assert.DoesNotContain("/dispatches", body, StringComparison.Ordinal);
         Assert.DoesNotContain("event_type", body, StringComparison.Ordinal);
 
-        var job = JobBlock(body, "register-publication:");
+        var job = JobBlock(body, "register-publication");
         Assert.Contains("needs.publish-bake.outputs.published == 'true'", job, StringComparison.Ordinal);
         Assert.Contains("inputs.webhook-url", job, StringComparison.Ordinal);
         Assert.Contains("secrets.webhook-secret", job, StringComparison.Ordinal);
@@ -148,7 +147,7 @@ public class UpstreamBuildGateGuard
     [Fact]
     public void AnAcceptedButUnverifiedPublicationRecord_EndsTheLane()
     {
-        var job = JobBlock(Body(), "register-publication:");
+        var job = JobBlock(Body(), "register-publication");
 
         Assert.Contains("case \"$verdict\" in", job, StringComparison.Ordinal);
         Assert.Contains("not-required)", job, StringComparison.Ordinal);
@@ -157,15 +156,12 @@ public class UpstreamBuildGateGuard
         Assert.DoesNotContain("::warning", job, StringComparison.Ordinal);
     }
 
-    /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
+    /// <summary>One job's block, by its WHOLE key (<see cref="WorkflowJobText.Block"/>).</summary>
     private static string JobBlock(string body, string jobKey)
     {
-        var start = body.IndexOf("\n  " + jobKey, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
+        var block = WorkflowJobText.Block(body, jobKey);
+        Assert.True(block is not null, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
                                 + "renamed, which no other check would catch.");
-        var next = body.IndexOf("\n  ", start + jobKey.Length + 3, StringComparison.Ordinal);
-        while (next >= 0 && next + 3 < body.Length && body[next + 3] == ' ')
-            next = body.IndexOf("\n  ", next + 1, StringComparison.Ordinal);
-        return next < 0 ? body[start..] : body[start..next];
+        return block!;
     }
 }
