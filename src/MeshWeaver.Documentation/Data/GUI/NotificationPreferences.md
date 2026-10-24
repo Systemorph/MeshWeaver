@@ -97,7 +97,10 @@ If you'd rather manage them directly, the settings are nodes under your own spac
 - **Channels per kind:** `{you}/_Settings/Notifications/{kind}` (`approvals`, `inbox`, `triage`,
   `accessGranted`, `chatReady`, `system`) — `bell`, `teams`, `email`.
 - **Per app:** `{you}/_Settings/Notifications/Apps/{app}` — `allowNotifications`, `deliverQuietly`,
-  `bell`, `teams`, `email`.
+  `bell`, `teams`, `email`. The tab lists your installed apps (`{you}/_App/{app}`) with a live search
+  and renders each one through that record's `NotificationPreferences` area: the app's card above the
+  editor bound to this node, which the area creates on first view with the default above — so the page
+  appears at once and opening it changes nothing.
 - **Rules:** `{you}/_NotificationRule/…` — write your intent in `ruleText`; optionally set a structured
   `channel`, plus `enabled` and `order` (lower runs first).
 - **Rule channels:** `{you}/_NotificationChannel/…` — `kind` (`Email` / `Teams`), an optional
