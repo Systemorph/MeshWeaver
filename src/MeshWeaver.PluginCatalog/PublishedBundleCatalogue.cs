@@ -716,7 +716,7 @@ public static class PublishedBundleCatalogue
             cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: `publication` is where the bytes ARE (the pointed-to generation, or the
             // source directory in the flat layout); `sourceDirectory` only names the SOURCE.
-            var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+            var (publication, complete) = CompletePublicationOf(sourceDirectory, logger, cancellationToken);
             if (complete is null)
                 continue;
             var source = Path.GetFileName(sourceDirectory)!;
@@ -729,7 +729,7 @@ public static class PublishedBundleCatalogue
                 if (range is not null)
                     ranges[StripZip(bundle)] = range;
             }
-            var modules = SealedModulesOf(sourceDirectory, logger);
+            var modules = ReadModuleSetObservingToken(sourceDirectory, logger, null, cancellationToken);
             if (modules.Modules is null)
             {
                 refusals.Add($"source '{source}': {modules.Refusal}");
@@ -1143,8 +1143,17 @@ public static class PublishedBundleCatalogue
     /// </summary>
     private static (string Directory, IReadOnlyList<string>? Bundles) CompletePublicationOf(
         string sourceDirectory, ILogger? logger)
+        => CompletePublicationOf(sourceDirectory, logger, CancellationToken.None);
+
+    /// <summary><see cref="CompletePublicationOf(string, ILogger?)"/> from a pooled walk: the pointer
+    /// is resolved under <paramref name="cancellationToken"/>, and it is checked before the seal is read
+    /// and before each listed bundle is probed (review on #7121). A cancel propagates; it is never a
+    /// torn publication.</summary>
+    private static (string Directory, IReadOnlyList<string>? Bundles) CompletePublicationOf(
+        string sourceDirectory, ILogger? logger, CancellationToken cancellationToken)
     {
-        var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
+        var directory = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger).Directory;
+        cancellationToken.ThrowIfCancellationRequested();
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
         var lines = ReadSealLines(sentinel);
@@ -1161,7 +1170,11 @@ public static class PublishedBundleCatalogue
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
-        if (listed.Any(name => !File.Exists(Path.Combine(directory, name))))
+        if (listed.Any(name =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return !File.Exists(Path.Combine(directory, name));
+            }))
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} is sealed but a listed bundle is "
@@ -1171,6 +1184,14 @@ public static class PublishedBundleCatalogue
         }
 
         return (directory, listed);
+    }
+
+    /// <summary>A predicate's step boundary: throws when <paramref name="cancellationToken"/> is
+    /// cancelled, else true — so a LINQ probe over a listing checks the token before each probe.</summary>
+    private static bool CheckedFor(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return true;
     }
 
     private static bool IsComplete(string sourceDirectory, ILogger? logger) =>
@@ -1282,10 +1303,17 @@ public static class PublishedBundleCatalogue
     // holding the same bare cref would have found out only when it moved its platform pin.
     internal static ModuleSetReading ReadModuleSet(
         string sourceDirectory, ILogger? logger, Func<string, string[]>? readIndex)
+        => ReadModuleSetObservingToken(sourceDirectory, logger, readIndex, CancellationToken.None);
+
+    /// <summary><see cref="ReadModuleSet"/> from a pooled walk: the seal verification and each listed
+    /// module bundle's probe check <paramref name="cancellationToken"/> first (review on #7121).</summary>
+    internal static ModuleSetReading ReadModuleSetObservingToken(
+        string sourceDirectory, ILogger? logger, Func<string, string[]>? readIndex,
+        CancellationToken cancellationToken)
     {
         // 🚨 #3461: one resolution, handed back on the reading. `publication` is the directory the
         // bytes are in; the module set is `<publication>/modules`, never `<source>/modules`.
-        var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+        var (publication, complete) = CompletePublicationOf(sourceDirectory, logger, cancellationToken);
         if (complete is null)
             return new(null, "no sealed publication")
             { Directory = publication, PublicationUnavailable = true };
@@ -1297,6 +1325,7 @@ public static class PublishedBundleCatalogue
         // identity directories, so the index observed by the probe was gone by the time the read
         // opened it, and the FileNotFoundException (or DirectoryNotFoundException, which is what a
         // removed parent throws) reached ExceptionHandlerMiddleware as a 500 on the module routes.
+        cancellationToken.ThrowIfCancellationRequested();
         var lines = ReadSealLines(index, readIndex);
         if (lines is null)
         {
@@ -1339,7 +1368,7 @@ public static class PublishedBundleCatalogue
             .Where(line => line.Length > 0)
             .ToList();
         var bad = listed.FirstOrDefault(name =>
-            name.IndexOfAny(['/', '\\', ':']) >= 0 || name == "." || name == ".."
+            CheckedFor(cancellationToken) && name.IndexOfAny(['/', '\\', ':']) >= 0 || name == "." || name == ".."
             || !File.Exists(Path.Combine(directory, name)));
         if (bad is not null)
         {

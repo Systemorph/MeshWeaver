@@ -2040,7 +2040,7 @@ internal class MeshNodeCompilationService(
             EmitPipeline.OptionsFingerprint,
             GeneratedInputIdentity.CompilerIdentity,
             GeneratedInputIdentity.AssemblyFileIdentities(
-                CheckingEach(GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths), ct)));
+                CheckingEach(GeneratorPipeline.DigestedGeneratorPaths(nugetAssemblyPaths, ct), ct)));
 
     /// <summary>
     /// <paramref name="source"/>, checking <paramref name="ct"/> before each element is handed out —

@@ -69,6 +69,84 @@ public class PluginCatalogWalksObserveThePoolTokenTest : IDisposable
         Assert.NotEmpty(Directory.GetFiles(ModuleActivationSidecar.LandingRecordsDirectory(root, Module), "*.json"));
     }
 
+    private string Store => Path.Combine(root, "shared-store");
+
+    private string[] StoreGenerations() =>
+        Directory.Exists(Store)
+            ? Directory.GetDirectories(Store).Where(d => !Path.GetFileName(d).StartsWith('.')).ToArray()
+            : [];
+
+    /// <summary>
+    /// 🚨 Review on #7121: the SHARED-TIER half of a landing ran before any token check and, when it
+    /// served the landing, the local half (where the checks were) was skipped — so an already-cancelled
+    /// landing on the store's owner still PUBLISHED a sealed generation and wrote its landing record.
+    /// </summary>
+    [Fact]
+    public void ACancelledLanding_OnTheStoresOwner_PublishesNothing_AndRecordsNothing()
+    {
+        var ownerRoot = Path.Combine(root, "owner");
+        Directory.CreateDirectory(ownerRoot);
+        using var owner = new ModuleLandingService(null, ownerRoot, beforeRecording: null)
+            { SharedRoot = Store, PublishesToShared = true };
+
+        Assert.ThrowsAny<OperationCanceledException>(() => Land(owner, Cancelled()));
+
+        Assert.Empty(StoreGenerations());
+        Assert.False(Directory.Exists(ModuleActivationSidecar.LandingRecordsDirectory(ownerRoot, Module)),
+            "a landing the pool cancelled records nothing, whichever tier would have served it");
+
+        // The control: uncancelled, the owner publishes to the store and records the landing.
+        Land(owner, CancellationToken.None);
+        Assert.Single(StoreGenerations());
+        Assert.NotEmpty(Directory.GetFiles(ModuleActivationSidecar.LandingRecordsDirectory(ownerRoot, Module), "*.json"));
+    }
+
+    /// <summary>The consumer's half of the same defect: a SEALED copy in the store served the landing
+    /// and the cancelled landing recorded against it anyway.</summary>
+    [Fact]
+    public void ACancelledLanding_ServedByASealedStoreCopy_RecordsNothing()
+    {
+        var ownerRoot = Path.Combine(root, "owner");
+        var consumerRoot = Path.Combine(root, "consumer");
+        Directory.CreateDirectory(ownerRoot);
+        Directory.CreateDirectory(consumerRoot);
+        using (var owner = new ModuleLandingService(null, ownerRoot, beforeRecording: null)
+                   { SharedRoot = Store, PublishesToShared = true })
+            Land(owner, CancellationToken.None);
+        using var consumer = new ModuleLandingService(null, consumerRoot, beforeRecording: null)
+            { SharedRoot = Store, PublishesToShared = false };
+
+        Assert.ThrowsAny<OperationCanceledException>(() => Land(consumer, Cancelled()));
+
+        Assert.False(Directory.Exists(ModuleActivationSidecar.LandingRecordsDirectory(consumerRoot, Module)));
+
+        Land(consumer, CancellationToken.None);
+        Assert.NotEmpty(Directory.GetFiles(ModuleActivationSidecar.LandingRecordsDirectory(consumerRoot, Module), "*.json"));
+    }
+
+    /// <summary>
+    /// Review on #7121: the activation read checked the token only between MODULES, so a drain
+    /// arriving inside one module's record log waited out every remaining record read. Here the drain
+    /// arrives while the first record of the only module is being read, and the walk must stop before
+    /// the next one.
+    /// </summary>
+    [Fact]
+    public void ADrainInsideOneModulesRecordLog_StopsBeforeTheNextRecord()
+    {
+        using (var replica = new ModuleLandingService(null, root, beforeRecording: null))
+            Land(replica, CancellationToken.None);
+        var records = ModuleActivationSidecar.LandingRecordsDirectory(root, Module);
+        // Sorts before the real record, so it is read first; reading it is where the drain lands.
+        File.WriteAllText(Path.Combine(records, "0-unreadable.json"), "{ not json");
+        using var cts = new CancellationTokenSource();
+        var reports = new List<string>();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => ModuleActivationSidecar.ReadFor(
+            root, message => { reports.Add(message); cts.Cancel(); }, () => null, cts.Token));
+
+        Assert.Single(reports);
+    }
+
     [Fact]
     public void TheActivationRecordWalk_StopsOnACancelledToken_AndReportsNothingCorrupt()
     {

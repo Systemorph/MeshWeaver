@@ -1345,7 +1345,20 @@ public sealed class ModuleLandingService : IDisposable
         // own volume while the store was down, must still publish it once the store is back. The local
         // half then runs whenever the local copy exists — resolution takes it first, so it keeps its
         // repair path — or when the shared half did not serve the landing.
-        var servedFromShared = LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets);
+        // 🚨 The pool's token governs the shared half too (review on #7121): an already-cancelled
+        // landing publishes nothing, adopts nothing and records nothing. The publication itself checks
+        // it between files and never seals on a cancel.
+        cancellationToken.ThrowIfCancellationRequested();
+        var servedFromShared = LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets,
+            cancellationToken);
+        if (servedFromShared && !Directory.Exists(target))
+        {
+            // Served from the store and nothing written locally: the landing's own commit is the
+            // record below, so this is the last point at which stopping leaves nothing referenced.
+            // An owner's sealed publication left unrecorded is the same content address the next
+            // landing of these bytes adopts.
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (!servedFromShared || Directory.Exists(target))
         {
             var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
@@ -1405,7 +1418,7 @@ public sealed class ModuleLandingService : IDisposable
                 }
                 if (alreadyLanded)
                 {
-                    RestoreMissingFiles(staging, target, name, generation);
+                    RestoreMissingFiles(staging, target, name, generation, cancellationToken);
                     Directory.Delete(staging, recursive: true);
                     AdoptLandedGeneration(target, name, generation);
                 }
@@ -1693,12 +1706,13 @@ public sealed class ModuleLandingService : IDisposable
         string name, string generation,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets,
+        CancellationToken cancellationToken)
     {
         var sharedRoot = SharedRoot;
         if (sharedRoot is null)
             return false;
-        if (SharedModuleTier.SealedDirectory(sharedRoot, generation) is { } sealedCopy)
+        if (SharedModuleTier.SealedDirectoryObservingToken(sharedRoot, generation, cancellationToken) is { } sealedCopy)
         {
             logger?.LogInformation(
                 "Module '{Name}': generation {Generation} is already sealed in the shared artifact store "
@@ -1714,7 +1728,7 @@ public sealed class ModuleLandingService : IDisposable
                 .Concat(staticAssets ?? [])
                 .Concat(nativeAssets ?? [])
                 .ToList();
-            var published = SharedModuleTier.Publish(sharedRoot, generation, files);
+            var published = SharedModuleTier.PublishObservingToken(sharedRoot, generation, files, cancellationToken);
             logger?.LogInformation(
                 "Module '{Name}': generation {Generation} PUBLISHED to the shared artifact store at "
                 + "{Directory} (this instance owns the store)", name, generation, published);
@@ -1789,12 +1803,16 @@ public sealed class ModuleLandingService : IDisposable
     /// file the target lacks is moved in from it. A file the target HAS is never touched: a
     /// running pod may hold it open, which is why landings write generations instead of swapping.
     /// </summary>
-    private void RestoreMissingFiles(string staging, string target, string name, string generation)
+    private void RestoreMissingFiles(string staging, string target, string name, string generation, CancellationToken cancellationToken)
     {
         var restored = ImmutableList<string>.Empty;
         foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
                      .ToImmutableArray())
         {
+            // One probe (and maybe one move) per file. A cancel here leaves a content-addressed
+            // directory with some files restored and none overwritten; the landing then takes its
+            // failure path and records nothing.
+            cancellationToken.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(staging, staged);
             var destination = Path.Combine(target, relative);
             if (File.Exists(destination))
