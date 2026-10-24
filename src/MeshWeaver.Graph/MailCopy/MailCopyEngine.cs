@@ -368,13 +368,20 @@ public sealed class MailCopyEngine(
                 : prior?.Attachments is { } existing && existing.Any(a => a.StoredPath is not null) ? existing
                 : message.HasAttachments == false ? ImmutableList<MailAttachmentCopy>.Empty
                 : prior?.Attachments;
-            // 🚨 A marker that said "has attachments" is never overwritten by "none": an interrupted save leaves
+            // 🚨 A marker that said "has attachments" is never overwritten by "none" NOR by "not said" (null): an interrupted save leaves
             // files with no list, and removal finds them through the marker.
-            var copy = message with { Attachments = known, HasAttachments = message.HasAttachments == false && prior?.HasAttachments == true ? true : message.HasAttachments };
+            var copy = message with { Attachments = known, HasAttachments = MergedAttachmentMarker(message.HasAttachments, prior?.HasAttachments) };
             return copies.WriteIfNewer(owner, copy).SelectMany(wrote => wrote
                 ? Attach(owner, copy, files).Select(_ => true)
                 : Observable.Return(false));
         });
+
+    /// <summary>
+    /// The "may hold files" marker a rewrite stores: a prior <c>true</c> survives an incoming <c>false</c> AND an
+    /// incoming <c>null</c> (the provider said nothing) — an interrupted save leaves files with no list, and
+    /// removal finds them only through this marker. Otherwise the incoming value.
+    /// </summary>
+    internal static bool? MergedAttachmentMarker(bool? incoming, bool? prior) => prior == true ? true : incoming;
 
     private IObservable<Unit> Attach(string owner, MailMessageCopy written, IMailAttachmentSource files)
     {

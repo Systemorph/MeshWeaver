@@ -23,8 +23,8 @@ namespace MeshWeaver.Graph.MailCopy;
 ///   that ended in between must not decide). A person may act on their own copy, and on anybody
 ///   else's only with the permission on <c>{owner}/_MailCopy</c> that the act needs. System and hub
 ///   principals pass: the background sync DECLARES itself System (<see cref="MailCopyEngine.Kick"/>).
-///   No identity at all, or an anonymous one (an empty id), is refused — a lost identity is never
-///   read as trusted background work.</description></item>
+///   No identity at all, an empty id, the Anonymous id or a virtual (logged-out) visitor is refused —
+///   a lost identity is never read as trusted background work, nor a visitor as the owner.</description></item>
 /// </list>
 /// </summary>
 internal static class MailCopyAuthority
@@ -63,8 +63,15 @@ internal static class MailCopyAuthority
             if (who is null || string.IsNullOrWhiteSpace(who.ObjectId))
                 return Observable.Throw<T>(new UnauthorizedAccessException(
                     $"The mail copy of '{owner}' is reachable only by a signed-in person or by work that runs as System; this call carries {(who is null ? "no identity" : "an anonymous one")}."));
-            if (InMeshImpersonationGuard.IsPlatformPrincipal(who)
-                || string.Equals(who.ObjectId, owner, StringComparison.OrdinalIgnoreCase))
+            if (InMeshImpersonationGuard.IsPlatformPrincipal(who))
+                return work();
+            // 🚨 A non-empty id is not a person: an unauthenticated request carries the id Anonymous, and a
+            // logged-out visitor is VIRTUAL whatever it is called — neither may reach the owner shortcut or
+            // System-backed work, even when its id happens to equal the owner's.
+            if (!WellKnownUsers.IsSignedIn(who, who.ObjectId))
+                return Observable.Throw<T>(new UnauthorizedAccessException(
+                    $"The mail copy of '{owner}' is reachable only by a signed-in person or by work that runs as System; this call carries a visitor identity ('{who.ObjectId}')."));
+            if (string.Equals(who.ObjectId, owner, StringComparison.OrdinalIgnoreCase))
                 return work();
             var scope = MailCopyNodeTypes.NamespaceFor(owner);
             // 🚨 Off the evaluator's gate before the work: a warm fold emits synchronously under its Rx lock,

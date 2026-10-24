@@ -100,6 +100,47 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// A non-empty id is not a signed-in person: the Anonymous id an unauthenticated request carries, and a
+    /// VIRTUAL (logged-out) visitor that carries the owner's own id, are both refused before the owner
+    /// shortcut. The owner, signed in, is the control arm in the first test.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ANamedAnonymousOrVirtualCaller_IsRefused_EvenWhenItsIdIsTheOwners()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
+
+        Task<MailMessageCopy> asVisitor;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner, IsVirtual = true }))
+            asVisitor = store.Upsert(owner, Copy("Forged")).Timeout(Bound).Await(ct);
+        (await Record.ExceptionAsync(() => asVisitor))
+            .Should().BeOfType<UnauthorizedAccessException>("a logged-out visitor is not the owner, whatever id it carries");
+
+        Task<MailMessageCopy> asAnonymous;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = WellKnownUsers.Anonymous, Name = WellKnownUsers.Anonymous }))
+            asAnonymous = store.Upsert(WellKnownUsers.Anonymous, Copy("Forged")).Timeout(Bound).Await(ct);
+        (await Record.ExceptionAsync(() => asAnonymous))
+            .Should().BeOfType<UnauthorizedAccessException>("the Anonymous id is no person, so it owns no copy");
+
+        (await store.Read(owner, "outlook", "g1", "m1").Timeout(Bound).Await(ct))
+            .Should().BeNull("the refused write wrote nothing");
+    }
+
+    [Fact]
+    public void AnInterruptedSavesMarker_SurvivesARewriteThatSaysNothingOrNone()
+    {
+        MailCopyEngine.MergedAttachmentMarker(incoming: null, prior: true)
+            .Should().BeTrue("the provider saying nothing must not clear the marker removal finds the files by");
+        MailCopyEngine.MergedAttachmentMarker(incoming: false, prior: true).Should().BeTrue();
+        // The control: with no prior marker the incoming value is stored as it came.
+        MailCopyEngine.MergedAttachmentMarker(incoming: null, prior: null).Should().BeNull();
+        MailCopyEngine.MergedAttachmentMarker(incoming: false, prior: false).Should().BeFalse();
+    }
+
+    /// <summary>
     /// The caller is the one who CALLED the store: a write composed under another person's identity and
     /// subscribed after that scope ended — here under the host's admin — is still judged as that person.
     /// </summary>
