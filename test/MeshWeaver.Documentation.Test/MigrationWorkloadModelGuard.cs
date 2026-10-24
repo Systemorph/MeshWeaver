@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -51,7 +52,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void TheMigration_IsAJobThatRunsToCompletion_NeverADeployment()
     {
-        var dir = Path.Combine(FindRepoRoot(), MigrationTemplates);
+        var dir = Path.Combine(RepoPaths.Root, MigrationTemplates);
         var templates = Directory.GetFiles(dir, "*.yaml");
 
         foreach (var template in templates)
@@ -59,13 +60,13 @@ public class MigrationWorkloadModelGuard
             var body = ExecutableLinesOf(File.ReadAllText(template));
             Assert.False(
                 Regex.IsMatch(body, @"^kind:\s*""?Deployment""?", RegexOptions.Multiline),
-                $"{Path.GetRelativePath(FindRepoRoot(), template)} declares a Deployment. The "
+                $"{Path.GetRelativePath(RepoPaths.Root, template)} declares a Deployment. The "
                 + "migration runs once and exits 0, so a Deployment restarts it forever — 310 "
                 + "restarts a day pegging a core, and a permanent CrashLoopBackOff that makes a "
                 + "REAL migration failure unreadable (#1788).");
         }
 
-        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Job)));
+        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Job)));
 
         Assert.True(Regex.IsMatch(job, @"^kind:\s*""?Job""?", RegexOptions.Multiline),
             $"{Job} must declare kind: Job — the workload model is the fix.");
@@ -98,7 +99,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void TheMigration_HasABudget_TenMinutesUnlessConfiguredExplicitly()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
         var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
 
@@ -125,7 +126,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void TheMigration_IsRehearsedByAnInitContainer_BeforeItRuns()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
         var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
 
@@ -158,7 +159,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void NoCommandInThisRepo_RollsTheMigrationAsADeployment()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // kubectl <verb> ... deployment/memex-migration-deployment  (or "deployment memex-…")
         var command = new Regex(
@@ -196,7 +197,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void NoDocument_TeachesThatACrashLoopingMigrationIsNormal()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // "benign"/"harmless"/"expected" within the same sentence as the crash loop.
         var excuse = new Regex(
@@ -282,13 +283,4 @@ public class MigrationWorkloadModelGuard
         string.Join("\n", yaml.Split('\n')
             .Where(line => !line.TrimStart().StartsWith('#')));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

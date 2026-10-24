@@ -3,6 +3,7 @@ using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -58,7 +59,7 @@ public class IngressAuthCookieHeaderBudgetGuard
     [Fact]
     public void ThePortalIngress_BudgetsForTheChunkedAuthCookie()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Values));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Values));
 
         var match = Regex.Match(
             text,
@@ -88,7 +89,7 @@ public class IngressAuthCookieHeaderBudgetGuard
     [Fact]
     public void ThePortalIngress_TakesItsAnnotationsFromTheValuesTheGuardChecks()
     {
-        var template = File.ReadAllText(Path.Combine(FindRepoRoot(), IngressTemplate));
+        var template = File.ReadAllText(Path.Combine(RepoPaths.Root, IngressTemplate));
 
         // The `memex-portal` resource — the one serving /signin-* — up to the next document.
         // Both markers are asserted before they are used to slice: a template refactor that renamed
@@ -164,14 +165,5 @@ public class IngressAuthCookieHeaderBudgetGuard
         const string two = "---\nname: first\n---\nname: second\n";
         Assert.Equal(0, NextDocumentSeparator(two, 0));
         Assert.Equal(16, NextDocumentSeparator(two, 1));
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -107,7 +108,7 @@ public class ShippedAccessGrantsTest
 
     private static IEnumerable<ShippedGrant> EnumerateShippedGrants()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         foreach (var file in AccessFolders(root)
                      .SelectMany(d => Directory.EnumerateFiles(d, "*.json"))
                      .OrderBy(f => f, StringComparer.Ordinal))
@@ -177,13 +178,4 @@ public class ShippedAccessGrantsTest
         || directoryName.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
         || directoryName.Equals("artifacts", StringComparison.OrdinalIgnoreCase);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

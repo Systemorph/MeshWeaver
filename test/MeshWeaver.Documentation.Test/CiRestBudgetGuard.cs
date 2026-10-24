@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.RepresentationModel;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -31,7 +32,7 @@ public class CiRestBudgetGuard
     private static readonly Regex RestRead = new(@"repos/Systemorph/MeshWeaver/contents/", RegexOptions.Compiled);
 
     public static IEnumerable<object[]> Lanes() =>
-        Directory.GetFiles(Path.Combine(FindRepoRoot(), ".github", "workflows"), "node-repo-*.yml")
+        Directory.GetFiles(Path.Combine(RepoPaths.Root, ".github", "workflows"), "node-repo-*.yml")
             .Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).Select(n => new object[] { n! });
 
     [Theory]
@@ -114,14 +115,6 @@ public class CiRestBudgetGuard
     private static string? Scalar(YamlMappingNode node, string key) =>
         node.Children.TryGetValue(new YamlScalarNode(key), out var v) && v is YamlScalarNode s ? s.Value : null;
 
-    private static string LanePath(string lane) => Path.Combine(FindRepoRoot(), ".github", "workflows", lane);
+    private static string LanePath(string lane) => Path.Combine(RepoPaths.Root, ".github", "workflows", lane);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

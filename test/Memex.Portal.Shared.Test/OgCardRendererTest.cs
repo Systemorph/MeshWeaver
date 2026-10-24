@@ -7,6 +7,7 @@ using Memex.Portal.Shared.Seo;
 using MeshWeaver.Mesh;
 using SkiaSharp;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -232,7 +233,7 @@ public class OgCardRendererTest
     [Fact]
     public void TheCardMark_IsTheShippedIconsDrawing()
     {
-        var repoRoot = FindRepoRoot();
+        var repoRoot = RepoPaths.Root;
         var icon = System.IO.File.ReadAllText(System.IO.Path.Combine(repoRoot, "src", "MeshWeaver.Graph", "Icons", "meshweaver-logo.svg"));
         foreach (var svg in new[] { OgCardRenderer.MeshWeaverMarkTile, OgCardRenderer.MeshWeaverMarkGlyph })
         {
@@ -247,14 +248,6 @@ public class OgCardRendererTest
                 Assert.Contains(centre, svg);
             }
         }
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "MeshWeaver.slnx")) && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repository root not found above " + AppContext.BaseDirectory);
     }
 
     /// <summary>Every card carries the mark in its footer, beside the instance name — a node's own

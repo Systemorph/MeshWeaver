@@ -7,6 +7,7 @@ using Memex.Portal.Shared.SelfUpdate;
 using Memex.Portal.Shared.Settings;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -122,19 +123,11 @@ public class AboutSettingsTabTest
             "about.plugins.column.kind", "about.plugins.column.partition"
         ];
 
-        var catalogPath = Path.Combine(FindRepoRoot(),
+        var catalogPath = Path.Combine(RepoPaths.Root,
             "src", "MeshWeaver.Messaging.Hub", "Localization", "strings.en.json");
         var catalog = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(catalogPath))!;
 
         var missing = used.Where(k => !catalog.ContainsKey(k)).ToList();
         missing.Should().BeEmpty($"the About tab renders these keys raw when absent: {string.Join(", ", missing)}");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }

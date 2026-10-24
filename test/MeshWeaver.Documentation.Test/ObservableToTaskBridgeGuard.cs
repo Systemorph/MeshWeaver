@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -410,7 +411,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void NoProductionCodeBridgesAnObservableToATask()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root, ProductionRoots);
 
         Assert.True(found.Count == 0,
@@ -439,7 +440,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void NoProductionBridgeUsesTheUnsafeForm()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = ScanBridges(root, ProductionRoots)
             .Where(g => !IsSafeForm(Path.Combine(root, g.Key.Replace('/', Path.DirectorySeparatorChar))))
             .OrderBy(g => g.Key, StringComparer.Ordinal)
@@ -466,7 +467,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void EveryProductionBridgeIsASanctionedImplementation()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var sanctioned = SanctionedBridges.Select(s => s.File).ToHashSet(StringComparer.Ordinal);
 
         var unsanctioned = ScanBridges(root, ProductionRoots)
@@ -498,7 +499,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void TheSanctionedBridgeRegisterIsStillAccurate()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         foreach (var (relative, why) in SanctionedBridges)
         {
@@ -704,7 +705,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewBridgeInTheTreesStillBeingSwept()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root, RatchetedRoots);
 
@@ -771,7 +772,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void NoProductionCodeAwaitsAnObservableDirectly()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = ScanDirectAwaits(root, DirectAwaitZeroRoots);
 
         Assert.True(found.Count == 0,
@@ -822,7 +823,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void EveryZeroToleranceRootExistsAndItsContributionIsPrinted()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var declared = ProductionRoots
             .Concat(DirectAwaitZeroRoots)
             .Distinct(StringComparer.Ordinal)
@@ -968,7 +969,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewBlockingBridgeInProductionCode()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(
             Path.Combine(root, "test", ProductionBlockingAllowFileName), ProductionBlockingAllowFileName);
         var found = ScanBlocking(root, ProductionRoots);
@@ -1052,7 +1053,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
 
         // The live counterpart: the trees still being swept must actually yield sites, so the
         // shrinking half above cannot be passing on an empty scan.
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         Assert.True(Scan(root, RatchetedRoots).Count > 0,
             "The scanner found no bridge anywhere under " + string.Join(", ", RatchetedRoots)
             + ". Either every site was swept — in which case move those roots into ProductionRoots, "
@@ -1392,7 +1393,7 @@ public class ObservableToTaskBridgeGuard(ITestOutputHelper output)
     [Fact]
     public void TheExemptedPinningTestStillPinsTheShape()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         foreach (var relative in ExemptPinningFiles)
         {
             var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));

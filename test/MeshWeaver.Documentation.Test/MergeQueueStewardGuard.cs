@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -50,7 +51,7 @@ public class MergeQueueStewardGuard
     [Fact]
     public void EveryCatalogueEntry_IsEvidenceBearing_AndUnexpired()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Catalogue));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Catalogue));
         var problems = Validate(text, DateOnly.FromDateTime(DateTime.UtcNow));
         Assert.True(problems.Count == 0,
             $"{Catalogue} carries entries the steward must not re-queue on:\n  - "
@@ -109,7 +110,7 @@ public class MergeQueueStewardGuard
     [Fact]
     public void TheClassifierSelfTest_Passes()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var psi = new ProcessStartInfo("python3")
         {
             WorkingDirectory = root,
@@ -136,7 +137,7 @@ public class MergeQueueStewardGuard
     [Fact]
     public void TheSteward_FiresOnDequeuedOnly_IsCappedAtTenMinutes_AndNeverRerunsAWorkflow()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var workflow = File.ReadAllText(Path.Combine(root, Workflow));
         var script = File.ReadAllText(Path.Combine(root, Script));
 
@@ -240,15 +241,5 @@ public class MergeQueueStewardGuard
         }
 
         return problems;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

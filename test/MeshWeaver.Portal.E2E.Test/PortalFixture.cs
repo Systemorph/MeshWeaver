@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Playwright;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Portal.E2E;
 
@@ -92,7 +93,7 @@ public sealed class PortalFixture : IAsyncLifetime
 
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            var root = FindRepoRoot();
+            var root = RepoPaths.TryFindRoot();
             if (root is null)
             {
                 SkipReason = "E2E_LAUNCH=1 but the monolith could not be started (repo root not found).";
@@ -347,14 +348,6 @@ public sealed class PortalFixture : IAsyncLifetime
         psi.Environment["ASPNETCORE_URLS"] = url;
         psi.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
         return Process.Start(psi);
-    }
-
-    private static string? FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName;
     }
 
     private static async Task<bool> WaitForPortalAsync(string baseUrl, TimeSpan timeout)

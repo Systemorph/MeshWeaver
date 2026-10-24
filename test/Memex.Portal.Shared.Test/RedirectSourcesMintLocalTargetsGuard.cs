@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -65,15 +66,12 @@ public class RedirectSourcesMintLocalTargetsGuard
 
     private static IEnumerable<string> Roots()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
+        var repoRoot = RepoPaths.Root;
         // Both trees that compose portal URLs: the auth/portal surface and the framework.
         ImmutableArray<string> relatives = [Path.Combine("memex", "Memex.Portal.Shared"), "src"];
         foreach (var relative in relatives)
         {
-            var root = Path.Combine(dir!.FullName, relative);
+            var root = Path.Combine(repoRoot, relative);
             Assert.True(Directory.Exists(root), $"{root} not found — update this guard's roots.");
             yield return root;
         }

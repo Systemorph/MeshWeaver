@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -143,7 +144,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void ThePullRequestGate_ReachesIntoNoPluginRepository()
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir, PullRequestGate);
+        var path = Path.Combine(RepoPaths.Root, WorkflowDir, PullRequestGate);
         File.Exists(path).Should().BeTrue(
             $"{WorkflowDir}/{PullRequestGate} is the repo's pull-request gate — if it was renamed, "
             + "this guard is measuring nothing and the constant must be updated with it");
@@ -170,7 +171,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void OnlyTheImageLanes_ReachIntoAPluginRepository()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir);
+        var dir = Path.Combine(RepoPaths.Root, WorkflowDir);
         Directory.Exists(dir).Should().BeTrue($"{WorkflowDir} must exist for this guard to measure anything");
 
         var files = Directory.GetFiles(dir, "*.yml").OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
@@ -223,7 +224,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void OnlyLedgeredWorkflows_ReadASiblingThroughTheApi()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir);
+        var dir = Path.Combine(RepoPaths.Root, WorkflowDir);
         var files = Directory.GetFiles(dir, "*.yml").OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
         files.Should().NotBeEmpty("an empty workflow directory would make this guard pass having read nothing");
 
@@ -314,7 +315,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void NoCoreProject_BuildsFromAPluginCheckout()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var roots = new[] { "src", "test", "tools", "memex", "samples" }
             .Select(d => Path.Combine(root, d))
             .Where(Directory.Exists)

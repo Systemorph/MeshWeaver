@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -73,7 +74,7 @@ public class NoPlaintextCredentialFallbackGuard
     [Fact]
     public void NoProtectCallSite_FallsBackToStoringThePlaintext()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // 🚨 A guard must never pass on no evidence. SourceFiles() silently drops a root that does
         // not exist, so a renamed directory would turn this into a green check that scanned nothing.

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -108,7 +109,7 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     }
 
     private static string WorkflowsDir() =>
-        Path.Combine(FindRepoRoot(), ".github", "workflows");
+        Path.Combine(RepoPaths.Root, ".github", "workflows");
 
     /// <summary>
     /// Executable lines only. A guard that matches comment prose is measuring the documentation,
@@ -488,15 +489,5 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             + "This lane is called by every repository in the fleet through workflow_call; a literal "
             + "is a copy of a fact every repo happens to share today. Read "
             + "github.event.repository.default_branch instead.");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github", "workflows")))
-            dir = dir.Parent;
-
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

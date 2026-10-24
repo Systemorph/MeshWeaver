@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -136,7 +137,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewSiteOpensAnImpersonationScopeInsideObservableUsing()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -190,7 +191,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheShapeItIsRatcheting()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
 
         Assert.True(found.Count > 0,

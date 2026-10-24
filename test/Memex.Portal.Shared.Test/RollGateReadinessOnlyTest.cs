@@ -14,6 +14,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -323,11 +324,8 @@ public class RollGateReadinessOnlyTest
     /// </summary>
     private static (string Startup, string Readiness, string Liveness) ChartProbePaths()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        var helm = Path.Combine(dir!.FullName, "deploy", "helm");
+        var repoRoot = RepoPaths.Root;
+        var helm = Path.Combine(repoRoot, "deploy", "helm");
 
         var template = string.Join("\n", File.ReadAllLines(
                 Path.Combine(helm, "templates", "memex-portal", "deployment.yaml"))
