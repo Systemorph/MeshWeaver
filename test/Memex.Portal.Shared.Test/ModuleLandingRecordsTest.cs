@@ -136,6 +136,11 @@ public class ModuleLandingRecordsTest : IDisposable
         Assert.Empty(RecordFiles());
         var stored = Assert.Single(ModuleActivationSidecar.ReadStored(root).Entries) with { ProjectionOf = null };
         ModuleActivationSidecar.WriteEntry(root, stored);
+        // The older image wrote it BEFORE the upgrade, and the order of events is read off file
+        // stamps. Said explicitly: on a coarse clock the landing below can share this write's tick,
+        // and at a tie the older image's install is replayed by generation order, not arrival.
+        File.SetLastWriteTimeUtc(
+            ModuleActivationSidecar.EntryPath(root, Module), DateTime.UtcNow - TimeSpan.FromMinutes(1));
         Assert.Equal(stored, Assert.Single(ModuleActivationSidecar.Read(root).Entries));
 
         await Shelve(replica, "1.7.0", "1.7.0");
@@ -172,6 +177,15 @@ public class ModuleLandingRecordsTest : IDisposable
             PreviousVersion = null,
             PreviousFrameworkMvid = null,
         });
+        // 🚨 The older image's uninstall is ordered by its entry file's stamp against the landing
+        // records' stamps, and a TIE goes to the landing by design (an older image's uninstall names
+        // no event it followed). It happened AFTER the landing, so it is stamped after it — set
+        // explicitly, because on a coarse clock (a Linux CI leg) the two writes can share one tick
+        // and the test would then measure the tie rule instead of this one.
+        var landedAt = Directory.EnumerateFiles(
+                ModuleActivationSidecar.LandingRecordsDirectory(root, Module), "*", SearchOption.AllDirectories)
+            .Max(File.GetLastWriteTimeUtc);
+        File.SetLastWriteTimeUtc(ModuleActivationSidecar.EntryPath(root, Module), landedAt.AddSeconds(1));
 
         var entry = Assert.Single(ModuleActivationSidecar.Read(root).Entries);
         Assert.False(entry.Enabled);
