@@ -92,8 +92,12 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// lowering it by one both read "64 → 63", and taking either side alone would have left the
     /// budget one above the file and put the free slot back. The seed is EXACT against the file
     /// again (62).</para>
+    ///
+    /// <para>45, not 61: sixteen allowances in ten files left with Memex.Portal.Shared when it moved
+    /// to MeshWeaver.Plugins (core slimming). The sites moved with their code; they were not
+    /// converted.</para>
     /// </summary>
-    private const int TotalBudget = 61;
+    private const int TotalBudget = 45;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
