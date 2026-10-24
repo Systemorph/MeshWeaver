@@ -3789,10 +3789,13 @@ jobs:
           # A suite gets what is left of the job, less what the evidence and hand-over steps after it
           # need — a STUCK detector derived from the cap, never a budget a suite is meant to grow into.
           [ -n "${MW_JOB_STARTED_EPOCH:-}" ] || { echo "::error::MW_JOB_STARTED_EPOCH is unset — the job's first step did not record its start, so no suite can be bounded below the cap"; exit 1; }
+          # It prints what is left, never a floor: a suite is NOT started once the window is spent
+          # (below MIN_SUITE_SECONDS) — launching one inside the reserve would let it run into the cap.
           suite_deadline() {
-            local left=$(( MW_JOB_STARTED_EPOCH + JOB_CAP_SECONDS - EVIDENCE_RESERVE_SECONDS - $(date +%s) ))
-            if [ "$left" -lt 60 ]; then echo 60; else echo "$left"; fi
+            echo $(( MW_JOB_STARTED_EPOCH + JOB_CAP_SECONDS - EVIDENCE_RESERVE_SECONDS - $(date +%s) ))
           }
+          MIN_SUITE_SECONDS=60
+          unstarted=()  # suites never started because the window was spent — failures, named after the loop
           # 🚨 THE RUNNER FOLLOWS THE TEST FRAMEWORK, AND THE PLATFORM PINS THE FRAMEWORK (#4414).
           # `dotnet test` reads its runner from the first `global.json` found walking UP from the
           # CURRENT DIRECTORY (measured on the .NET 10.0.400 SDK, 2026-09-15: one in a SIBLING
@@ -3839,6 +3842,12 @@ jobs:
           mapfile -t modules < <(bk list --ok --where need_test=true)
           for MODULE in "${modules[@]}"; do
             PROJECT="$(bk get --module "$MODULE" project)"
+            left="$(suite_deadline)"
+            if [ -d "$(dirname "$PROJECT").Test" ] && [ "$left" -lt "$MIN_SUITE_SECONDS" ]; then
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's suite was NOT STARTED: the job's suite window was spent (${left}s left before the evidence reserve) — it was never run, which is not a pass"
+              unstarted+=("$MODULE")
+              continue
+            fi
             mkdir -p /tmp/coredumps
             rm -f /tmp/meshweaver-test-trace.log /tmp/meshweaver-msg-trace.log /tmp/coredumps/*.dmp
             set +e
@@ -3854,7 +3863,7 @@ jobs:
                 tests="$(cd "$tests" && pwd)"
                 cd "$TEST_CWD"
                 "$(dirname "$MODULE_PACK_BATCH")/run-bounded-suite.sh" \
-                  --deadline "$(suite_deadline)" --label "$MODULE" --dump-dir /tmp/coredumps -- \
+                  --deadline "$left" --label "$MODULE" --dump-dir /tmp/coredumps -- \
                   dotnet test "$tests" -c Release \
                   -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
               else
@@ -3895,6 +3904,9 @@ jobs:
           # summary per test. Without it a red leg said only "the module's own suite failed" and the
           # name had to be dug out of the raw log (MeshWeaver.Plugins#3828). A REPORTER: it always
           # exits 0 and the per-module verdicts above stand; a reporter that cannot run is said.
+          if [ "${#unstarted[@]}" -gt 0 ]; then
+            echo "::error::${#unstarted[@]} module suite(s) NOT STARTED — the job's suite window was spent before their turn, so they are failures, never passes: ${unstarted[*]}"
+          fi
           if [ "${#red[@]}" -gt 0 ]; then
             python3 build-logic/.github/scripts/name-failing-tests.py "${red[@]}" --summary "$GITHUB_STEP_SUMMARY" \
               || echo "::warning::name-failing-tests.py could not name the failing tests (exit $?) — read each suite's output above"
@@ -4733,10 +4745,13 @@ jobs:
           # A suite gets what is left of the job, less what the evidence and hand-over steps after it
           # need — a STUCK detector derived from the cap, never a budget a suite is meant to grow into.
           [ -n "${MW_JOB_STARTED_EPOCH:-}" ] || { echo "::error::MW_JOB_STARTED_EPOCH is unset — the job's first step did not record its start, so no suite can be bounded below the cap"; exit 1; }
+          # It prints what is left, never a floor: a suite is NOT started once the window is spent
+          # (below MIN_SUITE_SECONDS) — launching one inside the reserve would let it run into the cap.
           suite_deadline() {
-            local left=$(( MW_JOB_STARTED_EPOCH + JOB_CAP_SECONDS - EVIDENCE_RESERVE_SECONDS - $(date +%s) ))
-            if [ "$left" -lt 60 ]; then echo 60; else echo "$left"; fi
+            echo $(( MW_JOB_STARTED_EPOCH + JOB_CAP_SECONDS - EVIDENCE_RESERVE_SECONDS - $(date +%s) ))
           }
+          MIN_SUITE_SECONDS=60
+          unstarted=()  # suites never started because the window was spent — failures, named after the loop
           # 🚨 THE RUNNER FOLLOWS THE TEST FRAMEWORK, AND THE PLATFORM PINS THE FRAMEWORK (#4414).
           # `dotnet test` reads its runner from the first `global.json` found walking UP from the
           # CURRENT DIRECTORY (measured on the .NET 10.0.400 SDK, 2026-09-15: one in a SIBLING
@@ -4793,6 +4808,12 @@ jobs:
               echo "no test project at $tests — nothing to run"
               continue
             fi
+            left="$(suite_deadline)"
+            if [ "$left" -lt "$MIN_SUITE_SECONDS" ]; then
+              MODULE_PACK_FAIL_LOG_ONLY=1 bk fail --module "$MODULE" --phase test --reason "the module's suite was NOT STARTED: the job's suite window was spent (${left}s left before the evidence reserve) — it was never run, which is not a pass"
+              unstarted+=("$MODULE")
+              continue
+            fi
             set +e
             ( set -euo pipefail
               mapfile -t flags < <(test_flags "$RUNNER_TEMP/trx/$MODULE")
@@ -4801,7 +4822,7 @@ jobs:
               tests="$(cd "$tests" && pwd)"
               cd "$TEST_CWD"
               "$(dirname "$MODULE_PACK_BATCH")/run-bounded-suite.sh" \
-                --deadline "$(suite_deadline)" --label "$MODULE" --dump-dir /tmp/coredumps -- \
+                --deadline "$left" --label "$MODULE" --dump-dir /tmp/coredumps -- \
                 dotnet test "$tests" -c Release \
                 -p:MeshWeaverRoot=$GITHUB_WORKSPACE/meshweaver "${flags[@]}"
             )
@@ -4836,6 +4857,9 @@ jobs:
           # summary per test. Without it a red leg said only "the module's own suite failed" and the
           # name had to be dug out of the raw log (MeshWeaver.Plugins#3828). A REPORTER: it always
           # exits 0 and the per-module verdicts above stand; a reporter that cannot run is said.
+          if [ "${#unstarted[@]}" -gt 0 ]; then
+            echo "::error::${#unstarted[@]} module suite(s) NOT STARTED — the job's suite window was spent before their turn, so they are failures, never passes: ${unstarted[*]}"
+          fi
           if [ "${#red[@]}" -gt 0 ]; then
             python3 build-logic/.github/scripts/name-failing-tests.py "${red[@]}" --summary "$GITHUB_STEP_SUMMARY" \
               || echo "::warning::name-failing-tests.py could not name the failing tests (exit $?) — read each suite's output above"

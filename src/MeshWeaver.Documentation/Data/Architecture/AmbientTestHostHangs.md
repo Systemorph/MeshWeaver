@@ -232,9 +232,18 @@ On the deadline it:
    about 100 MB for the AI host. A heap dump of the same host is 1.7 GB, which would cost the
    artifact store a lot per wedge. The stacks name a lock-order deadlock's two threads. `syncblk`
    needs the heap, so a lock-owner question is answered from a local heap dump.
+   The whole dump phase shares **one** budget (`--dump-budget`, 180 s by default) that sits inside
+   the caller's reserve. Each request gets only what is left of it (`diag-dump.py --timeout` is one
+   deadline over connect, send and every read), and a process still unasked when the budget is
+   spent is skipped and said. So a runtime that accepts the request and then stalls cannot push the
+   job past its cap before the evidence is uploaded.
 3. ends the process tree and exits 124. The lane then records the suite as a TIMEOUT, not as
    "the suite failed", and the existing evidence step keeps the dumps and the trace under
    `test-evidence/<module>`.
+
+A suite whose turn comes after the window is spent (less than 60 s left before the reserve) is
+**not started**. Starting it would put it inside the reserve, where it could run into the cap. It
+is recorded as a failure, never a pass, and the step names every unstarted suite in one annotation.
 
 Measured end to end on the AI suite with a 75 s deadline: exit 124, the four tests and two class
 inits in flight named by pid, a 94 MB host dump with 78 readable managed stacks, and no process left.

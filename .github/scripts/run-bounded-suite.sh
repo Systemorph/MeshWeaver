@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run-bounded-suite.sh --deadline <seconds> --label <name> --dump-dir <dir> -- <command…>
+# run-bounded-suite.sh --deadline <seconds> --label <name> --dump-dir <dir> [--dump-budget <seconds>] -- <command…>
 #
 # Runs ONE test suite command and ends it, WITH EVIDENCE, if it has not finished by the deadline.
 #
@@ -16,7 +16,10 @@
 #      or the class init/teardown, the host is stuck in) and prints the trace's last lines;
 #   2. asks every .NET process under the command to dump ITSELF (diag-dump.py — the runtime's
 #      diagnostics socket, so no ptrace and nothing to install) into --dump-dir, mini dumps:
-#      every managed stack, which is what names a lock-order deadlock's two threads;
+#      every managed stack, which is what names a lock-order deadlock's two threads. The whole
+#      dump phase shares ONE --dump-budget (default 180 s): each request gets only what is left of
+#      it, and processes still unasked when it is spent are SAID and skipped — a runtime that
+#      accepts the request and stalls cannot push the job past the reserve its caller kept;
 #   3. TERMs the process tree, KILLs what is left 30 s later, and exits 124 (timeout(1)'s code).
 # Otherwise it exits with the command's own code. A dump that cannot be written is SAID and
 # never changes the verdict: the suite did not finish, whatever the dump did.
@@ -65,17 +68,19 @@ open_tests() {
 run() {
   # The fixture writes Path.GetTempPath()/meshweaver-test-trace.log — /tmp on the Linux runners.
   local TRACE="${MESHWEAVER_TEST_TRACE:-/tmp/meshweaver-test-trace.log}"
-  local deadline="" label="" dump_dir=""
+  local deadline="" label="" dump_dir="" dump_budget=180
   while [ $# -gt 0 ]; do
     case "$1" in
       --deadline) deadline="$2"; shift 2 ;;
       --label) label="$2"; shift 2 ;;
       --dump-dir) dump_dir="$2"; shift 2 ;;
+      --dump-budget) dump_budget="$2"; shift 2 ;;
       --) shift; break ;;
       *) echo "run-bounded-suite: unknown argument '$1'" >&2; return 64 ;;
     esac
   done
   [[ "$deadline" =~ ^[0-9]+$ ]] && [ "$deadline" -gt 0 ] || { echo "run-bounded-suite: --deadline must be a positive number of seconds, got '$deadline'" >&2; return 64; }
+  [[ "$dump_budget" =~ ^[0-9]+$ ]] && [ "$dump_budget" -gt 0 ] || { echo "run-bounded-suite: --dump-budget must be a positive number of seconds, got '$dump_budget'" >&2; return 64; }
   [ -n "$label" ] && [ -n "$dump_dir" ] && [ $# -gt 0 ] || { echo "run-bounded-suite: --label, --dump-dir and a command are required" >&2; return 64; }
 
   "$@" &
@@ -87,14 +92,18 @@ run() {
       open_tests "$TRACE"
       [ -f "$TRACE" ] && { echo "[CI] $label last lines of the phase trace:"; tail -n 25 "$TRACE" | sed 's/^/  /'; }
       mkdir -p "$dump_dir"
-      local tree p dumped=0
+      local tree p dumped=0 skipped=0 left dump_end
       tree="$(descendants "$pid")"
+      dump_end=$(( SECONDS + dump_budget ))
       for p in $pid $tree; do
-        if python3 -I "$here/diag-dump.py" "$p" "$dump_dir/hang-$p.dmp" --type mini 2>/dev/null; then
+        left=$(( dump_end - SECONDS ))
+        if [ "$left" -le 0 ]; then skipped=$((skipped + 1)); continue; fi
+        if python3 -I "$here/diag-dump.py" "$p" "$dump_dir/hang-$p.dmp" --type mini --timeout "$left" 2>/dev/null; then
           dumped=$((dumped + 1))
         fi
       done
       echo "[CI] $label wrote $dumped dump(s) into $dump_dir (only .NET processes answer; 0 means no dump, not no wedge)"
+      [ "$skipped" -eq 0 ] || echo "[CI] $label dump budget of ${dump_budget}s SPENT — $skipped process(es) were not asked for a dump"
       # shellcheck disable=SC2086 # word-splitting the pid list is intended
       kill -TERM $tree "$pid" 2>/dev/null
       local waited=0
@@ -145,6 +154,33 @@ self_test() {
     echo "✗ the hung command's child (pid $child) survived"; kill -KILL "$child"; fails=1
   fi
 
+  # A child whose diagnostics socket ACCEPTS and never answers: the dump phase is cut at its ONE
+  # budget, not held for diag-dump's own 600 s, and the tree is still ended.
+  rm -f "$tmp/child.pid"
+  python3 -I -c '
+import os, socket, sys, time
+pidfile, tmp = sys.argv[1], sys.argv[2]
+end = time.time() + 30
+while not os.path.exists(pidfile) and time.time() < end: time.sleep(0.05)
+time.sleep(0.2)
+s = socket.socket(socket.AF_UNIX); s.bind(os.path.join(tmp, "dotnet-diagnostic-%s-1-socket" % open(pidfile).read().strip())); s.listen(4)
+conns = []
+while time.time() < end: conns.append(s.accept()[0])
+' "$tmp/child.pid" "$tmp" &
+  local listener=$!
+  t0=$SECONDS
+  out="$(TMPDIR="$tmp" MESHWEAVER_TEST_TRACE="$tmp/trace.log" run --deadline 2 --dump-budget 3 --label stalled --dump-dir "$tmp/d" -- \
+    bash -c 'sleep 300 & echo $! > "$1"; wait' _ "$tmp/child.pid")"; rc=$?
+  kill "$listener" 2>/dev/null; wait "$listener" 2>/dev/null
+  [ "$rc" -eq 124 ] || { echo "✗ a hung command with a stalled dump returned $rc, not 124"; fails=1; }
+  # At least the budget: the request really reached the stalled socket (else this proves nothing).
+  [ $(( SECONDS - t0 )) -ge 4 ] || { echo "✗ the stalled socket was never reached ($(( SECONDS - t0 ))s) — this case tested nothing"; fails=1; }
+  [ $(( SECONDS - t0 )) -lt 20 ] || { echo "✗ a stalled dump socket held the wrapper $(( SECONDS - t0 ))s past a 2s deadline + 3s dump budget"; fails=1; }
+  child="$(cat "$tmp/child.pid" 2>/dev/null)"
+  if [ -n "$child" ] && kill -0 "$child" 2>/dev/null; then
+    echo "✗ the stalled-dump command's child (pid $child) survived"; kill -KILL "$child"; fails=1
+  fi
+
   out="$(MESHWEAVER_TEST_TRACE="$tmp/none.log" open_tests "$tmp/none.log")"
   grep -q 'no phase trace' <<<"$out" || { echo "✗ a missing trace was not said"; fails=1; }
   printf '%s\n' '10:00:00.000 pid=7 [A] TEST_START B' '10:00:00.100 pid=7 [A] TEST_END elapsed=100ms B outcome=Passed' > "$tmp/closed.log"
@@ -152,9 +188,11 @@ self_test() {
 
   run --deadline 0 --label bad --dump-dir "$tmp/d" -- true 2>/dev/null; rc=$?
   [ "$rc" -eq 64 ] || { echo "✗ --deadline 0 was accepted (rc $rc)"; fails=1; }
+  run --deadline 5 --dump-budget 0 --label bad --dump-dir "$tmp/d" -- true 2>/dev/null; rc=$?
+  [ "$rc" -eq 64 ] || { echo "✗ --dump-budget 0 was accepted (rc $rc)"; fails=1; }
   rm -rf "$tmp"
   [ "$fails" -eq 0 ] || return 1
-  echo "✓ run-bounded-suite self-test: a finished command keeps its exit code; a hung one is ended at its deadline with 124, its tree does not survive, the open test and the unfinished class init are named (and nothing that closed), a dump-less tree says so, and a bad deadline is refused"
+  echo "✓ run-bounded-suite self-test: a finished command keeps its exit code; a hung one is ended at its deadline with 124, its tree does not survive, the open test and the unfinished class init are named (and nothing that closed), a dump-less tree says so, a stalled diagnostics socket is cut at the one dump budget, and a bad deadline or budget is refused"
 }
 
 if [ "${1:-}" = "--self-test" ]; then
