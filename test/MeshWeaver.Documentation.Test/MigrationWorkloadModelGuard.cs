@@ -38,109 +38,13 @@ namespace MeshWeaver.Documentation.Test;
 /// that name, and the chart's own RBAC still grants it (removing that grant before the updater
 /// stops patching it would turn a harmless call into a 403 mid-roll). Naming the problem is the
 /// opposite of repeating it. The assertion is on COMMANDS.</para>
+///
+/// <para>The three facts over the Job template itself (<c>TheMigration_*</c>) moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge,
+/// together with a copy of the two command/prose scans below over the moved tree.</para>
 /// </summary>
 public class MigrationWorkloadModelGuard
 {
-    private const string MigrationTemplates = "deploy/helm/templates/memex-migration";
     private const string Job = "deploy/helm/templates/memex-migration/job.yaml";
-
-    /// <summary>
-    /// The workload itself: a Job that runs to completion and stops. <c>restartPolicy: Never</c>
-    /// is the line that makes "it exited 0" mean finished rather than "restart it".
-    /// </summary>
-    [Fact]
-    public void TheMigration_IsAJobThatRunsToCompletion_NeverADeployment()
-    {
-        var dir = Path.Combine(FindRepoRoot(), MigrationTemplates);
-        var templates = Directory.GetFiles(dir, "*.yaml");
-
-        foreach (var template in templates)
-        {
-            var body = ExecutableLinesOf(File.ReadAllText(template));
-            Assert.False(
-                Regex.IsMatch(body, @"^kind:\s*""?Deployment""?", RegexOptions.Multiline),
-                $"{Path.GetRelativePath(FindRepoRoot(), template)} declares a Deployment. The "
-                + "migration runs once and exits 0, so a Deployment restarts it forever — 310 "
-                + "restarts a day pegging a core, and a permanent CrashLoopBackOff that makes a "
-                + "REAL migration failure unreadable (#1788).");
-        }
-
-        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Job)));
-
-        Assert.True(Regex.IsMatch(job, @"^kind:\s*""?Job""?", RegexOptions.Multiline),
-            $"{Job} must declare kind: Job — the workload model is the fix.");
-
-        Assert.True(job.Contains("restartPolicy: \"Never\"", StringComparison.Ordinal),
-            $"{Job} must set restartPolicy: Never. Without it the pod is restarted on exit and the "
-            + "Job form buys nothing.");
-
-        Assert.True(job.Contains(".Release.Revision", StringComparison.Ordinal),
-            $"{Job}'s name must embed .Release.Revision so a new migration actually RUNS on the "
-            + "next helm upgrade — a Job with a stable name is created once and then silently "
-            + "skipped, which would leave the schema behind while everything looked fine.");
-
-        Assert.True(job.Contains("ttlSecondsAfterFinished", StringComparison.Ordinal),
-            $"{Job} must set ttlSecondsAfterFinished so completed Jobs clean themselves up rather "
-            + "than accumulating one object per upgrade.");
-    }
-
-    /// <summary>
-    /// 🚨 The migration has a BUDGET, enforced twice from ONE number (maintainer, 2026-09-07:
-    /// "cap it", "enforce a time limit of 10 min per job", "if they want more than 10, they have to
-    /// configure explicitly"). Measured that day on memex-cloud: the <c>3.0.0-ci.8009</c> Job had
-    /// been running 4 h 30 min — seventy seconds of schema work, then a row-at-a-time embedding
-    /// backfill over 220 partition schemas — with its deploy long since reported failed and nothing
-    /// naming the cause. Inside the process <c>MIGRATION_BUDGET_MINUTES</c> makes the runner fail
-    /// RED naming the step; outside, <c>activeDeadlineSeconds</c> makes Kubernetes kill the Job at
-    /// the same budget. Both derive from <c>migration.budgetMinutes</c>, default 10, so a deployment
-    /// that needs more writes the number into its overlay — never gets it by default.
-    /// </summary>
-    [Fact]
-    public void TheMigration_HasABudget_TenMinutesUnlessConfiguredExplicitly()
-    {
-        var root = FindRepoRoot();
-        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
-        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
-
-        Assert.True(Regex.IsMatch(job, @"^\s*activeDeadlineSeconds:.*\.Values\.migration\.budgetMinutes", RegexOptions.Multiline),
-            $"{Job} must set activeDeadlineSeconds FROM .Values.migration.budgetMinutes — the Job's outside "
-            + "cap and the process's inside budget are one number, or the two drift and one of them lies.");
-        Assert.True(job.Contains("MIGRATION_BUDGET_MINUTES", StringComparison.Ordinal)
-                    && job.Contains(".Values.migration.budgetMinutes", StringComparison.Ordinal),
-            $"{Job} must pass MIGRATION_BUDGET_MINUTES from .Values.migration.budgetMinutes so the runner "
-            + "fails RED naming the step that outlived the budget, before Kubernetes kills the pod.");
-        var budget = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+budgetMinutes:\s*(\d+)", RegexOptions.Multiline);
-        Assert.True(budget.Success, "deploy/helm/values.yaml must declare migration.budgetMinutes");
-        Assert.Equal("10", budget.Groups[1].Value);
-    }
-
-    /// <summary>
-    /// 🚨 Rehearsal BEFORE execution (maintainer, 2026-09-07: "we must first test the migration
-    /// process and only then execute"). The Job's init container runs the same image with
-    /// <c>MIGRATION_MODE=rehearse</c> — counts what the pending repairs would touch, executes
-    /// nothing — and a failed init container never lets the migration container start. The
-    /// ordering is the pod's, not a convention; this pins that the init container exists, runs
-    /// the migration image, carries the mode, and is on by default.
-    /// </summary>
-    [Fact]
-    public void TheMigration_IsRehearsedByAnInitContainer_BeforeItRuns()
-    {
-        var root = FindRepoRoot();
-        var job = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Job)));
-        var values = File.ReadAllText(Path.Combine(root, "deploy/helm/values.yaml"));
-
-        var init = job.IndexOf("initContainers:", StringComparison.Ordinal);
-        var main = job.IndexOf("containers:", init + 1, StringComparison.Ordinal);
-        Assert.True(init >= 0 && main > init, $"{Job} must declare initContainers before containers");
-        var initBlock = job[init..main];
-        Assert.Contains("memex-migration-rehearsal", initBlock);
-        Assert.Contains(".Values.migration.image", initBlock);
-        Assert.True(Regex.IsMatch(initBlock, @"MIGRATION_MODE""?\s*\n\s*value:\s*""?rehearse", RegexOptions.Multiline),
-            "the rehearsal init container must run the migration image with MIGRATION_MODE=rehearse");
-        var rehearse = Regex.Match(values, @"^migration:\s*\n(?:.*\n)*?\s+rehearse:\s*(\w+)", RegexOptions.Multiline);
-        Assert.True(rehearse.Success && rehearse.Groups[1].Value == "true",
-            "deploy/helm/values.yaml must declare migration.rehearse: true — tested first is the default, not an option");
-    }
 
     /// <summary>
     /// 🚨 And no command anywhere in the repo may roll the migration as a Deployment. Each of
@@ -271,16 +175,6 @@ public class MigrationWorkloadModelGuard
         Directory.Exists(directory)
             ? Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
             : [];
-
-    /// <summary>
-    /// Comment lines are stripped before probing the templates, for the same reason
-    /// <see cref="DrainDeadlineGuard"/> strips them: <c>job.yaml</c>'s header explains the
-    /// Deployment it REPLACED, so an unstripped scan would find "Deployment" in the explanation
-    /// and fail on the very comment that documents the fix.
-    /// </summary>
-    private static string ExecutableLinesOf(string yaml) =>
-        string.Join("\n", yaml.Split('\n')
-            .Where(line => !line.TrimStart().StartsWith('#')));
 
     private static string FindRepoRoot()
     {

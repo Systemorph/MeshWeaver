@@ -13,16 +13,25 @@ on a rebuild, and who needs a credential to consume it.
 
 | Repository | Visibility | Owns | Never holds |
 |---|---|---|---|
-| **`Systemorph/MeshWeaver`** | **public** | The framework, and the **Helm chart** (`deploy/helm`). | — |
-| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog *and* shared scripts (CI gates, generators). | Deployment config. |
+| **`Systemorph/MeshWeaver`** | **public** | The framework. | Deployment material. |
+| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog, shared scripts (CI gates, generators), the hosting operator and the reference **Helm chart** (`deploy/helm`, `deploy/helm-db`, `deploy/aks/`). | Deployment config. |
 | **`Systemorph/Memex`** | **private** | **Config only** — the deployment overlays and thin CI glue. | Reusable code or logic. |
 
-## The framework repo is public, and the chart is read at deploy time
+## The chart is read at deploy time
 
-`MeshWeaver` is public. One consequence is easy to miss and load-bearing: the deploy
-(`helm-release.yml`, which lives in the `Memex` repo) checks the chart out of `MeshWeaver` with **no
-credential and no pinned `ref:`** — it takes the default branch **at deploy time**. The ConfigMap and
-every rendered resource come from **helm reading the repo**, never from the running portal image.
+The reference chart left this repository for `MeshWeaver.Plugins` with the hosting operator that
+installs it (core slimming; Plugins `Hosting/ChartHome`, and [Chart Ownership](../ChartOwnershipAndRunnerPool)
+for the analysis). The break-glass deploy (`helm-release.yml`, in the `Memex` repo) checks the chart
+out of `MeshWeaver.Plugins` with **no pinned `ref:`** — it takes the default branch **at deploy
+time** — using a per-run, read-only installation token of the MeshWeaver App. The governed path
+(the operator, and the estate's aks-ops lane) uses the chart at the operator image's commit instead.
+Either way the ConfigMap and every rendered resource come from **helm reading the repo**, never from
+the running portal image.
+
+🚨 **Those reads are the debt the gap section below describes.** While the chart lived in this public
+repository every reader was credential-free; in the private one, the estate's deploy lanes, its
+required `config-key-coverage` check and the homebrew tap each mint a scoped App token. Whether the
+reference chart should instead live in a public repository of its own is an open owner decision.
 
 So **a chart-only change is effective the moment it merges.** There is no image rebuild, no roll, no
 release cycle standing between a merged chart fix and the next `helm upgrade`. This was proven the

@@ -1081,7 +1081,7 @@ public static class ShippedPrebuiltBundles
     /// assemblies this pass actually ADOPTED (bytes uploaded, record stamped, the type's hub
     /// activated to do it) versus assemblies that were ALREADY CURRENT and therefore cost nothing.
     ///
-    /// <para>The split has to be reported, not just acted on. <c>deploy/aks/values.aks.yaml</c>
+    /// <para>The split has to be reported, not just acted on. MeshWeaver.Plugins <c>deploy/aks/values.aks.yaml</c>
     /// makes the boot coverage report the replacement for the retired bake readiness gate — "an
     /// identity mismatch declines every bundle wholesale and shows up as a coverage collapse in the
     /// logs on the FIRST pod of a bad roll". A skip-when-current optimisation that reported only

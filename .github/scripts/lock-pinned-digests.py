@@ -4454,9 +4454,16 @@ def acl_delete_grants(chart_dir: Path) -> tuple[list[tuple[str, int, str]], int]
     return grants, rules
 
 
-def check_registry_retention(root: str) -> int:
+def check_registry_retention(root: str, chart_root: str | None = None) -> int:
     """Does every registry the fleet's overlays name still say what — if anything — DELETES from it,
     and does the committed chart still agree with what the record says?
+
+    🏠 THE CHART MAY LIVE IN ANOTHER REPOSITORY. A `retention` block that names a `chartRepository`
+    says its `chart` path is in THAT repository (the reference chart left core for
+    Systemorph/MeshWeaver.Plugins — core slimming). Without `chart_root` (core's own pull-request
+    lane, which cannot read that repository) the chart-derived arms are NOT run and the run says so
+    by name — never a silent pass. With `chart_root` (that repository's Chart Gate, which checks core
+    out) the chart is re-derived there, against the record at the core commit it checked out.
 
     No credential, no network, no registry call. What it covers is the half a pull request can
     break: the declaration, and the chart the declaration is a statement ABOUT.
@@ -4498,6 +4505,8 @@ def check_registry_retention(root: str) -> int:
     push_derivation_trusted = bool(push_targets) and LANE_REGISTRY in push_targets
     charts_checked = 0
     acl_rules_checked = 0
+    # Registries whose chart lives in another repository and was NOT re-derived on this run.
+    charts_elsewhere: list[str] = []
     swept_files = swept_skipped = 0
     declaring_nothing_deletes: list[str] = []
     out_of_estate: list[tuple[str, str]] = []
@@ -4695,10 +4704,22 @@ def check_registry_retention(root: str) -> int:
                 "committed source the claim was derived from, this gate can only re-read the "
                 "claim — and a claim that checks itself passes on the day it stops being true.")
             continue
-        chart_dir = Path(root) / chart
+        chart_repo = str(retention.get("chartRepository", "")).strip()
+        if chart_repo and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", chart_repo):
+            problems.append(f"{where}.retention.chartRepository is {chart_repo!r}, which is not an "
+                            "`owner/name`. The chart's home has to be a repository someone can check out.")
+            continue
+        if chart_repo and chart_root is None:
+            # The sweep for executed deletions below still covers THIS repository.
+            charts_elsewhere.append(f"{host}: `{chart}` in {chart_repo}")
+            declaring_nothing_deletes.append(host)
+            continue
+        chart_base = Path(chart_root) if chart_repo else Path(root)
+        chart_dir = chart_base / chart
         if not chart_dir.is_dir():
             problems.append(f"{where}.retention.chart names {chart!r}, which is not a directory in "
-                            "this repository. A record pointing at a moved chart checks nothing.")
+                            + (f"the {chart_repo} checkout at {chart_root}" if chart_repo else "this repository")
+                            + ". A record pointing at a moved chart checks nothing.")
             continue
         charts_checked += 1
 
@@ -4709,7 +4730,7 @@ def check_registry_retention(root: str) -> int:
                     continue
                 if re.match(r'^\s*kind:\s*"?(Job|CronJob)"?\s*$', line):
                     problems.append(
-                        f"{rendered.relative_to(Path(root))}:{number} renders a "
+                        f"{rendered.relative_to(chart_base)}:{number} renders a "
                         f"{line.split(':', 1)[1].strip()} under {host}'s chart, and the record "
                         "says nothing deletes there. A scheduled job beside a registry is how a "
                         "`registry garbage-collect` arrives. Re-derive "
@@ -4758,7 +4779,7 @@ def check_registry_retention(root: str) -> int:
             for template, number, match_line in grants:
                 if principal not in match_line:
                     problems.append(
-                        f"{Path(template).relative_to(Path(root))}:{number} grants the `delete` "
+                        f"{Path(template).relative_to(chart_base)}:{number} grants the `delete` "
                         f"action to `{match_line}`, which does not name {principal!r}. "
                         f"`registries.{host}` records that only the publisher may delete, and that "
                         "verdict is this ACL and nothing else — an installation holding an instance "
@@ -4794,6 +4815,11 @@ def check_registry_retention(root: str) -> int:
     # 🚨 ALSO PRINTED WHATEVER THE VERDICT. An `out-of-estate` host is one this record deliberately
     # says NOTHING about, and a green run must not read as a measurement of it. The same reasoning
     # as the UNVERIFIED lines below: "not ours to answer" and "clean" are different sentences.
+    # 🚨 PRINTED WHATEVER THE VERDICT: a chart this run did not re-derive is not a chart that agrees.
+    for line in charts_elsewhere:
+        print(f"  {line}: chart NOT re-derived on this run — it lives in another repository, whose "
+              "Chart Gate re-derives it against this record (--check-registry-retention <core> "
+              "--chart-root <its checkout>).")
     for host, estate in sorted(out_of_estate):
         print(f"  {host}: OUT OF ESTATE — what deletes there is decided by "
               f"{estate or '<unnamed>'}; "
@@ -4812,7 +4838,7 @@ def check_registry_retention(root: str) -> int:
           "holds, and a `nothing-deletes` enumeration names at least one mechanism that IS "
           "present — so it inspected something — while an UNVERIFIED one is counted apart from a "
           "measured absence and keeps `cleanupAuthorized` false.")
-    print("  the committed chart still agrees: no Job or CronJob beside the registry, the "
+    print(f"  {charts_checked} committed chart(s) still agree: no Job or CronJob beside the registry, the "
           "`maintenance:` stanza carries exactly the declared keys and windows, every ACL rule "
           "granting `delete` still names the declared principal, and no executable line anywhere "
           "runs a deletion against a registry.")
@@ -6310,6 +6336,42 @@ ingress:
     check(code == 1 and "not a directory" in output,
           f"ARM 33: a record pointing at a chart that has MOVED passed, having checked nothing: "
           f"{output}")
+
+    # ── ARM 33h: the chart lives in ANOTHER repository (`chartRepository`, core slimming) ────────
+    # Core's pull-request lane cannot read that repository, so it must SAY it re-derived nothing —
+    # never print the clean sentence over zero charts — and the other repository's gate, handed its
+    # checkout as `chart_root`, must re-derive it exactly as before: a CronJob there is RED.
+    elsewhere = _fleet(retention={"chartRepository": "Systemorph/Example.Charts"})
+    with tempfile.TemporaryDirectory() as scratch:
+        root = _registry_root(scratch, elsewhere, chart_body=None)
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = check_registry_retention(root)
+        output = stdout.getvalue()
+    check(code == 0 and "0 chart(s) re-derived" in output and "chart NOT re-derived on this run" in output,
+          f"ARM 33h: a record whose chart lives in another repository either failed core's lane "
+          f"(which cannot read it) or passed WITHOUT saying it re-derived nothing: {output}")
+    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as charts:
+        root = _registry_root(scratch, elsewhere, chart_body=None)
+        _registry_root(charts, {}, extra_chart=None)          # the other repository's chart, good
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = check_registry_retention(root, charts)
+        output = stdout.getvalue()
+        check(code == 0 and "1 chart(s) re-derived" in output,
+              f"ARM 33h: the other repository's gate, given its checkout, did not re-derive the "
+              f"chart it holds: {output}")
+        (Path(charts) / _CHART / "gc.yaml").write_text("kind: CronJob\n", encoding="utf-8")
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = check_registry_retention(root, charts)
+        output = stdout.getvalue()
+        check(code == 1 and "renders a CronJob" in output,
+              f"ARM 33h: a CronJob beside the registry in the chart's NEW home passed — the move "
+              f"would have taken the arm that matters most out of the gate: {output}")
+    code, output = _verdict(_fleet(retention={"chartRepository": "not a repo"}))
+    check(code == 1 and "is not an `owner/name`" in output,
+          f"ARM 33h: a `chartRepository` that names no repository passed: {output}")
 
     # 🚨 THE ONE THAT IS NOT ABOUT JSON. A blob GC arrives as a scheduled job beside the registry,
     # and the record beside it still reads "nothing deletes".
@@ -8114,6 +8176,9 @@ def main() -> int:
     parser.add_argument("--check-retention-record", metavar="ROOT",
                         help="assert the committed .github/acr-retention record still describes a "
                              "purge the lock can protect against; no credential, no network")
+    parser.add_argument("--chart-root", metavar="DIR",
+                        help="with --check-registry-retention: a checkout of the repository a "
+                             "`retention.chartRepository` names, so its chart is re-derived here")
     parser.add_argument("--check-registry-retention", metavar="ROOT",
                         help="assert every registry the fleet pins in says what DELETES from it, "
                              "and that the committed chart still agrees (#4230); "
@@ -8132,7 +8197,7 @@ def main() -> int:
     if args.check_retention_record:
         return check_retention_record(args.check_retention_record)
     if args.check_registry_retention:
-        return check_registry_retention(args.check_registry_retention)
+        return check_registry_retention(args.check_registry_retention, args.chart_root)
     if args.root:
         repos = [args.repos or "local"]
     elif bool(args.repos) == bool(args.discover):

@@ -1,3 +1,0 @@
-# Refusal control: a crash-dump root that resolves OUTSIDE /data.
-crashDumps:
-  root: "/data/../tmp/dumps"

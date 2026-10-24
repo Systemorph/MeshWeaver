@@ -29,7 +29,7 @@ RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 USER 10001
 
 # The trusted endpoint and the well-known kernel address the .NET side routes `python` submissions to
-# (CodeNodeType). Both overridable; the defaults match deploy/helm values.grpc.
+# (CodeNodeType). Both overridable; the defaults match the MeshWeaver.Plugins deploy/helm values.grpc.
 # PYTHONUNBUFFERED so the worker's stdout (connect line, errors) reaches the pod log immediately.
 ENV MESH_GRPC_URL=http://127.0.0.1:8082 \
     MESH_GATE_ADDRESS=py/python-kernel \

@@ -28,17 +28,22 @@ name: Homebrew (memex-local)
 # trapdoor: this check is not required by the ruleset, and a PR that touches neither the CLI nor
 # the chart has nothing for a macOS runner to measure.
 
+# 🏠 THE CHART THE TARBALL VENDORS LIVES IN Systemorph/MeshWeaver.Plugins (core slimming; Plugins
+# Hosting/ChartHome), which is PRIVATE. Both jobs therefore mint a read token of the
+# DEPENDENT_DISPATCH_APP (installed org-wide, Contents: Read) for that repository and check
+# `deploy/helm` out at its default branch; make-tarball.sh packs it at deploy/helm, so the formula
+# is unchanged. 🚨 Whether the PUBLIC tap may keep carrying that chart is an owner decision recorded
+# in Hosting/ChartHome — this is the interim that changes nothing about what the tap publishes. A
+# chart change no longer triggers this workflow: it reaches the tap with the next publish here.
 on:
   pull_request:
     paths:
       - deploy/homebrew/**
-      - deploy/helm/**
       - .github/workflows/homebrew.yml
   push:
     branches: [main]
     paths:
       - deploy/homebrew/**
-      - deploy/helm/**
       - .github/workflows/homebrew.yml
   workflow_dispatch:
 
@@ -78,6 +83,40 @@ jobs:
           fi
           brew --version; /bin/bash --version | head -1
 
+      # The chart the tarball vendors (see the header). Asserted, then minted — a missing App is RED
+      # naming the secret, never a tarball without a chart.
+      - name: The App the chart checkout is minted from is provisioned
+        env:
+          APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          APP_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${APP_ID:-}" ]  || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID — the App that reads the chart from the PRIVATE Systemorph/MeshWeaver.Plugins")
+          [ -n "${APP_KEY:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY — its private key")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the tarball cannot vendor the chart — provision:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+      - name: Mint a read token for the chart's repository
+        id: chart-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: MeshWeaver.Plugins
+          permission-contents: read
+      - name: Check out the chart (MeshWeaver.Plugins deploy/helm)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          token: ${{ steps.chart-token.outputs.token }}
+          path: chart-src
+          sparse-checkout: |
+            deploy/helm
+          sparse-checkout-cone-mode: false
       - name: Version = 0.2.<commit count>
         id: ver
         run: |
@@ -91,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           tar="$RUNNER_TEMP/memex-local-${{ steps.ver.outputs.version }}.tar.gz"
-          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar"
+          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar" chart-src/deploy/helm
           sha="$(shasum -a 256 "$tar" | awk '{print $1}')"
           mkdir -p "$RUNNER_TEMP/formula"
           deploy/homebrew/scripts/render-formula.sh "${{ steps.ver.outputs.version }}" "file://$tar" "$sha" \
@@ -219,6 +258,38 @@ jobs:
           owner: Systemorph
           repositories: homebrew-memex
 
+      - name: The App the chart checkout is minted from is provisioned
+        env:
+          APP_ID: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          APP_KEY: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${APP_ID:-}" ]  || missing+=("secrets.DEPENDENT_DISPATCH_APP_ID — the App that reads the chart from the PRIVATE Systemorph/MeshWeaver.Plugins")
+          [ -n "${APP_KEY:-}" ] || missing+=("secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY — its private key")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the tarball cannot vendor the chart — provision:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+      - name: Mint a read token for the chart's repository
+        id: chart-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.DEPENDENT_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.DEPENDENT_DISPATCH_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: MeshWeaver.Plugins
+          permission-contents: read
+      - name: Check out the chart (MeshWeaver.Plugins deploy/helm)
+        uses: actions/checkout@v7
+        with:
+          repository: Systemorph/MeshWeaver.Plugins
+          token: ${{ steps.chart-token.outputs.token }}
+          path: chart-src
+          sparse-checkout: |
+            deploy/helm
+          sparse-checkout-cone-mode: false
       - name: Version = 0.2.<commit count>
         id: ver
         run: echo "version=0.2.$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
@@ -228,7 +299,7 @@ jobs:
         run: |
           set -euo pipefail
           tar="$RUNNER_TEMP/memex-local-${{ steps.ver.outputs.version }}.tar.gz"
-          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar"
+          deploy/homebrew/scripts/make-tarball.sh "${{ steps.ver.outputs.version }}" "$tar" chart-src/deploy/helm
           sha="$(sha256sum "$tar" | awk '{print $1}')"
           echo "path=$tar" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
@@ -256,7 +327,7 @@ jobs:
           url="https://github.com/$TAP_REPO/releases/download/$tag/$(basename "$TARBALL")"
           curl -fsSL -o "$RUNNER_TEMP/roundtrip.tar.gz" "$url"
           [ "$(sha256sum "$RUNNER_TEMP/roundtrip.tar.gz" | awk '{print $1}')" = "${{ steps.tar.outputs.sha }}" ] \
-            || { echo "::error::the released asset's sha256 differs from the tarball just built"; exit 1; }
+            || { echo "::error::the released asset's sha256 differs from the tarball just built — on a RE-RUN this is the vendored chart having moved in MeshWeaver.Plugins since $tag was published; a new core commit under deploy/homebrew publishes it as a new version"; exit 1; }
           echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Commit the rendered formula to the tap
