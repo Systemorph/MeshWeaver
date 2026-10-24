@@ -1,0 +1,5 @@
+# The build-host image's context is exactly the two scripts it ships (BuildKit reads this file in
+# place of the root .dockerignore, which excludes .github/).
+*
+!.github/scripts/build-run.py
+!.github/scripts/compose-gate-host.sh

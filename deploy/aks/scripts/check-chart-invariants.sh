@@ -204,6 +204,11 @@ COMBOS=(
   # turns portalNext on, so without these invariant 21 would only ever see /next OFF.
   "AKS overlay + /next bundled in the portal image (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-bundled.yaml"
   "AKS overlay + /next from a separately built image, the developer override (fixture)|deploy/helm/values.yaml:deploy/aks/values.aks.yaml:deploy/aks/scripts/testdata/values.portal-next-override.yaml"
+  # The standing build hosts ON (Doc/Architecture/BuildHosts): the only combination that renders
+  # templates/build-host/, so every portal invariant above also runs over a render that carries
+  # the hosts — a build host must not perturb the portal's shape. Its own shape and refusals are
+  # asserted by test-build-hosts.sh.
+  "the standing build hosts, both channels (fixture)|deploy/helm/values.yaml:deploy/aks/scripts/testdata/values.build-hosts.yaml"
 )
 
 WORK="$(mktemp -d)"

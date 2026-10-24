@@ -2390,6 +2390,23 @@ jobs:
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: bash .github/scripts/compose-gate-host.sh --self-test
 
+    # The standing build hosts (Doc/Architecture/BuildHosts): the follow lane's script
+    # (build-follow.yml fetches it at its scripts-ref), the host runner the chart ships, and CD's
+    # build-host announcement. Each must prove its refusals fire — a follower that reads a timeout
+    # as green, a runner that claims before it staged the plugins layer, or an announcement that
+    # names a tag for a digest would each be a green on no evidence.
+    - name: "The build follower reds a timeout, a 403 and every non-succeeded verdict (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-follow.py --self-test
+
+    - name: "The build host stages the plugins layer before it claims, and runs each stage in a fresh process (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-run.py --self-test
+
+    - name: "CD hands build-latest a set only when declared, by digest (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/build-host-announcement.py --self-test
+
     # The upstream SOURCE a node-repo bake stages (stage-sealed-upstream.sh, fetched by
     # node-repo-publish-bake.yml at its scripts ref) must be what the sealed publication's bytes
     # were baked from, PER PACKAGE — never the upstream's HEAD, never the publication commit for a

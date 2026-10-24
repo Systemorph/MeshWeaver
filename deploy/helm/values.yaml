@@ -1095,6 +1095,102 @@ database:
   # The Secret holding `username` and `password`; blank → `<release>-app` (CloudNativePG's name).
   appSecret: ""
 
+# ---- Standing build hosts (Doc/Architecture/BuildHosts; MeshWeaver.Plugins Hosting/StandingBuildHosts)
+# One warm Deployment + KEDA ScaledObject per release channel on the operations instance's record:
+# it claims build runs from this instance's queue (/api/builds) and runs every build and test stage
+# in a fresh child process (build-run.py, shipped from files/). OFF by default — nothing renders on
+# any estate until its record turns it on, and every key below is read only through the
+# `memex.buildHosts` gate, which REFUSES a half-declared block (an image by tag, a missing digest,
+# a missing API URL) instead of rendering a host that claims on the wrong compiler.
+#
+# `latest.*` / `stable.*` digests and platformVersion are written by core's CD (main-cd.yml,
+# job `build-host-latest`) into the operations record through its signed inbox — never by hand.
+buildHosts:
+  enabled: false
+  # The build API base the host claims from, in-cluster (http is accepted only for a cluster-local
+  # host), e.g. http://memex-portal-service:8080/api/builds. The KEDA trigger reads `<apiUrl>/queue`.
+  apiUrl: ""
+  # The worker token (the instance's Hosting:Builds:WorkerToken), from a Secret the record names,
+  # MOUNTED AS A FILE into the host process (never an environment variable, never into a stage).
+  workerTokenSecret:
+    name: "build-worker"
+    key: "token"
+  # The shared RWX cache (git mirrors, NuGet, the content-addressed plugins layer and compile
+  # outputs). An EXISTING claim — the chart never creates or deletes it.
+  cacheClaimName: "build-cache"
+  # The images, by REPOSITORY; each channel names the DIGEST it runs (written by core's CD).
+  testerRepository: ""            # e.g. cr.example.com/mw-plugin-test
+  portalRepository: ""            # e.g. cr.example.com/memex-portal-ai
+  runnerRepository: ""            # e.g. cr.example.com/mw-build-host — deploy/build-host/Dockerfile:
+                                  # bash, python3, git, bubblewrap, the .NET SDK, build-run.py
+  # The hosts' ONE cloud credential: Azure workload identity on the build-host ServiceAccount, granted
+  # AcrPull ONLY (to pull the plugins publication). Projected into the host container; never bound
+  # into a stage's sandbox. Blank → no identity, and the publication is pulled anonymously.
+  workloadIdentity:
+    clientId: ""
+  imagePullSecret: ""             # the KUBELET's image pull (never in the pod's filesystem)
+  # The sealed plugins publication the host stages before every claim (GET /hosts/inputs). Pulled
+  # WITHOUT a credential: a host holds no registry token and mounts no bake share (publication is
+  # the publish lane's, on build/verdict) — a pluginsPullSecret or bakeShares key is refused.
+  pluginsRegistry: ""             # e.g. cr.example.com — `<registry>/plugins/<source>@<digest>`
+  pluginsSource: "plugins"
+  # ORAS, copied into the runner by an init container — the same pinned image the bundle fetch uses.
+  orasImage: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"
+  # The tainted build pool (Build service §1.4): one build = one node.
+  nodeSelector:
+    workload: cibuild
+  tolerations:
+    - { key: ci, operator: Equal, value: build, effect: NoSchedule }
+    - { key: kubernetes.azure.com/scalesetpriority, operator: Equal, value: spot, effect: NoSchedule }
+  resources:
+    requests: { cpu: "12", memory: 40Gi }
+    limits: { cpu: "15", memory: 52Gi }
+  workSizeLimit: 60Gi
+  # The run deadline. Also the pod's terminationGracePeriodSeconds: on SIGTERM (a roll, a scale-in)
+  # the runner stops claiming and finishes the run it holds.
+  runDeadlineSeconds: 3600
+  # KEDA: polling, the scale-to-zero calm window, and the scale-down stabilization window (longer
+  # than a claim's round trip, so a replica is not removed between two runs).
+  pollingInterval: 15
+  cooldownPeriod: 600
+  scaleDownStabilizationSeconds: 300
+  # Every stage runs under bwrap (user/PID/mount/IPC namespaces). Whether the node's defaults allow
+  # unprivileged namespaces is measured (H4); state the container profiles here if they must differ
+  # (e.g. seccompProfile: Unconfined). A node that refuses makes the host exit at startup, named.
+  sandbox:
+    seccompProfile: ""
+    appArmorProfile: ""
+  # Egress: DNS, the build API's pods (podSelector below), and 80/443 to anything OUTSIDE the
+  # excluded ranges (GitHub, the registries, NuGet, Entra). Ingress: none — a host serves nothing.
+  networkPolicy:
+    enabled: true
+    apiPodSelector:
+      app.kubernetes.io/component: memex-portal
+    apiPort: 8080
+    # Never reachable on 80/443, whatever the stage: the cluster-private ranges, link-local
+    # (169.254.0.0/16 — the instance metadata service, where a node identity's tokens are minted),
+    # and Azure's platform endpoint 168.63.129.16 (WireServer; DNS on 53 stays allowed by the rule
+    # above). Stages share the pod's network namespace, so this is the boundary, not the sandbox.
+    privateCidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "168.63.129.16/32"]
+  # Optional Postgres sidecar for the substrate suites (Build service §1.4).
+  postgres:
+    enabled: false
+    image: ""
+  latest:
+    enabled: true
+    maxReplicas: 2
+    platformVersion: ""
+    testerDigest: ""
+    portalDigest: ""
+    runnerDigest: ""
+  stable:
+    enabled: false
+    maxReplicas: 1
+    platformVersion: ""
+    testerDigest: ""
+    portalDigest: ""
+    runnerDigest: ""
+
 config:
   memex_postgres:
     POSTGRES_HOST_AUTH_METHOD: "scram-sha-256"

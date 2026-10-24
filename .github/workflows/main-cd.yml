@@ -1972,6 +1972,53 @@ jobs:
           "${{ env.ACR }}/memex-migration:${{ needs.gate.outputs.staging_tag }}"
           "${{ env.REGISTRY }}/memex-migration:${{ needs.gate.outputs.staging_tag }}"
 
+  # 🔥 THE BUILD-HOST RUNNER IMAGE (Doc/Architecture/BuildHosts) — `mw-build-host`: bash, python3,
+  # git, bubblewrap, the .NET SDK and THIS commit's build-run.py + compose-gate-host.sh
+  # (deploy/build-host/Dockerfile). Tagged with the run's VERSION, the tag every image of the set
+  # carries, so `build-host-latest` (and the stable roll) resolve the runner by the set's version
+  # exactly as they resolve its tester and portal — and hand it to the hosts BY DIGEST. linux/amd64:
+  # the build pool's nodes. Outside the promotion: the platform set is complete without it, and a
+  # red here is paged (alert-on-failure) without holding the fleet's delivery.
+  build-host-image:
+    name: "Build + push mw-build-host (the build-host runner)"
+    needs: [gate, migration-image]
+    if: needs.gate.outputs.publish == 'true' && needs.migration-image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - uses: docker/setup-buildx-action@v4
+      - name: "Build + push mw-build-host:<version> (linux/amd64), and read its digest"
+        id: push
+        env:
+          VERSION: ${{ needs.migration-image.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ -n "${VERSION:-}" ] || { echo "::error::migration-image produced no version — refusing to tag mw-build-host with nothing"; exit 1; }
+          docker buildx build --platform linux/amd64 -f deploy/build-host/Dockerfile \
+            --tag "${{ env.ACR }}/mw-build-host:$VERSION" --push .
+          digest=$(docker buildx imagetools inspect "${{ env.ACR }}/mw-build-host:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in sha256:*) ;; *) echo "::error::mw-build-host:$VERSION was pushed but resolves to no digest ('$digest')"; exit 1 ;; esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "- mw-build-host \`$VERSION\` = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,
   # renders, and its `Tests` layout area executes green. The plugins repo's ci.yml `test-repos`
@@ -3951,6 +3998,134 @@ jobs:
           docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
             "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
           echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
+  # 🔥 STANDING BUILD HOSTS — core's CD deploys the updated host (Doc/Architecture/BuildHosts;
+  # MeshWeaver.Plugins Hosting/StandingBuildHosts §2, rule 2 "core's CD deploys the updated host").
+  # In the run that ARMS a set, `build-latest` is handed that set's tester and portal digests: a
+  # SIGNED `build-host-update-available` event into the control plane's inbox, which the operations
+  # instance turns into a change of its OWN record (`buildHosts.latest.*`) and that record's
+  # Reconcile — the supported record path, the same inbox `control-first` hands control its next
+  # image through. Never `kubectl set image`, never a hand-edited Deployment.
+  #
+  # 🚨 A NO-OP UNTIL DECLARED: `.github/build-hosts.json` `enabled: false` (the default) ⇒ one
+  # summary line, nothing sent, no credential used. The receiver guards the same fact again on the
+  # record (`buildHosts.enabled`). NEVER BACKWARDS: only the newest armed set is sent (the reading
+  # notify-platform-update makes). Outside `delivery-verdict` (the fleet's delivery does not depend on
+  # a build host) but UNDER `alert-on-failure`: a host left on an old set is paged, not unattended.
+  build-host-latest:
+    name: "Build host: hand the armed set to build-latest (record path)"
+    needs: [preflight, arm]
+    if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+            .github/build-hosts.json
+          sparse-checkout-cone-mode: false
+      - name: "The announcement can say no (self-test)"
+        run: python3 .github/scripts/build-host-announcement.py --self-test
+      - name: "Does this estate run standing build hosts?"
+        id: build_host
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/build-host-announcement.py decide --channel latest | tee -a "$GITHUB_OUTPUT"
+      - name: Not enabled — say so and send nothing
+        if: steps.build_host.outputs.enabled != 'true'
+        env:
+          WHY: ${{ steps.build_host.outputs.why }}
+        run: |
+          echo "- build-latest: $WHY" >> "$GITHUB_STEP_SUMMARY"
+      - name: Ensure Azure CLI
+        if: steps.build_host.outputs.enabled == 'true'
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        if: steps.build_host.outputs.enabled == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: "Is this still the newest armed set?"
+        id: build_host_current
+        if: steps.build_host.outputs.enabled == 'true'
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
+          newest=$(printf '%s' "$st" | jq -r '.version')
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
+            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — refusing to hand build-latest a set on no evidence"; exit 1; }
+          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+            || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy"; exit 1; }
+          if [ "$n_newest" -gt "$n_self" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "- build-latest: $V_SELF was superseded by $newest — the newer arming hands it on" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: "Sign and POST build-host-update-available for build-latest"
+        if: steps.build_host.outputs.enabled == 'true' && steps.build_host_current.outputs.superseded == 'false'
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          DEPLOYMENT: ${{ steps.build_host.outputs.deployment }}
+          V_SET: ${{ needs.arm.outputs.version }}
+          CORE_SHA: ${{ needs.arm.outputs.core_sha }}
+          PLUGINS_SHA: ${{ needs.arm.outputs.plugins_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
+          esac
+          bash .github/scripts/acr-login.sh
+          # Resolved from the ARMED set's version tag, never a moving name — the same rule
+          # notify-platform-update follows, so the host runs exactly the set the fleet is offered.
+          resolve() {
+            local d
+            if d=$(docker buildx imagetools inspect "meshweaver.azurecr.io/$1:$V_SET" --format '{{json .Manifest.Digest}}'); then
+              printf '%s' "$d" | tr -d '"'
+            fi
+          }
+          TESTER_DIGEST=$(resolve mw-plugin-test)
+          PORTAL_DIGEST=$(resolve memex-portal-ai)
+          # The runner of the SAME set (build-host-image tags it with the set's version). A set built
+          # before that leg existed has none, and is not handed to a host — the next armed set is.
+          RUNNER_DIGEST=$(resolve mw-build-host)
+          BODY=$(python3 .github/scripts/build-host-announcement.py body --deployment "$DEPLOYMENT" --channel latest \
+            --version "$V_SET" --tester-image meshweaver.azurecr.io/mw-plugin-test --tester-digest "$TESTER_DIGEST" \
+            --portal-image meshweaver.azurecr.io/memex-portal-ai --portal-digest "$PORTAL_DIGEST" \
+            --runner-image meshweaver.azurecr.io/mw-build-host --runner-digest "$RUNNER_DIGEST" \
+            --core-sha "$CORE_SHA" --plugins-sha "$PLUGINS_SHA" --instance "$RUN_URL")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/build-host-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/build-host-resp" || true
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/build-host-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              [ "$verdict" = verified ] || { echo "::error::the inbox stored the build-host event but did not VERIFY its signature (signature: '${verdict:-<none>}') — the router drops what it cannot verify, so build-latest would not move"; exit 1; }
+              # STORED AND VERIFIED IS NOT DELIVERED: the receiver changes the record only when that
+              # record declares buildHosts.enabled. Whether build-latest RUNS the set is read on the
+              # run nodes it claims (`PlatformVersion`), never inferred from this 200.
+              echo "- build-latest handed \`$V_SET\` (tester \`${TESTER_DIGEST:7:12}\`, portal \`${PORTAL_DIGEST:7:12}\`, runner \`${RUNNER_DIGEST:7:12}\`) for record \`$DEPLOYMENT\`: STORED and signature-verified (HTTP $code). Not yet a roll — the record's Reconcile is" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control plane's inbox — build-latest was NOT handed $V_SET"; exit 1 ;;
+            401) echo "::error::the inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and the instance's Hosting:PlatformWebhookSecret differ — build-latest was NOT handed $V_SET"; exit 1 ;;
+            *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-latest was NOT handed $V_SET"; exit 1 ;;
+          esac
+
   # ────────── THE PUBLISHED MODULE SET — READ, NEVER BUILT HERE (policy `platform-module-deploy-separate`) ──────────
   # "we separate platform deploy 100% from module deploy". This run does NOT pack, bake or seal any
   # MeshWeaver.Plugins module: modules publish on their OWN lanes (MeshWeaver.Plugins `ci.yml`
@@ -5158,10 +5333,16 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
+    # `build-host-image` and `build-host-latest` are in this list ON PURPOSE (Doc/Architecture/BuildHosts):
+    # they are outside the promotion and `delivery-verdict`, so a red there never holds the fleet —
+    # and without a direct need here a standing build host left on an old set would be an unattended
+    # red. While `.github/build-hosts.json` says `enabled: false` the hand-over sends nothing and
+    # cannot fail on a hand-over. build-stable's daily roll is NOT here: it reads MeshWeaver.Plugins'
+    # main-passed ceiling, and this workflow reads no Plugins verdict (its own workflow, build-host-stable.yml).
     # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
     # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
     # direct need here its red would be an unattended job and never a durable alert.
-    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, build-host-image, build-host-latest, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that
@@ -5231,6 +5412,7 @@ jobs:
           * arm: the FLEET is frozen on control (policy control-first-never-silent) when its ::error reads 'FLEET DELIVERY FROZEN ON CONTROL' - every image is published, but control has run none of the builds it was given for longer than the platformLagBoundMinutes bound, so control-first offers the fleet nothing. The error names control's running commit, the first build it missed and control's OWN self-update verdict (its /health self_update line); the open control-lag issue carries the same reading. The remedy is control's roll, never an arm override.
           * preflight / notify-platform-update: the images may be fine, but the release EVENT did not reach the control instance, so no node repo re-bakes against this commit until its own schedule poll (#2235). Read the job's ::error:: line - it names what to provision or what refused the delivery.
           * image-closure-record: every image IS published - what failed is recording portal-ai's closure as mesh data on the control instance (#4066, Doc/Architecture/ImageClosureAsMeshData). Read the job's ::error:: line: a 404 means the control record does not yet allowlist the inbox target Admin/ImageClosures with secretConfigKey Hosting:PlatformWebhookSecret; a 401 a secret mismatch; an unverified 2xx a target declared without a secret key. No image and no publication is missing.
+          * build-host-image / build-host-latest: every image of the set IS published and the fleet's delivery is unaffected - what failed is the standing build hosts' runner image, or handing the armed set to build-latest through the control plane's inbox (Doc/Architecture/BuildHosts). The host keeps running its previous set; read the job's ::error:: line.
           * satellite-compat (a matrix leg) / satellite-compat-image: the set IS published and the release event WAS sent - what failed is the per-build measurement that a satellite's NodeTypes still compile against it (the counterweight to the daily rebuild, 2026-09-12). A red leg means THIS BUILD BROKE that satellite: its types compiled against the set the fleet is on and do not against this one (a satellite that was already broken, or an unestablished baseline, is an advisory on the run page, never a red). The lines under Compatibility below name the types. No image and no publication is missing.
 
           The hourly reconciler will re-attempt main's HEAD on its own (bounded at 3 attempts per commit, logged here); you do NOT need to force a merge to trigger delivery. This issue CLOSES ITSELF when a CD run reports a successful heal (#3176) - a later failure files a fresh issue rather than appending here, so this one's title and age stay true to its own cause.${compat}"
