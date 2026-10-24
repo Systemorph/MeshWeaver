@@ -22,6 +22,8 @@ public sealed class FileSystemDeletePruneObservesTheTokenTest : IDisposable
 
     public void Dispose()
     {
+        // The adapter's pool parks an IoPool-cancel thread until the registry disposes it.
+        pools.Dispose();
         try { Directory.Delete(root, recursive: true); }
         catch { /* temp cleanup is the OS's problem, never a test failure */ }
     }

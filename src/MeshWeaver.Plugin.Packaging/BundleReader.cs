@@ -297,9 +297,23 @@ public static class BundleReader
     /// <param name="bundle">The archive bytes.</param>
     /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
     public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(byte[] bundle)
+        => Read(bundle, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read(byte[])"/> from a pooled leaf. The bytes are already in memory, but reading
+    /// them is still one decompression per manifest assembly (its DLL and its PDB), so
+    /// <paramref name="cancellationToken"/> is checked before each one, exactly as
+    /// <see cref="Read(Stream, IReadOnlySet{string}, CancellationToken)"/> does. A cancel throws
+    /// <see cref="OperationCanceledException"/>; nothing partial is returned.
+    /// </summary>
+    /// <param name="bundle">The archive bytes.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(
+        byte[] bundle, CancellationToken cancellationToken)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        return Read(buffer);
+        return Read(buffer, null, cancellationToken);
     }
 
     /// <summary>
@@ -708,9 +722,20 @@ public static class BundleReader
     }
 
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(byte[] bundle)
+        => ReadModule(bundle, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="ReadModule(byte[])"/> from a pooled leaf: the module closure is one decompression
+    /// per declared assembly, so <paramref name="cancellationToken"/> is checked before each one. A
+    /// cancel throws <see cref="OperationCanceledException"/>; nothing partial is returned.
+    /// </summary>
+    /// <param name="bundle">The archive bytes.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModule(
+        byte[] bundle, CancellationToken cancellationToken)
     {
         using var buffer = new MemoryStream(bundle, writable: false);
-        return ReadModuleFrom(buffer);
+        return ReadModuleFrom(buffer, cancellationToken);
     }
 
     /// <summary>
@@ -719,7 +744,18 @@ public static class BundleReader
     /// </summary>
     /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
     public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModuleFrom(Stream bundle)
+        => ReadModuleFrom(bundle, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="ReadModuleFrom(Stream)"/> with <paramref name="cancellationToken"/> checked before
+    /// the archive is opened and before each declared assembly is decompressed.
+    /// </summary>
+    /// <param name="bundle">The archive, seekable and positioned at its start. Left open.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    public static (Manifest? Manifest, IReadOnlyList<ModuleFile> Files) ReadModuleFrom(
+        Stream bundle, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifestEntry = archive.GetEntry(NuGetPackageWriter.ManifestEntry);
@@ -736,6 +772,7 @@ public static class BundleReader
         var files = new List<ModuleFile>();
         foreach (var fileName in declared)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var entry = archive.GetEntry(NuGetPackageWriter.ModuleEntryPathFor(fileName));
             if (entry is null)
                 // Incomplete closure — all or nothing (see remarks).
