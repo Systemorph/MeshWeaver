@@ -924,9 +924,20 @@ at Information, so whether a pass ran, what it removed and whether it refused we
 
 | collector | runs | outcome line |
 |---|---|---|
-| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
-| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / FAULTED …` |
-| modules GC | once per pod start | `Modules GC: pass outcome — completed / FAILED CLOSED / CANCELLED / FAULTED …` |
+| prebuilt-bundle retention | at boot and every `Interval` (daily), per replica | `PrebuiltBundleRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
+| assembly-cache retention | once per pod start | `AssemblyCacheRetention: pass outcome — REPORT ONLY / COLLECTED / ABORTED / INTERRUPTED / FAULTED …` |
+| modules GC | once per pod start | `Modules GC: pass outcome — COLLECTED / FAILED CLOSED / INTERRUPTED / FAULTED …` |
+
+All three write that line through one type, `PassLedger` (`MeshWeaver.Mesh.Threading`). It records
+exactly one outcome per pass (a second one throws). It also owns the pass's step boundary,
+`Step(ct)`. When the I/O pool cancels the pass (a teardown drain), the ledger records an
+`INTERRUPTED` outcome carrying what the pass removed so far, and throws
+`OperationCanceledException`. The hosted wrappers report that cancel as teardown, never as
+`FAULTED … nothing was collected`. The verdicts are the open constants `PassOutcome`; the modules
+GC adds its own `FAILED CLOSED`. Before the ledger, only the prebuilt-bundle pass had `INTERRUPTED`.
+The modules GC logged `CANCELLED` and returned as if it had finished, and the assembly-cache sweep
+did not look at its token at all. A cancel changes how much of a plan one pass reaches, never what
+the plan collects.
 
 Each carries the **denominator** (what was scanned and its bytes), what was removed or would be,
 and what was **kept, counted per KEEP rule** (`live=1, window=612, release-marker=40` —
