@@ -9,6 +9,7 @@ using MeshWeaver.Graph.Security;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -70,13 +71,14 @@ public class SelfTypedDeclarationRepairReportsFailedStepsTest(ITestOutputHelper 
 
         SelfTypedDeclarationDurableRepair.Sweep(
                 Observable.Return(fossil),
-                new WriteRefusingStorageAdapter(Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>()),
+                RefusingWrites(Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(), out var refusal),
                 "path routing via test",
                 Mesh.JsonSerializerOptions,
                 stats,
                 logger: null)
             .Subscribe(_ => { }, ex => escaped = ex, () => completed = true);
 
+        refusal.ArrivalCount.Should().Be(1, "the premise: the retype write reached the store and was refused");
         escaped.Should().BeNull("the row is fault-tolerant by design — the next row must still heal");
         completed.Should().BeTrue("both the source and the refused write fault or complete synchronously");
         stats.Read.Should().Be(1);
@@ -135,6 +137,20 @@ public class SelfTypedDeclarationRepairReportsFailedStepsTest(ITestOutputHelper 
         entry.Message.Should().Contain("1 FAILED step(s)").And.Contain("partition 'Auth' via test: 42P01");
     }
 
+    /// <summary>
+    /// The real adapter with every WRITE (<c>Write</c>, <c>WriteMany</c>, <c>WriteIfVersion</c>)
+    /// refused — the fault the per-row Catch exists for. Every other surface forwards, so no interface
+    /// default silently replaces the inner adapter's behaviour. Refused synchronously, which the
+    /// cases rely on.
+    /// </summary>
+    private static IStorageAdapter RefusingWrites(IStorageAdapter inner, out FaultSwitch refusal)
+    {
+        var store = new FaultInjectingStorageAdapter(inner);
+        refusal = store.FailOperations(_ => true, StorageLegs.Write,
+            _ => new InvalidOperationException("write refused by test"), description: "every path");
+        return store;
+    }
+
     /// <summary>Records each line's level and rendered message.</summary>
     private sealed class CapturingLogger : ILogger
     {
@@ -148,65 +164,5 @@ public class SelfTypedDeclarationRepairReportsFailedStepsTest(ITestOutputHelper 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
             => Entries = Entries.Add((logLevel, formatter(state, exception)));
-    }
-
-    /// <summary>
-    /// Forwards every surface to the real adapter except <c>Write</c>, which is refused — the
-    /// fault the per-row Catch exists for. Forwarding is exhaustive so no interface default
-    /// silently replaces the inner adapter's behaviour.
-    /// </summary>
-    private sealed class WriteRefusingStorageAdapter(IStorageAdapter inner) : IStorageAdapter
-    {
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options) => inner.Read(path, options);
-
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => inner.ReadMany(paths, options);
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => Observable.Throw<MeshNode?>(new InvalidOperationException("write refused by test"));
-
-        public IObservable<IReadOnlyList<MeshNode>> WriteMany(IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
-            => Observable.Throw<IReadOnlyList<MeshNode>>(new InvalidOperationException("write refused by test"));
-
-        public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-            => Observable.Throw<bool?>(new InvalidOperationException("write refused by test"));
-
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-
-        public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
-
-        public IObservable<string?> FindDeleteBlockingProvider(string path) => inner.FindDeleteBlockingProvider(path);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
-
-        public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-            => inner.ListDescendantPaths(rootPath);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
-            string fullPath, JsonSerializerOptions options) => inner.FindBestPrefixMatch(fullPath, options);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
-            string fullPath, JsonSerializerOptions options) => inner.ResolvePath(fullPath, options);
-
-        public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-            => inner.ListPartitionSubPaths(nodePath);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<System.Reactive.Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<System.Reactive.Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 }

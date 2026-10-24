@@ -89,12 +89,22 @@ public static class GeneratorPipeline
     /// Shared by the bake, the runtime compile and the re-evaluation lane.
     /// </summary>
     internal static IReadOnlyList<string> DigestedGeneratorPaths(IReadOnlyList<string> generatorAssemblyPaths)
+        => DigestedGeneratorPaths(generatorAssemblyPaths, CancellationToken.None);
+
+    /// <summary>
+    /// The digested paths from a pooled leaf: <paramref name="cancellationToken"/> is checked before
+    /// each candidate's runtime-asset discovery and between the entries of the package walk that
+    /// discovery makes, so a drain never waits out the whole file-system pre-pass (review on #7121).
+    /// </summary>
+    internal static IReadOnlyList<string> DigestedGeneratorPaths(
+        IReadOnlyList<string> generatorAssemblyPaths, CancellationToken cancellationToken)
     {
         var effective = EffectiveGeneratorPaths(generatorAssemblyPaths);
         List<string>? runtime = null;
         foreach (var path in effective)
         {
-            if (SourceGeneratorLoader.RuntimeAssetOf(path) is { } asset
+            cancellationToken.ThrowIfCancellationRequested();
+            if (SourceGeneratorLoader.RuntimeAssetObservingToken(path, cancellationToken) is { } asset
                 && !string.Equals(asset, path, StringComparison.OrdinalIgnoreCase))
                 (runtime ??= []).Add(asset);
         }

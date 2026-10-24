@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -45,7 +46,7 @@ public class IdentityReadsRunAsSystemGuard
     [Fact]
     public void Pre_identity_reads_run_as_system()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var violations = new List<string>();
         var checkedCalls = 0;
 

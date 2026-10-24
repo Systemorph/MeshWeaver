@@ -17,6 +17,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.FaultInjection;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -88,15 +89,16 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
                 // Last registration wins: the scripted client replaces the git/Octokit transport,
                 // so the whole loop runs offline and the CLONE is directly observable.
                 services.AddSingleton<IGitHubRepoClient>(repoClient);
-
-                // Wrap the LAST non-keyed IStorageAdapter — the production decorator chain's
-                // outermost layer — so the create handler's own read/write is what faults, exactly
-                // as in the incident. Path-gated, so it is inert for every test but the second.
-                var registered = services.Last(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService);
-                services.Remove(registered);
-                return services.AddSingleton<IStorageAdapter>(sp =>
-                    new PathFaultingStorageAdapter(Materialise(registered, sp)));
-            });
+                return services;
+            })
+            // Wrap the production decorator chain's OUTERMOST layer, so the create handler's own
+            // read/write is what faults, exactly as in the incident. Path-gated, so it is inert for
+            // every test but the second; armed for the mesh's whole life.
+            .AddFaultInjectingStorageOverTheChain(store => store.FailOperations(
+                p => p.Contains(UnreachableMarker, StringComparison.Ordinal),
+                StorageLegs.Read | StorageLegs.Exists | StorageLegs.Write | StorageLegs.Delete,
+                ConnectTimeout,
+                description: $"paths containing '{UnreachableMarker}'"));
 
     private GitHubSyncService Sync => Mesh.ServiceProvider.GetRequiredService<GitHubSyncService>();
 
@@ -490,97 +492,7 @@ public class GreenBuildSkipsASettledSourceTest(ITestOutputHelper output)
         public override string? SqlState => null;
     }
 
-    private static Exception? FaultFor(string path)
-        => path.Contains(UnreachableMarker, StringComparison.Ordinal)
-            ? new FakeDbException("Failed to connect to 10.42.18.4:5432",
-                new TimeoutException("Timeout during connection attempt"))
-            : null;
-
-    private static IStorageAdapter Materialise(ServiceDescriptor descriptor, IServiceProvider sp)
-        => descriptor.ImplementationFactory is { } factory
-            ? (IStorageAdapter)factory(sp)
-            : descriptor.ImplementationInstance as IStorageAdapter
-              ?? throw new InvalidOperationException(
-                  "The IStorageAdapter registration is neither a factory nor an instance, so this "
-                  + "test cannot wrap it. If the persistence registration lane changed, update this "
-                  + "hook — silently falling back to an unwrapped store would make the retryable-arm "
-                  + "assertions vacuous.");
-
-    /// <summary>
-    /// Makes the READ/WRITE surfaces fault for the ONE marked path; everything else forwards
-    /// untouched, so the mesh boots, the partition exists, and every unmarked node still lands.
-    ///
-    /// <para>Forwarding is exhaustive on purpose: <c>IStorageAdapter</c>'s doc-comments require a
-    /// decorator to forward <c>Changes</c>, <c>DeleteIfExists</c>, <c>WriteIfVersion</c>,
-    /// <c>ResolvePath</c> and <c>ListDescendantPaths</c>, or the behaviour they carry is silently
-    /// lost at the outermost decorator that falls back to the interface default.</para>
-    /// </summary>
-    private sealed class PathFaultingStorageAdapter(IStorageAdapter inner) : IStorageAdapter
-    {
-        private static IObservable<T> Fault<T>(Exception ex) => Observable.Throw<T>(ex);
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => FaultFor(path) is { } ex ? Fault<MeshNode?>(ex) : inner.Read(path, options);
-
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => paths.Select(FaultFor).FirstOrDefault(e => e is not null) is { } ex
-                ? Fault<MeshNode>(ex)
-                : inner.ReadMany(paths, options);
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => FaultFor(node.Path) is { } ex ? Fault<MeshNode?>(ex) : inner.Write(node, options);
-
-        public IObservable<IReadOnlyList<MeshNode>> WriteMany(
-            IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
-            => nodes.Select(n => FaultFor(n.Path)).FirstOrDefault(e => e is not null) is { } ex
-                ? Fault<IReadOnlyList<MeshNode>>(ex)
-                : inner.WriteMany(nodes, options);
-
-        public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-            => FaultFor(node.Path) is { } ex
-                ? Fault<bool?>(ex)
-                : inner.WriteIfVersion(node, expectedVersion, options);
-
-        public IObservable<bool> Exists(string path)
-            => FaultFor(path) is { } ex ? Fault<bool>(ex) : inner.Exists(path);
-
-        public IObservable<string> Delete(string path)
-            => FaultFor(path) is { } ex ? Fault<string>(ex) : inner.Delete(path);
-
-        public IObservable<bool> DeleteIfExists(string path)
-            => FaultFor(path) is { } ex ? Fault<bool>(ex) : inner.DeleteIfExists(path);
-
-        public IObservable<string?> FindDeleteBlockingProvider(string path)
-            => inner.FindDeleteBlockingProvider(path);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
-
-        public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-            => inner.ListDescendantPaths(rootPath);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
-            string fullPath, JsonSerializerOptions options) => inner.FindBestPrefixMatch(fullPath, options);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
-            string fullPath, JsonSerializerOptions options) => inner.ResolvePath(fullPath, options);
-
-        public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-            => inner.ListPartitionSubPaths(nodePath);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<System.Reactive.Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<System.Reactive.Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
-    }
+    private static Exception ConnectTimeout(string path)
+        => new FakeDbException("Failed to connect to 10.42.18.4:5432",
+            new TimeoutException("Timeout during connection attempt"));
 }

@@ -116,7 +116,7 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewTestBridgesAnObservableToABlockingWait()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -168,7 +168,7 @@ public class BlockingBridgeInTestRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheShapeItIsRatcheting()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
 
         Assert.True(found.Count > 0,

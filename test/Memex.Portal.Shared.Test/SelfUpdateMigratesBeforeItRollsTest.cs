@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -51,11 +52,9 @@ public class SelfUpdateMigratesBeforeItRollsTest
     /// a source guard runs in-repo only and must not silently pass outside one.</summary>
     private static string ReadSource(params string[] parts)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.SkipWhen(dir is null, "repository tree not reachable — source guard runs in-repo only");
-        var path = Path.Combine([dir!.FullName, .. parts]);
+        var root = RepoPaths.TryFindRoot();
+        Assert.SkipWhen(root is null, "repository tree not reachable — source guard runs in-repo only");
+        var path = Path.Combine([root!, .. parts]);
         Assert.True(File.Exists(path), $"expected the guarded source at {path}");
         return File.ReadAllText(path);
     }

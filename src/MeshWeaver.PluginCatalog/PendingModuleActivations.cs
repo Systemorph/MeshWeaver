@@ -738,9 +738,20 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
-    public ModuleActivationReport Read() => Read(
+    public ModuleActivationReport Read() => Read(CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read()"/> from a pooled leaf: <paramref name="cancellationToken"/> is the pool's,
+    /// handed to the volume walk (<c>ReadDisk</c>), which checks it before each listing and between
+    /// its enumerations. A cancel surfaces as <see cref="OperationCanceledException"/>, never as an
+    /// undetermined report — the read did not fail, the process is stopping.
+    /// </summary>
+    /// <param name="cancellationToken">The pool's token. Required: a pooled caller cannot drop it by
+    /// omission.</param>
+    public ModuleActivationReport Read(CancellationToken cancellationToken) => Read(
         ModuleActivationStatus.LoadedAssemblyNames(),
-        WithCurrentModuleGenerations(ModuleActivationStatus.LoadedModuleGenerations()));
+        WithCurrentModuleGenerations(ModuleActivationStatus.LoadedModuleGenerations()),
+        cancellationToken);
 
     /// <summary>
     /// The mesh's module registry, when this reader runs inside a mesh (policy
@@ -898,35 +909,17 @@ public sealed class PendingModuleActivations(string moduleRoot)
     }
 
     /// <summary>
-    /// The last-write times of the three directories every activation writer renames into.
-    /// 🚨 No longer the memo key (MeshWeaver#6829): a directory's last-write time need not move on a
-    /// rename into it on an SMB share, which froze the reading. Kept so a host compiled against the
-    /// previous platform still binds; <see cref="PendingModuleActivations"/> keys on the listings.
-    /// </summary>
-    [Obsolete("A directory's last-write time need not move on a rename into it (SMB) — MeshWeaver#6829. PendingModuleActivations keys its memo on the directory listings instead.")]
-    public readonly record struct DiskFingerprint(DateTime Modules, DateTime Entries, DateTime Sets)
-    {
-        public static DiskFingerprint Of(string baseDirectory) => new(
-            LastWrite(Path.Combine(baseDirectory, "modules")),
-            LastWrite(ModuleActivationSidecar.EntriesDirectory(baseDirectory)),
-            LastWrite(ModuleSetStore.SetsDirectory(baseDirectory)));
-
-        private static DateTime LastWrite(string directory) =>
-            Directory.Exists(directory) ? Directory.GetLastWriteTimeUtc(directory) : DateTime.MinValue;
-    }
-
-    /// <summary>
     /// Takes the reading. <paramref name="token"/> is the pool's own — <c>IIoPool</c> links its
     /// teardown cancellation into every leaf — and it is observed BETWEEN the units of volume work,
     /// which is the same granularity the modules GC states for its own pass ("between directories").
     ///
     /// <para>🚨 <b>What that does and does not promise.</b> A teardown arriving between the
     /// fingerprint, the activation sidecar and the set index stops the walk there, so a drain no
-    /// longer waits out the whole of a slow share. It does NOT interrupt a single enumeration
-    /// already inside <c>ModuleActivationSidecar.Read</c> or <c>ModuleSetStore.Read</c>: those
-    /// enumerate and parse their own directories behind public signatures whose callers all sit
-    /// outside this type, so a per-FILE token is a change to them rather than to this one. Stated
-    /// rather than implied — the comment this replaced claimed a stop this code cannot make.</para>
+    /// longer waits out the whole of a slow share. The token also reaches INSIDE both delegated
+    /// walks — <c>ModuleActivationSidecar.ReadFor</c> and <c>ModuleSetStore.ReadObservingToken</c>
+    /// check it per listed entry and before each record they open — so a drain arriving during one
+    /// stops before the next record read. A single file read already under way runs to its end;
+    /// that is the step boundary.</para>
     ///
     /// <para>A reading already gathered is PUBLISHED even when the token fires afterwards: the
     /// volume work is done, the rest is arithmetic, and throwing it away would make the next probe
@@ -962,13 +955,15 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // report is byte-identical to what it said before: the required-modules probe names
             // each unreadable file separately (its `unreadable` list), and folding them to one
             // would lose a file name an operator needs.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason =>
+            activation = ModuleActivationSidecar.ReadFor(ModuleRootPath, reason =>
             {
                 corrupt = reason;
                 corruptions.Add(reason);
-            });
+            }, ModuleActivationSidecar.LivePlatform, token);
         }
-        catch (Exception exception)
+        // A drain is not an open failure: the cancel escapes, so it is never reported as an
+        // unopenable sidecar.
+        catch (Exception exception) when (!(exception is OperationCanceledException && token.IsCancellationRequested))
         {
             openFailure = exception;
         }
@@ -977,7 +972,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
         token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
         var sets = openFailure is null && corrupt is null
-            ? ModuleSetStore.Read(ModuleRootPath, setNotes.Add)
+            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, setNotes.Add, setNotes.Add, token)
             : ModuleSetIndex.Empty;
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the
@@ -1043,8 +1038,19 @@ public sealed class PendingModuleActivations(string moduleRoot)
     public ModuleActivationReport Read(
         IReadOnlySet<string> loadedAssemblyNames,
         IReadOnlyDictionary<string, string> loadedModuleGenerations)
+        => Read(loadedAssemblyNames, loadedModuleGenerations, CancellationToken.None);
+
+    /// <summary>The testable form with the pool's token handed to the volume walk.</summary>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="loadedModuleGenerations">Module simple name → the generation directory leaf it
+    /// was loaded from here.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    public ModuleActivationReport Read(
+        IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations,
+        CancellationToken cancellationToken)
     {
-        var disk = ReadDisk();
+        var disk = ReadDisk(cancellationToken);
         if (disk.OpenFailure is { } exception)
             return new ModuleActivationReport(
                 [], $"the activation sidecar under '{ModuleRootPath}' could not be opened "
@@ -1189,7 +1195,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
             FloorAdvisories = floorAdvisories,
             // #4083 — every module whose last landing was refused, from its own marker; a refused
             // first install has no entry, so the markers are the denominator here, not the list.
-            Refused = [.. ModuleActivationSidecar.ReadRefusals(ModuleRootPath)
+            Refused = [.. ModuleActivationSidecar.ReadRefusalsObservingToken(ModuleRootPath, cancellationToken)
                 .Select(pair => new ModuleRefusal(
                     pair.Key, pair.Value.PackagePath, pair.Value.Version, pair.Value.Reason,
                     pair.Value.RefusedAt, pair.Value.Needs, pair.Value.Provides))],

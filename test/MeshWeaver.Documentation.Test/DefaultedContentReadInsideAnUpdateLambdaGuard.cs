@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -77,7 +78,7 @@ public class DefaultedContentReadInsideAnUpdateLambdaGuard
     [Fact]
     public void NoUntypedUpdateLambdaTurnsAFailedReadIntoAWrittenDefault()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new List<string>();
         var files = 0;
         var lambdas = 0;

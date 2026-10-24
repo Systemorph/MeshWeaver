@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -132,15 +133,6 @@ public class DirectoryBuildGuardTravelsWithItsSubjectTest
         Regex.Replace(xml, @"<!--.*?-->", string.Empty, RegexOptions.Singleline);
 
     private static string Read(string relativePath) =>
-        File.ReadAllText(Path.Combine(FindRepoRoot(), relativePath));
+        File.ReadAllText(Path.Combine(RepoPaths.Root, relativePath));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repository root (no MeshWeaver.slnx above the test binary).");
-    }
 }

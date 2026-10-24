@@ -5,6 +5,10 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- The shared storage fault injectors (FaultInjectingStorageAdapter + FaultSwitch): a test that
+         needs a store fault arms one instead of hand-rolling an IStorageAdapter decorator. A library
+         over src/ only, so referencing it creates no cycle. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
     <!-- ChangeFeedResetReleasesUpstreamTest (#3110) drives a REAL monolith mesh: the defect is in
          MeshNodeStreamCache's eviction teardown, and this assembly is the one MeshWeaver.Hosting
          already grants InternalsVisibleTo for the cache's eviction seam (ReadStreamEvictions /

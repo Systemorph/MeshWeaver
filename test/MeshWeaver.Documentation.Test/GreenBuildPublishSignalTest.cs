@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -246,7 +247,7 @@ public class GreenBuildPublishSignalTest
     [Fact]
     public void CoreContentCiRemainsAtThePublishSignalPath()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var workflowNames = Directory
             .EnumerateFiles(Path.Combine(root, ".github", "workflows"))
             .Select(Path.GetFileName);
@@ -364,7 +365,7 @@ public class GreenBuildPublishSignalTest
     public void ProcessWorkflowRunStillRunsAllThreeGuards()
     {
         var source = File.ReadAllText(Path.Combine(
-            SourceScan.FindRepoRoot(), "src", "MeshWeaver.GitSync", "GitHubWebhookProcessor.cs"));
+            RepoPaths.Root, "src", "MeshWeaver.GitSync", "GitHubWebhookProcessor.cs"));
 
         var body = MethodBody(source, "private IObservable<int> ProcessWorkflowRun(JsonElement payload)");
         Assert.Contains("IsPublishSignalTrigger(", body, StringComparison.Ordinal);

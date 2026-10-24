@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using System.Reactive;
 using System.Reactive.Linq;
@@ -29,7 +30,21 @@ namespace MeshWeaver.Testing.FaultInjection;
 ///   <item><see cref="HoldChangeFeed"/> — the <b>post-storage invalidation hold</b>. Change
 ///     notifications are queued in order and delivered on release, which is a slow or reconnecting
 ///     LISTEN channel in production.</item>
+///   <item><see cref="FailOperations(Func{string, bool}, StorageLegs, Func{string, Exception}?, int?, string?)"/>
+///     — the <b>general operation fault</b>: the chosen legs (<see cref="StorageLegs"/>) of the paths a
+///     predicate selects FAULT with the exception the test names, until released or for a fixed
+///     number of applications. Read faults, write refusals, enumeration faults and one-shot failures
+///     are all this one injector.</item>
+///   <item><see cref="ServeReadOnlyFallback"/> — a <b>read-only provider under a writable
+///     override</b>: reads of a path answer a shipped row whenever the store holds none.</item>
 /// </list>
+///
+/// <para>Where it sits is the test's choice.
+/// <see cref="FaultInjectionMeshExtensions.AddFaultInjectingStorage"/> puts it UNDER every platform
+/// guard (the store of record); <see cref="FaultInjectionMeshExtensions.AddFaultInjectingStorageOverTheChain"/>
+/// puts it OVER the whole production chain, where the caller's own read or write is the call that
+/// faults; and a test that hands an adapter to the code under test directly constructs one over
+/// whatever it wraps.</para>
 ///
 /// <para>It is also the process's end of a <see cref="CrossProcessChangeRelay"/>: what the relay
 /// delivers from other processes arrives on <see cref="Changes"/> exactly as a PostgreSQL NOTIFY does
@@ -55,6 +70,8 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     private readonly ConcurrentDictionary<string, ReplaySubject<bool>> _conditionalDeleteResults = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<MeshNode>> _heldWrites = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, ReplaySubject<string>> _enumerations = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, (MeshNode Row, FaultSwitch Switch)> _readOnlyFallbacks = new(StringComparer.OrdinalIgnoreCase);
+    private ImmutableList<OperationFault> _operationFaults = ImmutableList<OperationFault>.Empty;
     private readonly ISubject<DataChangeNotification> _remote = Subject.Synchronize(new Subject<DataChangeNotification>());
     private readonly ISubject<ChangeFeedGap> _gaps = Subject.Synchronize(new Subject<ChangeFeedGap>());
     private FaultSwitch? _feedHold;
@@ -233,6 +250,75 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         }
     }
 
+    /// <summary>
+    /// From now on, the <paramref name="legs"/> of every path <paramref name="matches"/> selects FAULT
+    /// with <paramref name="error"/> and do nothing — the store underneath is never asked. A batch
+    /// (<c>ReadMany</c>, <c>WriteMany</c>, <c>DeleteMany</c>) naming a selected path faults AS A WHOLE,
+    /// which is the shape of one batched statement failing. Route resolution
+    /// (<c>FindBestPrefixMatch</c> / <c>ResolvePath</c>), the partition-object surfaces and the change
+    /// feed are never faulted by it; <see cref="HidePath"/> and <see cref="HoldChangeFeed"/> cover those.
+    ///
+    /// <para>Each faulted operation is an arrival on the returned switch, so
+    /// <see cref="FaultSwitch.ArrivalCount"/> is the proof the fault was actually INJECTED. With
+    /// <paramref name="times"/> the fault applies that many times and then releases itself — a write
+    /// that fails exactly once and whose re-attempt lands is <c>times: 1</c>.</para>
+    /// </summary>
+    /// <param name="matches">Selects the faulted paths; it is handed the path with leading and
+    /// trailing slashes trimmed.</param>
+    /// <param name="legs">Which operations fault.</param>
+    /// <param name="error">The exception for a faulted path, given that path; defaults to the
+    /// driver's command-timeout shape, <c>TimeoutException("The operation has timed out.")</c>.</param>
+    /// <param name="times">How many operations fault before the switch releases itself; <c>null</c>
+    /// faults until released.</param>
+    /// <param name="description">What the predicate selects, for the switch's name.</param>
+    public FaultSwitch FailOperations(
+        Func<string, bool> matches, StorageLegs legs, Func<string, Exception>? error = null,
+        int? times = null, string? description = null)
+    {
+        var fault = new FaultSwitch($"{Name}: fail {legs} of {description ?? "the selected paths"}",
+            s => ImmutableInterlocked.Update(ref _operationFaults,
+                list => list.RemoveAll(f => ReferenceEquals(f.Switch, s))),
+            times);
+        var entry = new OperationFault(matches, legs,
+            error ?? (_ => new TimeoutException("The operation has timed out.")), fault);
+        ImmutableInterlocked.Update(ref _operationFaults, list => list.Add(entry));
+        return fault;
+    }
+
+    /// <summary>
+    /// <see cref="FailOperations(Func{string, bool}, StorageLegs, Func{string, Exception}?, int?, string?)"/>
+    /// for exactly one path (compared ignoring case and surrounding slashes).
+    /// </summary>
+    /// <param name="path">The node path whose operations fault.</param>
+    /// <param name="legs">Which operations fault.</param>
+    /// <param name="error">The exception; defaults to the driver's command-timeout shape.</param>
+    /// <param name="times">How many operations fault before the switch releases itself; <c>null</c>
+    /// faults until released.</param>
+    public FaultSwitch FailOperations(
+        string path, StorageLegs legs, Func<string, Exception>? error = null, int? times = null)
+    {
+        var key = Norm(path);
+        return FailOperations(p => string.Equals(p, key, StringComparison.OrdinalIgnoreCase),
+            legs, error, times, key);
+    }
+
+    /// <summary>
+    /// From now on, a read of <c>shipped.Path</c> (<c>Read</c>, or a <c>ReadMany</c> naming it)
+    /// answers <paramref name="shipped"/> whenever the store holds no row there — the shape of a
+    /// READ-ONLY provider (content shipped in an image) under a writable override. Writable storage
+    /// is untouched: <c>Exists</c>, <c>ExistsInWritableStorage</c>, writes and deletes see only what
+    /// the store holds, as a read-only provider's do. Each read the fallback answered is an arrival.
+    /// </summary>
+    /// <param name="shipped">The read-only row.</param>
+    public FaultSwitch ServeReadOnlyFallback(MeshNode shipped)
+    {
+        var key = Norm(shipped.Path);
+        var fallback = new FaultSwitch($"{Name}: serve a read-only fallback at {key}",
+            s => _readOnlyFallbacks.TryRemove(new KeyValuePair<string, (MeshNode, FaultSwitch)>(key, (shipped, s))));
+        _readOnlyFallbacks[key] = (shipped, fallback);
+        return fallback;
+    }
+
     /// <summary>Each write of <paramref name="path"/> that met a closed <see cref="HoldWrites"/> (replayed).</summary>
     /// <param name="path">The node path.</param>
     public IObservable<MeshNode> HeldWrites(string path) => HeldWriteSubject(Norm(path)).AsObservable();
@@ -284,26 +370,32 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Observable.Defer(() => HiddenBy(path) is { } hidden
-            ? Answered(hidden, $"Read {path}", (MeshNode?)null)
-            : _inner.Read(path, options));
+        => Observable.Defer(() => Injected<MeshNode?>(StorageLegs.Read, path, $"Read {path}")
+            ?? (HiddenBy(path) is { } hidden
+                ? Answered(hidden, $"Read {path}", (MeshNode?)null)
+                : WithFallback(path, _inner.Read(path, options))));
 
     /// <inheritdoc />
     public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
+            if (InjectedAny<MeshNode>(StorageLegs.Read, paths, "ReadMany") is { } refused)
+                return refused;
             var visible = paths.Where(p =>
             {
                 if (HiddenBy(p) is not { } hidden) return true;
                 hidden.NoteArrival($"ReadMany {p}");
                 return false;
             }).ToList();
-            return visible.Count == 0 ? Observable.Empty<MeshNode>() : _inner.ReadMany(visible, options);
+            return visible.Count == 0
+                ? Observable.Empty<MeshNode>()
+                : WithFallbacks(visible, _inner.ReadMany(visible, options));
         });
 
     /// <inheritdoc />
     public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
         => Observable.Defer(() => Unreachable<MeshNode?>(node.Path, $"Write {node.Path}")
+            ?? Injected<MeshNode?>(StorageLegs.Write, node.Path, $"Write {node.Path}")
             ?? HeldWrite(node, () => _inner.Write(node, options)));
 
     /// <summary>The refusal a closed <see cref="RefuseWritesAsJudged"/> or
@@ -340,6 +432,8 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
             if (nodes.Select(n => Unreachable<IReadOnlyList<MeshNode>>(n.Path, $"WriteMany {n.Path}"))
                     .FirstOrDefault(r => r is not null) is { } refused)
                 return refused;
+            if (InjectedAny<IReadOnlyList<MeshNode>>(StorageLegs.Write, nodes.Select(n => n.Path), "WriteMany") is { } faulted)
+                return faulted;
             var held = nodes.Select(n => (Node: n, Hold: WriteHold(n.Path)))
                 .Where(h => h.Hold is not null).ToList();
             if (held.Count == 0 || held[0].Hold is not { } gate)
@@ -355,7 +449,8 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
         => Observable.Defer(() =>
         {
-            if (Unreachable<bool?>(node.Path, $"WriteIfVersion {node.Path}") is { } refused)
+            if ((Unreachable<bool?>(node.Path, $"WriteIfVersion {node.Path}")
+                 ?? Injected<bool?>(StorageLegs.Write, node.Path, $"WriteIfVersion {node.Path}")) is { } refused)
                 return refused;
             if (_conditionalWriteFaults.TryGetValue(Norm(node.Path), out var fault) && fault.IsClosed)
             {
@@ -367,32 +462,33 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
         });
 
     /// <inheritdoc />
-    public IObservable<string> Delete(string path) => HeldDelete([path], () => Observable.Defer(() =>
+    public IObservable<string> Delete(string path) => FaultedDelete([path], "Delete", () => HeldDelete([path], () => Observable.Defer(() =>
     {
         if (!_deleteFaults.TryGetValue(Norm(path), out var fault) || !fault.IsClosed)
             return _inner.Delete(path);
         fault.NoteArrival($"Delete {Norm(path)}");
         return Observable.Throw<string>(new InvalidOperationException(
             $"{Name}: injected fault — Delete of {Norm(path)} failed and removed nothing"));
-    }));
+    })));
 
     /// <inheritdoc />
-    public IObservable<bool> DeleteIfExists(string path) => HeldDelete([path], () => _inner.DeleteIfExists(path));
+    public IObservable<bool> DeleteIfExists(string path)
+        => FaultedDelete([path], "DeleteIfExists", () => HeldDelete([path], () => _inner.DeleteIfExists(path)));
 
     /// <inheritdoc />
     /// <remarks>Held, then decided ATOMICALLY by the store underneath once released; each answer the
     /// store actually gave is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
     public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-        => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options)
-            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
+        => FaultedDelete([path], "DeleteIfVersionAtMost", () => HeldDelete([path], () => _inner.DeleteIfVersionAtMost(path, maxVersion, options)
+            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed))));
 
     /// <inheritdoc />
     /// <remarks>Held like every delete, then decided ATOMICALLY (version and incarnation) by the store
     /// underneath; its answer is recorded on <see cref="ConditionalDeleteResults"/>.</remarks>
     public IObservable<bool> DeleteIfIncarnationAtMost(
         string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
-        => HeldDelete([path], () => _inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options)
-            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed)));
+        => FaultedDelete([path], "DeleteIfIncarnationAtMost", () => HeldDelete([path], () => _inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options)
+            .Do(removed => _conditionalDeleteResults.GetOrAdd(Norm(path), _ => new ReplaySubject<bool>()).OnNext(removed))));
 
     /// <summary>
     /// Each answer the store underneath gave to a compare-and-delete of <paramref name="path"/>
@@ -404,7 +500,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
-        => HeldDelete(paths, () => Observable.Defer(() =>
+        => FaultedDelete(paths, "DeleteMany", () => HeldDelete(paths, () => Observable.Defer(() =>
         {
             foreach (var path in paths)
             {
@@ -420,7 +516,7 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
                         $"{Name}: injected fault — DeleteMany stopped at {stop} after deleting {others.Count} other path(s)")));
             }
             return _inner.DeleteMany(paths);
-        }));
+        })));
 
     /// <inheritdoc />
     public IObservable<string?> FindDeleteBlockingProvider(string path) => _inner.FindDeleteBlockingProvider(path);
@@ -429,6 +525,9 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
         => Observable.Defer(() =>
         {
+            if (Injected<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>(
+                    StorageLegs.Enumerate, parentPath, $"ListChildPaths {Norm(parentPath)}") is { } refused)
+                return refused;
             NoteEnumeration(parentPath, nameof(ListChildPaths));
             return HeldEnumeration(parentPath, nameof(ListChildPaths), _inner.ListChildPaths(parentPath)).Select(listing => (
                 (IEnumerable<string>)listing.NodePaths.Where(p => Visible(p, $"ListChildPaths {parentPath}")).ToList(),
@@ -439,6 +538,9 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
         => Observable.Defer(() =>
         {
+            if (Injected<IReadOnlyCollection<string>>(
+                    StorageLegs.Enumerate, rootPath, $"ListDescendantPaths {Norm(rootPath)}") is { } refused)
+                return refused;
             NoteEnumeration(rootPath, nameof(ListDescendantPaths));
             return HeldEnumeration(rootPath, nameof(ListDescendantPaths), _inner.ListDescendantPaths(rootPath))
                 .Select(set => (IReadOnlyCollection<string>)set.Where(p => Visible(p, $"ListDescendantPaths {rootPath}")).ToList());
@@ -446,15 +548,17 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
 
     /// <inheritdoc />
     public IObservable<bool> Exists(string path)
-        => Observable.Defer(() => HiddenBy(path) is { } hidden
-            ? Answered(hidden, $"Exists {path}", false)
-            : _inner.Exists(path));
+        => Observable.Defer(() => Injected<bool>(StorageLegs.Exists, path, $"Exists {path}")
+            ?? (HiddenBy(path) is { } hidden
+                ? Answered(hidden, $"Exists {path}", false)
+                : _inner.Exists(path)));
 
     /// <inheritdoc />
     public IObservable<bool> ExistsInWritableStorage(string path)
-        => Observable.Defer(() => HiddenBy(path) is { } hidden
-            ? Answered(hidden, $"ExistsInWritableStorage {path}", false)
-            : _inner.ExistsInWritableStorage(path));
+        => Observable.Defer(() => Injected<bool>(StorageLegs.Exists, path, $"ExistsInWritableStorage {path}")
+            ?? (HiddenBy(path) is { } hidden
+                ? Answered(hidden, $"ExistsInWritableStorage {path}", false)
+                : _inner.ExistsInWritableStorage(path)));
 
     /// <inheritdoc />
     public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(string fullPath, JsonSerializerOptions options)
@@ -490,6 +594,65 @@ public sealed class FaultInjectingStorageAdapter : IStorageAdapter
     // ── Mechanics ────────────────────────────────────────────────────────────────────────────────
 
     private static string Norm(string? path) => path?.Trim('/') ?? "";
+
+    /// <summary>One <see cref="FailOperations(Func{string, bool}, StorageLegs, Func{string, Exception}?, int?, string?)"/> in force.</summary>
+    private sealed record OperationFault(
+        Func<string, bool> Matches, StorageLegs Legs, Func<string, Exception> Error, FaultSwitch Switch);
+
+    /// <summary>The fault an operation fault in force answers for <paramref name="leg"/> of
+    /// <paramref name="path"/>, or <c>null</c> when the store takes the call. Deciding it is an
+    /// APPLICATION of the fault (<see cref="FaultSwitch.TryApply"/>), so it is called on subscribe only.</summary>
+    private IObservable<T>? Injected<T>(StorageLegs leg, string? path, string what)
+    {
+        var faults = Volatile.Read(ref _operationFaults);
+        if (faults.IsEmpty)
+            return null;
+        var key = Norm(path);
+        foreach (var fault in faults)
+            if ((fault.Legs & leg) != 0 && fault.Matches(key) && fault.Switch.TryApply(what))
+                return Observable.Throw<T>(fault.Error(key));
+        return null;
+    }
+
+    /// <summary>The fault a batch naming any selected path answers — the first one, applied once.</summary>
+    private IObservable<T>? InjectedAny<T>(StorageLegs leg, IEnumerable<string> paths, string call)
+        => paths.Select(p => Injected<T>(leg, p, $"{call} {Norm(p)}")).FirstOrDefault(r => r is not null);
+
+    /// <summary>A delete the operation faults refuse, decided on subscribe and ahead of any delete
+    /// hold; otherwise <paramref name="delete"/>.</summary>
+    private IObservable<T> FaultedDelete<T>(IReadOnlyCollection<string> paths, string call, Func<IObservable<T>> delete)
+        => Observable.Defer(() => InjectedAny<T>(StorageLegs.Delete, paths, call) ?? delete());
+
+    private (MeshNode Row, FaultSwitch Switch)? FallbackFor(string? path)
+        => _readOnlyFallbacks.TryGetValue(Norm(path), out var fallback) && fallback.Switch.IsClosed
+            ? fallback
+            : null;
+
+    private IObservable<MeshNode?> WithFallback(string path, IObservable<MeshNode?> read)
+        => FallbackFor(path) is not { } fallback
+            ? read
+            : read.Select(stored =>
+            {
+                if (stored is not null)
+                    return stored;
+                fallback.Switch.NoteArrival($"Read {Norm(path)} (served the read-only fallback)");
+                return fallback.Row;
+            });
+
+    private IObservable<MeshNode> WithFallbacks(IReadOnlyCollection<string> paths, IObservable<MeshNode> read)
+    {
+        var fallbacks = paths.Select(FallbackFor).Where(f => f is not null).Select(f => f!.Value).ToImmutableList();
+        if (fallbacks.IsEmpty)
+            return read;
+        return read.ToList().SelectMany(found =>
+        {
+            var stored = found.Select(n => Norm(n.Path)).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+            var served = fallbacks.Where(f => !stored.Contains(Norm(f.Row.Path))).ToImmutableList();
+            foreach (var f in served)
+                f.Switch.NoteArrival($"ReadMany {Norm(f.Row.Path)} (served the read-only fallback)");
+            return found.Concat(served.Select(f => f.Row));
+        });
+    }
 
     private static IObservable<T> Held<T>(FaultSwitch hold, T value, string what)
     {

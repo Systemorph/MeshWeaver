@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Memex.Portal.Shared.Api;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -131,7 +132,7 @@ public class MeshApiRecycleReasonBodyTest
     public void The_recycle_route_binds_RecycleBody_and_forwards_its_Reason()
     {
         var source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "memex", "Memex.Portal.Shared", "Api", "MeshApiEndpoints.cs"));
+            RepoPaths.Root, "memex", "Memex.Portal.Shared", "Api", "MeshApiEndpoints.cs"));
 
         // The mapping and its lambda, from `MapPost("/recycle"` to the `));` that closes the call —
         // matched tolerantly so reformatting the argument list across lines cannot silently pass.
@@ -164,13 +165,5 @@ public class MeshApiRecycleReasonBodyTest
 
         names.Should().Equal(["Path"],
             "/compile and /diagnostics bind PathBody and have no use for a recycle reason");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }

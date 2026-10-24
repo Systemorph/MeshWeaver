@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Xunit;
 using YamlDotNet.RepresentationModel;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -203,7 +204,7 @@ public class PluginPublicationProvenanceTest
     private static YamlMappingNode Jobs()
     {
         var yaml = new YamlStream();
-        using var reader = File.OpenText(Path.Combine(SourceScan.FindRepoRoot(), Workflow));
+        using var reader = File.OpenText(Path.Combine(RepoPaths.Root, Workflow));
         yaml.Load(reader);
         return (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode).Children[new YamlScalarNode("jobs")];
     }

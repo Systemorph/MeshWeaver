@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -68,7 +69,7 @@ public class KeyVaultCsiFreshnessGuard
     [Fact]
     public void EveryWorkloadThatReadsAKeyVaultSyncedSecret_AlsoMountsItsCsiVolume()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var dir = Path.Combine(root, Templates);
 
         var templates = Directory.EnumerateFiles(dir, "*.yaml", SearchOption.AllDirectories)
@@ -148,7 +149,7 @@ public class KeyVaultCsiFreshnessGuard
     [Fact]
     public void EveryWorkloadThatCarriesTheChartsKeyVaultSecrets_AlsoRendersTheLegacyEscapeHatch()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         AssertTheEscapeHatchKeysStillExist(root);
 
@@ -191,7 +192,7 @@ public class KeyVaultCsiFreshnessGuard
     [Fact]
     public void EveryWorkloadThatRendersTheEscapeHatchEnvFrom_AlsoRendersItsVolumeAndMount()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         AssertTheEscapeHatchKeysStillExist(root);
 
@@ -322,15 +323,5 @@ public class KeyVaultCsiFreshnessGuard
     {
         var hash = Regex.Match(line, @"(?<=^|\s)#");
         return hash.Success ? line[..hash.Index] : line;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }
