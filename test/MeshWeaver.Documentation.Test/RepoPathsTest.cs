@@ -87,16 +87,70 @@ public class RepoPathsTest
 
     /// <summary>
     /// A parent-directory walk (<c>x = x.Parent</c>) whose loop names a root marker — the solution
-    /// file, <c>.github</c> or <c>.git</c> — within a few lines above it.
+    /// file, <c>.github</c> or <c>.git</c> — within a few lines above it OR in the body of the
+    /// <c>for</c> loop whose iterator the step is (see <see cref="LoopBodyEnd"/>).
     /// </summary>
     private static readonly Regex ParentStep = new(@"\b(\w+)\s*=\s*\1\s*\.\s*Parent\b", RegexOptions.Compiled);
 
     private static readonly Regex RootMarkerLiteral =
         new("\"(?:MeshWeaver\\.slnx|\\.github|\\.git)\"", RegexOptions.Compiled);
 
+    /// <summary>
+    /// The files allowed to walk: <see cref="RepoPaths"/> itself, and THIS file, whose
+    /// <c>GitDirectoryAnchor</c> is the deliberate negative control for the shape the guard forbids.
+    /// </summary>
+    private static readonly string[] ExemptFiles =
+    [
+        Path.Combine("MeshWeaver.Fixture", "RepoPaths.cs"),
+        Path.Combine("MeshWeaver.Documentation.Test", "RepoPathsTest.cs"),
+    ];
+
+    /// <summary>
+    /// Where the loop a parent step belongs to ENDS, in <paramref name="code"/> (comments and strings
+    /// masked, offsets preserved). A <c>while</c> body's step (<c>dir = dir.Parent;</c>) ends at once —
+    /// its condition, which names the marker, is above it. A <c>for</c> iterator
+    /// (<c>for (…; d is not null; d = d.Parent)</c>) is followed by the header's <c>)</c> and then the
+    /// BODY, which is where that shape names the marker: a block to its matching brace, or one
+    /// statement to its <c>;</c>.
+    /// </summary>
+    private static int LoopBodyEnd(string code, int afterStep)
+    {
+        var depth = 0;
+        var i = afterStep;
+        for (; i < code.Length; i++)
+        {
+            var c = code[i];
+            if (c == '(') depth++;
+            else if (c == ')')
+            {
+                if (depth == 0) break; // the for header closes: the body follows
+                depth--;
+            }
+            else if (depth == 0 && c is ';' or '{' or '}')
+                return afterStep; // a statement, not a for iterator
+        }
+        if (i >= code.Length)
+            return afterStep;
+
+        var k = i + 1;
+        while (k < code.Length && char.IsWhiteSpace(code[k])) k++;
+        var braces = 0;
+        depth = 0;
+        for (; k < code.Length; k++)
+        {
+            var c = code[k];
+            if (c == '{') braces++;
+            else if (c == '}' && --braces <= 0) return k + 1;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ';' && braces == 0 && depth == 0) return k + 1;
+        }
+        return code.Length;
+    }
+
     private static string[] HandRolledRootWalks(string root) =>
         SourceScan.SourceFiles(root, ["test"])
-            .Where(f => !f.EndsWith(Path.Combine("MeshWeaver.Fixture", "RepoPaths.cs"), StringComparison.Ordinal))
+            .Where(f => !ExemptFiles.Any(e => f.EndsWith(e, StringComparison.Ordinal)))
             .Where(f =>
             {
                 var text = File.ReadAllText(f);
@@ -104,7 +158,8 @@ public class RepoPathsTest
                 return ParentStep.Matches(code).Any(m =>
                 {
                     var from = Math.Max(0, m.Index - 400);
-                    return RootMarkerLiteral.IsMatch(text.AsSpan(from, m.Index - from).ToString());
+                    var to = LoopBodyEnd(code, m.Index + m.Length);
+                    return RootMarkerLiteral.IsMatch(text.AsSpan(from, to - from).ToString());
                 });
             })
             .Select(f => SourceScan.Relative(root, f))
@@ -136,10 +191,29 @@ public class RepoPathsTest
                 "class C { static string R() { var dir = new System.IO.DirectoryInfo(\".\");\n"
                 + "  while (dir is not null && !System.IO.Directory.Exists(System.IO.Path.Combine(dir.FullName, \".github\")))\n"
                 + "    dir = dir.Parent;\n  return dir!.FullName; } }\n");
+            // The for-loop shape — RepoPaths.TryFindRoot copied with a literal marker: the marker sits
+            // in the loop BODY, after the iterator step.
+            File.WriteAllText(Path.Combine(test.FullName, "ForCopy.cs"),
+                "class F { static string? R(string start) {\n"
+                + "  for (var dir = new System.IO.DirectoryInfo(start); dir is not null; dir = dir.Parent)\n"
+                + "    if (System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, \"MeshWeaver.slnx\")))\n"
+                + "      return dir.FullName;\n  return null; } }\n");
+            // ...and with a braced body.
+            File.WriteAllText(Path.Combine(test.FullName, "ForBlockCopy.cs"),
+                "class G { static string? R(string start) {\n"
+                + "  for (var d = new System.IO.DirectoryInfo(start); d is not null; d = d.Parent)\n"
+                + "  {\n    var probe = System.IO.Path.Combine(d.FullName, \".github\");\n"
+                + "    if (System.IO.Directory.Exists(probe)) return d.FullName;\n  }\n  return null; } }\n");
+            // A for walk that names no marker is not a root walk.
+            File.WriteAllText(Path.Combine(test.FullName, "ForOther.cs"),
+                "class H { static int Depth(System.IO.DirectoryInfo? d) { var n = 0;\n"
+                + "  for (; d is not null; d = d.Parent) n++;\n  return n; }\n"
+                + "  const string Unrelated = \".git\"; }\n");
             File.WriteAllText(Path.Combine(test.FullName, "Clean.cs"),
                 "class D { static string R() => MeshWeaver.Fixture.RepoPaths.Root; }\n");
 
-            Assert.Equal(["test/X/Copy.cs"], HandRolledRootWalks(dir.FullName));
+            Assert.Equal(["test/X/Copy.cs", "test/X/ForBlockCopy.cs", "test/X/ForCopy.cs"],
+                HandRolledRootWalks(dir.FullName).Order(StringComparer.Ordinal));
         }
         finally
         {
