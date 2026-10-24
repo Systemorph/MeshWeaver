@@ -126,7 +126,7 @@ public static class ComboModuleSet
                     else
                         siblingBuilds[file.FileName] = (digest, name);
                 }
-                Land(name, bundle, bytes, files, fullRoot);
+                Land(name, bundle, bytes, manifest!.Module!, files, fullRoot);
                 landed[name] = bundle;
                 versions[name] = manifest!.Module!.Version ?? manifest.Version;
             }
@@ -152,7 +152,8 @@ public static class ComboModuleSet
     }
 
     private static void Land(
-        string name, string bundle, byte[] bytes, IReadOnlyList<BundleReader.ModuleFile> files, string root)
+        string name, string bundle, byte[] bytes, BundleReader.ModuleRef module,
+        IReadOnlyList<BundleReader.ModuleFile> files, string root)
     {
         // 🚨 EVERY name and path is validated BEFORE anything touches disk. The module name becomes
         // a directory and the file names become paths under it, and both come from a PRODUCER's
@@ -175,9 +176,23 @@ public static class ComboModuleSet
                 + "gate must not compose it either.");
         // Static assets and natives keep their module-relative path — the layout
         // ModuleLandingService writes and ModuleNativeAssets probes (MeshWeaver#4126).
-        var relative = BundleReader.ReadModuleAssets(bytes)
-            .Concat(BundleReader.ReadModuleNativeAssets(bytes))
-            .ToList();
+        // 🚨 Both readers are all-or-nothing and answer EMPTY for a declared section whose entries
+        // the archive does not carry — the reader's contract, not a refusal. Read alone, a bundle
+        // with a complete DLL closure and a missing declared asset or native would be composed
+        // with that section silently dropped: a module that loads and then 404s its assets or
+        // throws DllNotFoundException, judged as though it were complete. So the DECLARED count is
+        // the denominator and the read count the measurement, and a shortfall is refused.
+        var assets = BundleReader.ReadModuleAssets(bytes);
+        var natives = BundleReader.ReadModuleNativeAssets(bytes);
+        var declaredAssets = module.StaticAssets?.Count ?? 0;
+        var declaredNatives = module.NativeAssets?.Count ?? 0;
+        if (assets.Count != declaredAssets || natives.Count != declaredNatives)
+            throw new InvalidOperationException(
+                $"bundle '{bundle}' declares {declaredAssets} static asset(s) and {declaredNatives} "
+                + $"native payload(s) for module '{name}' but carries {assets.Count} and "
+                + $"{natives.Count} — an incomplete module is refused, never judged with a section "
+                + "silently dropped.");
+        var relative = assets.Concat(natives).ToList();
         foreach (var asset in relative.Where(a => !IsSafeRelativePath(a.RelativePath)))
             throw new InvalidOperationException(
                 $"bundle '{bundle}' declares the module-relative path '{asset.RelativePath}', which "
@@ -238,7 +253,13 @@ public sealed record ComboModuleComposition
         var installed = combo.Modules
             .Where(m => !string.IsNullOrWhiteSpace(m.Package?.CompiledModule))
             .GroupBy(m => m.Package!.CompiledModule!.Trim(), StringComparer.OrdinalIgnoreCase)
-            .ToImmutableDictionary(g => g.Key, g => g.First().Package!.Version,
+            // The RELEASED version is the SemVer a bundle states; `Version` can be a repository
+            // commit sha on a record, so it is only the fallback for legacy records that carry no
+            // released version.
+            .ToImmutableDictionary(g => g.Key,
+                g => string.IsNullOrWhiteSpace(g.First().Package!.ReleasedVersion)
+                    ? g.First().Package!.Version
+                    : g.First().Package!.ReleasedVersion,
                 StringComparer.OrdinalIgnoreCase);
         return
         [

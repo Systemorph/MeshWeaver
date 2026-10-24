@@ -159,6 +159,18 @@ if [ "$(jq -r '.isComplete' <"$combo")" != "true" ]; then
 fi
 note "combo: $(jq -r '.modules | length' <"$combo") module(s), readAt=$(jq -r '.readAt' <"$combo")"
 
+# The sources whose sealed module sets the gate needs (MeshWeaver#4413; composed below, once the
+# tester's framework identity is known). The publication share is asserted HERE — right after the
+# combo read and BEFORE either image is pulled — so a missing `vars.BAKE_PUBLISH_TARGETS` is a red
+# naming it, not one that arrives after two image pulls. It is not a `preflight` input: that step
+# carries only what is needed to REACH the roster derivation (check-combo-verify.py, part one), and
+# only a combo that declares a compiled module needs it.
+module_sources=$(jq -r '[.modules[].package | select(. != null and ((.compiledModule // "") | length) > 0)
+  | (.sourceName // "") | ascii_downcase] | unique | .[]' <"$combo")
+if [ -n "$module_sources" ]; then
+  : "${BAKE_PUBLISH_TARGETS:?vars.BAKE_PUBLISH_TARGETS is empty — the sealed module publications cannot be read, so the gate would run without the modules this instance lands}"
+fi
+
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
 verdict=$out_dir/combo-verdict-$tag.json
 src_args=()
@@ -223,10 +235,7 @@ note "gate host: $PORTAL_IMAGE /app + the $TESTER_IMAGE CLI, framework identity 
 # ones no seal carries. A source with no seal for this identity is RED here — never a gate run
 # without the modules the instance lands.
 module_args=()
-module_sources=$(jq -r '[.modules[].package | select(. != null and ((.compiledModule // "") | length) > 0)
-  | (.sourceName // "") | ascii_downcase] | unique | .[]' <"$combo")
 if [ -n "$module_sources" ]; then
-  : "${BAKE_PUBLISH_TARGETS:?vars.BAKE_PUBLISH_TARGETS is empty — the sealed module publications cannot be read, so the gate would run without the modules this instance lands}"
   storage_target="${BAKE_PUBLISH_TARGETS%% *}"
   bundles_root="$host_root/module-bundles"
   rm -rf "$bundles_root"

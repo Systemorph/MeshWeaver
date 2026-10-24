@@ -329,11 +329,6 @@ Console.WriteLine(
 // A throwaway work root is kept when the verdict is not green — the materialised tree and the
 // gate report are exactly what an operator inspects next.
 if (!explicitWorkRoot)
-{
-    if (run.ExitCode == 0)
-        Directory.Delete(workRoot, recursive: true);
-    else
-        Console.WriteLine($"work root kept for inspection: '{Path.GetFullPath(workRoot)}'");
-}
+    ComboWorkRoots.Settle(run.ExitCode, workRoot, moduleSet?.Root, Console.Out);
 
 return run.ExitCode;
