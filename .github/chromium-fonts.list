@@ -1,0 +1,24 @@
+# The font packages `playwright-core install --with-deps --only-shell chromium` adds to a GitHub
+# `ubuntu-24.04` runner. The portal image installs them the same way
+# (deploy/base-images/portal-ai/Dockerfile), so CI prints its PDFs with the font set production
+# has. Every Chromium shared library, fonts-liberation and fonts-noto-color-emoji are already in
+# the runner image.
+#
+# `.github/scripts/stage-chromium-fonts.sh stage` downloads THESE packages, extracts their files
+# (no dpkg install) and packs them as the `chromium-fonts` cache. A shard unpacks that cache
+# instead of reaching an Ubuntu mirror (Doc/Architecture/ReadingCiSignals, "A cancelled shard
+# can be a bad assignment"). On a cache miss, `stage` first checks this list against what the
+# pinned Playwright asks for on the runner's release, and fails naming any font package that is
+# neither listed here nor already installed.
+#
+# xfonts-encodings and xfonts-utils are the dependencies apt pulls in for xfonts-cyrillic and
+# xfonts-scalable.
+fonts-freefont-ttf
+fonts-ipafont-gothic
+fonts-tlwg-loma-otf
+fonts-unifont
+fonts-wqy-zenhei
+xfonts-cyrillic
+xfonts-encodings
+xfonts-scalable
+xfonts-utils

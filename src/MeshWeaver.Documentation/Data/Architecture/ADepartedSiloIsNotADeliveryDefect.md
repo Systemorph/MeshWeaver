@@ -64,6 +64,63 @@ The first row was already recognised. The middle two are this page's subject. Th
 different statement — about an activation on a live silo, not about the silo — and is handled
 separately.
 
+### The directory-owner shape: a refused PLACEMENT, not a refused send (#7002 / #7003)
+
+One more shape reaches the same leg and needs no predicate of its own. A message-hub delivery is
+*placed* before it is sent, and placement starts with a grain-directory lookup addressed to the silo
+that owns the grain id's partition on the directory ring. When that owner has left, the lookup itself
+is refused, and Orleans logs `Orleans.Messaging[100071] Failed to address message … IMessageHubGrain.DeliverMessage`
+carrying:
+
+```text
+Orleans.Runtime.SiloUnavailableException: The target silo became unavailable for message: Request
+  [S…:11111:… sys.client/hosted-…]->[S10.244.3.115:11111:151508771 sys.svc.dir.mem/…]
+  Orleans.GrainDirectory.IDhtGrainDirectory.LookupAsync(…)
+  at LocalGrainDirectory.LookupAsync → DhtGrainLocator.Lookup → PlacementService.PlacementWorker.ExecutePlacementAsync
+```
+
+Read it in this order:
+
+1. **The wording dates convergence.** *"The target silo became unavailable for message"* is a literal
+   of **Orleans.Core**: it is the text Orleans breaks an outstanding request with when membership
+   DECLARES the target silo dead. So this line is not a stale view that persists; it is the instant
+   the stale view ends. In #7003 the `ConnectionRefused` burst against the same silo (#5336's
+   shape) stopped at 14:15:32.56, and these two lines are at 14:15:33.
+2. **Orleans' own placement retry is not what absorbs it.** `PlacementMaxRetries` (3) runs inside the
+   same few milliseconds, so it is spent against the same ring. The `Polly[3] … Attempt: '3'` sibling
+   says that it ran out (see [Peer Death Is Dated By Its Exception Class](../PeerDeathIsDatedByItsExceptionClass)).
+3. **The router re-places it.** `SiloUnavailableException` IS an `OrleansMessageRejectionException`,
+   so `IsResendableDeliveryFailure` admits it, and `DeliverToGrainObservable` re-invokes the cold grain
+   call. Each attempt is a fresh `GetGrain`, which is a fresh placement through Orleans' own placement
+   service against the converged ring. If the refusal outlasted the ladder, `IsShutdownShaped`'s type
+   test would answer `ShuttingDown`. Nothing in this path drops the delivery, and nothing new was added
+   to make that so.
+
+**Pinned on a real cluster** by `APlacementRefusedByADepartedSiloIsReplacedTest`. It uses two silos:
+the target is activated on B, B is KILLED, and the test waits until A's membership lists B dead. The
+delivery is then issued from A through the production leg (`RoutingGrain.DeliverToGrainRoute`). A
+counted switch answers its first attempt with this exact exception and forwards later attempts to A's
+real grain factory. The subject asserts four things: no NACK, a landed delivery, the hub re-activated
+on the survivor, and the target's `PingResponse` to that very ping. The sender registered its callback
+for the delivery's id before the leg ran. `MessageHubGrain.DeliverMessage` answers before its hub has
+dispatched, so only the correlated response proves the delivery was serviced and not merely accepted.
+Two controls run on the same post-kill cluster:
+
+- **With no re-send budget, the delivery is lost and NACK'd.** So the refusal reaches the leg, and
+  Orleans does not recover the message on its own.
+- **With a refusal that never lifts, the answer is `ShuttingDown`, never `Failed`.**
+
+Mutation-measured once:
+
+- Excluding `SiloUnavailableException` from `IsResendableDeliveryFailure` turns the fact red: the
+  ladder makes 1 attempt where it should make 7.
+- Dropping it from `IsShutdownShaped` turns the second control red.
+
+So the `fail:` line on these tickets is Orleans reporting one placement attempt. It does not report a
+lost delivery. Orleans owns that line and its level. Whether a burst of it is a ticket or roll churn is
+the log watcher's decision (MeshWeaver.Plugins `RollChurnClassifier`), and that decision is made from
+what this test establishes.
+
 ## Why the cure is the CLASSIFIER, not a retry
 
 This is the fourth instance of one shape in this codebase, and naming it is the point: **the machinery
