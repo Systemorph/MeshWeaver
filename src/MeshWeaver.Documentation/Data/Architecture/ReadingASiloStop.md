@@ -1,7 +1,7 @@
 ---
 Name: Reading a Silo Stop
 Category: Architecture
-Description: How a departing silo's own SiloStopTimeline lines decide whether peers' 30 s GrainCallCancellationManager timeouts came from a stopping silo or a starved one (#6392, fingerprint 97b80f6a91dbdb74).
+Description: How a departing silo's own SiloStopTimeline lines decide whether peers' GrainCallCancellationManager errors (the 30 s timeout of issue 6392 and the connect timeout of issue 7094) came from a stopping, cut or starved silo, and why that read was impossible in production until the category was pinned.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
 ---
 
@@ -33,3 +33,34 @@ Reading a departing pod's log with those lines (the three existing hold lines st
 Worth noting, not shown: the measured silo stops on memex-cloud (55-61 s, recorded in `MeshTeardownHostedService`) are the same order as the 66 s window the 2026-10-07 samples cover (failures at 09:54:09 and 09:54:45). Until the pod logs for `10.244.2.27` (2026-10-07 about 09:53-09:55 UTC) or `10.244.17.110` (2026-10-09 about 20:38-20:40 UTC) are lined up with these lines, that is a coincidence of magnitudes and not a finding. Rollout check for the fingerprint: after the first roll with this change, read the departing pod's `SiloStopTimeline:` lines in Loki next to any `GrainCallCancellationManager` fingerprint `97b80f6a91dbdb74` lines from the peers for the same minute.
 
 Why this is not a multi-silo test: a `TestCluster`'s silos share one process and one memory store, so an in-process cluster cannot reproduce how OTHER processes see a departing one (the limit `OrleansServerRegistryExtensions` records for the pub-sub store). `SiloStopTimelineTest` pins what the timeline logs (every stage once, in Orleans' stop order, a slow stage visible as the next line's gap) and that the silo registers it.
+
+## The connect-timeout variant, and why the read above was never possible (#7094)
+
+The same logger has a second shape: `Error while cancelling 1 requests to S10.244.6.253:11111:151775954` with `OrleansMessageRejectionException` wrapping `ConnectionFailedException: Connection attempt to endpoint … timed out after 00:00:05` (memex-cloud, 2026-10-23 18:43:44Z, fingerprint `e578fd62e6a46b11`). The 30 s shape is the RESPONSE deadline, and it does not establish that a connection existed: in Orleans 10.4.0 `InsideRuntimeClient.SendRequest` registers the callback before `AddressAndSendMessage`, so that deadline also covers time spent waiting to address, connect and send. This shape is narrower and says more: **no usable connection was established within `OpenConnectionTimeout`**. In Orleans 10.4.0's `ConnectionManager.ConnectAsync`, that one deadline covers both opening the transport connection AND awaiting `connection.Initialized` (the handshake). So the exception is equally consistent with a pod that is gone, a network failure, and a live pod whose connection initialization stalled. Pod departure is a hypothesis here, not a reading.
+
+**It is Orleans behaving as designed, and nothing in this repository issues the cancellation.** Read from Orleans 10.4.0's `GrainCallCancellationManager`:
+
+- A cancellation for a call to silo S goes into a per-silo channel, and a pump sends each batch to S's `sys.svc.canceler`.
+- On a failed send the pump logs `Error while cancelling {Count} requests to {SiloAddress}`, keeps the failed batch, waits 5 s, and returns to `WaitToReadAsync`.
+- It does **not** resend on a timer. The retained batch goes out again only when ANOTHER cancellation for S arrives, so a single failure followed by silence establishes neither a recovery nor a membership transition. The batch may simply never have been resent.
+- The pump ends when membership reports S `Dead` (or `None`), or when the local silo shuts down: the worker's channel is completed and its token cancelled. A cancelled pump exits without logging.
+
+No grain interface declared in core (`IMessageHubGrain`, `IPodHubGrain`, `IRoutingGrain`, `ISiloDrainNoticeGrain`) takes a `CancellationToken`, so these cancellations are not issued by core's code: they come from inside Orleans. WHICH Orleans path issued this batch is not established. Cancel-on-response-timeout for a call to S is one candidate. A token Orleans cancels internally is another: the membership join probes, for example, run under their own deadline-linked token. System-target callbacks disable cancel-on-response-timeout, so a probe's cancellation would come from that token and not from the response timeout. The absence of `CancellationToken` parameters rules out core as the issuer, and nothing more.
+
+What the logs show for that instant (read through `Logs` actions `Ops/Actions/i7094-*` on the control instance):
+
+- A roll of memex-cloud was in progress (`Ops/Actions/selfupdate-roll-memex-cloud-3-1-11453-d951f25e`, 18:29:40Z–18:53:25Z). The reporting pod `…-7455dc7c55-npq89` was a NEW pod of that roll and was joining the cluster.
+- At 18:43:44Z the same pod logged `Did not receive a probe response from silo S10.244.6.253:11111:151775954 in timeout 00:00:15` and `Failed to get ping responses from 1 of 5 active silos. Newly joining silos validate connectivity with all active silos before joining the cluster.` Orleans' join check (`MembershipAgent.ValidateInitialConnectivity`) picks the `Active` entries from the joining silo's cached `CurrentSnapshot` BEFORE it awaits the probes, and refreshes the table only between attempts. So this warning says the joining silo's snapshot listed the address as `Active` when that attempt began. It does not establish the persisted row's status at 18:43:44Z.
+- About two minutes earlier, at 18:41:40Z, a peer (`…-85dfc86d59-mz4z6`) already logged `The target silo became unavailable for message: 'Request [S10.244.6.253:11111:151775954 …]'`.
+- A graceful Orleans stop writes `ShuttingDown` to the table when the `BecomeActive` stage stops, which is before `GrainDeactivation`, and writes `Dead` when `RuntimeInitialize` stops. Because the reading above comes from a cached snapshot, it does NOT show that the departing silo failed to write `ShuttingDown`: the row may already have changed while the joining silo was still using its earlier view. A stop that never reached Orleans' lifecycle (or was cut) remains one hypothesis among those above, not a finding.
+
+Not established: which pod had that address, and what the persisted row read at that instant. One old pod, `…-85dfc86d59-lk9l4`, logged `Application is shutting down...` at 18:41:22Z and `'Orleans.Runtime.Silo' stopped in stage 'GrainDeactivation (19998)'` at 18:41:40Z, the same second the peer lost 6.253. That timing is suggestive and not proof. What would separate the hypotheses:
+
+- the departing pod's own stop timeline, below;
+- a corroborated membership-update outcome for generation `151775954` (a peer's status-change line, or the table row itself), as opposed to one silo's cached view.
+
+The timeline, at least, is a gap of ours:
+
+**`SiloStopTimeline` never reached Loki.** It logs at Information under `MeshWeaver.Hosting.Orleans.SiloStopTimeline`, and the Distributed portal's `"MeshWeaver": "Warning"` catch-all dropped every line before stdout. Measured on memex-cloud: 0 `SiloStopTimeline` lines over 2026-10-23 12:00–21:00Z. In the same window and on the same instrument, departing pods logged dozens of `Application is shutting down...` and `SiloLifecycleSubject` lines (the negative control: the query and the window were not empty). So every read this page prescribes above was impossible in production since the timeline shipped. MeshWeaver.Plugins pins the category to Information in `Memex.Portal.Distributed/appsettings.json`, held by `ShippedLoggingLevelsGuard`. That is what makes the next occurrence readable.
+
+What this page does NOT recommend: demoting Orleans' line with a category filter. `Orleans.Runtime.GrainCallCancellationManager` also logs `Error processing cluster membership updates` through the same category, and a silo that peers still treat as live while it does not answer is the condition #6432 investigates. That condition is worth a red line until the stop timeline shows it to be an ordinary roll.
