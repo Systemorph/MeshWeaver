@@ -50,6 +50,18 @@ The refusals, and why each one exists:
 {{- if ($b.postgres | default dict).enabled -}}
 {{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
 {{- end -}}
+{{- $sb := ($b.sandbox | default dict) -}}
+{{- $sandbox := dict "seccompProfile" ($sb.seccompProfile | default "") "seccompLocalhostProfile" ($sb.seccompLocalhostProfile | default "")
+      "appArmorProfile" ($sb.appArmorProfile | default "") "appArmorLocalhostProfile" ($sb.appArmorLocalhostProfile | default "") -}}
+{{- range $kind := (list "seccomp" "appArmor") -}}
+{{- $t := index $sandbox (printf "%sProfile" $kind) -}}
+{{- if and $t (not (has $t (list "RuntimeDefault" "Unconfined" "Localhost"))) -}}
+{{- fail (printf "buildHosts.sandbox.%sProfile %q must be RuntimeDefault, Unconfined or Localhost" $kind $t) -}}
+{{- end -}}
+{{- if and (eq $t "Localhost") (not (index $sandbox (printf "%sLocalhostProfile" $kind))) -}}
+{{- fail (printf "buildHosts.sandbox.%sProfile is Localhost but buildHosts.sandbox.%sLocalhostProfile names no profile — Kubernetes rejects the pod without it" $kind $kind) -}}
+{{- end -}}
+{{- end -}}
 {{- $as := ($b.artifactStore | default dict) -}}
 {{- $asClaim := ($as.claimName | default "") -}}
 {{- $asSpec := ($as.spec | default (ternary "file:/ci-artifacts" "" (ne $asClaim ""))) -}}
@@ -100,7 +112,7 @@ The refusals, and why each one exists:
       "resources" ($b.resources | default dict) "workSizeLimit" ($b.workSizeLimit | default "60Gi")
       "runDeadline" (int ($b.runDeadlineSeconds | default 3600))
       "scaleDownStabilizationSeconds" (int ($b.scaleDownStabilizationSeconds | default 300))
-      "sandbox" (dict "seccompProfile" (($b.sandbox | default dict).seccompProfile | default "") "appArmorProfile" (($b.sandbox | default dict).appArmorProfile | default ""))
+      "sandbox" $sandbox
       "pollingInterval" (int ($b.pollingInterval | default 15)) "cooldownPeriod" (int ($b.cooldownPeriod | default 600))
       "networkPolicy" (dict "enabled" ($np.enabled | default false) "apiPodSelector" ($np.apiPodSelector | default dict)
                             "dnsNamespaceSelector" ($np.dnsNamespaceSelector | default (dict "kubernetes.io/metadata.name" "kube-system"))

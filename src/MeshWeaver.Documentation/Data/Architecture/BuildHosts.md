@@ -33,16 +33,28 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 ## 1. The follow lane
 
 While GitHub Actions is still the front door, a heavy leg a repository moves to a host is replaced
-by a call of the follow lane, under the **same job name**, so the required context does not change:
+by a call of the follow lane. 🚨 **A reusable call renames the context**: called from job
+`modules-follow`, the lane publishes `modules-follow / modules`, not the `modules` context a
+repository's protection may require. The old context is kept by a SHIM job with the old name that
+asserts the follow job's result ([Renaming A Required Check](../RenamingARequiredCheck)) — the
+route that leaves no unguarded moment:
 
 ```yaml
-modules:
+modules-follow:
   uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
   permissions: { contents: read, id-token: write }
   with:
     api-url: ${{ vars.MW_BUILD_API }}   # https://<operations instance>/api/builds
     stage: modules
     sha: ${{ github.event.pull_request.head.sha || github.sha }}
+modules:                                # the REQUIRED context, still published by name
+  name: modules
+  needs: [modules-follow]
+  if: ${{ !cancelled() }}
+  runs-on: ubuntu-latest
+  timeout-minutes: 5
+  steps:
+    - run: '[ "${{ needs.modules-follow.result }}" = success ] || { echo "::error::build/modules did not succeed on the host"; exit 1; }'
 ```
 
 It reads `GET {api}/{repo}/{sha}/stages/{stage}/log?after=<seq>&channel=<c>` every 10 s with the

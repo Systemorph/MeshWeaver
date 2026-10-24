@@ -4,17 +4,28 @@ name: Build follow — stream a standing build host's stage log
 # standing build host (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §4.2; platform reference
 # Doc/Architecture/BuildHosts). The job computes NOTHING: it follows the stage log the operations
 # instance keeps for this run, prints it line by line (compiler errors and failed tests as
-# annotations on the PR), and exits with the STAGE's verdict — so the required context a repository
-# already has keeps its name while the work moves off the runner. Call it with the context's job
-# name and the stage it now waits on:
+# annotations on the PR), and exits with the STAGE's FINAL verdict (once the run is terminal).
 #
-#   modules:
+# 🚨 A REUSABLE CALL RENAMES THE CONTEXT. Called from job `modules-follow`, this job publishes
+# `modules-follow / <stage>` — NOT the `modules` context a repository's protection may require. Keep
+# the old context with a SHIM job carrying the old name that asserts the follow job's result
+# (Doc/Architecture/RenamingARequiredCheck):
+#
+#   modules-follow:
 #     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
 #     permissions: { contents: read, id-token: write }
 #     with:
 #       api-url: ${{ vars.MW_BUILD_API }}        # https://<operations instance>/api/builds
 #       stage: modules
 #       sha: ${{ github.event.pull_request.head.sha || github.sha }}
+#   modules:                                     # the REQUIRED context, still published by name
+#     name: modules
+#     needs: [modules-follow]
+#     if: ${{ !cancelled() }}
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 5
+#     steps:
+#       - run: '[ "${{ needs.modules-follow.result }}" = success ] || { echo "::error::build/modules did not succeed on the host"; exit 1; }'
 #
 # 🚨 The CALLER must grant `id-token: write` (a reusable workflow can only narrow its caller's
 # grant; check-workflow-permission-pairing.py holds callers to it). The OIDC token IS the

@@ -19,13 +19,38 @@
 set -euo pipefail
 
 if [ "${1:-}" = "--self-test" ]; then
-  # The parts that can be proved without a server: the start options carry no TCP listener and a
-  # private socket, and a missing server is a named failure.
+  # The options are checked where they MATTER — on the command line the server is started with —
+  # by running this script against STUB server binaries that record their arguments. A test that
+  # grepped this file for the strings would stay green with the options removed from pg_ctl.
   self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-  grep -q "listen_addresses=''" "$self" || { echo "SELF-TEST FAILED: no listen_addresses=''"; exit 1; }
-  grep -q "unix_socket_permissions=0700" "$self" || { echo "SELF-TEST FAILED: the socket is not private"; exit 1; }
-  if PG_BIN_DIR=/nonexistent "$self" >/dev/null 2>&1; then echo "SELF-TEST FAILED: no server binaries was not refused"; exit 1; fi
-  echo "sandbox-postgres self-test: passed (no TCP, private socket, missing binaries refused)"
+  st="$(mktemp -d)"
+  trap 'rm -rf "$st"' EXIT
+  mkdir -p "$st/bin"
+  cat > "$st/bin/initdb" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${STUB_LOG:?}/initdb.args"
+while [ $# -gt 0 ]; do case "$1" in -D) mkdir -p "$2"; shift ;; esac; shift; done
+STUB
+  cat > "$st/bin/pg_ctl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "${STUB_LOG:?}/pg_ctl.args"
+STUB
+  chmod +x "$st/bin/initdb" "$st/bin/pg_ctl"
+  fail() { echo "SELF-TEST FAILED: $1"; exit 1; }
+  out="$(STUB_LOG="$st" PG_BIN_DIR="$st/bin" MW_BUILD_PG_ROOT="$st/pg" bash "$self" 2>/dev/null)" || fail "the stubbed start failed"
+  opts="$(grep -A1 '^-o$' "$st/pg_ctl.args" | tail -n 1)"
+  case "$opts" in *"listen_addresses=''"*) ;; *) fail "the server is started WITH a TCP listener (no listen_addresses='' in: $opts)" ;; esac
+  case "$opts" in *"unix_socket_permissions=0700"*) ;; *) fail "the server's socket is not private (no unix_socket_permissions=0700 in: $opts)" ;; esac
+  case "$opts" in *"-k $st/pg"*) ;; *) fail "the socket is not in the stage's own directory (no -k $st/pg in: $opts)" ;; esac
+  grep -qx 'scram-sha-256' "$st/initdb.args" || fail "initdb does not require a password (no -A scram-sha-256)"
+  [ ! -e "$st/pg/.pw" ] || fail "the password file outlives initdb"
+  case "$out" in *"PGHOST='$st/pg'"*"MW_BUILD_POSTGRES='Host=$st/pg;"*) ;; *) fail "the export line does not name the socket directory: $out" ;; esac
+  pw1="$(printf '%s' "$out" | sed -n "s/.*PGPASSWORD='\([^']*\)'.*/\1/p")"
+  out2="$(STUB_LOG="$st" PG_BIN_DIR="$st/bin" MW_BUILD_PG_ROOT="$st/pg2" bash "$self" 2>/dev/null)" || fail "the second stubbed start failed"
+  pw2="$(printf '%s' "$out2" | sed -n "s/.*PGPASSWORD='\([^']*\)'.*/\1/p")"
+  [ "${#pw1}" -ge 32 ] && [ "$pw1" != "$pw2" ] || fail "the password is not random per stage"
+  if PG_BIN_DIR=/nonexistent bash "$self" >/dev/null 2>&1; then fail "no server binaries was not refused"; fi
+  echo "sandbox-postgres self-test: passed (the started server has no TCP listener and a private socket in its own dir, scram passwords random per stage, missing binaries refused)"
   exit 0
 fi
 

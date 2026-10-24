@@ -159,6 +159,22 @@ jobs:
             401) echo "::error::the inbox REFUSED the signature (HTTP 401) — build-stable was NOT handed $V_SET"; exit 1 ;;
             *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-stable was NOT handed $V_SET"; exit 1 ;;
           esac
+      # The alert clears ITSELF: after a successful, ENABLED hand-over (a disabled no-op is not a
+      # recovery — nothing was handed over), the one open `build-host` issue is closed with the run
+      # that recovered it, so a later failure opens a fresh, current alert instead of appending to a
+      # stale one.
+      - name: Close the build-host alert after a successful hand-over
+        if: success() && steps.build_host_stable.outputs.enabled == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host&state=open&per_page=10" --jq '.[].number')
+          for n in $open; do
+            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body "Recovered: build-stable was handed its set by [run ${GITHUB_RUN_ID}](${RUN_URL})."
+            gh issue close "$n" --repo "$GITHUB_REPOSITORY" --reason completed
+          done
       - name: Report a red build-stable roll on the build-host issue
         if: failure()
         env:

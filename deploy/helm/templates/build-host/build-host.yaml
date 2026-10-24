@@ -222,10 +222,18 @@ spec:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
             {{- with $b.sandbox.seccompProfile }}
-            seccompProfile: { type: {{ . | quote }} }
+            seccompProfile:
+              type: {{ . | quote }}
+              {{- if eq . "Localhost" }}
+              localhostProfile: {{ $b.sandbox.seccompLocalhostProfile | quote }}
+              {{- end }}
             {{- end }}
             {{- with $b.sandbox.appArmorProfile }}
-            appArmorProfile: { type: {{ . | quote }} }
+            appArmorProfile:
+              type: {{ . | quote }}
+              {{- if eq . "Localhost" }}
+              localhostProfile: {{ $b.sandbox.appArmorLocalhostProfile | quote }}
+              {{- end }}
             {{- end }}
           volumeMounts:
             - { name: "tester", mountPath: "/tester", readOnly: true }

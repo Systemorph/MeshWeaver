@@ -100,7 +100,7 @@ def body(*, deployment: str, channel: str, version: str, tester_image: str, test
     for name, r in (("tester", tester_image), ("portal", portal_image), ("runner", runner_image)):
         if not REPOSITORY.match(r or "") or ":" in r.rsplit("/", 1)[-1] or "@" in r:
             raise ValueError(f"{name} image {r!r} is not a plain repository (no tag, no digest)")
-    if not SHA.match(core_sha or ""):
+    if core_sha and not SHA.match(core_sha):
         raise ValueError(f"core sha {core_sha!r} is not a full commit")
     if plugins_sha and not SHA.match(plugins_sha):
         raise ValueError(f"plugins sha {plugins_sha!r} is not a full commit")
@@ -117,7 +117,7 @@ def body(*, deployment: str, channel: str, version: str, tester_image: str, test
         "portalDigest": portal_digest,
         "runnerImage": runner_image,
         "runnerDigest": runner_digest,
-        "coreSha": core_sha,
+        "coreSha": core_sha or None,     # empty when CD re-sends a set another run armed
         "pluginsSha": plugins_sha or None,
         # What the receiver writes on the record, spelled as the chart reads it.
         "recordFields": {
@@ -146,8 +146,9 @@ def main(argv: list[str]) -> int:
     d.add_argument("--trigger", default="")
     b = sub.add_parser("body")
     for k in ("deployment", "channel", "version", "tester-image", "tester-digest", "portal-image",
-              "portal-digest", "runner-image", "runner-digest", "core-sha", "instance"):
+              "portal-digest", "runner-image", "runner-digest", "instance"):
         b.add_argument(f"--{k}", required=True)
+    b.add_argument("--core-sha", default="")
     b.add_argument("--plugins-sha", default="")
     a = ap.parse_args(argv)
     try:
@@ -220,6 +221,7 @@ def self_test() -> int:
         "buildHosts.latest.testerDigest": "sha256:" + "1" * 64,
         "buildHosts.latest.portalDigest": "sha256:" + "2" * 64,
         "buildHosts.latest.runnerDigest": "sha256:" + "3" * 64}, ev["recordFields"])
+    check("body/a re-sent set without its core sha says null", body(**dict(ok, core_sha=""))["coreSha"] is None)
     check("body/ci set name accepted", body(**dict(ok, version="3.0.0-ci.10052"))["platformVersion"] == "3.0.0-ci.10052")
     for k, v in (("tester_digest", "3.1.10412"), ("portal_digest", "sha256:abc"), ("runner_digest", ""),
                  ("runner_image", "cr.example.com/mw-build-host:latest"),

@@ -81,6 +81,10 @@ ANNOTATION_PROPS = ("file", "line", "col", "endLine", "endColumn", "title")
 # before it looks for `::` (and for the legacy `##[…]` syntax), so a space defuses nothing; a
 # visible, non-whitespace first character does.
 INERT = "› "
+# The runner's legacy parser finds `##[` ANYWHERE in a line, so the delimiter itself is broken
+# wherever it occurs in emitted text (a zero-width space between the `#` and the `[`).
+LEGACY = "##["
+LEGACY_BROKEN = "##\u200b["
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -121,7 +125,7 @@ class Failure(Exception):
 
 
 def _escape_data(v: str) -> str:
-    return v.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    return v.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A").replace(LEGACY, LEGACY_BROKEN)
 
 
 def _escape_prop(v: str) -> str:
@@ -148,10 +152,10 @@ def neutralise(text: str) -> list[str]:
                     props.append(f"{k}={_escape_prop(v)}")
             head = f"::{m.group('sev')}" + (" " + ",".join(props) if props else "")
             out.append(f"{head}::{_escape_data(m.group('msg'))}")
-        elif stripped.startswith("::") or stripped.startswith("##["):
-            out.append(INERT + stripped)
+        elif stripped.startswith("::"):
+            out.append(INERT + stripped.replace(LEGACY, LEGACY_BROKEN))
         else:
-            out.append(line)
+            out.append(line.replace(LEGACY, LEGACY_BROKEN))
     return out
 
 
@@ -519,6 +523,12 @@ def self_test() -> int:
     check("neutralise/unknown annotation properties dropped",
           neutralise("::warning file=a.cs,line=x,evil=1::w") == ["::warning file=a.cs::w"], neutralise("::warning file=a.cs,line=x,evil=1::w"))
     check("neutralise/indented annotation still an annotation", neutralise("  ::notice::n") == ["::notice::n"])
+    # the runner's LEGACY parser: `##[` anywhere in a line is a command — prefixed, embedded, or
+    # inside an annotation's message — so no emitted line may contain the delimiter at all.
+    for evil in ("› ##[add-mask]secret", "build ok ##[add-mask]secret", "##[set-output name=a;]b",
+                 "::error file=a.cs::x ##[add-mask]y", "  text ##[group]g", "::add-mask::x ##[error]e"):
+        printed = neutralise(evil)
+        check(f"neutralise/no legacy delimiter survives: {evil!r}", all(LEGACY not in p for p in printed), printed)
     check("neutralise/plain text", neutralise("compiled 3/4") == ["compiled 3/4"])
 
     # 10. No OIDC grant is a named red, never a silent anonymous read.

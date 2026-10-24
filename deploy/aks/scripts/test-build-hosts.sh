@@ -126,8 +126,10 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
         problems.append(f"{ch}: BUILD_TOKEN_FILE is not /run/build-worker/token")
     if pod.get("terminationGracePeriodSeconds") != 3600 or env.get("MW_BUILD_RUN_DEADLINE_SECONDS", {}).get("value") != "3600":
         problems.append(f"{ch}: terminationGracePeriodSeconds / the run deadline are not the same 3600 s")
-    if build.get("securityContext", {}).get("seccompProfile", {}).get("type") != "Unconfined":
-        problems.append(f"{ch}: the stated sandbox seccomp profile did not render")
+    if build.get("securityContext", {}).get("seccompProfile", {}) != {"type": "Unconfined"}:
+        problems.append(f"{ch}: the stated sandbox seccomp profile did not render: {build.get('securityContext')}")
+    if build.get("securityContext", {}).get("appArmorProfile", {}) != {"type": "Localhost", "localhostProfile": "build-host-userns"}:
+        problems.append(f"{ch}: a Localhost AppArmor profile must render its localhostProfile: {build.get('securityContext')}")
     if env.get("MW_BUILD_CHANNEL", {}).get("value") != ch or env.get("MW_BUILD_PLATFORM_VERSION", {}).get("value") != pv:
         problems.append(f"{ch}: channel/platformVersion env wrong")
     if env.get("BUILD_API", {}).get("value") != "http://memex-portal-service:8080/api/builds":
@@ -223,7 +225,8 @@ for entry in \
   "values.build-hosts-tag-not-digest.yaml|must be a sha256:<64 hex> digest" \
   "values.build-hosts-public-http.yaml|must be https, or http to a cluster-local host" \
   "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential" \
-  "values.build-hosts-postgres-sidecar.yaml|runs NO shared database"; do
+  "values.build-hosts-postgres-sidecar.yaml|runs NO shared database" \
+  "values.build-hosts-localhost-no-profile.yaml|names no profile"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"

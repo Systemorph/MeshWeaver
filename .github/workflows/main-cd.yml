@@ -4018,12 +4018,18 @@ jobs:
   # 🚨 A NO-OP UNTIL DECLARED: `.github/build-hosts.json` `enabled: false` (the default) ⇒ one
   # summary line, nothing sent, no credential used. The receiver guards the same fact again on the
   # record (`buildHosts.enabled`). NEVER BACKWARDS: only the newest armed set is sent (the reading
-  # notify-platform-update makes). Outside `delivery-verdict` (the fleet's delivery does not depend on
-  # a build host) but UNDER `alert-on-failure`: a host left on an old set is paged, not unattended.
+  # notify-platform-update makes), re-sent on every CD run so a missed hand-over self-heals. Outside
+  # `delivery-verdict` (the fleet's delivery does not depend on a build host) but UNDER
+  # `alert-on-failure`: a host left on an old set is paged, not unattended.
   build-host-latest:
     name: "Build host: hand the armed set to build-latest (record path)"
-    needs: [preflight, arm]
-    if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
+    # ORDERED after this run's runner image (build-host-image), so a set this run arms is never handed
+    # over before its mw-build-host exists. And it runs on EVERY CD run, not only an arming one: it
+    # hands over the NEWEST ARMED set each time, so a hand-over missed once (an image still
+    # publishing, an inbox outage) is recovered by the next run — the receiver changes nothing for a
+    # set it already holds and never moves backwards.
+    needs: [preflight, arm, build-host-image]
+    if: always() && needs.preflight.result == 'success' && needs.arm.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -4060,36 +4066,54 @@ jobs:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      - name: "Is this still the newest armed set?"
+      - name: "The newest armed set, and its runner"
         id: build_host_current
         if: steps.build_host.outputs.enabled == 'true'
         env:
-          V_SELF: ${{ needs.arm.outputs.version }}
+          ARMED_HERE: ${{ needs.arm.outputs.armed }}
+          V_ARMED_HERE: ${{ needs.arm.outputs.version }}
+          CORE_HERE: ${{ needs.arm.outputs.core_sha }}
+          PLUGINS_HERE: ${{ needs.arm.outputs.plugins_sha }}
+          IMAGE_LEG: ${{ needs.build-host-image.result }}
         run: |
           set -euo pipefail
           az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
             -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
           st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
-          newest=$(printf '%s' "$st" | jq -r '.version')
-          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
-            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — refusing to hand build-latest a set on no evidence"; exit 1; }
-          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+          newest=$(printf '%s' "$st" | jq -r '.version // empty')
+          [ -n "$newest" ] || { echo "::error::no armed set could be read from memex-portal-ai — nothing to hand build-latest, and nothing to say it is current"; exit 1; }
+          python3 .github/scripts/platform-version.py ordinal "$newest" >/dev/null \
             || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy"; exit 1; }
-          if [ "$n_newest" -gt "$n_self" ]; then
-            echo "superseded=true" >> "$GITHUB_OUTPUT"
-            echo "- build-latest: $V_SELF was superseded by $newest — the newer arming hands it on" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          core=""; plugins=""
+          if [ "$ARMED_HERE" = true ] && [ "$V_ARMED_HERE" = "$newest" ]; then core="$CORE_HERE"; plugins="$PLUGINS_HERE"; fi
+          bash .github/scripts/acr-login.sh
+          runner=""
+          if d=$(docker buildx imagetools inspect "meshweaver.azurecr.io/mw-build-host:$newest" --format '{{json .Manifest.Digest}}'); then
+            runner=$(printf '%s' "$d" | tr -d '"')
           fi
+          case "$runner" in
+            sha256:*) echo "send=true" >> "$GITHUB_OUTPUT" ;;
+            *)
+              if [ "$ARMED_HERE" = true ] && [ "$V_ARMED_HERE" = "$newest" ]; then
+                echo "::error::this run armed $newest but mw-build-host:$newest does not exist (build-host-image: $IMAGE_LEG) — build-latest was NOT handed the set; the next CD run retries once the runner image is published"
+                exit 1
+              fi
+              echo "send=false" >> "$GITHUB_OUTPUT"
+              echo "::warning::the newest armed set $newest has no mw-build-host image (built before the runner lane, or its image leg failed) — build-latest keeps its set until a set with a runner is armed"
+              echo "- build-latest: $newest has no runner image — not handed over" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac
+          { echo "version=$newest"; echo "core=$core"; echo "plugins=$plugins"; echo "runner=$runner"; } >> "$GITHUB_OUTPUT"
       - name: "Sign and POST build-host-update-available for build-latest"
-        if: steps.build_host.outputs.enabled == 'true' && steps.build_host_current.outputs.superseded == 'false'
+        if: steps.build_host.outputs.enabled == 'true' && steps.build_host_current.outputs.send == 'true'
         env:
           URL: ${{ vars.CONTROL_WEBHOOK_URL }}
           SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
           DEPLOYMENT: ${{ steps.build_host.outputs.deployment }}
-          V_SET: ${{ needs.arm.outputs.version }}
-          CORE_SHA: ${{ needs.arm.outputs.core_sha }}
-          PLUGINS_SHA: ${{ needs.arm.outputs.plugins_sha }}
+          V_SET: ${{ steps.build_host_current.outputs.version }}
+          CORE_SHA: ${{ steps.build_host_current.outputs.core }}
+          PLUGINS_SHA: ${{ steps.build_host_current.outputs.plugins }}
+          RUNNER_DIGEST: ${{ steps.build_host_current.outputs.runner }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -4108,9 +4132,7 @@ jobs:
           }
           TESTER_DIGEST=$(resolve mw-plugin-test)
           PORTAL_DIGEST=$(resolve memex-portal-ai)
-          # The runner of the SAME set (build-host-image tags it with the set's version). A set built
-          # before that leg existed has none, and is not handed to a host — the next armed set is.
-          RUNNER_DIGEST=$(resolve mw-build-host)
+          # RUNNER_DIGEST was resolved (and required) by the previous step, for the same version.
           BODY=$(python3 .github/scripts/build-host-announcement.py body --deployment "$DEPLOYMENT" --channel latest \
             --version "$V_SET" --tester-image meshweaver.azurecr.io/mw-plugin-test --tester-digest "$TESTER_DIGEST" \
             --portal-image meshweaver.azurecr.io/memex-portal-ai --portal-digest "$PORTAL_DIGEST" \

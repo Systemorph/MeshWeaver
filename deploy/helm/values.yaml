@@ -1158,8 +1158,10 @@ buildHosts:
   # unprivileged namespaces is measured (H4); state the container profiles here if they must differ
   # (e.g. seccompProfile: Unconfined). A node that refuses makes the host exit at startup, named.
   sandbox:
-    seccompProfile: ""
-    appArmorProfile: ""
+    seccompProfile: ""            # RuntimeDefault | Unconfined | Localhost
+    seccompLocalhostProfile: ""   # with Localhost: the profile file on the node (e.g. profiles/bwrap.json)
+    appArmorProfile: ""           # RuntimeDefault | Unconfined | Localhost — on a kernel with
+    appArmorLocalhostProfile: ""  #   apparmor_restrict_unprivileged_userns=1, a Localhost profile granting userns
   # Egress: the cluster DNS resolver, the build API's pods on their port, and 80/443 to anything
   # OUTSIDE the excluded ranges (GitHub, the registries, NuGet, Entra). Ingress: none. The runner's
   # start-up boundary self-check refuses to run where this policy does not hold.

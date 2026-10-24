@@ -523,6 +523,7 @@ class EventSink:
         self.last = clock()
         self.dropped = 0
         self.seq = 0               # the last batch number ACKNOWLEDGED
+        self.inflight: Optional[list[dict]] = None    # the batch sent as seq+1, frozen until acknowledged
         self.lock = threading.RLock()
 
     def add(self, events: Iterable[dict]) -> None:
@@ -540,9 +541,13 @@ class EventSink:
             elif self.clock() - self.last >= HEARTBEAT_SECONDS:
                 self.beat()
 
-    def _post(self, batch: list[dict]) -> int:
+    def _send_inflight(self) -> int:
+        """POST the ONE in-flight batch. It is frozen when first sent and re-sent byte-identical
+        under the same `seq` until acknowledged — events added meanwhile wait for the NEXT seq, so a
+        receiver that committed a batch whose acknowledgement was lost can never be handed a
+        different payload under a number it already holds."""
         status, _ = self.api.call("POST", self.path, {"host": self.host, "claimId": self.claim_id,
-                                                      "seq": self.seq + 1, "events": batch}, self.query)
+                                                      "seq": self.seq + 1, "events": self.inflight}, self.query)
         if status == 409:
             # Not held by this host, or a batch of an EARLIER assignment (`stale-claim`): either way
             # the run is no longer this host's — stop, kill the child, post nothing more.
@@ -551,24 +556,28 @@ class EventSink:
         # fails closed): retryable, the SAME batch with the SAME seq, never a run failure.
         if 200 <= status < 300:
             self.seq += 1
+            self.inflight = None
             self.last = self.clock()
         return status
 
     def beat(self) -> bool:
-        """The heartbeat: an empty batch when nothing was posted for HEARTBEAT_SECONDS (a buffered
-        batch is sent instead, which renews the lease just the same)."""
+        """The heartbeat: when nothing was posted for HEARTBEAT_SECONDS, re-send the in-flight batch,
+        else flush what is buffered, else send an EMPTY batch (a batch of its own, with its own seq)."""
         with self.lock:
             if self.clock() - self.last < HEARTBEAT_SECONDS:
                 return True
-            if self.buf:
+            if self.inflight is None and self.buf:
                 return self.flush(attempts=1)
-            return 200 <= self._post([]) < 300
+            if self.inflight is None:
+                self.inflight = []
+            return 200 <= self._send_inflight() < 300
 
     def flush(self, attempts: int = 4) -> bool:
-        """POST everything buffered. Only FAILED posts consume `attempts` — a long buffer that drains
-        in many successful batches never runs out of retries. Returns True when nothing is held."""
+        """POST everything buffered, one frozen batch at a time. Only FAILED posts consume
+        `attempts` — a long buffer that drains in many successful batches never runs out of retries.
+        Returns True when nothing is held (no in-flight batch, nothing buffered)."""
         with self.lock:
-            if not self.buf:
+            if self.inflight is None and not self.buf:
                 return True
             if self.dropped:
                 self.buf.insert(0, {"kind": "line", "text": f"{self.dropped} progress event(s) were dropped "
@@ -576,18 +585,20 @@ class EventSink:
                 self.dropped = 0
             delay = 2.0
             failures = 0
-            while self.buf and failures < attempts:
-                batch = self.buf[:BATCH_EVENTS]
-                status = self._post(batch)          # a retry re-sends the SAME seq
+            while (self.inflight is not None or self.buf) and failures < attempts:
+                if self.inflight is None:
+                    self.inflight = self.buf[:BATCH_EVENTS]
+                    del self.buf[:len(self.inflight)]
+                status = self._send_inflight()
                 if 200 <= status < 300:
-                    del self.buf[:len(batch)]
                     continue
                 failures += 1
-                self.log(f"events POST {self.path} → {status}; {len(self.buf)} event(s) held (failure {failures}/{attempts})")
+                self.log(f"events POST {self.path} → {status}; batch {self.seq + 1} held, "
+                         f"{len(self.buf)} more buffered (failure {failures}/{attempts})")
                 if failures < attempts:
                     self.sleep(delay)
                     delay = min(delay * 2, 60.0)
-            return not self.buf
+            return self.inflight is None and not self.buf
 
 
 class Heartbeat:
@@ -2576,7 +2587,7 @@ def self_test() -> int:
         outcome = down.run(claim)
         sent_kinds = {e.get("kind") for c in down.api.calls if c[1].endswith("/events") for e in c[2]["events"]}
         check("events/a lasting outage posts NO run-finished over a missing stage verdict",
-              outcome == "undelivered" and "stage-finished" in sent_kinds and "run-finished" not in sent_kinds,
+              outcome == "undelivered" and "run-finished" not in sent_kinds,
               (outcome, sent_kinds))
         # successful batches never consume the failure budget: 1,000 events drain through 5 batches
         big = EventSink(_FakeApi({("POST", "/r/"): [(202, None)]}), "h", "r", "a" * 40, "s", "latest", lambda m: None,
@@ -2681,6 +2692,19 @@ def self_test() -> int:
         sq.add([{"kind": "line", "text": "x"}])
         sq.flush(attempts=3)
         check("seq/a retried batch keeps its number", tries == [1, 1] and sq.seq == 1, tries)
+        # a LOST acknowledgement: the retry re-sends the SAME payload under the SAME seq; events added
+        # meanwhile go under the NEXT seq
+        sent: list[tuple] = []
+        replies = [503, 202, 202]
+        lk = EventSink(_FakeApi({("POST", "/r/"): lambda p_, b: (sent.append((b["seq"], json.dumps(b["events"]))) or replies.pop(0), None)}),
+                       "h", "r", "a" * 40, "s", "latest", lambda m: None, sleep=lambda x: None)
+        lk.buf = [{"kind": "line", "text": "first"}]
+        lk.flush(attempts=1)                       # the server committed it; the answer was lost (503)
+        lk.add([{"kind": "stage-finished", "state": "succeeded", "summary": "s"}])
+        lk.flush(attempts=3)
+        check("seq/a retried batch is byte-identical under its seq", sent[0] == sent[1] and sent[0][0] == 1, sent)
+        check("seq/events added meanwhile go under the next seq", len(sent) == 3 and sent[2][0] == 2
+              and "stage-finished" in sent[2][1] and "stage-finished" not in sent[1][1], sent)
         # the heartbeat: an empty batch once HEARTBEAT_SECONDS passed with nothing posted
         now = {"t": 0.0}
         hbp: list = []
