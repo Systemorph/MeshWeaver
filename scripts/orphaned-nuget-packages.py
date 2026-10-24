@@ -20,6 +20,18 @@ from pathlib import Path
 SEARCH = "https://azuresearch-usnc.nuget.org/query"
 PREFIX = "MeshWeaver"
 
+# 🚨 The surviving packages that are packed by ANOTHER repository of the fleet. The derivation
+# above can only see THIS tree, and the repository that packs these is private, so this lane cannot
+# read it; without this set both would read as orphaned and an apply would UNLIST two packages we
+# still publish. DECLARED, not derived (policy `declared-not-derived`): an absent contributor is not
+# a removal. A stale entry errs toward SPARING, the safe direction; remove one only when its
+# package is retired on purpose.
+#   MeshWeaver.MemexTemplate         - MeshWeaver.Plugins tools/MeshWeaver.MemexTemplate.Pack
+#   MeshWeaver.Aspire.Hosting.Memex  - MeshWeaver.Plugins src/Memex.Aspire.Hosting (moved from
+#                                      memex/aspire with the core-slimming carve;
+#                                      published by that repository's publish-aspire-package.yml)
+PACKED_ELSEWHERE = frozenset({"MeshWeaver.MemexTemplate", "MeshWeaver.Aspire.Hosting.Memex"})
+
 
 def published(prefix: str) -> set[str]:
     """Every package id on nuget.org matching the prefix (prerelease included)."""
@@ -256,6 +268,13 @@ def self_test() -> int:
     if quota_retry_after("") is not None:
         failures.append("empty tool output was misread as a quota refusal")
 
+    # The survivors another repository packs must never fall into the orphan set: this tree packs
+    # neither, so only the declared set stands between them and an unlist.
+    for survivor in ("MeshWeaver.Aspire.Hosting.Memex", "MeshWeaver.MemexTemplate"):
+        if survivor not in PACKED_ELSEWHERE:
+            failures.append(f"{survivor} is packed by MeshWeaver.Plugins and is not declared in "
+                            "PACKED_ELSEWHERE — an apply would UNLIST a package we still publish")
+
     for failure in failures:
         print(f"FAIL: {failure}")
     print("self-test: " + ("PASSED" if not failures else f"{len(failures)} FAILURE(S)"))
@@ -346,13 +365,13 @@ def main() -> int:
     root = Path(args.root).resolve()
     on_nuget = published(args.prefix)
     built = packable(root)
-    spared = set(args.keep)
+    spared = set(args.keep) | PACKED_ELSEWHERE
     orphans = sorted(on_nuget - built - spared)
 
     print(f"published on nuget.org : {len(on_nuget)}")
     print(f"packable in this tree  : {len(built)}")
     if spared:
-        print(f"spared by --keep       : {', '.join(sorted(spared))}")
+        print(f"spared (declared+keep) : {', '.join(sorted(spared))}")
     print(f"ORPHANED               : {len(orphans)}")
     for package_id in orphans:
         print(f"  {package_id}  ({len(versions(package_id))} version(s))")

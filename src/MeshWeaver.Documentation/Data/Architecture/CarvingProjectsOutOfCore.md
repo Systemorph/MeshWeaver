@@ -290,6 +290,33 @@ So the conversion, not a copy:
    one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
    suites call `IncludePartition("<Name>")`, the primitive it wrapped.
 
+## Deployment material: each piece goes where its consumer is
+
+The deployment material under `memex/aspire`, `deploy/aspire` and `deploy/aks` is not one thing. Each
+piece is decided by **who reads it**. The guard that pinned a piece moves with it, and nothing is
+deleted in core until the receiving half has merged.
+
+| Piece | Went to | Why there |
+|---|---|---|
+| `memex/aspire/Memex.Aspire.Hosting` (packed as `MeshWeaver.Aspire.Hosting.Memex`) | MeshWeaver.Plugins `src/Memex.Aspire.Hosting` | Its only in-fleet consumer, `Memex.AppHost`, already lived there and pinned core's copy through `$(MeshWeaverRoot)`; nothing in core read it. The package is published from there now (`publish-aspire-package.yml`). The guard `TheAspireHostStatesTheStorageType` became Plugins' `Memex.Hosts.Test/AspireHostStatesTheStorageTypeTest`, beside its image-side counterpart. |
+| `deploy/aspire/Memex.Deploy.AppHost` | MeshWeaver.Plugins `src/Memex.Deploy.AppHost` | It builds only against the integration, so it goes where the integration goes. |
+| `deploy/aks/envs/example` | Systemorph/Memex `deployments/aks/example/` | It is the template for the environment folders, and every real one already lives in `deployments/aks/<env>/` there. The secret-template guard became Memex's `scripts/check-example-secret-template.py`, in its required Build (Release). |
+| `deploy/aks/infra` (AKS platform Bicep) | Systemorph/Memex `infra/platform/` | Estate provisioning already lives there (`infra/estate.bicep`, the client-estate Bicep and bootstrap). |
+| `deploy/helm`, `deploy/aks/manifests`, `deploy/aks/scripts`, `deploy/aks/values.aks.yaml` | **not moved yet**, pending an owner decision | See [Chart Ownership and the Runner Pool](../ChartOwnershipAndRunnerPool), "Moving the chart into a private repository". |
+
+🚨 **Survivors packed in another repository must be DECLARED to the retirement sweep.**
+`scripts/orphaned-nuget-packages.py` derives "orphaned" as *published minus packed in this tree*.
+After the Aspire integration left core, that derivation reads `MeshWeaver.Aspire.Hosting.Memex` (and
+`MeshWeaver.MemexTemplate`) as orphaned, and an apply would unlist a package we still publish. Both
+are therefore in `PACKED_ELSEWHERE`, which the self-test pins. A stale entry errs toward sparing a
+package, which is the safe direction.
+
+🚨 **Moving a packed project moves its publishing credential.** nuget.org Trusted Publishing
+policies name a repository **and a workflow file**. The policy for core's `publish-packages.yml` does
+not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
+policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
+that lane's `preflight` is red by name.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows

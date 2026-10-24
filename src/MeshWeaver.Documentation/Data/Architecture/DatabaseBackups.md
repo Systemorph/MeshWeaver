@@ -32,9 +32,9 @@ region. A regional outage would take the server *and* its backups. The infra now
 server **geo-redundant** so a read-only backup copy lives in the Azure-paired region
 (swedencentral → germanywestcentral):
 
-- `deploy/aks/infra/modules/postgres.bicep` → `geoRedundantBackup` param (**default `true`** →
+- `infra/platform/modules/postgres.bicep` (Systemorph/Memex) → `geoRedundantBackup` param (**default `true`** →
   `backup.geoRedundantBackup: 'Enabled'`).
-- `deploy/aks/infra/main.bicep` → `postgresGeoRedundantBackup` param (default `true`), wired through.
+- `infra/platform/main.bicep` (Systemorph/Memex) → `postgresGeoRedundantBackup` param (default `true`), wired through.
 
 Any **newly provisioned** server (a fresh environment, or a rebuild) is geo-redundant automatically.
 

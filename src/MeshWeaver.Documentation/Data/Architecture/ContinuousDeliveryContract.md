@@ -1163,7 +1163,7 @@ unpublish anything — the images ship and the installs still self-update; what 
 🚨 **A 2xx still does NOT prove the wave ran.** The inbox is deliberately dumb, so 2xx means
 *stored*. The half CD cannot see is the shared HMAC: an unset or mismatched
 `Hosting:PlatformWebhookSecret` on the control instance (Key Vault → `Hosting-PlatformWebhookSecret`;
-see `deploy/aks/envs/example/secretproviderclass.yaml`) makes the watcher drop every delivery as
+see `Systemorph/Memex deployments/aks/example/secretproviderclass.yaml`) makes the watcher drop every delivery as
 unverifiable, and the POST still answers 2xx. The close condition for the mechanism is therefore
 observed on the SATELLITES — a `repository_dispatch` run whose payload carries `source: memex`, plus
 the pin-bump PR — and in the control instance's log: `[PlatformBuilds] release broadcast for

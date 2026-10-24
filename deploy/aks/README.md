@@ -68,6 +68,11 @@ Architecture decisions baked in:
 
 ## Repository layout
 
+🚚 **The AKS platform Bicep (`infra/`) and the example environment (`envs/example/`) moved to the
+private deployments repository, Systemorph/Memex** (`infra/platform/` and `deployments/aks/example/`),
+with the core-slimming carve. Every `infra/platform/…` path below is relative to a Memex checkout;
+the image-based deploy AppHost moved to MeshWeaver.Plugins (`src/Memex.Deploy.AppHost`).
+
 ```
 deploy/aks/
 ├── README.md                  ← you are here — the whole AKS story
@@ -83,16 +88,6 @@ deploy/aks/
 │   ├── check-chart-drift.sh   ← does the CLUSTER run what the chart describes?
 │   ├── aks-extras.yaml        ← StorageClass + RWX PVCs, applied by deploy.sh
 │   └── values.deploy.example.yaml ← template for your secrets file (never commit the real one)
-├── infra/
-│   ├── main.bicep             ← subscription-scoped orchestrator (creates RG)
-│   ├── main.parameters.json   ← edit these
-│   └── modules/
-│       ├── network.bicep      ← VNet + subnets + private DNS zone + VNet link
-│       ├── acr.bicep          ← Azure Container Registry
-│       ├── aks.bicep          ← PRIVATE AKS + identities + AcrPull + CSI + OIDC
-│       ├── vpn.bicep          ← P2S VPN Gateway (cert auth, OpenVPN/IKEv2)
-│       ├── storage.bicep      ← Blob storage + Workload Identity for pgBackRest
-│       └── files.bicep        ← Azure Files account + named shares for STATIC PV binding
 └── manifests/                 ← applied alongside the Helm release
     ├── storageclass-azurefile.yaml ← custom azurefile-memex SC (uid 1654, nobrl)
     ├── portal-pvcs.yaml       ← RWX drives: data/content/attachments/users + pg PVC
@@ -152,7 +147,7 @@ find a patch file here, check whether the chart already does it before running i
   `New-SelfSignedCertificate` works too
 
 A **globally-unique registry** shared across environments, created once (skip if
-you already have one, or if `infra/modules/acr.bicep` provisions a
+you already have one, or if `infra/platform/modules/acr.bicep` provisions a
 per-deployment ACR for you):
 
 ```bash
@@ -163,7 +158,7 @@ az acr create -g meshweaver-shared -n <acrName> --sku Premium
 Validate the Bicep before deploying:
 
 ```bash
-az bicep build --file infra/main.bicep --stdout > /dev/null   # compiles clean
+az bicep build --file infra/platform/main.bicep --stdout > /dev/null   # compiles clean
 ```
 
 ---
@@ -178,7 +173,7 @@ resource group):
 az deployment sub create \
   --name memex-aks-infra \
   --location westeurope \
-  --template-file infra/main.bicep \
+  --template-file infra/platform/main.bicep \
   --parameters @infra/main.parameters.json \
   --parameters postgresAdminPassword="$PG_ADMIN_PW"   # required: deployPostgresFlexible=true
 ```
@@ -202,7 +197,7 @@ az deployment sub show --name memex-aks-infra \
 > `deployVpnGateway: false` unless you specifically want the interactive VNet
 > route described in [Appendix A](#appendix-a--point-to-site-vpn-optional)
 > (Grafana port-forward, `psql`). It defaults to `true`
-> (`infra/main.bicep`, `param deployVpnGateway bool = true`).
+> (`infra/platform/main.bicep`, `param deployVpnGateway bool = true`).
 
 ### Key parameters
 
@@ -229,7 +224,7 @@ az deployment sub show --name memex-aks-infra \
 
 ### Grant AcrPull on a SHARED registry (cross-RG, out-of-band)
 
-A per-deployment ACR (`infra/modules/acr.bicep`) is granted in-bicep and needs
+A per-deployment ACR (`infra/platform/modules/acr.bicep`) is granted in-bicep and needs
 nothing here. A **shared** registry in another resource group cannot be granted
 from a deployment scoped to this one, so two role assignments are made
 out-of-band — and **both** are needed, for different readers:
@@ -242,7 +237,7 @@ az role assignment create --assignee-object-id $KUBELET --assignee-principal-typ
   --role AcrPull --scope $(az acr show -n <acrName> --query id -o tsv)
 
 # 2. The portal WORKLOAD IDENTITY — this is what the in-pod self-updater uses to
-#    LIST tags on the registry. Provisioned by infra/modules/portal-identity.bicep and
+#    LIST tags on the registry. Provisioned by infra/platform/modules/portal-identity.bicep and
 #    federated to system:serviceaccount:<ns>:memex-portal-sa for every portalNamespaces entry.
 PORTAL_MI=$(az identity show -g <rg> -n <portal-identity> --query principalId -o tsv)
 az role assignment create --assignee-object-id $PORTAL_MI --assignee-principal-type ServicePrincipal \
@@ -648,7 +643,7 @@ refusing a class without `allowVolumeExpansion`. Azure Files expands online.
 
 If you'd rather pre-create named shares in one account (to size/quota/firewall/
 back them up centrally), set `deployContentFileShares: true` (default) so
-`infra/modules/files.bicep` provisions a `StorageV2 / Standard_ZRS /
+`infra/platform/modules/files.bicep` provisions a `StorageV2 / Standard_ZRS /
 largeFileSharesState=Enabled` account with shares `content`, `attachments`,
 `data`, `users`, `otel-logs`. Then bind a **static PV** per share. Grab the
 account name + key:
@@ -941,7 +936,7 @@ az storage file download-batch \
 ## Database — PRIVATE PostgreSQL Flexible Server (default)
 
 This sample defaults to a **managed, private** database:
-`infra/modules/postgres.bicep` provisions an **Azure Database for PostgreSQL
+`infra/platform/modules/postgres.bicep` provisions an **Azure Database for PostgreSQL
 Flexible Server** injected into the delegated `postgres` subnet — no public
 endpoint. It resolves only inside the VNet (and over the P2S VPN) via the
 `*.private.postgres.database.azure.com` private DNS zone that `network.bicep`
@@ -995,7 +990,7 @@ in-memory copy — the `doc` schema is purely a search index.
 
 The embeddings provider is **optional**. Leave it unset and docs are full-text-searchable with
 no external AI dependency; set it to enable vector ranking. The deploy AppHost
-(`deploy/aspire/Memex.Deploy.AppHost`) reads three parameters and flows them to **both** the
+(MeshWeaver.Plugins `src/Memex.Deploy.AppHost`) reads three parameters and flows them to **both** the
 migration and the portal:
 
 | Deploy parameter | Container env (migration **and** portal) | Notes |
@@ -1007,7 +1002,7 @@ migration and the portal:
 Set them via `dotnet user-secrets` / env / GitHub secrets at publish time, e.g.:
 
 ```bash
-aspire publish --apphost deploy/aspire/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
+aspire publish --apphost src/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj   # in a MeshWeaver.Plugins checkout \
   -o deploy/helm -- --mode kubernetes \
   -- --Parameters:embedding-endpoint=https://<foundry>.services.ai.azure.com/... \
      --Parameters:embedding-key=<key>
@@ -1426,7 +1421,7 @@ converge onto each newly published build and old ALCs collect — mechanism in
 ## Generating this from Aspire
 
 The repo already models the deployment in
-[`deploy/aspire/Memex.Deploy.AppHost`](../aspire). Running
+MeshWeaver.Plugins `src/Memex.Deploy.AppHost`. Running
 `aspire publish` (or `azd`) against that model is what produced the generic
 [`../helm`](../helm) chart and the [`../aca`](../aca) Container Apps Bicep.
 
@@ -1437,14 +1432,14 @@ P2S-VPN + pgBackRest-PITR stack. So the relationship is:
 - **Aspire owns the app model** → it generates `../helm` (Deployments, Service,
   StatefulSet, migration Job, config/secret templates). Keep regenerating that
   from Aspire when the app composition changes.
-- **This sample owns the AKS platform** → `infra/*.bicep` (private cluster, VPN,
+- **This sample owns the AKS platform** → `infra/platform/*.bicep` (Systemorph/Memex) (private cluster, VPN,
   ACR, backup storage) + `values.aks.yaml` overlay + `manifests/` for the pieces
   the generic chart doesn't template. These are hand-authored Azure platform
   concerns that don't belong in the app model.
 
 If you want the Aspire AppHost to drive the **infra** too, you can call this
 Bicep from a `Memex.Deploy.AppHost` publisher: add it as an
-`AddBicepTemplate("aks-infra", "infra/main.bicep")` resource (or invoke
+`AddBicepTemplate("aks-infra", "infra/platform/main.bicep")` resource (or invoke
 `az deployment sub create` from a publish hook) and pass the cluster/ACR/storage
 outputs into the Helm release step. That keeps a single `aspire`/`azd`-driven
 entry point while this directory remains the source of truth for the AKS-specific
@@ -1461,7 +1456,7 @@ on top unchanged (they only reference stable resource names like
 Aspire's Kubernetes publisher generates the **workload** chart, but it does not
 provision an AKS **cluster**, a private Postgres Flexible Server, a VPN, or
 Let's Encrypt. Those platform pieces are the Bicep + the steps above. The AppHost
-([`../aspire/Memex.Deploy.AppHost`](../aspire/Memex.Deploy.AppHost)) owns the app
+(MeshWeaver.Plugins `src/Memex.Deploy.AppHost`) owns the app
 model **and the deploy parameters** — including the OAuth providers; this document
 stitches the platform around it. All config flows from deploy parameters → env.
 
@@ -1495,7 +1490,7 @@ stitches the platform around it. All config flows from deploy parameters → env
   `ConnectionStrings__memex` is supplied without a matching `__orleans`, so the
   half-configured case cannot ship silently.
 - **Secrets → Key Vault**: move the PG password, master key, and OAuth secrets into
-  Key Vault via the CSI Secrets Store add-on (enabled in `infra/modules/aks.bicep`).
+  Key Vault via the CSI Secrets Store add-on (enabled in `infra/platform/modules/aks.bicep`).
 
 ---
 
@@ -1519,7 +1514,7 @@ az group delete --name <rg> --yes --no-wait    # cluster, VPN, ACR, storage, VNe
 - **Secrets**: move `memex_postgres_password` out of `--set`/values into Key
   Vault via the CSI Secrets Store add-on (already enabled).
 - **API server**: private-only; `enablePrivateClusterPublicFQDN=false`.
-  `infra/modules/aks.bicep` sets `disableLocalAccounts: false` with the comment
+  `infra/platform/modules/aks.bicep` sets `disableLocalAccounts: false` with the comment
   *"keep admin kubeconfig usable over the VPN"* — that is the **only** thing local
   accounts are for here, since `az aks command invoke` does not need them. If you
   skip the VPN (`deployVpnGateway: false`), consider Entra-only
@@ -1547,7 +1542,7 @@ interactive tooling that opens its own socket:
 - a native local `kubectl` — tab-completion, long-running `watch`/`logs -f` — without
   a standing jumpbox VM.
 
-The gateway is still provisioned by default (`infra/main.bicep`,
+The gateway is still provisioned by default (`infra/platform/main.bicep`,
 `param deployVpnGateway bool = true`, module `vpn.bicep`) and it costs 20–45 minutes
 of deploy time; `deployVpnGateway: false` is supported and documented on that
 parameter. Because the cluster is private, the tunnel is what lets `kubectl` resolve
