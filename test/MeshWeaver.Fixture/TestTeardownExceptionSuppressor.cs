@@ -70,11 +70,10 @@ internal static class TestTeardownExceptionSuppressor
     {
         var msg = ex.Message ?? string.Empty;
 
-        // (1) disposed Autofac LifetimeScope during in-flight (de)serialization
-        if (ex is ObjectDisposedException
-            && msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase))
+        // (1) disposed Autofac LifetimeScope during in-flight (de)serialization — the platform's one
+        // definition of that fact (FaultClassifier), not a third copy of its text match. EVERY branch,
+        // through wrappers: a wrapper over a disposed scope beside a real defect is not benign.
+        if (MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex))
             return true;
 
         // (2) xUnit "no currently active test" — a continuation ran after teardown

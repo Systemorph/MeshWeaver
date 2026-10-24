@@ -135,10 +135,10 @@ internal static class TeardownStragglerCapturer
     private static bool IsTeardownDisposedStraggler(Exception? ex) =>
         IsAutofacDisposedScope(ex) || IsDisposedMemoryCache(ex);
 
+    // The FRAME only, never the graph: this runs in the first-chance handler, which then formats the
+    // exception — and an aggregate admitted here would have its (exponential) message composed.
     private static bool IsAutofacDisposedScope(Exception? ex) =>
-        ex is ObjectDisposedException
-        && (ex.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) == true
-            || ex.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) == true);
+        MeshWeaver.Messaging.FaultClassifier.IsDisposedContainerFrame(ex);
 
     private static bool IsDisposedMemoryCache(Exception? ex) =>
         ex is ObjectDisposedException ode
