@@ -45,7 +45,7 @@ Every moving label lives in
 | `{major}.{minor}-stable` | standard | newest set of a minor line that earned trust ([Release Channels](../ReleaseChannels)) | the stable promoter (owed) | declared |
 | `{major}-mac` | mac | newest armed set whose `linux/arm64` variant passed Mac acceptance on Apple silicon | `main-cd.yml` `mac-accept` (owed) | declared |
 | `{major}-enterprise` | enterprise | newest **official** release of the major (clean `x.y.z`) | `release.yml` (owed) | declared |
-| `main` | continuous | newest promoted set, before arming (also `hosting-operator:main`) | `main-cd.yml` `promote`, `hosting-operator.yml` | written |
+| `main` | continuous | newest promoted set, before arming (also `hosting-operator:main`) | `main-cd.yml` `promote`, MeshWeaver.Plugins `hosting-operator.yml` | written |
 | `latest` | continuous | the tester's moving tag, GHCR's latest release, and `memex-portal-ai-base:latest` | `main-cd.yml` `promote`, `release.yml`, `base-image-acr.yml` | written |
 | `edge` | edge | newest unverified edge build; never a fleet seed | `edge-images.yml` | written |
 | `gliner-multi-2.1`, `1.7.4-flix-large-v3-q8` | service | the s1-extract and whisper model-service line tags, re-pushed by each main build | `s1-extract-image.yml`, `whisper-image.yml` | written |

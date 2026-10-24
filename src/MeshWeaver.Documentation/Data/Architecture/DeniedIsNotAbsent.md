@@ -58,7 +58,7 @@ to put the discrimination where every script reaches it and then compare the tre
 
 ## The primitive
 
-`hosting::probe` in `deploy/aks/operator/bin/_common.sh`. It returns `0` present, `1` absent, `2`
+`hosting::probe` in `MeshWeaver.Plugins/deploy/hosting-operator/bin/_common.sh`. It returns `0` present, `1` absent, `2`
 refused, and hands the caller `HOSTING_PROBE_OUT` and `HOSTING_PROBE_ERR`.
 
 ```bash
@@ -84,7 +84,7 @@ caller that only tests for success is unaffected: both are non-zero.
 
 ## The gate
 
-`deploy/aks/operator/test/check-stderr-discarded.sh` enumerates every line in `bin/` that names
+`MeshWeaver.Plugins/deploy/hosting-operator/test/check-stderr-discarded.sh` enumerates every line in `bin/` that names
 `kubectl` **and** discards its stderr, and requires each to be declared in
 `test/stderr-discarded.allow` with the reason collapsing the two answers is safe *there*.
 

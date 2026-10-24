@@ -290,6 +290,33 @@ So the conversion, not a copy:
    one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
    suites call `IncludePartition("<Name>")`, the primitive it wrapped.
 
+## Moving a tool whose IMAGE carries core bytes — the hosting operator
+
+`deploy/aks/operator` (the `hosting-*` scripts, their behaviour suite and the Dockerfile) moved to
+MeshWeaver.Plugins `deploy/hosting-operator`, beside `Hosting/InstanceAction`, the plan that emits
+the commands. Three things made it different from a source move:
+
+1. **The image is two repositories' bytes.** It bakes core's chart, db chart and drift scripts beside
+   the scripts, because `hosting-deploy` installs the chart it carries. The chart stays in core. The
+   new lane stages core's `deploy/` at the declared platform ref with the scripts overlaid where
+   core's own build had them, so the Dockerfile's `COPY` lines are unchanged. A core chart change
+   reaches `:main` through an hourly rebuild that runs only when the input fingerprint moved.
+2. **The tag is a consumer contract.** `hosting-operator:main` keeps its meaning. The old immutable
+   tag (`<core sha7>`) was read as a core COMMIT by the estate's aks-ops lane, which checks the
+   scripts out of core at that commit. The new tag is `<plugins sha7>-<core sha7>`. So core's copy
+   may only be deleted after that lane checks the scripts out of the new home. The deleting half
+   waits for the estate repository as well as for the adding half.
+3. **The equivalence was measured, not argued.** The two images were built from the same core
+   commit and compared. The `/opt/hosting` tree and `/usr/local/bin` were byte-identical, and the
+   entrypoint, user and env were identical. The new lane asserts the entrypoint, the user and the
+   command set on every run. Moving also exposed drift: core's hand-copied list of planned commands
+   had fallen out of step with the plan. The lane in the plan's repository reads the plan instead.
+
+The guards that covered these files moved with them: the `secrets-write-only-entry` allow entries,
+and the `.gitignore` re-include for `bin/`. Their release-channel writer is now declared across
+repositories (`"repo"` on a binding in `.github/release-channels.json`), which keeps
+`hosting-operator:main` protected. MeshWeaver.Plugins `Hosting/HostingOperator` is the manual.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows
