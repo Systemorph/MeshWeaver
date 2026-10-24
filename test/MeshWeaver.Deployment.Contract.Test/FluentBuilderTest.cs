@@ -288,6 +288,23 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void SelfServiceSecrets_AreEmptyByDefault_SurviveTheContract_AndRenderNothingIntoThePortal()
+    {
+        var plain = DeploymentRecordJson.Read("{\"operator\":{\"maintainer\":\"rbuergi\"}}")!;
+        Assert.Empty(plain.Operator!.SelfServiceSecrets);
+        var optedIn = new DeploymentContent
+        {
+            Operator = new HostingOperatorSpec { SelfServiceSecrets = ["Google--OAuth--ClientSecret"] },
+        };
+        var json = DeploymentRecordJson.Write(optedIn);
+        Assert.Contains("\"selfServiceSecrets\":[\"Google--OAuth--ClientSecret\"]", json);
+        Assert.Equal(["Google--OAuth--ClientSecret"], DeploymentRecordJson.Read(json)!.Operator!.SelfServiceSecrets);
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+            Assert.DoesNotContain(DeploymentPortalConfig.PortalConfig(optedIn, options).Keys,
+                k => k.Contains("SelfService", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void ACustomerGovernedRecordThatNamesModels_RendersTheSeedAndCeilingReading_OnBothRenderers()
     {
         // Policy model-settings-seed-and-ceiling (Plugins#2604): on a customer-governed record that
