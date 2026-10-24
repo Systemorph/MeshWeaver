@@ -406,7 +406,8 @@ public static class MailCopyNodeTypes
     /// </summary>
     public static TBuilder AddMailCopyTypes<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
-        builder.AddMeshNodes(SourceTypeNode(), MessageTypeNode());
+        // IfAbsent: the Mail module and every other provider module call this, and any one of them may be the only one installed.
+        builder.AddMeshNodesIfAbsent(SourceTypeNode(), MessageTypeNode());
         builder.AddAutocompleteExcludedTypes(SourceNodeType, MessageNodeType);
         builder.ConfigureHub(config => config
             .WithType<MailCopySource>(nameof(MailCopySource))

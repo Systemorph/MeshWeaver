@@ -26,7 +26,9 @@ public class MailCopyContractTest(ITestOutputHelper output) : MonolithMeshTestBa
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(60);
 
-    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder).AddMailCopyTypes();
+    // Called TWICE on purpose: the Mail module and every other provider module call it and any one of them may
+    // be the only one installed — the mesh must start with each node type seeded once (the write below proves it).
+    protected override MeshBuilder ConfigureMesh(MeshBuilder builder) => base.ConfigureMesh(builder).AddMailCopyTypes().AddMailCopyTypes();
 
     // A copy exactly as the Mail module stored it BEFORE attachments existed (camelCase, discriminator first).
     private const string LegacyCopy = """
