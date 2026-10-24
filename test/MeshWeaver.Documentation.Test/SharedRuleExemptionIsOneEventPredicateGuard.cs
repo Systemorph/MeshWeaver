@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -44,7 +45,7 @@ public class SharedRuleExemptionIsOneEventPredicateGuard
     ];
 
     private static string WorkflowText() =>
-        File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", Workflow));
+        File.ReadAllText(Path.Combine(RepoPaths.Root, ".github", "workflows", Workflow));
 
     /// <summary>
     /// The actual <c>if:</c> EXPRESSIONS carrying the exemption — never comments. The first version
@@ -109,14 +110,5 @@ public class SharedRuleExemptionIsOneEventPredicateGuard
         Assert.DoesNotContain(doctored[0], sites.Where(s => s.Contains("dependabot", StringComparison.Ordinal)));
         Assert.False(doctored[0].Contains("dependabot[bot]", StringComparison.Ordinal),
             "the negative control must genuinely lack the clause the guard requires");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (no .github directory found)");
-        return dir!.FullName;
     }
 }

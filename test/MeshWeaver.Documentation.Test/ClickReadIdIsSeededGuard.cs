@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -50,7 +51,7 @@ public class ClickReadIdIsSeededGuard
     [Fact]
     public void EveryClickReadId_IsSeededOutsideTheClick()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var scanned = 0;
         var reads = 0;
         var offenders = new List<string>();

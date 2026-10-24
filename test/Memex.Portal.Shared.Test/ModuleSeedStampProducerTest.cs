@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -94,11 +95,8 @@ public class ModuleSeedStampProducerTest : IDisposable
 
     private static string TargetsPath()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        var targets = Path.Combine(dir!.FullName, "memex", "MeshModulesPublish.targets");
+        var repoRoot = RepoPaths.Root;
+        var targets = Path.Combine(repoRoot, "memex", "MeshModulesPublish.targets");
         Assert.True(File.Exists(targets), $"{targets} is missing — follow the closure lane if it moved.");
         return targets;
     }

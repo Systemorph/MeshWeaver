@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -146,7 +147,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewAwaitOfAMeshRead()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(
             Path.Combine(root, "test", AwaitedReadAllowFile), AwaitedReadAllowFile);
         var found = ScanAwaitedReads(root);
@@ -203,7 +204,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewTaskShapedSeamInTheMeshContract()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(
             Path.Combine(root, "test", SeamAllowFile), SeamAllowFile);
         var found = ScanContractSeams(root);
@@ -331,7 +332,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void BothScannersFindTheInventoryTheyRatchet()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         Assert.True(ScanAwaitedReads(root).Count > 0,
             "The awaited-read scanner found NO site anywhere under "

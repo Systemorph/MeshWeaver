@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -61,7 +62,7 @@ public class ModuleSuiteLaneGuard
     [Fact]
     public void TheTestsLane_IsTheExactComplement_AndDependsOnNothingItShouldRunBeside()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         Assert.True(Regex.IsMatch(text, @"\n  tests:\n"), $"{Lane} must have a `tests` job");
 
         var tests = JobBody("tests");
@@ -121,7 +122,7 @@ public class ModuleSuiteLaneGuard
     [Fact]
     public void Verify_StaysTheOneStableContext_AndStillRedsOnARedSuite()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         // 🚨 The context NAME is unchanged on purpose: a renamed required context waits forever,
         // and six repos call this lane.
         Assert.Contains("    name: All selected bundles built\n", text, StringComparison.Ordinal);
@@ -137,7 +138,7 @@ public class ModuleSuiteLaneGuard
         // 🚨 …and `bundles-built` must NOT move with it. It is what a gate that only COMPOSES the
         // bundle depends on, so a red suite may not read as "bundle missing" there (#2710,
         // Plugins#937). The verifier answers it from the built markers alone.
-        var verifier = File.ReadAllText(Path.Combine(FindRepoRoot(), Verifier));
+        var verifier = File.ReadAllText(Path.Combine(RepoPaths.Root, Verifier));
         var body = Regex.Match(verifier, @"\ndef bundles_built\((?<b>.*?)\n\ndef ", RegexOptions.Singleline);
         Assert.True(body.Success, "the verifier must define bundles_built");
         Assert.DoesNotContain("tests", body.Groups["b"].Value, StringComparison.Ordinal);
@@ -176,7 +177,7 @@ public class ModuleSuiteLaneGuard
     [Fact]
     public void TheBrowserStep_IsOneImplementation_InBothJobsThatRunASuite()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         var steps = Regex.Matches(
             text,
             @"      - name: A headless browser for the pixel-export suites\n(?<body>(?:        .*\n|\n)+)");
@@ -228,12 +229,4 @@ public class ModuleSuiteLaneGuard
     /// </summary>
     private static string JobBody(string job) => WorkflowJobText.Body(Lane, job);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

@@ -291,11 +291,9 @@ public class PlatformRollsIndependentlyOfPackagesTest(ITestOutputHelper output) 
     /// (<c>SelfUpdateMigratesBeforeItRollsTest</c>): they run in-repo only.</summary>
     private static string RepoRoot()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.SkipWhen(dir is null, "repository tree not reachable — source guard runs in-repo only");
-        return dir!.FullName;
+        var root = RepoPaths.TryFindRoot();
+        Assert.SkipWhen(root is null, "repository tree not reachable — source guard runs in-repo only");
+        return root!;
     }
 
     /// <summary>

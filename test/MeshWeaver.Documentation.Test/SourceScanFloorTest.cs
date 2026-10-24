@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -16,7 +17,7 @@ namespace MeshWeaver.Documentation.Test;
 ///
 /// <para>This is not hypothetical. Relocating <c>MeshWeaver.Documentation.Test</c> into another
 /// repository — a one-line csproj move, seriously considered on 2026-08-30 as part of a test
-/// migration — would have pointed <c>FindRepoRoot()</c> at a tree with no <c>src/</c>, dropping
+/// migration — would have pointed <c>RepoPaths.Root</c> at a tree with no <c>src/</c>, dropping
 /// every root and disarming ~30 rules silently and permanently.</para>
 ///
 /// <para>🚨 <b>Why the existing <c>TheScannerSeesWhatItClaimsTo</c> self-tests do not cover this.</b>
@@ -76,7 +77,7 @@ public class SourceScanFloorTest
     [Fact]
     public void TheRealTreeScansFine_AndAnAbsentOptionalRootIsStillTolerated()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         SourceScan.SourceFiles(root, ["src"]).Should().NotBeEmpty();
         SourceScan.SourceFiles(root, ["src", "no-such-root-here"]).Should().NotBeEmpty(

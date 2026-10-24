@@ -14,6 +14,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -109,7 +110,7 @@ public class AzureReposSyncPolicyTest
         // push-only refusals (RefuseInbound on import / re-import / branch state / branch head) are
         // gone from the sync path, not merely unused.
         var source = System.IO.File.ReadAllText(System.IO.Path.Combine(
-            RepoRoot(), "src", "MeshWeaver.GitSync", "GitHubSyncService.cs"));
+            RepoPaths.Root, "src", "MeshWeaver.GitSync", "GitHubSyncService.cs"));
         source.Should().Contain("AzureReposSyncPolicy.ExportGuard(config)");
         source.Should().Contain("AzureReposSyncPolicy.ReimportGuard(config)");
         source.Contains("config.Direction == SyncDirection.ImportOnly", StringComparison.Ordinal)
@@ -308,14 +309,6 @@ public class AzureReposSyncPolicyTest
         diff["allChangesIncluded"] = false;
         AzureReposRepoClient.ChangedPaths(diff, "base", "site/").Should().BeNull(
             "a partial change list must never read as \"nothing else changed\"");
-    }
-
-    private static string RepoRoot()
-    {
-        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !System.IO.File.Exists(System.IO.Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repository root (MeshWeaver.slnx) not found");
     }
 
     // ── Localization of every refusal ────────────────────────────────────────
