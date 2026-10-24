@@ -541,7 +541,16 @@ for the reading process.
 (MeshWeaver.Hosting.Orleans.Test). Four System reads through the silo's cache activate four hubs,
 the pass's mirrors are released, and each hub must reach `DisposalCompleted`. On the unfixed grain
 none does within the 36 s convergence bound. A second fact covers the conservative half: a node
-read by `TestUser` must keep its activation after every mirror of it has gone.
+`TestUser` opened a view of from another process must keep its activation after that view and every
+mirror of it have gone. The person is recognised on the view's own subscribe.
+
+That fact first read the node through the client process's mesh-node cache, which by the rule above
+never marks the owner. It passed only when the cache's later **teardown** message happened to be
+stamped with the test host's standing identity (`SetHostIdentity`, a single-identity host) and reached
+the grain before the owner's last lease dropped. A teardown stamped any other way retired the hub, and
+main went red intermittently. Released under System, the same teardown retires it every time. A
+person fact must put the person on the read itself, never on whatever identity a later message
+inherits.
 
 **Not established:** the before/after on a live replica. The reading to take is the per-address
 census of §10.1 inside the first 30 minutes of a generation, compared with the same window on a
