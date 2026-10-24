@@ -440,6 +440,13 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
             else:
                 reasons.append(stale)
                 owes_review = stale
+                # A REFUSAL of this very head, after the review that no longer covers it, is terminal:
+                # the review-on-change lane requests nothing over a refusal, so waiting for the owed
+                # review would only sleep the full window. Report it as unreviewable (#7142 review).
+                after = str(newest_landed_copilot_review(reviews, as_of).get("submitted_at") or "")
+                refused += [first_line(r.get("body")) for k, r in kinds
+                            if k == "refused" and head and str(r.get("commit_id") or "") == head
+                            and str(r.get("submitted_at") or "") > after]
     else:
         if not_copilot:
             why = ("no Copilot review of this pull request — \"reviewed, nothing found\" is ONLY a completed Copilot review "
@@ -2498,6 +2505,15 @@ def self_test() -> int:
     case("REAL CHANGE: the real change's OWN review lands -> green (what the red waits for)", GREEN,
          _pr(0), [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], carry=NOT_COVERED,
          never_says=("OWES A REVIEW",))
+    case("REAL CHANGE NEG: an earlier head's review, then a REFUSAL of the current head -> red, unreviewable, not waited for",
+         (OWES,), _pr(0), [older_clean, _review(REFUSAL_QUOTA, rid=63, at="2026-09-14T14:00:00Z")], [], carry=NOT_COVERED,
+         says=("RED — UNREVIEWABLE",))
+    v_refused_head = evaluate(_pr(0), [older_clean, _review(REFUSAL_QUOTA, rid=63, at="2026-09-14T14:00:00Z")], [], NO_WAIVER,
+                              copilot_carry=NOT_COVERED)
+    ok = bool(v_refused_head.refused) and not waiting_would_help(v_refused_head)
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'REAL CHANGE: a refusal of the owing head is not waited for':60} "
+          f"refused={bool(v_refused_head.refused)} waits={waiting_would_help(v_refused_head)}")
     case("REAL CHANGE: the waiver releases a head that owes a review", GREEN, _pr(0, [WAIVER_LABEL]), [older_clean], [],
          Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), carry=NOT_COVERED, mention=("WAIVED", OWES))
     v_owes = evaluate(_pr(0), [older_clean], [], NO_WAIVER, copilot_carry=NOT_COVERED)
