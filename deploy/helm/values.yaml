@@ -1160,17 +1160,23 @@ buildHosts:
   sandbox:
     seccompProfile: ""
     appArmorProfile: ""
-  # Egress: DNS, the build API's pods (podSelector below), and 80/443 to anything OUTSIDE the
-  # excluded ranges (GitHub, the registries, NuGet, Entra). Ingress: none — a host serves nothing.
+  # Egress: the cluster DNS resolver, the build API's pods on their port, and 80/443 to anything
+  # OUTSIDE the excluded ranges (GitHub, the registries, NuGet, Entra). Ingress: none. The runner's
+  # start-up boundary self-check refuses to run where this policy does not hold.
   networkPolicy:
     enabled: true
     apiPodSelector:
       app.kubernetes.io/component: memex-portal
     apiPort: 8080
+    # DNS goes to the cluster resolver ONLY (AKS: CoreDNS, k8s-app=kube-dns in kube-system).
+    dnsNamespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodSelector:
+      k8s-app: kube-dns
     # Never reachable on 80/443, whatever the stage: the cluster-private ranges, link-local
     # (169.254.0.0/16 — the instance metadata service, where a node identity's tokens are minted),
-    # and Azure's platform endpoint 168.63.129.16 (WireServer; DNS on 53 stays allowed by the rule
-    # above). Stages share the pod's network namespace, so this is the boundary, not the sandbox.
+    # and Azure's platform endpoint 168.63.129.16 (WireServer). Stages share the pod's network
+    # namespace, so this is the boundary, not the sandbox.
     privateCidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "168.63.129.16/32"]
   # H8: the plugins layer from the REGISTRY's bundle index (what an instance on this framework identity
   # installs), read before every claim with a READ-ONLY `mwi_` instance key from a Secret, mounted

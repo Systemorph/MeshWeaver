@@ -14,7 +14,9 @@
 #      the channel's maxReplicaCount and a metrics-api trigger on <apiUrl>/queue?channel=<c> with
 #      valueLocation demand and a scale-down stabilization window, the worker token as a mounted
 #      FILE (never env), grace = the run deadline, no credential volume but that one and no bake
-#      share — plus a ServiceAccount with no token and a NetworkPolicy with no ingress;
+#      share — plus a ServiceAccount with no token and a NetworkPolicy with no ingress whose egress
+#      is pinned whole (DNS to the cluster resolver only; the build API's pods on their port; 80/443
+#      outside every private range, IMDS and WireServer);
 #   4. the refusals hold: a tag instead of a digest, plain http to a public host, and a registry
 #      credential for the host, fail
 #      `helm template` naming why.
@@ -176,10 +178,30 @@ if find("ConfigMap", "memex-build-host-scripts"):
     problems.append("the chart renders a scripts ConfigMap — the runner ships in the image")
 np = find("NetworkPolicy", "build-host")
 if np:
-    excepts = [e for rule in np["spec"].get("egress", []) for to in rule.get("to", []) for e in (to.get("ipBlock") or {}).get("except", [])]
-    for blocked in ("169.254.0.0/16", "168.63.129.16/32"):
-        if blocked not in excepts:
-            problems.append(f"NetworkPolicy build-host leaves {blocked} reachable (instance metadata / WireServer)")
+    # The egress shape, pinned whole: exactly three rules.
+    #   1. DNS (53/udp+tcp) to the cluster resolver ONLY;
+    #   2. the build API's pods on their port ONLY;
+    #   3. 80/443 to 0.0.0.0/0 EXCEPT every private range, link-local/IMDS and WireServer.
+    egress = np["spec"].get("egress", [])
+    if len(egress) != 3:
+        problems.append(f"NetworkPolicy build-host has {len(egress)} egress rules, not the pinned 3")
+    def ports(rule):
+        return sorted((p.get("protocol"), p.get("port")) for p in rule.get("ports", []))
+    dns = [r for r in egress if ports(r) == [("TCP", 53), ("UDP", 53)]]
+    if not dns or not all(to.get("namespaceSelector", {}).get("matchLabels") == {"kubernetes.io/metadata.name": "kube-system"}
+                          and to.get("podSelector", {}).get("matchLabels") == {"k8s-app": "kube-dns"}
+                          for r in dns for to in (r.get("to") or [{}])):
+        problems.append(f"DNS egress is not restricted to the cluster resolver: {dns}")
+    api = [r for r in egress if ports(r) == [("TCP", 8080)]]
+    if not api or any("ipBlock" in to for r in api for to in r.get("to", [])):
+        problems.append(f"the build-API egress is not a pod selector on its port: {api}")
+    web = [r for r in egress if ports(r) == [("TCP", 80), ("TCP", 443)]]
+    blocks = [to.get("ipBlock") for r in web for to in r.get("to", [])]
+    must = {"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "168.63.129.16/32"}
+    if len(blocks) != 1 or not blocks[0] or blocks[0].get("cidr") != "0.0.0.0/0" or not must <= set(blocks[0].get("except", [])):
+        problems.append(f"the 80/443 egress does not exclude every private range, IMDS and WireServer: {blocks}")
+    if any(not to for r in egress for to in r.get("to", [None])):
+        problems.append("an egress rule has no destination (it would allow every address)")
 if not np or np["spec"].get("ingress") != [] or "Ingress" not in np["spec"].get("policyTypes", []):
     problems.append("NetworkPolicy build-host missing or admits ingress")
 if problems:

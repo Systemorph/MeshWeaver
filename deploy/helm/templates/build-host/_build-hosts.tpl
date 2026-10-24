@@ -97,6 +97,8 @@ The refusals, and why each one exists:
       "sandbox" (dict "seccompProfile" (($b.sandbox | default dict).seccompProfile | default "") "appArmorProfile" (($b.sandbox | default dict).appArmorProfile | default ""))
       "pollingInterval" (int ($b.pollingInterval | default 15)) "cooldownPeriod" (int ($b.cooldownPeriod | default 600))
       "networkPolicy" (dict "enabled" ($np.enabled | default false) "apiPodSelector" ($np.apiPodSelector | default dict)
+                            "dnsNamespaceSelector" ($np.dnsNamespaceSelector | default (dict "kubernetes.io/metadata.name" "kube-system"))
+                            "dnsPodSelector" ($np.dnsPodSelector | default (dict "k8s-app" "kube-dns"))
                             "apiPort" (int ($np.apiPort | default 8080)) "privateCidrs" ($np.privateCidrs | default list))
       "registry" (dict "url" $regUrl "keySecret" $regSecret "keySecretKey" ((($reg.instanceKeySecret | default dict).key) | default "key"))
       "channels" $channels) -}}

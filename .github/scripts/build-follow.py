@@ -36,6 +36,10 @@ THE RULES, each of which is a way this step could otherwise read green on no evi
     lines, and a follower whose cursor fell behind is told how many it missed — never a silent gap.
   * the verdict is read only after the log is DRAINED: a terminal state is acted on once a poll
     returns no further lines, so the last error lines are printed before the exit.
+  * the RUN decides when the follow ends, not the stage: while `runTerminal` is false the follower
+    keeps polling even after its stage's verdict (the run can restart the stage — a lost host, a
+    re-queue — and the restart is printed), and at `runTerminal` it exits with the stage's FINAL
+    `state` (`succeeded` → 0, anything else → 1).
   * workflow commands from the log are passed through ONLY for `::error`, `::warning` and
     `::notice` (an annotation on the PR's Files tab), RE-COMPOSED from validated parts. Every other
     command-shaped physical line — `::add-mask::`, `::stop-commands::`, `::group::`, `##[…]`, after
@@ -239,15 +243,29 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                 cursor = nxt
             elif lines and isinstance(lines[-1], dict) and isinstance(lines[-1].get("seq"), int):
                 cursor = lines[-1]["seq"]
-            state = str(body.get("state") or "").strip().lower()
+            new_state = str(body.get("state") or "").strip().lower()
             summary = str(body.get("summary") or "").strip()
-            if state in PENDING:
-                if lines:
-                    continue        # more may be waiting — read again before sleeping
+            # A stage's verdict is NOT the end: the RUN can still restart it (a host lost, a re-queue
+            # after a platform move). The follower ends only when the run is terminal — and exits
+            # with the stage's FINAL state then. A page without `runTerminal` (an older instance)
+            # keeps the old rule: the stage's terminal state ends the follow.
+            has_run = "runTerminal" in body
+            run_terminal = body.get("runTerminal") is True
+            run_state = str(body.get("runState") or "").strip()
+            if state and state not in PENDING and new_state in PENDING:
+                out(f"::notice title=Stage restarted::{stage} was {state} and is {new_state or 'pending'} again — "
+                    f"the run restarted it (run {run_state or 'running'}); following on")
+            state = new_state
+            if lines:
+                continue                # drain the log before deciding anything
+            if has_run:
+                if run_terminal:
+                    break
                 sleep(poll_seconds)
                 continue
-            if lines:
-                continue            # terminal, but drain the log before acting on the verdict
+            if state in PENDING:
+                sleep(poll_seconds)
+                continue
             break
     finally:
         out("::endgroup::")
@@ -412,6 +430,31 @@ def self_test() -> int:
     check("cursor/each line once", sum("Store cache hit" in o for o in out) == 1, out)
     check("cursor/stage is one path segment", "/stages/modules/log?" in http.urls[0], http.urls[0])
     check("cursor/grouped", out[0].startswith("::group::build/modules") and "::endgroup::" in out, out)
+
+    # 1b. The RUN decides when following ends: a stage verdict while the run is still running keeps
+    #     the follower going, a restart after success is followed, and the final state at runTerminal
+    #     is the exit.
+    def _rpage(lines, nxt, state, run_state, terminal, summary=""):
+        st, body = _page(lines, nxt, state, summary=summary)
+        return st, dict(body, runState=run_state, runTerminal=terminal)
+    code, err, out, http = _run([
+        _rpage([(1, "compiled")], 1, "succeeded", "running", False),
+        _rpage([], 1, "succeeded", "running", False),
+        _rpage([], 1, "succeeded", "succeeded", True),
+    ])
+    check("run/succeeded but the run still running keeps polling", code == 0 and len(http.urls) == 3, (code, err, http.urls))
+    code, err, out, _ = _run([
+        _rpage([(1, "compiled")], 1, "succeeded", "running", False),
+        _rpage([(2, "host lost — re-queued")], 2, "queued", "running", False),
+        _rpage([(3, "CS0246 on the new set")], 3, "failed", "running", False),
+        _rpage([], 3, "failed", "failed", True, summary="1 error"),
+    ])
+    check("run/a reset after success is followed, and the FINAL state is the exit",
+          code == 1 and err and "failed" in err and any("Stage restarted" in o for o in out), (code, err, out))
+    code, err, _, _ = _run([_rpage([], 0, "not-run", "failed", True)])
+    check("run/not-run at a terminal run is red", code == 1 and err and "did NOT RUN" in err, (code, err))
+    code, err, _, _ = _run([_rpage([], 0, "succeeded", "running", False)], timeout=1.0)
+    check("run/a run that never turns terminal is a timeout, not a green", code == 1 and err and "no verdict" in err, (code, err))
 
     # 2. A skipped gap is LOUD, with the count.
     code, err, out, _ = _run([_page([(2050, "late line")], 2050, "running", skipped=48),

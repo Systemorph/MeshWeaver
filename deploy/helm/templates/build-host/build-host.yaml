@@ -25,8 +25,10 @@ metadata:
 automountServiceAccountToken: false
 {{- if $b.networkPolicy.enabled }}
 ---
-# PR code is untrusted code. A build host serves nothing (no ingress) and may reach DNS, the build
-# API's pods, and 80/443 OUTSIDE the cluster-private ranges — never another workload in the cluster.
+# PR code is untrusted code. A build host serves nothing (no ingress) and may reach the cluster's DNS
+# resolver, the build API's pods on their port, and 80/443 OUTSIDE the excluded ranges (every private
+# range, link-local/IMDS, WireServer) — never another workload, the node or the cloud's metadata.
+# build-run.py's start-up boundary self-check refuses to run on a policy that does not hold.
 apiVersion: "networking.k8s.io/v1"
 kind: "NetworkPolicy"
 metadata:
@@ -43,7 +45,15 @@ spec:
   policyTypes: ["Ingress", "Egress"]
   ingress: []
   egress:
-    - ports:
+    # DNS to the CLUSTER RESOLVER only — never port 53 to anything (an open 53 is a tunnel).
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $b.networkPolicy.dnsNamespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $b.networkPolicy.dnsPodSelector | nindent 14 }}
+      ports:
         - { protocol: UDP, port: 53 }
         - { protocol: TCP, port: 53 }
     - to:

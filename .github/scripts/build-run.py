@@ -38,7 +38,9 @@ THE LOOP, and the order that matters:
      and a tmpfs scratch writable. When the stage ends its whole process tree ends with it; the host
      checks no process survives in another pid namespace before it claims again, and EXITS if one
      does. If the node cannot create the namespaces, the host refuses to START, naming why — it
-     never runs a stage unsandboxed. `MW_BUILD_PUBLISH=true|false` (from the claim) is
+     never runs a stage unsandboxed. It also refuses to start when, from INSIDE a sandbox, the
+     instance metadata service, a cluster-private address or the Kubernetes API ANSWERS (the
+     boundary self-check): the NetworkPolicy, not the sandbox, is the network boundary. `MW_BUILD_PUBLISH=true|false` (from the claim) is
      informational: a host holds no publication credential and mounts no bake share; publication
      is the publish lane's, on `build/verdict`.
   4. The child's output is translated into PROGRESS EVENTS (§7a) and POSTed in batches to
@@ -829,6 +831,69 @@ class Sandbox:
                         f"user/PID/mount namespaces are required; the host refuses to run any stage unsandboxed")
 
 
+# The places PR code must NOT reach from a stage, probed from INSIDE a sandbox at host start
+# (Doc/Architecture/BuildHosts §2): the instance metadata service (node-identity tokens), a
+# cluster-private address, and the Kubernetes API. Any of them ANSWERING — any HTTP status, even a
+# 401/403 — is a hole in the NetworkPolicy, and the host refuses to start naming it.
+BOUNDARY_PROBES = (
+    ("instance metadata (169.254.169.254)", "http://169.254.169.254/metadata/instance?api-version=2021-02-01", {"Metadata": "true"}),
+    ("a cluster-private address", None, {}),          # MW_BUILD_BOUNDARY_PRIVATE_URL, default below
+    ("the Kubernetes API (kubernetes.default.svc)", "https://kubernetes.default.svc/version", {}),
+)
+DEFAULT_PRIVATE_PROBE = "http://10.0.0.1/"
+BOUNDARY_SCRIPT = r"""
+import json, ssl, sys, urllib.request, urllib.error
+out = {}
+for name, url, headers in json.loads(sys.argv[1]):
+    try:
+        ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+        urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=4, context=ctx)
+        out[name] = "answered"
+    except urllib.error.HTTPError as e:
+        out[name] = "answered (HTTP %d)" % e.code
+    except Exception as e:
+        out[name] = "blocked (%s)" % type(e).__name__
+print(json.dumps(out))
+"""
+
+
+def boundary_problems(results: dict) -> list[str]:
+    """The probes that ANSWERED — each one a boundary the NetworkPolicy does not hold."""
+    return sorted(f"{name}: {r}" for name, r in results.items() if str(r).startswith("answered"))
+
+
+def boundary_check(sandbox, env: dict, run: Callable[[list[str]], tuple[int, str]]) -> None:
+    """Probe the boundary from inside a sandbox (the place a stage would try from). The host REFUSES
+    TO START when any probe answers, or when the probe itself cannot report — a check that could not
+    run is not a check that passed."""
+    probes = [(name, url or env.get("MW_BUILD_BOUNDARY_PRIVATE_URL") or DEFAULT_PRIVATE_PROBE, headers)
+              for name, url, headers in BOUNDARY_PROBES]
+    d = tempfile.mkdtemp(prefix="boundary-")
+    try:
+        argv = sandbox.argv("python3 -c " + shlex_quote(BOUNDARY_SCRIPT) + " " + shlex_quote(json.dumps(probes)),
+                            d, d, {"PATH": "/usr/bin:/bin"})
+        rc, out = run(argv)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    try:
+        results = json.loads(out.strip().splitlines()[-1]) if rc == 0 and out.strip() else None
+    except ValueError:
+        results = None
+    if not isinstance(results, dict) or len(results) != len(probes):
+        raise Fatal(f"the boundary self-check could not run inside the sandbox (exit {rc}): {out.strip()[-300:]} — "
+                    f"the host refuses to start on an unmeasured boundary")
+    holes = boundary_problems(results)
+    if holes:
+        raise Fatal("the network boundary does not hold — from inside a stage's sandbox these ANSWERED: "
+                    + "; ".join(holes) + ". The host refuses to start: fix the build-host NetworkPolicy "
+                    "(169.254.0.0/16, 168.63.129.16 and the private ranges must be unreachable)")
+
+
+def shlex_quote(v: str) -> str:
+    import shlex
+    return shlex.quote(v)
+
+
 def pid_namespace_leftovers(proc_root: str = "/proc") -> list[int]:
     """Processes visible to the host that live in ANOTHER pid namespace than the host's — what a
     finished stage left behind. The host runs one run at a time and starts nothing else in a
@@ -1115,8 +1180,9 @@ def _post_form(url: str, form: dict) -> dict:
 
 
 def _run_capture(argv: list[str]) -> tuple[int, str]:
-    r = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
-    return r.returncode, (r.stderr or "") + (r.stdout or "")
+    r = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")},
+                       timeout=120)
+    return r.returncode, (r.stderr or "") + (r.stdout or "")      # stdout LAST: callers read its final line
 
 
 class Host:
@@ -1631,6 +1697,7 @@ def main(argv: list[str]) -> int:
         host = Host(env, Api(env.get("BUILD_API", ""), read_worker_token(env)))
         host.preflight()
         host.sandbox.probe(_run_capture)
+        boundary_check(host.sandbox, env, _run_capture)
     except (Refusal, Fatal) as r:
         print(f"build-run: {r}", file=sys.stderr, flush=True)
         return 1
@@ -1813,6 +1880,37 @@ def self_test() -> int:
     check("probe/uses the same sandbox argv", probe_calls and probe_calls[0][0] == "/usr/bin/bwrap"
           and "--unshare-pid" in probe_calls[0], probe_calls)
     sb.probe(lambda argv: (0, ""))      # a node that allows them starts
+
+    # the boundary self-check, with injected results
+    sbx = Sandbox("/usr/bin/bwrap", [])
+    seen_argv: list[list[str]] = []
+
+    def boundary_run(results):
+        def run(argv):
+            seen_argv.append(argv)
+            return 0, "bwrap noise\n" + json.dumps(results)
+        return run
+    blocked = {n: "blocked (URLError)" for n, _, _ in BOUNDARY_PROBES}
+    boundary_check(sbx, {}, boundary_run(blocked))
+    check("boundary/probed from INSIDE a sandbox", seen_argv and seen_argv[0][0] == "/usr/bin/bwrap"
+          and "--unshare-pid" in seen_argv[0] and "169.254.169.254" in seen_argv[0][-1], seen_argv[:1])
+    check("boundary/the metadata probe sends Metadata: true", '"Metadata": "true"' in seen_argv[0][-1])
+    for name, _, _ in BOUNDARY_PROBES:
+        for answer in ("answered", "answered (HTTP 403)"):
+            try:
+                boundary_check(sbx, {}, boundary_run(dict(blocked, **{name: answer})))
+                check(f"boundary/{name} {answer} refuses to start", False, "started")
+            except Fatal as e:
+                check(f"boundary/the refusal names {name}", name in str(e), e)
+    for broken in ((1, "python3: not found"), (0, "not json"), (0, json.dumps({"only": "one"}))):
+        try:
+            boundary_check(sbx, {}, lambda argv, b=broken: b)
+            check(f"boundary/an unmeasured boundary {broken} refuses to start", False, "started")
+        except Fatal:
+            pass
+    seen_argv.clear()
+    boundary_check(sbx, {"MW_BUILD_BOUNDARY_PRIVATE_URL": "http://10.1.2.3/"}, boundary_run(blocked))
+    check("boundary/the private probe address is configurable", "10.1.2.3" in seen_argv[0][-1], seen_argv[0][-1][-200:])
 
     tmp = tempfile.mkdtemp(prefix="build-run-selftest-")
     try:
@@ -2309,7 +2407,7 @@ def self_test() -> int:
         return 1
     print("build-run self-test: all cases passed (diagnostics, dedup, vstest + xunit results, structured events, "
           "stage declaration, the bwrap argv, the env allow-list, the token file, the startup sandbox probe, "
-          "pid-namespace leftovers, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
+          "pid-namespace leftovers, the network-boundary self-check, trunk-only BUILD-stage cache promotion under recomputed keys, the plan, batch seq, the lease heartbeat, the claimId, the git mirror, the workload-identity pull, the registry bundle index (H8), plugins refresh BEFORE claim, fresh process per "
           "stage, fail-fast, channel + publish, 409, undeclared stages, stage timeout, run deadline)")
     return 0
 

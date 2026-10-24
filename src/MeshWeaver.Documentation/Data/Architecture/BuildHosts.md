@@ -59,6 +59,11 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   yet), transport errors and 5xx after six consecutive failures.
 - **a `skipped` gap is a warning with the count** — the host keeps the newest 2,000 lines.
 - **the log is drained before the verdict**, so the last error lines print first.
+- **the RUN ends the follow, not the stage.** The log page carries `runState` and `runTerminal`;
+  while `runTerminal` is false the follower keeps polling even after its stage's verdict — the run
+  can restart the stage (a lost host, a re-queue), and the restart is printed — and at
+  `runTerminal` it exits with the stage's FINAL `state` (`succeeded` → 0, anything else, `not-run`
+  included → 1).
 - **only `::error`, `::warning` and `::notice` pass through** as workflow commands (annotations on
   the Files tab). Every other `::` line is defused with a leading space: a build must not be able to
   steer the runner that prints its log (`::add-mask::`, `::stop-commands::`, …).
@@ -148,6 +153,11 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    - **Nothing survives a stage.** `--die-with-parent` and the PID namespace end the whole tree with
      the stage; the host then checks no process remains in another pid namespace, kills any it
      finds, and **exits** (the container is replaced) if one still survives — before it claims again.
+   - **The network boundary is checked at start.** From INSIDE a sandbox the host probes the
+     instance metadata service (`http://169.254.169.254/metadata/instance`, `Metadata: true`), a
+     cluster-private address (`MW_BUILD_BOUNDARY_PRIVATE_URL`, default `http://10.0.0.1/`) and the
+     Kubernetes API (`https://kubernetes.default.svc`). If ANY answers — any HTTP status — the host
+     refuses to start, naming which; a probe that cannot report is a refusal too.
    - **No sandbox, no host.** At startup the host creates the namespaces once; if the node refuses
      them (seccomp, AppArmor, a kernel without unprivileged user namespaces) it exits non-zero
      naming why. It never runs a stage unsandboxed.
@@ -234,7 +244,8 @@ pull and never enters the pod's filesystem. The plugins publication is pulled wi
 identity above (AcrPull, read-only) or anonymously.
 
 Shared: a ServiceAccount `build-host` with no token mounted and no rights, a NetworkPolicy with no
-ingress and egress only to DNS, the build API's pods and 80/443 outside the excluded ranges — the
+ingress and exactly three egress rules — DNS to the CLUSTER RESOLVER only (`kube-system`
+`k8s-app=kube-dns`), the build API's pods on their port, and 80/443 outside the excluded ranges — the
 cluster-private ranges, link-local `169.254.0.0/16` (the instance metadata service, where a node
 identity's tokens are minted) and `168.63.129.16/32` (WireServer). Stages share the pod's network
 namespace, so that policy — not the sandbox — is the network boundary. There is no shared database
