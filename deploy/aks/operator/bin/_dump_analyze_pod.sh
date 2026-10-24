@@ -73,18 +73,26 @@ export HOME=/tmp DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
 dotnet tool install --tool-path "$tools" dotnet-dump --version "$MW_DOTNET_DUMP_VERSION" >/tmp/mw-dd-install.log 2>&1 \
   || refuse "could not install dotnet-dump $MW_DOTNET_DUMP_VERSION from nuget.org: $(tail -3 /tmp/mw-dd-install.log | tr '\n' ' ')"
 
-# section <head|tail> <name> <command…>. `head` keeps the first $MW_SECTION_BYTES of the output, `tail`
-# the last ones (from the first whole line) — `dumpheap -stat` lists its types SMALLEST first and
-# ends with its `Total … objects, … bytes` line, so the types that hold the heap are at the END.
-# Either way the full byte count is reported on the `end` line, so a cut is never silent.
+# section <head|stat> <name> <command…>. `head` keeps the first $MW_SECTION_BYTES of the output.
+# `stat` is for `dumpheap -stat`, which lists its types SMALLEST first and closes the table with its
+# `Total … objects, … bytes` line, so the types that hold the heap are at the table's END. It keeps
+# the output THROUGH that Total line — dropping what SOS prints after it (the "Fragmented blocks"
+# table, which names object addresses and whose rows would displace the statistics) — and of that,
+# the last $MW_SECTION_BYTES from the first whole line. Either way the full byte count is reported on
+# the `end` line, so a cut is never silent.
 section() {
   keep="$1" name="$2"; shift 2
   emit "section${tab}${name}${tab}$*"
   timeout "$MW_CMD_TIMEOUT" "$tools/dotnet-dump" analyze "$real" -c "setsymbolserver -ms" -c "$*" -c exit </dev/null >/tmp/mw-dd-out.txt 2>&1
   rc=$?
   size="$(stat -c %s /tmp/mw-dd-out.txt)"
-  if [ "$keep" = tail ] && [ "$size" -gt "$MW_SECTION_BYTES" ]; then
-    tail -c "$MW_SECTION_BYTES" /tmp/mw-dd-out.txt | sed 1d
+  if [ "$keep" = stat ]; then
+    sed '/^[[:space:]]*Total [0-9,]* objects/q' /tmp/mw-dd-out.txt >/tmp/mw-dd-stat.txt
+    if [ "$(stat -c %s /tmp/mw-dd-stat.txt)" -gt "$MW_SECTION_BYTES" ]; then
+      tail -c "$MW_SECTION_BYTES" /tmp/mw-dd-stat.txt | sed 1d
+    else
+      cat /tmp/mw-dd-stat.txt
+    fi
   else
     head -c "$MW_SECTION_BYTES" /tmp/mw-dd-out.txt
   fi
@@ -98,7 +106,7 @@ section() {
 section head eeversion eeversion
 section head threadpool threadpool
 section head gcheapstat gcheapstat
-section tail dumpheap dumpheap -stat
+section stat dumpheap dumpheap -stat
 section head syncblk syncblk
 section head clrthreads clrthreads
 section head clrstack clrstack -all

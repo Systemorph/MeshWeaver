@@ -47,7 +47,9 @@ case "$cmd" in
     echo "          MT     Count     TotalSize Class Name"
     n="${HOSTING_DA_HEAP_ROWS:-3000}" i=1
     while [ "$i" -le "$n" ]; do printf '7f12a%07x %9d %13d Generated.Type%06d\n' "$i" "$i" "$((i * 1000))" "$i"; i=$((i + 1)); done
-    echo "Total $((n * (n + 1) / 2)) objects, $((n * (n + 1) / 2 * 1000)) bytes" ;;
+    echo "Total $((n * (n + 1) / 2)) objects, $((n * (n + 1) / 2 * 1000)) bytes"
+    # What SOS may print after the table: fragmentation rows naming object addresses.
+    printf 'Fragmented blocks larger than 0.5 MB:\n    Addr     Size      Followed By\n700000000000   99999999999999 700000000100 System.Byte[]\n' ;;
   *) echo "unknown command $cmd"; exit 2 ;;
 esac
 STUB

@@ -4419,22 +4419,50 @@ _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p'
 rm -f "$_da_large"
 
 # A heap with tens of thousands of types (a real portal's `dumpheap -stat` runs to ~20,000 rows): the
-# table is cut to the LARGEST types, never the first ones printed, and the cut is stated.
-_da_heap="$(mktemp)"
-{
+# table is cut to the LARGEST types, never the first ones printed, and the cut is stated. The log is
+# what the pod sends when its section cap cut the table: the tail, so the table's header is gone.
+_da_heap="$(mktemp)" _da_rows="$(mktemp)"
+# Pure bash: the operator image (Azure Linux 3), where CI runs this suite, ships no awk.
+_i=1
+while [ "$_i" -le 20000 ]; do
+  printf '7f12a%07x %9d %13d Generated.N%06d.Holder`1[[Generated.N%06d.Payload, Generated]]\n' "$_i" "$_i" "$((_i * 1000))" "$_i" "$_i"
+  _i=$((_i + 1))
+done > "$_da_rows"
+unset _i
+# The fixture is checked first: a generator that failed (an awk, in an image with none) would
+# otherwise surface as a heap of zero types.
+[ "$(grep -c ' Generated\.N[0-9]*\.Holder' "$_da_rows")" = 20000 ] && ok "the 20,000-type heap fixture holds 20,000 type rows" || bad "heap fixture" "rows: $(grep -c ' Generated\.N[0-9]*\.Holder' "$_da_rows")"
+da_heap_log() {  # da_heap_log <with header: yes|no>
   printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
   printf '@@MW-DUMP selected\tp/coredump.1.1791622450\t17179869184\t1791622450\n'
   printf '@@MW-DUMP section\tdumpheap\tdumpheap -stat\n'
-  printf 'Statistics:\n          MT     Count     TotalSize Class Name\n'
-  awk 'BEGIN { for (i = 1; i <= 20000; i++) printf "7f12a%07x %9d %13d Generated.N%06d.Holder`1[[Generated.N%06d.Payload, Generated]]\n", i, i, i * 1000, i, i }'
+  [ "$1" = no ] || printf 'Statistics:\n          MT     Count     TotalSize Class Name\n'
+  cat "$_da_rows"
   printf 'Total 200010000 objects, 200010000000 bytes\n'
+  # What SOS may print AFTER the Total line is not the table: fragmentation rows (address, size,
+  # next object, its type), here with an all-digit address and a plain size, so they match a type row.
+  printf 'Fragmented blocks larger than 0.5 MB:\n'
+  printf '    Addr     Size      Followed By\n'
+  printf '700000000000   99999999999999 700000000100 System.Byte[]\n'
   printf '@@MW-DUMP end\tdumpheap\t0\t2400000\n@@MW-DUMP done\n'
-} > "$_da_heap"
+}
+da_heap_log no > "$_da_heap"
 da HOSTING_DA_LOG="$_da_heap" -- --namespace memex-cloud
 _da_fact="$(printf '%s\n' "$_da_out" | sed -n 's/^::hosting:: dump_analysis=//p' | tail -1)"
 [ "$_da_rc" -eq 0 ] && [ "${#_da_fact}" -le 14000 ] && [ "$(printf '%s' "$_da_json" | jq -r '.heap | .typeCount, (.typesShown < .typeCount), (.typesShown == (.types | length)), .types[0].type, .types[-1].bytes > 19000000, .rowsCut' | tr '\n' '|')" = "20000|true|true|Generated.N020000.Holder\`1[[Generated.N020000.Payload, Generated]]|true|true|" ] \
   && ok "a 20,000-type heap keeps the LARGEST types within the lane's budget (${#_da_fact} bytes), stating shown < found and that the pod cut rows" || bad "heap cap" "rc ${_da_rc}; ${#_da_fact} bytes; heap: $(printf '%s' "$_da_json" | jq -c '.heap | del(.types)'); first: $(printf '%s' "$_da_json" | jq -c '.heap.types[0]')"
 case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .text')" in *"largest of at least 20000 type(s) by total size; the rest are cut."*) ok "…and says so in the section the page renders" ;; *) bad "heap cut stated" "json: $(printf '%s' "$_da_json" | jq -c '.sections')" ;; esac
+[ "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .truncated')" = true ] \
+  && ok "…and marks that section cut" || bad "heap section truncated" "json: $(printf '%s' "$_da_json" | jq -c '.sections')"
+# The same table with its header — nothing cut in the pod, although the section printed more bytes than
+# the cap (the fragmentation rows count too): the type count is exact, never "at least".
+da_heap_log yes > "$_da_heap"
+da HOSTING_DA_LOG="$_da_heap" -- --namespace memex-cloud
+[ "$_da_rc" -eq 0 ] && [ "$(printf '%s' "$_da_json" | jq -r '.heap | .typeCount, .rowsCut, .types[0].type' | tr '\n' '|')" = "20000|false|Generated.N020000.Holder\`1[[Generated.N020000.Payload, Generated]]|" ] \
+  && case "$(printf '%s' "$_da_json" | jq -r '.sections[] | select(.name == "dumpheap") | .text')" in *"largest of 20000 type(s)"*) true ;; *) false ;; esac \
+  && ok "a whole table is reported as whole (exact type count), and rows AFTER the Total line are never read as types" || bad "whole heap table" "rc ${_da_rc}; heap: $(printf '%s' "$_da_json" | jq -c '.heap | del(.types)'); first: $(printf '%s' "$_da_json" | jq -c '.heap.types[0]')"
+rm -f "$_da_rows"
+unset -f da_heap_log
 # A heap walk that did not finish (the per-command bound): no Total line — said, never read as an empty heap.
 {
   printf '@@MW-DUMP listing\n17179869184\t1791622450\tp/coredump.1.1791622450\n'
@@ -4543,13 +4571,14 @@ if find /dev/null -maxdepth 0 -printf '' >/dev/null 2>&1 && realpath -e / >/dev/
   [ "$(printf '%s\n' "$_dap_out" | sed -n 's/^@@MW-DUMP section	\([^	]*\)	.*/\1/p' | tr '\n' ',')" = "eeversion,threadpool,gcheapstat,dumpheap,syncblk,clrthreads,clrstack,dumpasync," ] && case "$_dap_out" in *"@@MW-DUMP done"*) true ;; *) false ;; esac \
     && ok "…running the eight fixed commands and reaching done" || bad "pod sections" "out: ${_dap_out}"
   # dumpheap -stat prints ~168 KB here against a 100 KB section cap: the pod keeps the TAIL (the largest
-  # types and the Total line), from a whole line, and reports the full byte count.
+  # types and the Total line), from a whole line, drops what SOS prints AFTER the Total line (the
+  # fragmentation rows, which name object addresses), and reports the full byte count.
   _dap_heap="$(printf '%s\n' "$_dap_out" | sed -n '/^@@MW-DUMP section	dumpheap	/,/^@@MW-DUMP end	dumpheap	/p')"
   case "$_dap_heap" in *"Generated.Type003000"*"Total 4501500 objects, 4501500000 bytes"*) true ;; *) false ;; esac \
-    && case "$_dap_heap" in *"Generated.Type000001"*|*"Statistics:"*) false ;; *) true ;; esac \
+    && case "$_dap_heap" in *"Generated.Type000001"*|*"Statistics:"*|*"Fragmented"*|*"700000000000"*) false ;; *) true ;; esac \
     && [ "$(printf '%s\n' "$_dap_heap" | sed -n '2p' | grep -c '^7f12a[0-9a-f]\{7\} ')" = 1 ] \
     && [ "$(printf '%s\n' "$_dap_heap" | tail -1 | cut -f4)" -gt 100000 ] \
-    && ok "in the pod: a dumpheap -stat over the section cap keeps its TAIL — largest types and Total — from a whole line, counting every byte" || bad "pod heap tail" "heap section: $(printf '%s\n' "$_dap_heap" | head -3) … $(printf '%s\n' "$_dap_heap" | tail -3)"
+    && ok "in the pod: a dumpheap -stat over the section cap keeps its TAIL — largest types and Total, nothing after it — from a whole line, counting every byte" || bad "pod heap tail" "heap section: $(printf '%s\n' "$_dap_heap" | head -3) … $(printf '%s\n' "$_dap_heap" | tail -3)"
   unset _dap_heap
   [ "$(printf '%s\n' "$_dap_out" | sed -n '/^@@MW-DUMP listing/,/^@@MW-DUMP selected/p' | grep -c 'coredump')" = 3 ] \
     && ok "…listing every regular dump file (symlinks are not dumps) beside the selection" || bad "pod listing" "out: ${_dap_out}"

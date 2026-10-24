@@ -298,16 +298,21 @@ def lpad($n): tostring | ([range(0; ([$n - length, 0] | max))] | map(" ") | join
 | ($r.sections | map(select(.name == "clrstack")) | first // {lines: []}) as $cs
 | ($r.sections | map(select(.name == "syncblk")) | first // {lines: []}) as $sb
 # dumpheap -stat: `<MT> <count> <total bytes> <type>` per type (SOS prints the numbers with or without
-# thousands separators), then `Total <n> objects, <m> bytes`. The pod kept the TAIL of a long table,
-# which is where the largest types are; rowsCut says the type count is then a floor.
+# thousands separators), then `Total <n> objects, <m> bytes`. Only rows BEFORE that Total line are
+# statistics (the pod already drops what SOS prints after it; this holds for any log). The pod kept the
+# TAIL of a long table, which is where the largest types are, so the header of the table is gone
+# exactly when rows were cut — rowsCut is read off that, never off a byte count that also counts the
+# lines that are not the table, and says the type count is then a floor.
 | ($r.sections | map(select(.name == "dumpheap")) | first // null) as $dh
 | (if $dh == null then null else
-     ([ $dh.lines[]
+     ($dh.lines | (first(range(0; length) as $i | select(.[$i] | test("^\\s*Total\\s+[0-9][0-9,]*\\s+objects")) | $i) // length)) as $end
+     | ([ $dh.lines[:$end][]
         | capture("^\\s*(?:0x)?[0-9a-fA-F]{8,}\\s+(?<count>[0-9][0-9,]*)\\s+(?<size>[0-9][0-9,]*)\\s+(?<type>\\S.*?)\\s*$")
         | {type: (.type | redact), objects: (.count | num), bytes: (.size | num)} ]
       | sort_by(-.bytes)) as $rows
-     | ([ $dh.lines[] | capture("^\\s*Total\\s+(?<o>[0-9][0-9,]*)\\s+objects,\\s+(?<b>[0-9][0-9,]*)\\s+bytes") ] | first // null) as $tot
-     | {exit: $dh.exit, bytes: $dh.bytes, rowsCut: (($dh.bytes // 0) > $sectionBytes),
+     | ([ $dh.lines[$end:][] | capture("^\\s*Total\\s+(?<o>[0-9][0-9,]*)\\s+objects,\\s+(?<b>[0-9][0-9,]*)\\s+bytes") ] | first // null) as $tot
+     | {exit: $dh.exit, bytes: $dh.bytes,
+        rowsCut: (($rows | length) > 0 and ($dh.lines[:$end] | any(test("^\\s*Statistics:|^\\s*MT\\s+Count\\s+TotalSize")) | not)),
         totalObjects: (if $tot == null then null else ($tot.o | num) end),
         totalBytes: (if $tot == null then null else ($tot.b | num) end),
         typeCount: ($rows | length), typesShown: ([($rows | length), $heapTypes] | min), typesCap: $heapTypes,
@@ -350,7 +355,7 @@ def lpad($n): tostring | ([range(0; ([$n - length, 0] | max))] | map(" ") | join
     dump: $r.selected,
     heap: $heap,
     sections: [ $r.sections[] | select(.name != "clrstack") | if .name == "dumpheap" then
-                  {name, command, exit, bytes, truncated: false, text: $heapText}
+                  {name, command, exit, bytes, truncated: ($heap.rowsCut or $heap.typesShown < $heap.typeCount), text: $heapText}
                 elif $text == 0 and (.name == "dumpasync" or .name == "clrthreads") then
                   {name, command, exit, bytes, truncated: true, omitted: true, text: ""}
                 else (.lines | join("\n") | redact) as $t

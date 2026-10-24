@@ -203,9 +203,12 @@ Its one step is core's `hosting-dump-analyze --namespace <ns> [selector]`
    each generation (gen0, gen1, gen2, LOH, POH) per GC heap, kept as printed. `dumpheap -stat` is
    turned into a table of the types that hold the most bytes, **largest first**. Each row carries
    the type's bytes, object count and share of the heap's `Total … bytes` line, and the table opens
-   with that total. SOS prints the types smallest first and ends with the total, so the Job keeps
-   the **tail** of a table longer than its section cap: the largest types and the total survive,
-   and the table says the type count is then a floor. The table shows the 40 largest types, fewer
+   with that total. SOS prints the types smallest first and closes the table with the total, so
+   the Job keeps the output **through the total line**. It drops what SOS prints after that line,
+   the fragmentation blocks, which name object addresses and would push the table out. Of the
+   table it keeps the **tail** when it is longer than the section cap, so the largest types and
+   the total survive. When rows were cut, the table's own header is gone too, and the table then
+   says the type count is a floor. The table shows the 40 largest types, fewer
    if the fact must shrink to fit. It is never left out, and it states shown-versus-found. The
    `Free` row is kept, because free space is fragmentation, not retention. A heap walk stopped by
    the per-command bound prints no total, and the table says it did not finish rather than
