@@ -325,7 +325,7 @@ public class DepartedSiloClassificationTest
     /// two different Orleans assemblies, neither of which is the one declaring
     /// <see cref="OrleansException"/>.</para>
     /// </summary>
-    private static bool ShippedLiteralPresent(string assemblyFileName, string phrase)
+    internal static bool ShippedLiteralPresent(string assemblyFileName, string phrase)
     {
         var assemblyPath = Path.Combine(AppContext.BaseDirectory, assemblyFileName);
 

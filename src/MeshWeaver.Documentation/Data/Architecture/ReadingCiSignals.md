@@ -203,8 +203,49 @@ before classifying that red. The completed `[CI] … elapsed=` markers identify 
 drifted; a `TEST_START` without `TEST_END` identifies the test in flight, whose surrounding trace
 distinguishes a stalled edge from a job cut during steady progress. Re-measure the table from
 full, executed green runs, split a project whose part exceeds the per-project headroom rule, and
-check the six assignments again. A green-tree reuse run skips the shards and supplies no timing
+check every shard's assignment again. A green-tree reuse run skips the shards and supplies no timing
 evidence. Keep the job and per-project caps in place: they make a real wedge observable and bounded.
+
+**Balanced weights are not enough when the browser step can eat the cap.** The 20-minute job cap
+has to hold the browser provision's worst case as well as the tests. Until 2026-10-24 every shard ran
+`playwright-core install --with-deps` for its apt half, which on ubuntu-24.04 adds only nine font
+packages. When the runner's apt mirror stalled, that step spent its whole 480 s budget on fonts it
+then gave up on, and with its graces it could take ~10 minutes. The cancellations of 2026-10-23 had
+that and stale weights at once:
+
+- PR runs 40011143666 and 40011313475, and main run 40027189653, each lost a shard on attempt 1.
+- Each cut shard spent exactly 480 s in the browser step; healthy shards spend 20–70 s.
+- Shard 4 owed ~880 s of tests against a printed ~454 s, because the weights were stale.
+
+The fix took the mirror out of the shards rather than widening anything:
+
+- **The font set is staged once.** The `Stage the browser font set` job downloads the packages in
+  `.github/chromium-fonts.list`, extracts their files without installing them, and saves them as
+  the `chromium-fonts` cache (`.github/scripts/stage-chromium-fonts.sh`). It runs in parallel with
+  the build and reaches the mirror only on a cache miss. On a miss it first checks the list against
+  the pinned Playwright's `install-deps --dry-run`, so the set stays the one the portal image ships.
+- **A shard only restores and unpacks it.** No apt runs in a shard, so there is no mirror, no lock
+  and no orphaned apt-get. A missing cache is a warning, and the smoke print still decides.
+- **The browser has an end-to-end bound.** The restore step's 2 min and the provision step's 5 min
+  `timeout-minutes` (420 s) are the whole browser cost. Every inner bound fits inside them. The
+  restore's cap is deliberately longer than its 1 min download abort: an abandoned download is
+  reported as a cache miss, while the step cap firing first would fail the shard over an optional
+  input.
+- **The weights were re-measured and re-split, and `CI_SHARD_TOTAL` went 6→8.** The scheduled suite
+  is ~4,100 s. After the 420 s browser bound and ~150 s of setup, a shard has ~630 s for tests;
+  eight shards average ~513 s.
+
+`ShardWeightHeadroomGuard.TheIdealShardLoadFitsTheShardJobCap` checks the arithmetic, and
+`TheProvisionStepsInnerBoundsFitItsCap` checks that the step's inner bounds fit its cap. Both read
+their numbers from the workflow. The load is summed over the projects the scheduler actually
+discovers, with unlisted ones at `DEFAULT_WEIGHT`, never over the table's rows.
+
+That guard can only be as right as the table, and the table goes stale without telling anyone. The
+LPT loop also weights every part of a split project as total ÷ N, while the every-Nth class split
+is uneven: Messaging.Hub's two parts were 106 s and 408 s. So re-check against the measured
+per-part `elapsed=` markers, not against the loads the script prints. The trx per-class durations,
+fed through the sorted every-Nth split, reproduce the measured parts exactly. That makes them the
+way to choose a part count before you push.
 
 ## 🚨 A narrow instrument does not answer a wide question — and it is RIGHT while you misread it
 
