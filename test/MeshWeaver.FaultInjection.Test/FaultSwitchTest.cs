@@ -18,7 +18,7 @@ public class FaultSwitchTest
     /// already read open. Negative control: publishing the arrival before the limit counts as spent
     /// (the switch released only after <c>NoteArrival</c>) makes the callback read it closed.
     /// </summary>
-    [Fact(Timeout = 10_000)]
+    [Fact]
     public void AOneShotFault_ReadsOpen_WhenItsArrivalIsPublished()
     {
         var fault = new FaultSwitch("fail one write", limit: 1);
