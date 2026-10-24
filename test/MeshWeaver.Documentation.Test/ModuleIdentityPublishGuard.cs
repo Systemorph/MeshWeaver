@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -109,7 +110,7 @@ public class ModuleIdentityPublishGuard
         // answer "identity could not be checked". Determinism alone would not have fixed that;
         // stating the commit does.
         Assert.Contains("MeshWeaverFrameworkIdentity", File.ReadAllText(Path.Combine(
-            SourceScan.FindRepoRoot(), "src", "MeshWeaver.Plugin.Build", "FrameworkIdentity.cs")),
+            RepoPaths.Root, "src", "MeshWeaver.Plugin.Build", "FrameworkIdentity.cs")),
             StringComparison.Ordinal);
 
         // 🚨 An unreadable platform commit ends the arm RED — it never falls back to a derived or
@@ -202,7 +203,7 @@ public class ModuleIdentityPublishGuard
         // And the verifier that reads it still asks BOTH questions. `verify` is the lane's one
         // stable context (`All selected bundles built`) — the context a repo's branch protection
         // requires — so this is where the outcome becomes falsifiable.
-        var verifier = File.ReadAllText(Path.Combine(FindRepoRoot(), Verifier));
+        var verifier = File.ReadAllText(Path.Combine(RepoPaths.Root, Verifier));
         Assert.Contains("def identity_agreement(", verifier, StringComparison.Ordinal);
         Assert.Contains("IDENTITY_FIELD = \"frameworkIdentity\"", verifier, StringComparison.Ordinal);
         Assert.Contains("DIFFERENT framework identities", verifier, StringComparison.Ordinal);
@@ -223,7 +224,7 @@ public class ModuleIdentityPublishGuard
     [Fact]
     public void TheLedgerRecipeVersion_MovedWithTheBytesTheLanePacks()
     {
-        var key = File.ReadAllText(Path.Combine(FindRepoRoot(), KeyScript));
+        var key = File.ReadAllText(Path.Combine(RepoPaths.Root, KeyScript));
         var recipe = Regex.Match(key, @"^RECIPE_VERSION = ""(?<v>[^""]+)""", RegexOptions.Multiline);
         Assert.True(recipe.Success, $"{KeyScript} must declare RECIPE_VERSION");
         Assert.NotEqual("1", recipe.Groups["v"].Value);
@@ -235,12 +236,4 @@ public class ModuleIdentityPublishGuard
     /// </summary>
     private static string JobBody(string job) => WorkflowJobText.Body(Lane, job);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

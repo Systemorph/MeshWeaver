@@ -14,6 +14,7 @@ using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -30,7 +31,8 @@ namespace MeshWeaver.Graph.Test;
 /// down, the next activation loaded the OLDER row, and the change was silently gone.</para>
 ///
 /// <para>The fault is injected at the storage adapter — the outermost layer of the production chain —
-/// and fires exactly ONCE, for the one path under test. The negative control runs the identical
+/// and fires exactly ONCE, for the one path under test (a <c>FailOperations(path, Write, times: 1)</c>
+/// of the shared <see cref="FaultInjectingStorageAdapter"/>). The negative control runs the identical
 /// sequence with no fault armed, so a pass there proves the recycle path itself is sound and the
 /// difference is the failed write.</para>
 /// </summary>
@@ -38,79 +40,13 @@ public class AFailedOwnSaveSurvivesARecycleTest(ITestOutputHelper output) : Mono
 {
     // ——— fault injection —————————————————————————————————————————————————————————————————
 
-    // The path whose NEXT write fails, and how many writes are left to fail. Set by the test,
-    // read by the decorator on the storage thread.
-    private volatile string? faultPath;
-    private int faultsRemaining;
-    // Completed by the decorator when it has injected the fault — the test waits on that, never on time.
-    private readonly AsyncSubject<Unit> faultInjected = new();
-
-    private sealed class WriteFaultingStorageAdapter(IStorageAdapter inner, AFailedOwnSaveSurvivesARecycleTest test)
-        : IStorageAdapter
-    {
-        private IObservable<T>? Fault<T>(string path)
-        {
-            if (!string.Equals(path, test.faultPath, StringComparison.Ordinal)
-                || Interlocked.Decrement(ref test.faultsRemaining) < 0)
-                return null;
-            test.faultInjected.OnNext(Unit.Default);
-            test.faultInjected.OnCompleted();
-            return Observable.Throw<T>(new InvalidOperationException(
-                $"injected store failure for {path} (AFailedOwnSaveSurvivesARecycleTest)"));
-        }
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options) => inner.Read(path, options);
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => inner.ReadMany(paths, options);
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => Fault<MeshNode?>(node.Path) ?? inner.Write(node, options);
-        public IObservable<IReadOnlyList<MeshNode>> WriteMany(IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
-            => nodes.Select(n => Fault<IReadOnlyList<MeshNode>>(n.Path)).FirstOrDefault(f => f is not null)
-               ?? inner.WriteMany(nodes, options);
-        public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-            => Fault<bool?>(node.Path) ?? inner.WriteIfVersion(node, expectedVersion, options);
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-        public IObservable<bool> DeleteIfExists(string path) => inner.DeleteIfExists(path);
-        public IObservable<string?> FindDeleteBlockingProvider(string path) => inner.FindDeleteBlockingProvider(path);
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-            => inner.ListChildPaths(parentPath);
-        public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-            => inner.ListDescendantPaths(rootPath);
-        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(string fullPath, JsonSerializerOptions options)
-            => inner.FindBestPrefixMatch(fullPath, options);
-        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(string fullPath, JsonSerializerOptions options)
-            => inner.ResolvePath(fullPath, options);
-        public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath) => inner.ListPartitionSubPaths(nodePath);
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-        public IObservable<Unit> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
-    }
-
     /// <inheritdoc />
+    /// <remarks>The injector wraps the OUTERMOST storage registration (the whole production chain),
+    /// so the per-node hub's own save is the call that faults.</remarks>
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
-        => base.ConfigureMesh(builder).ConfigureServices(services =>
-        {
-            // Wrap the outermost non-keyed IStorageAdapter registration (same hook as
-            // CreateWhenTheStoreIsUnreachableTest), so the per-node hub's own save is the call that faults.
-            var registered = services.Last(d => d.ServiceType == typeof(IStorageAdapter) && !d.IsKeyedService);
-            services.Remove(registered);
-            return services.AddSingleton<IStorageAdapter>(sp =>
-                new WriteFaultingStorageAdapter(
-                    registered.ImplementationFactory is { } factory
-                        ? (IStorageAdapter)factory(sp)
-                        : registered.ImplementationInstance as IStorageAdapter
-                          ?? throw new InvalidOperationException(
-                              "The IStorageAdapter registration is neither a factory nor an instance — update "
-                              + "this hook; an unwrapped store would make every assertion here vacuous."),
-                    this));
-        });
+        => base.ConfigureMesh(builder).AddFaultInjectingStorageOverTheChain();
+
+    private FaultInjectingStorageAdapter Injector => Mesh.ServiceProvider.GetRequiredService<FaultInjectingStorageAdapter>();
 
     // ——— helpers —————————————————————————————————————————————————————————————————————————
 
@@ -154,11 +90,13 @@ public class AFailedOwnSaveSurvivesARecycleTest(ITestOutputHelper output) : Mono
         var before = Mesh.GetHostedHub(new Address(path), HostedHubCreation.Never);
         before.Should().NotBeNull("the node's hub is activated before the change");
 
-        if (failTheSave)
-        {
-            faultsRemaining = 1;
-            faultPath = path;
-        }
+        // ONE write of the path fails, then the switch releases itself: every later write — the
+        // re-attempt — goes through. The reservation is atomic, so two racing writes cannot both fail.
+        var fault = failTheSave
+            ? Injector.FailOperations(path, StorageLegs.Write,
+                p => new InvalidOperationException($"injected store failure for {p} (AFailedOwnSaveSurvivesARecycleTest)"),
+                times: 1)
+            : null;
 
         // The change is the OWNER's own write — the route the persistence sampler persists (a
         // client's patch is written by the post-commit flush instead, which answers its caller).
@@ -169,12 +107,11 @@ public class AFailedOwnSaveSurvivesARecycleTest(ITestOutputHelper output) : Mono
             .Where(n => n is not null && TextOf(n) == "v2")
             .Should().Within(60.Seconds()).Emit("the change is live", cancellationToken: ct);
 
-        if (failTheSave)
+        if (fault is not null)
         {
-            await faultInjected.Should().Within(60.Seconds())
+            await fault.Arrivals.Should().Within(60.Seconds())
                 .Emit("the sampled save reached the store and was failed once", cancellationToken: ct);
-            // Disarm, so only that ONE write failed: every later write — the re-attempt — goes through.
-            faultPath = null;
+            fault.IsClosed.Should().BeFalse("a one-shot fault releases itself with its one application");
         }
         else
         {

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.AI;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -22,7 +23,7 @@ public class OperationSentinelPrefixTest
     [Fact]
     public void Every_sentinel_literal_the_verbs_write_is_one_the_classifier_reads()
     {
-        var source = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "MeshWeaver.Mesh.Operations", "MeshOperations.cs"));
+        var source = File.ReadAllText(Path.Combine(RepoPaths.Root, "src", "MeshWeaver.Mesh.Operations", "MeshOperations.cs"));
         var literals = SentinelLiteral.Matches(source)
             .Select(m => m.Groups["text"].Value)
             .Where(text => text.Contains(':') || text.StartsWith("Refused ", StringComparison.Ordinal))  // "<Word>: …", or the colon-less refusal
@@ -47,13 +48,5 @@ public class OperationSentinelPrefixTest
         OperationSentinel.NotFoundPrefix.Should().Be("Not found:");
         OperationSentinel.UnavailablePrefix.Should().Be("Unavailable:");
         OperationSentinel.RefusedPrefix.Should().Be("Refused ");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }

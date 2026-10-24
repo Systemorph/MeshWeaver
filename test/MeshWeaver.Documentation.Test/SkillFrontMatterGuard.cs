@@ -1,6 +1,7 @@
 using System.Text;
 using Xunit;
 using YamlDotNet.Serialization;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -34,7 +35,7 @@ public class SkillFrontMatterGuard
     [Fact]
     public void CodexSkillsResolveToTheMaintainedDirectory()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var alias = new DirectoryInfo(Path.Combine(root, CodexSkillsPath));
         Assert.True(alias.LinkTarget == CodexSkillsTarget,
             $"{CodexSkillsPath} must be the relative symlink to {CodexSkillsTarget}, not a copied "
@@ -48,11 +49,11 @@ public class SkillFrontMatterGuard
     /// <summary>Every shipped skill file, as (relative path, text).</summary>
     private static (string Path, string Text)[] SkillFiles()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), SkillsRoot);
+        var dir = Path.Combine(RepoPaths.Root, SkillsRoot);
         return Directory.Exists(dir)
             ? Directory.EnumerateFiles(dir, "SKILL.md", SearchOption.AllDirectories)
                 .OrderBy(p => p, StringComparer.Ordinal)
-                .Select(p => (Path.GetRelativePath(SourceScan.FindRepoRoot(), p), File.ReadAllText(p)))
+                .Select(p => (Path.GetRelativePath(RepoPaths.Root, p), File.ReadAllText(p)))
                 .ToArray()
             : [];
     }

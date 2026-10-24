@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -245,7 +246,7 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewProductionSiteIssuesLifecycleWorkFromTheRouter()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var verbs = DeriveVerbs(root);
 
@@ -332,7 +333,7 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheDerivationIsSourcedTheScannerReachesEveryVerdictAndSeesTheProductionTree()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var verbs = DeriveVerbs(root);
 
         // --- 1. the derivation ---------------------------------------------------------------
@@ -680,5 +681,4 @@ public class RouterAsNodeOperationOriginRatchetGuard(ITestOutputHelper output)
 
         return sites;
     }
-
 }

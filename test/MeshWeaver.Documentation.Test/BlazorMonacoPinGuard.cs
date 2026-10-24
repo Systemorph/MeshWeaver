@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -67,7 +68,7 @@ public class BlazorMonacoPinGuard
     private static readonly string[] ProjectRoots = ["src", "test", "tools", "samples", "memex"];
 
     private static string PropsPath() =>
-        Path.Combine(FindRepoRoot(), "Directory.Packages.props");
+        Path.Combine(RepoPaths.Root, "Directory.Packages.props");
 
     /// <summary>Every <c>PackageVersion</c> entry as (id, version).</summary>
     private static List<(string Id, string Version)> Pins() =>
@@ -78,7 +79,7 @@ public class BlazorMonacoPinGuard
 
     private static List<string> ProjectFiles() =>
         ProjectRoots
-            .Select(r => Path.Combine(FindRepoRoot(), r))
+            .Select(r => Path.Combine(RepoPaths.Root, r))
             .Where(Directory.Exists)
             .SelectMany(d => Directory.EnumerateFiles(d, "*.csproj", SearchOption.AllDirectories))
             .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
@@ -142,7 +143,7 @@ public class BlazorMonacoPinGuard
         var referencing = ProjectFiles()
             .Where(p => Regex.IsMatch(File.ReadAllText(p),
                 $@"<PackageReference\s+[^>]*Include\s*=\s*""{PackageId}"""))
-            .Select(p => Path.GetRelativePath(FindRepoRoot(), p))
+            .Select(p => Path.GetRelativePath(RepoPaths.Root, p))
             .ToList();
 
         Assert.True(referencing.Count == 0,
@@ -178,19 +179,5 @@ public class BlazorMonacoPinGuard
         // And the scan must be able to SEE a PackageReference at all — otherwise "no matches" is
         // indistinguishable from a broken matcher.
         Assert.Contains(projects, p => Regex.IsMatch(File.ReadAllText(p), @"<PackageReference\s"));
-    }
-
-    /// <summary>
-    /// 🚨 Anchors on the SOLUTION file, not on Directory.Packages.props. There are two of the
-    /// latter — the root one, and test/Directory.Packages.props with 6 pins — and walking up from
-    /// the test binary reaches the test one FIRST.
-    /// </summary>
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (no MeshWeaver.slnx found)");
-        return dir!.FullName;
     }
 }

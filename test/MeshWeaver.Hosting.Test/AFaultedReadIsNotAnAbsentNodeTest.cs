@@ -11,6 +11,7 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Hosting.Persistence.Query;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
+using MeshWeaver.Testing.FaultInjection;
 using Xunit;
 
 namespace MeshWeaver.Hosting.Test;
@@ -89,14 +90,18 @@ public class AFaultedReadIsNotAnAbsentNodeTest
         await store.Write(Node("Ifrs17", "Group"), Options).Await(TestContext.Current.CancellationToken);
         await store.Write(Node("Ifrs17/AocType"), Options).Await(TestContext.Current.CancellationToken);
 
-        var failing = new FaultingReadStorageAdapter(store, faultOnPathContaining: "AocType");
+        // The production shape of a Postgres connect timeout on one path of a multi-path probe: the
+        // READ legs (Read, and a ReadMany naming it — which faults as a whole) of that path throw.
+        var failing = new FaultInjectingStorageAdapter(store);
+        var fault = failing.FailOperations(p => p.Contains("AocType", StringComparison.OrdinalIgnoreCase),
+            StorageLegs.Read, description: "paths containing AocType");
         var provider = new StorageAdapterMeshQueryProvider(persistence: failing);
         var query = (IMeshQueryCore)new MeshQuery([provider], hub: null!);
 
         var frame = await FirstFrame(query, ExactProbe("Ifrs17", "Ifrs17/AocType"),
             TestContext.Current.CancellationToken);
 
-        failing.Faults.Should().BeGreaterThan(0,
+        fault.ArrivalCount.Should().BeGreaterThan(0,
             "the fault must actually have been INJECTED — without this the test could pass having "
             + "exercised the healthy path, which is the shape of a verification that cannot fail");
 
@@ -128,14 +133,14 @@ public class AFaultedReadIsNotAnAbsentNodeTest
         var store = new InMemoryStorageAdapter();
         await store.Write(Node("Ifrs17", "Group"), Options).Await(TestContext.Current.CancellationToken);
 
-        var healthy = new FaultingReadStorageAdapter(store, faultOnPathContaining: null);
+        // The same adapter with nothing armed — which is what makes it this test's control.
+        var healthy = new FaultInjectingStorageAdapter(store);
         var provider = new StorageAdapterMeshQueryProvider(persistence: healthy);
         var query = (IMeshQueryCore)new MeshQuery([provider], hub: null!);
 
         var frame = await FirstFrame(query, ExactProbe("Ifrs17", "Ifrs17/NeverWritten"),
             TestContext.Current.CancellationToken);
 
-        healthy.Faults.Should().Be(0, "this case injects no fault — that is what makes it the control");
 
         frame.SnapshotIncomplete.Should().BeFalse(
             "every read behind this frame completed; the path is simply not there. Marking this "
@@ -161,7 +166,9 @@ public class AFaultedReadIsNotAnAbsentNodeTest
         await store.Write(Node("Ifrs17", "Group"), Options).Await(TestContext.Current.CancellationToken);
         await store.Write(Node("Ifrs17/AocType"), Options).Await(TestContext.Current.CancellationToken);
 
-        var failing = new FaultingWalkStorageAdapter(store);
+        // Every subtree enumeration (ListChildPaths, ListDescendantPaths) throws.
+        var failing = new FaultInjectingStorageAdapter(store);
+        var fault = failing.FailOperations(_ => true, StorageLegs.Enumerate, description: "every path");
         var provider = new StorageAdapterMeshQueryProvider(persistence: failing);
         var query = (IMeshQueryCore)new MeshQuery([provider], hub: null!);
 
@@ -169,122 +176,10 @@ public class AFaultedReadIsNotAnAbsentNodeTest
             new MeshQueryRequest { Query = "path:Ifrs17 scope:descendants nodeType:Markdown" },
             TestContext.Current.CancellationToken);
 
-        failing.Faults.Should().BeGreaterThan(0, "the walk fault must actually have been injected");
+        fault.ArrivalCount.Should().BeGreaterThan(0, "the walk fault must actually have been injected");
         frame.SnapshotIncomplete.Should().BeTrue(
             "a walk that could not list its children produced a shorter subtree, and 'no such "
             + "child' read off it is a store fault wearing a data answer");
         frame.SilentProviders.Should().Contain(((IMeshQueryProvider)provider).Name);
-    }
-
-    /// <summary>
-    /// The real <see cref="InMemoryStorageAdapter"/> with the READ legs made to throw for paths
-    /// matching <paramref name="faultOnPathContaining"/> — the production shape of a Postgres
-    /// connect timeout on one path of a multi-path probe. <c>null</c> injects nothing, which is what
-    /// makes the same class serve as this test's control.
-    /// </summary>
-    private sealed class FaultingReadStorageAdapter(IStorageAdapter inner, string? faultOnPathContaining)
-        : IStorageAdapter
-    {
-        private int _faults;
-
-        /// <summary>How many reads were faulted — asserted, so a refactor that stops taking this
-        /// leg cannot leave the test silently vacuous.</summary>
-        public int Faults => _faults;
-
-        private bool ShouldFault(string path) =>
-            faultOnPathContaining is not null
-            && path.Contains(faultOnPathContaining, StringComparison.OrdinalIgnoreCase);
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => ShouldFault(path)
-                ? Observable.Defer(() =>
-                {
-                    Interlocked.Increment(ref _faults);
-                    return Observable.Throw<MeshNode?>(new TimeoutException("The operation has timed out."));
-                })
-                : inner.Read(path, options);
-
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => paths.Any(ShouldFault)
-                ? Observable.Defer(() =>
-                {
-                    Interlocked.Increment(ref _faults);
-                    return Observable.Throw<MeshNode>(new TimeoutException("The operation has timed out."));
-                })
-                : inner.ReadMany(paths, options);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => inner.Write(node, options);
-
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
-    }
-
-    /// <summary>
-    /// The real store with <see cref="IStorageAdapter.ListChildPaths"/> throwing — the walk leg's
-    /// twin of <see cref="FaultingReadStorageAdapter"/>.
-    /// </summary>
-    private sealed class FaultingWalkStorageAdapter(IStorageAdapter inner) : IStorageAdapter
-    {
-        private int _faults;
-
-        /// <summary>How many listings were faulted.</summary>
-        public int Faults => _faults;
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath)
-            => Observable.Defer(() =>
-            {
-                Interlocked.Increment(ref _faults);
-                return Observable.Throw<(IEnumerable<string>, IEnumerable<string>)>(
-                    new TimeoutException("The operation has timed out."));
-            });
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => inner.Read(path, options);
-
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => inner.ReadMany(paths, options);
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-            => inner.Write(node, options);
-
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 }

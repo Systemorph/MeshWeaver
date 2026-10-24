@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,7 +34,7 @@ public class ModuleBuildLedgerLaneGuard
     [Fact]
     public void TheLane_DeclaresTheLedgerFlagAndItsToken_DefaultingToOff()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         // The folded (`>`) description carries blank lines, so the body is "8-space-indented or empty".
         var input = Regex.Match(text, @"\n      ledger:\n(?<body>(?:(?:        .*)?\n)+)");
         Assert.True(input.Success, $"{Lane} must declare a `ledger` input");
@@ -231,7 +232,7 @@ public class ModuleBuildLedgerLaneGuard
     {
         foreach (var script in new[] { KeyScript, LedgerScript })
         {
-            var head = File.ReadAllText(Path.Combine(FindRepoRoot(), script));
+            var head = File.ReadAllText(Path.Combine(RepoPaths.Root, script));
             head = head[..Math.Min(400, head.Length)];
             Assert.Contains(Path.GetFileName(script), head, StringComparison.Ordinal);
         }
@@ -252,7 +253,7 @@ public class ModuleBuildLedgerLaneGuard
     [Fact]
     public void SameRunHandoffs_UseTheSharedTransport_WithLaneScopedNames()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
 
         foreach (var (name, producer, consumer) in new[]
                  {
@@ -294,7 +295,7 @@ public class ModuleBuildLedgerLaneGuard
     [Fact]
     public void EveryStoreOperation_AssertsTheStoreIdentityTheRunResolved()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
 
         // `select` resolves it once and publishes it; a per-job resolution could disagree, which is
         // the whole point — two jobs CAN be on two different shares.
@@ -329,7 +330,7 @@ public class ModuleBuildLedgerLaneGuard
 
         // And the script must still OFFER the flag at the pin this lane fetches: a build-logic ref
         // that predates it would fail every store step on an unknown argument.
-        var helper = File.ReadAllText(Path.Combine(FindRepoRoot(), ".github/scripts/ci-artifact-store.py"));
+        var helper = File.ReadAllText(Path.Combine(RepoPaths.Root, ".github/scripts/ci-artifact-store.py"));
         Assert.Contains("--expect-store-id", helper, StringComparison.Ordinal);
         Assert.Contains("def store_id(self)", helper, StringComparison.Ordinal);
         Assert.Contains("_verify_written", helper, StringComparison.Ordinal);
@@ -339,7 +340,7 @@ public class ModuleBuildLedgerLaneGuard
     [Fact]
     public void EveryGitHubCache_IsDisabledInOwnStoreMode()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         var caches = text.Split("\n      -", StringSplitOptions.None)
             .Where(step => step.Contains("uses: actions/cache@", StringComparison.Ordinal)).ToArray();
         Assert.Equal(6, caches.Length);
@@ -353,12 +354,4 @@ public class ModuleBuildLedgerLaneGuard
     /// </summary>
     private static string JobBody(string job) => WorkflowJobText.Body(Lane, job);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

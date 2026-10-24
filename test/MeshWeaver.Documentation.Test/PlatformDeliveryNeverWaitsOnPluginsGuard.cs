@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -55,7 +56,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void ThePlatformDelivery_NeverWaitsOn_NorFailsFor_APluginsJob()
     {
-        var problems = Problems(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        var problems = Problems(File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow)));
         Assert.True(problems.Count == 0,
             "the PLATFORM delivery in main-cd.yml is coupled to a Plugins job again (policy "
             + "platform-backwards-compatibility — a platform roll never waits for a plugin seal):\n  "
@@ -66,7 +67,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void TheDetector_CatchesEveryCouplingShape()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
         Assert.Empty(Problems(text));
 
         // 1. a Plugins job as a DIRECT need of the verdict.
@@ -114,7 +115,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void TheArmingIsNeverAPlatformDeliveryLeg()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
         var start = text.IndexOf("\n  delivery-verdict:", StringComparison.Ordinal);
         Assert.True(start >= 0, "delivery-verdict is gone from main-cd.yml");
         var m = Regex.Match(text[start..], @"\n    needs:\s*\[(?<n>[^\]]*)\]");
@@ -136,7 +137,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void NoShippedChartOrRecord_PinsAPlatformImage()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var problems = ShippedConfigFiles(root)
             .SelectMany(f => PinProblems(Path.GetRelativePath(root, f), File.ReadAllText(f)))
             .ToList();
@@ -326,14 +327,5 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
         Assert.True(text.Contains(from, StringComparison.Ordinal),
             $"negative control cannot apply — the anchor moved, so the control would pass having mutated nothing: `{from}`");
         return text.Replace(from, to, StringComparison.Ordinal);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

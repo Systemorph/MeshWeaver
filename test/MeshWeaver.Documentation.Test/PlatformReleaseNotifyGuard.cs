@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,13 +34,13 @@ public class PlatformReleaseNotifyGuard
     /// <summary>The workflow's steps, comments stripped — a guard must judge what RUNS, never the
     /// prose explaining it.</summary>
     private static string Body() => string.Join("\n",
-        File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow))
+        File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow))
             .Split('\n')
             .Where(l => !l.TrimStart().StartsWith('#')));
 
     /// <summary>The workflow verbatim, comments included — for the few assertions that are ABOUT
     /// the prose (a rationale that must stay attached to the code it explains).</summary>
-    private static string Verbatim() => File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+    private static string Verbatim() => File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
     /// <summary>
     /// 🚨 A gate NEVER tests its own inputs. `preflight` must assert both halves of the release
@@ -221,7 +222,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void CoreDispatchesToNoRepository()
     {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var workflows = Path.Combine(RepoPaths.Root, ".github", "workflows");
 
         // The withdrawn leg, by name — the shape most likely to be re-added from memory.
         Assert.False(File.Exists(Path.Combine(workflows, "notify-dependents.yml")),
@@ -351,14 +352,5 @@ public class PlatformReleaseNotifyGuard
              i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
             n++;
         return n;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

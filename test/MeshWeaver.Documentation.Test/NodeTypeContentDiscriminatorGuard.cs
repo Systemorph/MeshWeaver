@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -61,7 +62,7 @@ public class NodeTypeContentDiscriminatorGuard
     public void EveryDeclaredContentType_AlsoRegistersItsDiscriminator()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var files = SourceScan.SourceFiles(root, ScannedRoots).ToArray();
 
         var declared = new Dictionary<string, string>(StringComparer.Ordinal);

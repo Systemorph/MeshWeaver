@@ -416,8 +416,8 @@ public sealed class InstanceComboAssembler
                 if (verdict.Failed is not null)
                     return Observable.Return(new ModuleOutcome(plan, verdict.Failed, Absent: false));
 
-                return filePool.InvokeBlocking(_ =>
-                        WriteModule(workRoot, plan.Module.ModuleId, files))
+                return filePool.InvokeBlocking(ct =>
+                        WriteModule(workRoot, plan.Module.ModuleId, files, ct))
                     .Select(written => new ModuleOutcome(plan, verdict.Entry with
                     {
                         Status = ModuleAssemblyStatus.Materialized,
@@ -658,8 +658,14 @@ public sealed class InstanceComboAssembler
 
     private sealed record WrittenModule(string ContentHash, bool DeclaresRoot);
 
+    /// <summary>
+    /// Writes one module's files into the work root — one write per file, so the pool's token is
+    /// checked before each: a drain at teardown stops the loop at the next file instead of waiting
+    /// out the whole tree. A cancelled write leaves a partial tree in the WORK root only, which the
+    /// assembly never reports as materialised (the cancel faults the leaf).
+    /// </summary>
     private static WrittenModule WriteModule(
-        string workRoot, string moduleId, IReadOnlyList<RepoFile> files)
+        string workRoot, string moduleId, IReadOnlyList<RepoFile> files, CancellationToken cancellationToken)
     {
         var moduleRoot = Path.Combine(Path.GetFullPath(workRoot), moduleId);
         Directory.CreateDirectory(moduleRoot);
@@ -667,6 +673,7 @@ public sealed class InstanceComboAssembler
         var declaresRoot = false;
         foreach (var file in files.OrderBy(f => f.Path, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var bytes = file.Bytes;
             var full = Path.Combine(moduleRoot,
                 file.Path.Replace('/', Path.DirectorySeparatorChar));
@@ -684,6 +691,7 @@ public sealed class InstanceComboAssembler
     /// <summary>Writes the manifest (also on refusal — the manifest documents WHY nothing was
     /// materialised) and emits the report.</summary>
     private IObservable<ComboAssemblyReport> Finish(string workRoot, ComboAssemblyReport report) =>
+        // atomic-blocking-leaf: one CreateDirectory and one WriteAllText of the manifest, no step boundary
         filePool.InvokeBlocking(_ =>
         {
             var root = Path.GetFullPath(workRoot);

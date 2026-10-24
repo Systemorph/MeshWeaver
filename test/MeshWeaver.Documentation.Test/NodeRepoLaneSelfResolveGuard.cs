@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -34,7 +35,7 @@ public class NodeRepoLaneSelfResolveGuard
     [InlineData(Gate)]
     public void TheLane_FetchesTheSharedResolverAtItsScriptsRef_AndSelfTestsItFirst(string workflow)
     {
-        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), workflow)));
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, workflow)));
 
         // The same fetch shape as compose-gate-host.sh: core's script, at the LANE's scripts ref —
         // never at the platform's commit (hours behind the lane) and never a vendored copy. Read over
@@ -60,7 +61,7 @@ public class NodeRepoLaneSelfResolveGuard
     [Fact]
     public void TheGate_ResolvesInPlan_AndEveryShardRefreshesAgainstPlansBaseline()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Gate));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Gate));
         var lines = ExecutableLinesOf(text);
 
         // plan hands the shards the digests AND its whole resolver row as their baseline.
@@ -85,7 +86,7 @@ public class NodeRepoLaneSelfResolveGuard
     [Fact]
     public void ThePublishBake_ResolvesBeforeTheImageSteps_AndTheyReadItsAnswer()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), PublishBake));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, PublishBake));
         var lines = ExecutableLinesOf(text);
 
         var digests = lines.IndexOf("id: digests", StringComparison.Ordinal);
@@ -112,7 +113,7 @@ public class NodeRepoLaneSelfResolveGuard
     [Fact]
     public void TheResolver_ExistsAndCarriesTheRuleAndASelfTest()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Resolver));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Resolver));
         Assert.StartsWith("#!/usr/bin/env python3", text, StringComparison.Ordinal);
         // The seal is the TRIO — the run's conclusion does not decide, and nothing else does either.
         foreach (var job in new[] { "Promote: tag the full set", "Verify every image shipped",
@@ -137,7 +138,7 @@ public class NodeRepoLaneSelfResolveGuard
     [Fact]
     public void TheResolver_ReadsNoRetiredPluginsSeal_AndWritesNoPluginsOutput()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Resolver));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Resolver));
 
         Assert.DoesNotContain("PLUGINS_SEAL_JOB = (", text, StringComparison.Ordinal);
         Assert.DoesNotContain("PLUGINS_LOOKBACK", text, StringComparison.Ordinal);
@@ -162,7 +163,7 @@ public class NodeRepoLaneSelfResolveGuard
     {
         // The resolver writes no `plugins-set` (MeshWeaver#6615); a lane that still greps for it
         // prints an empty "plugins publication:" that reads like an answer.
-        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), workflow)));
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, workflow)));
         Assert.DoesNotContain("plugins-set", lines, StringComparison.Ordinal);
     }
 
@@ -189,12 +190,4 @@ public class NodeRepoLaneSelfResolveGuard
     private static string ExecutableLinesOf(string yaml) =>
         string.Join('\n', yaml.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

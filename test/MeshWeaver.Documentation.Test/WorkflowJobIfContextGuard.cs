@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -36,7 +37,7 @@ public class WorkflowJobIfContextGuard
     [Fact]
     public void NoJobLevelIf_ReadsTheMatrixContext()
     {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var workflows = Path.Combine(RepoPaths.Root, ".github", "workflows");
         Assert.True(Directory.Exists(workflows), $"expected {workflows} to exist");
 
         var offenders = Directory
@@ -97,15 +98,5 @@ public class WorkflowJobIfContextGuard
             }
             yield return (i + 1, text);
         }
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }
