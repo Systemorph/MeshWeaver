@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
@@ -147,7 +150,12 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     public static readonly TimeSpan CommitBudget = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource?> Source(string owner, string provider)
+        => Gated(Assembly.GetCallingAssembly(), nameof(Source), owner, Permission.Read, () => SourceCore(owner, provider));
+
+    private IObservable<MailCopySource?> SourceCore(string owner, string provider)
         => Mesh().SelectMany(m => m.Mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.SourcePath(owner, provider)}", owner) with { Limit = 1 })
             .Take(1)
@@ -157,19 +165,26 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 .FirstOrDefault(source => source is not null)));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource> Create(string owner, MailCopySource source)
-        => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source)))
+        => Gated(Assembly.GetCallingAssembly(), nameof(Create), owner, Permission.Update, () => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source)))
             .Select(_ => source)
             // Already there — switched on by another click or another replica: keep the first.
             .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex)
-                ? Source(owner, source.Provider).Select(existing => existing ?? throw ex)
-                : Observable.Throw<MailCopySource>(ex));
+                ? SourceCore(owner, source.Provider).Select(existing => existing ?? throw ex)
+                : Observable.Throw<MailCopySource>(ex)));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource?> Commit(string owner, string provider, string generation, Func<MailCopySource, MailCopySource?> change)
+        => Gated(Assembly.GetCallingAssembly(), nameof(Commit), owner, Permission.Update, () => CommitCore(owner, provider, generation, change));
+
+    private IObservable<MailCopySource?> CommitCore(string owner, string provider, string generation, Func<MailCopySource, MailCopySource?> change)
         // The existence read first: an absent node's stream never answers, and the bound below would
         // then spend its whole budget to say what this read says at once.
-        => Source(owner, provider).SelectMany(current => current is null || current.Generation != generation
+        => SourceCore(owner, provider).SelectMany(current => current is null || current.Generation != generation
             ? Observable.Return<MailCopySource?>(null)
             : Mesh().SelectMany(m =>
             {
@@ -206,21 +221,24 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             : (node, null);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> Disable(string owner, string provider)
         // The copies' attachment files go first, one pass at a time (each pass deletes what it read, files
         // before node), so "stop and delete the copies" leaves no file and no index behind; the source then
         // takes whatever is left with it.
-        => (attachments is null ? Observable.Return(0) : Observable.Defer(() => RotatedThenCleaned(owner, provider)))
-            .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider))));
+        => Gated(Assembly.GetCallingAssembly(), nameof(Disable), owner, Permission.Delete, () =>
+            (attachments is null ? Observable.Return(0) : Observable.Defer(() => RotatedThenCleaned(owner, provider)))
+            .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider)))));
 
     // 🚨 The source's generation is rotated FIRST: a sync still running holds the old one, so its commits
     // are refused from now on (and it removes what it wrote by that generation), instead of racing the
     // scan below with copies and files created after the last empty pass.
     private IObservable<int> RotatedThenCleaned(string owner, string provider)
-        => Source(owner, provider)
+        => SourceCore(owner, provider)
             .SelectMany(current => current is null
                 ? Observable.Return<MailCopySource?>(null)
-                : Commit(owner, provider, current.Generation, RotatedForSwitchOff))
+                : CommitCore(owner, provider, current.Generation, RotatedForSwitchOff))
             .SelectMany(_ => DisablePasses(owner, provider, 1, 0));
 
     /// <summary>
@@ -261,24 +279,49 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
 
     /// <summary>
     /// One copy's attachment files and index, then its node. 🚨 The files go first and a failure to delete
-    /// them stops here: the node stays, and with it the way to try again.
+    /// them stops here: the node stays, and with it the way to try again. 🚨 Whether the copy may hold files
+    /// is read from the node AS IT IS (its stream), never from the query that found it: the index trails
+    /// the store, and an older indexed copy can lack the marker a newer write set.
     /// </summary>
     private IObservable<bool> DeleteCopy(string owner, MeshNode node, System.Text.Json.JsonSerializerOptions options)
-        => (attachments is not null && MailAttachments.MayHoldFiles(node.ContentAs<MailMessageCopy>(options, logger))
-                ? attachments.DeleteAll(owner, node.Path)
-                : Observable.Return(System.Reactive.Unit.Default))
+        => (attachments is null
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Live(owner, node.Path).SelectMany(live => MailAttachments.MayHoldFiles(live.ContentAs<MailMessageCopy>(options, logger))
+                    ? attachments.DeleteAll(owner, node.Path)
+                    : Observable.Return(System.Reactive.Unit.Default)))
             .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(node.Path)));
 
+    /// <summary>
+    /// The node at <paramref name="path"/> as its stream has it — for a node a query has just shown to
+    /// EXIST (CQRS: existence from the index, content from the stream; an absent node's stream never answers).
+    /// </summary>
+    private IObservable<MeshNode> Live(string owner, string path)
+        => Mesh().SelectMany(m => m.Access
+            .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Hub.GetMeshNodeStream(path).Take(1))
+            .Take(1)
+            .Timeout(CommitBudget));
+
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailMessageCopy> Upsert(string owner, MailMessageCopy copy)
-        => Write(owner, m => m.Mesh.CreateOrUpdateNode(MailCopyNodeTypes.BuildCopy(owner, copy))).Select(_ => copy);
+        => Gated(Assembly.GetCallingAssembly(), nameof(Upsert), owner, Permission.Update, () =>
+            Write(owner, m => m.Mesh.CreateOrUpdateNode(MailCopyNodeTypes.BuildCopy(owner, copy))).Select(_ => copy));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> WriteIfNewer(string owner, MailMessageCopy copy)
-        => ReplaceIfNewer(owner, copy).Select(result => result.Wrote);
+        => Gated(Assembly.GetCallingAssembly(), nameof(WriteIfNewer), owner, Permission.Update, () =>
+            ReplaceIfNewerCore(owner, copy).Select(result => result.Wrote));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<(bool Wrote, MailMessageCopy? Replaced)> ReplaceIfNewer(string owner, MailMessageCopy copy)
+        => Gated(Assembly.GetCallingAssembly(), nameof(ReplaceIfNewer), owner, Permission.Update, () => ReplaceIfNewerCore(owner, copy));
+
+    private IObservable<(bool Wrote, MailMessageCopy? Replaced)> ReplaceIfNewerCore(string owner, MailMessageCopy copy)
         => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildCopy(owner, copy)))
             .Select(_ => (Wrote: true, Replaced: (MailMessageCopy?)null))
             .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex)
@@ -315,18 +358,33 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             : (node with { Content = copy, Name = MailCopyNodeTypes.BuildCopy("", copy).Name }, true);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<long?> Revision(string owner, string provider, string generation, string messageId)
+        // Existence from the index, the version from the node's stream: a revision read off the index can
+        // be older than the node, and it is the precondition of the write that follows.
+        => Gated(Assembly.GetCallingAssembly(), nameof(Revision), owner, Permission.Read, () =>
+            Indexed(owner, MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId))
+                .SelectMany(found => found is null
+                    ? Observable.Return<long?>(null)
+                    : Live(owner, found.Path).Select(live => string.Equals(live.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal)
+                        ? (long?)live.Version
+                        : null)));
+
+    // A copy the index lists at exactly this path, or null — an EXISTENCE answer only (the index trails
+    // the store, so its content is never what a decision reads, and its miss is no proof of absence).
+    private IObservable<MeshNode?> Indexed(string owner, string path)
         => Mesh().SelectMany(m => m.Mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId)}", owner) with { Limit = 1 })
+            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}", owner) with { Limit = 1 })
             .Take(1)
-            .Select(change => change.Items
-                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal))
-                .Select(node => (long?)node.Version)
-                .FirstOrDefault()));
+            .Select(change => change.Items.FirstOrDefault(node =>
+                string.Equals(node.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal))));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> WriteIfUnchanged(string owner, MailMessageCopy copy, long? expected)
-        => expected is null
+        => Gated(Assembly.GetCallingAssembly(), nameof(WriteIfUnchanged), owner, Permission.Update, () => expected is null
             // "Still none": create-only — a node that appeared meanwhile is the conflict.
             ? Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildCopy(owner, copy)))
                 .Select(_ => true)
@@ -346,7 +404,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     .Take(1)
                     .Timeout(CommitBudget)
                     .Select(_ => applied);
-            });
+            }));
 
     /// <summary>
     /// What <see cref="WriteIfUnchanged"/> makes of the stored node: <paramref name="copy"/> when its
@@ -359,9 +417,11 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             : (node, false);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> SetAttachments(string owner, string provider, string generation, string messageId,
         ImmutableList<MailAttachmentCopy> list)
-        => Mesh().SelectMany(m =>
+        => Gated(Assembly.GetCallingAssembly(), nameof(SetAttachments), owner, Permission.Update, () => Mesh().SelectMany(m =>
         {
             var applied = false;
             return m.Access
@@ -376,7 +436,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 .Take(1)
                 .Timeout(CommitBudget)
                 .Select(_ => applied);
-        });
+        }));
 
     /// <summary>
     /// What <see cref="SetAttachments"/> makes of the copy <paramref name="node"/> as it is at the owner:
@@ -389,20 +449,25 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             : (node, false);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> Remove(string owner, string provider, string generation, string messageId)
-        => attachments is null
+        => Gated(Assembly.GetCallingAssembly(), nameof(Remove), owner, Permission.Delete, () => attachments is null
             ? Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId)))
-            : Mesh().SelectMany(m => m.Mesh
-                    .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId)}", owner) with { Limit = 1 })
-                    .Take(1)
-                    .Select(change => change.Items.FirstOrDefault(node => string.Equals(node.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal)))
+            // 🚨 A node the index does not list yet is NOT deleted blind: that delete would skip its files,
+            // and the node is the only handle on them. It is left for the next sweep, whose query will
+            // list it, and this answers "none" — the sweeps are the only callers, and they re-read.
+            : Mesh().SelectMany(m => Indexed(owner, MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId))
                     .SelectMany(node => node is null
-                        ? Write(owner, mesh => mesh.Mesh.DeleteNode(MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId)))
-                        : DeleteCopy(owner, node, m.Options)));
+                        ? Observable.Return(false)
+                        : DeleteCopy(owner, node, m.Options))));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<int> RemoveGeneration(string owner, string provider, string generation)
-        => Observable.Defer(() => RemovePasses(owner, provider, generation, 1, 0));
+        => Gated(Assembly.GetCallingAssembly(), nameof(RemoveGeneration), owner, Permission.Delete,
+            () => RemovePasses(owner, provider, generation, 1, 0));
 
     /// <summary>
     /// Whether <paramref name="node"/> is one of <paramref name="owner"/>'s copies of
@@ -423,10 +488,12 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             : throw new ArgumentException("The copy's generation is not a well-formed id; it is never used in a query.", nameof(generation));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<ImmutableList<MailMessageCopy>> List(string owner, string provider, int max, string? exceptGeneration = null)
     {
         var bound = Math.Clamp(max, 1, MaxPage);
-        return Mesh().SelectMany(m => m.Mesh
+        return Gated(Assembly.GetCallingAssembly(), nameof(List), owner, Permission.Read, () => Mesh().SelectMany(m => m.Mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(ListQuery(owner, provider, bound, exceptGeneration), owner) with { Limit = bound })
             .Take(1)
             .Select(change => change.Items
@@ -434,7 +501,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 .Select(node => node.ContentAs<MailMessageCopy>(m.Options, logger))
                 .OfType<MailMessageCopy>()
                 .Where(copy => string.Equals(copy.Provider, provider, StringComparison.Ordinal) && copy.MessageId.Length > 0)
-                .ToImmutableList()));
+                .ToImmutableList())));
     }
 
     private IObservable<int> RemovePasses(string owner, string provider, string generation, int pass, int removed)
@@ -464,18 +531,26 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         => $"namespace:{MailCopyNodeTypes.SourcePath(owner, provider)} nodeType:{MailCopyNodeTypes.MessageNodeType} content.generation:{Checked(generation)}";
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailMessageCopy?> Read(string owner, string provider, string generation, string messageId)
-        => Mesh().SelectMany(m => m.Mesh
-            .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId)}", owner) with { Limit = 1 })
-            .Take(1)
-            .Select(change => Copies(change.Items, provider, generation, m.Options).FirstOrDefault()));
+        // Existence from the index, the content from the node's stream — what a caller decides a write
+        // on must be the copy as it is, not as the index last saw it. An index miss answers null, which is
+        // NOT proof of absence: a caller that cleans up on it must treat it as "unknown".
+        => Gated(Assembly.GetCallingAssembly(), nameof(Read), owner, Permission.Read, () => Mesh().SelectMany(m =>
+            Indexed(owner, MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId))
+                .SelectMany(found => found is null
+                    ? Observable.Return<MailMessageCopy?>(null)
+                    : Live(owner, found.Path).Select(live => Copies([live], provider, generation, m.Options).FirstOrDefault()))));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<ImmutableList<MailMessageCopy>> ReadPage(
         string owner, string provider, string generation, long? from, int size, bool oldestFirst = false)
     {
         var bound = Math.Clamp(size, 1, MaxPage);
-        return Mesh().SelectMany(m => m.Mesh
+        return Gated(Assembly.GetCallingAssembly(), nameof(ReadPage), owner, Permission.Read, () => Mesh().SelectMany(m => m.Mesh
             .Query<MeshNode>(MeshQueryRequest.FromQuery(PageQuery(owner, provider, generation, from, bound, oldestFirst), owner) with { Limit = bound })
             .Take(1)
             .Select(change =>
@@ -487,7 +562,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     ? copies.OrderBy(copy => copy.OrderKey).ThenBy(copy => copy.MessageId, StringComparer.Ordinal)
                     : copies.OrderByDescending(copy => copy.OrderKey).ThenByDescending(copy => copy.MessageId, StringComparer.Ordinal);
                 return ordered.ToImmutableList();
-            }));
+            })));
     }
 
     /// <summary>
@@ -514,6 +589,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                            && copy.MessageId.Length > 0
                            // A tombstone is never listed nor opened.
                            && !copy.Removed);
+
+    private IObservable<T> Gated<T>(Assembly caller, string surface, string owner, Permission permission, Func<IObservable<T>> work)
+        => MailCopyAuthority.Gated(hub(), caller, $"{nameof(MeshMailCopyStore)}.{surface}", owner, permission, work);
 
     private IObservable<T> Write<T>(string owner, Func<Portal, IObservable<T>> write)
         => Mesh().SelectMany(m => m.Access

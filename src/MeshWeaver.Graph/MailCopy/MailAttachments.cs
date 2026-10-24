@@ -1,10 +1,13 @@
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using MeshWeaver.ContentCollections;
 using MeshWeaver.Mesh;
+using MeshWeaver.Mesh.Security;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -106,6 +109,25 @@ public static class MailAttachments
     /// <summary>The path of the attachment's file relative to the collection: <c>{folder}/{fileName}</c>. Pure.</summary>
     public static string RelativePath(MailAttachmentInfo info) => $"{FolderOf(info.Id)}/{CleanFileName(info.Name)}";
 
+    /// <summary>
+    /// Whether <paramref name="copyPath"/> is one of <paramref name="owner"/>'s copy nodes —
+    /// <c>{owner}/_MailCopy/{key}/{id}</c>, exactly — and <paramref name="relativePath"/> (when given) a
+    /// path INSIDE its attachments collection: no empty, <c>.</c> or <c>..</c> segment, no backslash. The
+    /// only targets the attachment store writes to or empties as System. Pure.
+    /// </summary>
+    public static bool IsCopyTarget(string owner, string copyPath, string? relativePath = null)
+    {
+        static bool Plain(string segment) => segment.Length > 0 && segment is not "." and not ".." && !segment.Contains('\\');
+        var prefix = MailCopyNodeTypes.NamespaceFor(owner) + "/";
+        if (string.IsNullOrWhiteSpace(owner) || owner.Contains('/')
+            || !copyPath.StartsWith(prefix, StringComparison.Ordinal))
+            return false;
+        var rest = copyPath[prefix.Length..].Split('/');
+        if (rest.Length != 2 || !rest.All(Plain))
+            return false;
+        return relativePath is null || relativePath.Split('/').All(Plain);
+    }
+
     /// <summary>The full stored path of a copy's attachment file. Pure.</summary>
     public static string StoredPathOf(string copyPath, string relativePath) => $"{copyPath}/{Collection}/{relativePath}";
 
@@ -198,8 +220,10 @@ public sealed class MeshMailAttachmentStore(Func<IMessageHub?> hub, ILogger? log
     public static readonly TimeSpan LookupBudget = TimeSpan.FromSeconds(30);
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<string> Save(string owner, string copyPath, string relativePath, byte[] bytes)
-        => Mesh().SelectMany(m => m.Access
+        => Gated(Assembly.GetCallingAssembly(), nameof(Save), owner, copyPath, relativePath, () => Mesh().SelectMany(m => m.Access
             .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Hub
                 .SaveContentFile(copyPath)
                 .To(MailAttachments.Collection, relativePath)
@@ -212,11 +236,13 @@ public sealed class MeshMailAttachmentStore(Func<IMessageHub?> hub, ILogger? log
                 // The post-upload seam: the content index reacts off-band; a mesh without it is a no-op.
                 m.Hub.RaiseContentUploaded($"{copyPath}/{MailAttachments.Collection}", relativePath);
                 return MailAttachments.StoredPathOf(copyPath, relativePath);
-            }));
+            })));
 
     /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<Unit> DeleteAll(string owner, string copyPath)
-        => Mesh().SelectMany(m => m.Access
+        => Gated(Assembly.GetCallingAssembly(), nameof(DeleteAll), owner, copyPath, null, () => Mesh().SelectMany(m => m.Access
             .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => Collection(m.Hub, copyPath)
                 .SelectMany(collection => Everything(collection, "/")
                     // Sequentially: each delete raises its own notification, and the first failure stops
@@ -226,7 +252,18 @@ public sealed class MeshMailAttachmentStore(Func<IMessageHub?> hub, ILogger? log
                     .LastOrDefaultAsync()
                     .Select(_ => Unit.Default)))
             .Take(1))
-            .Do(_ => logger?.LogDebug("Mail copy: the attachments of {Copy} were deleted", copyPath));
+            .Do(_ => logger?.LogDebug("Mail copy: the attachments of {Copy} were deleted", copyPath)));
+
+    // 🚨 The caller is authorized (MailCopyAuthority) and the TARGET is pinned to the owner's own copy
+    // nodes: these run as System, so a path anywhere else would be a System write to — or an emptying
+    // of — any node's attachments.
+    private IObservable<T> Gated<T>(Assembly caller, string surface, string owner, string copyPath, string? relativePath, Func<IObservable<T>> work)
+        => MailAttachments.IsCopyTarget(owner, copyPath, relativePath)
+            ? MailCopyAuthority.Gated(hub(), caller, $"{nameof(MeshMailAttachmentStore)}.{surface}", owner,
+                surface == nameof(DeleteAll) ? Permission.Delete : Permission.Update, work)
+            : Observable.Throw<T>(new ArgumentException(
+                $"'{copyPath}' is not one of the mail copies of '{owner}'; attachments are stored only under {MailCopyNodeTypes.NamespaceFor(owner)}/{{key}}/{{id}}.",
+                nameof(copyPath)));
 
     private static IObservable<(string Path, bool IsFolder)> Everything(ContentCollection collection, string folder)
         => collection.GetFiles(folder).Select(file => (file.Path, false))

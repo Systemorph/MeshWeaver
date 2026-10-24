@@ -56,3 +56,34 @@ owner.
 
 The default account of a provider keeps `{owner}/_MailCopy/{provider}`; every other connected account is its
 own copy at `{owner}/_MailCopy/{provider}.{accountId}` (`MailCopyNodeTypes.KeyFor`).
+
+## Who may call the stores
+
+`MeshMailCopyStore` and `MeshMailAttachmentStore` write as System on the owner's behalf, and every NodeType
+can reach them, so they authorize the caller before they elevate
+([Authorize as the Caller, Execute as System](../AuthorizeAsCallerExecuteAsSystem)):
+
+- **The code** that called them is judged by the in-mesh impersonation guard exactly as if it had called
+  `RunAsSystemFor` itself (each entry point is an `[ImpersonationSurface]`).
+- **The identity** it runs under: the owner may act on their own copy; anybody else needs the permission
+  the act needs (Read, Update or Delete) on `{owner}/_MailCopy`. The background sync has no person (no
+  context, or System) and passes — what started it was authorized where it was asked for.
+- **The target**: the attachment store writes to and empties only `{owner}/_MailCopy/{key}/{id}` — a copy
+  node of the owner — and never a relative path that leaves its `attachments` collection.
+
+## Reads that decide writes
+
+What a write is decided on comes from the node's stream, never from the index: `Read` and `Revision` use
+the index only to learn that a copy EXISTS and then read it from its stream, and a copy is deleted with its
+files when its LIVE content may hold files. An index miss is not proof of absence: `Remove` leaves a copy
+the index does not list yet to the next sweep instead of deleting it without its files.
+
+A tombstone keeps the "may hold files" marker (`HasAttachments`): once it lands, the copy's inventory is
+gone, so a cleanup that failed after the tombstone was written is repeated by the next attempt, which finds
+the marker on the tombstone it replaces.
+
+**Open:** the conditional writes (`Commit`, `ReplaceIfNewer`, `WriteIfUnchanged`, `SetAttachments`) decide
+on the writer's node-stream mirror. The owner's three-way merge refuses a field the write changes when the
+owner's value moved since the mirror's base, which is what makes the lease safe across replicas; a field the
+predicate only READS (a generation, a version, `Removed`) is not checked by the owner. Closing that needs an
+owner-side precondition on a cross-hub update, which the platform does not have yet.

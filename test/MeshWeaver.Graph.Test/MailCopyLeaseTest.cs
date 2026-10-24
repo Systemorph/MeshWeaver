@@ -14,8 +14,14 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// The copy's lease is a conditional commit at the owning node: of N syncs that try to take a free lease at
-/// once, exactly one is told it holds it. A lease that two syncs can both take is two syncs writing one copy.
+/// The copy's lease is a conditional commit: of N syncs that try to take a free lease at once, exactly one is
+/// told it holds it. A lease that two syncs can both take is two syncs writing one copy.
+///
+/// <para>🚨 Scope: the contenders share ONE replica's node-stream mirror, whose per-path update queue
+/// serialises them before anything reaches the owner — so this pins the single-replica contract only.
+/// Across replicas the guarantee rests on the owner's three-way merge refusing a second writer's
+/// <c>LeaseHolder</c> leaf (its base, "free", is no longer the live value); that cross-replica case is not
+/// exercised here (a monolith mesh has one mirror).</para>
 /// </summary>
 public class MailCopyLeaseTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {

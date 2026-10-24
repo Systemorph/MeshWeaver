@@ -316,13 +316,48 @@ public sealed class MailCopyEngine(
 
     // The files go BEFORE the tombstone, and only when it will be accepted; what the tombstone replaced is
     // cleaned too (read atomically with the write). A failed cleanup fails the step, which repeats.
+    // 🚨 The tombstone itself carries the "may hold files" marker (Tombstone): the copy's inventory is gone
+    // the moment it lands, and Read never answers a tombstone, so a repeat that finds no prior must still
+    // learn from the tombstone it replaces that its cleanup is owed.
     private IObservable<bool> Tombstoned(string owner, string generation, string messageId, DateTimeOffset at)
         => Prior(owner, generation, messageId).SelectMany(prior =>
             (prior is null || prior.CopiedAt > at ? Observable.Return(Unit.Default) : DropFiles(owner, generation, messageId, prior))
-                .SelectMany(_ => store.ReplaceIfNewer(owner, MailCopyNodeTypes.Tombstone(Provider, generation, messageId, at)))
-                .SelectMany(result => result.Wrote && result.Replaced is { } replaced && !Equals(replaced.Attachments, prior?.Attachments)
-                    ? DropFiles(owner, generation, messageId, replaced).Select(_ => true)
+                .SelectMany(_ => store.ReplaceIfNewer(owner, Tombstone(generation, messageId, at)))
+                .SelectMany(result => result.Wrote && CleansAfterTombstone(prior, at, result.Replaced)
+                    ? DropFiles(owner, generation, messageId, result.Replaced).Select(_ => true)
                     : Observable.Return(result.Wrote)));
+
+    /// <summary>
+    /// The tombstone this engine writes: with an attachment store, it keeps the "may hold files" marker
+    /// (<see cref="MailMessageCopy.HasAttachments"/>) whatever it replaces — until the node is deleted, the
+    /// marker is the only record that files may still be there, and every later removal of the node
+    /// (<see cref="MailAttachments.MayHoldFiles"/>) empties the collection by enumerating it. Pure.
+    /// </summary>
+    public MailMessageCopy Tombstone(string generation, string messageId, DateTimeOffset at)
+    {
+        var tombstone = MailCopyNodeTypes.Tombstone(Provider, generation, messageId, at);
+        return attachments is null ? tombstone : tombstone with { HasAttachments = true };
+    }
+
+    /// <summary>
+    /// Whether the files of <paramref name="replaced"/> — what a tombstone written at <paramref name="at"/>
+    /// replaced — must be deleted after the write: whenever it may hold files, unless the cleanup before the
+    /// write already covered exactly that state (<paramref name="prior"/>, read before, was the same copy and
+    /// was cleaned). 🚨 A <paramref name="replaced"/> that is itself a marked tombstone is a cleanup a
+    /// previous attempt still owes, and is always cleaned. Pure.
+    /// </summary>
+    public static bool CleansAfterTombstone(MailMessageCopy? prior, DateTimeOffset at, MailMessageCopy? replaced)
+    {
+        if (!MailAttachments.MayHoldFiles(replaced))
+            return false;
+        var cleanedBefore = prior is not null && prior.CopiedAt <= at && MailAttachments.MayHoldFiles(prior);
+        return !cleanedBefore
+               || replaced!.Removed
+               || replaced.HasAttachments != prior!.HasAttachments
+               || !(replaced.Attachments is null
+                   ? prior.Attachments is null
+                   : prior.Attachments is not null && replaced.Attachments.SequenceEqual(prior.Attachments));
+    }
 
     private IObservable<Unit> DropFiles(string owner, string generation, string messageId, MailMessageCopy? prior)
         => attachments is not null && MailAttachments.MayHoldFiles(prior)
