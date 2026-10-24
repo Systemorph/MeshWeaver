@@ -28,7 +28,9 @@ namespace MeshWeaver.Hosting;
 /// <para><b>What makes it typed rather than a blanket retry.</b> Only <see cref="IsTransient"/>
 /// faults re-open: a database connect/IO fault (<see cref="StorageFaults.IsTransientConnectFault"/>,
 /// <see cref="InfrastructureFault.IsTransient"/>) or the fan-in's own availability terminal
-/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict). A query or
+/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict), or a store
+/// fault an OWNER met and classified before answering across the hub boundary
+/// (<see cref="MeshNodeError.Transient"/> on a <see cref="MeshNodeStreamException"/>, #7066). A query or
 /// schema error, a deserialization defect, a disposed mesh — anything else — terminates the watch
 /// on the first occurrence exactly as before, because re-reading it would only repeat the same
 /// defect on a timer.</para>
@@ -98,6 +100,12 @@ public static class StandingWatchRecovery
             // The fan-in's stall terminal: the availability fault a standing read meets on a pod in
             // a GC or thread-pool stall, where every query misses its Initial bound together.
             if (e is QueryProviderStalledException)
+                return true;
+            // A store fault the OWNER met, carried across the hub boundary as data: the exception
+            // that had the type stayed on the owner, so its classification travels on the record
+            // (MeshNodeError.Transient, MeshWeaver#7066). Only the owner's own classification
+            // counts — never the message text.
+            if (e is MeshNodeStreamException { Error.Transient: true })
                 return true;
         }
         // A chain with no aggregate in it: a database read that died mid-stream surfaces as the

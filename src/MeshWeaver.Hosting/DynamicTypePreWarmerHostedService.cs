@@ -125,9 +125,12 @@ public sealed class DynamicTypePreWarmerHostedService(
 
     /// <summary>
     /// The served-build witness offer (#5544): held by the publication gate until this pod is
-    /// admitted, written then, discarded if refused. Disposed with the service.
+    /// admitted, written then, discarded if refused. Disposed with the service. SERIAL because a
+    /// sweep re-run after a transient store fault (#7066) offers it again — the first offer was
+    /// discarded when the fault refused the pod, and its read of the witness may itself have met
+    /// the same refusal.
     /// </summary>
-    private IDisposable? _servedWitness;
+    private readonly SerialDisposable _servedWitness = new();
 
     /// <summary>
     /// One recovery watch per RECORDED REGRESSION (#1214) — each observes its type until it
@@ -136,7 +139,7 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// here and disposed with the service; a discarded subscription would root the hub.
     /// Empty on a healthy bake, which is the overwhelmingly common case.
     /// </summary>
-    private readonly CompositeDisposable _recoveryWatches = new();
+    private readonly RecoveryWatchSet _recoveryWatches = new();
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -309,8 +312,11 @@ public sealed class DynamicTypePreWarmerHostedService(
         // the rollout falls back on, and therefore never refuses itself (ServedBuildWitness).
         // Only where the gate is ARMED: an unarmed host refuses nothing, so there is nothing for
         // the marker to relax, and a dev host or test mesh should not write it.
-        if (sweepEnabled && gate is { GatesReadiness: true })
-            _servedWitness = ServedBuildWitness
+        void OfferServedWitness()
+        {
+            if (!sweepEnabled || gate is not { GatesReadiness: true })
+                return;
+            _servedWitness.Disposable = ServedBuildWitness
                 // Read FIRST: a build that has served here relaxes a Faulted sweep too (it has no
                 // per-type evidence for the stamp to judge), and the gate re-reads it live.
                 .HasServed(mesh, ServedBuildWitness.LivePlatformVersion, logger)
@@ -328,6 +334,8 @@ public sealed class DynamicTypePreWarmerHostedService(
                         "DynamicTypePreWarmer: could not record the served-build witness — a later "
                         + "restart of this image will not know it has served, and keeps the bake "
                         + "gate's strict reading (#5544)"));
+        }
+        OfferServedWitness();
 
         // Pacing: explicit config wins; otherwise a readiness-GATED pod sweeps at full speed (it
         // serves nobody while it bakes — the initial-bake case) and an ungated pod keeps the
@@ -478,14 +486,22 @@ public sealed class DynamicTypePreWarmerHostedService(
         // catalog and write adopted builds onto its rows, which is the database input a closed
         // process must not read. The probe/sweep behind this then report the empty set themselves.
         var closedTypeSet = services.IsClosedTypeSet();
+        // The cold seeding stages, as a factory: a sweep re-run after a transient store fault runs them
+        // AGAIN (#7066 review). The fault refused the pod, and that discarded every publication the
+        // first seeding held — including its adoption stamps — while this process's adoption registry
+        // kept the adoptions. Re-run, the sweep would overlay those retained adoptions, classify the
+        // types as baked, and admit the pod with the shared records still naming the old builds.
+        // Seeding again re-offers the stamps, held until the re-run's verdict exactly as at boot.
+        IObservable<int> SeedBundles() =>
+            (closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
+            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
+                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
         var seeded = (importSettled?.Settled ?? Observable.Return(Unit.Default))
             .Do(_ => progress?.Invoke(closedTypeSet
                 ? $"{ClosedTypeSet.ConfigKey}=true — no prebuilt bundle is adopted onto a database NodeType"
                 : "adopting the prebuilt bundles shipped for this framework before enumerating"))
-            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedAll(mesh, prebuiltDirectory, logger))
-            .SelectMany(_ => closedTypeSet ? Observable.Return(0)
-                : ShippedPrebuiltBundles.SeedPublishedRoot(mesh, publishedBundleRoot, logger));
+            .SelectMany(_ => SeedBundles());
 
         if (!sweepEnabled)
         {
@@ -530,9 +546,85 @@ public sealed class DynamicTypePreWarmerHostedService(
             return;
         }
 
+        // 🚨 #7066 — A SWEEP THAT FAULTED ON A TRANSIENT STORE FAULT IS RE-RUN ON THIS POD once the
+        // store is reachable again. It used to run exactly once: on 2026-10-22 a ~40 s database
+        // restart refused the sweep's Admin/Build write, the gate recorded Faulted, nothing ran the
+        // sweep again, and the pod refused readiness for 74 minutes after the database was back —
+        // until it was replaced. Under the readiness-only policy nothing restarts a refused pod, so
+        // the log's "a restart re-runs the sweep" described no recovery path at all.
+        //
+        // The re-run is triggered by the platform's one "the store answers again" evidence
+        // (StoreReachability: the change feed reconnected, or the store announced a commit) or, for the
+        // first few re-runs, a bounded backoff racing it; see StoreRecoveryRerun for why the evidence
+        // alone is not enough. Only a fault typed as
+        // transient is re-run; a compile error or a query defect still ends the sweep below, named.
+        var rerunPolicy = services.GetService<StoreRecoveryRerunPolicy>() ?? StoreRecoveryRerunPolicy.Default;
+
+        void BeginRerun(int rerun)
+        {
+            // The summary describes the attempt that FINISHED, not the sum of every attempt.
+            Interlocked.Exchange(ref compiled, 0);
+            Interlocked.Exchange(ref alreadyBaked, 0);
+            Interlocked.Exchange(ref errored, 0);
+            Interlocked.Exchange(ref timedOut, 0);
+            Interlocked.Exchange(ref skipped, 0);
+            Interlocked.Exchange(ref faulted, 0);
+            Interlocked.Exchange(ref contentBroken, 0);
+            lock (slowestLock)
+                slowest.Clear();
+
+            gate?.MarkRerunning(
+                $"re-running the NodeType sweep (re-run {rerun}) after a transient store fault — "
+                + "the store is reachable again");
+            admission?.Reconsider();
+            // The first offer was discarded when the fault refused the pod, and its read of the
+            // witness may have met the same refusal (a failed read counts as "not served").
+            OfferServedWitness();
+            logger.LogInformation(
+                "DynamicTypePreWarmer: RE-RUNNING the warm-up sweep (re-run {Rerun}) — the previous "
+                + "attempt faulted on a transient store fault and the store is reachable again, so this "
+                + "pod measures its NodeTypes now instead of waiting to be replaced (#7066)",
+                rerun);
+        }
+
+        void OnTransientFault(StoreRecoveryRerunScheduled scheduled)
+        {
+            // Recorded honestly FIRST: the attempt faulted and verified nothing, so the gate says
+            // Faulted (a served image or AllowUnprovenBake is still relaxed by it, exactly as before)
+            // — and the detail names the pending re-run, so /health never reads it as final.
+            gate?.MarkFaulted(
+                $"the warm-up stream faulted on a TRANSIENT store fault ({scheduled.Fault.GetType().Name}) — "
+                + $"NOT final: the sweep re-runs on this pod {scheduled.Trigger}");
+            admission?.Reconsider();
+            logger.LogWarning(scheduled.Fault,
+                "DynamicTypePreWarmer: the warm-up sweep FAULTED on a TRANSIENT store fault, so this pod "
+                + "has not verified its NodeTypes on this image yet{Readiness}. This is NOT final: the "
+                + "sweep re-runs on this pod {Trigger} (#7066)",
+                gate is { GatesReadiness: true, ReadinessGranted: false }
+                    ? " and refuses readiness until a re-run passes"
+                    : string.Empty,
+                scheduled.Trigger);
+            census?.RecordSettlement("faulted");
+            // The bake barrier (#1114) is held while a TIMED re-run is pending — the re-run is about to
+            // saturate the compile queue again, which is exactly what the boot flows behind the barrier
+            // must not race — and released once only the store's signal can trigger one, so a store
+            // that stays away cannot hold those flows for ever. MarkSettled is first-wins.
+            if (scheduled.Backoff is null)
+                bake?.MarkSettled(PreWarmSettlement.Faulted);
+        }
+
         _warmSubscription = seeded
-            .SelectMany(_ => DynamicTypePreWarmer
-                .WarmDynamicTypes(mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress))
+            .SelectMany(_ => StoreRecoveryRerun.RerunOnStoreRecovery(
+                rerun => SweepAttempt(
+                    rerun,
+                    BeginRerun,
+                    SeedBundles,
+                    () => DynamicTypePreWarmer.WarmDynamicTypes(
+                        mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress)),
+                StoreRecoveryRerun.EvidenceFor(mesh.ServiceProvider.GetService<IMeshInvalidationFeed>()),
+                rerunPolicy,
+                System.Reactive.Concurrency.Scheduler.Default,
+                OnTransientFault))
             .Subscribe(
                 outcome =>
                 {
@@ -574,8 +666,11 @@ public sealed class DynamicTypePreWarmerHostedService(
                                 + "landing mid-bake), not this image. It STANDS until the type is "
                                 + "seen to build here, and is retracted automatically when it does.",
                                 outcome.TypePath);
-                        _recoveryWatches.Add(
-                            DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger));
+                        // One LIVE watch per condemned type: a re-run that re-measures a regression
+                        // already being watched adds none, and a type whose watch has ENDED (it saw
+                        // a recovery, or faulted) gets a fresh one when it regresses again.
+                        _recoveryWatches.Watch(outcome.TypePath, ended =>
+                            DynamicTypePreWarmer.WatchForRecovery(mesh, gate, outcome.TypePath, logger, ended));
                     }
                     // Rank by cost before classifying — a type that TIMED OUT is exactly the one
                     // whose duration the summary must name, so this deliberately does not filter on
@@ -633,13 +728,18 @@ public sealed class DynamicTypePreWarmerHostedService(
                     // operator set AllowUnprovenBake. Either way the held stamps are settled here
                     // rather than left in limbo for the pod's lifetime.
                     admission?.Reconsider();
+                    // 🚨 #7066 — only a fault that is NOT a transient store fault reaches here: a
+                    // transient one is re-run on this pod (OnTransientFault above) and never ends
+                    // the sweep. So this is a defect the same pod would meet again, and it stays a
+                    // named, final failure.
                     if (gate is { GatesReadiness: true, Phase: BakePhase.Faulted })
                         logger.LogCritical(ex,
                             "DynamicTypePreWarmer: REFUSING READINESS — the warm-up stream FAULTED, "
                             + "so this pod has NOT verified that its NodeTypes build on this image. "
-                            + "A sweep that errored is not a sweep that passed. The rollout will "
-                            + "stall with the previous image still serving; a restart re-runs the "
-                            + "sweep, so a transient cause clears itself. Lazy compilation still "
+                            + "A sweep that errored is not a sweep that passed. The fault is not a "
+                            + "transient store fault, so this pod does NOT re-run the sweep: the "
+                            + "rollout stalls with the previous image still serving until the cause "
+                            + "is fixed and the instance is restarted. Lazy compilation still "
                             + "works, so if this deployment must roll forward regardless, set "
                             + "'{Key}'=true — that serves on an UNPROVEN bake and says so in the "
                             + "health payload.",
@@ -820,8 +920,7 @@ public sealed class DynamicTypePreWarmerHostedService(
         _warmSubscription = null;
         _liveCensus?.Dispose();
         _liveCensus = null;
-        _servedWitness?.Dispose();
-        _servedWitness = null;
+        _servedWitness.Dispose();
         _recoveryWatches.Dispose();
     }
 
@@ -843,7 +942,34 @@ public sealed class DynamicTypePreWarmerHostedService(
     /// test instead of quietly inflating the fault count.</para>
     /// </summary>
     /// <param name="status">The outcome's status.</param>
-    internal static string CounterFor(PreWarmStatus status) => status switch
+    internal static string CounterFor(PreWarmStatus status) => CounterForStatus(status);
+
+    /// <summary>
+    /// 🚨 One attempt of the sweep (#7066). The first attempt (<paramref name="rerun"/> 0) is the sweep
+    /// alone — the boot seeding already ran ahead of it. A RE-RUN first marks itself
+    /// (<paramref name="beginRerun"/>), then runs the cold seeding stages AGAIN, then the sweep: the
+    /// transient fault that refused the pod discarded every publication the first seeding held,
+    /// including its adoption stamps, so the re-run must offer them again before the sweep overlays
+    /// this process's retained adoptions and calls those types baked.
+    /// </summary>
+    /// <typeparam name="T">The sweep's emission.</typeparam>
+    /// <param name="rerun">The attempt's re-run number, 0 for the first run.</param>
+    /// <param name="beginRerun">Marks a re-run (gate, counters, witness, log).</param>
+    /// <param name="reseed">The cold seeding stages.</param>
+    /// <param name="sweep">The cold sweep.</param>
+    internal static IObservable<T> SweepAttempt<T>(
+        int rerun, Action<int> beginRerun, Func<IObservable<int>> reseed, Func<IObservable<T>> sweep)
+        => rerun == 0
+            ? Observable.Defer(sweep)
+            : Observable.Defer(() =>
+            {
+                beginRerun(rerun);
+                return reseed().TakeLast(1).DefaultIfEmpty().SelectMany(_ => sweep());
+            });
+
+    /// <summary>The <see cref="CounterFor"/> table itself.</summary>
+    /// <param name="status">The outcome's status.</param>
+    private static string CounterForStatus(PreWarmStatus status) => status switch
     {
         PreWarmStatus.Compiled => PreWarmCounters.Compiled,
         PreWarmStatus.AlreadyBaked => PreWarmCounters.AlreadyBaked,
@@ -875,6 +1001,65 @@ public sealed class DynamicTypePreWarmerHostedService(
 /// <c>open-vocabulary-string-constants</c>: named exactly as the enum members would have been, so
 /// every call site reads identically.
 /// </summary>
+/// <summary>
+/// The LIVE recovery watches, one per condemned NodeType (#1214, #7066 review). A sweep re-run
+/// re-measures a regression that may already be watched, so a watch is started only when its type
+/// has none running; and a watch that has ENDED — it saw its recovery (it watches for exactly one),
+/// or it faulted — leaves the set, so a later regression of the same type gets a fresh watch instead
+/// of being suppressed for good, which would leave the pod Regressed after the type is repaired.
+/// Instance state of one hosted service; disposed with it.
+/// </summary>
+internal sealed class RecoveryWatchSet : IDisposable
+{
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SingleAssignmentDisposable> live =
+        new(StringComparer.OrdinalIgnoreCase);
+    private int disposed;
+
+    /// <summary>
+    /// Starts a watch on <paramref name="typePath"/> unless one is live. <paramref name="start"/> is
+    /// given the callback the watch calls when it ends, however it ends.
+    /// </summary>
+    /// <param name="typePath">The condemned NodeType.</param>
+    /// <param name="start">Starts the watch.</param>
+    /// <returns><c>true</c> when a watch was started.</returns>
+    public bool Watch(string typePath, Func<Action, IDisposable> start)
+    {
+        if (Volatile.Read(ref disposed) != 0)
+            return false;
+        var slot = new SingleAssignmentDisposable();
+        if (!live.TryAdd(typePath, slot))
+            return false;
+        // 🚨 Re-checked AFTER the insert (review on #7088): a Dispose that ran between the check above
+        // and the insert has already drained the set, so this slot would never be disposed and the
+        // watch would outlive the service, rooting the mesh. Any Dispose either ran before this read
+        // (seen here) or runs after the insert (and finds the slot in the set) — no window is left.
+        if (Volatile.Read(ref disposed) != 0)
+        {
+            live.TryRemove(new KeyValuePair<string, SingleAssignmentDisposable>(typePath, slot));
+            slot.Dispose();
+            return false;
+        }
+        // Removes THIS slot only: a newer watch registered after this one ended is left alone.
+        slot.Disposable = start(() => live.TryRemove(
+            new KeyValuePair<string, SingleAssignmentDisposable>(typePath, slot)));
+        return true;
+    }
+
+    /// <summary>Whether a watch on <paramref name="typePath"/> is live.</summary>
+    /// <param name="typePath">The NodeType.</param>
+    public bool IsWatching(string typePath) => live.ContainsKey(typePath);
+
+    /// <inheritdoc />
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+            return;
+        foreach (var watch in live.Values)
+            watch.Dispose();
+        live.Clear();
+    }
+}
+
 internal static class PreWarmCounters
 {
     /// <summary>Reached a usable compiled build on this sweep.</summary>
