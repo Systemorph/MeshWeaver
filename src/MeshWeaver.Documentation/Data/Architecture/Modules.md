@@ -1189,9 +1189,8 @@ stays on clean releases. A
 deployment that pins its image takes updates deliberately, and its modules do not run ahead of
 that choice. A **first landing** is deliberately policy-exempt: it completes an install the
 operator's own surfaces already sanctioned, and gating it would ship a package whose binary half
-never arrives. The wiring is `IModuleUpdatePolicy` (`MeshWeaver.PluginCatalog`), implemented by
-the memex portals over the policy node; a host that registers no implementation gets the default
-(allowed).
+never arrives. The policy is per package (`PackageManifest.UpdatePolicy`); the former host-wide
+`IModuleUpdatePolicy` seam was retired and has since been deleted.
 
 ## Deciding: what can be a module, and where its source may live
 

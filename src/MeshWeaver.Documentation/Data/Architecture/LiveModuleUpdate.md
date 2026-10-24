@@ -176,7 +176,8 @@ and leaves `activation.d/`'s own listing unchanged
 name-only: nothing the reading derives lives in them. That is what the reading is derived from, and no filesystem leaves it
 unchanged across a create, rename, replace or delete. A directory that cannot be listed yields no key
 at all, so the reading is retaken and reports the fault instead of serving the old snapshot. The old
-`DiskFingerprint` stays as an `[Obsolete]` type for binary compatibility and keys nothing.
+`DiskFingerprint` was kept briefly as an `[Obsolete]` type and has since been deleted; nothing outside
+`PendingModuleActivations` ever bound it.
 `PendingModuleActivationsCostTest.ALandingIsSeen_WhenTheVolumeDoesNotMoveDirectoryTimestamps`
 reproduces the share by restoring the three directories' timestamps after a second wave: it reads 1
 pending module where 3 are pending without the fix and 3 with it, while an unchanged volume is still

@@ -46,9 +46,9 @@ serialised round trips. The answer is that none of them are needed.
 ## The decision: remove it, don't batch it
 
 Batching would have kept a write that has no reader. So `MeshDataSource` no longer installs the
-mirror, and `NodeTypeCompileStateMirror.Install` is `[Obsolete]` rather than deleted. A caller in
-in-mesh source is invisible to every CI build, so deleting the method would break that caller at
-runtime compile. The value shape (`StatePath`, `StateNode`, `Parse`) stays, so satellites that
+mirror. `NodeTypeCompileStateMirror.Install` was first kept as `[Obsolete]`, because a caller in
+in-mesh source is invisible to every CI build. It was deleted once a month had passed and the fleet
+repositories and the live mesh's in-mesh code held no caller. The value shape (`StatePath`, `StateNode`, `Parse`) stays, so satellites that
 already exist can still be read. They are now inert records.
 
 **Pinned by** `NodeTypeCompileStateMirrorTest.NodeTypeActivationAndStateChange_WriteNoCompileStateSatellite`
