@@ -1,3 +1,5 @@
+using MeshWeaver.Messaging;
+
 namespace MeshWeaver.Mesh;
 
 /// <summary>
@@ -29,7 +31,7 @@ public static class CancellationClassifier
     /// <returns>True for cooperative cancellation; false for everything else, including a
     /// cancellation raised to express a timeout.</returns>
     public static bool IsCooperativeCancellation(Exception? exception) =>
-        Unwrap(exception) is OperationCanceledException cancelled && !HasTimeoutCause(cancelled);
+        FaultClassifier.Classify(exception).IsCancellation;
 
     /// <summary>
     /// The evidence line for a benign cancellation — what token state the exception actually
@@ -52,16 +54,4 @@ public static class CancellationClassifier
         exception is AggregateException { InnerExceptions.Count: 1 } aggregate
             ? aggregate.InnerExceptions[0]
             : exception;
-
-    /// <summary>
-    /// True when the cancellation was raised to express a timeout — the impostor this classifier
-    /// exists to keep out. Walks the inner chain because a transport may wrap it once more.
-    /// </summary>
-    private static bool HasTimeoutCause(Exception exception)
-    {
-        for (var inner = exception.InnerException; inner is not null; inner = inner.InnerException)
-            if (inner is TimeoutException)
-                return true;
-        return false;
-    }
 }
