@@ -14,6 +14,10 @@ name: Request review on real change
 on:
   pull_request:
     types: [synchronize]
+  # The sweep: a review requested while another was pending can land on the previous head, and no
+  # event follows (#7142 review). Every 15 minutes the lane re-judges the open pull requests.
+  schedule:
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: read
@@ -26,4 +30,5 @@ jobs:
       contents: read
       pull-requests: write
     with:
+      # On `schedule` github.sha is main's tip — the predicate as merged.
       scripts-ref: ${{ github.sha }}

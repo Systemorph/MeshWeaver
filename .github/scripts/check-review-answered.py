@@ -1521,8 +1521,19 @@ def review_request_action(pr: dict, reviews, carry: Carry | None, repo: str, pen
     on_head = copilot_review_on(reviews, head)
     if on_head is not None:
         return "none", f"Copilot already reviewed head {head[:10]} (review {on_head.get('id')})"
+    answered = [r for r in reviews or () if (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID
+                and (r.get("user") or {}).get("type") == "Bot" and r.get("commit_id") == head and r.get("state") != "PENDING"]
+    if answered:
+        # A REFUSAL (or an empty body) on this very head is Copilot's answer to a request already made.
+        # Re-requesting it on every sweep would loop on a quota refusal; a maintainer re-requests it.
+        return "none", (f"Copilot already ANSWERED head {head[:10]} without a review (review {answered[-1].get('id')}: "
+                        f"\"{first_line(answered[-1].get('body'))}\") — a maintainer re-requests it, never this lane")
     if pending:
-        return "none", f"a Copilot review is already requested and pending on #{number} — it reviews the head it finds"
+        # 🚨 Not a permanent "nothing to do" (#7142 review): an in-flight review may land on the PREVIOUS
+        # head. The sweep (`--request-review-sweep`, on the caller's schedule) re-judges the pull request
+        # once it lands and requests again when that review does not cover the head.
+        return "none", (f"a Copilot review is already requested and pending on #{number} — if it lands on an earlier head, "
+                        "the scheduled sweep requests one for this head")
     if carry is not None and carry.ok:
         return "none", (f"ONLY THE DEFAULT BRANCH WAS MERGED IN — no review requested for head {head[:10]}: {carry.why}")
     why = carry.why if carry is not None else f"there is no earlier head of #{number} to compare head {head[:10]} against"
@@ -2037,7 +2048,7 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
     return 0
 
 
-def run_request_review(repo: str, number: int, before: str | None, gh=None) -> int:
+def run_request_review(repo: str, number: int, before: str | None, gh=None, sweep: bool = False) -> int:
     """The review-on-change lane (policy review-on-real-change). Exit 0 when it requested a review and
     GitHub's answer lists Copilot as requested, or had nothing to do (both printed, with why); 1 (RED,
     named) when a read, the request or its confirmation failed. `gh` defaults to `Gh(repo)`; the
@@ -2056,6 +2067,12 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None) -> i
             raise ReadError(f"issues/{number}/timeline did not return a listing")
         before = before if before and re.fullmatch(r"[0-9a-f]{40}", before) and before != head else ""
         latest = newest_landed_copilot_review(reviews)
+        if sweep and (latest is None or copilot_review_on(reviews, head) is not None):
+            # The sweep exists for ONE state (#7142 review): a review requested for this head landed on an
+            # EARLIER one. No landed review at all is the opening review's business (the ruleset's), and a
+            # reviewed head needs nothing — so the sweep never re-asks those, every 15 minutes, forever.
+            print(f"  #{number}: {'no Copilot review has landed yet' if latest is None else 'the head is reviewed'} — nothing for the sweep")
+            return 0
         if latest is not None and copilot_review_on(reviews, head) is None:
             reference, ref_kind = str(latest.get("commit_id") or ""), f"Copilot's newest review ({latest.get('id')})"
         elif latest is None and before:
@@ -2096,6 +2113,37 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None) -> i
         print(f"  #{number}: {why}")
     _append("GITHUB_STEP_SUMMARY", f"Review on real change — #{number}: {action} — {why}\n")
     return 0
+
+
+#: At most this many pull requests are judged per sweep run (each costs ~5 REST reads, two compares more).
+SWEEP_MAX_PRS = 40
+
+
+def run_request_review_sweep(repo: str, gh=None) -> int:
+    """The scheduled half of the review-on-change lane (#7142 review). A `synchronize` that finds a
+    Copilot review already PENDING requests nothing — and that pending review may then land on the
+    PREVIOUS head, leaving the current one stale with no further event: Copilot's own review event
+    starts no run here (`waiting_would_help`). So the caller's `schedule` re-judges every open,
+    non-draft pull request with `run_request_review(..., sweep=True)`, which acts only when a landed
+    review does not cover the head and nothing is pending. Exit 1 when the listing or any one
+    pull request's judgement failed (every failure named); 0 otherwise."""
+    gh = gh if gh is not None else Gh(repo)
+    try:
+        pulls = gh.api("pulls?state=open&per_page=100", paginate=True)
+        if not isinstance(pulls, list):
+            raise ReadError("pulls?state=open did not return a listing")
+    except ReadError as e:
+        print(f"::error::the review-on-change sweep cannot list open pull requests: {e}")
+        return 1
+    numbers = sorted(p["number"] for p in pulls if isinstance(p, dict) and not p.get("draft") and p.get("number"))
+    if len(numbers) > SWEEP_MAX_PRS:
+        print(f"::warning::{len(numbers)} open pull requests — this sweep judges the newest {SWEEP_MAX_PRS}; the next takes the rest only if they stay newest")
+        numbers = numbers[-SWEEP_MAX_PRS:]
+    print(f"sweep: judging {len(numbers)} open non-draft pull request(s): {numbers}")
+    failed = [n for n in numbers if run_request_review(repo, n, None, gh=gh, sweep=True) != 0]
+    if failed:
+        print(f"::error::the review-on-change sweep could not judge {failed}")
+    return 1 if failed else 0
 
 
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
@@ -3151,8 +3199,8 @@ def self_test() -> int:
     req_case("NEG: no reference head at all -> request", "request", RPR, [], None, says="no earlier head")
     req_case("already requested and pending -> none (idempotent)", "none", RPR, [COP_O], CHANGED, pending=True, says="already requested")
     req_case("the head is already reviewed -> none (idempotent)", "none", RPR, [dict(COP_O, commit_id=M)], CHANGED, says="already reviewed")
-    req_case("a refusal on the head is not a review of it -> request", "request", RPR,
-             [COP_O, dict(_review(REFUSAL_QUOTA, rid=82), commit_id=M)], CHANGED)
+    req_case("a refusal ON the head is Copilot's answer -> none (never re-asks a refusal)", "none", RPR,
+             [COP_O, dict(_review(REFUSAL_QUOTA, rid=82), commit_id=M)], CHANGED, says="ANSWERED head")
     req_case("draft -> none (the ruleset decides drafts)", "none", dict(RPR, draft=True), [COP_O], CHANGED, says="draft")
     req_case("closed -> none", "none", dict(RPR, state="closed"), [COP_O], CHANGED, says="closed")
     req_case("an App's own pull request -> none (Copilot does not review it)", "none",
@@ -3218,6 +3266,33 @@ def self_test() -> int:
         ok = rc == expect_rc and len(stub.mutations) == expect_mutations and bot_ok
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    # ── the SWEEP (#7142 review): a real-change push H2 found a review pending, so it requested nothing;
+    # that review then landed on the EARLIER head O. No event follows — the sweep is what re-judges it.
+    RACE = [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"},
+            {"event": "reviewed", "user": REVIEWER_REVIEW_USER, "submitted_at": "2026-10-24T10:06:00Z"}]
+    race_routes = dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED)),
+                                      "issues/1/timeline": RACE})
+    for name, routes, expect_mutations in [
+        ("sweep: pending review landed on the EARLIER head -> requests for this head", race_routes, 1),
+        ("sweep NEG: the review is still pending -> no mutation", dict(race_routes, **{"issues/1/timeline": RACE[:1]}), 0),
+        ("sweep NEG: the landed review covers the head (main-only) -> no mutation", dict(req_routes, **{"issues/1/timeline": RACE}), 0),
+        ("sweep NEG: no Copilot review has landed at all -> no mutation", dict(race_routes, **{"pulls/1/reviews": []}), 0),
+        ("sweep NEG: the head is reviewed -> no mutation", dict(race_routes, **{"pulls/1/reviews": [dict(COP_O, commit_id=M)]}), 0),
+    ]:
+        stub = _ReqGh(dict(routes, **{"pulls?state=open": [{"number": 1, "draft": False}, {"number": 2, "draft": True}]}), ANSWER_OK)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+        ok = rc == 0 and len(stub.mutations) == expect_mutations and not any(c.startswith("pulls/2") for c in stub.calls)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    stub = _ReqGh({}, ANSWER_OK)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+    ok = rc == 1 and "cannot list open pull requests" in printed.getvalue()
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'sweep: an unreadable listing -> RED, named':60} rc={rc}")
 
     # ── the EVENT half: only a FAILED gate on the CURRENT head with a GREEN stage 1 is re-run.
     def adv_case(name, expect, pr, run, job, verdict, says=""):
@@ -3445,6 +3520,9 @@ def main(argv=None) -> int:
                     help="the review-on-change lane (policy review-on-real-change): request ONE Copilot review for --pr's "
                          "head when its own diff changed since Copilot's last review (or since --before), and nothing "
                          "when only the default branch was merged in (review_request_action)")
+    ap.add_argument("--request-review-sweep", action="store_true",
+                    help="the scheduled half of the review-on-change lane: re-judge every open non-draft pull request and "
+                         "request a review where a landed one no longer covers the head (run_request_review_sweep)")
     ap.add_argument("--before", help="--request-review-on-change: the push's previous head (github.event.before)")
     ap.add_argument("--since", help="--stage-gate: when the head's CI run was created (ISO-8601 UTC)")
     ap.add_argument("--no-carry", action="store_true",
@@ -3485,6 +3563,11 @@ def main(argv=None) -> int:
             print(f"::error::--refresh-read-run needs --pr <number> and --run-id <number>, got {args.pr!r} / {args.run_id!r}")
             return 2
         return run_refresh(args.repo, int(args.pr), args.event, args.run_id, args.evaluated_at or "")
+    if args.request_review_sweep:
+        if args.pr or args.merge_group_ref or args.before:
+            print("::error::--request-review-sweep takes --repo only")
+            return 2
+        return run_request_review_sweep(args.repo)
     if args.request_review_on_change:
         if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
             print("::error::--request-review-on-change takes --repo, --pr <number> and optionally --before <sha>")

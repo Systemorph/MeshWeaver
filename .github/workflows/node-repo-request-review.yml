@@ -26,6 +26,8 @@
 #   on:
 #     pull_request:
 #       types: [synchronize]
+#     schedule:
+#       - cron: "*/15 * * * *"   # the sweep — see below
 #   permissions:
 #     contents: read
 #     pull-requests: write
@@ -35,6 +37,13 @@
 #       permissions:
 #         contents: read
 #         pull-requests: write
+#
+# 🚨 THE SWEEP (`schedule`, #7142 review). A `synchronize` that finds a Copilot review already PENDING
+# requests nothing — and that review may land on the PREVIOUS head, leaving the current one owing a
+# review with no further event (Copilot's own review event starts no run: `action_required`, zero
+# jobs). On `schedule` the lane re-judges every open non-draft pull request
+# (`--request-review-sweep`) and requests a review only where a LANDED review does not cover the head
+# and nothing is pending; a head Copilot already answered (a refusal included) is never re-asked.
 #
 # The caller's grant is recorded in .github/lane-caller-grants.yml (a called job holds only what its
 # caller grants — a missing `pull-requests: write` is a refused mutation here, a missing `contents:
@@ -87,7 +96,7 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
 
-      - name: Request a Copilot review iff the pull request's own diff changed
+      - name: Request a Copilot review iff the pull request's own diff changed (or sweep, on schedule)
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -96,8 +105,12 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "schedule" ]; then
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-sweep
+            exit $?
+          fi
           if [ -z "${PR:-}" ]; then
-            echo "::error::event '${EVENT_NAME}' carries no pull request — wire the caller to pull_request: synchronize"
+            echo "::error::event '${EVENT_NAME}' carries no pull request — wire the caller to pull_request: synchronize (and schedule for the sweep)"
             exit 1
           fi
           if [ -n "${BEFORE:-}" ]; then

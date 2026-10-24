@@ -217,9 +217,16 @@ requires) bought a full Copilot round on code the pull request did not change: n
   head (`github.event.before`). Its success signal is the mutation's own answer listing Copilot as
   requested. It requests nothing for a draft (the ruleset decides drafts), for an App's own pull
   request (Copilot does not review those), when a Copilot review is already pending (read off the
-  REST timeline), or when the head is already reviewed — so it is idempotent, and since a review
+  REST timeline), when the head is already reviewed, or when Copilot already answered this head
+  with a refusal (a maintainer re-requests that one) — so it is idempotent, and since a review
   request pushes nothing it cannot loop. A fork pull request is printed as a `::warning::` naming
   the manual request; every failed read or request is red, named.
+- **The sweep.** A push that finds a review already pending requests nothing, and that pending
+  review can then land on the PREVIOUS head — with no event to follow, because Copilot's own review
+  event starts no run here. So the caller also runs on `schedule` (every 15 minutes) and the lane
+  re-judges every open non-draft pull request (`--request-review-sweep`): it requests a review only
+  where a landed review does not cover the head and nothing is pending, and never for a pull request
+  with no landed review at all (that is the opening review's business).
 - **The merge gate enforces the same line.** `Automatic review answered` takes an earlier head's
   Copilot review only when `copilot_carry_over` proves it covers the head (`copilot_currency`).
   Otherwise the verdict is `RED — THIS HEAD OWES A REVIEW`, waited for (up to the check's
@@ -230,7 +237,9 @@ requires) bought a full Copilot round on code the pull request did not change: n
   reviews a pull request when it opens); `review_draft_pull_requests` keeps its value.
   `.github/scripts/set-copilot-review-on-push.py` carries `REVIEW_ON_PUSH = False` and is applied
   **per repository, only once that repository calls the review-on-change lane** (`--repo NAME
-  --apply`; `--out DIR` writes the before-state). A repository flipped without the lane would leave
+  --apply`). `--out DIR` writes, before any PUT, `<repo>.<id>.before.json` — the ruleset's fields
+  as read, the restore body — and `<repo>.<id>.put.json`, the body it PUTs; restoring is a PUT of
+  the `.before.json` file. A repository flipped without the lane would leave
   every real change after the opening review unreviewed.
 - **The order.** The gate half and the lane land in core first (the gate change is safe under
   `review_on_push: true`, where every head is reviewed anyway); each repository then adds its thin
