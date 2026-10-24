@@ -324,6 +324,10 @@ public static class AssemblyCacheGenerations
 
         var claims = ImmutableList.CreateBuilder<AssemblyCacheClaim>();
         foreach (var tagDirectory in claimsRoot.EnumerateDirectories())
+        {
+            // Per tag directory too: an EMPTY one yields no file, and its listing is still a round
+            // trip (review on #7115).
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var file in tagDirectory.EnumerateFiles("*", SearchOption.TopDirectoryOnly))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -345,6 +349,7 @@ public static class AssemblyCacheGenerations
                 claims.Add(new AssemblyCacheClaim(
                     tagDirectory.Name.ToLowerInvariant(), file.Name, at));
             }
+        }
         return claims.ToImmutable();
     }
 
