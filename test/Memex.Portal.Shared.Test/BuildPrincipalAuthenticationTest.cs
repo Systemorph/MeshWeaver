@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
@@ -9,7 +10,9 @@ using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
 using MeshWeaver.Data;
 using MeshWeaver.Hosting.SelfUpdate;
+using System.Reactive;
 using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Threading;
 using System.Threading.Tasks;
 using Memex.Portal.Shared.Api;
@@ -67,8 +70,38 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
     /// Instance state, so it dies with the test class — never a static.</summary>
     private volatile Func<string> jwks = () => "";
 
+    // ── the lagging-mirror seam ───────────────────────────────────────────────────────────────
+    //
+    // While armed, every DataChangedEvent the principal's OWNER posts for {heldPath} — the commit
+    // echo that advances this process's live mirror — is held at the owner's outbound pipeline
+    // instead of sent. The owner's ACK (PatchDataResponse) is untouched, so the revoke completes
+    // exactly as it does when the echo is merely slow (a loaded runner, a busy cache hub, another
+    // replica). This is the ordering the full-run failure hit by chance, held on purpose. Released by
+    // the test, which re-delivers the held frames in order. Instance fields: per-test lifetime.
+    private volatile string? heldPath;
+    private ImmutableList<(IMessageHub Owner, IMessageDelivery Delivery)> heldEcho = [];
+    private readonly AsyncSubject<Unit> echoHeld = new();
+
+    private void ReleaseEcho()
+    {
+        heldPath = null;
+        foreach (var (owner, delivery) in Interlocked.Exchange(ref heldEcho, []))
+            owner.DeliverMessage(delivery);
+    }
+
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
         => base.ConfigureMesh(builder)
+            .ConfigureDefaultNodeHub(config => config.AddPostPipeline(p => p.AddPipeline((d, next) =>
+            {
+                if (heldPath is not { } held
+                    || d.Message is not DataChangedEvent
+                    || !string.Equals(p.Hub.Address.Path, held, StringComparison.Ordinal))
+                    return next.Invoke(d);
+                ImmutableInterlocked.Update(ref heldEcho, list => list.Add((p.Hub, d)));
+                echoHeld.OnNext(Unit.Default);
+                echoHeld.OnCompleted();
+                return d.Ignored();
+            })))
             .AddPluginCatalog()
             .AddUpdatePolicyType()
             .ConfigureServices(services => services
@@ -107,20 +140,6 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
 
     private Task<InstanceAuthResult> Authenticate(string token, CancellationToken cancellationToken = default) =>
         Authenticator().AuthenticateOutcome($"Bearer {token}")
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
-
-    /// <summary>
-    /// The answer once it satisfies <paramref name="seen"/>. The authenticator reads the principal
-    /// from the process-wide node mirror, which the change feed keeps current: an UPDATE of a node
-    /// the mirror already holds is seen when the feed delivers it, not when the write returns. So a
-    /// read that follows an update waits on the answer it is about, never on the write.
-    /// </summary>
-    private Task<InstanceAuthResult> AuthenticateUntil(
-        string token, Func<InstanceAuthResult, bool> seen, CancellationToken cancellationToken = default) =>
-        Observable.Interval(TimeSpan.FromMilliseconds(50)).StartWith(0L)
-            .Select(_ => Authenticator().AuthenticateOutcome($"Bearer {token}").FirstAsync())
-            .Concat()
-            .Where(seen)
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(cancellationToken);
 
     /// <summary>Writes a build principal into the Admin partition — the create a global admin
@@ -210,6 +229,56 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         var result = await Authenticate(tokens.Mint(Audience, repository: repository));
         Assert.False(result.IsUnavailable);
         Assert.Null(result.Build);
+    }
+
+    [Fact(Timeout = 240_000)]
+    public async Task ARevokedPrincipal_IsRefused_WhileThisProcesssMirrorStillCarriesTheGrant()
+    {
+        // 🚨 The deterministic form of the full-run failure (ARevokedPrincipal_StopsAuthenticatingAtOnce
+        // authenticated a revoked principal once). The revoke is ACKNOWLEDGED by the owner — it has
+        // committed — while the echo that would advance this process's mirror is held. Any read of the
+        // principal that answers from that mirror authenticates a revoked build for as long as the
+        // echo is late; on another replica that is as long as the cross-process feed is late. The
+        // verdict must come from the owner, so the refusal holds from the moment the revoke commits.
+        jwks = () => tokens.Jwks();
+        var repository = "Systemorph/MeshWeaver.RevokedEchoHeld";
+        var token = tokens.Mint(Audience, repository: repository);
+        await Grant(Principal(repository), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull((await Authenticate(token, TestContext.Current.CancellationToken)).Build);
+
+        // This process's mirror, hydrated with the ACTIVE principal BEFORE the echo is held — the
+        // state any reader in this process had when the full run failed. Held open for the whole
+        // test, and asserted on again at the verdict, so the window is provably open when it is read.
+        var path = BuildPrincipal.PathFor(repository);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var mirror = new ReplaySubject<BuildPrincipal?>(1);
+        using var mirrorSubscription = access.RunAsSystem(() => Mesh.GetMeshNodeStream(path)
+                .Select(node => node.ContentAs<BuildPrincipal>(Mesh.JsonSerializerOptions)))
+            .Subscribe(mirror);
+        await mirror.Where(p => p is not null && p.IsActive(DateTimeOffset.UtcNow)).Should()
+            .Within(TimeSpan.FromSeconds(60)).Emit("this process's mirror carries the active principal");
+
+        heldPath = path;
+        try
+        {
+            await Grant(Principal(repository) with { RequestedAction = BuildPrincipalActions.Revoke },
+                cancellationToken: TestContext.Current.CancellationToken);
+            // Not vacuous: the owner committed the revoke AND posted its echo, which the seam holds —
+            // so this process's mirror provably still carries the active principal right now.
+            await echoHeld.Should().Within(TimeSpan.FromSeconds(60)).Emit(
+                "the owner committed the revoke and posted its echo — which the seam is holding");
+
+            var result = await Authenticate(token, TestContext.Current.CancellationToken);
+            Assert.False(result.IsUnavailable, "a committed revoke is a VERDICT, never an outage");
+            Assert.Null(result.Build);
+            // …while the mirror still says ACTIVE: the refusal did not come from it.
+            await mirror.Take(1).Where(p => p is not null && p.IsActive(DateTimeOffset.UtcNow)).Should()
+                .Within(TimeSpan.FromSeconds(10)).Emit("the held echo keeps this process's mirror on the pre-revoke record");
+        }
+        finally
+        {
+            ReleaseEcho();
+        }
     }
 
     [Fact(Timeout = 240_000)]
@@ -595,15 +664,17 @@ public class BuildPrincipalAuthenticationTest(ITestOutputHelper output) : Monoli
         Assert.Equal(BuildPrincipal.PathFor(DeclaredRepository), narrowed.Build!.PrincipalPath);
         Assert.False(narrowed.Build.Allows(BuildVerbs.Verify, "combo"));
 
-        // …and a revoking node stops the declared principal with no roll: as soon as the mirror the
-        // authenticator reads has the update, the token is refused — by a verdict, not by a read
-        // that could not be made.
+        // …and a revoking node stops the declared principal with no roll, on the very next request:
+        // the declaration is consulted only once the OWNER has said no node exists, so neither a
+        // listing nor a mirror that has not caught up yet can hand back the declared trust — and the
+        // refusal is a verdict, not a read that could not be made.
         await Grant(VerificationPrincipal() with
         {
             Repository = DeclaredRepository, RequestedAction = BuildPrincipalActions.Revoke,
         });
-        var revoked = await AuthenticateUntil(token, r => r.Build is null, TestContext.Current.CancellationToken);
+        var revoked = await Authenticate(token, TestContext.Current.CancellationToken);
         Assert.False(revoked.IsUnavailable);
+        Assert.Null(revoked.Build);
     }
 
     private static BuildPrincipal VerificationPrincipal() => Principal() with
