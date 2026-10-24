@@ -1,9 +1,11 @@
+using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
+using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -92,6 +94,73 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         Assert.NotNull(SecretEnvelope.TryParse(SecretEnvelope.Seal(Secret, pub, "k1", Context).ToJson()));
     }
 
+    [Fact]
+    public void HostileEnvelopes_AreRefusedBeforeAnythingIsDecoded()
+    {
+        var (publicKey, privateKey) = SecretEnvelope.GenerateKeyPair();
+        var good = SecretEnvelope.Seal(Secret, publicKey, "k1", Context);
+
+        Assert.Null(SecretEnvelope.TryParse(new string(' ', SecretEnvelope.MaxWireChars) + good.ToJson()));   // oversized wire
+        var huge = Convert.ToBase64String(new byte[SecretEnvelope.MaxPlaintextBytes + 1]);
+        Assert.Null(SecretEnvelope.TryParse((good with { Ciphertext = huge }).ToJson()));                      // oversized ciphertext
+        Assert.Null(SecretEnvelope.TryParse((good with { KeyId = new string('k', 65) }).ToJson()));           // oversized key id
+        Assert.Null(SecretEnvelope.TryParse((good with { Salt = Convert.ToBase64String(new byte[17]) }).ToJson()));
+        Assert.Null(SecretEnvelope.TryParse((good with { EphemeralPublicKey = new string('A', 4096) }).ToJson()));
+
+        // Unseal refuses the same shapes even when the envelope was built directly, never via TryParse.
+        Assert.Null((good with { Ciphertext = huge }).Unseal(privateKey, Context));
+        Assert.Null((good with { Nonce = Convert.ToBase64String(new byte[13]) }).Unseal(privateKey, Context));
+        Assert.Null((good with { Tag = Convert.ToBase64String(new byte[15]) }).Unseal(privateKey, Context));
+        Assert.Equal(Secret, good.Unseal(privateKey, Context));
+        Assert.NotNull(SecretEnvelope.TryParse(SecretEnvelope.Seal(new string('x', SecretEnvelope.MaxPlaintextBytes), publicKey, "k1", Context).ToJson()));
+    }
+
+    [Fact]
+    public void ARotationThatLostTheRace_AdoptsTheOneThatLanded_InsteadOfReplacingIt()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var k0 = new SecretSealingKey { CurrentId = "k0", ProtectedCurrentPrivateKey = "enc:k0", RotateAfter = now.AddMinutes(-1) };
+        var kA = new SecretSealingKey { CurrentId = "kA", ProtectedCurrentPrivateKey = "enc:kA", RotateAfter = now.AddDays(90) };
+        var kB = new SecretSealingKey { CurrentId = "kB", ProtectedCurrentPrivateKey = "enc:kB", RotateAfter = now.AddDays(90) };
+        bool Due(SecretSealingKey k) => SecretSealingKeyService.IsDue(k, now);
+
+        var first = SecretSealingKeyService.RotateAtOwner(k0, kA, Due, now);
+        var second = SecretSealingKeyService.RotateAtOwner(first, kB, Due, now);
+
+        first.CurrentId.Should().Be("kA");
+        second.Should().BeSameAs(first, "the second request read the same overdue K0, but at the owner K0 is already rotated: KA stays");
+        second.ProtectedPrivateKeyFor("k0", now).Should().Be("enc:k0", "the outgoing key is retired, not dropped");
+    }
+
+    [Fact]
+    public void TwoRotationsInsideOneWindow_KeepEveryOutgoingKeyUntilItsOwnDeadline()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var grace = SecretSealingKeys.RotationGrace;
+        var k0 = new SecretSealingKey { CurrentId = "k0", ProtectedCurrentPrivateKey = "enc:k0" };
+        var k1 = k0.RotatedTo(new SecretSealingKey { CurrentId = "k1", ProtectedCurrentPrivateKey = "enc:k1" }, now, grace);
+        var k2 = k1.RotatedTo(new SecretSealingKey { CurrentId = "k2", ProtectedCurrentPrivateKey = "enc:k2" }, now.AddDays(1), grace);
+
+        k2.ProtectedPrivateKeyFor("k0", now.AddDays(2)).Should().Be("enc:k0", "K0 is inside its own window although two rotations happened");
+        k2.ProtectedPrivateKeyFor("k1", now.AddDays(2)).Should().Be("enc:k1");
+        k2.ProtectedPrivateKeyFor("k2", now.AddDays(2)).Should().Be("enc:k2");
+        k2.ProtectedPrivateKeyFor("k0", now.Add(grace)).Should().BeNull("K0's window ends at its own deadline");
+        k2.ProtectedPrivateKeyFor("k1", now.Add(grace)).Should().Be("enc:k1", "K1's window runs a day longer");
+        var k3 = k2.RotatedTo(new SecretSealingKey { CurrentId = "k3", ProtectedCurrentPrivateKey = "enc:k3" }, now.Add(grace).AddMinutes(1), grace);
+        k3.Retired!.Select(r => r.Id).Should().Equal(["k1", "k2"], "a retired key past its deadline is dropped at the next rotation");
+    }
+
+    [Fact]
+    public async Task ALookupThatFails_IsAnswered503_NotAnUnhandledFault()
+    {
+        var result = await SealKeyEndpoints.Answer(Observable.Throw<SealingPublicKey?>(new InvalidOperationException("no master key")), null)
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)result).StatusCode.Should().Be(503);
+        var missing = await SealKeyEndpoints.Answer(Observable.Return<SealingPublicKey?>(null), null)
+            .Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken);
+        ((Microsoft.AspNetCore.Http.IStatusCodeHttpResult)missing).StatusCode.Should().Be(404);
+    }
+
     // ── the control instance's key, on a real mesh ──────────────────────────
 
     private async Task<WebApplication> Start()
@@ -123,7 +192,7 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
 
         using (var before = await client.GetAsync(SealKeyPayloads.Route, TestContext.Current.CancellationToken))
             before.StatusCode.Should().Be(HttpStatusCode.NotFound, "until the control plane mints the pair there is nothing to publish");
-        (await Mesh.GetMeshNode(SecretSealingKeys.Path, TimeSpan.FromSeconds(10)).Take(1).Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken))
+        (await Mesh.GetMeshNode(SecretSealingKeys.Path, TimeSpan.FromSeconds(10)).Take(1).Timeout(TestTimeouts.Convergence).Await(TestContext.Current.CancellationToken))
             .Should().BeNull("an anonymous request must not provoke the mint");
 
         var service = Mesh.ServiceProvider.GetRequiredService<SecretSealingKeyService>();
@@ -173,11 +242,21 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var sealedToSecond = SecretEnvelope.Seal(Secret, Convert.FromBase64String(second.PublicKey), second.KeyId, Context);
         (await service.Unseal(sealedToSecond.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().Be(Secret);
 
-        // Past the window the outgoing key no longer opens: age the stored previous key out.
-        var node = await Mesh.GetMeshNode(SecretSealingKeys.Path, TimeSpan.FromSeconds(10)).Take(1).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
-        var expired = node!.ContentAs<SecretSealingKey>(Mesh.JsonSerializerOptions)! with { PreviousValidUntil = DateTimeOffset.UtcNow.AddMinutes(-1) };
-        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateOrUpdateNode(node! with { Content = expired })
-            .Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
+        // A second rotation inside the window keeps the first key too.
+        var third = await service.Rotate("test").Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
+        third.KeyId.Should().NotBe(second.KeyId);
+        (await service.Unseal(sealedToFirst.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken))
+            .Should().Be(Secret, "two rotations inside one window do not drop the first outgoing key before its deadline");
+
+        // Past the window the outgoing keys no longer open: age them out through the node's own stream.
+        await Mesh.GetWorkspace().GetMeshNodeStream(SecretSealingKeys.Path)
+            .Update(current => current with
+            {
+                Content = current.ContentAs<SecretSealingKey>(Mesh.JsonSerializerOptions) is { } there
+                    ? there with { Retired = there.Retired?.Select(r => r with { ValidUntil = DateTimeOffset.UtcNow.AddMinutes(-1) }).ToImmutableList() }
+                    : current.Content,
+            })
+            .Take(1).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         (await service.Unseal(sealedToFirst.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken))
             .Should().BeNull("the outgoing key is accepted for a bounded window only");
         (await service.Unseal(sealedToSecond.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().Be(Secret);

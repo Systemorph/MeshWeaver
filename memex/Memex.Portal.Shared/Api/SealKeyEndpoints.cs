@@ -34,14 +34,29 @@ public static class SealKeyEndpoints
     {
         var logger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(SealKeyEndpoints));
         var keys = rootHub.ServiceProvider.GetRequiredService<SecretSealingKeyService>();
-        return keys.Existing()
-            .Select(key => key is null
-                ? Results.Json(new { error = "no sealing key has been minted on this instance" }, statusCode: StatusCodes.Status404NotFound)
-                : Results.Json(
-                    new SealKeyPayloads.Response(key.KeyId, key.PublicKey, SealKeyPayloads.Algorithm, SecretEnvelope.CurrentVersion),
-                    SealKeyPayloads.Json))
+        return Answer(keys.Existing(), logger)
             .ObserveCompletion(ex => logger?.LogWarning(ex, "Seal-key request faulted after answering"), ct)
-            .ContinueWith(t => t.Result ?? Results.Json(new { error = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
+            .ContinueWith(t => t.IsCompletedSuccessfully && t.Result is { } result ? result : Unavailable,
                 TaskContinuationOptions.ExecuteSynchronously);
     }
+
+    private static IResult Unavailable => Results.Json(new { error = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    /// <summary>
+    /// The answer for a key lookup. 🚨 A lookup that FAILS (no master key, the Admin partition unreachable) is
+    /// answered 503 and logged INSIDE the chain, so the bridge never sees a fault and never throws out of the
+    /// handler. Cold; emits once.
+    /// </summary>
+    internal static IObservable<IResult> Answer(IObservable<SealingPublicKey?> key, ILogger? logger)
+        => key.Take(1)
+            .Select(found => found is null
+                ? Results.Json(new { error = "no sealing key has been minted on this instance" }, statusCode: StatusCodes.Status404NotFound)
+                : Results.Json(
+                    new SealKeyPayloads.Response(found.KeyId, found.PublicKey, SealKeyPayloads.Algorithm, SecretEnvelope.CurrentVersion),
+                    SealKeyPayloads.Json))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "Seal-key request could not read the sealing key; answering 503");
+                return Observable.Return(Unavailable);
+            });
 }

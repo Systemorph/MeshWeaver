@@ -27,20 +27,31 @@ byte. `Unseal` answers `null` for every failure, never an exception that could s
 
 Wire form: `{ "v":1, "kid":"…", "epk":"…", "salt":"…", "nonce":"…", "ct":"…", "tag":"…" }`.
 
+**Hostile input is refused before anything is decoded.** `TryParse` reads at most 16 384 characters, and both
+`TryParse` and `Unseal` check every field against what a sealed envelope can carry (a P-256 SPKI key, 16/12/16 random
+bytes, 1..8192 bytes of ciphertext), so an envelope with a bad tag cannot make the control instance allocate for it.
+
 ## The control instance's key
 
 `SecretSealingKeyService` (`MeshWeaver.PluginCatalog`) owns one node, `Admin/SecretSealingKey/current`, minted by the
 control plane itself (never by a request) and read back so replicas agree. It holds the **public key in the clear** and the **private key only as `enc:` ciphertext of the
 platform key protector**, refused when no master key exists.
 
-**Rotation:** every 90 days, or on demand. The outgoing key stays accepted for 7 days, so a value sealed just before
-the rotation still opens; after that only the new key does.
+**Rotation:** every 90 days, or on demand. Each outgoing key stays accepted for 7 days from its own rotation, so a
+value sealed just before the rotation still opens; after that only the newer keys do. **Every** retired key inside its
+window is kept (`SecretSealingKey.Retired`), so two rotations within one window never drop the first outgoing key
+early.
+
+The due-check and the rotation happen together inside the update at the node's owning hub, which serialises them:
+two requests that both read an overdue key cannot both rotate it. The second finds the first one's key current and
+adopts it, and every caller answers with the key as stored, never its own proposal.
 
 ## Publishing the public key
 
 `GET /api/instances/seal-key` is anonymous and read-only: it is a public key, and an installation that holds only its
 announcement key (the control-inbox credential) must be able to fetch it. It answers `{ keyId, publicKey, algorithm,
-version }`, or 404 until the control plane has minted the pair. A request can never provoke the mint, and nothing else
+version }`, or 404 until the control plane has minted the pair, or a logged 503 when the key cannot be read. It
+authenticates nobody, so an answer from it is never an authentication boundary. A request can never provoke the mint, and nothing else
 leaves the control instance. What the key is *for* is gated elsewhere: a value sealed to it is accepted only inside an
 event signed with the deployment's own key.
 

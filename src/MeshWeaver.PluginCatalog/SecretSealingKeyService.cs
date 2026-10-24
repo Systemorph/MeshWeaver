@@ -1,6 +1,7 @@
 using MeshWeaver.AI;   // IProviderKeyProtector keeps its ORIGINAL namespace in MeshWeaver.Mesh.Contract (#2398 forwarders)
 using System.Reactive.Linq;
 using System.Security.Cryptography;
+using MeshWeaver.Data;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -62,9 +63,7 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
         {
             if (stored is null) return null;
             var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-            var protectedPrivate = envelope.KeyId == stored.CurrentId ? stored.ProtectedCurrentPrivateKey
-                : envelope.KeyId == stored.PreviousId && stored.PreviousStillValid(DateTimeOffset.UtcNow) ? stored.ProtectedPreviousPrivateKey
-                : null;
+            var protectedPrivate = stored.ProtectedPrivateKeyFor(envelope.KeyId, DateTimeOffset.UtcNow);
             if (protectedPrivate is null || Unprotect(protector, protectedPrivate) is not { } privateKey)
                 return null;
             try { return envelope.Unseal(privateKey, context); }
@@ -72,11 +71,16 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
         });
     }
 
-    /// <summary>Rotates now (an operator's call; the schedule does it by itself). Cold; emits the new public key.</summary>
+    /// <summary>
+    /// Rotates now (an operator's call; the schedule does it by itself). Every outgoing key stays accepted for
+    /// <see cref="SecretSealingKeys.RotationGrace"/> from its own rotation. Cold; emits the new public key.
+    /// </summary>
     public IObservable<SealingPublicKey> Rotate(string rotatedBy)
     {
         var access = hub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => Read().SelectMany(stored => Write(NewKey(stored), stored is null)))
+        return access.RunAsSystem(() => Read().SelectMany(stored => stored is null
+                ? Create()
+                : Rotated(_ => true)))
             .Do(_ => logger.LogInformation("Secret sealing key rotated by {By}; the outgoing key stays accepted for {Grace}", rotatedBy, SecretSealingKeys.RotationGrace))
             .Select(stored => new SealingPublicKey(stored.CurrentId, stored.CurrentPublicKey));
     }
@@ -87,12 +91,40 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
         // ONE sealed System scope around the whole resolve: the key is in the Admin partition and the
         // caller is an HTTP request that must not be left holding System.
         return access.RunAsSystem(() => Read().SelectMany(stored =>
-            stored is null ? Write(NewKey(null), create: true)
-            : stored.RotateAfter is { } due && DateTimeOffset.UtcNow >= due ? Write(NewKey(stored), create: false)
+            stored is null ? Create()
+            : IsDue(stored, DateTimeOffset.UtcNow) ? Rotated(there => IsDue(there, DateTimeOffset.UtcNow))
             : Observable.Return(stored)));
     }
 
-    private SecretSealingKey NewKey(SecretSealingKey? outgoing)
+    /// <summary>Whether a new key is due at <paramref name="now"/>. Pure.</summary>
+    internal static bool IsDue(SecretSealingKey key, DateTimeOffset now) => key.RotateAfter is { } due && now >= due;
+
+    /// <summary>
+    /// What a rotation makes of the key as it is at the OWNING hub: when <paramref name="rotate"/> still holds for
+    /// it, <paramref name="candidate"/> becomes current and the outgoing key is retired; otherwise it is left exactly
+    /// as it is, so a request that read the same overdue key as another ADOPTS the rotation that landed first
+    /// instead of replacing it. Pure.
+    /// </summary>
+    internal static SecretSealingKey RotateAtOwner(SecretSealingKey there, SecretSealingKey candidate,
+        Func<SecretSealingKey, bool> rotate, DateTimeOffset now)
+        => rotate(there) ? there.RotatedTo(candidate, now, SecretSealingKeys.RotationGrace) : there;
+
+    // 🚨 The due-check and the rotation happen together, inside the update at the owning hub, which serialises
+    // them: two requests that both read an overdue K0 can never publish KA and KB, both naming K0 — the second
+    // finds KA current (not due) and leaves it. The answer is the key as stored afterwards, never the proposal.
+    private IObservable<SecretSealingKey> Rotated(Func<SecretSealingKey, bool> rotate)
+    {
+        var candidate = NewKey();
+        return hub.GetWorkspace().GetMeshNodeStream(SecretSealingKeys.Path)
+            .Update(node => node.ContentAs<SecretSealingKey>(hub.JsonSerializerOptions) is { } there
+                ? node with { Content = RotateAtOwner(there, candidate, rotate, DateTimeOffset.UtcNow) }
+                : node)
+            .Take(1)
+            .SelectMany(_ => Read())
+            .Select(stored => stored ?? throw new InvalidOperationException("The secret sealing key was rotated but could not be read back."));
+    }
+
+    private SecretSealingKey NewKey()
     {
         var protector = hub.ServiceProvider.GetRequiredService<IProviderKeyProtector>();
         var (publicKey, privateKey) = SecretEnvelope.GenerateKeyPair();
@@ -107,9 +139,6 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
                 ProtectedCurrentPrivateKey = protector.Protect(Convert.ToBase64String(privateKey))
                     ?? throw new InvalidOperationException("The sealing key cannot be stored: no master key is configured."),
                 CurrentIssuedAt = now,
-                PreviousId = outgoing?.CurrentId,
-                ProtectedPreviousPrivateKey = outgoing?.ProtectedCurrentPrivateKey,
-                PreviousValidUntil = outgoing is null ? null : now.Add(SecretSealingKeys.RotationGrace),
                 RotateAfter = now.Add(SecretSealingKeys.RotationInterval),
             };
         }
@@ -119,7 +148,7 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
         }
     }
 
-    private IObservable<SecretSealingKey> Write(SecretSealingKey key, bool create)
+    private IObservable<SecretSealingKey> Create()
     {
         var meshService = hub.ServiceProvider.GetRequiredService<IMeshService>();
         var node = new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace)
@@ -127,13 +156,12 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
             Name = "Secret sealing key",
             NodeType = SecretSealingKeys.NodeType,
             State = MeshNodeState.Active,
-            Content = key,
+            Content = NewKey(),
         };
         // 🚨 ALWAYS read back; never return what we proposed. Under a concurrent create both callers are told
         // "created" while storage keeps the FIRST write: the stored node is the only authority, otherwise two
         // replicas end up sealing to different keys.
-        var written = create ? meshService.CreateNodes([node]).Select(_ => 0) : meshService.CreateOrUpdateNode(node).Select(_ => 0);
-        return written.SelectMany(_ => Read()).Select(stored =>
+        return meshService.CreateNodes([node]).Select(_ => 0).SelectMany(_ => Read()).Select(stored =>
             stored ?? throw new InvalidOperationException("The secret sealing key was written but could not be read back."));
     }
 

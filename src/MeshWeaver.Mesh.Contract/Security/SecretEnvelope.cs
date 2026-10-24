@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -35,6 +36,17 @@ public sealed record SecretEnvelope(
 
     /// <summary>The largest plaintext sealed: a secret is a key or a password, never a document.</summary>
     public const int MaxPlaintextBytes = 8192;
+
+    /// <summary>
+    /// The largest wire JSON <see cref="TryParse"/> reads. Every field is bounded too (the base64 of a P-256
+    /// SPKI key, of 16/12/16 random bytes, and of at most <see cref="MaxPlaintextBytes"/> of ciphertext), so an
+    /// envelope that could never have been sealed is refused BEFORE anything is decoded or allocated for it.
+    /// </summary>
+    public const int MaxWireChars = 16384;
+
+    private const int MaxKeyIdChars = 64;
+    private const int MaxEphemeralKeyChars = 256;
+    private const int MaxCiphertextChars = (MaxPlaintextBytes + 2) / 3 * 4;
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
@@ -83,17 +95,22 @@ public sealed record SecretEnvelope(
     {
         try
         {
-            if (Version != CurrentVersion) return null;
+            if (Version != CurrentVersion || !WithinBounds()) return null;
+            var ciphertext = Convert.FromBase64String(Ciphertext);
+            var salt = Convert.FromBase64String(Salt);
+            var nonce = Convert.FromBase64String(Nonce);
+            var tag = Convert.FromBase64String(Tag);
+            if (ciphertext.Length is 0 or > MaxPlaintextBytes || salt.Length != 16 || nonce.Length != 12 || tag.Length != 16)
+                return null;
             using var recipient = ECDiffieHellman.Create();
             recipient.ImportPkcs8PrivateKey(recipientPrivateKey, out _);
             using var sender = ECDiffieHellman.Create();
             sender.ImportSubjectPublicKeyInfo(Convert.FromBase64String(EphemeralPublicKey), out _);
             if (sender.KeySize != 256) return null;
-            var key = DeriveKey(recipient.DeriveRawSecretAgreement(sender.PublicKey), Convert.FromBase64String(Salt));
-            var ciphertext = Convert.FromBase64String(Ciphertext);
+            var key = DeriveKey(recipient.DeriveRawSecretAgreement(sender.PublicKey), salt);
             var plain = new byte[ciphertext.Length];
             using (var aes = new AesGcm(key, 16))
-                aes.Decrypt(Convert.FromBase64String(Nonce), ciphertext, Convert.FromBase64String(Tag), plain, Aad(Version, KeyId, context));
+                aes.Decrypt(nonce, ciphertext, tag, plain, Aad(Version, KeyId, context));
             CryptographicOperations.ZeroMemory(key);
             return Encoding.UTF8.GetString(plain);
         }
@@ -106,14 +123,19 @@ public sealed record SecretEnvelope(
     /// <summary>The envelope as its wire JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, Json);
 
-    /// <summary>Parses an envelope; null for anything that is not one.</summary>
+    /// <summary>
+    /// Parses an envelope; null for anything that is not one — including input longer than
+    /// <see cref="MaxWireChars"/> and any field longer than a sealed envelope can carry, refused before it is
+    /// deserialized or decoded.
+    /// </summary>
     public static SecretEnvelope? TryParse(string? json)
     {
-        if (string.IsNullOrWhiteSpace(json)) return null;
+        if (string.IsNullOrWhiteSpace(json) || json.Length > MaxWireChars) return null;
         try
         {
             var envelope = JsonSerializer.Deserialize<SecretEnvelope>(json, Json);
             return envelope is { KeyId.Length: > 0, EphemeralPublicKey.Length: > 0, Salt.Length: > 0, Nonce.Length: > 0, Ciphertext.Length: > 0, Tag.Length: > 0 }
+                   && envelope.WithinBounds()
                 ? envelope
                 : null;
         }
@@ -122,6 +144,15 @@ public sealed record SecretEnvelope(
             return null;
         }
     }
+
+    // The field lengths a sealed envelope can have, checked before any field is decoded.
+    private bool WithinBounds()
+        => KeyId is { Length: > 0 and <= MaxKeyIdChars }
+           && EphemeralPublicKey is { Length: > 0 and <= MaxEphemeralKeyChars }
+           && Salt is { Length: 24 }
+           && Nonce is { Length: 16 }
+           && Tag is { Length: 24 }
+           && Ciphertext is { Length: > 0 and <= MaxCiphertextChars };
 
     private static byte[] DeriveKey(byte[] sharedSecret, byte[] salt)
     {
@@ -153,21 +184,43 @@ public record SecretSealingKey
     /// <summary>When the current key was minted.</summary>
     public DateTimeOffset CurrentIssuedAt { get; init; }
 
-    /// <summary>The previous key's id, during a rotation window.</summary>
-    public string? PreviousId { get; init; }
-
-    /// <summary>The previous private key, protected.</summary>
-    public string? ProtectedPreviousPrivateKey { get; init; }
-
-    /// <summary>The previous key is accepted until this instant.</summary>
-    public DateTimeOffset? PreviousValidUntil { get; init; }
+    /// <summary>
+    /// The outgoing keys still inside their grace window, each with its own deadline. 🚨 EVERY unexpired one is
+    /// kept: two rotations inside one window (K0 → K1 → K2) must not drop K0 before its deadline, or a value
+    /// sealed to it stops opening early. Null (the type default) when there are none.
+    /// </summary>
+    public ImmutableList<RetiredSealingKey>? Retired { get; init; }
 
     /// <summary>When a new key is due.</summary>
     public DateTimeOffset? RotateAfter { get; init; }
 
-    /// <summary>Whether the previous key is still accepted at <paramref name="now"/>.</summary>
-    public bool PreviousStillValid(DateTimeOffset now)
-        => !string.IsNullOrWhiteSpace(ProtectedPreviousPrivateKey) && PreviousValidUntil is { } until && now < until;
+    /// <summary>The protected private key that opens <paramref name="keyId"/> at <paramref name="now"/>: the current one, or a retired one inside its window; null otherwise.</summary>
+    public string? ProtectedPrivateKeyFor(string keyId, DateTimeOffset now)
+        => keyId == CurrentId ? ProtectedCurrentPrivateKey
+            : Retired?.FirstOrDefault(r => r.Id == keyId && r.StillValid(now))?.ProtectedPrivateKey;
+
+    /// <summary>
+    /// This key retired in favour of <paramref name="next"/> at <paramref name="now"/>: the outgoing current key
+    /// joins the retired keys for <paramref name="grace"/>, retired keys already past their deadline are dropped,
+    /// and every other one is kept. Pure.
+    /// </summary>
+    public SecretSealingKey RotatedTo(SecretSealingKey next, DateTimeOffset now, TimeSpan grace)
+        => next with
+        {
+            Retired = (Retired ?? []).Where(r => r.StillValid(now))
+                .Append(new RetiredSealingKey(CurrentId, ProtectedCurrentPrivateKey, now.Add(grace)))
+                .ToImmutableList(),
+        };
+}
+
+/// <summary>An outgoing sealing key, accepted until <paramref name="ValidUntil"/>.</summary>
+/// <param name="Id">The key id envelopes sealed to it name.</param>
+/// <param name="ProtectedPrivateKey">Its private key (PKCS#8, base64), protected by the platform key protector.</param>
+/// <param name="ValidUntil">The instant it stops opening.</param>
+public sealed record RetiredSealingKey(string Id, string ProtectedPrivateKey, DateTimeOffset ValidUntil)
+{
+    /// <summary>Whether it is still accepted at <paramref name="now"/>.</summary>
+    public bool StillValid(DateTimeOffset now) => !string.IsNullOrWhiteSpace(ProtectedPrivateKey) && now < ValidUntil;
 }
 
 /// <summary>Where the sealing key lives and how it rotates.</summary>
@@ -195,7 +248,12 @@ public static class SecretSealingKeys
 /// <summary>The wire contract of <c>GET /api/instances/seal-key</c>: the public key an installation seals a secret to.</summary>
 public static class SealKeyPayloads
 {
-    /// <summary>The route, served by the control instance and authenticated by the installation's instance key.</summary>
+    /// <summary>
+    /// The route, served by the control instance. ANONYMOUS and read-only: it publishes a public key and
+    /// authenticates nobody, so a consumer must not treat an answer from it as an authentication boundary. What a
+    /// value sealed to the key is FOR is gated elsewhere (it is accepted only inside an event signed with the
+    /// deployment's own key).
+    /// </summary>
     public const string Route = "/api/instances/seal-key";
 
     /// <summary>The algorithm named in the answer.</summary>
