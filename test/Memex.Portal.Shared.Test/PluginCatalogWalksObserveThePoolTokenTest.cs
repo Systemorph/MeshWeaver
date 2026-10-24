@@ -249,4 +249,41 @@ public class PluginCatalogWalksObserveThePoolTokenTest : IDisposable
             ModuleActivationSidecar.ReadTierRefusals(root, Cancelled()));
         Assert.Empty(ModuleActivationSidecar.ReadTierRefusals(root, CancellationToken.None));
     }
+    /// <summary>Review on #7121: the pending report's refusal markers were listed and read with no
+    /// token.</summary>
+    [Fact]
+    public void TheRefusalWalk_StopsOnACancelledToken()
+    {
+        var entries = ModuleActivationSidecar.EntriesDirectory(root);
+        Directory.CreateDirectory(entries);
+        File.WriteAllText(Path.Combine(entries, Module + ModuleActivationSidecar.RefusedMarkerSuffix), "{ not json");
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            ModuleActivationSidecar.ReadRefusalsObservingToken(root, Cancelled()));
+        Assert.Empty(ModuleActivationSidecar.ReadRefusalsObservingToken(root, CancellationToken.None));
+    }
+
+    /// <summary>
+    /// Review on #7121: reading a sealed module bundle's carried assemblies inflates every one of them
+    /// to read its MVID, with no token. A cancelled token extracts nothing; the control reads the entry
+    /// and its platform sibling.
+    /// </summary>
+    [Fact]
+    public void TheSealedAssemblyExtraction_StopsOnACancelledToken()
+    {
+        var bundle = Path.Combine(root, "m.module.nupkg");
+        using (var zip = System.IO.Compression.ZipFile.Open(bundle, System.IO.Compression.ZipArchiveMode.Create))
+        {
+            using (var w = new StreamWriter(zip.CreateEntry("meshweaver/manifest.json").Open()))
+                w.Write($"{{\"module\":{{\"assemblyName\":\"{Module}\"}}}}");
+            using (var s = zip.CreateEntry($"meshweaver/modules/{Module}.dll").Open())
+                s.Write(File.ReadAllBytes(typeof(BundleReader).Assembly.Location));
+            using (var s = zip.CreateEntry("meshweaver/modules/MeshWeaver.PluginCatalog.dll").Open())
+                s.Write(File.ReadAllBytes(typeof(ModuleActivationSidecar).Assembly.Location));
+        }
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            PublishedBundleCatalogue.SealedModuleAssembliesOf(bundle, Cancelled()));
+        Assert.Equal(2, PublishedBundleCatalogue.SealedModuleAssembliesOf(bundle, CancellationToken.None).Length);
+    }
 }

@@ -751,7 +751,7 @@ public static class PublishedBundleCatalogue
                 ImmutableArray<SealedModuleAssembly> carried;
                 try
                 {
-                    carried = SealedModuleAssembliesOf(path);
+                    carried = SealedModuleAssembliesOf(path, cancellationToken);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or BadImageFormatException or InvalidOperationException)
                 {
@@ -860,7 +860,16 @@ public static class PublishedBundleCatalogue
     /// is what the bundle contains, not what its manifest claims.</para>
     /// </summary>
     internal static ImmutableArray<SealedModuleAssembly> SealedModuleAssembliesOf(string moduleBundlePath)
+        => SealedModuleAssembliesOf(moduleBundlePath, CancellationToken.None);
+
+    /// <summary><see cref="SealedModuleAssembliesOf(string)"/> from a pooled leaf: each assembly is
+    /// inflated into memory to read its MVID, so <paramref name="cancellationToken"/> is checked before
+    /// the bundle is opened and before EACH assembly's extraction — a drain during the first one stops
+    /// before the next.</summary>
+    internal static ImmutableArray<SealedModuleAssembly> SealedModuleAssembliesOf(
+        string moduleBundlePath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var manifest = BundleReader.ReadManifest(moduleBundlePath);
         using var file = File.OpenRead(moduleBundlePath);
         using var archive = new ZipArchive(file, ZipArchiveMode.Read);
@@ -884,12 +893,14 @@ public static class PublishedBundleCatalogue
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
 
         var carried = ImmutableArray.CreateBuilder<SealedModuleAssembly>(flat.Count);
+        cancellationToken.ThrowIfCancellationRequested();
         carried.Add(new SealedModuleAssembly(name, MvidOf(entry), IsEntry: true));
         foreach (var sibling in flat)
         {
             var simple = Path.GetFileNameWithoutExtension(sibling.FullName);
             if (string.Equals(simple, name, StringComparison.Ordinal) || !IsPlatformAssemblyName(simple))
                 continue;
+            cancellationToken.ThrowIfCancellationRequested();
             carried.Add(new SealedModuleAssembly(simple, MvidOf(sibling), IsEntry: false));
         }
         return carried.ToImmutable();

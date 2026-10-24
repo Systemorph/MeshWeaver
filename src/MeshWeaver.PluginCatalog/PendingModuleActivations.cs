@@ -1213,7 +1213,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
             FloorAdvisories = floorAdvisories,
             // #4083 — every module whose last landing was refused, from its own marker; a refused
             // first install has no entry, so the markers are the denominator here, not the list.
-            Refused = [.. ModuleActivationSidecar.ReadRefusals(ModuleRootPath)
+            Refused = [.. ModuleActivationSidecar.ReadRefusalsObservingToken(ModuleRootPath, cancellationToken)
                 .Select(pair => new ModuleRefusal(
                     pair.Key, pair.Value.PackagePath, pair.Value.Version, pair.Value.Reason,
                     pair.Value.RefusedAt, pair.Value.Needs, pair.Value.Provides))],

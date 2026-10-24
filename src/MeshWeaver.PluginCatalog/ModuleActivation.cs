@@ -706,14 +706,14 @@ public static class ModuleActivationSidecar
                 + "sees its records whole restores it.");
         }
 
-        var (names, listed) = ListRecordDirectories(baseDirectory, onCorrupt);
+        var (names, listed) = ListRecordDirectories(baseDirectory, onCorrupt, cancellationToken);
         if (!listed)
             // Which modules have records is unknown, so no PROJECTION can be trusted: a current
             // image's per-module file is a decision some record or tombstone may have overtaken.
             foreach (var projected in stored.List.Entries.Where(e => e.ProjectionOf is not null).ToImmutableList())
                 Drop(projected.Name, "the record directories under activation.d could not be listed");
 
-        var present = GenerationPresence(baseDirectory);
+        var present = GenerationPresence(baseDirectory, cancellationToken);
         foreach (var moduleName in names)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -747,7 +747,7 @@ public static class ModuleActivationSidecar
             // per-module marker file, only while the head is still the generation it measured.
             // ProjectionOf is the per-module FILE's bookkeeping and never leaves this class.
             Entries = [.. order.Select(name =>
-                WithUnloadableMarker(baseDirectory, byName[name] with { ProjectionOf = null }))],
+                WithUnloadableMarker(baseDirectory, byName[name] with { ProjectionOf = null }, cancellationToken))],
         };
     }
 
@@ -1219,12 +1219,21 @@ public static class ModuleActivationSidecar
 
     private static (ImmutableList<string> Names, bool Listed) ListRecordDirectories(
         string baseDirectory, Action<string>? onCorrupt)
+        => ListRecordDirectories(baseDirectory, onCorrupt, CancellationToken.None);
+
+    /// <summary><see cref="ListRecordDirectories(string, Action{string}?)"/> checking
+    /// <paramref name="cancellationToken"/> before the listing and per listed entry, before the sort.
+    /// A cancel escapes the catch below, so it is never reported as an unlistable directory.</summary>
+    private static (ImmutableList<string> Names, bool Listed) ListRecordDirectories(
+        string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var directory = EntriesDirectory(baseDirectory);
         try
         {
             return (Directory.Exists(directory)
                 ? [.. Directory.EnumerateDirectories(directory)
+                    .Select(d => { cancellationToken.ThrowIfCancellationRequested(); return d; })
                     .Select(Path.GetFileName)
                     .Where(IsValidModuleName)
                     .Select(name => name!)
@@ -1656,16 +1665,27 @@ public static class ModuleActivationSidecar
     /// volume once per generation. A fresh function per read: nothing outlives the call.
     /// </summary>
     private static Func<string, string, bool> GenerationPresence(string baseDirectory)
+        => GenerationPresence(baseDirectory, CancellationToken.None);
+
+    /// <summary><see cref="GenerationPresence(string)"/> checking <paramref name="cancellationToken"/>
+    /// before each probe, and resolving through <see cref="SharedModuleTier.ResolveObservingToken"/>, so a
+    /// shared-only generation's seal verification stops between its probes too. The same rule as
+    /// <see cref="ModuleActivationBoot.LandedModuleDllExists"/>: the resolved directory plus
+    /// <c>&lt;name&gt;.dll</c>.</summary>
+    private static Func<string, string, bool> GenerationPresence(string baseDirectory, CancellationToken cancellationToken)
     {
         var known = ImmutableDictionary.Create<string, bool>(StringComparer.OrdinalIgnoreCase);
+        var sharedRoot = SharedModuleTier.For(baseDirectory).Root;
         return (name, generation) =>
         {
             if (string.IsNullOrWhiteSpace(generation))
                 return false;
             if (known.TryGetValue(generation, out var exists))
                 return exists;
-            exists = ModuleActivationBoot.LandedModuleDllExists(
-                baseDirectory, new ModuleActivationEntry { Name = name, Directory = generation });
+            cancellationToken.ThrowIfCancellationRequested();
+            exists = File.Exists(Path.Combine(
+                SharedModuleTier.ResolveObservingToken(baseDirectory, sharedRoot, generation, cancellationToken),
+                name + ".dll"));
             known = known.SetItem(generation, exists);
             return exists;
         };
@@ -2150,7 +2170,15 @@ public static class ModuleActivationSidecar
     /// A refused FIRST install has no activation entry at all, so the report enumerates the
     /// markers rather than the entries.</summary>
     public static ImmutableSortedDictionary<string, RefusedLanding> ReadRefusals(string baseDirectory)
+        => ReadRefusalsObservingToken(baseDirectory, CancellationToken.None);
+
+    /// <summary><see cref="ReadRefusals"/> from a pooled leaf: checks <paramref name="cancellationToken"/>
+    /// before the listing, per listed marker while the listing is collected, and before each marker
+    /// read. A DISTINCT name, so the bare <c>ReadRefusals</c> <c>cref</c>s stay unambiguous.</summary>
+    internal static ImmutableSortedDictionary<string, RefusedLanding> ReadRefusalsObservingToken(
+        string baseDirectory, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var builder = ImmutableSortedDictionary.CreateBuilder<string, RefusedLanding>(StringComparer.OrdinalIgnoreCase);
         var directory = EntriesDirectory(baseDirectory);
         if (!Directory.Exists(directory))
@@ -2158,7 +2186,9 @@ public static class ModuleActivationSidecar
         IEnumerable<string> files;
         try
         {
-            files = Directory.EnumerateFiles(directory, "*" + RefusedMarkerSuffix).ToArray();
+            files = Directory.EnumerateFiles(directory, "*" + RefusedMarkerSuffix)
+                .Select(f => { cancellationToken.ThrowIfCancellationRequested(); return f; })
+                .ToArray();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -2166,6 +2196,7 @@ public static class ModuleActivationSidecar
         }
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetFileName(file);
             name = name[..^RefusedMarkerSuffix.Length];
             if (ReadRefused(baseDirectory, name) is { } refusal)
@@ -2176,10 +2207,13 @@ public static class ModuleActivationSidecar
 
     /// <summary>Attaches the marker's identity to <paramref name="entry"/> when — and only when —
     /// the marker measured the generation the entry currently heads.</summary>
-    private static ModuleActivationEntry WithUnloadableMarker(string baseDirectory, ModuleActivationEntry entry)
+    private static ModuleActivationEntry WithUnloadableMarker(
+        string baseDirectory, ModuleActivationEntry entry, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(entry.Directory))
             return entry;
+        // One marker read per entry: the step boundary is before it, outside ReadUnloadable's catch.
+        cancellationToken.ThrowIfCancellationRequested();
         var marker = ReadUnloadable(baseDirectory, entry.Name);
         if (marker is null
             || !string.Equals(marker.Generation, entry.Directory, StringComparison.Ordinal)
