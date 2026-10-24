@@ -201,6 +201,53 @@ up in a `TEST_START`/`TEST_END` census. Its own `[Long Running Test]` lines name
 recent CI runs the host took 261–279 s every time except the one deadlock, and it exits the moment
 that test reports.
 
+## A module suite that wedges: ended below the job cap, with a dump
+
+Core's shards always bounded each host below the job cap (`timeout 8m` in `dotnet-test.yml`). The
+satellites' module lane (`node-repo-module-pack.yml`) did not. Its `dotnet test` ran unbounded, so a
+wedged suite ran into the job's 45-minute cap. A job the cap cancels runs no further step, so it kept
+no trx, no phase trace and no dump. The leg read `cancelled`, which looks like infra.
+
+That is what happened on MeshWeaver.Plugins PR #4155 (run 40115238778, `Module tests
+(MeshWeaver.AI)`, platform `c784cdb0e`, which predates the stdout fix above). The AI host printed its
+last skip about 70 s in and then nothing for 35 minutes. That silence does **not** carry the
+stdout-deadlock signature by itself: under Microsoft.Testing.Platform the console prints only skips,
+failures and the summary. A green run of the same suite (run 40120811982) is silent from that same
+skip until its summary 3.5 minutes later, and xunit's long-running notices do not reach the MTP
+console even with `--long-running` and `--xunit-diagnostics on` (measured locally). So nothing in
+that log separates the #7137 deadlock, a test that blocks synchronously, and a run-teardown wedge.
+Each of them withholds the summary too. 20 local runs of the suite on that platform did not stall.
+
+Each suite now runs under `.github/scripts/run-bounded-suite.sh`. Its deadline is whatever the job
+has left, less a reserve for the steps after it: a stuck detector derived from the cap, not a budget.
+On the deadline it:
+
+1. names every phase in `/tmp/meshweaver-test-trace.log` that opened and never closed
+   (`TEST_START` without `TEST_END`, `INIT_START` without `INIT_DONE`, `DISPOSE_START` without
+   `DISPOSE_DONE`). If every phase closed, it says the host is stuck outside a test.
+2. asks each .NET process in the tree to dump **itself**, through its diagnostics socket
+   (`.github/scripts/diag-dump.py`). This needs no ptrace and no tool installed at the moment of the
+   wedge. The runtime spawns its own `createdump`, and its diagnostics server answers from its own
+   native thread while managed threads are deadlocked. The dumps are mini dumps: every managed stack,
+   about 100 MB for the AI host. A heap dump of the same host is 1.7 GB, which would cost the
+   artifact store a lot per wedge. The stacks name a lock-order deadlock's two threads. `syncblk`
+   needs the heap, so a lock-owner question is answered from a local heap dump.
+   The whole dump phase shares **one** budget (`--dump-budget`, 180 s by default) that sits inside
+   the caller's reserve. Each request gets only what is left of it (`diag-dump.py --timeout` is one
+   deadline over connect, send and every read), and a process still unasked when the budget is
+   spent is skipped and said. So a runtime that accepts the request and then stalls cannot push the
+   job past its cap before the evidence is uploaded.
+3. ends the process tree and exits 124. The lane then records the suite as a TIMEOUT, not as
+   "the suite failed", and the existing evidence step keeps the dumps and the trace under
+   `test-evidence/<module>`.
+
+A suite whose turn comes after the window is spent (less than 60 s left before the reserve) is
+**not started**. Starting it would put it inside the reserve, where it could run into the cap. It
+is recorded as a failure, never a pass, and the step names every unstarted suite in one annotation.
+
+Measured end to end on the AI suite with a 75 s deadline: exit 124, the four tests and two class
+inits in flight named by pid, a 94 MB host dump with 78 readable managed stacks, and no process left.
+
 ## What is still open
 
 **What ends a live node's synchronization streams roughly five seconds into an operation that is
