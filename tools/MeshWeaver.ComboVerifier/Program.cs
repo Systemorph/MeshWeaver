@@ -65,6 +65,7 @@ var fetchTimeout = TimeSpan.FromMinutes(2);
 var gateTimeout = TimeSpan.FromMinutes(45);
 var sources = ImmutableDictionary<string, string>.Empty
     .WithComparers(StringComparer.OrdinalIgnoreCase);
+var moduleBundleDirs = ImmutableList<string>.Empty;
 
 for (var i = 0; i < args.Length; i++)
 {
@@ -108,6 +109,11 @@ for (var i = 0; i < args.Length; i++)
         case "--host" when i + 1 < args.Length:
             hostDir = args[++i];
             break;
+        // The combo's MODULE half (MeshWeaver#4413): a directory of sealed module bundles for the
+        // candidate's framework identity. Repeatable. See ComboModuleSet.
+        case "--module-bundles" when i + 1 < args.Length:
+            moduleBundleDirs = moduleBundleDirs.Add(args[++i]);
+            break;
         case "--fetch-timeout" when i + 1 < args.Length:
             fetchTimeout = TimeSpan.FromSeconds(
                 double.Parse(args[++i], CultureInfo.InvariantCulture));
@@ -119,7 +125,8 @@ for (var i = 0; i < args.Length; i++)
         // A value-taking option as the LAST argument would otherwise fall through to the default
         // case as "Unknown argument" — a misleading message for a missing value.
         case "--work-root" or "--verdict" or "--tag" or "--source" or "--default-source"
-            or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform" or "--host":
+            or "--token-env" or "--fetch-timeout" or "--gate-timeout" or "--platform" or "--host"
+            or "--module-bundles":
             Console.Error.WriteLine($"Option '{args[i]}' requires a value. Try --help.");
             return 2;
         case "--help" or "-h":
@@ -128,7 +135,11 @@ for (var i = 0; i < args.Length; i++)
                 + "[--verdict <file>] [--tag <candidate-tag>] [--allow-moving] "
                 + "[--allow-incomplete] [--source <name>=<url>]... [--default-source <url>] "
                 + "[--fetch-timeout <s>] [--gate-timeout <s>] [--token-env <VAR>] "
-                + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}]");
+                + "[--module-bundles <dir>]... "
+                + $"[--platform <os/arch>, default {DockerImageGate.FleetPlatform}]\n"
+                + "  --module-bundles <dir>: sealed module bundles for the candidate's framework "
+                + "identity. Required when the combo's packages declare compiled modules: the "
+                + "tester ships none, so without them every Skill/Agent install is refused.");
             return 0;
         default:
             if (args[i].StartsWith('-') || imageRef is not null)
@@ -209,7 +220,60 @@ var assembler = new InstanceComboAssembler(
         Output = Console.Out,
     });
 
-var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform, hostDir);
+// 🚨 THE MODULE HALF OF THE COMBO (MeshWeaver#4413). The instance runs every installed package's
+// compiled module; the tester's image ships none. A gate run without them registers no Skill or
+// Agent type, refuses the first install that needs one, and cascades into a red that blames every
+// package's CONTENT. So a combo that declares compiled modules with no module bytes handed over is
+// a missing INSTRUMENT, refused here with no verdict written — never a run whose red would be
+// landed on the instance as a statement about the candidate.
+var declaredModules = ComboModuleSet.DeclaredBy(combo);
+ComboModuleComposition? moduleSet = null;
+if (declaredModules.Length > 0 && moduleBundleDirs.Count == 0)
+{
+    Console.Error.WriteLine(
+        $"mw-combo-verify: the combo's packages declare {declaredModules.Length} compiled module(s) "
+        + $"({string.Join(", ", declaredModules)}) and no --module-bundles was given, so the gate "
+        + "would run without the modules this instance lands — the INSTRUMENT is incomplete, "
+        + "nothing about the candidate was asked, and no verdict is written. Fetch the sealed "
+        + "module set for the candidate's framework identity (.github/scripts/"
+        + "compose-sealed-modules.sh) and pass its directory.");
+    return DockerImageGate.TesterMissingExitCode;
+}
+if (declaredModules.Length > 0)
+{
+    try
+    {
+        moduleSet = await pools.Get(IoPoolNames.FileSystem)
+            .InvokeBlocking(_ => ComboModuleSet.Compose(
+                declaredModules, moduleBundleDirs, Path.GetFullPath(workRoot) + ".modules"))
+            .FirstAsync()
+            .ObserveCompletion(ex => Console.Error.WriteLine(
+                $"module composition faulted AFTER it was reported — reported, not orphaned: {ex}"));
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or IOException or InvalidDataException)
+    {
+        Console.Error.WriteLine($"mw-combo-verify: the module set could not be composed: {ex.Message}");
+        return DockerImageGate.TesterMissingExitCode;
+    }
+    Console.WriteLine(
+        $"modules: {moduleSet!.Modules.Length} of {declaredModules.Length} declared compiled "
+        + $"module(s) composed from the sealed set: {string.Join(", ", moduleSet.Modules)}");
+    if (moduleSet.NotSealed.Length > 0)
+        Console.WriteLine(
+            $"modules: {moduleSet.NotSealed.Length} declared but carried by no fetched seal, so NOT "
+            + $"loaded (the producing repository's own gate does not load them either): "
+            + string.Join(", ", moduleSet.NotSealed));
+    if (moduleSet.VersionDivergence(combo) is { Length: > 0 } diverged)
+        Console.WriteLine(
+            $"modules: {diverged.Length} composed at a version other than the installed one: "
+            + string.Join("; ", diverged));
+    if (moduleSet.NotDeclared.Length > 0)
+        Console.WriteLine(
+            $"modules: {moduleSet.NotDeclared.Length} sealed but not installed on this instance, so "
+            + $"NOT loaded: {string.Join(", ", moduleSet.NotDeclared)}");
+}
+
+var gate = new DockerImageGate(pools, gateTimeout, Console.Out, platform, hostDir, moduleSet);
 
 // 🚨 THE INSTRUMENT FIRST (#3848). A gate with no tester to start exits 127 with no report, which
 // folds into a NotVerifiable that reads as a statement about the candidate — and was landed on live
@@ -236,9 +300,25 @@ var run = (await verifier.Verify(combo, imageRef, workRoot, candidateTag).FirstA
 
 run.WriteSummary(Console.Out);
 
+// The verdict names its exact input, the module half included: a declared module no seal carried
+// ran unloaded, and a failure that needs it must be attributable from the verdict alone.
+var moduleCaveats = ImmutableList<string>.Empty;
+if (moduleSet is { NotSealed.Length: > 0 })
+    moduleCaveats = moduleCaveats.Add(
+        $"{moduleSet.NotSealed.Length} compiled module(s) this instance declares were carried by "
+        + "no sealed publication for the candidate's framework identity and were NOT loaded: "
+        + string.Join(", ", moduleSet.NotSealed));
+if (moduleSet?.VersionDivergence(combo) is { Length: > 0 } divergent)
+    moduleCaveats = moduleCaveats.Add(
+        $"{divergent.Length} module(s) ran at the version sealed for the candidate's framework "
+        + "identity — what the instance lands once it rolls there — which is not the version it has "
+        + $"installed today: {string.Join("; ", divergent)}");
+var verdictToWrite = moduleCaveats.IsEmpty
+    ? run.Verdict
+    : run.Verdict with { Caveats = run.Verdict.Caveats.AddRange(moduleCaveats) };
 var fullVerdictPath = Path.GetFullPath(verdictPath);
 File.WriteAllText(
-    fullVerdictPath, JsonSerializer.Serialize(run.Verdict, InstanceComboAssembler.Json));
+    fullVerdictPath, JsonSerializer.Serialize(verdictToWrite, InstanceComboAssembler.Json));
 Console.WriteLine();
 Console.WriteLine($"verdict written to '{fullVerdictPath}'.");
 Console.WriteLine(
@@ -249,11 +329,6 @@ Console.WriteLine(
 // A throwaway work root is kept when the verdict is not green — the materialised tree and the
 // gate report are exactly what an operator inspects next.
 if (!explicitWorkRoot)
-{
-    if (run.ExitCode == 0)
-        Directory.Delete(workRoot, recursive: true);
-    else
-        Console.WriteLine($"work root kept for inspection: '{Path.GetFullPath(workRoot)}'");
-}
+    ComboWorkRoots.Settle(run.ExitCode, workRoot, moduleSet?.Root, Console.Out);
 
 return run.ExitCode;
