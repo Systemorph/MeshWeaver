@@ -69,6 +69,10 @@ def run(selection: str, invocation: str, caller: str | None, platform: str | Non
     script = "\n".join([
         "set -euo pipefail",
         'dotnet() { echo "CWD=$PWD"; for a in "$@"; do echo "ARG=$a"; done; }',
+        # The invocation runs `dotnet test` UNDER run-bounded-suite.sh (the REAL wrapper, in its own
+        # bash): the stub must reach that child, and the window the loop computed is `left`.
+        "export -f dotnet",
+        "left=600",
         selection,
         'echo "RUNNER=$TEST_RUNNER"',
         'MODULE=Mod',
@@ -79,7 +83,10 @@ def run(selection: str, invocation: str, caller: str | None, platform: str | Non
         ")",
         'echo "AFTER=$PWD"',
     ])
-    env = dict(os.environ, GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(root / "rt"))
+    core = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, GITHUB_WORKSPACE=str(workspace), RUNNER_TEMP=str(root / "rt"),
+               MODULE_PACK_BATCH=str(core / ".github" / "scripts" / "module-pack-batch.py"),
+               MESHWEAVER_TEST_TRACE=str(root / "trace.log"))
     out = subprocess.run(["bash", "-c", script], cwd=workspace, env=env,
                          capture_output=True, text=True, check=True).stdout
     result: dict[str, str] = {"ARGS": ""}
@@ -154,8 +161,15 @@ class ModulePackTestRunnerTest(unittest.TestCase):
         lines = text.splitlines()
         starts = [i for i, l in enumerate(lines) if l.strip() == 'if [ "${#red[@]}" -gt 0 ]; then']
         self.assertEqual(2, len(starts), "both call sites name the red suites after the loop")
-        fails = [l.strip() for l in lines if "bk fail" in l and "the module's own suite failed" in l]
-        self.assertEqual(2, len(fails), "both call sites record a red suite's failure")
+        # The failure reason is built on the lines before `bk fail` (`why=`, and the TIMEOUT
+        # override for exit 124) — the block executed below is all three, as the step runs them.
+        fail_at = [i for i, l in enumerate(lines)
+                   if "bk fail" in l and '--phase test --reason "$why"' in l]
+        self.assertEqual(2, len(fail_at), "both call sites record a red suite's failure")
+        for i in fail_at:
+            self.assertIn("the module's own suite failed", lines[i - 2], "the default reason precedes `bk fail`")
+            self.assertIn('[ "$rc" -eq 124 ]', lines[i - 1], "the TIMEOUT reason precedes `bk fail`")
+        fails = ["\n  ".join(l.strip() for l in lines[i - 2:i + 1]) for i in fail_at]
         core = Path(__file__).resolve().parents[2]
         # 🚨 A MULTI-SUITE batch, failure bookkeeping AND the report, as the step runs them: the
         # REAL `bk fail` line of each call site against the real batch state, then the naming
