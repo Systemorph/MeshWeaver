@@ -349,7 +349,6 @@ Systemorph/MeshWeaver/.github/workflows/
   node-repo-tag-modules.yml    job: tag-modules    name: Tag module versions
   node-repo-publish-bake.yml   job: publish-bake   name: Bake + publish NodeType assemblies to portal storage
   node-repo-module-pack.yml    (mixed packages only — builds + packs a compiled module)
-  node-repo-platform-ref-bump.yml (opens the pin-bump PR)
 ```
 
 **Adoption status today, so you copy the right file:** SocialMedia and Reinsurance call the full
@@ -779,39 +778,13 @@ the bundle's five files, no `_GitSync`) has none, and since #3583 its module con
 than compiling from the leftover copy. The Partition Sync administration page adds one; then
 trigger one sync and count the partition's source nodes against the repo.
 
-## 13. The pin-bump lane needs the App's `workflows` permission — or it never opens a PR
+## 13. There is no pin-bump lane — a node repo carries no platform pin
 
-🚨 **SUPERSEDED — see "READ FIRST": `meshweaver-cloud` HOLDS `workflows: write` since (at latest)
-2026-09-20, measured with an App JWT against `GET /app`. The account below is why the grant exists and
-how to re-measure it; the grant itself is no longer missing.**
-
-`platform-ref-bump.yml` → core's `node-repo-platform-ref-bump.yml` opens the pin-bump PR with a
-token minted for the `meshweaver-cloud` App. The pin lives in `.github/workflows/ci.yml` (the
-`uses: …@<sha>` refs cannot live anywhere else), and GitHub refuses any push touching a workflow
-file from a token without the **`workflows`** permission:
-
-```
-! [remote rejected] chore/platform-ref-… (refusing to allow a GitHub App to create or update
-  workflow `.github/workflows/ci.yml` without `workflows` permission)
-```
-
-Measured on Plugins 2026-09-07 (run 34083504064, Plugins#1464): the lane resolved the right target
-and died at the push, no bot-authored pin PR had EVER existed, and the staleness ratchet went red
-at 130/120 commits behind and blocked every publication until a hand bump (#1463). Two halves:
-
-- **the lane** (core #3568/#3573, same morning): the token mint now asks for
-  `permission-workflows: write`, so a missing grant fails at the mint step, named;
-- **the App** — measured straight from GitHub with an App JWT (`GET /app`,
-  `GET /app/installations`): `meshweaver-cloud` (4220566) holds `contents:write, emails:write,
-  metadata:read, pull_requests:write` and **no `workflows` at all**, on the App and on the
-  Systemorph installation. That is an org-owner act in the App's settings (UI only — App
-  permissions are not settable through the API): Permissions → Workflows: Read and write, then
-  approve on the org installation.
-
-Until the grant lands every pin move in every node repo is a hand move — `sed` the OLD value
-across `ci.yml`, run `scripts/check-platform-pins.py`, and read the digests back from ACR by tag.
-To re-measure without printing the PEM: vault `meshweaverkeyvault/github-app-privatekey` →
-`openssl dgst -sha256 -sign` → RS256 JWT → `curl -H "Authorization: Bearer …" /app`.
+🚨 **RETIRED.** Node repos no longer pin the platform: they resolve the newest SEALED set at run time
+(MeshWeaver#3842, adopted by MeshWeaver.Plugins in `b5414edf7`, which deleted the last caller). Core's
+`node-repo-platform-ref-bump.yml` lane is therefore deleted; never add a `platform-ref-bump.yml` caller
+to a new repo. The history — why the lane needed the App's `workflows` grant, and the empty-room
+failure it taught — is kept on [Keeping the Platform Source Pin Current](../../../src/MeshWeaver.Documentation/Data/Architecture/PlatformRefBumpLane.md).
 
 ## The checklist
 
