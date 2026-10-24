@@ -635,26 +635,7 @@ public static class ActivityControlPlaneExtensions
     /// <param name="ex">The fault to classify.</param>
     /// <param name="address">The watcher's own hub/node address.</param>
     public static bool IsOwnHubDisposing(Exception? ex, Address address) =>
-        IsOwnHubDisposing(ex, address, depth: 0);
-
-    // depth caps the walk: AggregateException fan-out makes the traversal a tree, not a chain.
-    // 16 mirrors HubDisposingException.IsHubDisposal and is far beyond any real wrapping depth
-    // (the deepest observed in prod is TargetInvocationException → HubDisposingException).
-    private static bool IsOwnHubDisposing(Exception? ex, Address address, int depth)
-    {
-        if (depth > 16 || address is null)
-            return false;
-        for (var e = ex; e is not null; e = e.InnerException)
-        {
-            if (e is HubDisposingException disposing
-                && string.Equals(disposing.HubAddress.Path, address.Path, StringComparison.Ordinal))
-                return true;
-            if (e is AggregateException agg
-                && agg.InnerExceptions.Any(inner => IsOwnHubDisposing(inner, address, depth + 1)))
-                return true;
-        }
-        return false;
-    }
+        FaultClassifier.IsHubDisposalOf(ex, address);
 
     /// <summary>
     /// True when <paramref name="ex"/> (or an inner exception) is a

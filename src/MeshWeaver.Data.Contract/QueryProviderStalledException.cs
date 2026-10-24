@@ -61,8 +61,15 @@ public sealed class QueryProviderStalledException(
         + "reported as unavailable (retryable) rather than left hanging with no error. This is an "
         + "availability failure, never a permission verdict: a consumer deciding access must fail "
         + "CLOSED and say it could not establish the answer. Fix the stalled provider; never bump "
-        + "the consumer's timeout.")
+        + "the consumer's timeout."), MeshWeaver.Messaging.IClassifiedFault
 {
+    /// <summary>A transient fault of the store as a whole — <see cref="MeshWeaver.Messaging.FaultLayer.StoreStall"/>,
+    /// kept apart from an unreachable store so the connect retry never resubscribes a stall.</summary>
+    public string ClassifiedKind => MeshWeaver.Messaging.FaultKind.Transient;
+
+    /// <inheritdoc />
+    public string? ClassifiedLayer => MeshWeaver.Messaging.FaultLayer.StoreStall;
+
     /// <summary>Comma-joined names of the providers that had not emitted an Initial when the
     /// fan-in's bound elapsed — the attribution nothing above this level can produce.</summary>
     public string Providers { get; } = providers;

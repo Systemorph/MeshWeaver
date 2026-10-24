@@ -41,8 +41,15 @@ public sealed class StaleStreamStateException : InvalidOperationException
 /// signal for when to read again (the node's next write, a new listing frame); the cache evicts the
 /// faulted entry so that next read opens a fresh subscription.</para>
 /// </summary>
-public sealed class SyncStreamOwnerRefusedException : InvalidOperationException
+public sealed class SyncStreamOwnerRefusedException : InvalidOperationException, IClassifiedFault
 {
+    /// <summary>Every refusal counted was the owner's ShuttingDown verdict — "the address is coming
+    /// back" — so for a reader this is a transient fault of the transport, never a defect.</summary>
+    public string ClassifiedKind => FaultKind.Transient;
+
+    /// <inheritdoc />
+    public string? ClassifiedLayer => FaultLayer.Transport;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SyncStreamOwnerRefusedException"/> class.
     /// </summary>
