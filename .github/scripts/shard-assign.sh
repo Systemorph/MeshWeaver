@@ -78,7 +78,7 @@
 #      the numerator instead — PluginCatalog's two parts run ~174 s each, ~36% of
 #      the cap — and it costs nothing, because the parts land on different runners.
 #
-#      Memex.Portal.Shared.Test was the next one: listed at 25 s, it measured 431 s solo on
+#      Memex.Portal.Shared.Test (now in MeshWeaver.Plugins) was the next one: listed at 25 s, it measured 431 s solo on
 #      run 36816633012 (90% of the cap) and was killed at 480 s exit=124 on run 36817124160,
 #      still progressing through its classes, once #5894 added ~28 s of deliberate waits. It
 #      now runs in three parts: the two parts measured 327 and 324 s on
@@ -153,7 +153,6 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-651 Memex.Portal.Shared.Test 3
 269 MeshWeaver.Hosting.Orleans.Test
 91 MeshWeaver.Data.Test
 435 MeshWeaver.Messaging.Hub.Test 2

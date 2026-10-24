@@ -73,26 +73,61 @@ could not be built:
 Together those convert `MeshWeaver.GitSync` and `MeshWeaver.ContentCollections.Indexing` from
 "cannot be a module" (their third-party closure had nowhere to live) into "can be".
 
-🚨 **What the lane did NOT change is what pins most of the remaining projects.** They are held by
+🚨 **What the lane did NOT change is what pins most of the remaining projects.** They were held by
 consumers inside core — above all by `memex/Memex.Portal.Shared` — and no build change can release
 those. Only deleting the reference can.
 
-## The keystone: `memex/Memex.Portal.Shared`
+## The keystone: `Memex.Portal.Shared` — moved to plugins
 
 78 files, ~17.3k lines — `Api`, `Authentication`, `Email`, `Pages`, `SelfUpdate`, `Seo`, `Settings`,
-`Social`, `Storage` — and it is still in **core**, while all four hosts that consume it
-(`Memex.Portal.Gui`, `.Distributed`, `.Monolith`, `Memex.LocalMesh`) live in **plugins**.
+`Social`, `Storage` — that sat in **core** while all four hosts that consume it
+(`Memex.Portal.Gui`, `.Distributed`, `.Monolith`, `Memex.LocalMesh`) lived in **plugins**. It is now
+a SOURCE move to `MeshWeaver.Plugins/src/Memex.Portal.Shared`, with its suite at
+`src/Memex.Portal.Shared.Test`; the assembly name is unchanged and it still ships in the portal image.
 
 It alone holds 13 core `ProjectReference`s — but **most of them are not real**. Measured: it builds
 clean without `Observability.Contract`, `Maps`, `ContentCollections.Indexing` and `.Indexing.Graph`.
 The one candidate it genuinely couples to is **`GitSync`**, through four files —
 `MemexConfiguration` plus the GitHub login, connect and webhook endpoints. That is authentication,
 which is precisely why an earlier attempt to move Portal.Shared wholesale was split instead: doing
-it exiles sign-in from the platform repo. **That contradiction is still open and is a maintainer
-call, not an implementation detail.**
+it exiles sign-in from the platform repo.
 
-So the keystone is narrower than it looks: it gates `GitSync`, and it does not gate `Maps` or
+**Decided (core slimming): GitHub sign-in moves WITH Portal.Shared.** `MemexConfiguration` and
+`Social/GitHub*Endpoints` live in plugins now and still call core's `MeshWeaver.GitSync` library
+through a `$(MeshWeaverRoot)` project reference; `GitSync` itself stays in core for now and moves in
+a later step. So sign-in is no longer the platform repo's: the platform keeps the library the
+endpoints call, and plugins owns the portal surface that signs a person in.
+
+So the keystone was narrower than it looked: it gated `GitSync`, and it never gated `Maps` or
 `Indexing`.
+
+### What the move carried with it, and what it left unguarded
+
+- 🚨 **The `InternalsVisibleTo` grants stay in core.** `MeshWeaver.Graph`, `.Hosting`,
+  `.Hosting.AspNetCore`, `.Compiler`, `.Mesh.Operations`, `.PluginCatalog` and `.Testcontainers`
+  name `Memex.Portal.Shared` / `Memex.Portal.Shared.Test`, which are now assemblies of ANOTHER
+  repository. That is the #2689 shape — a refactor of one of those internals can red the plugins
+  trunk with no local signal — and what catches it is the required
+  `Dependent suites (MeshWeaver.Plugins)` verdict, which selects the moved suite by compiled reach.
+- **Two guards moved with their subject.** `IdentityReadsRunAsSystemGuard` (its whole subject was
+  Portal.Shared's onboarding reads) and the `SeoResolver` half of `InlineSvgEmissionBackplateGuard`
+  now run in `Memex.Portal.Shared.Test`. The platform's svg guard keeps its platform files.
+- **Three core ratchets lost inventory, not coverage they could keep.**
+  `ImpersonationScopeSites.allow` (16 sites in 10 files), `AwaitedMeshReadSites.allow` (its last 2)
+  and `LayoutAreaDataBakeSites.allow` (1) dropped their Portal.Shared lines and budgets. The plugins
+  repo runs the layout-area ratchet over `src/` already (core's script, through
+  `node-repo-validate.yml`); it has **no** compiled-code impersonation-latch or awaited-mesh-read
+  ratchet over `src/` (its `check-impersonation.py` scans in-mesh `Source/` only), so those 18 sites
+  are now guarded by nothing until one is ported.
+- **Plugins' stricter `src/` gates applied on arrival.** Every one-shot `.Subscribe` in the settings
+  tabs gained an error arm (`check-subscribe-error-arm.py` is zero-tolerance there; core never
+  scanned `memex/`), and `check-register-before-post.py` learned that a lone `hub` argument is the
+  IMessageHub a static reader is handed, never a delivery.
+- **Many of the suite's tests are about PLATFORM subjects** (PluginCatalog landing, module
+  activation, search refusal, token validation) and use Portal.Shared only as the host that composes
+  them. They moved whole, as the suite did; by the rule in *Splitting a test that spans the
+  boundary* below they belong where their subject lives, and splitting them back into a core suite
+  is the follow-up. Until then the dependent-suites verdict is what runs them on a core change.
 
 The second-order pin behind it is `tools/MeshWeaver.PluginTester` — core-owned, shipped as the gate
 image — which directly references `Indexing.Graph`, `GitSync`, `Maps`, `Mesh.Operations` and
@@ -133,10 +168,10 @@ delivery event, not a refactor, and it is why these do not get done casually or 
 | `Maps` | 116 | **yes** | in-mesh sample content (`Cornerstone/Pricing`), 5 test meshes, PluginTester | module + identity flip |
 | `ContentCollections.Indexing` | 1 851 | **yes** | one `using` in `Mesh.Operations`; in-mesh content | module + identity flip |
 | `ContentCollections.Indexing.Graph` | 2 253 | **yes** | PluginTester; in-mesh content | with the above |
-| `GitSync` | 9 649 | **yes** | `PluginCatalog`, 4 real files in Portal.Shared (**GitHub login = authentication**) | module + identity flip; auth ⇒ `Modules:Required` |
-| `PluginCatalog` | 21 245 | **yes** | Portal.Shared, PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
+| `GitSync` | 9 649 | **yes** | `PluginCatalog` (Portal.Shared's GitHub sign-in now calls it from plugins) | module + identity flip; auth ⇒ `Modules:Required` |
+| `PluginCatalog` | 21 245 | **yes** | PluginTester, ComboAssembler/Verifier | **stays** — it *is* the plugin system |
 | `Documentation` | 1 670 | no | the doc gate; settled decision | **stays** |
-| `Mesh.Operations` | 4 726 | **yes** | Portal.Shared, LocalMesh, PluginTester | **stays** |
+| `Mesh.Operations` | 4 726 | **yes** | PluginTester (Portal.Shared and LocalMesh consume it from plugins) | **stays** |
 
 Everything not listed is kernel: messaging, data, layout, the mesh contract, hosting, the compiler
 and NuGet resolution, packaging.
