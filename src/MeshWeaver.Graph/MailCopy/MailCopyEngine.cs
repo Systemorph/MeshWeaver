@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Reactive;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
@@ -52,8 +54,16 @@ public interface IMailCopyFeed
 /// source, every copy, the files and the index.
 /// </summary>
 public sealed class MailCopyEngine(
-    IMailCopyFeed feed, IMailCopyStore store, TimeProvider? clock = null, ILogger? logger = null, IMailAttachmentStore? attachments = null)
+    IMailCopyFeed feed, IMailCopyStore store, TimeProvider? clock = null, ILogger? logger = null, IMailAttachmentStore? attachments = null,
+    AccessService? access = null)
 {
+    // 🚨 The sync is BACKGROUND work: it carries out the owner's own switch-on, copying the owner's own
+    // account into the owner's own copy, and runs after provider hops that keep no ambient identity. So it
+    // never relies on one: every store call it makes is DECLARED System on the owner's behalf (the stores
+    // refuse a call with no identity). Switching on, off and reading go through the caller's own identity.
+    private readonly IMailCopyStore copies = new BackgroundMailCopyStore(store, access);
+    private readonly IMailAttachmentStore? fileStore = attachments is null ? null : new BackgroundMailAttachmentStore(attachments, access);
+
     /// <summary>The most feed steps one sync takes before it yields.</summary>
     public const int MaxStepsPerSync = 10;
 
@@ -101,16 +111,23 @@ public sealed class MailCopyEngine(
     /// <summary>Switches the copy OFF: the source, every copy, their attachment files and index go. Cold; true when something was removed.</summary>
     public IObservable<bool> Disable(string owner) => store.Disable(owner, Provider);
 
-    /// <summary>Starts a sync unless one runs in this process or, unless <paramref name="force"/>, one started lately. Fire and forget.</summary>
+    /// <summary>
+    /// Starts a sync unless one runs in this process or, unless <paramref name="force"/>, one started lately.
+    /// Fire and forget. The sync runs as System on the owner's behalf, so the CODE that asks is judged by the
+    /// in-mesh impersonation guard exactly as if it had called <c>RunAsSystemFor</c> itself.
+    /// </summary>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void Kick(string owner, bool force = false)
     {
+        CheckCaller(Assembly.GetCallingAssembly(), nameof(Kick), owner);
         var now = time.GetUtcNow();
         if (!force && lastStarted.TryGetValue(owner, out var last) && now - last < MinInterval)
             return;
         if (!ImmutableInterlocked.Update(ref running, static (set, o) => set.Add(o), owner))
             return;
         ImmutableInterlocked.AddOrUpdate(ref lastStarted, owner, now, (_, _) => now);
-        Sync(owner)
+        SyncCore(owner)
             .Timeout(TimeSpan.FromMinutes(30))
             .Finally(() => ImmutableInterlocked.Update(ref running, static (set, o) => set.Remove(o), owner))
             .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "{Provider} copy: the sync of {Owner} failed", Provider, owner));
@@ -121,8 +138,24 @@ public sealed class MailCopyEngine(
     /// cursor committed under the lease — and the lease released. For a copy that is OFF it only sweeps what a
     /// late write left behind: it reads one node and writes nothing else. Cold.
     /// </summary>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource?> Sync(string owner)
-        => store.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null
+    {
+        CheckCaller(Assembly.GetCallingAssembly(), nameof(Sync), owner);
+        return SyncCore(owner);
+    }
+
+    private void CheckCaller(Assembly caller, string surface, string owner)
+        => access?.ImpersonationGuard.Check(caller, $"{nameof(MailCopyEngine)}.{surface}", new AccessContext
+        {
+            ObjectId = AccessService.SystemObjectId,
+            Name = AccessService.SystemObjectId,
+            OnBehalfOf = owner,
+        });
+
+    private IObservable<MailCopySource?> SyncCore(string owner)
+        => copies.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null
             ? Sweep(owner).Select(_ => (MailCopySource?)null)
             : Acquire(owner, source).SelectMany(leased => leased is null
                 ? Observable.Return<MailCopySource?>(null)
@@ -138,7 +171,7 @@ public sealed class MailCopyEngine(
                     .SelectMany(done => Release(owner, null).Select(released => done is null ? null : released ?? done))));
 
     private IObservable<MailCopySource?> Acquire(string owner, MailCopySource source)
-        => store.Commit(owner, Provider, source.Generation, current =>
+        => copies.Commit(owner, Provider, source.Generation, current =>
             current.LeaseHolder is null || current.LeaseHolder == holder || current.LeaseUntil is not { } until || until <= time.GetUtcNow()
                 ? current with { LeaseHolder = holder, LeaseUntil = time.GetUtcNow() + LeaseTime }
                 : null);
@@ -149,10 +182,10 @@ public sealed class MailCopyEngine(
             : null;
 
     private IObservable<MailCopySource?> Release(string owner, string? error)
-        => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
+        => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
             .SelectMany(current => current is null || current.LeaseHolder != holder
                 ? Observable.Return<MailCopySource?>(null)
-                : store.Commit(owner, Provider, current.Generation, there => there.LeaseHolder == holder
+                : copies.Commit(owner, Provider, current.Generation, there => there.LeaseHolder == holder
                     ? there with
                     {
                         LeaseHolder = null,
@@ -174,14 +207,14 @@ public sealed class MailCopyEngine(
             source.MailboxId == id
                 ? Observable.Return<MailCopySource?>(source)
                 : source.MailboxId is null
-                    ? store.Commit(owner, Provider, source.Generation, UnderLease(current => current with { MailboxId = id }))
+                    ? copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with { MailboxId = id }))
                     : Rebuild(owner, source, id));
 
     private IObservable<MailCopySource?> Rebuild(string owner, MailCopySource source, string? mailboxId = null)
     {
         var generation = MailCopyNodeTypes.NewGeneration();
         logger?.LogInformation("{Provider} copy: rebuilding {Owner}'s copy as generation {Generation}", Provider, owner, generation);
-        return store.Commit(owner, Provider, source.Generation, UnderLease(current => current with
+        return copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with
             {
                 Generation = generation,
                 Projection = MailCopySource.CurrentProjection,
@@ -194,27 +227,27 @@ public sealed class MailCopyEngine(
             .SelectMany(rebuilt => rebuilt is null
                 ? Observable.Return<MailCopySource?>(null)
                 : (MailCopyNodeTypes.IsValidGeneration(source.Generation)
-                    ? store.RemoveGeneration(owner, Provider, source.Generation)
+                    ? copies.RemoveGeneration(owner, Provider, source.Generation)
                     : Sweep(owner)).Select(_ => (MailCopySource?)rebuilt));
     }
 
     /// <summary>Removes the copies a late write left behind — of generations PROVEN obsolete. Emits how many.</summary>
     public IObservable<int> Sweep(string owner)
-        => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
-            .SelectMany(before => store.List(owner, Provider, MeshMailCopyStore.MaxPage, before?.Generation))
+        => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
+            .SelectMany(before => copies.List(owner, Provider, MeshMailCopyStore.MaxPage, before?.Generation))
             .SelectMany(listed => listed.Count == 0
                 ? Observable.Return(0)
-                : store.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current =>
+                : copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current =>
                 {
                     var obsolete = listed.Where(copy => current is null || copy.Generation != current.Generation).ToList();
                     return obsolete.Count == 0
                         ? Observable.Return(0)
-                        : obsolete.Select(copy => store.Remove(owner, Provider, copy.Generation, copy.MessageId)).MergeBounded(4).Count();
+                        : obsolete.Select(copy => copies.Remove(owner, Provider, copy.Generation, copy.MessageId)).MergeBounded(4).Count();
                 }));
 
     private IObservable<MailCopySource?> Step(string owner, MailCopySource source, int step, IMailAttachmentSource files)
         => feed.Step(owner, source.Cursor, source.WindowStart).Take(1)
-            .SelectMany(feedStep => store.Commit(owner, Provider, source.Generation, UnderLease(current => current))
+            .SelectMany(feedStep => copies.Commit(owner, Provider, source.Generation, UnderLease(current => current))
                 .SelectMany(renewed => renewed is null
                     ? Lost(owner, source).Select(_ => (Committed: (MailCopySource?)null, Feed: (MailFeedStep?)null))
                     : Apply(owner, source, feedStep, files).SelectMany(failures => failures > 0
@@ -242,15 +275,15 @@ public sealed class MailCopyEngine(
             .SelectMany(_ => Observable.Throw<(MailCopySource? Committed, MailFeedStep? Feed)>(ex));
 
     private IObservable<MailCopySource?> CommitOrClean(string owner, MailCopySource started, Func<MailCopySource, MailCopySource?> change)
-        => store.Commit(owner, Provider, started.Generation, change)
+        => copies.Commit(owner, Provider, started.Generation, change)
             .SelectMany(committed => committed is not null
                 ? Observable.Return<MailCopySource?>(committed)
                 : Lost(owner, started).Select(_ => (MailCopySource?)null));
 
     // The lease was lost or the copy switched off meanwhile: what this sync wrote is removed by ITS generation.
     private IObservable<int> Lost(string owner, MailCopySource source)
-        => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current => current is null || current.Generation != source.Generation
-            ? store.RemoveGeneration(owner, Provider, source.Generation)
+        => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current => current is null || current.Generation != source.Generation
+            ? copies.RemoveGeneration(owner, Provider, source.Generation)
             : Observable.Return(0));
 
     private IObservable<int> Apply(string owner, MailCopySource source, MailFeedStep step, IMailAttachmentSource files)
@@ -275,38 +308,38 @@ public sealed class MailCopyEngine(
     }
 
     private IObservable<MailMessageCopy?> Prior(string owner, string generation, string messageId)
-        => attachments is null
+        => fileStore is null
             ? Observable.Return<MailMessageCopy?>(null)
-            : store.Read(owner, Provider, generation, messageId).Take(1).DefaultIfEmpty(null);
+            : copies.Read(owner, Provider, generation, messageId).Take(1).DefaultIfEmpty(null);
 
     private IObservable<bool> Copied(string owner, MailCopySource source, MailMessageCopy message, IMailAttachmentSource files)
         => Prior(owner, source.Generation, message.MessageId).SelectMany(prior =>
         {
             // The decision already stored is carried over (never fetched again); a message without attachments
             // is decided empty; one the provider did not say anything about stays undecided.
-            var known = attachments is null ? null
+            var known = fileStore is null ? null
                 : prior?.Attachments is { } existing && existing.Any(a => a.StoredPath is not null) ? existing
                 : message.HasAttachments == false ? ImmutableList<MailAttachmentCopy>.Empty
                 : prior?.Attachments;
             // 🚨 A marker that said "has attachments" is never overwritten by "none": an interrupted save leaves
             // files with no list, and removal finds them through the marker.
             var copy = message with { Attachments = known, HasAttachments = message.HasAttachments == false && prior?.HasAttachments == true ? true : message.HasAttachments };
-            return store.WriteIfNewer(owner, copy).SelectMany(wrote => wrote
+            return copies.WriteIfNewer(owner, copy).SelectMany(wrote => wrote
                 ? Attach(owner, copy, files).Select(_ => true)
                 : Observable.Return(false));
         });
 
     private IObservable<Unit> Attach(string owner, MailMessageCopy written, IMailAttachmentSource files)
     {
-        if (attachments is null || written.HasAttachments != true || written.Attachments is not null)
+        if (fileStore is null || written.HasAttachments != true || written.Attachments is not null)
             return Observable.Return(Unit.Default);
         var copyPath = MailCopyNodeTypes.CopyPath(owner, Provider, written.Generation, written.MessageId);
-        return MailAttachments.Collect(files, attachments, owner, copyPath, written.MessageId, logger)
-            .SelectMany(decided => store.SetAttachments(owner, Provider, written.Generation, written.MessageId, decided))
+        return MailAttachments.Collect(files, fileStore, owner, copyPath, written.MessageId, logger)
+            .SelectMany(decided => copies.SetAttachments(owner, Provider, written.Generation, written.MessageId, decided))
             .SelectMany(recorded => recorded
                 ? Observable.Return(Unit.Default)
-                : store.Read(owner, Provider, written.Generation, written.MessageId).Take(1).DefaultIfEmpty(null)
-                    .SelectMany(current => current is null ? attachments.DeleteAll(owner, copyPath) : Observable.Return(Unit.Default)))
+                : copies.Read(owner, Provider, written.Generation, written.MessageId).Take(1).DefaultIfEmpty(null)
+                    .SelectMany(current => current is null ? fileStore.DeleteAll(owner, copyPath) : Observable.Return(Unit.Default)))
             .Catch((Exception ex) =>
             {
                 logger?.LogWarning(ex, "{Provider} copy: the attachments of {Copy} could not be copied", Provider, copyPath);
@@ -322,7 +355,7 @@ public sealed class MailCopyEngine(
     private IObservable<bool> Tombstoned(string owner, string generation, string messageId, DateTimeOffset at)
         => Prior(owner, generation, messageId).SelectMany(prior =>
             (prior is null || prior.CopiedAt > at ? Observable.Return(Unit.Default) : DropFiles(owner, generation, messageId, prior))
-                .SelectMany(_ => store.ReplaceIfNewer(owner, Tombstone(generation, messageId, at)))
+                .SelectMany(_ => copies.ReplaceIfNewer(owner, Tombstone(generation, messageId, at)))
                 .SelectMany(result => result.Wrote && CleansAfterTombstone(prior, at, result.Replaced)
                     ? DropFiles(owner, generation, messageId, result.Replaced).Select(_ => true)
                     : Observable.Return(result.Wrote)));
@@ -336,7 +369,7 @@ public sealed class MailCopyEngine(
     public MailMessageCopy Tombstone(string generation, string messageId, DateTimeOffset at)
     {
         var tombstone = MailCopyNodeTypes.Tombstone(Provider, generation, messageId, at);
-        return attachments is null ? tombstone : tombstone with { HasAttachments = true };
+        return fileStore is null ? tombstone : tombstone with { HasAttachments = true };
     }
 
     /// <summary>
@@ -360,8 +393,8 @@ public sealed class MailCopyEngine(
     }
 
     private IObservable<Unit> DropFiles(string owner, string generation, string messageId, MailMessageCopy? prior)
-        => attachments is not null && MailAttachments.MayHoldFiles(prior)
-            ? attachments.DeleteAll(owner, MailCopyNodeTypes.CopyPath(owner, Provider, generation, messageId))
+        => fileStore is not null && MailAttachments.MayHoldFiles(prior)
+            ? fileStore.DeleteAll(owner, MailCopyNodeTypes.CopyPath(owner, Provider, generation, messageId))
             : Observable.Return(Unit.Default);
 }
 

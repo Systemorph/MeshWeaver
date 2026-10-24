@@ -64,10 +64,19 @@ can reach them, so they authorize the caller before they elevate
 ([Authorize as the Caller, Execute as System](../AuthorizeAsCallerExecuteAsSystem)):
 
 - **The code** that called them is judged by the in-mesh impersonation guard exactly as if it had called
-  `RunAsSystemFor` itself (each entry point is an `[ImpersonationSurface]`).
-- **The identity** it runs under: the owner may act on their own copy; anybody else needs the permission
-  the act needs (Read, Update or Delete) on `{owner}/_MailCopy`. The background sync has no person (no
-  context, or System) and passes — what started it was authorized where it was asked for.
+  `RunAsSystemFor` itself (each entry point is an `[ImpersonationSurface]`). A runtime check sees only the
+  immediate caller, so the same entry points — on the interfaces and on the concrete stores, plus the
+  engine's `Kick` and `Sync` — are also reported at COMPILE time (`InMeshImpersonationReferences`), which
+  finds a method group handed to a later platform callback as well.
+- **The identity** the store was CALLED under — the request context, else the circuit's — read at the call,
+  never when the cold result is subscribed: a write composed by one person and subscribed after their
+  scope ended is still theirs. The owner may act on their own copy; anybody else needs the permission the
+  act needs (Read, Update or Delete) on `{owner}/_MailCopy`. System and hub principals pass. **No identity,
+  or an anonymous one, is refused**: a lost identity is never read as trusted background work.
+- **The background sync declares itself.** `MailCopyEngine` (given the host's `AccessService`) makes every
+  store call of a sync as System on the owner's behalf, at the call — a sync runs after provider hops that
+  keep no ambient identity. Switching on, off and reading go through the caller's own identity. An engine
+  built without the `AccessService` on a host that has one gets its syncs refused, loudly.
 - **The target**: the attachment store writes to and empties only `{owner}/_MailCopy/{key}/{id}` — a copy
   node of the owner — and never a relative path that leaves its `attachments` collection.
 

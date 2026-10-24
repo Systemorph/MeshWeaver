@@ -287,7 +287,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         => (attachments is null
                 ? Observable.Return(System.Reactive.Unit.Default)
                 : Live(owner, node.Path).SelectMany(live => MailAttachments.MayHoldFiles(live.ContentAs<MailMessageCopy>(options, logger))
-                    ? attachments.DeleteAll(owner, node.Path)
+                    // The caller was authorized where the removal was asked for; this inner call runs after
+                    // hops that keep no ambient identity, so it declares System itself.
+                    ? Mesh().SelectMany(m => m.Access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => attachments.DeleteAll(owner, node.Path)))
                     : Observable.Return(System.Reactive.Unit.Default)))
             .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(node.Path)));
 
