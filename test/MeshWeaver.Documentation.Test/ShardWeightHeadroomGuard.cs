@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -98,16 +99,18 @@ public class ShardWeightHeadroomGuard
     private const double MaxBudgetFraction = 0.9;
 
     /// <summary>
-    /// The shard job's cap must hold the shard's tests even when the browser step runs to its worst
+    /// The shard job's cap must hold the shard's tests even when the browser steps run to their worst
     /// case. Runs 40011143666, 40011313475 and 40027189653 (2026-10-23) were cancelled at the
     /// 20-minute cap with every project still progressing. In each, the browser step had spent its
     /// 480 s budget on a stalled apt mirror, and the shard owed ~14.6 min of tests. Two causes
     /// stacked. The weights were stale, so the LPT loop reported ~454 s on a shard that ran ~880 s.
-    /// And the suite had outgrown six shards: re-measured, it is ~3,900 s of tests.
+    /// And the browser step's worst case left too little of the cap for a suite of ~4,100 s at six
+    /// shards. The fix removed the mirror from the shards (the font set is staged once and restored
+    /// from a cache) and re-measured the weights. This guard holds the arithmetic.
     ///
-    /// <para>The per-unit guard above cannot see the second cause, because every unit was under its
-    /// own cap. This one checks the shard count against the job cap. The fix it points to is more
-    /// shards (CI_SHARD_TOTAL) or a lighter suite, never a wider cap.</para>
+    /// <para>The per-unit guard above cannot see this, because every unit was under its own cap. The
+    /// fix it points to is more shards (CI_SHARD_TOTAL), a lighter suite or a cheaper browser
+    /// provision, never a wider cap.</para>
     ///
     /// <para>🚨 Both sides are measured the way the SCHEDULER and the WORKFLOW see them, never the
     /// way the table reads (review on #7102):</para>
@@ -116,10 +119,11 @@ public class ShardWeightHeadroomGuard
     /// schedules, each at its table weight or at <c>DEFAULT_WEIGHT</c> when unlisted. Summing the
     /// table instead would count stale rows and leave out every unlisted suite, so a new suite would
     /// add nothing here.</item>
-    /// <item>The browser reservation is the step's END-TO-END worst case, not its
-    /// <c>BROWSER_STEP_BUDGET</c>. The budget bounds the install attempts. The last attempt's
-    /// <c>--kill-after</c> grace, the orphaned-apt reap and the smoke print's own <c>timeout</c>
-    /// all run after it.</item>
+    /// <item>The browser reservation is the END-TO-END bound of the steps that provision it: the
+    /// <c>timeout-minutes</c> of the font-cache restore and of the provision step. Those are the
+    /// hard ceilings GitHub enforces, so nothing inside them can cost the cap more.
+    /// <see cref="TheProvisionStepsInnerBoundsFitItsCap"/> checks that every inner bound fits inside
+    /// them, so a stall still fails with its own name first.</item>
     /// </list>
     /// </summary>
     [Fact(Timeout = 60000)]
@@ -131,7 +135,7 @@ public class ShardWeightHeadroomGuard
         var script = File.ReadAllText(Path.Combine(root, WeightsPath));
         var shards = ReadIntSetting(workflow, @"\n\s*CI_SHARD_TOTAL:\s*(\d+)", "CI_SHARD_TOTAL");
         var jobCapSeconds = ReadShardJobCapMinutes(workflow) * 60;
-        var browserWorstCase = ReadBrowserStepWorstCaseSeconds(workflow);
+        var browserWorstCase = ReadBrowserWorstCaseSeconds(workflow);
 
         var scheduled = ScheduledProjectNames(root).ToArray();
         scheduled.Length.Should().BeGreaterThanOrEqualTo(10,
@@ -145,32 +149,58 @@ public class ShardWeightHeadroomGuard
         idealLoad.Should().BeLessThanOrEqualTo(testBudget,
             $"the {scheduled.Length} scheduled test projects weigh {totalSeconds} s in {WeightsPath} "
             + $"(unlisted ones at DEFAULT_WEIGHT), which is {idealLoad:0} s per shard at "
-            + $"CI_SHARD_TOTAL={shards}. A shard whose browser step runs to its worst case "
+            + $"CI_SHARD_TOTAL={shards}. A shard whose browser steps run to their bound "
             + $"({browserWorstCase} s end to end) then has {left} s of its {jobCapSeconds / 60} min cap "
             + $"left for tests, and the ideal load may fill {MaxBudgetFraction:P0} of that "
-            + $"({testBudget:0} s). Past it, a stalled apt mirror cancels a shard whose tests are still "
-            + "progressing (runs 40011143666, 40011313475). Raise CI_SHARD_TOTAL (matrix, upload "
-            + "steps) — do NOT widen the job cap");
+            + $"({testBudget:0} s). Past it, a slow browser provision cancels a shard whose tests are "
+            + "still progressing (runs 40011143666, 40011313475). Raise CI_SHARD_TOTAL (matrix, "
+            + "upload steps) or make the provision cheaper — do NOT widen the job cap");
     }
 
-    /// <summary>The parses <see cref="TheIdealShardLoadFitsTheShardJobCap"/> rests on, asserted.</summary>
+    /// <summary>
+    /// The provision step's step-level <c>timeout-minutes</c> is the bound the shard budget counts,
+    /// so every bound inside it must fit: the download budget, its last attempt's
+    /// <c>--kill-after</c> grace, the font install's timeout and grace, and the smoke print's
+    /// <c>timeout</c>. If they did not fit, the step-level cap would fire first and kill the step
+    /// with GitHub's generic message instead of the step's own INFRA diagnosis.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void TheProvisionStepsInnerBoundsFitItsCap()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var workflow = File.ReadAllText(Path.Combine(SourceScan.FindRepoRoot(), WorkflowPath));
+        var cap = ReadStepTimeoutMinutes(workflow, ProvisionStepName) * 60;
+        var inner = ReadProvisionInnerBoundsSeconds(workflow);
+        inner.Should().BeLessThanOrEqualTo(cap,
+            $"the bounds inside \"{ProvisionStepName}\" add up to {inner} s, more than its "
+            + $"{cap} s `timeout-minutes`. Shrink an inner bound or raise the step's cap, and let "
+            + "TheIdealShardLoadFitsTheShardJobCap re-check the shard count against it");
+    }
+
+    /// <summary>The parses the budget guards rest on, asserted.</summary>
     [Fact]
     public void TheShardBudgetGuardParsesItsInputs()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         const string workflow = "env:\n  CI_SHARD_TOTAL: 8\njobs:\n  build:\n    timeout-minutes: 45\n"
             + "  test:\n    name: \"Run tests (shard ${{ matrix.shard }})\"\n    # cap\n    timeout-minutes: 20\n"
-            + "    steps:\n      BROWSER_STEP_BUDGET: 480\n"
-            + "          while [ \"$waited\" -lt 15 ]; do\n"
+            + "    steps:\n"
+            + "    - name: \"Restore the browser font set (staged by browser-fonts)\"\n"
+            + "      uses: actions/cache/restore@v6\n      timeout-minutes: 1\n"
+            + "    - name: \"Provision the headless browser (infra, not a test)\"\n      timeout-minutes: 6\n"
+            + "      env:\n        BROWSER_STEP_BUDGET: 180\n        FONT_INSTALL_TIMEOUT: 70\n"
             + "          timeout --signal=TERM --kill-after=30 \"$budget\" \\\n"
+            + "          if ! timeout --signal=TERM --kill-after=5 \"$FONT_INSTALL_TIMEOUT\" \\\n"
             + "        timeout 60 \"$BROWSER\" --headless=new \\\n"
             + "  other:\n    timeout-minutes: 30\n";
         ReadIntSetting(workflow, @"\n\s*CI_SHARD_TOTAL:\s*(\d+)", "CI_SHARD_TOTAL").Should().Be(8);
         ReadShardJobCapMinutes(workflow).Should().Be(20,
             "the cap is the SHARD job's, not the first `timeout-minutes` in the file");
-        ReadBrowserStepWorstCaseSeconds(workflow).Should().Be(480 + 30 + (15 + ReapKillSettleSeconds) + 60,
-            "the budget, the last attempt's kill grace, the reap and the smoke print all count — "
-            + "the budget alone bounds only the install attempts");
+        ReadBrowserWorstCaseSeconds(workflow).Should().Be((1 + 6) * 60,
+            "the browser's cost is the two steps' own `timeout-minutes`, read by step name");
+        ReadProvisionInnerBoundsSeconds(workflow).Should().Be(180 + 30 + 70 + 5 + 60,
+            "the download budget, its kill grace, the font install and its grace, and the smoke "
+            + "print all run inside the provision step");
 
         var table = ReadWeights("WEIGHTS=$(cat <<'EOF'\n300 Listed.Test 2\n50 Gone.Test\nEOF\n)").ToArray();
         ScheduledTotalSeconds(["Listed.Test", "Unlisted.Test"], table, 10).Should().Be(310,
@@ -178,22 +208,35 @@ public class ShardWeightHeadroomGuard
             + "(Gone.Test) schedules nothing");
     }
 
-    /// <summary>
-    /// The reap's settle after its SIGKILL: <c>sleep 2</c> plus one second for the kill itself.
-    /// </summary>
-    private const int ReapKillSettleSeconds = 3;
+    private const string RestoreStepName = "Restore the browser font set (staged by browser-fonts)";
+    private const string ProvisionStepName = "Provision the headless browser (infra, not a test)";
 
     /// <summary>
-    /// The browser step's end-to-end worst case: <c>BROWSER_STEP_BUDGET</c>, then the last attempt's
-    /// <c>--kill-after</c> grace, the orphaned-apt reap (its SIGTERM wait plus the SIGKILL settle)
-    /// and the smoke print's <c>timeout</c>, all of which run after the budget's deadline.
+    /// The browser's end-to-end cost against the shard job's cap: the step-level
+    /// <c>timeout-minutes</c> of the font-cache restore plus that of the provision step.
     /// </summary>
-    private static int ReadBrowserStepWorstCaseSeconds(string workflow)
+    private static int ReadBrowserWorstCaseSeconds(string workflow)
+        => (ReadStepTimeoutMinutes(workflow, RestoreStepName)
+            + ReadStepTimeoutMinutes(workflow, ProvisionStepName)) * 60;
+
+    /// <summary>The sum of the bounds that run inside the provision step.</summary>
+    private static int ReadProvisionInnerBoundsSeconds(string workflow)
         => ReadIntSetting(workflow, @"BROWSER_STEP_BUDGET:\s*(\d+)", "BROWSER_STEP_BUDGET")
-           + ReadIntSetting(workflow, @"--kill-after=(\d+)\s+""\$budget""", "the install attempt's --kill-after")
-           + ReadIntSetting(workflow, @"""\$waited""\s+-lt\s+(\d+)", "the orphaned-apt reap's SIGTERM wait")
-           + ReapKillSettleSeconds
+           + ReadIntSetting(workflow, @"--kill-after=(\d+)\s+""\$budget""", "the download attempt's --kill-after")
+           + ReadIntSetting(workflow, @"FONT_INSTALL_TIMEOUT:\s*(\d+)", "FONT_INSTALL_TIMEOUT")
+           + ReadIntSetting(workflow, @"--kill-after=(\d+)\s+""\$FONT_INSTALL_TIMEOUT""", "the font install's --kill-after")
            + ReadIntSetting(workflow, @"timeout\s+(\d+)\s+""\$BROWSER""", "the smoke print's timeout");
+
+    /// <summary>The step-level <c>timeout-minutes</c> of the step with this exact name.</summary>
+    private static int ReadStepTimeoutMinutes(string workflow, string stepName)
+    {
+        var m = Regex.Match(workflow,
+            @"- name:\s*""" + Regex.Escape(stepName) + @"""(?:(?!\n\s*- name:).)*?\n\s*timeout-minutes:\s*(\d+)",
+            RegexOptions.Singleline);
+        Assert.True(m.Success, $"could not find a step-level timeout-minutes on \"{stepName}\" in {WorkflowPath}. "
+            + "That cap is the browser's end-to-end bound; without it the shard budget has nothing to count.");
+        return int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
 
     /// <summary>
     /// The project names <c>shard-assign.sh</c> schedules: <c>find test -name '*.csproj' ! -path
@@ -208,7 +251,7 @@ public class ShardWeightHeadroomGuard
     /// <summary>The scheduled seconds: each project at its table weight, or the default when unlisted.</summary>
     private static int ScheduledTotalSeconds(IEnumerable<string> projects, IEnumerable<Unit> table, int defaultWeight)
     {
-        var weights = table.ToDictionary(u => u.Name, u => u.TotalSeconds, StringComparer.Ordinal);
+        var weights = table.ToImmutableDictionary(u => u.Name, u => u.TotalSeconds, StringComparer.Ordinal);
         return projects.Sum(p => weights.TryGetValue(p, out var w) ? w : defaultWeight);
     }
 
