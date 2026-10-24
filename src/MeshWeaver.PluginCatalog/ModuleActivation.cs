@@ -666,7 +666,7 @@ public static class ModuleActivationSidecar
                 PendingRestart = File.Exists(PendingRestartMarkerPath(baseDirectory)) || legacy.PendingRestart,
                 // #4097 — what the registry said this instance's plan refuses, from the markers the
                 // default install keeps in step with the registry's answer.
-                TierRefusals = [.. ReadTierRefusals(baseDirectory).Values],
+                TierRefusals = [.. ReadTierRefusals(baseDirectory, cancellationToken).Values],
             },
             writtenAt,
             files.Unreadable,
@@ -1949,7 +1949,16 @@ public static class ModuleActivationSidecar
     /// <summary>Every plan-tier refusal marker under the deployment, module name → refusal, sorted
     /// by name. An unreadable or malformed marker contributes nothing.</summary>
     public static ImmutableSortedDictionary<string, Mesh.Security.PlanTierRefusal> ReadTierRefusals(string baseDirectory)
+        => ReadTierRefusals(baseDirectory, CancellationToken.None);
+
+    /// <summary><see cref="ReadTierRefusals(string)"/> from a pooled leaf: checks
+    /// <paramref name="cancellationToken"/> before the listing, per listed marker while the listing is
+    /// collected, and before each marker read — outside the catch, so a cancel is never folded into
+    /// "unreadable, no verdict".</summary>
+    internal static ImmutableSortedDictionary<string, Mesh.Security.PlanTierRefusal> ReadTierRefusals(
+        string baseDirectory, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var builder = ImmutableSortedDictionary.CreateBuilder<string, Mesh.Security.PlanTierRefusal>(StringComparer.OrdinalIgnoreCase);
         var directory = EntriesDirectory(baseDirectory);
         if (!Directory.Exists(directory))
@@ -1957,7 +1966,9 @@ public static class ModuleActivationSidecar
         string[] files;
         try
         {
-            files = Directory.EnumerateFiles(directory, "*" + TierRefusedMarkerSuffix).ToArray();
+            files = Directory.EnumerateFiles(directory, "*" + TierRefusedMarkerSuffix)
+                .Select(f => { cancellationToken.ThrowIfCancellationRequested(); return f; })
+                .ToArray();
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -1965,6 +1976,7 @@ public static class ModuleActivationSidecar
         }
         foreach (var file in files)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetFileName(file)[..^TierRefusedMarkerSuffix.Length];
             try
             {

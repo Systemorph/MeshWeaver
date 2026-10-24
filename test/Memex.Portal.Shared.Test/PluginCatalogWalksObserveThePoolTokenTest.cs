@@ -209,4 +209,44 @@ public class PluginCatalogWalksObserveThePoolTokenTest : IDisposable
         Assert.ThrowsAny<OperationCanceledException>(() => pending.Read(Cancelled()));
         Assert.False(pending.Read(CancellationToken.None).IsUndetermined);
     }
+    /// <summary>
+    /// Review on #7121: the pending-activation read forwarded its token to neither delegated walk, so
+    /// a drain arriving inside the module-set records waited out every remaining record read. Two
+    /// unreadable proposals; the drain lands while the FIRST is reported, and the walk must stop
+    /// before opening the second — never reporting a cancel as one more unreadable record.
+    /// </summary>
+    [Fact]
+    public void ADrainInsideTheModuleSetRecords_StopsBeforeTheNextRecord()
+    {
+        var sets = Path.Combine(root, "modules", "sets");
+        Directory.CreateDirectory(sets);
+        // Names this store never writes, so each is opened to be indexed by content.
+        File.WriteAllText(Path.Combine(sets, "a.proposed.json"), "{ not json");
+        File.WriteAllText(Path.Combine(sets, "b.proposed.json"), "{ not json");
+        using var cts = new CancellationTokenSource();
+        var reports = new List<string>();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => ModuleSetStore.ReadObservingToken(
+            root, message => { reports.Add(message); cts.Cancel(); }, onNotice: null, cts.Token));
+
+        Assert.Single(reports);
+
+        // The control: uncancelled, both unreadable records are reported.
+        var control = new List<string>();
+        ModuleSetStore.ReadObservingToken(root, control.Add, onNotice: null, CancellationToken.None);
+        Assert.Equal(2, control.Count);
+    }
+
+    /// <summary>Review on #7121: the plan-tier refusal markers were listed and read with no token.</summary>
+    [Fact]
+    public void TheTierRefusalWalk_StopsOnACancelledToken()
+    {
+        var entries = ModuleActivationSidecar.EntriesDirectory(root);
+        Directory.CreateDirectory(entries);
+        File.WriteAllText(Path.Combine(entries, Module + ModuleActivationSidecar.TierRefusedMarkerSuffix), "{ not json");
+
+        Assert.ThrowsAny<OperationCanceledException>(() =>
+            ModuleActivationSidecar.ReadTierRefusals(root, Cancelled()));
+        Assert.Empty(ModuleActivationSidecar.ReadTierRefusals(root, CancellationToken.None));
+    }
 }

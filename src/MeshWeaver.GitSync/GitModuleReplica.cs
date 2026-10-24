@@ -151,16 +151,12 @@ public sealed class GitModuleReplica(
             var slugDir = Path.Combine(Root, "worktrees", Sanitize(repoSlug));
             var keep = keepShas.Select(Sanitize).ToImmutableHashSet(StringComparer.Ordinal);
 
-            // atomic-blocking-leaf: one existence probe and one directory listing, no loop of round trips
-            return FileSystem.InvokeBlocking(_ => Directory.Exists(slugDir)
-                    ? Directory.GetDirectories(slugDir)
-                    : [])
-                .SelectMany(dirs =>
+            // The whole walk — the commit directories, then each superseded one's worktrees — is ONE
+            // pooled leaf with a step boundary per listed entry, so a drain need not wait out a long
+            // listing, and no listing runs on the subscribing thread.
+            return FileSystem.InvokeBlocking(ct => StaleWorktrees(slugDir, keep, ct))
+                .SelectMany(stale =>
                 {
-                    var stale = dirs
-                        .Where(d => !keep.Contains(Path.GetFileName(d)))
-                        .SelectMany(d => Directory.Exists(d) ? Directory.GetDirectories(d) : [])
-                        .ToImmutableArray();
                     if (stale.IsEmpty)
                         return Observable.Return(0);
 
@@ -179,6 +175,30 @@ public sealed class GitModuleReplica(
                         });
                 });
         });
+
+    /// <summary>The worktree directories under every commit directory of <paramref name="slugDir"/>
+    /// whose commit is not in <paramref name="keep"/>. Checks <paramref name="ct"/> before each
+    /// listing and per listed entry.</summary>
+    internal static ImmutableArray<string> StaleWorktrees(
+        string slugDir, ImmutableHashSet<string> keep, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (!Directory.Exists(slugDir))
+            return [];
+        var builder = ImmutableArray.CreateBuilder<string>();
+        foreach (var commit in Directory.EnumerateDirectories(slugDir))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (keep.Contains(Path.GetFileName(commit)) || !Directory.Exists(commit))
+                continue;
+            foreach (var worktree in Directory.EnumerateDirectories(commit))
+            {
+                ct.ThrowIfCancellationRequested();
+                builder.Add(worktree);
+            }
+        }
+        return builder.ToImmutable();
+    }
 
     /// <summary>True when a worktree already sits at exactly this commit.</summary>
     private IObservable<bool> AlreadyAt(string worktree, string sha) =>

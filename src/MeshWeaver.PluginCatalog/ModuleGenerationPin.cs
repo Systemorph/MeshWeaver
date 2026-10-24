@@ -79,8 +79,15 @@ public static class ModuleGenerationPin
         Action<string>? onWarn = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        var sharedDirectory = ModuleLandingService.ModuleDirectoryFor(moduleRoot, entry.Name, entry);
-        var sharedDll = ModuleActivationBoot.LandedDllPath(moduleRoot, entry);
+        // ONE resolution, under the pool's token: on a shared-only generation it verifies the
+        // store's seal file by file, and resolving the directory and the DLL separately walked that
+        // verification twice with no token. Same rule as ModuleLandingService.ModuleDirectoryFor and
+        // ModuleActivationBoot.LandedDllPath, which is that directory plus "<name>.dll".
+        var sharedDirectory = SharedModuleTier.ResolveObservingToken(
+            moduleRoot, SharedModuleTier.For(moduleRoot).Root,
+            string.IsNullOrWhiteSpace(entry.Directory) ? entry.Name : entry.Directory!,
+            cancellationToken);
+        var sharedDll = Path.Combine(sharedDirectory, entry.Name + ".dll");
         try
         {
             var leaf = Path.GetFileName(sharedDirectory);

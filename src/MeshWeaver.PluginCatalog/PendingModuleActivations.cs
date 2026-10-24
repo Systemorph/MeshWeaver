@@ -933,11 +933,11 @@ public sealed class PendingModuleActivations(string moduleRoot)
     ///
     /// <para>🚨 <b>What that does and does not promise.</b> A teardown arriving between the
     /// fingerprint, the activation sidecar and the set index stops the walk there, so a drain no
-    /// longer waits out the whole of a slow share. It does NOT interrupt a single enumeration
-    /// already inside <c>ModuleActivationSidecar.Read</c> or <c>ModuleSetStore.Read</c>: those
-    /// enumerate and parse their own directories behind public signatures whose callers all sit
-    /// outside this type, so a per-FILE token is a change to them rather than to this one. Stated
-    /// rather than implied — the comment this replaced claimed a stop this code cannot make.</para>
+    /// longer waits out the whole of a slow share. The token also reaches INSIDE both delegated
+    /// walks — <c>ModuleActivationSidecar.ReadFor</c> and <c>ModuleSetStore.ReadObservingToken</c>
+    /// check it per listed entry and before each record they open — so a drain arriving during one
+    /// stops before the next record read. A single file read already under way runs to its end;
+    /// that is the step boundary.</para>
     ///
     /// <para>A reading already gathered is PUBLISHED even when the token fires afterwards: the
     /// volume work is done, the rest is arithmetic, and throwing it away would make the next probe
@@ -973,13 +973,15 @@ public sealed class PendingModuleActivations(string moduleRoot)
             // report is byte-identical to what it said before: the required-modules probe names
             // each unreadable file separately (its `unreadable` list), and folding them to one
             // would lose a file name an operator needs.
-            activation = ModuleActivationSidecar.Read(ModuleRootPath, reason =>
+            activation = ModuleActivationSidecar.ReadFor(ModuleRootPath, reason =>
             {
                 corrupt = reason;
                 corruptions.Add(reason);
-            });
+            }, ModuleActivationSidecar.LivePlatform, token);
         }
-        catch (Exception exception)
+        // A drain is not an open failure: the cancel escapes, so it is never reported as an
+        // unopenable sidecar.
+        catch (Exception exception) when (!(exception is OperationCanceledException && token.IsCancellationRequested))
         {
             openFailure = exception;
         }
@@ -988,7 +990,7 @@ public sealed class PendingModuleActivations(string moduleRoot)
         token.ThrowIfCancellationRequested();
         var setNotes = ImmutableList.CreateBuilder<string>();
         var sets = openFailure is null && corrupt is null
-            ? ModuleSetStore.Read(ModuleRootPath, setNotes.Add)
+            ? ModuleSetStore.ReadObservingToken(ModuleRootPath, setNotes.Add, setNotes.Add, token)
             : ModuleSetIndex.Empty;
         // One existence probe per landed DLL for the life of this snapshot: the three projection
         // passes below ask about the same entries, and the answer cannot change while the

@@ -55,9 +55,12 @@ public sealed partial class DirectoryInstanceStore : IInstanceStore
 
     /// <inheritdoc />
     public IObservable<ImmutableList<string>> ListContainers()
-        // atomic-blocking-leaf: one existence probe and one GetDirectories listing of the store root, sorted in memory
-        => pool.InvokeBlocking(_ => System.IO.Directory.Exists(root)
-            ? System.IO.Directory.GetDirectories(root)
+        // A listing of the store root with a step boundary per entry (a large or slow share must not
+        // hold a drain), sorted in memory once collected.
+        => pool.InvokeBlocking(ct => System.IO.Directory.Exists(root)
+            ? System.IO.Directory.EnumerateDirectories(root)
+                .Select(d => { ct.ThrowIfCancellationRequested(); return d; })
+                .ToArray()
                 .Select(Path.GetFileName)
                 .OfType<string>()
                 .Order(StringComparer.Ordinal)

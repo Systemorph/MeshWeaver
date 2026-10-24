@@ -167,11 +167,22 @@ public static class SharedModuleTier
     /// <param name="sharedRoot">The shared tier's root; null → no tier.</param>
     /// <param name="leaf">The directory leaf (a generation, or a legacy module name).</param>
     public static string Resolve(string baseDirectory, string? sharedRoot, string leaf)
+        => ResolveObservingToken(baseDirectory, sharedRoot, leaf, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Resolve"/> from a pooled leaf: the same rule, with the shared copy's seal
+    /// verification (<see cref="SealedDirectoryObservingToken"/>) checking
+    /// <paramref name="cancellationToken"/> before each probe. A DISTINCT name, so the bare
+    /// <c>Resolve</c> <c>cref</c>s stay unambiguous.
+    /// </summary>
+    internal static string ResolveObservingToken(
+        string baseDirectory, string? sharedRoot, string leaf, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var local = Path.Combine(baseDirectory, "modules", leaf);
         if (Directory.Exists(local))
             return local;
-        return SealedDirectory(sharedRoot, leaf) ?? local;
+        return SealedDirectoryObservingToken(sharedRoot, leaf, cancellationToken) ?? local;
     }
 
     /// <summary>
@@ -272,7 +283,11 @@ public static class SharedModuleTier
             }
             if (!moved)
             {
+                // A snapshot (the loop moves files out of the tree it lists), collected with a step
+                // boundary per listed path so a drain need not wait out the whole staging walk.
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
+                             .Select(f => { cancellationToken.ThrowIfCancellationRequested(); return f; })
                              .ToImmutableArray())
                 {
                     cancellationToken.ThrowIfCancellationRequested();
