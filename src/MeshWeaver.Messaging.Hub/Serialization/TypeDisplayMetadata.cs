@@ -23,6 +23,7 @@ public sealed class TypeDisplayMetadata
 {
     internal TypeDisplayMetadata(Type type)
     {
+        this.type = type;
         Display = type.GetCustomAttribute<DisplayAttribute>();
         FallbackName = type.Name.Wordify();
         var iconAttribute = type.GetCustomAttribute<IconAttribute>();
@@ -48,6 +49,30 @@ public sealed class TypeDisplayMetadata
 
     /// <summary>The type's XML-doc summary, resolved on FIRST READ only.</summary>
     internal Lazy<string> Description { get; }
+
+    private readonly Type type;
+    // 0 = not yet read, 1 = no, 2 = yes. A reflection read of the type alone, so racing readers
+    // compute the same answer and either write is correct.
+    private int conventionalKey;
+
+    /// <summary>
+    /// Whether the key conventions alone decide this type's key
+    /// (<see cref="KeyFunctionBuilder.HasConventionalKey"/>) — a fact about the CLR type, the same in
+    /// every hub. Read on first use, never on construction.
+    /// </summary>
+    internal bool HasConventionalKey
+    {
+        get
+        {
+            var state = Volatile.Read(ref conventionalKey);
+            if (state == 0)
+            {
+                state = KeyFunctionBuilder.HasConventionalKey(type) ? 2 : 1;
+                Volatile.Write(ref conventionalKey, state);
+            }
+            return state == 2;
+        }
+    }
 }
 
 /// <summary>
