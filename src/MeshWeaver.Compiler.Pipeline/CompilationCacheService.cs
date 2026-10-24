@@ -1203,6 +1203,9 @@ internal class CompilationCacheService(
                 // entry for a file that exists again — removing by key alone would drop it.
                 foreach (var entry in _buildProbingDirs)
                 {
+                    // One existence probe per entry: the drain's cancel ends the sweep between them;
+                    // whatever it did not reach is the next sweep's.
+                    ct.ThrowIfCancellationRequested();
                     if (File.Exists(entry.Key))
                         continue;
                     StaleBuildCheckProbe?.Invoke(entry.Key);
@@ -1225,8 +1228,13 @@ internal class CompilationCacheService(
                 {
                     Volatile.Write(ref _buildProbingSweepAt,
                         Math.Max(BuildProbingSweepFloor, 2 * _buildProbingDirs.Count));
-                    logger.LogWarning(ex,
-                        "Build probing sweep failed — stale entries stay until the next sweep");
+                    // A sweep the pool cancelled (teardown) did not fail; what it did not reach stays.
+                    if (ex is OperationCanceledException)
+                        logger.LogDebug(
+                            "Build probing sweep was cancelled by the pool — stale entries stay until the next sweep");
+                    else
+                        logger.LogWarning(ex,
+                            "Build probing sweep failed — stale entries stay until the next sweep");
                 });
     }
 

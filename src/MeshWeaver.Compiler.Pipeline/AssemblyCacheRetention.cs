@@ -239,6 +239,9 @@ public static class AssemblyCacheGenerations
     /// <summary>Directory under the cache root that holds the per-generation claim files.</summary>
     public const string ClaimsDirectoryName = ".generations";
 
+    /// <summary>The pass's name on its one <c>pass outcome</c> line (<see cref="PassLedger"/>).</summary>
+    public const string PassName = "AssemblyCacheRetention";
+
     /// <summary>
     /// The framework generation a cache filename belongs to, or <c>null</c> when the name is not one
     /// this store wrote. Strict on purpose — everything this refuses is something the sweep will
@@ -491,6 +494,8 @@ public static class AssemblyCacheGenerations
         ILogger? logger,
         Action<string>? deleteFile)
     {
+        // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
+        var ledger = new PassLedger(PassName, logger);
         ImmutableList<AssemblyCacheGeneration> generations;
         ImmutableList<AssemblyCacheClaim> claims;
         int unrecognised;
@@ -500,20 +505,27 @@ public static class AssemblyCacheGenerations
             (generations, unrecognised, unrecognisedBytes) = Scan(rootDirectory, cancellationToken);
             claims = ReadClaims(rootDirectory, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The pool's cancel during the walk: an interruption before anything was planned, never
+            // "cache could not be read".
+            ledger.Interrupt(cancellationToken);
+            throw;
+        }
         catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // 🚨 FAIL CLOSED. Every other coordination path around the bake fails OPEN because the
             // cost of being wrong is duplicated work; here the cost of being wrong is deleting an
             // assembly a live pod is about to load. A partial listing is not a picture of the cache,
             // so it licenses nothing.
-            logger?.LogWarning(ex,
-                "AssemblyCacheRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A cache we cannot "
+            ledger.Record(PassOutcome.Aborted, ex,
+                ": could not read {Root} — NOTHING collected. A cache we cannot "
                 + "enumerate completely can never be pruned safely",
                 rootDirectory);
             return new AssemblyCacheSweepResult(null, false, 0, 0, 0, $"cache could not be read: {ex.Message}");
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        ledger.Step(cancellationToken);
         var plan = Plan(liveTag, generations, claims, retention, nowUtc, unrecognised, unrecognisedBytes);
 
         if (!retention.Delete)
@@ -522,8 +534,8 @@ public static class AssemblyCacheGenerations
             // the cluster ships only Warning+ to Loki and this is the one line that says whether the
             // sweep ran and what it decided. It carries counts and the per-rule tally only; the
             // itemized lists below stay Information.
-            logger?.LogWarning(
-                "AssemblyCacheRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. "
+            ledger.Record(PassOutcome.ReportOnly,
+                " (collection is not armed), nothing deleted. "
                 + "{Summary}. Kept {KeptCount} generation(s) by rule: {KeptTally}",
                 plan.Summary, plan.Protected.Count, plan.KeptTally);
             logger?.LogInformation(
@@ -542,30 +554,24 @@ public static class AssemblyCacheGenerations
         var deletedBytes = 0L;
         var failed = 0;
 
-        // Called at every removal's step boundary. A cancel there ends the pass, and what it already
-        // removed is still reported (one INTERRUPTED outcome) before the cancel is thrown, never
-        // folded into a result that reads as a finished pass.
-        void ThrowIfLeaving()
-        {
-            if (!cancellationToken.IsCancellationRequested)
-                return;
-            logger?.LogWarning(
-                "AssemblyCacheRetention: pass outcome — INTERRUPTED: the pool cancelled the pass (teardown) after deleting "
-                + "{DeletedFiles} file(s) reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. The rest of "
-                + "the plan stays and the next pass re-plans it. {Summary}",
-                deletedFiles, deletedBytes / (1024d * 1024d), failed, plan.Summary);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
+        // A cancel at a removal's step boundary ends the pass; what it already removed is still
+        // reported (one INTERRUPTED outcome) before the cancel is thrown, never folded into a result
+        // that reads as a finished pass.
+        ledger.OnInterrupted = () => ledger.Record(PassOutcome.Interrupted,
+            ": the pool cancelled the pass (teardown) after deleting "
+            + "{DeletedFiles} file(s) reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. The rest of "
+            + "the plan stays and the next pass re-plans it. {Summary}",
+            deletedFiles, deletedBytes / (1024d * 1024d), failed, plan.Summary);
 
         foreach (var generation in plan.Collectable)
             foreach (var path in generation.Files)
             {
-                ThrowIfLeaving();
+                ledger.Step(cancellationToken);
                 try
                 {
                     // Two round trips (a stat, then the unlink), so the token is checked between them.
                     var length = new FileInfo(path).Length;
-                    cancellationToken.ThrowIfCancellationRequested();
+                    ledger.Step(cancellationToken);
                     delete(path);
                     deletedFiles++;
                     deletedBytes += length;
@@ -573,7 +579,7 @@ public static class AssemblyCacheGenerations
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     // The pool's cancel, not a failed delete: the interrupted path, never `failed`.
-                    ThrowIfLeaving();
+                    ledger.Interrupt(cancellationToken);
                     throw;
                 }
                 catch (Exception ex)
@@ -590,8 +596,8 @@ public static class AssemblyCacheGenerations
             }
 
         // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why).
-        logger?.LogWarning(
-            "AssemblyCacheRetention: pass outcome — COLLECTED {DeletedFiles} file(s) across {Generations} "
+        ledger.Record(PassOutcome.Collected,
+            " {DeletedFiles} file(s) across {Generations} "
             + "generation(s), reclaiming {DeletedMb:N1} MB, {Failed} file(s) could not be deleted. {Summary}. "
             + "Kept {KeptCount} generation(s) by rule: {KeptTally}",
             deletedFiles, plan.Collectable.Count, deletedBytes / (1024d * 1024d), failed,
@@ -630,6 +636,7 @@ public static class AssemblyCacheGenerations
         => Observable
             .Timer(TimeSpan.Zero, retention.ClaimRefreshInterval)
             .SelectMany(_ => pool
+                // atomic-blocking-leaf: one CreateDirectory plus one small WriteAllText of the claim file
                 .InvokeBlocking(_ => AssertClaim(rootDirectory, tag, holder))
                 .Catch<Unit, Exception>(ex =>
                 {

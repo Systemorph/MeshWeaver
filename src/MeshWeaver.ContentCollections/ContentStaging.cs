@@ -193,6 +193,7 @@ internal static class OutOfBandContentTransfer
     /// </param>
     internal static IObservable<StagedContentFile> Stage(
         ContentCollection destination, IIoPool pool, InlineContentFile file, string? transferNonce = null)
+        // atomic-blocking-leaf: one SHA-256 over bytes already in memory, a single call
         => pool.InvokeBlocking(_ => ContentStaging.ComputeHandle(file.Content) + transferNonce)
             .SelectMany(handle =>
             {

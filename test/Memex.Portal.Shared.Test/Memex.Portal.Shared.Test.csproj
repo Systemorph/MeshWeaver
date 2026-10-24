@@ -42,6 +42,10 @@
     <!-- LocalMeshApiRoutesTest asserts the headless sidecar maps the same /api/mesh/* verbs the JS
          shells call — an unmapped one there answers the SPA fallback with a 200, not a 404 (#1474). -->
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
+    <!-- The shared storage fault injectors (FaultInjectingStorageAdapter + FaultSwitch): a test that
+         needs a store fault arms one instead of hand-rolling an IStorageAdapter decorator. A library
+         over src/ only, so referencing it creates no cycle. -->
+    <ProjectReference Include="..\MeshWeaver.Testing.FaultInjection\MeshWeaver.Testing.FaultInjection.csproj" />
     <!-- ViewPackModuleTest asserts on each view pack's module attribute, and all of them left
          Memex.Portal.Shared's closure when they flipped to modules/ (#1974) — so the test anchors
          the packs itself rather than riding portal references that no longer exist. Safe here
