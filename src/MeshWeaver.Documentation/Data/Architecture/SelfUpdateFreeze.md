@@ -298,6 +298,19 @@ file, or a whole generation directory. The only change it cannot see is a rewrit
 place with no entry added, which can only re-word or SHRINK a declaration, i.e. can only make the gate
 hold.
 
+🚨 **But "the stamp moves" holds only ACROSS stamp granules, so equality is trusted only for a SETTLED
+stamp.** A directory stamp is coarse — the Linux kernel's coarse clock ticks in milliseconds, an SMB
+share stamps on the server, FAT in two-second steps — so a republication that lands in the same
+granule as an earlier read leaves the stamp EQUAL, and recalling on equality served the old
+declaration: a Linux CI leg read `Set: [Documentation]` four milliseconds after Northwind was added.
+The cache therefore follows git's racy-clean rule: it remembers an observation only when the source
+directory's stamp is older than the read's start by `SealedBundleFloorCache.SettleWindow` (one
+minute), so any later change lands in a later granule and moves the stamp. A source stamped more
+recently is read in full and not remembered, which costs the handful of sources published in the last
+minute, never the store; the window also absorbs clock skew against the file server and an SMB
+attribute cache, and a stamp in the future is never settled. The read's log line counts these as
+*not remembered because their stamp is too recent to trust*.
+
 🚨 **Fail-closed otherwise, clause by clause**, because a cache that turned a hold into a roll would be
 far worse than the freeze it removed. A refusal — an absent root, an unfollowable publication pointer,
 an enumeration fault — is **never** remembered, so one transient share fault cannot latch into a
