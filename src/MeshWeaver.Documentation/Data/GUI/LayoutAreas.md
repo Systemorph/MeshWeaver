@@ -89,7 +89,7 @@ public static UiControl OverviewTemplate(string nodePath) =>
         });
 ```
 
-🚨 **Do not** return `host.Workspace.GetMeshNodeStream().Select(node => Controls…)` (or `GetStream<MeshNode>()`, or a query) for a view that only SHOWS data: the page waits for the slowest read, then shows a snapshot built on the hub. The worked samples are `samples/Graph/Data/Northwind/{Customer,Supplier,Employee,Product}` — each with a `Test/` folder whose cases assert the template with `LayoutTemplate.DeferredViews`.
+🚨 **Do not** return `host.Workspace.GetMeshNodeStream().Select(node => Controls…)` (or `GetStream<MeshNode>()`, or a query) for a view that only SHOWS data: the page waits for the slowest read, then shows a snapshot built on the hub. The worked samples are the Northwind demo's `Northwind/{Customer,Supplier,Employee,Product}` (MeshWeaver.Plugins, `test/samples/Graph/Data/`) — each with a `Test/` folder whose cases assert the template with `LayoutTemplate.DeferredViews`.
 
 ## Reading the Hosting Node's Own Content
 
@@ -138,8 +138,8 @@ public static IObservable<string> EmploymentFeed(LayoutAreaHost host)
         .Catch<string, Exception>(ex => { /* log */ return Observable.Return("*Could not be read.*"); });
 ```
 
-`samples/Graph/Data/Northwind/Employee` and `samples/Graph/Data/PythonDemo/PrimeReport` are the
-worked examples.
+`samples/Graph/Data/PythonDemo/PrimeReport` (this repository) and the Northwind demo's
+`Northwind/Employee` (MeshWeaver.Plugins, `test/samples/Graph/Data/`) are the worked examples.
 
 `host.Workspace.GetMeshNodeStream()` is the read, and `GetMeshNodeStream(path)` reads any *other*
 node through the same process-wide `IMeshNodeStreamCache`. Several framework areas still read it
