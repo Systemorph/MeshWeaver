@@ -1,20 +1,19 @@
 ---
 Name: Paired Change Sets
 Category: Architecture
-Description: How an author pairs a core pull request with a MeshWeaver.Plugins pull request so the two are built and tested TOGETHER before either merges — and why merging stays per repository with core first and never waiting.
+Description: How an author pairs a core pull request with a MeshWeaver.Plugins pull request — core merges first on its own checks and waits for no other repository; the Plugins half is verified against the sealed core set that contains the core half.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="12" r="3"/><circle cx="17" cy="12" r="3"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
 ---
 
 # Paired Change Sets
 
-**A change that spans core and MeshWeaver.Plugins is tested as ONE change set before either half
-merges.** Merging stays per repository, core first. Core waits for Plugins in exactly one way: its
-required `Dependent suites (MeshWeaver.Plugins)` verdict on the suites the diff can reach (policy
-`dependent-suites-affected-gate`). A core half that breaks those suites against Plugins' default
-branch merges only by declaring `Breaks-plugins: … — counterpart Systemorph/MeshWeaver.Plugins#<n>;
-semver: …` with the counterpart green against the same candidate
-([Cross-Repo Pair Gate](../CrossRepoPairGate)); a `Pairs-with:` pair is ALSO measured at the
-counterpart's head, as before.
+**A change that spans core and MeshWeaver.Plugins merges per repository, core first, and core waits
+for nothing on the Plugins side** (policy `dependents-verify-on-their-side`, which superseded
+`dependent-suites-affected-gate`; register: [Policy Not Prose](../PolicyNotProse)). Core runs no
+Plugins suites and reads no Plugins verdict; there is no `Breaks-plugins:` declaration any more.
+The pair is verified on the PLUGINS side, against the sealed core set that contains the core half,
+and the deploy side ([One Promotion Gate](../OnePromotionGate), the combo gate) keeps an unverified
+combination off the fleet.
 
 ## How to pair two pull requests
 
@@ -26,21 +25,20 @@ That is all. What happens:
 
 | where | what runs | what it proves |
 |---|---|---|
-| core PR — `Dependent suites (request)` / `(MeshWeaver.Plugins, advisory)` | MeshWeaver.Plugins `core-candidate.yml`, against the core PR's merge commit AND the Plugins PR's head | the two halves compile and the reachable Plugins suites pass TOGETHER — advisory, reported on the core PR |
-| Plugins PR — `paired-core.yml` | the same `core-candidate.yml`, dispatched from the Plugins side while the core PR is open | the same pairing, re-run on every push to either half's Plugins side |
-| Plugins PR — `Resolve the released platform` | the normal Plugins CI against the newest green core `main` build | once the core half has landed AND is in a green build, the Plugins half is tested against it like any other change |
+| core PR — `Cross-repo pair (public surface)` | core's own gate, reading the `Pairs-with:` line | a core half that REMOVES public surface lands only after its counterpart (deleting half last) |
+| Plugins PR — `Resolve the released platform` | the normal Plugins CI against the newest sealed core set | once the core half has landed AND is in a sealed set, the Plugins half is tested against it like any other change |
+| Plugins `main` — push and daily runs | Plugins' own suites against each new sealed core set | a core change that breaks Plugins is seen THERE, as Plugins' red, and fixed by a counterpart pull request |
 
 ## The order
 
-1. **Core merges first**, on its own checks. The paired run is information for the author, never a
-   gate on the merge.
+1. **Core merges first**, on its own checks — nothing on the core side waits for Plugins.
 2. core's CD builds and promotes the landed commit (~25 minutes to a promoted set).
 3. **The Plugins half re-runs** — push, or re-run the workflow. `Resolve the released platform` checks
    that the resolved set CONTAINS the declared core pull request's merge commit (by ancestry) and is
    RED, naming the set it saw, while it does not — so the Plugins half never goes green against a
    core that lacks what it needs.
-4. The Plugins half merges; the next main-cd build pairs both, and the promotion gate arms it once
-   the dependent suites pass.
+4. The Plugins half merges; the next main-cd build pairs both, and the promotion gate arms the set
+   on its platform verdict.
 
 **Deleting-half-last still holds.** When the core half REMOVES public surface the Plugins half uses,
 the Plugins half must land first and be compatible with both — then it declares NO `Core-ref:` (it
@@ -48,7 +46,6 @@ does not need the core change), and the core half declares `Pairs-with:` as the 
 
 ## Not covered
 
-- Satellites other than MeshWeaver.Plugins are not paired this way; they find a core break in their
-  own daily run.
-- The paired run builds Plugins suites from source against the core candidate; in-mesh NodeType
-  source is compiled by the compile gates, not here.
+- Every satellite — MeshWeaver.Plugins included — finds a core break in its own push and daily runs
+  against the sealed core set; nothing measures an UNMERGED core candidate against a dependent.
+- In-mesh NodeType source is compiled by the compile gates, not here.
