@@ -100,7 +100,7 @@ public class StoreRecoveryRerunTest
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
         var gaps = new Subject<bool>();
-        var announced = new System.Collections.Generic.List<StoreRecoveryRerunScheduled>();
+        var announced = System.Collections.Immutable.ImmutableList<StoreRecoveryRerunScheduled>.Empty;
         var attempts = 0;
         var policy = new StoreRecoveryRerunPolicy { MaxTimedReruns = 2, Backoff = n => TimeSpan.FromSeconds(n) };
 
@@ -110,7 +110,7 @@ public class StoreRecoveryRerunTest
                     Interlocked.Increment(ref attempts);
                     return Observable.Throw<Unit>(Refused());
                 },
-                gaps, policy, scheduler, announced.Add)
+                gaps, policy, scheduler, a => announced = announced.Add(a))
             .Subscribe(_ => { }, _ => { });
 
         attempts.Should().Be(1);
@@ -194,7 +194,7 @@ public class StoreRecoveryRerunTest
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var evidence = new Subject<bool>();
-        var announced = new System.Collections.Generic.List<StoreRecoveryRerunScheduled>();
+        var announced = System.Collections.Immutable.ImmutableList<StoreRecoveryRerunScheduled>.Empty;
         var attempts = 0;
 
         using var run = StoreRecoveryRerun.RerunOnStoreRecovery(
@@ -203,7 +203,7 @@ public class StoreRecoveryRerunTest
                     Interlocked.Increment(ref attempts);
                     return Observable.Throw<Unit>(Refused());
                 },
-                evidence, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, announced.Add)
+                evidence, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, a => announced = announced.Add(a))
             .Subscribe(_ => { }, _ => { });
 
         attempts.Should().Be(1);
@@ -226,11 +226,11 @@ public class StoreRecoveryRerunTest
     {
         using var watches = new RecoveryWatchSet();
         var started = 0;
-        var ends = new System.Collections.Generic.List<Action>();
+        var ends = System.Collections.Immutable.ImmutableList<Action>.Empty;
         IDisposable Start(Action ended)
         {
             started++;
-            ends.Add(ended);
+            ends = ends.Add(ended);
             return System.Reactive.Disposables.Disposable.Empty;
         }
 
@@ -272,16 +272,16 @@ public class StoreRecoveryRerunTest
     [Fact]
     public void AReRun_MarksItself_ThenReSeeds_ThenSweeps()
     {
-        var order = new System.Collections.Generic.List<string>();
-        IObservable<int> Reseed() => Observable.Defer(() => { order.Add("seed"); return Observable.Return(3); });
-        IObservable<string> Sweep() => Observable.Defer(() => { order.Add("sweep"); return Observable.Return("ok"); });
+        var order = System.Collections.Immutable.ImmutableList<string>.Empty;
+        IObservable<int> Reseed() => Observable.Defer(() => { order = order.Add("seed"); return Observable.Return(3); });
+        IObservable<string> Sweep() => Observable.Defer(() => { order = order.Add("sweep"); return Observable.Return("ok"); });
 
-        DynamicTypePreWarmerHostedService.SweepAttempt(0, n => order.Add($"begin {n}"), Reseed, Sweep)
+        DynamicTypePreWarmerHostedService.SweepAttempt(0, n => order = order.Add($"begin {n}"), Reseed, Sweep)
             .Subscribe(_ => { }, _ => { });
         order.Should().Equal("sweep");
 
-        order.Clear();
-        DynamicTypePreWarmerHostedService.SweepAttempt(2, n => order.Add($"begin {n}"), Reseed, Sweep)
+        order = order.Clear();
+        DynamicTypePreWarmerHostedService.SweepAttempt(2, n => order = order.Add($"begin {n}"), Reseed, Sweep)
             .Subscribe(_ => { }, _ => { });
         order.Should().Equal("begin 2", "seed", "sweep");
     }

@@ -83,10 +83,9 @@ public class AWarmUpSweepRerunsWhenTheStoreRecoversTest(ITestOutputHelper output
                     var configuration = new ConfigurationBuilder();
                     if (Materialise(configured, sp) is { } host)
                         configuration.AddConfiguration(host);
-                    return configuration.AddInMemoryCollection(new Dictionary<string, string?>
-                    {
-                        [DynamicTypePreWarmerHostedService.EnabledConfigKey] = "true",
-                    }).Build();
+                    return configuration.AddInMemoryCollection(
+                        System.Collections.Immutable.ImmutableDictionary<string, string?>.Empty
+                            .Add(DynamicTypePreWarmerHostedService.EnabledConfigKey, "true")).Build();
                 });
             });
 
