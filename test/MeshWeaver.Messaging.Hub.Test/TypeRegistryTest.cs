@@ -147,6 +147,23 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// Setting a key on the FULL-name registration of a type whose canonical (write) name is its short
+    /// name must not flip the canonical name back to the full name — the operation only sets a key.
+    /// </summary>
+    [Fact]
+    public void KeyingTheFullNameRegistration_KeepsTheShortWriteName()
+    {
+        var typeRegistry = MessageHubExtensions.CreateTypeRegistry();
+        typeRegistry.WithType(typeof(AliasedContent), typeof(AliasedContent).FullName!);
+        typeRegistry.WithType(typeof(AliasedContent), nameof(AliasedContent));
+
+        typeRegistry.WithKeyFunction(typeof(AliasedContent).FullName!, new KeyFunction(_ => "k", typeof(string)));
+
+        typeRegistry.TryGetCollectionName(typeof(AliasedContent), out var writeName).Should().BeTrue();
+        writeName.Should().Be(nameof(AliasedContent));
+    }
+
+    /// <summary>
     /// GitSync uses strict deserialization for authored node files. The polymorphic object
     /// converter must let an unknown nested member fail that read instead of recovering it as raw
     /// JSON and letting the import acknowledge a record this image cannot understand.

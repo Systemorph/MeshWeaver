@@ -54,10 +54,9 @@ public record TypeDefinition : ITypeDefinition
         // the null until GetKey dereferenced it — a bare NullReferenceException at every
         // activation of a hub whose data source registered such a type, naming nothing
         // (Systemorph/MeshWeaver#6643). GetKey/GetKeyType now refuse it BY NAME.
-        // Resolved on first use from the builder (see Key) — plain fields, no closure, no Lazy.
-        // A definition is held once per registry per type, so its per-instance objects multiply by the
-        // number of hubs (Doc/Architecture/PortalHeapIsHubs → "Per-hub DI and type metadata").
-        this.keyFunctionBuilder = keyFunctionBuilder;
+        // Resolved on first use from the builder (see Key), exactly once.
+        keyCell = new(() => keyFunctionBuilder.GetKeyFunction(elementType));
+        keyFromBuilder = true;
 
         // 🚨 LAZY, and it must stay lazy — this is the FutuRe.Test teardown SIGSEGV (exit=139).
         // XmlDocs.Summary reflects into the type's assembly XML documentation. Constructing a
@@ -185,25 +184,18 @@ public record TypeDefinition : ITypeDefinition
             + "A type served as a data-source collection needs a key: mark one property [Key], "
             + "name it Id or SystemName, or configure WithKey(...) on its type source.");
 
-    // The builder the key is resolved from on first use, or null once the key is fixed (an explicit
-    // key function, WithKeyFunction). Racing first readers resolve the same key function from the
-    // same builder, so either write is correct — the same guarantee the Lazy this replaces gave.
-    private KeyFunctionBuilder? keyFunctionBuilder;
-    private KeyFunction? key;
-    private volatile bool keyResolved;
+    // The key function, resolved from the registry's builder on first use. A Lazy, and the field
+    // never changes after construction: (1) the record's synthesized Equals/GetHashCode read every
+    // instance field, so cache state that flipped on the first read would change a definition's
+    // hash while it sits in a hash set — the reference to this cell is stable instead; (2) the
+    // builder runs arbitrary key-function providers, so concurrent first readers must not run it
+    // twice and publish two different key functions — Lazy's ExecutionAndPublication runs it once.
+    private Lazy<KeyFunction?> keyCell;
+    // Whether keyCell resolves from a builder's conventions (false once an explicit key is fixed).
+    private bool keyFromBuilder;
 
     /// <summary>The key function of this type, resolved from the registry's builder on first use.</summary>
-    internal KeyFunction? Key
-    {
-        get
-        {
-            if (keyResolved)
-                return key;
-            key = keyFunctionBuilder?.GetKeyFunction(Type);
-            keyResolved = true;
-            return key;
-        }
-    }
+    internal KeyFunction? Key => keyCell.Value;
 
     /// <summary>
     /// True while this definition's key comes from the key-function CONVENTIONS of a registry's
@@ -211,7 +203,7 @@ public record TypeDefinition : ITypeDefinition
     /// would build for the type. What lets a hub-level registry reuse its parent's definition of a
     /// type whose key the conventions decide instead of holding a copy (TypeRegistry.WithType).
     /// </summary>
-    internal bool KeyFromBuilder => keyFunctionBuilder is not null;
+    internal bool KeyFromBuilder => keyFromBuilder;
 
     /// <summary>
     /// True when the description and icon are the ones the type itself declares — neither was
@@ -226,9 +218,8 @@ public record TypeDefinition : ITypeDefinition
     internal TypeDefinition WithKey(KeyFunction keyFunction)
     {
         var copy = this with { };
-        copy.keyFunctionBuilder = null;
-        copy.key = keyFunction;
-        copy.keyResolved = true;
+        copy.keyCell = new(keyFunction);
+        copy.keyFromBuilder = false;
         return copy;
     }
 }

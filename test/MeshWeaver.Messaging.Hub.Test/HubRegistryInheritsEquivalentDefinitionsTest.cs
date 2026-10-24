@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Runtime.Loader;
+using System.Threading;
 using MeshWeaver.Domain;
 using MeshWeaver.Fixture;
 using MeshWeaver.Messaging.Serialization;
@@ -177,5 +179,96 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
 
         grandchild.GetType("Entry").Should().Be(typeof(KeyedContent),
             "the grandchild registered KeyedContent as Entry itself");
+    }
+
+    /// <summary>
+    /// The full-name alias of a shared definition is bound on the hub too: a newer collectible build
+    /// registered on the parent (same full name — the alias is newest-wins there) must move neither the
+    /// hub's canonical name nor its full-name alias off the build the hub registered.
+    /// </summary>
+    [Fact]
+    public void AParentRegisteringANewerBuild_MovesNeitherOfTheHubsNames()
+    {
+        var location = typeof(KeyedContent).Assembly.Location;
+        var fullName = typeof(KeyedContent).FullName!;
+        var aliasName = fullName.Replace('+', '.');
+        var first = new AssemblyLoadContext("shared-alias-first", isCollectible: true);
+        var second = new AssemblyLoadContext("shared-alias-second", isCollectible: true);
+        try
+        {
+            var oldBuild = first.LoadFromAssemblyPath(location).GetType(fullName)!;
+            var newBuild = second.LoadFromAssemblyPath(location).GetType(fullName)!;
+            oldBuild.Should().NotBe(newBuild, "the precondition: two builds with one full name");
+
+            var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(oldBuild, nameof(KeyedContent));
+            var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(oldBuild, nameof(KeyedContent));
+            hub.GetTypeDefinition(oldBuild, create: false)
+                .Should().BeSameAs(mesh.GetTypeDefinition(oldBuild, create: false), "the precondition: shared");
+
+            mesh.WithType(newBuild, nameof(KeyedContent));
+            mesh.GetType(aliasName).Should().Be(newBuild, "the precondition: the parent's alias moved");
+
+            hub.GetType(nameof(KeyedContent)).Should().Be(oldBuild, "the hub's canonical name keeps its build");
+            hub.GetType(aliasName).Should().Be(oldBuild,
+                "the full-name alias must resolve the same build as the canonical name on the hub");
+        }
+        finally
+        {
+            first.Unload();
+            second.Unload();
+        }
+    }
+
+    /// <summary>
+    /// A definition's equality and hash must not change when its key is first read: a shared definition
+    /// can be resolved by another hub while it sits in a hash set (DataModelLayoutArea).
+    /// </summary>
+    [Fact]
+    public void ReadingTheKey_DoesNotChangeTheDefinitionsHash()
+    {
+        var definition = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeyedContent), nameof(KeyedContent))
+            .GetTypeDefinition(typeof(KeyedContent), create: false)!;
+        var set = new HashSet<ITypeDefinition> { definition };
+        var hashBefore = definition.GetHashCode();
+
+        definition.GetKey(new KeyedContent("k1", "label")).Should().Be("k1");
+
+        definition.GetHashCode().Should().Be(hashBefore, "lazy key state is not part of the definition's identity");
+        set.Should().Contain(definition, "an entry added before the first key read must stay findable");
+    }
+
+    /// <summary>
+    /// Concurrent FIRST key reads resolve the key function once: the builder runs arbitrary key-function
+    /// providers, and two runs could publish two different key functions for one definition. The first
+    /// reader's provider starts a second reader and waits (bounded) for it to enter the provider too.
+    /// </summary>
+    [Fact]
+    public void ConcurrentFirstKeyReads_ResolveTheKeyFunctionOnce()
+    {
+        var invocations = 0;
+        Thread? second = null;
+        object? secondSaw = null;
+        var content = new KeylessContent("label");
+        var builder = new KeyFunctionBuilder();
+        TypeDefinition? definition = null;
+        builder.WithKeyFunction(_ =>
+        {
+            var run = Interlocked.Increment(ref invocations);
+            if (run == 1)
+            {
+                second = new Thread(() => secondSaw = definition!.GetKey(content));
+                second.Start();
+                SpinWait.SpinUntil(() => Volatile.Read(ref invocations) >= 2, TimeSpan.FromSeconds(2));
+            }
+            return new KeyFunction(_ => $"resolution-{run}", typeof(string));
+        });
+        definition = new TypeDefinition(typeof(KeylessContent), nameof(KeylessContent), builder);
+
+        var firstSaw = definition.GetKey(content);
+        second!.Join(TimeSpan.FromSeconds(10)).Should().BeTrue("the second reader completes once the first publishes");
+
+        Volatile.Read(ref invocations).Should().Be(1, "the key function is resolved exactly once");
+        firstSaw.Should().Be("resolution-1");
+        secondSaw.Should().Be(firstSaw, "both readers observe the one published key function");
     }
 }

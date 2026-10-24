@@ -171,6 +171,10 @@ internal class TypeRegistry : ITypeRegistry
             // otherwise be synthesised before the parent is asked.
             typeByName[typeName] = inherited;
             nameByType[type] = typeName;
+            // The full-name alias is a name this hub resolves too, so it is bound locally as well —
+            // left on the parent, a newer collectible build registered there (same full name,
+            // newest-wins) would take the alias while this hub's canonical name kept the old build.
+            IndexFullNameAlias(type, inherited, typeName);
             TrackCollectible(type);
             return this;
         }
@@ -666,7 +670,10 @@ internal class TypeRegistry : ITypeRegistry
         var keyed = typeByName[collection] = typeDefinition.WithKey(keyFunction);
         // Index the type too, so a lookup BY TYPE finds this registry's keyed definition rather than
         // falling through to the parent's — it did not when the definition came from the parent.
-        nameByType[keyed.Type] = collection;
+        // TryAdd, never overwrite: an existing entry is this registry's canonical (write) name — e.g.
+        // the short name a type was registered under after its full name — and setting a key must not
+        // flip the $type it serializes with.
+        nameByType.TryAdd(keyed.Type, collection);
         // This registry now holds the type strongly, so it must hear its context unload — or the
         // keyed definition roots a superseded collectible assembly while only the parent demotes.
         TrackCollectible(keyed.Type);
