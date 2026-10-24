@@ -39,7 +39,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <c>EveryConfigKeySetInAValuesFile_*</c>, <c>ModulesRequired_*</c>,
 /// <c>NoValuesFile_DeclaresAModulesRequiredIndexAboveTheCeiling</c>,
 /// <c>NoValuesFileArmsTheBakeGateWithoutTheSweepBehindIt</c>) read the chart and moved to
-/// MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge (as <c>ChartValuesBindingGuard</c>).</para>
+/// MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge (as <c>ChartValuesBindingGuard</c>).</para>
 /// </summary>
 public class PlatformBakeLaneGuard
 {
@@ -555,26 +555,6 @@ public class PlatformBakeLaneGuard
         var end = Array.FindIndex(lines, start + 1, IsJobKey);
         if (end < 0) end = lines.Length;
         return string.Join("\n", lines[..start].Concat(lines[end..]));
-    }
-
-    /// <summary>
-    /// The local instance must name a bundle root — adopt-only with nothing to adopt from reports
-    /// every dynamic type as uncovered forever, which is honest but useless.
-    /// </summary>
-    [Fact]
-    public void LocalDefaults_NameABundleRootToAdoptFrom()
-    {
-        var values = File.ReadAllLines(Path.Combine(
-                FindRepoRoot(), "deploy", "homebrew", "share", "values.local.defaults.yaml"))
-            .Select(l => l.Trim())
-            .Where(l => !l.StartsWith('#'))
-            .ToList();
-
-        Assert.True(
-            values.Any(l => l.StartsWith("PreWarm__PrebuiltBundleRoot:", StringComparison.Ordinal)
-                            && l.Contains('/', StringComparison.Ordinal)),
-            "The local instance must name a bundle root, otherwise adopt-only has no bundles to "
-            + "adopt from and reports every dynamic type as uncovered forever.");
     }
 
     /// <summary>The <c>publish-bake</c> job's own YAML block: from its two-space-indented key to

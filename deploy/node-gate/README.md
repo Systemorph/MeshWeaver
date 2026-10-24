@@ -40,4 +40,4 @@ grpc:
 ```
 
 `MESH_GRPC_URL` and `MESH_GATE_ADDRESS` (the container's env) override the endpoint and address; the
-defaults match MeshWeaver.Plugins `deploy/helm` `values.grpc`. The Python gate is the sibling — see `deploy/python-gate`.
+defaults match MeshWeaver.Deploy `deploy/helm` `values.grpc`. The Python gate is the sibling — see `deploy/python-gate`.

@@ -28,7 +28,7 @@ namespace MeshWeaver.Hosting.Test;
 /// copied string: renaming the config key moves the guard's subject with it instead of leaving a
 /// check that passes having verified nothing.</para>
 ///
-/// <para>The CHART fact (<c>DeletionIsNeverArmedByOmission</c>) moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge.
+/// <para>The CHART fact (<c>DeletionIsNeverArmedByOmission</c>) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.
 /// See Doc/Architecture/PrebuiltBundleRetention.</para>
 /// </summary>
 public class PrebuiltBundleRetentionArmingGuard

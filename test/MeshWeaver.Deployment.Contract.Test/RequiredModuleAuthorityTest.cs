@@ -22,7 +22,7 @@ namespace MeshWeaver.Deployment.Contract.Test;
 ///
 /// <para>The one fact that read the CHART (<c>TheDeclaredCeilingIsTheOneTheChartRenders</c> —
 /// <see cref="DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot"/> against the template's
-/// rendered range) moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
+/// rendered range) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
 /// </summary>
 public class RequiredModuleAuthorityTest
 {

@@ -8,7 +8,7 @@ namespace Memex.Portal.Shared.Test;
 /// MeshWeaver#5544, and <c>required-modules-readiness-only</c>) — the platform-side pin.
 ///
 /// <para>The facts that drive the REAL probe composition on the paths the CHART ships moved to
-/// MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge. What stays is the one fact that reads no chart.</para>
+/// MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge. What stays is the one fact that reads no chart.</para>
 /// </summary>
 public class RollGateReadinessOnlyTest
 {

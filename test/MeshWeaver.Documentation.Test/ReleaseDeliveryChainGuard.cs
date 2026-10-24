@@ -32,7 +32,7 @@ namespace MeshWeaver.Documentation.Test;
 /// them.</para>
 ///
 /// <para>The ledger's CHART fact (<c>EveryConfigKeyTheReleaseChainReads_IsRenderedByTheChart</c>)
-/// moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
+/// moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
 /// </summary>
 public class ReleaseDeliveryChainGuard
 {

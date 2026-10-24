@@ -4460,7 +4460,7 @@ def check_registry_retention(root: str, chart_root: str | None = None) -> int:
 
     🏠 THE CHART MAY LIVE IN ANOTHER REPOSITORY. A `retention` block that names a `chartRepository`
     says its `chart` path is in THAT repository (the reference chart left core for
-    Systemorph/MeshWeaver.Plugins — core slimming). Without `chart_root` (core's own pull-request
+    Systemorph/MeshWeaver.Deploy — core slimming). Without `chart_root` (core's own pull-request
     lane, which cannot read that repository) the chart-derived arms are NOT run and the run says so
     by name — never a silent pass. With `chart_root` (that repository's Chart Gate, which checks core
     out) the chart is re-derived there, against the record at the core commit it checked out.

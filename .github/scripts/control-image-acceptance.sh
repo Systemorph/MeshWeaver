@@ -31,7 +31,7 @@ set -euo pipefail
 
 CONTROL="" MIGRATION="" PREVIOUS="" FIRST_RUN=false
 POSTGRES_IMAGE="pgvector/pgvector:pg17"
-# The chart's startupProbe window: periodSeconds 5 × failureThreshold 60 (MeshWeaver.Plugins deploy/helm/values.yaml).
+# The chart's startupProbe window: periodSeconds 5 × failureThreshold 60 (MeshWeaver.Deploy deploy/helm/values.yaml).
 BUDGET=300
 
 while [ $# -gt 0 ]; do

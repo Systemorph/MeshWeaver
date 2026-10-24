@@ -17,7 +17,7 @@ namespace Memex.Portal.Shared.Test;
 /// fails, because "no storage configured" is a legitimate state by design.</para>
 ///
 /// <para>So the two halves are guarded on opposite sides: the image must NOT answer, and these
-/// must. The CHART half (<c>TheHelmChartStatesTheStorageType</c>) moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge;
+/// must. The CHART half (<c>TheHelmChartStatesTheStorageType</c>) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge;
 /// this file keeps the Aspire half, which reads no chart. Each guard lives with its subject, and neither can be satisfied by the other moving.</para>
 /// </summary>
 public class DeploymentPathsSupplyStorageTest

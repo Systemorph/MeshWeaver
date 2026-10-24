@@ -39,7 +39,7 @@ namespace MeshWeaver.Documentation.Test;
 /// stops patching it would turn a harmless call into a 403 mid-roll). Naming the problem is the
 /// opposite of repeating it. The assertion is on COMMANDS.</para>
 ///
-/// <para>The three facts over the Job template itself (<c>TheMigration_*</c>) moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge,
+/// <para>The three facts over the Job template itself (<c>TheMigration_*</c>) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge,
 /// together with a copy of the two command/prose scans below over the moved tree.</para>
 /// </summary>
 public class MigrationWorkloadModelGuard

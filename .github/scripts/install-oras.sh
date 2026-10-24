@@ -10,7 +10,7 @@
 # to $GITHUB_PATH when those exist, so a workflow step after it can call `oras` bare.
 #
 # 🚨 ONE PIN, ONE HOME. The bake lanes (main-cd.yml's `publish-bake` and `plugins-bake`, the
-# satellites' node-repo-publish-bake.yml) and MeshWeaver.Plugins' chart-gate harness (test-bundle-registry.py) all
+# satellites' node-repo-publish-bake.yml) and MeshWeaver.Deploy' chart-gate harness (test-bundle-registry.py) all
 # install through THIS script, so the version the harness executes the publisher with is the
 # version the lanes publish with. A second pin table anywhere else is drift waiting to happen.
 #

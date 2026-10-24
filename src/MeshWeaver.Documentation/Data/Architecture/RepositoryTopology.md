@@ -14,24 +14,20 @@ on a rebuild, and who needs a credential to consume it.
 | Repository | Visibility | Owns | Never holds |
 |---|---|---|---|
 | **`Systemorph/MeshWeaver`** | **public** | The framework. | Deployment material. |
-| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog, shared scripts (CI gates, generators), the hosting operator and the reference **Helm chart** (`deploy/helm`, `deploy/helm-db`, `deploy/aks/`). | Deployment config. |
+| **`Systemorph/MeshWeaver.Deploy`** | **public** | The deployment **reference**: the **Helm chart** (`deploy/helm`, `deploy/helm-db`), the example AKS overlay and manifests, the chart tooling, and `memex-local`. | An installation's own values. |
+| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog, shared scripts (CI gates, generators), the hosting operator. | Deployment config. |
 | **`Systemorph/Memex`** | **private** | **Config only** — the deployment overlays and thin CI glue. | Reusable code or logic. |
 
-## The chart is read at deploy time
+## The chart is public, and it is read at deploy time
 
-The reference chart left this repository for `MeshWeaver.Plugins` with the hosting operator that
-installs it (core slimming; Plugins `Hosting/ChartHome`, and [Chart Ownership](../ChartOwnershipAndRunnerPool)
-for the analysis). The break-glass deploy (`helm-release.yml`, in the `Memex` repo) checks the chart
-out of `MeshWeaver.Plugins` with **no pinned `ref:`** — it takes the default branch **at deploy
-time** — using a per-run, read-only installation token of the MeshWeaver App. The governed path
-(the operator, and the estate's aks-ops lane) uses the chart at the operator image's commit instead.
-Either way the ConfigMap and every rendered resource come from **helm reading the repo**, never from
-the running portal image.
-
-🚨 **Those reads are the debt the gap section below describes.** While the chart lived in this public
-repository every reader was credential-free; in the private one, the estate's deploy lanes, its
-required `config-key-coverage` check and the homebrew tap each mint a scoped App token. Whether the
-reference chart should instead live in a public repository of its own is an open owner decision.
+The reference chart left this repository for its own PUBLIC repository, `MeshWeaver.Deploy`, so the
+platform stays framework only while every reader stays **credential-free** (core slimming;
+[Chart Ownership](../ChartOwnershipAndRunnerPool) for the analysis). The break-glass deploy
+(`helm-release.yml`, in the `Memex` repo) checks the chart out of `MeshWeaver.Deploy` with **no
+credential and no pinned `ref:`** — it takes the default branch **at deploy time**. The governed path
+(the operator image, and the estate's aks-ops lane) uses the chart at the commit the operator image's
+tag names. Either way the ConfigMap and every rendered resource come from **helm reading the repo**,
+never from the running portal image.
 
 So **a chart-only change is effective the moment it merges.** There is no image rebuild, no roll, no
 release cycle standing between a merged chart fix and the next `helm upgrade`. This was proven the

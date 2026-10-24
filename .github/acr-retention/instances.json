@@ -187,13 +187,13 @@
     },
     "Systemorph/MeshWeaver": {
       "role": "chart",
-      "reason": "This repository. Its `deploy/` tree carries chart values files of its own (measured at the chart's move to MeshWeaver.Plugins: 5 files that match the overlay path filter — the homebrew CLI's local values, and the s1-extract and whisper charts), not an installation; the platform chart itself left for Systemorph/MeshWeaver.Plugins (core slimming) — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
+      "reason": "This repository. Its `deploy/` tree carries chart values files of its own (measured at the chart's move to MeshWeaver.Deploy: 2 files that match the overlay path filter — the s1-extract and whisper charts), not an installation; the platform chart and memex-local left for Systemorph/MeshWeaver.Deploy (core slimming) — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
       "declaredAt": "2026-09-15",
       "issue": "MeshWeaver#3438"
     },
-    "Systemorph/MeshWeaver.Plugins": {
+    "Systemorph/MeshWeaver.Deploy": {
       "role": "chart",
-      "reason": "The reference CHART's home since it left core with the hosting operator (core slimming; Plugins Hosting/ChartHome). Its `deploy/` tree carries the chart's own values files and the chart gate's fixtures (measured at the move: 39 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. Named for the same reason core was: a repository whose tree carries overlay FILES and is absent from this table is exactly the silent one the table exists to refuse.",
+      "reason": "The PUBLIC deployment reference: the platform chart, the db chart, the AKS overlay and manifests and memex-local left core for it (core slimming). Its `deploy/` tree carries the chart's own values files, memex-local's local values and the chart gate's fixtures (measured at the move: 42 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. Named for the same reason core was: a repository whose tree carries overlay FILES and is absent from this table is exactly the silent one the table exists to refuse.",
       "declaredAt": "2026-10-24",
       "issue": "core slimming"
     }
@@ -212,7 +212,7 @@
         "design": "Doc/Architecture/FleetRegistryRetention",
         "reason": "Measured 2026-09-14 over core origin/main 192bb073b8, read-only: NOTHING deletes a manifest, a tag or a referenced blob from cr.meshweaver.cloud, and nothing collects its garbage — so the registry grows without bound. That is the safe direction to be wrong in; the hazard is the FIX. 🚨 `distribution` HAS NO LOCK: ACR's `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object here that a protected set can be written INTO ahead of a deleter. A cleanup's own derivation would therefore be the entire safety margin, with nothing behind it — where on the ACR an incomplete run merely writes fewer locks and last night's still hold. Until a cleanup can derive a protected set over what this registry HOLDS (and nothing enumerates that as data today — MeshWeaver#4066), none may be added.",
         "chart": "deploy/helm/templates/registry",
-        "chartRepository": "Systemorph/MeshWeaver.Plugins",
+        "chartRepository": "Systemorph/MeshWeaver.Deploy",
         "deleteGrantedTo": "publisherUsername",
         "maintenance": {
           "uploadpurging": "168h"

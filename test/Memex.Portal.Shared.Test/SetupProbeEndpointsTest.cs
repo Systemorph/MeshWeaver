@@ -11,7 +11,7 @@ namespace Memex.Portal.Shared.Test;
 /// The setup-only host's probe paths are answered, never redirected to <c>/setup</c>.
 ///
 /// <para>The companion fact — every path the CHART probes is one the setup host maps — reads the
-/// chart, so it moved to MeshWeaver.Plugins (src/Memex.Hosts.Test/Chart/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
+/// chart, so it moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
 /// </summary>
 public class SetupProbeEndpointsTest
 {
