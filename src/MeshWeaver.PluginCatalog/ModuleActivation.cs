@@ -553,7 +553,19 @@ public static class ModuleActivationSidecar
     /// sees its internals.</summary>
     internal static ModuleActivationList ReadFor(
         string baseDirectory, Action<string>? onCorrupt, Func<string?> platform)
-        => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt), onCorrupt, platform);
+        => ReadFor(baseDirectory, onCorrupt, platform, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="ReadFor(string, Action{string}?, Func{string?})"/> from a pooled leaf. The read
+    /// WALKS the volume (one read per per-module entry file, then one record listing and log per
+    /// module), so <paramref name="cancellationToken"/> (the pool's) is checked before each. A cancel
+    /// surfaces as <see cref="OperationCanceledException"/>; it is never reported through
+    /// <paramref name="onCorrupt"/> and never drops a module as unreadable.
+    /// </summary>
+    internal static ModuleActivationList ReadFor(
+        string baseDirectory, Action<string>? onCorrupt, Func<string?> platform, CancellationToken cancellationToken)
+        => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt, cancellationToken),
+            onCorrupt, platform, cancellationToken);
 
     /// <summary>The platform this process runs: the live framework identity — the same key a
     /// producer records beside its bytes. Resolved only when a verdict is actually consulted.</summary>
@@ -614,6 +626,12 @@ public static class ModuleActivationSidecar
     /// <summary><see cref="ReadStored"/> with each entry's paired write time and the unreadable
     /// per-module files.</summary>
     internal static StoredActivation ReadStoredActivation(string baseDirectory, Action<string>? onCorrupt)
+        => ReadStoredActivation(baseDirectory, onCorrupt, CancellationToken.None);
+
+    /// <summary><see cref="ReadStoredActivation(string, Action{string}?)"/>, checking
+    /// <paramref name="cancellationToken"/> before each per-module entry file it reads.</summary>
+    internal static StoredActivation ReadStoredActivation(
+        string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var (legacy, legacyWrittenAt, aggregateUnreadable) = ReadLegacy(baseDirectory, onCorrupt);
         var byName = ImmutableDictionary.Create<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
@@ -635,7 +653,7 @@ public static class ModuleActivationSidecar
         // Per-module files last: a record written by the landing lane WINS over whatever the
         // frozen aggregate still says about that name (an uninstall must beat a stale enabled row).
         // Sorted so the union is deterministic regardless of directory-enumeration order.
-        var files = ReadEntryFiles(baseDirectory, onCorrupt);
+        var files = ReadEntryFiles(baseDirectory, onCorrupt, cancellationToken);
         foreach (var (entry, at) in files.Entries)
             Accept(entry, at);
 
@@ -666,6 +684,13 @@ public static class ModuleActivationSidecar
     /// </summary>
     internal static ModuleActivationList ApplyLandingRecords(
         string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform)
+        => ApplyLandingRecords(baseDirectory, stored, onCorrupt, platform, CancellationToken.None);
+
+    /// <summary><see cref="ApplyLandingRecords(string, StoredActivation, Action{string}?, Func{string?})"/>,
+    /// checking <paramref name="cancellationToken"/> before each module's record log it reads.</summary>
+    internal static ModuleActivationList ApplyLandingRecords(
+        string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform,
+        CancellationToken cancellationToken)
     {
         var byName = stored.List.Entries.ToImmutableDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var order = stored.List.Entries.Select(e => e.Name).ToImmutableList();
@@ -691,6 +716,7 @@ public static class ModuleActivationSidecar
         var present = GenerationPresence(baseDirectory);
         foreach (var moduleName in names)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
             if (!log.Whole)
             {
@@ -2308,7 +2334,8 @@ public static class ModuleActivationSidecar
     /// and the module names whose file exists but could not be read.
     /// </summary>
     private static (ImmutableList<(ModuleActivationEntry Entry, DateTime WrittenAtUtc)> Entries,
-        ImmutableHashSet<string> Unreadable, bool Listed) ReadEntryFiles(string baseDirectory, Action<string>? onCorrupt)
+        ImmutableHashSet<string> Unreadable, bool Listed) ReadEntryFiles(
+            string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var directory = EntriesDirectory(baseDirectory);
         ImmutableList<string> files;
@@ -2331,6 +2358,8 @@ public static class ModuleActivationSidecar
         var unreadable = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
+            // Outside the try: a cancel is the pool ending the read, never an unreadable entry.
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (TryReadWithWriteTime(file) is not { } read)

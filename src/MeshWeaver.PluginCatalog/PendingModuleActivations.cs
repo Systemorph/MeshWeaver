@@ -738,9 +738,20 @@ public sealed class PendingModuleActivations(string moduleRoot)
     /// The current report. Recomputed per call — the state changes underneath a running process
     /// (that is the whole point), so a cached answer would be wrong exactly when it matters.
     /// </summary>
-    public ModuleActivationReport Read() => Read(
+    public ModuleActivationReport Read() => Read(CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read()"/> from a pooled leaf: <paramref name="cancellationToken"/> is the pool's,
+    /// handed to the volume walk (<c>ReadDisk</c>), which checks it before each listing and between
+    /// its enumerations. A cancel surfaces as <see cref="OperationCanceledException"/>, never as an
+    /// undetermined report — the read did not fail, the process is stopping.
+    /// </summary>
+    /// <param name="cancellationToken">The pool's token. Required: a pooled caller cannot drop it by
+    /// omission.</param>
+    public ModuleActivationReport Read(CancellationToken cancellationToken) => Read(
         ModuleActivationStatus.LoadedAssemblyNames(),
-        WithCurrentModuleGenerations(ModuleActivationStatus.LoadedModuleGenerations()));
+        WithCurrentModuleGenerations(ModuleActivationStatus.LoadedModuleGenerations()),
+        cancellationToken);
 
     /// <summary>
     /// The mesh's module registry, when this reader runs inside a mesh (policy
@@ -1043,8 +1054,19 @@ public sealed class PendingModuleActivations(string moduleRoot)
     public ModuleActivationReport Read(
         IReadOnlySet<string> loadedAssemblyNames,
         IReadOnlyDictionary<string, string> loadedModuleGenerations)
+        => Read(loadedAssemblyNames, loadedModuleGenerations, CancellationToken.None);
+
+    /// <summary>The testable form with the pool's token handed to the volume walk.</summary>
+    /// <param name="loadedAssemblyNames">Assembly SIMPLE names loaded in this process.</param>
+    /// <param name="loadedModuleGenerations">Module simple name → the generation directory leaf it
+    /// was loaded from here.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    public ModuleActivationReport Read(
+        IReadOnlySet<string> loadedAssemblyNames,
+        IReadOnlyDictionary<string, string> loadedModuleGenerations,
+        CancellationToken cancellationToken)
     {
-        var disk = ReadDisk();
+        var disk = ReadDisk(cancellationToken);
         if (disk.OpenFailure is { } exception)
             return new ModuleActivationReport(
                 [], $"the activation sidecar under '{ModuleRootPath}' could not be opened "
