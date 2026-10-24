@@ -241,7 +241,9 @@ public static class FaultClassifier
         if (IsScopeTeardown(exception, context))
             return new(FaultKind.ScopeTeardown, null, isCancellation, false, branches);
         if (IsHubTeardown(exception, context))
-            return new(FaultKind.HubTeardown, null, isCancellation, false, branches);
+            return new(FaultKind.HubTeardown, null, isCancellation,
+                // Recognised by a BANNER only (no typed teardown frame anywhere): a verdict by message.
+                ByMessage: !ExceptionChain.Contains(exception, IsTypedHubTeardownFrame), branches);
 
         return Combine(branches, isCancellation);
     }
@@ -253,7 +255,28 @@ public static class FaultClassifier
     /// </summary>
     /// <param name="exception">The fault; may be null.</param>
     public static bool IsDisposedContainer(Exception? exception)
-        => ExceptionChain.Contains(exception, IsDisposedContainerFrame);
+        => ExceptionChain.Contains(exception, IsDisposedContainerFrameCore);
+
+    /// <summary>
+    /// True when EVERY branch of <paramref name="exception"/>'s graph — through wrappers and nested
+    /// aggregates, bounded and cycle-safe — reaches the disposed-<c>LifetimeScope</c> frame. The
+    /// teardown suppressors' rule: a wrapper over a disposed scope BESIDE a real defect carries the
+    /// defect, so it is not benign (where <see cref="IsDisposedContainer"/>, which asks whether the
+    /// graph CONTAINS one, says yes).
+    /// </summary>
+    /// <param name="exception">The fault; may be null.</param>
+    public static bool EveryBranchIsDisposedContainer(Exception? exception)
+        => EveryBranchReaches(exception, IsDisposedContainerFrameCore);
+
+    /// <summary>
+    /// True when <paramref name="exception"/> ITSELF is the disposed-<c>LifetimeScope</c>
+    /// <see cref="ObjectDisposedException"/> — no walk. For a first-chance handler, which must never
+    /// admit an <see cref="AggregateException"/> whose message it would then format (exponential in
+    /// the depth of a shared nested graph).
+    /// </summary>
+    /// <param name="exception">One frame; may be null.</param>
+    public static bool IsDisposedContainerFrame(Exception? exception)
+        => exception is not null && IsDisposedContainerFrameCore(exception);
 
     /// <summary>
     /// True when <paramref name="exception"/> carries a <see cref="HubDisposingException"/> raised for
@@ -271,7 +294,7 @@ public static class FaultClassifier
     /// <param name="exception">One frame.</param>
     public static bool IsNetworkFault(Exception exception) => exception is SocketException;
 
-    private static bool IsDisposedContainerFrame(Exception e) =>
+    private static bool IsDisposedContainerFrameCore(Exception e) =>
         e is ObjectDisposedException
         && ((e.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) ?? false)
             || (e.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) ?? false));
@@ -287,10 +310,13 @@ public static class FaultClassifier
             : ExceptionChain.Contains(exception, IsHubTeardownFrame);
 
     private static bool IsHubTeardownFrame(Exception e) =>
+        IsTypedHubTeardownFrame(e) || IsHubShutdownBanner(e);
+
+    /// <summary>A hub teardown stated by a TYPE (or a typed delivery-failure kind), never by text.</summary>
+    private static bool IsTypedHubTeardownFrame(Exception e) =>
         e is HubDisposingException or HubDisposedBeforeResponseException
         || e is DeliveryFailureException { Failure.ErrorType: ErrorType.ShuttingDown }
-        || (e is IClassifiedFault classified && classified.ClassifiedKind == FaultKind.HubTeardown)
-        || IsHubShutdownBanner(e);
+        || (e is IClassifiedFault classified && classified.ClassifiedKind == FaultKind.HubTeardown);
 
     /// <summary>"Hub X is shutting down" / "Host is shutting down" — but never the DATABASE's
     /// "the database system is shutting down", which is a store fault.</summary>
@@ -443,6 +469,11 @@ public static class FaultClassifier
         }
     }
 
+    private static bool IsTransientDriverCause(Exception inner)
+        => inner is TimeoutException or SocketException or IOException
+           || IsUnreachableSqlState(inner)
+           || inner is DbException { IsTransient: true };
+
     private static bool IsUnreachableSqlState(Exception e)
         => e is DbException { SqlState: { } sqlState } && StoreUnreachableSqlStates.Contains(sqlState);
 
@@ -467,7 +498,13 @@ public static class FaultClassifier
                     static inner => inner is TimeoutException or SocketException or IOException
                                     || IsUnreachableSqlState(inner)))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
-            if (db.IsTransient)
+            // The provider's flag speaks for the driver frame — but not over NESTED branch evidence:
+            // a flagged driver over an aggregate in which one branch is a permanent defect (a socket
+            // reset beside a JsonException) carries that defect, and retrying it trades a latch for
+            // a loop. With an aggregate below, every branch must be a transient frame.
+            if (db.IsTransient
+                && (!ExceptionChain.Contains<AggregateException>(db.InnerException)
+                    || EveryBranchReaches(db.InnerException, IsTransientDriverCause)))
                 return Leaf(FaultKind.Transient, FaultLayer.StoreContention);
             // Nothing typed decided: the driver's TEXT may still name an unreachable store (the same
             // banner a remote reader matches once the type is flattened away) — a verdict by message,
@@ -486,8 +523,11 @@ public static class FaultClassifier
             return Leaf(FaultKind.Transient, FaultLayer.Network);
 
         // Reached only when the teardown pre-check did not claim it, i.e. it is ANOTHER hub going away.
-        if (IsHubTeardownFrame(e))
+        // A typed teardown is typed transport evidence; the banner alone is a verdict by message.
+        if (IsTypedHubTeardownFrame(e))
             return Leaf(FaultKind.Transient, FaultLayer.Transport);
+        if (IsHubShutdownBanner(e))
+            return Leaf(FaultKind.Transient, FaultLayer.Transport, byMessage: true);
 
         // Orleans.Core is not (and must not be) referenced here: match the grain reject by name.
         if (e.GetType().Name == "OrleansMessageRejectionException")

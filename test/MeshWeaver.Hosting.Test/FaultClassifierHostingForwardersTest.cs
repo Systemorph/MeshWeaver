@@ -59,6 +59,29 @@ public class FaultClassifierHostingForwardersTest
             .Should().BeFalse();
     }
 
+    /// <summary>
+    /// 🚨 A standing watch must not re-open on a provider-flagged driver fault whose nested aggregate
+    /// carries a permanent content defect beside the socket reset: the flag speaks for the driver,
+    /// not for the defect, and re-opening trades a latch for a loop.
+    /// </summary>
+    [Fact]
+    public void AStandingWatch_DoesNotReopen_OnAFlaggedDriverFaultCarryingADefect()
+    {
+        StandingWatchRecovery.IsTransient(new FlaggedDbException("read failed",
+                new AggregateException(new SocketException((int)SocketError.ConnectionReset),
+                    new System.Text.Json.JsonException("bad content"))))
+            .Should().BeFalse();
+        StandingWatchRecovery.IsTransient(new FlaggedDbException("read failed",
+                new AggregateException(new SocketException((int)SocketError.ConnectionReset))))
+            .Should().BeTrue("a flagged driver over transport faults alone is still a store fault");
+    }
+
     private sealed class FakeDbException(string message, Exception? inner = null)
         : System.Data.Common.DbException(message, inner);
+
+    private sealed class FlaggedDbException(string message, Exception? inner = null)
+        : System.Data.Common.DbException(message, inner)
+    {
+        public override bool IsTransient => true;
+    }
 }

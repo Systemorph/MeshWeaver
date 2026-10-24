@@ -39,5 +39,7 @@ internal static class OrleansShutdownRaceSuppressor
     }
 
     private static bool IsDisposedLifetimeScope(Exception ex) =>
-        MeshWeaver.Messaging.FaultClassifier.IsDisposedContainer(ex);
+        // Every branch, through wrappers — a wrapper over a disposed scope beside a real defect is not
+        // the shutdown race.
+        MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex);
 }

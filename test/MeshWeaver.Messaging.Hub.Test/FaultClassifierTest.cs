@@ -335,4 +335,89 @@ public class FaultClassifierTest
         FaultClassifier.Classify(new TimeoutException("slow", new InvalidOperationException("x")))
             .Kind.Should().Be(FaultKind.Timeout);
     }
+
+    /// <summary>
+    /// 🚨 A provider-flagged driver frame over a socket fault BESIDE a permanent defect is not
+    /// contention: the flag speaks for the driver, the nested aggregate says one branch is a real
+    /// defect, and re-opening a standing watch on it trades a latch for a loop.
+    /// </summary>
+    [Fact]
+    public void ATransientDriverException_OverADefectBesideASocketFault_IsNotRetryable()
+    {
+        var verdict = FaultClassifier.Classify(new FakeDbException("read failed",
+            new AggregateException(new SocketException((int)SocketError.ConnectionReset),
+                new System.Text.Json.JsonException("bad content")), transient: true));
+
+        verdict.Kind.Should().Be(FaultKind.Fault);
+        verdict.EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.Network)
+            .Should().BeFalse();
+
+        // …while the same flag over an aggregate of transport faults alone is still a store fault.
+        FaultClassifier.Classify(new FakeDbException("read failed",
+                new AggregateException(new SocketException((int)SocketError.ConnectionReset), new IOException("reset")),
+                transient: true))
+            .EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.StoreContention).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A hub teardown recognised only by its "is shutting down" BANNER is a verdict by message —
+    /// with or without <see cref="TeardownContext.OwnAddress"/> — so a typed forwarder can refuse it.
+    /// A typed teardown (<see cref="HubDisposingException"/>) is not relabelled.
+    /// </summary>
+    [Fact]
+    public void ABannerOnlyHubTeardown_IsAVerdictByMessage()
+    {
+        var banner = new InvalidOperationException("Hub node/a is shutting down");
+
+        var plain = FaultClassifier.Classify(banner);
+        plain.Kind.Should().Be(FaultKind.HubTeardown);
+        plain.ByMessage.Should().BeTrue();
+
+        var elsewhere = FaultClassifier.Classify(banner, new TeardownContext(OwnAddress: new Address("node", "b")));
+        elsewhere.Kind.Should().Be(FaultKind.Transient);
+        elsewhere.Layer.Should().Be(FaultLayer.Transport);
+        elsewhere.ByMessage.Should().BeTrue();
+        elsewhere.EveryBranchTypedTransientIn(FaultLayer.Transport).Should().BeFalse();
+
+        var typed = new HubDisposingException(new Address("node", "a"), "stream");
+        FaultClassifier.Classify(typed).ByMessage.Should().BeFalse();
+        FaultClassifier.Classify(typed, new TeardownContext(OwnAddress: new Address("node", "b")))
+            .EveryBranchTypedTransientIn(FaultLayer.Transport).Should().BeTrue();
+    }
+
+    private static ObjectDisposedException DisposedScope() => new("LifetimeScope",
+        "Instances cannot be resolved and nested lifetimes cannot be created from this LifetimeScope");
+
+    /// <summary>
+    /// 🚨 The teardown suppressors observe an unobserved fault only when EVERY branch is the
+    /// disposed-scope shape — through wrappers too. A wrapper over a disposed scope BESIDE a real
+    /// defect carries the defect, so it is not benign (the graph-wide "contains" answer says it is).
+    /// </summary>
+    [Fact]
+    public void EveryBranchIsDisposedContainer_RefusesAWrapperOverAMixedAggregate()
+    {
+        var mixed = new InvalidOperationException("wrapper",
+            new AggregateException(DisposedScope(), new InvalidOperationException("configuration defect")));
+
+        FaultClassifier.IsDisposedContainer(mixed).Should().BeTrue("the graph CONTAINS the scope fault");
+        FaultClassifier.EveryBranchIsDisposedContainer(mixed).Should().BeFalse();
+        FaultClassifier.EveryBranchIsDisposedContainer(new InvalidOperationException("wrapper",
+            new AggregateException(DisposedScope(), DisposedScope()))).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 The first-chance capturer names only the disposed-scope FRAME itself: an aggregate that
+    /// merely contains one is not admitted, because formatting a nested aggregate's message is
+    /// exponential in its depth.
+    /// </summary>
+    [Fact]
+    public void IsDisposedContainerFrame_AdmitsTheFrameOnly()
+    {
+        Exception current = DisposedScope();
+        for (var level = 0; level < 8; level++)
+            current = new AggregateException(current, current);
+
+        FaultClassifier.IsDisposedContainerFrame(DisposedScope()).Should().BeTrue();
+        FaultClassifier.IsDisposedContainerFrame(current).Should().BeFalse();
+    }
 }

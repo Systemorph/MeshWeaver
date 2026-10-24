@@ -71,8 +71,9 @@ internal static class TestTeardownExceptionSuppressor
         var msg = ex.Message ?? string.Empty;
 
         // (1) disposed Autofac LifetimeScope during in-flight (de)serialization — the platform's one
-        // definition of that fact (FaultClassifier), not a third copy of its text match.
-        if (MeshWeaver.Messaging.FaultClassifier.IsDisposedContainer(ex))
+        // definition of that fact (FaultClassifier), not a third copy of its text match. EVERY branch,
+        // through wrappers: a wrapper over a disposed scope beside a real defect is not benign.
+        if (MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex))
             return true;
 
         // (2) xUnit "no currently active test" — a continuation ran after teardown
