@@ -271,6 +271,9 @@ public static class AssemblyCacheGenerations
         var unrecognised = 0;
         var unrecognisedBytes = 0L;
 
+        // Before the first round trip, too: a token cancelled before entry starts no share IO
+        // (review on #7115).
+        cancellationToken.ThrowIfCancellationRequested();
         var root = new DirectoryInfo(rootDirectory);
         if (!root.Exists)
             return (ImmutableList<AssemblyCacheGeneration>.Empty, 0, 0);
@@ -318,6 +321,7 @@ public static class AssemblyCacheGenerations
     /// </summary>
     public static ImmutableList<AssemblyCacheClaim> ReadClaims(string rootDirectory, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var claimsRoot = new DirectoryInfo(Path.Combine(rootDirectory, ClaimsDirectoryName));
         if (!claimsRoot.Exists)
             return ImmutableList<AssemblyCacheClaim>.Empty;
