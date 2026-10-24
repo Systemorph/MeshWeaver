@@ -9,6 +9,25 @@
 Worker Thread: Total: 55 Running: 55 Idle: 0 MaxLimit: 32767 MinLimit: 4
 Work Request in Queue: 812
 @@MW-DUMP end	threadpool	0	100
+@@MW-DUMP section	gcheapstat	gcheapstat
+Heap             Gen0         Gen1         Gen2          LOH          POH          FRZ
+Heap0       112,345,600   40,960,000 6,912,345,678  987,654,321   1,048,576            0
+Total       112,345,600   40,960,000 6,912,345,678  987,654,321   1,048,576            0
+@@MW-DUMP end	gcheapstat	0	260
+@@MW-DUMP section	dumpheap	dumpheap -stat
+Loading core dump: /dumps/p/coredump.1.1791621003 ...
+Current symbol store settings:
+-> Server: https://msdl.microsoft.com/download/symbols/ Timeout: 4 RetryCount: 3
+Statistics:
+          MT     Count     TotalSize Class Name
+7f12a0001000         1            24 System.Threading.Lock
+7f12a0002000    12,000       960,000 MeshWeaver.Messaging.MessageHub
+7f12a0003000    48,000     2,304,000 System.Reactive.Subjects.ReplaySubject`1[[System.Object, System.Private.CoreLib]]
+55f4045b5fd0       310   981,000,000 Free
+7f12a0004000 9,000,000 1,152,000,000 System.Byte[]
+7f12a0005000 40,000,000 3,200,000,000 System.String
+Total 49,060,311 objects, 5,336,264,024 bytes
+@@MW-DUMP end	dumpheap	0	900
 @@MW-DUMP section	syncblk	syncblk
 Index         SyncBlock MonitorHeld Recursion Owning Thread Info          SyncBlock Owner
     7 00007F12A0001234            3         1 00007F12A0005678 2c  12   00007f12b0009abc System.Object
