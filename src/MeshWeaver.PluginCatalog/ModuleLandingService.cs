@@ -215,11 +215,13 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="nowUtc">The reference "now" the age check compares against. Defaults to
     /// <see cref="DateTime.UtcNow"/>; a test seam so the race and its fix are provable without a
     /// real sleep.</param>
-    /// <param name="cancellationToken">Observed BETWEEN directories — the unit of atomic removal.
-    /// A cancelled pass stops before its next rename and returns what it removed so far; whatever
-    /// is left (an intact orphan, or a <c>.trash-*</c> whose delete did not finish) is a later
-    /// pass's job by construction. This is the pool's token when the pass runs through
-    /// <c>IIoPool</c>, so a mesh teardown cancels the sweep instead of waiting on it.</param>
+    /// <param name="cancellationToken">Observed BETWEEN directories — the unit of atomic removal —
+    /// and between landing records. A cancelled pass stops before its next rename, records one
+    /// <c>pass outcome — INTERRUPTED</c> line carrying what it removed so far, and throws
+    /// <see cref="OperationCanceledException"/>; whatever is left (an intact orphan, or a
+    /// <c>.trash-*</c> whose delete did not finish) is a later pass's job by construction. This is
+    /// the pool's token when the pass runs through <c>IIoPool</c>, so a mesh teardown cancels the
+    /// sweep instead of waiting on it.</param>
     /// <returns>How many directories were removed — where "removed" means gone from the
     /// <c>modules/</c> namespace (a rename into <c>.trash-*</c> counts even when the final delete
     /// is finished by a later pass).</returns>
@@ -241,6 +243,8 @@ public sealed class ModuleLandingService : IDisposable
         if (!Directory.Exists(modulesRoot))
             return 0;
         var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
+        // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
+        var ledger = new PassLedger(GcPassName, logger);
         var readFaults = 0;
         void OnReadFault(string msg)
         {
@@ -292,6 +296,34 @@ public sealed class ModuleLandingService : IDisposable
             onNotice: msg => logger?.LogInformation("Modules GC: {Message}", msg));
         foreach (var generation in ModuleSetStore.ReferencedGenerations(setIndex))
             referenced.Add(generation);
+        // The pass's counters, for its one outcome line (#6991) — declared before the first step
+        // that can be interrupted, so an INTERRUPTED outcome carries the same denominator a
+        // finished pass does.
+        var prunedSets = 0;
+        var pruneProblems = 0;
+        var retired = 0;
+        var removed = 0;
+        var scanned = 0;
+        var keptReferenced = 0;
+        var keptOther = 0;
+        var keptYoung = 0;
+        var keptInUse = 0;
+        var skippedUnreliable = 0;
+        var deleteUnfinished = 0;
+        void Outcome(string verdict) => ledger.Record(verdict,
+            ": removed {Removed} of {Scanned} directory(ies) under {ModulesRoot}; "
+            + "kept {Referenced} referenced generation(s), {Other} non-generation director(ies) (metadata such as sets/, "
+            + "unknown names — never collected), {Young} younger than {MinAge}, {InUse} in use; "
+            + "{SkippedUnreliable} unreferenced generation(s) NOT deleted because {Faults} reference file(s) "
+            + "could not be read; {Unfinished} delete(s) left for a later pass; retired {Sets} module set "
+            + "record(s) ({PruneProblems} could not be read or removed) and {Records} landing record file(s)",
+            removed, scanned, modulesRoot, keptReferenced, keptOther, keptYoung, minAge ?? DefaultGarbageMinAge,
+            keptInUse, skippedUnreliable, readFaults, deleteUnfinished, prunedSets, pruneProblems, retired);
+        // 🚨 Between directories, never mid-removal: a rename is atomic, and a .trash-* whose delete
+        // was cut short is exactly the state a later pass already finishes (#2509). The token is the
+        // IIoPool's (#2684) — a teardown drain must not wait out a slow unlink.
+        ledger.OnInterrupted = () => Outcome(PassOutcome.Interrupted);
+        ledger.Step(cancellationToken);
         // Superseded set records are housekeeping like the rest of this pass — and only ever below
         // the CURRENT set, so a record whose generations are still in the reference set above is
         // never the one removed. Skipped entirely when anything was unreadable, for the same
@@ -299,8 +331,6 @@ public sealed class ModuleLandingService : IDisposable
         // #6991: the per-record problems of BOTH prune calls below are itemized at Information and
         // COUNTED into the pass's one Warning outcome line — N refused records never become N
         // shipped lines, and never a "0 could not be read or removed" either.
-        var prunedSets = 0;
-        var pruneProblems = 0;
         void OnPruneProblem(string msg)
         {
             pruneProblems++;
@@ -334,13 +364,11 @@ public sealed class ModuleLandingService : IDisposable
         // (ModuleActivationSidecar.PruneLandingRecords). Behind the same fail-closed counter and
         // the same grace window as the generation deletes: a record younger than the window may be
         // a landing on another replica, and with anything unreadable nothing is retired.
-        var retired = 0;
         if (referencesReliable)
         {
             foreach (var moduleName in ModuleActivationSidecar.ModuleNamesWithLandingRecords(baseDirectory))
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
+                ledger.Step(cancellationToken);
                 var storedEntry = stored.For(moduleName);
                 retired += ModuleActivationSidecar.PruneLandingRecords(
                     baseDirectory, moduleName, storedEntry,
@@ -353,29 +381,10 @@ public sealed class ModuleLandingService : IDisposable
                     "Modules GC: retired {Count} landing record file(s) the derived activation no "
                     + "longer needs", retired);
         }
-        var removed = 0;
-        // The pass's denominator, for its one outcome line (#6991).
-        var scanned = 0;
-        var keptReferenced = 0;
-        var keptOther = 0;
-        var keptYoung = 0;
-        var keptInUse = 0;
-        var skippedUnreliable = 0;
-        var deleteUnfinished = 0;
-        var cancelled = false;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
-            // 🚨 Between directories, never mid-removal: a rename is atomic, and a .trash-* whose
-            // delete was cut short is exactly the state a later pass already finishes (#2509). The
-            // token is the IIoPool's (#2684) — a teardown drain must not wait out a slow unlink.
-            if (cancellationToken.IsCancellationRequested)
-            {
-                cancelled = true;
-                logger?.LogInformation(
-                    "Modules GC: cancelled after removing {Removed} directory(ies) — the rest is a "
-                    + "later pass's job.", removed);
-                break;
-            }
+            // Between directories, never mid-removal (see the step boundary above).
+            ledger.Step(cancellationToken);
             scanned++;
             var leaf = Path.GetFileName(dir);
             var isTrash = leaf.StartsWith(".trash-", StringComparison.OrdinalIgnoreCase);
@@ -468,16 +477,7 @@ public sealed class ModuleLandingService : IDisposable
         // and without this line nobody could tell whether the pass ran, what it removed, or that it
         // refused. The pass runs once per pod start (ModuleGenerationsGcHostedService), so this is
         // one line per replica boot; the per-directory "removed" lines above stay Information.
-        logger?.LogWarning(
-            "Modules GC: pass outcome — {Verdict}: removed {Removed} of {Scanned} directory(ies) under {ModulesRoot}; "
-            + "kept {Referenced} referenced generation(s), {Other} non-generation director(ies) (metadata such as sets/, "
-            + "unknown names — never collected), {Young} younger than {MinAge}, {InUse} in use; "
-            + "{SkippedUnreliable} unreferenced generation(s) NOT deleted because {Faults} reference file(s) "
-            + "could not be read; {Unfinished} delete(s) left for a later pass; retired {Sets} module set "
-            + "record(s) ({PruneProblems} could not be read or removed) and {Records} landing record file(s)",
-            cancelled ? "CANCELLED" : readFaults > 0 ? "FAILED CLOSED" : "completed",
-            removed, scanned, modulesRoot, keptReferenced, keptOther, keptYoung, minAge ?? DefaultGarbageMinAge,
-            keptInUse, skippedUnreliable, readFaults, deleteUnfinished, prunedSets, pruneProblems, retired);
+        Outcome(readFaults > 0 ? GcPassOutcome.FailedClosed : PassOutcome.Collected);
         return removed;
     }
 
@@ -489,6 +489,9 @@ public sealed class ModuleLandingService : IDisposable
     // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
     // one file per module (ModuleActivationSidecar), and one immutable record per landing within
     // it (#4026), so concurrent writers never decide through a path they both write.
+    /// <summary>The modules GC's name on its one <c>pass outcome</c> line (<see cref="PassLedger"/>).</summary>
+    public const string GcPassName = "Modules GC";
+
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
