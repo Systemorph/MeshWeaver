@@ -1,0 +1,274 @@
+{{- $b := include "memex.buildHosts" . | fromYaml }}
+{{- if $b.enabled }}
+# The standing build hosts (Doc/Architecture/BuildHosts; MeshWeaver.Plugins Hosting/StandingBuildHosts):
+# the runner script and the gate-host composer (verbatim from deploy/helm/files, which
+# deploy/aks/scripts/test-build-hosts.sh pins byte-identical to .github/scripts), one ServiceAccount
+# and NetworkPolicy shared by every channel, and per channel a Deployment + ScaledObject.
+---
+apiVersion: "v1"
+kind: "ConfigMap"
+metadata:
+  name: "memex-build-host-scripts"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+data:
+  build-run.py: |
+{{ .Files.Get "files/build-run.py" | indent 4 }}
+  compose-gate-host.sh: |
+{{ .Files.Get "files/compose-gate-host.sh" | indent 4 }}
+---
+# NO Kubernetes right, NO cluster or subscription credential, and no token mounted at all: the host
+# reaches the build API with its worker token, GitHub with the run's one-hour installation token,
+# and the registries with the pull secret — nothing else.
+apiVersion: "v1"
+kind: "ServiceAccount"
+metadata:
+  name: "build-host"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+automountServiceAccountToken: false
+{{- if $b.networkPolicy.enabled }}
+---
+# PR code is untrusted code. A build host serves nothing (no ingress) and may reach DNS, the build
+# API's pods, and 80/443 OUTSIDE the cluster-private ranges — never another workload in the cluster.
+apiVersion: "networking.k8s.io/v1"
+kind: "NetworkPolicy"
+metadata:
+  name: "build-host"
+  labels:
+    app.kubernetes.io/name: "{{ .Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ .Release.Name }}"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: "build-host"
+      app.kubernetes.io/instance: "{{ .Release.Name }}"
+  policyTypes: ["Ingress", "Egress"]
+  ingress: []
+  egress:
+    - ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- toYaml $b.networkPolicy.apiPodSelector | nindent 14 }}
+      ports:
+        - { protocol: TCP, port: {{ $b.networkPolicy.apiPort }} }
+    - to:
+        - ipBlock:
+            cidr: "0.0.0.0/0"
+            {{- with $b.networkPolicy.privateCidrs }}
+            except:
+              {{- toYaml . | nindent 14 }}
+            {{- end }}
+      ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 80 }
+{{- end }}
+{{- range $c := $b.channels }}
+---
+# build-{{ $c.name }}: the platform set {{ $c.platformVersion }}. Rolled by core's CD writing the two
+# digests into the record (never `kubectl set image`): a NEW replica stages the set before it is
+# Ready (readiness = staged), the old one stops claiming, finishes its run, and exits.
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "build-host-{{ $c.name }}"
+  labels:
+    app.kubernetes.io/name: "{{ $.Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ $.Release.Name }}"
+    hosting.meshweaver.io/channel: "{{ $c.name }}"
+  annotations:
+    hosting.meshweaver.io/platform-version: "{{ $c.platformVersion }}"
+spec:
+  # No `replicas`: the ScaledObject below owns the count (0 when nothing is claimable or running).
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: "build-host"
+      app.kubernetes.io/instance: "{{ $.Release.Name }}"
+      hosting.meshweaver.io/channel: "{{ $c.name }}"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: "{{ $.Chart.Name }}"
+        app.kubernetes.io/component: "build-host"
+        app.kubernetes.io/instance: "{{ $.Release.Name }}"
+        hosting.meshweaver.io/channel: "{{ $c.name }}"
+      annotations:
+        checksum/scripts: {{ printf "%s%s" ($.Files.Get "files/build-run.py") ($.Files.Get "files/compose-gate-host.sh") | sha256sum | quote }}
+    spec:
+      serviceAccountName: "build-host"
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ $b.grace }}
+      {{- with $b.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $b.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if $b.imagePullSecret }}
+      imagePullSecrets:
+        - name: {{ $b.imagePullSecret | quote }}
+      {{- end }}
+      # The composition of Build service §1.4, 1:1 and without a Docker daemon: the tester's /app and
+      # the portal's /app + dotnet copied out of the set's two images (by DIGEST), then composed into
+      # the gate host by compose-gate-host.sh in the runner before the first claim.
+      initContainers:
+        - name: "tester"
+          image: {{ $c.tester | quote }}
+          imagePullPolicy: "IfNotPresent"
+          command: ["/bin/sh", "-c", "cp -a /app/. /tester/"]
+          volumeMounts:
+            - { name: "tester", mountPath: "/tester" }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+        - name: "portal"
+          image: {{ $c.portal | quote }}
+          imagePullPolicy: "IfNotPresent"
+          command: ["/bin/sh", "-c", "mkdir -p /portal/app /portal/dotnet && cp -a /app/. /portal/app/ && cp -a /usr/share/dotnet/. /portal/dotnet/"]
+          volumeMounts:
+            - { name: "portal", mountPath: "/portal" }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+        - name: "oras"
+          image: {{ $b.orasImage | quote }}
+          imagePullPolicy: "IfNotPresent"
+          command: ["/bin/sh", "-c", "cp /bin/oras /tools/oras"]
+          volumeMounts:
+            - { name: "tools", mountPath: "/tools" }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+      containers:
+        - name: "build"
+          image: {{ $b.runnerImage | quote }}
+          imagePullPolicy: "IfNotPresent"
+          # exec: build-run.py is PID 1's direct child replacement, so SIGTERM reaches it and the
+          # replica stops claiming and finishes the run in hand.
+          command: ["/bin/bash", "-c", "set -euo pipefail; bash /scripts/compose-gate-host.sh /portal/app /tester /host; exec python3 /scripts/build-run.py --host"]
+          env:
+            - { name: BUILD_API, value: {{ $b.apiUrl | quote }} }
+            - name: BUILD_TOKEN
+              valueFrom: { secretKeyRef: { name: {{ $b.tokenSecret | quote }}, key: {{ $b.tokenKey | quote }} } }
+            - { name: MW_BUILD_CHANNEL, value: {{ $c.name | quote }} }
+            - { name: MW_BUILD_PLATFORM_VERSION, value: {{ $c.platformVersion | quote }} }
+            - { name: MW_BUILD_TESTER_DIGEST, value: {{ $c.testerDigest | quote }} }
+            - { name: MW_BUILD_PORTAL_DIGEST, value: {{ $c.portalDigest | quote }} }
+            - { name: MW_BUILD_IDENTITY_FILE, value: "/portal/app/meshweaver-framework.identity" }
+            - name: MW_BUILD_HOST
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - { name: MW_BUILD_CACHE, value: "/cache" }
+            - { name: MW_BUILD_WORK, value: "/work" }
+            - { name: MW_BUILD_READY_FILE, value: "/tmp/build-host-ready" }
+            - { name: MW_BUILD_GATE_HOST, value: "/host" }
+            - { name: MW_BUILD_PORTAL_DOTNET, value: "/portal/dotnet/dotnet" }
+            - { name: MeshWeaverRefs, value: "/portal/app" }
+            - { name: NUGET_PACKAGES, value: "/cache/nuget" }
+            - { name: ORAS, value: "/tools/oras" }
+            - { name: MW_PLUGINS_REGISTRY, value: {{ $b.pluginsRegistry | quote }} }
+            - { name: MW_PLUGINS_SOURCE, value: {{ $b.pluginsSource | quote }} }
+            {{- if $b.pluginsPullSecret }}
+            - { name: MW_PLUGINS_REGISTRY_CONFIG, value: "/run/registry/config.json" }
+            {{- end }}
+            {{- if $b.postgres.enabled }}
+            - { name: MW_BUILD_POSTGRES, value: "Host=localhost;Username=postgres;Password=build" }
+            {{- end }}
+          readinessProbe:
+            exec: { command: ["/bin/sh", "-c", "test -f /tmp/build-host-ready"] }
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml $b.resources | nindent 12 }}
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+          volumeMounts:
+            - { name: "scripts", mountPath: "/scripts", readOnly: true }
+            - { name: "tester", mountPath: "/tester", readOnly: true }
+            - { name: "portal", mountPath: "/portal", readOnly: true }
+            - { name: "host", mountPath: "/host" }
+            - { name: "tools", mountPath: "/tools", readOnly: true }
+            - { name: "work", mountPath: "/work" }
+            - { name: "cache", mountPath: "/cache" }
+            {{- if $b.pluginsPullSecret }}
+            - { name: "registry-config", mountPath: "/run/registry", readOnly: true }
+            {{- end }}
+        {{- if $b.postgres.enabled }}
+        - name: "postgres"
+          image: {{ $b.postgres.image | quote }}
+          imagePullPolicy: "IfNotPresent"
+          env:
+            - { name: POSTGRES_PASSWORD, value: "build" }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { memory: 4Gi }
+        {{- end }}
+      volumes:
+        - name: "scripts"
+          configMap: { name: "memex-build-host-scripts", defaultMode: 0555 }
+        - { name: "tester", emptyDir: {} }
+        - { name: "portal", emptyDir: {} }
+        - { name: "host", emptyDir: {} }
+        - { name: "tools", emptyDir: {} }
+        - name: "work"
+          emptyDir: { sizeLimit: {{ $b.workSizeLimit | quote }} }
+        - name: "cache"
+          persistentVolumeClaim: { claimName: {{ $b.cacheClaim | quote }} }
+        {{- if $b.pluginsPullSecret }}
+        - name: "registry-config"
+          secret:
+            secretName: {{ $b.pluginsPullSecret | quote }}
+            items: [{ key: ".dockerconfigjson", path: "config.json" }]
+        {{- end }}
+---
+# Queue depth → replicas. Two metrics-api triggers on the build API's anonymous per-channel count
+# (`GET /queue?channel=<c>` → {channel, claimable, running}), combined as claimable + running
+# (KEDA scaling modifiers, KEDA ≥ 2.12): one replica per run in hand plus one per run waiting, so a
+# host is never scaled away while it holds a run and a waiting run never queues behind it. A 503
+# (queue unreadable) leaves the replica count where it is.
+apiVersion: "keda.sh/v1alpha1"
+kind: "ScaledObject"
+metadata:
+  name: "build-host-{{ $c.name }}-scaler"
+  labels:
+    app.kubernetes.io/name: "{{ $.Chart.Name }}"
+    app.kubernetes.io/component: "build-host"
+    app.kubernetes.io/instance: "{{ $.Release.Name }}"
+    hosting.meshweaver.io/channel: "{{ $c.name }}"
+spec:
+  scaleTargetRef:
+    name: "build-host-{{ $c.name }}"
+  minReplicaCount: 0
+  maxReplicaCount: {{ $c.maxReplicas }}
+  pollingInterval: {{ $b.pollingInterval }}
+  cooldownPeriod: {{ $b.cooldownPeriod }}
+  advanced:
+    scalingModifiers:
+      formula: "claimable + running"
+      target: "1"
+      activationTarget: "0"
+      metricType: "AverageValue"
+  triggers:
+    - type: metrics-api
+      name: "claimable"
+      metricType: AverageValue
+      metadata:
+        url: "{{ $b.apiUrl }}/queue?channel={{ $c.name }}"
+        valueLocation: "claimable"
+        targetValue: "1"
+    - type: metrics-api
+      name: "running"
+      metricType: AverageValue
+      metadata:
+        url: "{{ $b.apiUrl }}/queue?channel={{ $c.name }}"
+        valueLocation: "running"
+        targetValue: "1"
+{{- end }}
+{{- end }}

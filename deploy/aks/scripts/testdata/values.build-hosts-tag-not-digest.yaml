@@ -1,0 +1,12 @@
+# A build host whose tester is named by TAG, not digest — refused (a run must record ONE immutable set).
+buildHosts:
+  enabled: true
+  apiUrl: "http://memex-portal-service:8080/api/builds"
+  runnerImage: "cr.example.com/build-runner:1"
+  testerRepository: "cr.example.com/mw-plugin-test"
+  portalRepository: "cr.example.com/memex-portal-ai"
+  latest:
+    enabled: true
+    platformVersion: "3.1.10412"
+    testerDigest: "3.1.10412"
+    portalDigest: "sha256:2222222222222222222222222222222222222222222222222222222222222222"

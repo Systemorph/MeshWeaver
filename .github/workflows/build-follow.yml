@@ -1,0 +1,110 @@
+name: Build follow — stream a standing build host's stage log
+
+# ♻️ REUSABLE (workflow_call) — ONE job per stage that a repository's heavy leg has moved to a
+# standing build host (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §4.2; platform reference
+# Doc/Architecture/BuildHosts). The job computes NOTHING: it follows the stage log the operations
+# instance keeps for this run, prints it line by line (compiler errors and failed tests as
+# annotations on the PR), and exits with the STAGE's verdict — so the required context a repository
+# already has keeps its name while the work moves off the runner. Call it with the context's job
+# name and the stage it now waits on:
+#
+#   modules:
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
+#     permissions: { contents: read, id-token: write }
+#     with:
+#       api-url: ${{ vars.MW_BUILD_API }}        # https://<operations instance>/api/builds
+#       stage: modules
+#
+# 🚨 The CALLER must grant `id-token: write` (a reusable workflow can only narrow its caller's
+# grant; check-workflow-permission-pairing.py holds callers to it). The OIDC token IS the
+# credential: the endpoint verifies it against GitHub's JWKS and answers only for the repository and
+# sha its claims name. No secret is read here, so the lane runs identically on a fork's PR.
+#
+# 🛡️ NO SKIP-TRAPDOOR: no `continue-on-error:`, no input-shaped `if:`. A missing api-url is RED,
+# named; a timeout is RED; an unreadable endpoint is RED; only the stage's own `succeeded` is green
+# (build-follow.py, whose --self-test runs first and must pass).
+
+on:
+  workflow_call:
+    inputs:
+      api-url:
+        description: The operations instance's build API base, e.g. https://control.example.com/api/builds.
+        required: true
+        type: string
+      stage:
+        description: The stage to follow, as the repository's .github/build-stages.json names it (e.g. modules; build/modules is accepted). Its Check Run is build/<stage>.
+        required: true
+        type: string
+      repo:
+        description: The bare repository name the run is keyed by. Empty = this repository.
+        required: false
+        type: string
+        default: ''
+      sha:
+        description: >-
+          The commit the run is keyed by. Empty = GITHUB_SHA, which is what the OIDC token's `sha`
+          claim names (on pull_request: the merge commit) — the endpoint answers 403 for any other.
+        required: false
+        type: string
+        default: ''
+      channel:
+        description: The release channel whose host runs the stage (latest | stable).
+        required: false
+        type: string
+        default: latest
+      timeout-minutes:
+        description: >-
+          How long to wait for the stage's verdict before failing RED. At most 43: the job is
+          hard-cut at 45 minutes, and the follower must reach its own verdict first.
+        required: false
+        type: number
+        default: 40
+      audience:
+        description: The OIDC audience (the instance's Hosting:Builds:OidcAudience). Empty = the api-url's origin.
+        required: false
+        type: string
+        default: ''
+      scripts-ref:
+        description: The Systemorph/MeshWeaver ref build-follow.py is fetched at (the lane's own vintage).
+        required: false
+        type: string
+        default: main
+
+jobs:
+  follow:
+    name: ${{ inputs.stage }}
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write      # the run's OIDC token is the bearer the build API verifies
+    steps:
+      # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Fetch build-follow.py at the lane's scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — build-follow.py has no ref to be fetched at"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" ".github/scripts/build-follow.py" > "$RUNNER_TEMP/build-follow.py"
+          [ -s "$RUNNER_TEMP/build-follow.py" ] || { echo "::error::fetched an EMPTY build-follow.py at $SCRIPTS_REF"; exit 1; }
+      - name: The follower can say no (self-test)
+        run: python3 "$RUNNER_TEMP/build-follow.py" --self-test
+      - name: Follow ${{ inputs.stage }} on build-${{ inputs.channel }}
+        env:
+          API_URL: ${{ inputs.api-url }}
+          STAGE: ${{ inputs.stage }}
+          REPO: ${{ inputs.repo }}
+          SHA: ${{ inputs.sha }}
+          CHANNEL: ${{ inputs.channel }}
+          TIMEOUT: ${{ inputs.timeout-minutes }}
+          AUDIENCE: ${{ inputs.audience }}
+        run: |
+          set -euo pipefail
+          [ -n "${API_URL:-}" ] || { echo "::error::api-url is empty — set the caller's build API variable (e.g. vars.MW_BUILD_API); there is no host to follow"; exit 1; }
+          python3 "$RUNNER_TEMP/build-follow.py" --api-url "$API_URL" --stage "$STAGE" \
+            --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" --timeout-minutes "$TIMEOUT" --audience "$AUDIENCE"
