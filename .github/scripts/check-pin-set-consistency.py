@@ -134,6 +134,9 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
+
 REGISTRY_DEFAULT = "meshweaver"
 REGISTRY_HOST_RE = r"(?P<host>[a-z0-9]+)\.azurecr\.io"
 
@@ -462,29 +465,23 @@ def scan_local(root: str, gh_repo: str) -> RepoScan:
     return scan
 
 
-def gh_api(path: str, paginate: bool = False, jq: str | None = None) -> tuple[int, str, str]:
-    cmd = ["gh", "api", "-H", "X-GitHub-Api-Version: 2022-11-28", path]
-    if jq:
-        cmd += ["--jq", jq]
-    if paginate:
-        cmd.insert(2, "--paginate")
-    proc = subprocess.run(cmd, capture_output=True, text=True)
-    return proc.returncode, proc.stdout, proc.stderr
+# `gh api` GET → (rc, stdout, stderr). The name stays: lock-pinned-digests.py calls it as
+# `consistency.gh_api`.
+gh_api = ghrest.gh_cli
 
 
 def discover_repos() -> list[str]:
     """Every repository the App installation reaches — discovered, never committed."""
-    # 🚨 LET `gh` DO THE EXTRACTION. `gh api --paginate` emits one JSON DOCUMENT PER PAGE, so
-    # recovering the pages by splitting text is guesswork, and guesswork that loses a page loses a
-    # REPOSITORY — which then appears in the report neither as a failure nor as a measured zero.
-    rc, out, err = gh_api("/installation/repositories", paginate=True,
-                          jq=".repositories[].full_name")
+    # 🚨 LET `gh` DO THE EXTRACTION (ghrest.installation_repo_names: `--paginate --jq`). Paginated
+    # `gh api` emits one JSON DOCUMENT PER PAGE, so recovering the pages by splitting text is
+    # guesswork, and guesswork that loses a page loses a REPOSITORY — which then appears in the
+    # report neither as a failure nor as a measured zero.
+    rc, names, err = ghrest.installation_repo_names()
     if rc != 0:
         die("could not enumerate the App installation's repositories.",
             ["This needs an INSTALLATION token (GH_TOKEN from actions/create-github-app-token).",
              "Locally, pass --repos instead.",
              f"gh said: {err.strip()[:400]}"])
-    names = sorted({line.strip() for line in out.splitlines() if line.strip()})
     if not names:
         die("the App installation reaches ZERO repositories.",
             ["A sweep over an empty fleet reports 'every pin agrees' having checked nothing."])
@@ -591,11 +588,7 @@ def acr_tags(registry: str, acr_repo: str, digest: str, cache: dict) -> tuple[li
 # ── Reporting ──────────────────────────────────────────────────────────────────────────────────
 
 
-def die(headline: str, lines: list[str]) -> None:
-    print(f"::error::{headline}")
-    for line in lines:
-        print(f"  {line}")
-    sys.exit(1)
+die = ghrest.die
 
 
 def emit(text: str) -> None:
