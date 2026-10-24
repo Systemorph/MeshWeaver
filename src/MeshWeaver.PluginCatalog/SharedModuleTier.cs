@@ -119,7 +119,20 @@ public static class SharedModuleTier
     /// fail a resolution.
     /// </summary>
     public static string? SealedDirectory(string? sharedRoot, string? leaf)
+        => SealedDirectoryCore(sharedRoot, leaf, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="SealedDirectory"/> from a pooled leaf: <paramref name="cancellationToken"/> is checked
+    /// before the seal is read and before each listed file is probed, one share round trip each, and a
+    /// cancel propagates as <see cref="OperationCanceledException"/> rather than answering null.
+    /// </summary>
+    internal static string? SealedDirectoryObservingToken(
+        string? sharedRoot, string? leaf, CancellationToken cancellationToken)
+        => SealedDirectoryCore(sharedRoot, leaf, cancellationToken);
+
+    private static string? SealedDirectoryCore(string? sharedRoot, string? leaf, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         if (Normalize(sharedRoot) is not { } root || !IsGeneration(leaf))
             return null;
         try
@@ -130,6 +143,7 @@ public static class SharedModuleTier
                 return null;
             foreach (var listed in File.ReadAllLines(seal).Select(l => l.Trim()).Where(l => l.Length > 0))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (Path.IsPathRooted(listed) || listed.Split('/').Any(segment => segment == ".."))
                     return null;
                 if (!File.Exists(Path.Combine(directory, listed.Replace('/', Path.DirectorySeparatorChar))))
@@ -153,11 +167,22 @@ public static class SharedModuleTier
     /// <param name="sharedRoot">The shared tier's root; null → no tier.</param>
     /// <param name="leaf">The directory leaf (a generation, or a legacy module name).</param>
     public static string Resolve(string baseDirectory, string? sharedRoot, string leaf)
+        => ResolveObservingToken(baseDirectory, sharedRoot, leaf, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Resolve"/> from a pooled leaf: the same rule, with the shared copy's seal
+    /// verification (<see cref="SealedDirectoryObservingToken"/>) checking
+    /// <paramref name="cancellationToken"/> before each probe. A DISTINCT name, so the bare
+    /// <c>Resolve</c> <c>cref</c>s stay unambiguous.
+    /// </summary>
+    internal static string ResolveObservingToken(
+        string baseDirectory, string? sharedRoot, string leaf, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var local = Path.Combine(baseDirectory, "modules", leaf);
         if (Directory.Exists(local))
             return local;
-        return SealedDirectory(sharedRoot, leaf) ?? local;
+        return SealedDirectoryObservingToken(sharedRoot, leaf, cancellationToken) ?? local;
     }
 
     /// <summary>
@@ -191,6 +216,25 @@ public static class SharedModuleTier
     public static string PublishWith(
         string sharedRoot, string leaf, IReadOnlyList<(string RelativePath, byte[] Bytes)> files,
         Func<string, Stream> openForWrite)
+        => PublishCore(sharedRoot, leaf, files, openForWrite, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Publish"/> from a pooled leaf. <paramref name="cancellationToken"/> is checked before
+    /// each staged file is written, before the rename that places the generation, before each file a
+    /// pre-existing unsealed target has restored, and before the seal. Every one of those points leaves
+    /// a state a later publication already repairs: a dot-prefixed staging directory the finally
+    /// removes, or an UNSEALED target, which no reader resolves (<see cref="SealedDirectory"/>) and
+    /// the next publication completes. A cancel never seals.
+    /// </summary>
+    internal static string PublishObservingToken(
+        string sharedRoot, string leaf, IReadOnlyList<(string RelativePath, byte[] Bytes)> files,
+        CancellationToken cancellationToken)
+        => PublishCore(sharedRoot, leaf, files, MeshWeaver.Mesh.Persistence.AtomicFileWrite.OpenTempForWrite,
+            cancellationToken);
+
+    private static string PublishCore(
+        string sharedRoot, string leaf, IReadOnlyList<(string RelativePath, byte[] Bytes)> files,
+        Func<string, Stream> openForWrite, CancellationToken cancellationToken)
     {
         var root = Normalize(sharedRoot)
             ?? throw new ArgumentException("no shared module tier is configured", nameof(sharedRoot));
@@ -199,7 +243,7 @@ public static class SharedModuleTier
                 $"'{leaf}' is not a content-addressed generation leaf — only generations are shared",
                 nameof(leaf));
         var target = Path.Combine(root, leaf);
-        if (SealedDirectory(root, leaf) is not null)
+        if (SealedDirectoryCore(root, leaf, cancellationToken) is not null)
             return target;
         // A target that carries a seal but lacks a listed file (review of MeshWeaver#7009) falls
         // through: the files missing from it are restored from the bytes in hand below, and the seal —
@@ -212,6 +256,7 @@ public static class SharedModuleTier
         {
             foreach (var (relativePath, bytes) in files)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var destination = Path.Combine(staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 // 🚨 Flushed and length-checked, never File.WriteAllBytes (review of
@@ -222,6 +267,7 @@ public static class SharedModuleTier
                 MeshWeaver.Mesh.Persistence.AtomicFileWrite.PublishBytesWith(destination, bytes, openForWrite);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var moved = false;
             if (!Directory.Exists(target))
             {
@@ -237,9 +283,14 @@ public static class SharedModuleTier
             }
             if (!moved)
             {
+                // A snapshot (the loop moves files out of the tree it lists), collected with a step
+                // boundary per listed path so a drain need not wait out the whole staging walk.
+                cancellationToken.ThrowIfCancellationRequested();
                 foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
+                             .Select(f => { cancellationToken.ThrowIfCancellationRequested(); return f; })
                              .ToImmutableArray())
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var destination = Path.Combine(target, Path.GetRelativePath(staging, staged));
                     if (File.Exists(destination))
                         continue;
@@ -250,6 +301,7 @@ public static class SharedModuleTier
 
             // The seal, strictly last — and it lists what it seals (the files this publication carries),
             // so a reader checks it rather than trusting it. An existing seal is left as it is.
+            cancellationToken.ThrowIfCancellationRequested();
             var listed = files
                 .Select(f => f.RelativePath.Replace('\\', '/'))
                 .Where(f => !string.Equals(f, SealFileName, StringComparison.Ordinal))
@@ -259,7 +311,8 @@ public static class SharedModuleTier
             MeshWeaver.Mesh.Persistence.AtomicFileWrite.PublishBytes(
                 Path.Combine(target, SealFileName),
                 System.Text.Encoding.UTF8.GetBytes(string.Join('\n', listed) + "\n"));
-            return SealedDirectory(root, leaf)
+            // Past the seal the publication is committed; verifying it is not a step to cut.
+            return SealedDirectoryCore(root, leaf, CancellationToken.None)
                 ?? throw new IOException(
                     $"the shared generation {leaf} at {target} is not whole after publication — a listed file is missing");
         }

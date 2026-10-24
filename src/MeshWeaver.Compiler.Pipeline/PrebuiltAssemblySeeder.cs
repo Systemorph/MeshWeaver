@@ -1560,6 +1560,7 @@ public static class PrebuiltAssemblySeeder
                         // The MVID read is a blocking file/PE leaf — the shared Compile pool, as every
                         // other assembly-file read in the pipeline.
                         : (hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile) ?? IoPool.Unbounded)
+                            // atomic-blocking-leaf: one MVID read from one assembly file's PE header
                             .InvokeBlocking(_ => string.Equals(ServedBuildIdentity.OfFile(path), named, StringComparison.Ordinal)))
                 .DefaultIfEmpty(false)
                 .Catch<bool, Exception>(ex =>

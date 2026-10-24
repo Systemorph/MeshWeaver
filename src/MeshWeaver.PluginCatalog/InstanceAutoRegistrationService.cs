@@ -2014,7 +2014,7 @@ public sealed class InstanceAutoRegistrationService(
         // partition current the install defers to it (UnprovenRefHold, MeshWeaver#4588) — one
         // partition, one bookkeeping. An unreadable index is said, never read as "nothing sealed".
         return pools.Get(IoPoolNames.FileSystem)
-            .InvokeBlocking(_ => SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger))
+            .InvokeBlocking(ct => SealedPublicationIndex.ReadingFor(publishedRoot, identity, ct, logger))
             .Select(reading =>
             {
                 if (SealedSyncGate.RefusedForUnreadableIndex(reading.Outcome, identity) is { HoldReason: { } unreadable })

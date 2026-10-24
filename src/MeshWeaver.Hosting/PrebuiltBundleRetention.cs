@@ -491,6 +491,9 @@ public static class PrebuiltBundleStore
     /// <summary>The append-only ledger of what each pass removed, one line per pass and one per identity.</summary>
     public const string LedgerFileName = "ledger.txt";
 
+    /// <summary>The pass's name on its one <c>pass outcome</c> line (<see cref="PassLedger"/>).</summary>
+    public const string PassName = "PrebuiltBundleRetention";
+
     /// <summary>
     /// Read the whole store: every identity directory (skipping the <c>_…</c> bookkeeping
     /// directories) with its sources' seals, and every release marker. Throws when the root or the
@@ -1147,6 +1150,8 @@ public static class PrebuiltBundleStore
         Action<string>? deleteDirectory,
         BundleShareIo io)
     {
+        // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
+        var ledger = new PassLedger(PassName, logger);
         PrebuiltStoreScan scan;
         try
         {
@@ -1154,27 +1159,34 @@ public static class PrebuiltBundleStore
             {
                 var absent = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0,
                     $"the published bundle root '{root}' does not exist");
-                logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Reason} — nothing collected", absent.AbortReason);
+                ledger.Record(PassOutcome.Aborted, ": {Reason} — nothing collected", absent.AbortReason);
                 return absent;
             }
             scan = Scan(root, cancellationToken, logger, io);
         }
-        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The pool's cancel during the walk: an interruption before anything was planned, never
+            // "store could not be read" and never an aborted-pass ledger entry.
+            ledger.Interrupt(cancellationToken);
+            throw;
+        }
+        catch (Exception ex)
         {
             // 🚨 FAIL CLOSED: a partial listing is not a picture of the store, so it licenses nothing.
-            logger?.LogWarning(ex,
-                "PrebuiltBundleRetention: pass outcome — ABORTED: could not read {Root} — NOTHING collected. A store that cannot be "
+            ledger.Record(PassOutcome.Aborted, ex,
+                ": could not read {Root} — NOTHING collected. A store that cannot be "
                 + "enumerated completely can never be pruned safely", root);
             var failed = new PrebuiltBundleSweepResult(nowUtc, null, false, 0, 0, 0, 0, $"store could not be read: {ex.Message}");
             AppendLedger(root, failed, logger);
             return failed;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
+        ledger.Step(cancellationToken);
         var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
-            logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Summary}. NOTHING collected", plan.Summary);
+            ledger.Record(PassOutcome.Aborted, ": {Summary}. NOTHING collected", plan.Summary);
             var aborted = new PrebuiltBundleSweepResult(nowUtc, plan, false, 0, 0, 0, 0, plan.AbortReason);
             AppendLedger(root, aborted, logger);
             return aborted;
@@ -1186,8 +1198,8 @@ public static class PrebuiltBundleStore
             // only Warning+ to Loki — so it is a Warning, once per pass (boot + every Interval, per
             // replica), carrying the denominator and the per-rule kept tally but never a per-identity
             // list. The itemized lists below stay Information: they scale with the store.
-            logger?.LogWarning(
-                "PrebuiltBundleRetention: pass outcome — REPORT ONLY (collection is not armed), nothing deleted. {Summary}. "
+            ledger.Record(PassOutcome.ReportOnly,
+                " (collection is not armed), nothing deleted. {Summary}. "
                 + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and "
                 + "{KeptSurfaces} release surface(s)",
                 plan.Summary, plan.Protected.Count, plan.KeptTally, plan.ProtectedGenerations.Count,
@@ -1206,33 +1218,35 @@ public static class PrebuiltBundleStore
 
         var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
         var deletedIdentities = 0;
+        var deletedGenerations = 0;
+        var deletedMarkers = 0;
+        var deletedSurfaces = 0;
         var deletedBytes = 0L;
         var failedDeletes = 0;
         var lines = new List<string>();
 
-        // Called at every removal's step boundary. A cancel there ends the pass, but what it already
-        // removed is a fact the ledger must still carry — so the ledger is written first (one append)
-        // and the cancel is then thrown, never folded into a result that reads as a finished pass.
-        void ThrowIfLeaving(int identities, int generations, int markers, int surfaces, long bytes, int failed)
+        // A cancel at a removal's step boundary ends the pass, but what it already removed is a fact
+        // the ledger must still carry — so the ledger is written first (one append) and the cancel is
+        // then thrown, never folded into a result that reads as a finished pass.
+        ledger.OnInterrupted = () =>
         {
-            if (!cancellationToken.IsCancellationRequested)
-                return;
-            logger?.LogWarning(
-                "PrebuiltBundleRetention: pass outcome — INTERRUPTED: the pool cancelled the pass (teardown) after removing "
+            ledger.Record(PassOutcome.Interrupted,
+                ": the pool cancelled the pass (teardown) after removing "
                 + "{Identities} identity(ies), {Generations} superseded generation(s), {Markers} marker(s) and "
                 + "{Surfaces} release surface(s) reclaiming {Reclaimed}, {Failed} removal(s) failed. The rest of the plan "
                 + "stays and the next pass re-plans it. {Summary}",
-                identities, generations, markers, surfaces, PrebuiltBundleSweepPlan.Mb(bytes), failed, plan.Summary);
-            var interrupted = new PrebuiltBundleSweepResult(nowUtc, plan, true, identities, bytes, markers, failed,
+                deletedIdentities, deletedGenerations, deletedMarkers, deletedSurfaces,
+                PrebuiltBundleSweepPlan.Mb(deletedBytes), failedDeletes, plan.Summary);
+            var interrupted = new PrebuiltBundleSweepResult(nowUtc, plan, true, deletedIdentities, deletedBytes,
+                    deletedMarkers, failedDeletes,
                     "interrupted by the pool's cancel (teardown) — the rest of the plan is the next pass's")
-                { DeletedGenerations = generations, DeletedSurfaces = surfaces };
+                { DeletedGenerations = deletedGenerations, DeletedSurfaces = deletedSurfaces };
             AppendLedger(root, interrupted, logger, lines);
-            cancellationToken.ThrowIfCancellationRequested();
-        }
+        };
 
         foreach (var identity in plan.Collectable)
         {
-            ThrowIfLeaving(deletedIdentities, 0, 0, 0, deletedBytes, failedDeletes);
+            ledger.Step(cancellationToken);
             try
             {
                 // Unseal first: a reader that lists the directory mid-removal then sees "no
@@ -1264,7 +1278,7 @@ public static class PrebuiltBundleStore
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 // The pool's cancel, not a failed removal: the interrupted-ledger path, never failedDeletes.
-                ThrowIfLeaving(deletedIdentities, 0, 0, 0, deletedBytes, failedDeletes);
+                ledger.Interrupt(cancellationToken);
                 throw;
             }
             catch (Exception ex)
@@ -1283,10 +1297,9 @@ public static class PrebuiltBundleStore
         // identity: unseal first so a reader listing it mid-removal sees "no sentinel" and backs
         // off to the previous generation, then remove; a failed removal is counted and re-planned
         // next pass rather than swallowed.
-        var deletedGenerations = 0;
         foreach (var generation in plan.CollectableGenerations)
         {
-            ThrowIfLeaving(deletedIdentities, deletedGenerations, 0, 0, deletedBytes, failedDeletes);
+            ledger.Step(cancellationToken);
             try
             {
                 var sentinel = Path.Combine(generation.Directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
@@ -1306,7 +1319,7 @@ public static class PrebuiltBundleStore
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                ThrowIfLeaving(deletedIdentities, deletedGenerations, 0, 0, deletedBytes, failedDeletes);
+                ledger.Interrupt(cancellationToken);
                 throw;
             }
             catch (Exception ex)
@@ -1318,11 +1331,10 @@ public static class PrebuiltBundleStore
             }
         }
 
-        var deletedMarkers = 0;
         var retiredVersions = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         foreach (var marker in plan.CollectableMarkers)
         {
-            ThrowIfLeaving(deletedIdentities, deletedGenerations, deletedMarkers, 0, deletedBytes, failedDeletes);
+            ledger.Step(cancellationToken);
             try
             {
                 File.Delete(marker.Path);
@@ -1340,13 +1352,12 @@ public static class PrebuiltBundleStore
         // Per-release surfaces AFTER their markers (MeshWeaver#6990): the reverse of the publisher's
         // surface-then-marker order, so no reader finds a marker whose surface is gone. A surface
         // whose marker could not be removed stays with it, and the next pass re-plans both.
-        var deletedSurfaces = 0;
         var markerRetiring = plan.CollectableMarkers.Select(m => m.Version).ToImmutableHashSet(StringComparer.Ordinal);
         foreach (var surface in plan.CollectableSurfaces)
         {
             if (markerRetiring.Contains(surface.Version) && !retiredVersions.Contains(surface.Version))
                 continue;
-            ThrowIfLeaving(deletedIdentities, deletedGenerations, deletedMarkers, deletedSurfaces, deletedBytes, failedDeletes);
+            ledger.Step(cancellationToken);
             try
             {
                 File.Delete(surface.Path);
@@ -1366,8 +1377,8 @@ public static class PrebuiltBundleStore
 
         // 🚨 #6991: the once-per-pass outcome at Warning (see the report-only branch for why); the
         // itemized kept list stays on the Information line after it.
-        logger?.LogWarning(
-            "PrebuiltBundleRetention: pass outcome — COLLECTED {Identities} identity(ies), {Generations} superseded "
+        ledger.Record(PassOutcome.Collected,
+            " {Identities} identity(ies), {Generations} superseded "
             + "generation(s) and {Surfaces} release surface(s) reclaiming {Reclaimed}, retired {Markers} marker(s), {Failed} removal(s) failed. {Summary}. "
             + "Kept {KeptCount} identity(ies) by rule: {KeptTally}; kept {KeptGenerations} generation(s) and {KeptSurfaces} release surface(s)",
             deletedIdentities, deletedGenerations, deletedSurfaces, PrebuiltBundleSweepPlan.Mb(deletedBytes), deletedMarkers, failedDeletes,
