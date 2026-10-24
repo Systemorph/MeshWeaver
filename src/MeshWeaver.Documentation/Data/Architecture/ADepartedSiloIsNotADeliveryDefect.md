@@ -100,8 +100,11 @@ Read it in this order:
 the target is activated on B, B is KILLED, and the test waits until A's membership lists B dead. The
 delivery is then issued from A through the production leg (`RoutingGrain.DeliverToGrainRoute`). A
 counted switch answers its first attempt with this exact exception and forwards later attempts to A's
-real grain factory. The subject asserts no NACK, a landed delivery, and the hub re-activated on the
-survivor. Two controls run on the same post-kill cluster:
+real grain factory. The subject asserts four things: no NACK, a landed delivery, the hub re-activated
+on the survivor, and the target's `PingResponse` to that very ping. The sender registered its callback
+for the delivery's id before the leg ran. `MessageHubGrain.DeliverMessage` answers before its hub has
+dispatched, so only the correlated response proves the delivery was serviced and not merely accepted.
+Two controls run on the same post-kill cluster:
 
 - **With no re-send budget, the delivery is lost and NACK'd.** So the refusal reaches the leg, and
   Orleans does not recover the message on its own.

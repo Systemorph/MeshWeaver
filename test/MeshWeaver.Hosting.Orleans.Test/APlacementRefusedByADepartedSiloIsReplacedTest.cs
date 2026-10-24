@@ -133,7 +133,18 @@ public class APlacementRefusedByADepartedSiloIsReplacedTest(APlacementRefusedByA
             + "and a terminal Failed would tear them down for an ordinary roll (#2299 / #2307)");
 
         // 4. THE SUBJECT — the departure's refusal on the first attempt, then Orleans' own placement.
-        var subject = new DepartedOwnerRefusal(refusal, refusals: 1, () => Deliver(grainsA, hubA, path));
+        //    The ping is sent FROM an issuing hub that has registered the callback for THIS delivery's
+        //    id before the leg runs, so the only thing that can resolve it is the target's own
+        //    PingResponse to this very ping — proof the re-placed delivery was serviced, not merely
+        //    accepted (MessageHubGrain.DeliverMessage answers before its hub has dispatched).
+        //    Observe(delivery) registers the callback for an existing delivery and posts nothing.
+        var issuer = hubA.NodeOperationIssuingHub();
+        var ping = new MessageDelivery<PingRequest>(
+            issuer.Address, new Address(path), new PingRequest(), issuer.JsonSerializerOptions);
+        var answered = issuer.Observe(ping).Replay(1);
+        using var awaiting = answered.Connect();
+        var subject = new DepartedOwnerRefusal(refusal, refusals: 1,
+            () => grainsA.GetGrain<IMessageHubGrain>(path).DeliverMessage(ping));
         var subjectNacks = await RunLeg(subject, path, maxRetries: 6, ct);
         subject.Attempts.Should().Be(2, "one refused attempt, then one re-placed attempt");
         subjectNacks.Should().BeEmpty(
@@ -141,7 +152,10 @@ public class APlacementRefusedByADepartedSiloIsReplacedTest(APlacementRefusedByA
             + "not dropped (#7002 / #7003)");
         subject.Landed.Should().NotBeNull("the re-placed attempt must reach the target grain");
         subject.Landed!.State.Should().NotBe(MessageDeliveryState.Failed,
-            "the target, re-placed on the survivor, services the delivery");
+            "the target, re-placed on the survivor, accepts the delivery");
+        await answered.Where(d => d.Message is PingResponse)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the target must answer THIS ping — the re-placed delivery was serviced, not dropped", ct);
         await Observable.Interval(TimeSpan.FromMilliseconds(100))
             .StartWith(0L)
             .Select(_ => hubA.GetHostedHub(new Address(path), HostedHubCreation.Never))
