@@ -202,17 +202,25 @@ order) and that a hub's own `IStartable` is still started.
 
 **Type definitions.** A hub's registry already chains to its parent's; the copies came from the hub's
 own `WithType` calls for types the mesh registry already held under the same name (a node hub: 344 own
-definitions of 427 resolvable). `TypeRegistry.WithType` now serves the parent's definition when it is
-exactly the one the hub would build — same type and name, no owning address, no description or icon
+definitions of 427 resolvable). `TypeRegistry.WithType` now binds the parent's definition OBJECT in the hub's own maps, instead of
+building a copy, when it is exactly the one the hub would build — same type and name, no owning address, no description or icon
 override, no resource-backed display text, and a key the conventions decide (`[Key]`, `Id`,
 `SystemName`), because a registry's own key-function providers are consulted only after them. A type
 whose key would come from the hub's own providers keeps its own definition, as before
-(`HubRegistryInheritsEquivalentDefinitionsTest`). Each remaining `TypeDefinition` also lost its seven
+(`HubRegistryInheritsEquivalentDefinitionsTest`). The binding stays LOCAL — the hub keeps its name and
+type entries, and only the definition is shared — because a registry the hub inherits from can change
+after the hub registered: a later `WithKeyFunction` on the parent, a module replacing the name's type
+while the mesh runs, or an intermediate hub binding the same name to another type must not change what
+this hub registered. For the same reason a closed generic (its name is synthesised locally before the
+parent is asked) is never shared, the parent chain must resolve the registered name and the full-name
+alias to the very same definition, and a hub that binds a collectible type, or keys one, listens to
+that context's unloading itself. Each remaining `TypeDefinition` also lost its seven
 per-instance key objects (two `Lazy`, two `LazyHelper`, two delegates, a closure); the key is now
 resolved from the builder on first use, and the two weak-shadow name maps are created on the first
 demotion only.
 
-**Measured on a realistic population** — 99 activated Markdown node hubs with the standard data-source
+**Measured on a realistic population** (before the binding was made local; the hub's two map entries
+per shared type are back, the definition objects stay shared) — 99 activated Markdown node hubs with the standard data-source
 setup plus their hosted hubs, 516 `MessageHub`s, in one test mesh (`dumpheap -stat -live`):
 
 | | Before | After |

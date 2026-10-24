@@ -161,8 +161,19 @@ internal class TypeRegistry : ITypeRegistry
     public ITypeRegistry WithType(Type type, string typeName)
     {
         typeName ??= type.FullName!;
-        if (InheritsEquivalentDefinition(type, typeName))
+        if (InheritedEquivalentDefinition(type, typeName) is { } inherited)
+        {
+            // Bind the parent's definition LOCALLY — the same object, so no copy is built, but held
+            // by this registry: a later change to the parent (a WithKeyFunction, a module replacing
+            // the name's type during ApplyToRunningMesh, an intermediate registry rebinding the name)
+            // must never change what this hub registered. The local name entry also keeps
+            // TryGetCollectionName answering the registered name for a closed generic, which would
+            // otherwise be synthesised before the parent is asked.
+            typeByName[typeName] = inherited;
+            nameByType[type] = typeName;
+            TrackCollectible(type);
             return this;
+        }
         var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder, descriptions.For(type));
         // A type whose context has already BEGUN unloading registers into the weak shadow:
         // its Unloading event will never fire again, so a strong entry could never be
@@ -184,9 +195,9 @@ internal class TypeRegistry : ITypeRegistry
     }
 
     /// <summary>
-    /// Whether this registry can serve <paramref name="type"/> under <paramref name="typeName"/> from
-    /// its parent chain instead of holding a definition of its own — because the parent's definition is
-    /// exactly the one this registry would build.
+    /// The parent chain's definition of <paramref name="type"/> under <paramref name="typeName"/> when
+    /// this registry can bind that very object instead of building a definition of its own — because it
+    /// is exactly the one this registry would build; null otherwise.
     ///
     /// <para>🚨 Why. Every hub owns a registry chained to its parent's, and a hub's configuration
     /// registers (<c>WithType</c>) most of the types the mesh registry already holds under the same
@@ -203,12 +214,25 @@ internal class TypeRegistry : ITypeRegistry
     /// builder are consulted only after them, so both builders yield the same key. A type whose key
     /// would come from this registry's own factories keeps its own definition, as before.</para>
     /// </summary>
-    private bool InheritsEquivalentDefinition(Type type, string typeName)
+    private TypeDefinition? InheritedEquivalentDefinition(Type type, string typeName)
     {
-        if (parent is null || nameByType.ContainsKey(type) || typeByName.ContainsKey(typeName) || IsUnloadingContext(type))
-            return false;
-        return parent.GetTypeDefinition(type, create: false) is TypeDefinition inherited
-               && IsEquivalentPlainDefinition(inherited, type, typeName);
+        if (parent is null || nameByType.ContainsKey(type) || typeByName.ContainsKey(typeName) || IsUnloadingContext(type)
+            // A closed generic's registered name is resolved by this registry's own generic synthesis,
+            // which is not the parent's lookup — keep such registrations the hub's own.
+            || type.IsGenericType)
+            return null;
+        if (parent.GetTypeDefinition(type, create: false) is not TypeDefinition inherited
+            || !IsEquivalentPlainDefinition(inherited, type, typeName))
+            return null;
+        // A by-type match proves nothing about the NAMES this registry would index: the parent chain
+        // must resolve the registered name — and the full-name alias an own definition would index —
+        // to this very definition, or an intermediate registry's binding of the name would show through.
+        if (!ReferenceEquals(parent.GetTypeDefinition(typeName), inherited))
+            return null;
+        var fullName = (type.FullName ?? type.Name).Replace('+', '.');
+        if (fullName != typeName && !ReferenceEquals(parent.GetTypeDefinition(fullName), inherited))
+            return null;
+        return inherited;
     }
 
     private static bool IsEquivalentPlainDefinition(TypeDefinition inherited, Type type, string typeName) =>
@@ -418,15 +442,7 @@ internal class TypeRegistry : ITypeRegistry
     }
 
     public KeyFunction? GetKeyFunction(string collection) =>
-        (typeByName.GetValueOrDefault(collection) ?? GetDemoted(collection) ?? InheritedConventionalDefinition(collection))?.Key;
-
-    // A type served from the parent chain by InheritsEquivalentDefinition: its key is the parent
-    // definition's (the conventions decide it, so this registry's builder would yield the same one).
-    private TypeDefinition? InheritedConventionalDefinition(string collection) =>
-        parent?.GetTypeDefinition(collection) is TypeDefinition inherited
-        && IsEquivalentPlainDefinition(inherited, inherited.Type, collection)
-            ? inherited
-            : null;
+        (typeByName.GetValueOrDefault(collection) ?? GetDemoted(collection))?.Key;
 
     public KeyFunction? GetKeyFunction(Type type)
     {
@@ -651,6 +667,9 @@ internal class TypeRegistry : ITypeRegistry
         // Index the type too, so a lookup BY TYPE finds this registry's keyed definition rather than
         // falling through to the parent's — it did not when the definition came from the parent.
         nameByType[keyed.Type] = collection;
+        // This registry now holds the type strongly, so it must hear its context unload — or the
+        // keyed definition roots a superseded collectible assembly while only the parent demotes.
+        TrackCollectible(keyed.Type);
         return keyed;
     }
 

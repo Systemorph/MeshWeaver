@@ -120,4 +120,62 @@ public class HubRegistryInheritsEquivalentDefinitionsTest(ITestOutputHelper outp
         plainMesh.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("k1",
             "the parent's definition is untouched");
     }
+    /// <summary>A second conventionally keyed type, to replace a name's type on the parent.</summary>
+    public record OtherKeyedContent(string Id, int Rank);
+
+    /// <summary>A conventionally keyed closed generic.</summary>
+    public record GenericKeyed<T>(string Id, T Value);
+
+    /// <summary>
+    /// A shared definition is bound LOCALLY: a later change to the parent — a key function, or a module
+    /// replacing the name's type while the mesh runs — never changes what the hub registered.
+    /// </summary>
+    [Fact]
+    public void AParentChangedAfterTheHubRegistered_DoesNotChangeTheHubsBinding()
+    {
+        var content = new KeyedContent("k1", "label");
+        var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeyedContent), nameof(KeyedContent));
+        var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(typeof(KeyedContent), nameof(KeyedContent));
+        hub.GetTypeDefinition(typeof(KeyedContent), create: false)
+            .Should().BeSameAs(mesh.GetTypeDefinition(typeof(KeyedContent), create: false), "the precondition: shared");
+
+        mesh.WithKeyFunction(nameof(KeyedContent), new KeyFunction(_ => "mesh-key", typeof(string)));
+        hub.GetTypeDefinition(typeof(KeyedContent), create: false)!.GetKey(content).Should().Be("k1",
+            "the hub registered the conventionally keyed type; a later parent key is the parent's");
+        hub.GetKeyFunction(nameof(KeyedContent))!.Function(content).Should().Be("k1");
+
+        mesh.WithType(typeof(OtherKeyedContent), nameof(KeyedContent));
+        hub.GetType(nameof(KeyedContent)).Should().Be(typeof(KeyedContent),
+            "a replacement on the parent must not rebind the name the hub registered");
+    }
+
+    /// <summary>
+    /// A closed generic registered under a custom name on both parent and hub keeps that name on the hub
+    /// — the wire discriminator — rather than the synthesised generic name.
+    /// </summary>
+    [Fact]
+    public void AClosedGenericUnderACustomName_KeepsItsNameOnTheHub()
+    {
+        var mesh = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(GenericKeyed<int>), "Entries");
+        var hub = MessageHubExtensions.CreateTypeRegistry(mesh).WithType(typeof(GenericKeyed<int>), "Entries");
+
+        hub.TryGetCollectionName(typeof(GenericKeyed<int>), out var name).Should().BeTrue();
+        name.Should().Be("Entries");
+    }
+
+    /// <summary>
+    /// A by-type match on the parent chain does not prove the NAME resolves to it: root binds A as
+    /// <c>Entry</c>, a middle registry binds B as <c>Entry</c>, and a grandchild that registers A as
+    /// <c>Entry</c> must resolve <c>Entry</c> to A.
+    /// </summary>
+    [Fact]
+    public void AnIntermediateRebindingOfTheName_DoesNotShowThroughTheGrandchild()
+    {
+        var root = MessageHubExtensions.CreateTypeRegistry().WithType(typeof(KeyedContent), "Entry");
+        var middle = MessageHubExtensions.CreateTypeRegistry(root).WithType(typeof(OtherKeyedContent), "Entry");
+        var grandchild = MessageHubExtensions.CreateTypeRegistry(middle).WithType(typeof(KeyedContent), "Entry");
+
+        grandchild.GetType("Entry").Should().Be(typeof(KeyedContent),
+            "the grandchild registered KeyedContent as Entry itself");
+    }
 }

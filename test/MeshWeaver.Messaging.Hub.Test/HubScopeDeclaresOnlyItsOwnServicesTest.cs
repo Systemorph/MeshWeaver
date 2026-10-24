@@ -152,4 +152,20 @@ public class HubScopeDeclaresOnlyItsOwnServicesTest(ITestOutputHelper output) : 
         var plain = new ServiceCollection().AddSingleton(new StartCounter()).SetupModules(root);
         plain.GetRequiredService<StartCounter>().Starts.Should().Be(0);
     }
+    /// <summary>
+    /// A startable GRANDCHILD under a plain child is still started. The child's scope says
+    /// IgnoreStartableComponents, and Autofac's property bag falls back to the parent scope's, so a
+    /// grandchild that left its own value unset inherited the flag and never ran <c>Start()</c>.
+    /// </summary>
+    [Fact]
+    public void AStartableGrandchild_UnderAPlainChild_IsStillStarted()
+    {
+        var counter = new StartCounter();
+        var root = RootWith(RootInstances);
+        var plainChild = new ServiceCollection().AddSingleton(new Greeting("child")).SetupModules(root);
+        _ = new ServiceCollection()
+            .AddSingleton<IStartable>(_ => new CountingStartable(counter))
+            .SetupModules(plainChild);
+        counter.Starts.Should().Be(1, "the grandchild's own IStartable is started as its scope is built");
+    }
 }

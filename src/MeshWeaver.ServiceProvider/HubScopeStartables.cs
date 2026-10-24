@@ -49,7 +49,16 @@ internal static class HubScopeStartables
     /// <param name="services">The registrations the scope is populated with.</param>
     public static void StartOnlyOwnComponents(ContainerBuilder builder, IEnumerable<ServiceDescriptor> services)
     {
-        if (!services.Any(d => d.ServiceType == typeof(IStartable)))
-            builder.Properties[ContainerBuildOptionsKey] = ContainerBuildOptions.IgnoreStartableComponents;
+        // Always set the scope's OWN value. The property bag falls back to the PARENT scope's, so a scope
+        // that left it unset inherited a plain parent's IgnoreStartableComponents and never started its
+        // own IStartable (root → plain child → startable grandchild). Only the ignore bit is decided
+        // here; every other inherited build option is kept.
+        var inherited = builder.Properties.TryGetValue(ContainerBuildOptionsKey, out var value)
+                        && value is ContainerBuildOptions options
+            ? options
+            : ContainerBuildOptions.None;
+        builder.Properties[ContainerBuildOptionsKey] = services.Any(d => d.ServiceType == typeof(IStartable))
+            ? inherited & ~ContainerBuildOptions.IgnoreStartableComponents
+            : inherited | ContainerBuildOptions.IgnoreStartableComponents;
     }
 }
