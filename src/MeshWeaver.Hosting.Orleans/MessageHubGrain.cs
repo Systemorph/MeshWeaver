@@ -767,6 +767,10 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     .WithTaskScheduler(grainScheduler)
                     .Set(new GrainKeepAliveCallback(() => TryDelayDeactivation(TimeSpan.FromMinutes(10))))
                     .Set(new GrainLongRunningOperationCallback(BeginLongRunningOperation))
+                    // #6623: one lease per server-side stream this activation serves, so it can end
+                    // with its LAST subscriber when it has served nobody but the platform — see
+                    // AcquireSubscriberLease.
+                    .Set(new GrainSubscriberLeases(AcquireSubscriberLease))
                     // The completion counterpart to the three callbacks around it: they are what a
                     // straggler DOES to this activation, this is what the activation TELLS anyone
                     // waiting for it to be gone. Subscribing to it is the alternative to polling
@@ -1069,6 +1073,76 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         public void Dispose() => onDispose();
     }
 
+    // #6623 — how many server-side streams the hubs of this activation serve right now (one lease
+    // each, see GrainSubscriberLeases), and whether any delivery to it ever carried a PERSON's
+    // identity (AccessService.ReaderOf). 0/1 flag, set once, never cleared.
+    private int _subscriberLeases;
+    private int _servedAPerson;
+
+    /// <summary>
+    /// Takes one subscriber lease (<see cref="GrainSubscriberLeases"/>). The workspace takes it
+    /// when it registers a server-side stream and releases it when that stream is disposed.
+    /// </summary>
+    /// <returns>The lease; disposing it more than once releases it once.</returns>
+    private IDisposable AcquireSubscriberLease()
+    {
+        Interlocked.Increment(ref _subscriberLeases);
+        var released = 0;
+        return new LongRunningOperationScope(() =>
+        {
+            if (Interlocked.Exchange(ref released, 1) != 0)
+                return;
+            if (Interlocked.Decrement(ref _subscriberLeases) == 0)
+                OnLastSubscriberLeft();
+        });
+    }
+
+    /// <summary>
+    /// 🚨 The end of an activation that only the PLATFORM ever used (#6623).
+    ///
+    /// <para><b>Why.</b> A boot step reads many nodes as System through the process's mesh-node
+    /// cache — <c>GetMeshNodeStream(path).Take(1)</c> — and each read builds the node's hub. The read
+    /// leaves a cache mirror subscribed to it, which the cache's idle sweep releases after ten
+    /// subscriber-free minutes; after that nothing ended the activation but Orleans' own idle
+    /// collection, fifteen minutes later. So every node a boot pass touched stayed resident for about
+    /// 25 minutes, all of them at once on the first replica of a generation — about 1,000 node hubs at
+    /// about 5 MB each on the public instance. Nothing was pinned forever; the activations simply had
+    /// no owner of their lifetime once their reader had gone.</para>
+    ///
+    /// <para><b>The rule.</b> When the LAST server-side stream of an activation ends, and no delivery
+    /// to it ever carried a person's identity, it has nothing left to do: ask Orleans to deactivate it
+    /// now. The next access builds it again, as after any idle collection. It applies only while
+    /// nothing else holds the activation — not during its build or a long-running operation
+    /// (<see cref="HoldActivation"/>), not to an instance singleton (<c>RelocateOnDrain</c>), which
+    /// lives for its own work rather than for subscribers, and not to a hub already tearing down.</para>
+    ///
+    /// <para><b>Why "never a person".</b> A reader who navigates away and back closes and reopens its
+    /// streams; retiring the hub between the two would rebuild it on every navigation. Such an
+    /// activation keeps Orleans' idle collection, exactly as before. The flag is sticky for the
+    /// activation's life because one person is enough to make that the right trade.</para>
+    ///
+    /// <para>Event-driven: it runs on the release that brings the count to zero, from the stream's own
+    /// disposal. No timer and no sweep.</para>
+    /// </summary>
+    private void OnLastSubscriberLeft()
+    {
+        if (Volatile.Read(ref _servedAPerson) != 0 || Volatile.Read(ref _activeOperations) != 0)
+            return;
+        if (_hub is not { RunLevel: MessageHubRunLevel.Started } hub || hub is MessageHub { IsDisposing: true })
+            return;
+        if (hub.ServiceProvider.GetService(typeof(HostDrainSignal)) is HostDrainSignal signal
+            && signal.Relocates(hub.Address))
+            return;
+        // A subscriber that arrived between the release and here keeps the activation.
+        if (Volatile.Read(ref _subscriberLeases) != 0)
+            return;
+        logger.LogDebug(
+            "Grain {GrainId}: its last subscriber has gone and only the platform ever used this activation "
+            + "— deactivating instead of waiting for idle collection (#6623)",
+            this.GetPrimaryKeyString());
+        TryDeactivateOnIdle();
+    }
+
 
     /// <summary>
     /// Subscribes to <see cref="HubReady"/> (Synchronized ReplaySubject(1)) and posts
@@ -1147,6 +1221,11 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                 Name = userName ?? userId
             });
         }
+
+        // #6623: remember, for the life of this activation, that a PERSON reached it. Sticky by
+        // design — see OnLastSubscriberLeft for the one decision it feeds.
+        if (Volatile.Read(ref _servedAPerson) == 0 && AccessService.ReaderOf(delivery.AccessContext) is not null)
+            Volatile.Write(ref _servedAPerson, 1);
 
         // 🚨 THE GRAIN CALL IS ANSWERED NOW, NEVER WHEN THE HUB IS BUILT — issues #5286 / #5417.
         //

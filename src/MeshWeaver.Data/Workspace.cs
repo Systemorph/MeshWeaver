@@ -1764,6 +1764,35 @@ public class Workspace : IWorkspace
                 && ReferenceEquals(current.Stream, stream))
                 _clientSubscriptions.TryRemove(key, out _);
         }));
+
+        // 🚨 The grain's view of this subscription (#6623): one lease for as long as the server-side
+        // STREAM lives — every route out of the registry (unsubscribe, eviction, refusal, the hub's
+        // own teardown) ends in that stream's disposal, so the lease cannot outlive it or be released
+        // twice. With the last lease gone, an activation that has served only the platform ends
+        // instead of waiting out Orleans' idle collection. No grain (Monolith): no callback, no lease.
+        if (GrainSubscriberLeasesOf(Hub) is { } leases)
+            stream.RegisterForDisposal(leases.Acquire());
+    }
+
+    /// <summary>
+    /// The grain's <see cref="GrainSubscriberLeases"/> for <paramref name="hub"/>, found by walking
+    /// up the parent chain — the grain registers it on its top-level hub, and a hosted child hub
+    /// (a thread, an <c>_Exec</c> kernel) serves streams of the same activation. Null when no
+    /// ancestor is a grain hub.
+    /// </summary>
+    private static GrainSubscriberLeases? GrainSubscriberLeasesOf(IMessageHub hub)
+    {
+        var current = hub;
+        while (current is not null)
+        {
+            if (current.Configuration.Get<GrainSubscriberLeases>() is { } leases)
+                return leases;
+            var parent = current.Configuration.ParentHub;
+            if (parent is null || ReferenceEquals(parent, current))
+                return null;
+            current = parent;
+        }
+        return null;
     }
 
     /// <summary>
