@@ -399,7 +399,7 @@ jobs:
           # With that fixed the lane must actually be fetched, or the caller is silently uncovered.
           for lane in node-repo-validate node-repo-compile-check node-repo-gate node-repo-module-pack \
                       node-repo-module-publish node-repo-publish-bake node-repo-tag-modules \
-                      node-repo-platform-canary node-repo-platform-ref-bump node-repo-supersede \
+                      node-repo-platform-canary node-repo-supersede \
                       auto-arm; do
             "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/${lane}.yml" > "$RUNNER_TEMP/platform/.github/workflows/${lane}.yml" \
               || { echo "::error::could not fetch .github/workflows/${lane}.yml at ${SCRIPTS_REF} — the permission-pairing guard cannot read the lane this repo calls, and a guard that cannot read its subject must not pass"; exit 1; }

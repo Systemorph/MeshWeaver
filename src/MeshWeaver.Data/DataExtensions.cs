@@ -1516,7 +1516,7 @@ public static class DataExtensions
     /// as <see cref="MeshNodeErrorCode.Unknown"/> with the exception type prefixed — visible at the
     /// consumer GUI so the gap is diagnosable, not silent.</para>
     /// </summary>
-    private static MeshNodeError ClassifyPatchException(Exception ex, string path)
+    internal static MeshNodeError ClassifyPatchException(Exception ex, string path)
     {
         if (IsOwnerTeardown(ex))
             return new MeshNodeError(
@@ -1541,7 +1541,66 @@ public static class DataExtensions
             ArgumentException => (MeshNodeErrorCode.Validation, "Validation failed"),
             _ => (MeshNodeErrorCode.Unknown, ex.GetType().Name),
         };
-        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace);
+        // 🚨 MeshWeaver#7066 — classify transience HERE, where the exception still has its type.
+        // The caller only ever sees this record (the exception never crosses the hub boundary), so
+        // a store that refused the owner's read or write for a moment and an owner that answered
+        // with a defect were the same `Unknown` on the far side, told apart only by message text.
+        // The code is unchanged; the flag is an additional fact the caller may act on.
+        return new MeshNodeError(code, path, $"{prefix}: {ex.Message}", ex.StackTrace)
+        {
+            Transient = IsTransientStoreFault(ex),
+        };
+    }
+
+    /// <summary>
+    /// Whether the owner's fault was a TRANSIENT store fault — the classification
+    /// <see cref="ClassifyPatchException"/> sends on <see cref="MeshNodeError.Transient"/> (#7066).
+    ///
+    /// <para>🚨 <b>An aggregate qualifies only when EVERY branch does</b>, at any depth — the rule
+    /// <see cref="InfrastructureFault.IsTransient"/> states. <see cref="StorageFaults.IsTransientConnectFault"/>
+    /// walks only <c>InnerException</c>, which on an aggregate is its FIRST branch, so asking it of
+    /// <c>Aggregate(connection refused, InvalidOperationException)</c> answered "transient" for a fault
+    /// that carries a genuine defect. The record loses the aggregate on the wire, so the caller could
+    /// never correct that and would re-run the defect. Hence the aggregate is decided here, branch by
+    /// branch, before either predicate is asked about a chain.</para>
+    /// </summary>
+    /// <param name="ex">The owner's fault.</param>
+    internal static bool IsTransientStoreFault(Exception? ex)
+    {
+        var budget = MaxFaultNodes;
+        return IsTransientStoreFault(
+            ex, ImmutableHashSet.Create<Exception>(ReferenceEqualityComparer.Instance), ref budget);
+    }
+
+    /// <summary>Bounds the walk over a caller-supplied fault graph, however it is shared.</summary>
+    private const int MaxFaultNodes = 256;
+
+    /// <remarks>
+    /// 🚨 A CYCLE is detected on the current PATH only (review on #7088). A visited-set shared across
+    /// branches read a REPEATED reference — <c>Aggregate(fault, fault)</c>, two wrappers over one
+    /// inner — as a cycle and answered "not transient", so a refused connection crossed the wire as a
+    /// defect and was never re-run. The total visit count still bounds the walk.
+    /// </remarks>
+    private static bool IsTransientStoreFault(Exception? ex, ImmutableHashSet<Exception> path, ref int budget)
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (path.Contains(e) || --budget < 0)
+                return false;
+            path = path.Add(e);
+            if (e is AggregateException aggregate)
+            {
+                var branches = aggregate.Flatten().InnerExceptions;
+                if (branches.Count == 0)
+                    return false;
+                foreach (var branch in branches)
+                    if (!IsTransientStoreFault(branch, path, ref budget))
+                        return false;
+                return true;
+            }
+        }
+        // A chain with no aggregate in it: either shared predicate decides.
+        return InfrastructureFault.IsTransient(ex) || StorageFaults.IsTransientConnectFault(ex);
     }
 
     /// <summary>

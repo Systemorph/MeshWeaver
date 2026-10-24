@@ -7,6 +7,14 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # Keeping the Platform Source Pin Current
 
+> 🚨 **Retired.** Node repositories no longer carry a platform pin: they resolve the newest SEALED
+> platform set at run time (MeshWeaver#3842). MeshWeaver.Plugins deleted the last caller of the
+> lane in `b5414edf7`, and core's `node-repo-platform-ref-bump.yml` and the guards that pinned its
+> credential and alerting shape have since been deleted. This page is kept as the incident record —
+> the default-token suppression and the "red in an empty room" failure apply to any scheduled lane,
+> and `ArmedMergeMustTriggerMainsPushLanesGuard.NoWorkflowOpensAPullRequestWithTheDefaultToken`
+> still holds the first one for every workflow in core.
+
 A satellite repository reaches the platform under **three** identities, and they answer three
 different questions:
 
