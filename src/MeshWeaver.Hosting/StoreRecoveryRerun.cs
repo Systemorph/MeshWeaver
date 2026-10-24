@@ -2,17 +2,16 @@ using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Linq;
 using System.Reactive.Subjects;
+using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
-using MeshWeaver.Messaging;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.Hosting;
 
 /// <summary>
-/// How a FINITE store-reading job — the boot warm-up sweep — is re-run after a transient store
-/// fault: how many re-runs a timer may trigger, and how long each waits. Registered as a mesh
-/// singleton by <see cref="PreWarmServiceCollectionExtensions.AddDynamicTypePreWarming"/>; a host
-/// that registers none gets <see cref="Default"/>.
+/// The bounded EARLY backoff a finite store-reading job (the boot warm-up sweep) adds to the shared
+/// "the store answers again" evidence (<see cref="StoreReachability.StoreAnswersAgain"/>): how many
+/// re-runs a timer may also trigger, and how long each waits. A host that registers none gets
+/// <see cref="Default"/>.
 /// </summary>
 public sealed class StoreRecoveryRerunPolicy
 {
@@ -24,8 +23,8 @@ public sealed class StoreRecoveryRerunPolicy
     public static StoreRecoveryRerunPolicy Default { get; } = new();
 
     /// <summary>
-    /// Re-runs a TIMER may trigger. After that the job is re-run only on the store's own recovery
-    /// signal (a change-feed gap closing), never on a clock again.
+    /// Re-runs a TIMER may trigger. After that the job is re-run only on evidence that the store
+    /// answers again, never on a clock.
     /// </summary>
     public int MaxTimedReruns { get; init; } = StandingWatchRecovery.DefaultMaxConsecutive;
 
@@ -38,20 +37,37 @@ public sealed class StoreRecoveryRerunPolicy
 /// <param name="Rerun">Which re-run this will be (1-based).</param>
 /// <param name="MaxTimedReruns">How many re-runs a timer may trigger in all.</param>
 /// <param name="Backoff">The timer's delay, or <see langword="null"/> once the timed re-runs are
-/// spent and only the store's recovery signal can trigger it.</param>
+/// spent and only evidence can trigger it.</param>
+/// <param name="EvidenceAlreadyIn">The store was evidenced to answer again WHILE the faulted attempt
+/// was in flight, so the re-run starts at once.</param>
+/// <param name="CommitsCount">Whether a commit the store announced still counts as evidence for
+/// this job (<c>false</c> once a commit-started re-run met the same fault again — then only a
+/// reconnect, or the timer, starts one).</param>
 public sealed record StoreRecoveryRerunScheduled(
-    Exception Fault, int Rerun, int MaxTimedReruns, TimeSpan? Backoff)
+    Exception Fault, int Rerun, int MaxTimedReruns, TimeSpan? Backoff,
+    bool EvidenceAlreadyIn = false, bool CommitsCount = true)
 {
     /// <summary>What will trigger the re-run, in one clause — for the log line and the health payload.</summary>
-    public string Trigger => Backoff is { } wait
-        ? $"when the change feed declares the store reachable again, or in {wait.TotalSeconds:0.#}s "
-          + $"(re-run {Rerun} of at most {MaxTimedReruns} timed)"
-        : $"when the change feed declares the store reachable again (re-run {Rerun}; the "
-          + $"{MaxTimedReruns} timed re-runs are spent, so no clock will trigger it)";
+    public string Trigger
+    {
+        get
+        {
+            if (EvidenceAlreadyIn)
+                return $"now: the store answered again while the attempt was in flight (re-run {Rerun})";
+            var evidence = CommitsCount
+                ? "when the store is evidenced to answer again (its change feed reconnects, or it announces a commit)"
+                : "when the store's change feed reconnects (a commit no longer counts: a commit-started "
+                  + "re-run met the same fault)";
+            return Backoff is { } wait
+                ? $"{evidence}, or in {wait.TotalSeconds:0.#}s (re-run {Rerun} of at most {MaxTimedReruns} timed)"
+                : $"{evidence} (re-run {Rerun}; the {MaxTimedReruns} timed re-runs are spent, so no "
+                  + "clock will trigger it)";
+        }
+    }
 }
 
 /// <summary>
-/// 🚨 <b>A finite job that faulted on a TRANSIENT store fault is re-run once the store is reachable
+/// 🚨 <b>A finite job that faulted on a TRANSIENT store fault is re-run once the store answers
 /// again — on the same process</b> (MeshWeaver#7066).
 ///
 /// <para><b>The defect this closes.</b> The boot warm-up sweep that feeds the <c>nodetype_bake</c>
@@ -62,16 +78,29 @@ public sealed record StoreRecoveryRerunScheduled(
 /// converge in between. Under the readiness-only policy nothing restarts a refused pod, so "a
 /// restart re-runs the sweep" was not a recovery path at all.</para>
 ///
-/// <para><b>What triggers the re-run — the store's own recovery signal first.</b> A backend whose
-/// cross-process feed can drop declares a <see cref="ChangeFeedGap"/> when it re-opens its session
-/// (the PostgreSQL listener after a lost connection): that is the platform saying, with a
-/// timestamp, that the store accepts connections again. The re-run subscribes to it after the fault
-/// and runs on the first gap. It is not sufficient alone — a gap is declared only after the feed had
-/// come up once, may already have been declared before the fault surfaced (a slow read failing after
-/// the store returned), and a backend with no cross-process feed declares none — so a bounded timer
-/// (<see cref="StoreRecoveryRerunPolicy"/>) races it for the first few re-runs, and after those only
-/// the signal can trigger one. Whichever fires, the re-run is logged and named in the health
-/// payload before it waits.</para>
+/// <para><b>What triggers the re-run: the platform's ONE "the store answers again" evidence.</b>
+/// That is <see cref="StoreReachability.StoreAnswersAgain"/> (#7072): a declared
+/// <see cref="ChangeFeedGap"/> (the feed lost its connection and resumed, which a database restart
+/// always produces) or a commit the store announced (<see cref="IMeshInvalidationFeed.DurableCommits"/>).
+/// This class defines no signal of its own; it applies the same two evidence rules
+/// <see cref="StoreReachability.ReissueWhenStoreAnswers"/> applies to a single write, to a job that
+/// emits many results:</para>
+/// <list type="bullet">
+/// <item>Evidence is observed for the job's WHOLE life, and evidence that arrives while an attempt is
+/// in flight is retained: a reconnect landing during the attempt that then faults starts the re-run at
+/// once instead of being lost to a feed that never replays.</item>
+/// <item>A re-run STARTED BY A COMMIT that meets the same fault shows a commit is not evidence for
+/// this job (the store accepted someone's commit and still refused ours), so from then on only a
+/// reconnect starts one. That keeps a busy mesh from becoming a re-run loop.</item>
+/// </list>
+///
+/// <para><b>What this adds: a bounded early backoff</b> (<see cref="StoreRecoveryRerunPolicy"/>),
+/// documented because it is the one clock here. The evidence does not cover every recovery: a feed
+/// declares a gap only after it had come up once (a pod whose listener never connected declares
+/// none), and a backend with no cross-process feed and no announced commits gives no evidence at
+/// all. So for the first few re-runs only, a timer races the evidence; after those only evidence can
+/// trigger a re-run and no clock runs. Every wait is told to the caller before it starts, so it is
+/// named in the log and the health payload.</para>
 ///
 /// <para><b>What it deliberately does NOT re-run.</b> Only <see cref="StandingWatchRecovery.IsTransient"/>
 /// faults: a database connect/IO fault, the fan-in's stall terminal, or a store fault an owner
@@ -79,32 +108,31 @@ public sealed record StoreRecoveryRerunScheduled(
 /// error, a query or schema error, a deserialization defect — anything else — surfaces unchanged on
 /// its first occurrence and stays a named failure; re-running a defect only repeats it.</para>
 ///
-/// <para>Nothing polls: between attempts the only scheduled work is the one timer, and once the
-/// timed re-runs are spent there is none. Nothing parks a thread, and no state is static.</para>
+/// <para>Nothing polls, nothing parks a thread, and no state is static.</para>
 /// </summary>
 public static class StoreRecoveryRerun
 {
     /// <summary>
-    /// The store's recovery signal for <paramref name="mesh"/>: each <see cref="ChangeFeedGap"/> its
-    /// invalidation feed declares (delivery resumed, so the store accepts connections). Never emits
-    /// on a mesh whose feed has no cross-process source.
+    /// The store's "answers again" evidence for a mesh-wide job, with its SOURCE kept (<c>true</c>: the
+    /// feed reconnected; <c>false</c>: the store announced a commit) — <see cref="StoreReachability"/>'s
+    /// own evidence, counted over every partition, because the sweep reads every partition.
     /// </summary>
-    /// <param name="mesh">The mesh hub.</param>
-    public static IObservable<ChangeFeedGap> RecoverySignal(IMessageHub mesh)
-        => mesh.ServiceProvider.GetService<IMeshInvalidationFeed>()?.Gaps
-           ?? Observable.Never<ChangeFeedGap>();
+    /// <param name="feed">The mesh's invalidation feed, or <c>null</c> (then it never emits).</param>
+    public static IObservable<bool> EvidenceFor(IMeshInvalidationFeed? feed)
+        => StoreReachability.EvidenceBySource(feed, partition: null);
 
     /// <summary>
     /// Runs <paramref name="attempt"/>, and after a <see cref="StandingWatchRecovery.IsTransient"/>
-    /// fault runs it again — on the first <paramref name="storeRecovered"/> signal after the fault,
-    /// or (for the first <see cref="StoreRecoveryRerunPolicy.MaxTimedReruns"/> re-runs) when the
-    /// policy's backoff elapses, whichever comes first. Any other fault surfaces unchanged.
+    /// fault runs it again on the first piece of <paramref name="storeAnswers"/> evidence — retained
+    /// if it arrived while the faulted attempt was in flight — or, for the first
+    /// <see cref="StoreRecoveryRerunPolicy.MaxTimedReruns"/> re-runs, when the policy's backoff
+    /// elapses, whichever comes first. Any other fault surfaces unchanged.
     /// </summary>
     /// <typeparam name="T">The job's emission.</typeparam>
     /// <param name="attempt">Cold factory for one attempt, given its re-run number (0 = the first
     /// run). Re-invoked per re-run, so it must build a FRESH upstream.</param>
-    /// <param name="storeRecovered">The store's recovery signal (hot); subscribed only while a
-    /// re-run is pending, so a recovery declared before the fault does not count.</param>
+    /// <param name="storeAnswers">The evidence, with its source (<see cref="EvidenceFor"/>); hot,
+    /// observed for the life of the subscription.</param>
     /// <param name="policy">How many timed re-runs, and their backoff.</param>
     /// <param name="scheduler">Scheduler for the backoff timer.</param>
     /// <param name="onScheduled">Told each re-run BEFORE it waits — the caller records the fault and
@@ -114,59 +142,148 @@ public static class StoreRecoveryRerun
     /// <returns>Every attempt's emissions, completing when an attempt completes.</returns>
     public static IObservable<T> RerunOnStoreRecovery<T>(
         Func<int, IObservable<T>> attempt,
-        IObservable<ChangeFeedGap> storeRecovered,
+        IObservable<bool> storeAnswers,
         StoreRecoveryRerunPolicy policy,
         IScheduler scheduler,
         Action<StoreRecoveryRerunScheduled> onScheduled,
         Func<Exception, bool>? isTransient = null)
     {
         ArgumentNullException.ThrowIfNull(attempt);
-        ArgumentNullException.ThrowIfNull(storeRecovered);
+        ArgumentNullException.ThrowIfNull(storeAnswers);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(scheduler);
         ArgumentNullException.ThrowIfNull(onScheduled);
         var classify = isTransient ?? StandingWatchRecovery.IsTransient;
         var timedBudget = Math.Max(0, policy.MaxTimedReruns);
 
-        // ONE flat pipeline re-subscribed in place by RetryWhen (StandingWatchRecovery's shape, for
-        // the same reason: no Catch nesting one layer deeper per fault survived).
         return Observable.Defer(() =>
         {
-            // Per outer subscription: the number of the attempt the next subscription starts.
+            // Per outer subscription, never shared. Evidence arrives on the feed's thread and faults on
+            // the attempt's, so the hand-off between them is a plain lock around field updates — no
+            // await or blocking wait happens inside it.
+            var state = new RerunState();
+            var evidence = storeAnswers.Subscribe(byGap =>
+            {
+                AsyncSubject<bool>? wake;
+                lock (state)
+                {
+                    if (!byGap && !state.CommitsCount)
+                        return;
+                    if (state.Waiter is { } waiting)
+                    {
+                        state.Waiter = null;
+                        wake = waiting;
+                    }
+                    else
+                    {
+                        // Retained for the attempt in flight; a reconnect outranks a commit.
+                        state.Pending = state.Pending == true ? true : byGap;
+                        return;
+                    }
+                }
+                wake.OnNext(byGap);
+                wake.OnCompleted();
+            }, ex =>
+            {
+                // The evidence itself faulted: nothing can say any more that the store answers again,
+                // so the job must not wait on it in silence. A waiting re-run surfaces the fault now;
+                // otherwise the next transient fault does (no evidence, and no clock once the timed
+                // re-runs are spent, would leave it waiting for ever).
+                AsyncSubject<bool>? wake;
+                lock (state)
+                {
+                    state.EvidenceFault = ex;
+                    wake = state.Waiter;
+                    state.Waiter = null;
+                }
+                wake?.OnError(ex);
+            });
+
             var next = 0;
-            return Observable.Defer(() => attempt(next++))
+            // ONE flat pipeline re-subscribed in place by RetryWhen (StandingWatchRecovery's shape, for
+            // the same reason: no Catch nesting one layer deeper per fault survived).
+            return Observable.Defer(() =>
+                {
+                    lock (state)
+                    {
+                        // Whatever started this attempt is spent; only newer evidence counts for it.
+                        state.Pending = null;
+                        state.Waiter = null;
+                    }
+                    return attempt(next++);
+                })
                 .RetryWhen(faults => faults.SelectMany(fault =>
                 {
                     if (!classify(fault))
                         return Observable.Throw<Unit>(fault);
                     var rerun = next;
                     TimeSpan? wait = rerun <= timedBudget ? policy.Backoff(rerun) : null;
-                    var recovered = storeRecovered.Take(1).Select(_ => Unit.Default);
-                    // LISTEN FIRST, RECORD SECOND, RE-RUN THIRD. The trigger is subscribed before the
-                    // caller is told, so a recovery declared while the caller records the fault is
-                    // not lost; it lands in a one-shot subject that hands it to the re-subscription
-                    // only after the caller has returned, so the re-run can never start (and mark
-                    // itself running) before the fault it re-runs has been recorded. The listening
-                    // subscription is owned by the returned chain: disposing the job, or the trigger
-                    // firing, releases it.
-                    var trigger = wait is { } delay
-                        ? recovered.Amb(Observable.Timer(delay, scheduler).Select(_ => Unit.Default))
-                        : recovered;
-                    var fired = new AsyncSubject<Unit>();
-                    var listening = trigger.Subscribe(fired);
-                    try
+                    bool? retained;
+                    bool commitsCount;
+                    Exception? evidenceFault;
+                    AsyncSubject<bool>? waiter = null;
+                    lock (state)
                     {
-                        onScheduled(new StoreRecoveryRerunScheduled(fault, rerun, timedBudget, wait));
+                        if (state.StartedByCommit)
+                        {
+                            // A commit started it and the store still refused it: commits are disproved.
+                            state.CommitsCount = false;
+                            if (state.Pending == false)
+                                state.Pending = null;
+                        }
+                        retained = state.Pending;
+                        state.Pending = null;
+                        commitsCount = state.CommitsCount;
+                        evidenceFault = retained is null ? state.EvidenceFault : null;
+                        if (retained is null && evidenceFault is null)
+                            state.Waiter = waiter = new AsyncSubject<bool>();
                     }
-                    catch
+
+                    // RECORD FIRST, RE-RUN SECOND: the evidence wakes the waiter, which hands it over
+                    // only once this selector has returned, so a re-run can never start (and mark
+                    // itself running) before the fault it re-runs has been recorded.
+                    onScheduled(new StoreRecoveryRerunScheduled(
+                        fault, rerun, timedBudget, wait, retained is not null, commitsCount));
+
+                    // With the evidence gone, only a pending timed re-run can still trigger one; once
+                    // those are spent the evidence's own fault surfaces as the job's terminal.
+                    IObservable<bool?> trigger = evidenceFault is { } broken
+                        ? wait is { } lastDelay
+                            ? Observable.Timer(lastDelay, scheduler).Select(_ => (bool?)null)
+                            : Observable.Throw<bool?>(broken)
+                        : retained is { } byGapNow
+                        ? Observable.Return<bool?>(byGapNow)
+                        : wait is { } delay
+                            ? waiter!.Select(b => (bool?)b)
+                                .Amb(Observable.Timer(delay, scheduler).Select(_ => (bool?)null))
+                            : waiter!.Select(b => (bool?)b);
+                    return trigger.Do(byGap =>
                     {
-                        // The caller could not record the fault: the re-run is abandoned and the
-                        // recording failure surfaces through the selector, unchanged.
-                        listening.Dispose();
-                        throw;
-                    }
-                    return fired.Finally(listening.Dispose);
-                }));
+                        lock (state)
+                            state.StartedByCommit = byGap == false;
+                    }).Select(_ => Unit.Default);
+                }))
+                .Finally(evidence.Dispose);
         });
+    }
+
+    /// <summary>The state of one <see cref="RerunOnStoreRecovery{T}"/> subscription, owned by it alone.</summary>
+    private sealed class RerunState
+    {
+        /// <summary>Evidence retained while an attempt was in flight: <c>true</c> a reconnect,
+        /// <c>false</c> a commit, <c>null</c> none.</summary>
+        public bool? Pending;
+
+        /// <summary>The waiter of a re-run that is waiting for evidence, or <c>null</c>.</summary>
+        public AsyncSubject<bool>? Waiter;
+
+        /// <summary>Whether a commit still counts as evidence for this job.</summary>
+        public bool CommitsCount = true;
+
+        /// <summary>Whether the attempt in flight was started by a commit.</summary>
+        public bool StartedByCommit;
+
+        /// <summary>The fault that ended the evidence subscription, or <c>null</c>.</summary>
+        public Exception? EvidenceFault;
     }
 }

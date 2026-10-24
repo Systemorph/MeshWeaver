@@ -269,15 +269,28 @@ caller reads that flag, never the message text. A compile error, a query or sche
 deserialization defect is not transient. It ends the sweep on its first occurrence and stays a
 named failure, as before.
 
-**What triggers the re-run** is the store's own recovery signal, a `ChangeFeedGap`. A backend
-whose cross-process feed can drop declares one when it re-opens its session; the PostgreSQL
-listener does so after a lost connection. That is the platform stating that the store accepts
-connections again. The signal alone is not enough. A gap is declared only after the feed had come
-up once. It may already have been declared before a slow read surfaced its fault. And a backend
-with no cross-process feed never declares one. So for the first few re-runs a timer races the
-signal, on the schedule a standing watch uses (2 s, 5 s, 15 s, 30 s, 60 s). After those, only the
-signal can trigger a re-run, and no clock runs at all. `StoreRecoveryRerun` holds the rule, and
-`StoreRecoveryRerunPolicy` holds the schedule.
+**What triggers the re-run** is the platform's one "the store answers again" evidence,
+`StoreReachability.StoreAnswersAgain` (#7072, the same evidence a refused NodeType release re-cut is
+re-issued on). It fires on a declared `ChangeFeedGap`, which a backend whose cross-process feed can
+drop declares when it re-opens its session (the PostgreSQL listener does so after a lost
+connection). It also fires on a commit the store announced (`IMeshInvalidationFeed.DurableCommits`),
+because such a commit is announced only after the store accepted it. The sweep reads every
+partition, so a commit in any partition counts. The sweep applies the same two rules
+`ReissueWhenStoreAnswers` applies to a single write:
+
+- Evidence is observed for the sweep's whole life. Evidence that arrives while an attempt is still
+  in flight is retained, and the re-run starts the moment that attempt faults. The feed never
+  replays a reconnect, so without this it would be lost.
+- A re-run started by a commit that meets the same fault shows that a commit is not evidence for
+  this sweep. From then on only a reconnect starts one, so a busy mesh cannot turn into a re-run
+  loop.
+
+The evidence alone is not enough, and the sweep adds one documented clock to it. A gap is declared
+only after the feed had come up once, and a backend with no cross-process feed and no announced
+commits gives no evidence at all. So for the first few re-runs a timer races the evidence, on the
+schedule a standing watch uses (2 s, 5 s, 15 s, 30 s, 60 s). After those, only evidence can trigger
+a re-run, and no clock runs at all. `StoreRecoveryRerun` holds the rule; `StoreRecoveryRerunPolicy`
+holds the schedule. It defines no second "the store is back" signal.
 
 **What the pod says while it waits.** The fault is recorded honestly first: the gate reads
 `Faulted`, and its detail names the pending re-run and what will trigger it. The log line is a
@@ -292,7 +305,7 @@ a timed re-run is pending, and released once only the signal can trigger one.
 The regression test is `AWarmUpSweepRerunsWhenTheStoreRecoversTest` (MeshWeaver.FaultInjection.Test).
 It runs the real hosted service on a real mesh, refuses the sweep's catalog read with the incident's
 fault shape, and allows no timed re-run. It asserts that the same gate instance reaches `Complete`
-once the store recovers and declares the gap. Its negative control holds the sweep the way the
+once the store recovers and the change feed declares the gap, through `StoreReachability`. Its negative control holds the sweep the way the
 service held it before. That gate stays unready after the same recovery, while a fresh sweep on the
 same mesh passes. A third case shows a non-transient fault is not re-run.
 

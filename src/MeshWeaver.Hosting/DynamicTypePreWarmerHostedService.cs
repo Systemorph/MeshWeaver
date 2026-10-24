@@ -545,9 +545,10 @@ public sealed class DynamicTypePreWarmerHostedService(
         // until it was replaced. Under the readiness-only policy nothing restarts a refused pod, so
         // the log's "a restart re-runs the sweep" described no recovery path at all.
         //
-        // The re-run is triggered by the store's OWN recovery signal (a change-feed gap closing — the
-        // listener re-opened its session) or, for the first few re-runs, a bounded backoff racing it;
-        // see StoreRecoveryRerun for why the signal alone is not enough. Only a fault typed as
+        // The re-run is triggered by the platform's one "the store answers again" evidence
+        // (StoreReachability: the change feed reconnected, or the store announced a commit) or, for the
+        // first few re-runs, a bounded backoff racing it; see StoreRecoveryRerun for why the evidence
+        // alone is not enough. Only a fault typed as
         // transient is re-run; a compile error or a query defect still ends the sweep below, named.
         var rerunPolicy = services.GetService<StoreRecoveryRerunPolicy>() ?? StoreRecoveryRerunPolicy.Default;
 
@@ -618,7 +619,7 @@ public sealed class DynamicTypePreWarmerHostedService(
                     return DynamicTypePreWarmer.WarmDynamicTypes(
                         mesh, logger, perTypeBudget, betweenTypes, batchBake, buildProtocol, progress);
                 },
-                StoreRecoveryRerun.RecoverySignal(mesh),
+                StoreRecoveryRerun.EvidenceFor(mesh.ServiceProvider.GetService<IMeshInvalidationFeed>()),
                 rerunPolicy,
                 System.Reactive.Concurrency.Scheduler.Default,
                 OnTransientFault))

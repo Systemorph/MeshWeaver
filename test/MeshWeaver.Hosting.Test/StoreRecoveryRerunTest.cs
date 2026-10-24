@@ -31,8 +31,9 @@ public class StoreRecoveryRerunTest
     private static Exception Refused() =>
         new RefusedException("Failed to connect to 10.0.0.1:5432", new SocketException(111));
 
-    private static ChangeFeedGap Gap() =>
-        new("test", DateTimeOffset.UtcNow.AddSeconds(-40), DateTimeOffset.UtcNow, "connection refused");
+    /// <summary>StoreReachability's evidence sources: the change feed reconnected, or the store announced a commit.</summary>
+    private const bool Reconnect = true;
+    private const bool Commit = false;
 
     private static readonly StoreRecoveryRerunPolicy NoTimer = new() { MaxTimedReruns = 0 };
 
@@ -40,7 +41,7 @@ public class StoreRecoveryRerunTest
     public async Task ATransientFault_IsReRun_OnTheStoresRecoverySignal()
     {
         var ct = TestContext.Current.CancellationToken;
-        var gaps = new Subject<ChangeFeedGap>();
+        var gaps = new Subject<bool>();
         var scheduled = new ReplaySubject<StoreRecoveryRerunScheduled>();
         var attempts = 0;
         var result = new AsyncSubject<string>();
@@ -64,7 +65,7 @@ public class StoreRecoveryRerunTest
         pending.Fault.Should().BeOfType<RefusedException>();
         Volatile.Read(ref attempts).Should().Be(1, "nothing re-runs before the store has recovered");
 
-        gaps.OnNext(Gap());
+        gaps.OnNext(Reconnect);
 
         var value = await result
             .Should().Within(TestTimeouts.Convergence)
@@ -77,7 +78,7 @@ public class StoreRecoveryRerunTest
     public async Task ARecoveryDeclaredWhileTheFaultIsBeingRecorded_IsNotLost()
     {
         var ct = TestContext.Current.CancellationToken;
-        var gaps = new Subject<ChangeFeedGap>();
+        var gaps = new Subject<bool>();
         var result = new AsyncSubject<string>();
 
         // The signal arrives INSIDE the caller's recording of the fault — the earliest instant it can.
@@ -85,7 +86,7 @@ public class StoreRecoveryRerunTest
                 attempt => attempt == 0
                     ? Observable.Throw<string>(Refused())
                     : Observable.Return("re-ran"),
-                gaps, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, _ => gaps.OnNext(Gap()))
+                gaps, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, _ => gaps.OnNext(Reconnect))
             .Subscribe(result);
 
         (await result.Should().Within(TestTimeouts.Convergence)
@@ -98,7 +99,7 @@ public class StoreRecoveryRerunTest
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
         var scheduler = new TestScheduler();
-        var gaps = new Subject<ChangeFeedGap>();
+        var gaps = new Subject<bool>();
         var announced = new System.Collections.Generic.List<StoreRecoveryRerunScheduled>();
         var attempts = 0;
         var policy = new StoreRecoveryRerunPolicy { MaxTimedReruns = 2, Backoff = n => TimeSpan.FromSeconds(n) };
@@ -122,7 +123,7 @@ public class StoreRecoveryRerunTest
         announced[^1].Backoff.Should().BeNull();
         announced[^1].Trigger.Should().Contain("no clock");
 
-        gaps.OnNext(Gap());
+        gaps.OnNext(Reconnect);
         attempts.Should().Be(4, "the store's recovery signal still re-runs it — the fault is never final");
     }
 
@@ -130,7 +131,7 @@ public class StoreRecoveryRerunTest
     public async Task ANonTransientFault_SurfacesUnchanged_AndIsNeverReRun()
     {
         var ct = TestContext.Current.CancellationToken;
-        var gaps = new Subject<ChangeFeedGap>();
+        var gaps = new Subject<bool>();
         var announced = 0;
         var attempts = 0;
         var terminal = new AsyncSubject<Exception>();
@@ -148,9 +149,95 @@ public class StoreRecoveryRerunTest
         (await terminal.Should().Within(TestTimeouts.Convergence)
                 .Emit("a defect ends the job on its first occurrence", ct))
             .Should().BeOfType<InvalidOperationException>();
-        gaps.OnNext(Gap());
+        gaps.OnNext(Reconnect);
         Volatile.Read(ref attempts).Should().Be(1, "re-running a defect only repeats it");
         Volatile.Read(ref announced).Should().Be(0);
+    }
+
+    /// <summary>
+    /// A reconnect that lands while the attempt is still IN FLIGHT — the feed never replays it — is
+    /// retained, and the re-run starts the moment that attempt faults (StoreReachability's rule).
+    /// </summary>
+    [HubFact]
+    public async Task EvidenceThatArrivesDuringTheFaultedAttempt_StartsTheReRunAtOnce()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var evidence = new Subject<bool>();
+        var announced = new ReplaySubject<StoreRecoveryRerunScheduled>();
+        var result = new AsyncSubject<string>();
+
+        using var run = StoreRecoveryRerun.RerunOnStoreRecovery(
+                attempt => attempt == 0
+                    ? Observable.Defer(() =>
+                    {
+                        evidence.OnNext(Reconnect); // the store came back while this attempt was failing
+                        return Observable.Throw<string>(Refused());
+                    })
+                    : Observable.Return("re-ran"),
+                evidence, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, announced.OnNext)
+            .Subscribe(result);
+
+        (await result.Should().Within(TestTimeouts.Convergence)
+                .Emit("a reconnect retained from the faulted attempt must re-run it with no further evidence", ct))
+            .Should().Be("re-ran");
+        var scheduled = await announced.Take(1).Should().Within(TestTimeouts.Convergence).Emit(cancellationToken: ct);
+        scheduled.EvidenceAlreadyIn.Should().BeTrue();
+        scheduled.Trigger.Should().StartWith("now");
+    }
+
+    /// <summary>
+    /// A re-run STARTED BY A COMMIT that meets the same fault shows a commit is not evidence for this
+    /// job, so later commits start nothing — only a reconnect does. A busy mesh cannot become a loop.
+    /// </summary>
+    [HubFact]
+    public void ACommitStartedReRunThatFailsAgain_DisprovesCommits_ButAReconnectStillCounts()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var evidence = new Subject<bool>();
+        var announced = new System.Collections.Generic.List<StoreRecoveryRerunScheduled>();
+        var attempts = 0;
+
+        using var run = StoreRecoveryRerun.RerunOnStoreRecovery(
+                _ =>
+                {
+                    Interlocked.Increment(ref attempts);
+                    return Observable.Throw<Unit>(Refused());
+                },
+                evidence, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, announced.Add)
+            .Subscribe(_ => { }, _ => { });
+
+        attempts.Should().Be(1);
+        evidence.OnNext(Commit);
+        attempts.Should().Be(2, "a commit the store announced is evidence it answers again");
+        announced[^1].CommitsCount.Should().BeFalse("that commit-started re-run met the same fault");
+        evidence.OnNext(Commit);
+        evidence.OnNext(Commit);
+        attempts.Should().Be(2, "commits are disproved for this job: they must not drive a re-run loop");
+        evidence.OnNext(Reconnect);
+        attempts.Should().Be(3, "a reconnect is still evidence");
+    }
+
+    /// <summary>
+    /// If the evidence itself faults, nothing can say the store answers again: a re-run waiting on
+    /// it must surface that fault, never wait on a dead signal in silence.
+    /// </summary>
+    [HubFact]
+    public async Task AFaultedEvidenceFeed_SurfacesInsteadOfWaitingForEver()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var evidence = new Subject<bool>();
+        var terminal = new AsyncSubject<Exception>();
+
+        using var run = StoreRecoveryRerun.RerunOnStoreRecovery(
+                _ => Observable.Throw<Unit>(Refused()),
+                evidence, NoTimer, System.Reactive.Concurrency.Scheduler.Immediate, _ => { })
+            .Subscribe(_ => { }, ex => { terminal.OnNext(ex); terminal.OnCompleted(); });
+
+        evidence.OnError(new ObjectDisposedException("the invalidation feed"));
+
+        (await terminal.Should().Within(TestTimeouts.Convergence)
+                .Emit("a re-run waiting on evidence that can no longer arrive must say so", ct))
+            .Should().BeOfType<ObjectDisposedException>();
     }
 
     /// <summary>
