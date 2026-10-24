@@ -171,8 +171,12 @@ public static class MailAttachments
     /// it (the size is the provider's), and stores the rest — one at a time. A failure of one attachment is
     /// recorded as <see cref="MailAttachmentSkips.FetchFailed"/> and never fails the others; only the
     /// listing itself can error (the caller then leaves the message undecided). Cold.
+    /// <para>🚨 INTERNAL on purpose (#7133 review): its saves are invoked only after the listing and the fetch
+    /// have emitted, so the store would judge whoever subscribed rather than whoever composed the call, and
+    /// it would read THIS assembly as the calling code. The engine's background path is its one caller, and
+    /// that path declares System on the owner's behalf at every store call (BackgroundMailAttachmentStore).</para>
     /// </summary>
-    public static IObservable<ImmutableList<MailAttachmentCopy>> Collect(
+    internal static IObservable<ImmutableList<MailAttachmentCopy>> Collect(
         IMailAttachmentSource source, IMailAttachmentStore store, string owner, string copyPath, string messageId, ILogger? logger = null)
         => source.List(messageId).Take(1).SelectMany(infos => infos
             .Select(info => Observable.Defer(() => Decide(source, store, owner, copyPath, messageId, info, logger)))

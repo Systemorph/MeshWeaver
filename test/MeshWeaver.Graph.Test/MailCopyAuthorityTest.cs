@@ -430,18 +430,40 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
 
         // The decision is warm now (the calls above folded it). Subscribed on THIS thread, a continuation that
         // stayed on the emitting thread would run here, inside the fold's gate.
+        // 🚨 Re-entry is judged DURING the subscribe call, never by comparing thread ids afterwards: once the
+        // test thread yields, the pool may hand that same thread to the hopped work (#7133 review). The work
+        // ran inside the gate exactly when it ran on the subscribing thread before Subscribe returned.
         var subscriber = Environment.CurrentManagedThreadId;
-        var worker = -1;
+        var subscribing = 1;
+        var ranInline = 0;
         IObservable<int> gated;
         using (access.SwitchAccessContext(asDelegate))
             gated = MailCopyAuthority.Gated(Mesh, typeof(MailCopyAuthorityTest).Assembly, "test", owner, Permission.Read,
                 () => Observable.Defer(() =>
                 {
-                    worker = Environment.CurrentManagedThreadId;
+                    if (Environment.CurrentManagedThreadId == subscriber && Volatile.Read(ref subscribing) == 1)
+                        Volatile.Write(ref ranInline, 1);
                     return Observable.Return(1);
                 }));
-        (await gated.Timeout(Bound).Await(ct)).Should().Be(1);
-        worker.Should().NotBe(subscriber, "the work runs after the decision has left the evaluator's gate");
+        var result = gated.Timeout(Bound).Await(ct);
+        Volatile.Write(ref subscribing, 0);
+        (await result).Should().Be(1);
+        Volatile.Read(ref ranInline).Should().Be(0, "the work runs after the decision has left the evaluator's gate, never inside the subscribe");
+    }
+
+    /// <summary>
+    /// <see cref="MailAttachments"/>' collector saves only after the listing and the fetch emit, so a store
+    /// call it makes would judge whoever SUBSCRIBED and read the platform assembly as the calling code: no
+    /// code outside the platform may compose it (#7133 review). The background engine is its one caller.
+    /// </summary>
+    [Fact]
+    public void TheAttachmentCollector_IsNotReachableFromOutsideThePlatform()
+    {
+        var collect = typeof(MailAttachments).GetMethod("Collect",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+        collect.Should().NotBeNull("the control: the collector exists");
+        collect!.IsPublic.Should().BeFalse("a public collector would launder an in-mesh caller's System write through the trusted store");
+        (collect.IsFamily || collect.IsFamilyOrAssembly).Should().BeFalse("nor reachable through a derived type");
     }
 
     [Fact]
