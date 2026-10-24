@@ -151,6 +151,76 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
             .Should().Be("Hello", "the background sync wrote the copy as System on the owner's behalf");
     }
 
+    /// <summary>
+    /// Switching a copy on is judged as the person who CALLED <see cref="MailCopyEngine.Enable"/>, not as
+    /// whoever later subscribes the cold result: composed under another person and subscribed under the
+    /// host's admin, it is refused and creates nothing. The owner, composing the same call, is the control.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task Enable_IsJudgedAsItsCaller_NotAsItsSubscriber()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var engine = new MailCopyEngine(new OneMessageFeed(), store, access: access);
+
+        IObservable<MailCopySource> composed;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "mallory", Name = "mallory" }))
+            composed = engine.Enable(owner, 30);
+        // Subscribed outside mallory's scope, where the host's identity (an admin) is ambient.
+        (await Record.ExceptionAsync(() => composed.Timeout(Bound).Await(ct)))
+            .Should().BeOfType<UnauthorizedAccessException>("the switch-on was asked for by mallory, whoever subscribes it later");
+        (await engine.Source(owner).Timeout(Bound).Await(ct))
+            .Should().BeNull("the refused switch-on created no copy");
+
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            composed = engine.Enable(owner, 30);
+        (await composed.Timeout(Bound).Await(ct)).Provider
+            .Should().Be("outlook", "the control arm: the SAME composition by the owner switches the copy on");
+    }
+
+    /// <summary>
+    /// One sync per owner per engine: a direct <see cref="MailCopyEngine.Sync"/> while another runs answers
+    /// null at once instead of sharing the running sync's lease and cursor, and the gate is released when the
+    /// running subscription is disposed — the next sync then runs to its commit.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task Sync_IsSingleFlightPerOwner_AndReleasesTheGateOnDisposal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var feed = new HeldFeed();
+        var engine = new MailCopyEngine(feed, store, access: access);
+        var now = DateTimeOffset.UtcNow;
+        await store.Create(owner, new MailCopySource
+        {
+            Provider = "outlook", Generation = MailCopyNodeTypes.NewGeneration(), Projection = MailCopySource.CurrentProjection,
+            EnabledAt = now, WindowStart = now.AddDays(-30),
+        }).Timeout(Bound).Await(ct);
+
+        var first = engine.Sync(owner).Subscribe(_ => { }, _ => { });
+        (await engine.Sync(owner).Timeout(Bound).Await(ct))
+            .Should().BeNull("a second sync of the same owner while one runs must not share its lease and cursor");
+
+        first.Dispose();
+        feed.Release();
+        var synced = await engine.Sync(owner).Timeout(Bound).Await(ct);
+        synced.Should().NotBeNull("disposing the running sync released the gate, so the next sync runs");
+        synced!.Backfilled.Should().BeTrue("the released feed step said it was done");
+    }
+
+    /// <summary>
+    /// The sweep deletes copies through the System-backed store, so it is never a public entry point of the
+    /// engine: it runs only inside the checked <see cref="MailCopyEngine.Sync"/> and <see cref="MailCopyEngine.Kick"/>.
+    /// </summary>
+    [Fact]
+    public void TheSweep_IsNotAPublicEntryPoint()
+        => typeof(MailCopyEngine).GetMethod("Sweep", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Should().BeNull("a public Sweep would let any code delete another owner's copies as System, unchecked");
+
     [Fact(Timeout = 120_000)]
     public async Task TheAttachmentStore_RefusesEveryTargetButTheOwnersOwnCopyNodes()
     {
@@ -209,6 +279,21 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
         public IObservable<ImmutableList<(string AccountId, string Label)>> Accounts(string owner) => Observable.Return(ImmutableList.Create(("acct", "Mail")));
         public IObservable<MailFeedStep> Step(string owner, string? cursor, DateTimeOffset windowStart)
             => Observable.Return(new MailFeedStep(
+                [new MailMessageCopy { Provider = "outlook", MessageId = "m1", Subject = "Hello", ReceivedAt = DateTimeOffset.UtcNow }],
+                ImmutableList<string>.Empty, "c1", Done: true));
+        public IObservable<IMailAttachmentSource> Attachments(string owner) => Observable.Return<IMailAttachmentSource>(new NoFiles());
+    }
+
+    /// <summary>A feed whose step is held until <see cref="Release"/>: a sync started before then parks in it.</summary>
+    private sealed class HeldFeed : IMailCopyFeed
+    {
+        private readonly System.Reactive.Subjects.BehaviorSubject<bool> held = new(true);
+        public void Release() => held.OnNext(false);
+        public string Provider => "outlook";
+        public IObservable<string> AccountId(string owner) => Observable.Return("acct");
+        public IObservable<ImmutableList<(string AccountId, string Label)>> Accounts(string owner) => Observable.Return(ImmutableList.Create(("acct", "Mail")));
+        public IObservable<MailFeedStep> Step(string owner, string? cursor, DateTimeOffset windowStart)
+            => held.Where(h => !h).Take(1).Select(_ => new MailFeedStep(
                 [new MailMessageCopy { Provider = "outlook", MessageId = "m1", Subject = "Hello", ReceivedAt = DateTimeOffset.UtcNow }],
                 ImmutableList<string>.Empty, "c1", Done: true));
         public IObservable<IMailAttachmentSource> Attachments(string owner) => Observable.Return<IMailAttachmentSource>(new NoFiles());

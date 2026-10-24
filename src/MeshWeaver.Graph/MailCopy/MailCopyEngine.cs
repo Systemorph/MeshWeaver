@@ -91,22 +91,35 @@ public sealed class MailCopyEngine(
     /// <summary>The copy's source, or null while it is off. Cold; emits once.</summary>
     public IObservable<MailCopySource?> Source(string owner) => store.Source(owner, Provider).Take(1).DefaultIfEmpty(null);
 
-    /// <summary>Switches the copy ON (a no-op when it is on) and starts the backfill. Cold.</summary>
+    /// <summary>
+    /// Switches the copy ON (a no-op when it is on) and starts the backfill. Cold. The switch-on is judged as
+    /// the identity ambient when this is CALLED — never as whoever later subscribes the result — while every
+    /// subscription still mints its own generation.
+    /// </summary>
     public IObservable<MailCopySource> Enable(string owner, int windowDays)
-        => Observable.Defer(() =>
+    {
+        // 🚨 Read HERE, at the call: the Defer below runs at subscribe, possibly after the caller's scope has
+        // ended and under somebody else's identity (a System or admin subscriber must not launder the call).
+        var caller = access is null ? null : access.Context ?? access.CircuitContext;
+        return Observable.Defer(() =>
             {
+                if (access is not null && caller is null)
+                    return Observable.Throw<MailCopySource>(new UnauthorizedAccessException(
+                        $"Switching on the mail copy of '{owner}' needs a signed-in person; this call carries no identity."));
                 var now = time.GetUtcNow();
                 var days = windowDays >= 1 ? windowDays : MailCopyNodeTypes.WindowDays;
-                return store.Create(owner, new MailCopySource
-                {
-                    Provider = Provider,
-                    Generation = MailCopyNodeTypes.NewGeneration(),
-                    Projection = MailCopySource.CurrentProjection,
-                    EnabledAt = now,
-                    WindowStart = now.AddDays(-days),
-                });
+                using (access?.SwitchAccessContext(caller))
+                    return store.Create(owner, new MailCopySource
+                    {
+                        Provider = Provider,
+                        Generation = MailCopyNodeTypes.NewGeneration(),
+                        Projection = MailCopySource.CurrentProjection,
+                        EnabledAt = now,
+                        WindowStart = now.AddDays(-days),
+                    });
             })
-            .Do(_ => Kick(owner, force: true));
+            .Do(_ => KickFrom(typeof(MailCopyEngine).Assembly, owner, force: true));
+    }
 
     /// <summary>Switches the copy OFF: the source, every copy, their attachment files and index go. Cold; true when something was removed.</summary>
     public IObservable<bool> Disable(string owner) => store.Disable(owner, Provider);
@@ -119,32 +132,50 @@ public sealed class MailCopyEngine(
     [ImpersonationSurface]
     [MethodImpl(MethodImplOptions.NoInlining)]
     public void Kick(string owner, bool force = false)
+        => KickFrom(Assembly.GetCallingAssembly(), owner, force, nameof(Kick));
+
+    /// <summary>
+    /// <see cref="Kick"/> on behalf of <paramref name="caller"/> — the assembly that called the PUBLIC surface
+    /// (<see cref="Kick"/>, or <see cref="MailFeedAccountCopy.KickAll"/>), which the guard judges; never this
+    /// platform assembly, which would pass any caller.
+    /// </summary>
+    internal void KickFrom(Assembly caller, string owner, bool force = false, string surface = nameof(Kick))
     {
-        CheckCaller(Assembly.GetCallingAssembly(), nameof(Kick), owner);
+        CheckCaller(caller, surface, owner);
         var now = time.GetUtcNow();
         if (!force && lastStarted.TryGetValue(owner, out var last) && now - last < MinInterval)
             return;
-        if (!ImmutableInterlocked.Update(ref running, static (set, o) => set.Add(o), owner))
+        if (!TryEnter(owner))
             return;
         ImmutableInterlocked.AddOrUpdate(ref lastStarted, owner, now, (_, _) => now);
         SyncCore(owner)
             .Timeout(TimeSpan.FromMinutes(30))
-            .Finally(() => ImmutableInterlocked.Update(ref running, static (set, o) => set.Remove(o), owner))
+            .Finally(() => Exit(owner))
             .Subscribe(_ => { }, ex => logger?.LogWarning(ex, "{Provider} copy: the sync of {Owner} failed", Provider, owner));
     }
 
     /// <summary>
     /// One sync: the lease taken, then feed steps from the stored cursor — each step's writes first, then its
     /// cursor committed under the lease — and the lease released. For a copy that is OFF it only sweeps what a
-    /// late write left behind: it reads one node and writes nothing else. Cold.
+    /// late write left behind: it reads one node and writes nothing else. Cold. One sync per owner runs in this
+    /// engine: a subscription made while another (or a <see cref="Kick"/>) runs emits null at once and does
+    /// nothing; the gate is released when the running one completes, fails or is disposed.
     /// </summary>
     [ImpersonationSurface]
     [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource?> Sync(string owner)
     {
         CheckCaller(Assembly.GetCallingAssembly(), nameof(Sync), owner);
-        return SyncCore(owner);
+        return Observable.Defer(() => TryEnter(owner)
+            ? SyncCore(owner).Finally(() => Exit(owner))
+            : Observable.Return<MailCopySource?>(null));
     }
+
+    // The per-owner single-flight gate: every sync of this engine shares one lease holder, so two at once
+    // would both pass Acquire, step the same cursor and release each other's lease.
+    private bool TryEnter(string owner) => ImmutableInterlocked.Update(ref running, static (set, o) => set.Add(o), owner);
+
+    private void Exit(string owner) => ImmutableInterlocked.Update(ref running, static (set, o) => set.Remove(o), owner);
 
     private void CheckCaller(Assembly caller, string surface, string owner)
         => access?.ImpersonationGuard.Check(caller, $"{nameof(MailCopyEngine)}.{surface}", new AccessContext
@@ -231,8 +262,9 @@ public sealed class MailCopyEngine(
                     : Sweep(owner)).Select(_ => (MailCopySource?)rebuilt));
     }
 
-    /// <summary>Removes the copies a late write left behind — of generations PROVEN obsolete. Emits how many.</summary>
-    public IObservable<int> Sweep(string owner)
+    // Removes the copies a late write left behind — of generations PROVEN obsolete. Emits how many. 🚨 Private:
+    // it deletes through the System-backed store, so it runs only inside the checked Sync / Kick.
+    private IObservable<int> Sweep(string owner)
         => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
             .SelectMany(before => copies.List(owner, Provider, MeshMailCopyStore.MaxPage, before?.Generation))
             .SelectMany(listed => listed.Count == 0
@@ -429,5 +461,9 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
             : engine.Disable(owner));
 
     /// <inheritdoc />
-    public void KickAll(string owner) => engine.Kick(owner);
+    /// <remarks>Starts a System sync on the owner's behalf, so the CODE that calls it is judged by the in-mesh
+    /// impersonation guard — this assembly calling <see cref="MailCopyEngine.Kick"/> would pass any caller.</remarks>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public void KickAll(string owner) => engine.KickFrom(Assembly.GetCallingAssembly(), owner, surface: nameof(KickAll));
 }

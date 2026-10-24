@@ -98,6 +98,8 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Graph.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
             ["MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
             ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync"],
+            ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll"],
+            ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
     /// <summary>Members reported only when WRITTEN (an assignment, an object or <c>with</c> initializer).</summary>

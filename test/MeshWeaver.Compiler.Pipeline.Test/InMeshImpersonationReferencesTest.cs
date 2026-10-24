@@ -186,6 +186,12 @@ public class InMeshImpersonationReferencesTest
         "MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore.Save")]
     [InlineData("public static Action<string, bool> M(MailCopyEngine e) => e.Kick;",
         "MeshWeaver.Graph.MailCopy.MailCopyEngine.Kick")]
+    [InlineData("public static Func<string, IObservable<MailCopySource?>> M(MailCopyEngine e) => e.Sync;",
+        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Sync")]
+    [InlineData("public static Action<string> M(IMailAccountCopy a) => a.KickAll;",
+        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.KickAll")]
+    [InlineData("public static void M(MailFeedAccountCopy a) => a.KickAll(\"owner\");",
+        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.KickAll")]
     public void AMailCopyStoreReference_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));

@@ -66,8 +66,10 @@ can reach them, so they authorize the caller before they elevate
 - **The code** that called them is judged by the in-mesh impersonation guard exactly as if it had called
   `RunAsSystemFor` itself (each entry point is an `[ImpersonationSurface]`). A runtime check sees only the
   immediate caller, so the same entry points — on the interfaces and on the concrete stores, plus the
-  engine's `Kick` and `Sync` — are also reported at COMPILE time (`InMeshImpersonationReferences`), which
-  finds a method group handed to a later platform callback as well.
+  engine's `Kick` and `Sync` and the account switch's `KickAll` — are also reported at COMPILE time
+  (`InMeshImpersonationReferences`), which finds a method group handed to a later platform callback as well.
+  `KickAll` judges ITS caller and hands that verdict on, never the platform assembly that then calls the
+  engine. The engine's sweep of obsolete copies is private: it runs only inside a checked sync.
 - **The identity** the store was CALLED under — the request context, else the circuit's — read at the call,
   never when the cold result is subscribed: a write composed by one person and subscribed after their
   scope ended is still theirs. The owner may act on their own copy; anybody else needs the permission the
@@ -75,7 +77,11 @@ can reach them, so they authorize the caller before they elevate
   or an anonymous one, is refused**: a lost identity is never read as trusted background work.
 - **The background sync declares itself.** `MailCopyEngine` (given the host's `AccessService`) makes every
   store call of a sync as System on the owner's behalf, at the call — a sync runs after provider hops that
-  keep no ambient identity. Switching on, off and reading go through the caller's own identity. An engine
+  keep no ambient identity. Switching on, off and reading go through the caller's own identity; `Enable`
+  reads it when it is CALLED and re-establishes it when its cold result is subscribed, so a System or admin
+  subscriber never launders another person's switch-on. One sync per owner runs per engine: a `Sync`
+  subscribed while another runs emits null at once, and the gate opens again when the running one
+  completes, fails or is disposed. An engine
   built without the `AccessService` on a host that has one gets its syncs refused, loudly.
 - **The target**: the attachment store writes to and empties only `{owner}/_MailCopy/{key}/{id}` — a copy
   node of the owner — and never a relative path that leaves its `attachments` collection.
