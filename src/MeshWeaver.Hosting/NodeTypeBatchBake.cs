@@ -1343,6 +1343,11 @@ internal static class NodeTypeBatchBake
                     : null,
                 unreleasedBuildReason: outcome is { Attempted: true, Succeeded: false }
                     ? outcome.Failure
+                    : null,
+                // #7072 — the class, so the activation that holds this stamp can tell a create the
+                // store never saw from a verdict.
+                unreleasedBuildFailureClass: outcome is { Attempted: true, Succeeded: false }
+                    ? outcome.FailureClass
                     : null))
             .Select(_ =>
             {
@@ -1468,12 +1473,13 @@ internal static class NodeTypeBatchBake
         DateTimeOffset startedAt,
         ILogger? logger,
         string? unreleasedBuildPath = null,
-        string? unreleasedBuildReason = null)
+        string? unreleasedBuildReason = null,
+        string? unreleasedBuildFailureClass = null)
     {
         var gate = mesh.ServiceProvider.GetService<MeshPublicationGate>();
         IObservable<Unit> Stamp() =>
             BuildStamp(mesh, typeNode, ok, result, error, releasePath, startedAt, logger,
-                unreleasedBuildPath, unreleasedBuildReason);
+                unreleasedBuildPath, unreleasedBuildReason, unreleasedBuildFailureClass);
         return gate is null
             ? Observable.Defer(Stamp)
             : gate.Publish($"NodeType compile stamp for {typeNode.Path}", Stamp);
@@ -1493,7 +1499,8 @@ internal static class NodeTypeBatchBake
         DateTimeOffset startedAt,
         ILogger? logger,
         string? unreleasedBuildPath,
-        string? unreleasedBuildReason)
+        string? unreleasedBuildReason,
+        string? unreleasedBuildFailureClass)
     {
         var storage = mesh.ServiceProvider.GetService<IStorageAdapter>();
         if (storage is null)
@@ -1556,7 +1563,8 @@ internal static class NodeTypeBatchBake
                             unreleasedBuildPath, unreleasedBuildReason,
                             // #6831 — the node the compiler was handed, whose module version
                             // the bytes carry.
-                            compiledInput: typeNode.ContentAs<NodeTypeDefinition>(options, logger))
+                            compiledInput: typeNode.ContentAs<NodeTypeDefinition>(options, logger),
+                            unreleasedBuildFailureClass: unreleasedBuildFailureClass)
                         : NodeTypeCompilationHelpers.ApplyCompileFailure(
                             def, result, error, activityPath: null,
                             mesh.ServiceProvider.GetService<InstalledModulesFingerprint>()?.Hash,
