@@ -446,8 +446,9 @@ public static class SealedPublicationIndex
             // end. So the walk is attempted and its own exception separates them:
             // `DirectoryNotFoundException` is the absence, everything else lands in the catch
             // below as UNREADABLE.
-            readings = [.. io.EnumerateDirectories(identityDirectory)
-                .OrderBy(d => d, StringComparer.Ordinal)
+            // The listing itself is a step boundary too (review on #7121): checked before it starts and
+            // per entry while it materializes, before the sort — never after a buffered listing.
+            readings = [.. ShippedPrebuiltBundles.OrdinalListing(io.ListDirectories(identityDirectory), cancellationToken)
                 .Select(d =>
                 {
                     // Between sources: each is a pointer, two markers, a seal, a probe per bundle

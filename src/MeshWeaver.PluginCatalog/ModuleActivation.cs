@@ -2353,9 +2353,17 @@ public static class ModuleActivationSidecar
         ImmutableList<string> files;
         try
         {
-            files = Directory.Exists(directory)
-                ? [.. Directory.EnumerateFiles(directory, "*.json").OrderBy(f => f, StringComparer.Ordinal)]
-                : [];
+            // Checked before the listing starts and per entry while it materializes, BEFORE the sort
+            // (review on #7121): a sort drains the whole listing before anything could look.
+            cancellationToken.ThrowIfCancellationRequested();
+            var listed = ImmutableList.CreateBuilder<string>();
+            if (Directory.Exists(directory))
+                foreach (var entry in Directory.EnumerateFiles(directory, "*.json"))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    listed.Add(entry);
+                }
+            files = [.. listed.OrderBy(f => f, StringComparer.Ordinal)];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

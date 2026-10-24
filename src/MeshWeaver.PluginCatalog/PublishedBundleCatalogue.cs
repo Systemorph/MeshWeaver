@@ -709,7 +709,15 @@ public static class PublishedBundleCatalogue
         // to a RELEASE, not to an identity's publications, and Read attaches the one recorded for
         // the release being judged. The meshweaver-content-first order is kept for the module
         // conflict attribution below, which names the first source that sealed a copy.
+        // The listing is a step boundary too (review on #7121): checked before it starts, and per entry
+        // as the sort drains it — the Select runs once per yielded directory, BEFORE ordering.
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+                     .Select(d =>
+                     {
+                         cancellationToken.ThrowIfCancellationRequested();
+                         return d;
+                     })
                      .OrderBy(d => string.Equals(Path.GetFileName(d), "meshweaver-content", StringComparison.Ordinal) ? 0 : 1)
                      .ThenBy(d => d, StringComparer.Ordinal))
         {
