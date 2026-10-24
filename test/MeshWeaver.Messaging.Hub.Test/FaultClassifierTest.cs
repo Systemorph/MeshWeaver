@@ -21,6 +21,23 @@ public class FaultClassifierTest
         public override bool IsTransient => transient;
     }
 
+    /// <summary>A driver exception that compares EQUAL by value, as a provider type may — the
+    /// classifier must still judge each instance on its own.</summary>
+    private sealed class ValueEqualDbException(string message, string sqlState) : DbException(message)
+    {
+        public override string? SqlState { get; } = sqlState;
+        public override bool Equals(object? obj) => obj is ValueEqualDbException;
+        public override int GetHashCode() => 1;
+    }
+
+    /// <summary>The shape of the query provider's stall (<c>QueryProviderStalledException</c>,
+    /// which lives above this assembly): a typed <see cref="FaultLayer.StoreStall"/>.</summary>
+    private sealed class StallException() : Exception("provider stalled"), IClassifiedFault
+    {
+        public string ClassifiedKind => FaultKind.Transient;
+        public string? ClassifiedLayer => FaultLayer.StoreStall;
+    }
+
     private static DeliveryFailureException Failure(string message, ErrorType type)
         => new(new DeliveryFailure(null!, message) { ErrorType = type });
 
@@ -254,5 +271,68 @@ public class FaultClassifierTest
         flattened.Kind.Should().Be(driver.Kind);
         flattened.Layer.Should().Be(driver.Layer);
         flattened.ByMessage.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 Two DISTINCT driver exceptions that compare equal by value — an outage (<c>57P03</c>) and a
+    /// schema defect (<c>42P01</c>) — are two branches. Memoized by value, the second reused the
+    /// first's verdict and the whole aggregate read as a retryable store outage.
+    /// </summary>
+    [Fact]
+    public void ValueEqualDriverExceptions_AreJudgedEachOnTheirOwn()
+    {
+        var verdict = FaultClassifier.Classify(new AggregateException(
+            new ValueEqualDbException("cannot connect now", "57P03"),
+            new ValueEqualDbException("relation does not exist", "42P01")));
+
+        verdict.Kind.Should().Be(FaultKind.Fault);
+        verdict.EveryBranchTypedTransientIn(FaultLayer.Store).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 A wrapper's TEXT match stands in only for a cause nothing typed decides — it is never
+    /// copied into an aggregate child beside a sibling that DID decide. Otherwise a configuration
+    /// defect next to a socket fault inherits "Failed to connect" and the mix reads as transient.
+    /// </summary>
+    [Fact]
+    public void AWrappersText_NeverReplacesAnUndecidedSibling_OfATypedBranch()
+    {
+        var verdict = FaultClassifier.Classify(new InvalidOperationException("Failed to connect",
+            new AggregateException(
+                new SocketException((int)SocketError.ConnectionRefused),
+                new InvalidOperationException("bad configuration"))));
+
+        verdict.Kind.Should().Be(FaultKind.Fault);
+
+        // …while an aggregate in which NOTHING decides still takes the wrapper's text.
+        var undecided = FaultClassifier.Classify(new InvalidOperationException("Failed to connect",
+            new AggregateException(new InvalidOperationException("x"), new InvalidOperationException("y"))));
+        undecided.Kind.Should().Be(FaultKind.Transient);
+        undecided.Layer.Should().Be(FaultLayer.Store);
+        undecided.ByMessage.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A TYPED timeout wrapping a stalled provider is the stall: the provider's stall is WHY it
+    /// timed out. Read as a plain timeout, a view retried it (<c>IsTransientHubFailure</c>) and the
+    /// storage-unavailable frame never rendered (<c>IsStorageUnavailable</c>).
+    /// </summary>
+    [Fact]
+    public void ATimeoutWrappingAStall_IsTheStall()
+    {
+        var verdict = FaultClassifier.Classify(new TimeoutException("query failed", new StallException()));
+
+        verdict.Kind.Should().Be(FaultKind.Transient);
+        verdict.Layer.Should().Be(FaultLayer.StoreStall);
+        verdict.EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.StoreStall).Should().BeTrue();
+
+        // The mixed-branch rule is kept: a stall beside a defect under the timeout is a fault.
+        FaultClassifier.Classify(new TimeoutException("query failed",
+                new AggregateException(new StallException(), new InvalidOperationException("defect"))))
+            .Kind.Should().Be(FaultKind.Fault);
+
+        // And a timeout over anything else is still a timeout.
+        FaultClassifier.Classify(new TimeoutException("slow", new InvalidOperationException("x")))
+            .Kind.Should().Be(FaultKind.Timeout);
     }
 }

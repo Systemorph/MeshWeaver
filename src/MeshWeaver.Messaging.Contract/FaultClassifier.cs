@@ -317,7 +317,10 @@ public static class FaultClassifier
     /// </summary>
     private sealed class Walk(TeardownContext? context)
     {
-        private readonly Dictionary<(Exception Node, bool IsHead, FaultClassification? Fallback), ImmutableArray<FaultClassification>> memo = new();
+        // Keyed by the node's REFERENCE: an exception type may override Equals (a provider's driver
+        // exception comparing by value), and two distinct instances are two branches, never one.
+        private readonly Dictionary<(Exception Node, bool IsHead, FaultClassification? Fallback), ImmutableArray<FaultClassification>> memo
+            = new(MemoKeyComparer.Instance);
         private readonly HashSet<Exception> path = new(ReferenceEqualityComparer.Instance);
         private int expansions;
 
@@ -351,28 +354,56 @@ public static class FaultClassifier
             {
                 if (aggregate.InnerExceptions.Count == 0)
                     return [fallback ?? Leaf(FaultKind.Fault)];
+                // The children are judged WITHOUT the outer stand-in: a wrapper's verdict speaks for
+                // the aggregate as a whole only when NO child decides anything. Copied into each
+                // child, it would turn a defect beside a socket fault into a second transient branch.
                 var verdicts = ImmutableArray.CreateBuilder<FaultClassification>();
                 foreach (var inner in aggregate.InnerExceptions)
-                    foreach (var verdict in Collect(inner, isHead, fallback))
+                    foreach (var verdict in Collect(inner, isHead, fallback: null))
                         if (!verdicts.Contains(verdict))
                             verdicts.Add(verdict);
-                return verdicts.ToImmutable();
+                return fallback is { } standIn && verdicts.All(static v => v == Undecided)
+                    ? [standIn]
+                    : verdicts.ToImmutable();
             }
 
             if (Decide(node, isHead, context) is { } decided)
             {
                 // A TYPE decides for the whole chain below it (a driver exception wrapping a socket
                 // fault is a store fault). A message match only stands in: the typed cause it wraps,
-                // if any, is the better witness.
-                if (!decided.ByMessage)
+                // if any, is the better witness. So does a typed TIMEOUT over a stalled provider: the
+                // stall is WHY it timed out, and read as a plain timeout a view would retry it.
+                if (!decided.ByMessage && !(decided.Kind == FaultKind.Timeout && WrapsStall(node.InnerException)))
                     return [decided];
-                fallback ??= decided;
+                fallback = decided.ByMessage ? fallback ?? decided : decided;
             }
 
             return node.InnerException is { } next
                 ? Collect(next, isHead: false, fallback)
                 : [fallback ?? Leaf(FaultKind.Fault)];
         }
+    }
+
+    /// <summary>The verdict of a chain nothing in which decided — what an unresolved branch is.</summary>
+    private static readonly FaultClassification Undecided = Leaf(FaultKind.Fault);
+
+    /// <summary>True when <paramref name="exception"/>'s graph carries a stalled query provider
+    /// (a typed <see cref="FaultLayer.StoreStall"/>).</summary>
+    private static bool WrapsStall(Exception? exception)
+        => ExceptionChain.Contains(exception, static e =>
+            e is IClassifiedFault { ClassifiedKind: FaultKind.Transient, ClassifiedLayer: FaultLayer.StoreStall });
+
+    /// <summary>Compares a memo key's exception by REFERENCE and the rest by value.</summary>
+    private sealed class MemoKeyComparer : IEqualityComparer<(Exception Node, bool IsHead, FaultClassification? Fallback)>
+    {
+        public static MemoKeyComparer Instance { get; } = new();
+
+        public bool Equals((Exception Node, bool IsHead, FaultClassification? Fallback) x,
+            (Exception Node, bool IsHead, FaultClassification? Fallback) y)
+            => ReferenceEquals(x.Node, y.Node) && x.IsHead == y.IsHead && Nullable.Equals(x.Fallback, y.Fallback);
+
+        public int GetHashCode((Exception Node, bool IsHead, FaultClassification? Fallback) key)
+            => HashCode.Combine(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(key.Node), key.IsHead, key.Fallback);
     }
 
     /// <summary>

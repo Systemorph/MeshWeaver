@@ -59,7 +59,15 @@ owner's verdict (a standing watch) acts on it.
   survives a routed failure being flattened to a string, carries `ByMessage`. The typed store and
   infrastructure rules refuse such a verdict. A genuine fault whose text merely mentions "Failed to
   connect" is not an outage. A text match only STANDS IN: when the frame it matched wraps a typed
-  cause that decides, the typed verdict replaces it.
+  cause that decides, the typed verdict replaces it. Over an aggregate it speaks for the aggregate
+  only when NO child decides anything: it is never copied into one child beside a sibling that did,
+  so a configuration defect next to a socket fault under "Failed to connect" stays a fault.
+- **A timeout over a stalled provider is the stall.** A typed `TimeoutException` (or a cancellation
+  carrying one) whose graph holds a `StoreStall` only stands in, like a text match: the stall below
+  it decides, so `IsStorageUnavailable` renders it and `IsTransientHubFailure` never retries it. A
+  stall beside a defect under the timeout is still a fault.
+- **Each exception instance is its own branch.** The walk memoizes by REFERENCE, so two distinct
+  driver exceptions a provider type compares equal by value are judged separately.
 - **A driver exception over a network cause needs it in EVERY branch.** A non-transient
   `DbException` is a store outage only when every branch below it reaches a timeout, socket or IO
   fault, or a nested driver frame carrying a connection-class SQLSTATE; a permanent defect beside a
