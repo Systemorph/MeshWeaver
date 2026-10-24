@@ -305,6 +305,22 @@ public class FluentBuilderTest
     }
 
     [Fact]
+    public void SelfServiceSecrets_NeverReachThePortal_ThroughTheDeploymentRecordPayload()
+    {
+        // The portal also receives the record itself (Deployment__Record, via WritePortal); the allow-list is
+        // read by the control plane ABOUT the deployment and must not travel there either.
+        var optedIn = new DeploymentContent
+        {
+            Operator = new HostingOperatorSpec { Maintainer = "rbuergi", SelfServiceSecrets = ["Google--OAuth--ClientSecret"] },
+        };
+        var portal = DeploymentRecordJson.WritePortal(optedIn);
+        Assert.DoesNotContain("Google--OAuth--ClientSecret", portal);
+        Assert.Empty(DeploymentRecordJson.Read(portal)!.Operator!.SelfServiceSecrets);
+        Assert.Equal("rbuergi", DeploymentRecordJson.Read(portal)!.Operator!.Maintainer);   // the rest of the block survives
+        Assert.Contains("Google--OAuth--ClientSecret", DeploymentRecordJson.Write(optedIn)); // the control-side form keeps it
+    }
+
+    [Fact]
     public void ACustomerGovernedRecordThatNamesModels_RendersTheSeedAndCeilingReading_OnBothRenderers()
     {
         // Policy model-settings-seed-and-ceiling (Plugins#2604): on a customer-governed record that

@@ -119,6 +119,44 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact]
+    public void AKeyIdItsOwnReaderWouldRefuse_IsRefusedAtSealing()
+    {
+        // Seal must never produce an envelope that TryParse/Unseal then refuse with the right key and context.
+        var (publicKey, privateKey) = SecretEnvelope.GenerateKeyPair();
+        Assert.Throws<ArgumentException>(() => SecretEnvelope.Seal(Secret, publicKey, "", Context));
+        Assert.Throws<ArgumentException>(() => SecretEnvelope.Seal(Secret, publicKey, new string('k', 65), Context));
+        var longest = SecretEnvelope.Seal(Secret, publicKey, new string('k', 64), Context);
+        Assert.Equal(Secret, SecretEnvelope.TryParse(longest.ToJson())!.Unseal(privateKey, Context));
+    }
+
+    [Fact]
+    public void MovingTheSeparatorBetweenKeyIdAndContext_DoesNotAuthenticate()
+    {
+        // The associated data must encode (key id, context) unambiguously: "k1|deployment-a" + "object" and
+        // "k1" + "deployment-a|object" are different bindings, so the second must not open the first.
+        var (publicKey, privateKey) = SecretEnvelope.GenerateKeyPair();
+        var envelope = SecretEnvelope.Seal(Secret, publicKey, "k1|deployment-a", "object");
+        Assert.Equal(Secret, envelope.Unseal(privateKey, "object"));
+        Assert.Null((envelope with { KeyId = "k1" }).Unseal(privateKey, "deployment-a|object"));
+    }
+
+    [Fact]
+    public void AReadThatIsNotAnAnswerOfAbsence_IsAFault_NeverANullKey()
+    {
+        // Only "absent" means "no key yet" (and so may lead to a create). A delete in flight or a read that could
+        // not be answered must surface as a fault, or Resolve/Rotate would create a key over one that exists.
+        var options = Mesh.JsonSerializerOptions;
+        Assert.Null(SecretSealingKeyService.KeyFrom(NodeReadOutcome.Absent, options));
+        Assert.Throws<InvalidOperationException>(() => SecretSealingKeyService.KeyFrom(NodeReadOutcome.DeleteInProgress, options));
+        var unavailable = Assert.Throws<InvalidOperationException>(() =>
+            SecretSealingKeyService.KeyFrom(NodeReadOutcome.Unavailable(new TimeoutException("owner did not answer")), options));
+        Assert.IsType<TimeoutException>(unavailable.InnerException);
+        var key = new SecretSealingKey { CurrentId = "k1", CurrentPublicKey = "pub", ProtectedCurrentPrivateKey = "enc:x" };
+        var present = NodeReadOutcome.Present(new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { Content = key });
+        Assert.Equal("k1", SecretSealingKeyService.KeyFrom(present, options)!.CurrentId);
+    }
+
+    [Fact]
     public void ARotationThatLostTheRace_AdoptsTheOneThatLanded_InsteadOfReplacingIt()
     {
         var now = DateTimeOffset.UtcNow;

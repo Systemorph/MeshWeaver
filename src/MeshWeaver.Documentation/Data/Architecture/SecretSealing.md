@@ -20,7 +20,10 @@ the control instance opens it.
 - **HKDF-SHA256** over the shared secret (random 16-byte salt, info `mw-secret-envelope v1`),
 - **AES-256-GCM** with a random 12-byte nonce.
 
-The associated data is `mw-secret-envelope|v1|{keyId}|{context}`. For a vault write the context is
+The associated data is `mw-secret-envelope v1`, then the key id and the context, each as a 4-byte big-endian
+byte length followed by its UTF-8 bytes. The length prefixes make it unambiguous: moving a `|` from the key id
+into the context (`k1|a` + `b` against `k1` + `a|b`) is different associated data and does not authenticate. `Seal`
+refuses a key id its own reader would refuse (1 to 64 characters). For a vault write the context is
 `{deployment}|{object}`, so a sealed value **cannot be replayed onto another deployment or object**: unsealing
 with a different context fails authentication, like a wrong key, a wrong key id, a different version or any changed
 byte. `Unseal` answers `null` for every failure, never an exception that could say which.
@@ -50,7 +53,9 @@ adopts it, and every caller answers with the key as stored, never its own propos
 
 `GET /api/instances/seal-key` is anonymous and read-only: it is a public key, and an installation that holds only its
 announcement key (the control-inbox credential) must be able to fetch it. It answers `{ keyId, publicKey, algorithm,
-version }`, or 404 until the control plane has minted the pair, or a logged 503 when the key cannot be read. It
+version }`, or 404 until the control plane has minted the pair, or a logged 503 when the key cannot be read. Only a
+read that answers *absent* counts as "no key"; a delete in flight or an unanswered read is a fault, so no caller ever
+mints a second key over a stored one. It
 authenticates nobody, so an answer from it is never an authentication boundary. A request can never provoke the mint, and nothing else
 leaves the control instance. What the key is *for* is gated elsewhere: a value sealed to it is accepted only inside an
 event signed with the deployment's own key.

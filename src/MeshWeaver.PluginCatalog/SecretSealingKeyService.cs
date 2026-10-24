@@ -166,8 +166,24 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
     }
 
     private IObservable<SecretSealingKey?> Read()
-        => hub.GetMeshNode(SecretSealingKeys.Path, ReadTimeout).Take(1)
-            .Select(node => node?.ContentAs<SecretSealingKey>(hub.JsonSerializerOptions));
+        => hub.GetMeshNodeOutcome(SecretSealingKeys.Path, ReadTimeout).Take(1)
+            .Select(outcome => KeyFrom(outcome, hub.JsonSerializerOptions));
+
+    /// <summary>
+    /// The stored key from a read. 🚨 Null ONLY for <see cref="NodeReadStatus.Absent"/>: that is the one answer that
+    /// lets <see cref="Resolve"/> and <see cref="Rotate"/> CREATE a key. A delete in flight or a read that could not be
+    /// answered is a fault, never "no key yet", or a transient failure would mint a second key over the stored one.
+    /// </summary>
+    internal static SecretSealingKey? KeyFrom(NodeReadOutcome outcome, System.Text.Json.JsonSerializerOptions options)
+        => outcome.Status switch
+        {
+            NodeReadStatus.Present => outcome.Node!.ContentAs<SecretSealingKey>(options),
+            NodeReadStatus.Absent => null,
+            NodeReadStatus.DeleteInProgress => throw new InvalidOperationException(
+                $"The secret sealing key at {SecretSealingKeys.Path} is being deleted; refusing to treat it as absent."),
+            _ => throw new InvalidOperationException(
+                $"The secret sealing key at {SecretSealingKeys.Path} could not be read ({outcome.Status}).", outcome.Failure),
+        };
 
     private static byte[]? Unprotect(IProviderKeyProtector? protector, string? stored)
     {
