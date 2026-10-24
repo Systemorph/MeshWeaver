@@ -137,10 +137,21 @@ public sealed record MeshNodeError(
 /// card (different card per <see cref="MeshNodeError.Code"/>); test asserts
 /// match on <see cref="Error"/>.<see cref="MeshNodeError.Code"/>.
 /// </summary>
-public sealed class MeshNodeStreamException : System.Exception
+public sealed class MeshNodeStreamException : System.Exception, MeshWeaver.Messaging.IClassifiedFault
 {
     /// <summary>The structured error this exception was synthesized from.</summary>
     public MeshNodeError Error { get; }
+
+    /// <summary>A transient store fault when the OWNER classified it so
+    /// (<see cref="MeshNodeError.Transient"/>); otherwise a fault — only the owner's own
+    /// classification counts, never the message text.</summary>
+    public string ClassifiedKind => Error.Transient
+        ? MeshWeaver.Messaging.FaultKind.Transient
+        : MeshWeaver.Messaging.FaultKind.Fault;
+
+    /// <summary><see cref="MeshWeaver.Messaging.FaultLayer.OwnerStore"/> for an owner-classified
+    /// transient fault.</summary>
+    public string? ClassifiedLayer => Error.Transient ? MeshWeaver.Messaging.FaultLayer.OwnerStore : null;
 
     /// <summary>Creates an exception from the given structured error.</summary>
     /// <param name="error">The structured mesh-node error.</param>

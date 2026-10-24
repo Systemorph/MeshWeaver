@@ -38,11 +38,8 @@ internal static class OrleansShutdownRaceSuppressor
         };
     }
 
-    private static bool IsDisposedLifetimeScope(Exception ex)
-    {
-        var msg = ex.Message ?? string.Empty;
-        return (ex is ObjectDisposedException
-                && msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase))
-               || msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsDisposedLifetimeScope(Exception ex) =>
+        // Every branch, through wrappers — a wrapper over a disposed scope beside a real defect is not
+        // the shutdown race.
+        MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex);
 }
