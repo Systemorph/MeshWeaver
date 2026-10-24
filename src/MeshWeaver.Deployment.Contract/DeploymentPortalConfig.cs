@@ -23,6 +23,10 @@ public static class DeploymentPortalConfig
     /// </summary>
     public const string MaintainerSignsAloneKey = "Hosting__Operator__MaintainerSignsAlone";
 
+    /// <summary>The portal key carrying a standing build host channel's platform set — the instance's
+    /// claim barrier (<c>Hosting:Builds:Channels:&lt;channel&gt;:PlatformVersion</c>).</summary>
+    public static string BuildHostPlatformVersionKey(string channel) => $"Hosting__Builds__Channels__{channel}__PlatformVersion";
+
     /// <summary>
     /// The portal key that tells the instance how its model settings relate to this record (policy
     /// <c>model-settings-seed-and-ceiling</c>): rendered as <see cref="ModelGovernanceSeedAndCeiling"/>
@@ -1335,6 +1339,17 @@ public static class DeploymentPortalConfig
             // signature count as it is. The portal reads it only beside a declared maintainer.
             Set(MaintainerSignsAloneKey, operatorSpec.MaintainerSignsAlone ? "true" : null);
         }
+
+        // The build queue's CLAIM BARRIER per standing build host channel (Doc/Architecture/BuildHosts):
+        // the instance hands a run on channel <c> only to a host that runs the set the record names,
+        // read from Hosting:Builds:Channels:<c>:PlatformVersion (MeshWeaver.Plugins
+        // BuildHostQueue.DesiredPlatformConfigKey). Rendered from the SAME field the chart renders the
+        // host's images from, so one record write moves both the hosts and the barrier. Only for an
+        // ENABLED block and a non-blank version; a record without the block renders nothing new.
+        if (d.BuildHosts is { Enabled: true } buildHosts)
+            foreach (var (channel, spec) in buildHosts.Channels)
+                if (!string.IsNullOrWhiteSpace(channel) && !string.IsNullOrWhiteSpace(spec?.PlatformVersion))
+                    Set(BuildHostPlatformVersionKey(channel.Trim()), spec.PlatformVersion.Trim());
 
         foreach (var (key, value) in d.ExtraPortalConfig)
             // 🚨 The sole-signer flag is RESERVED for the typed field, rendered or not: an extra must
