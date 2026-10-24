@@ -106,6 +106,9 @@ import zipfile
 from pathlib import Path
 from typing import Callable
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
+
 CORE = "Systemorph/MeshWeaver"
 API = "https://api.github.com"
 WORKFLOW = "main-cd.yml"
@@ -339,29 +342,18 @@ def control_announcement(deployment: str, version: str, image_repository: str, i
 
 # ───────────────────────────────── transport ──────────────────────────────────────────────
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args, **kwargs):  # noqa: D401 — hand the 302 back to the caller
-        return None
-
-
 def http_get(url: str, token: str, raw: bool = False) -> tuple[int, object]:
-    """GET over REST. A RAW download (an artifact zip) is a 302 to blob storage, which must be
-    fetched WITHOUT the bearer — so the redirect is read here and followed unauthenticated."""
-    req = urllib.request.Request(url if url.startswith("http") else f"{API}/{url}", headers={
-        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28"})
-    opener = urllib.request.build_opener(_NoRedirect) if raw else urllib.request.build_opener()
+    """GET over REST → (status, parsed JSON | raw bytes), (HTTP code, None), or (0, transport error).
+    A RAW download (an artifact zip) is a 302 to blob storage; ghrest follows it and keeps the
+    bearer on GitHub's origin — the same rule now covers the JSON reads, which used to follow every
+    redirect with the token attached."""
     try:
-        with opener.open(req, timeout=60) as r:
+        if raw:
+            return 200, ghrest.download_artifact(url, token=token, api=API, timeout=120)
+        with ghrest.request(url, token, api=API, timeout=60) as r:
             body = r.read()
-            return r.status, (body if raw else json.loads(body.decode() or "null"))
+            return r.status, json.loads(body.decode() or "null")
     except urllib.error.HTTPError as e:
-        if raw and e.code in (301, 302, 303, 307, 308) and e.headers.get("Location"):
-            try:
-                with urllib.request.urlopen(e.headers["Location"], timeout=120) as r:
-                    return r.status, r.read()
-            except (urllib.error.URLError, OSError) as e2:
-                return 0, str(e2)
         return e.code, None
     except (urllib.error.URLError, OSError, ValueError) as e:
         return 0, str(e)

@@ -118,7 +118,16 @@ jobs:
             || { echo "::error::could not fetch node-repo-retry-transients.yml at ${SCRIPTS_REF} — the self-test reads its grants"; exit 1; }
           "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/workflows/node-repo-module-pack.yml" > "$workflows/node-repo-module-pack.yml" \
             || { echo "::error::could not fetch node-repo-module-pack.yml at ${SCRIPTS_REF} — the self-test reads its verdict step"; exit 1; }
-          for fetched in "$scripts/retry-known-transients.py" "$workflows/node-repo-retry-transients.yml" "$workflows/node-repo-module-pack.yml"; do
+          # The shared REST client the script imports from beside itself (`import ghrest`). Fetched
+          # whenever the script at this ref imports it — an older scripts-ref predates the module
+          # and has no such file to fetch — and RED if it cannot be.
+          fetched_files=("$scripts/retry-known-transients.py" "$workflows/node-repo-retry-transients.yml" "$workflows/node-repo-module-pack.yml")
+          if grep -q '^import ghrest' "$scripts/retry-known-transients.py"; then
+            "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/ghrest.py" > "$scripts/ghrest.py" \
+              || { echo "::error::could not fetch ghrest.py at ${SCRIPTS_REF} — the decision script imports it"; exit 1; }
+            fetched_files+=("$scripts/ghrest.py")
+          fi
+          for fetched in "${fetched_files[@]}"; do
             [ -s "$fetched" ] || { echo "::error::$fetched arrived EMPTY at ${SCRIPTS_REF}"; exit 1; }
           done
           echo "MW_RETRY_SCRIPT=$scripts/retry-known-transients.py" >> "$GITHUB_ENV"
