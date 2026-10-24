@@ -11,9 +11,10 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 for nothing on the Plugins side** (policy `dependents-verify-on-their-side`, which superseded
 `dependent-suites-affected-gate`; register: [Policy Not Prose](../PolicyNotProse)). Core runs no
 Plugins suites and reads no Plugins verdict; there is no `Breaks-plugins:` declaration any more.
-The pair is verified on the PLUGINS side, against the sealed core set that contains the core half,
-and the deploy side ([One Promotion Gate](../OnePromotionGate), the combo gate) keeps an unverified
-combination off the fleet.
+The pair is verified on the PLUGINS side, against the sealed core set that contains the core half.
+The deploy side does not hold an unverified combination back: arming ([One Promotion
+Gate](../OnePromotionGate)) judges platform evidence only, and the combo verdict is advisory
+([Combo Gate Wiring](../ComboGateWiring)).
 
 ## How to pair two pull requests
 

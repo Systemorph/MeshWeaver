@@ -207,7 +207,8 @@ public class PlatformReleaseNotifyGuard
     /// policy <c>dependent-suites-affected-gate</c>) — was removed with that policy: it held a core
     /// runner for up to 45 minutes polling another repository. Under policy
     /// <c>dependents-verify-on-their-side</c> a dependent verifies a new SEALED core set on its own
-    /// side, and the deploy-side promotion gate refuses an unverified combination.</para>
+    /// side. The deploy side does not replace that check: arming judges platform evidence only and the
+    /// combo verdict is advisory (policy <c>platform-rolls-independently-of-packages</c>).</para>
     ///
     /// <para>The reusable lanes core hosts for the satellites
     /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send

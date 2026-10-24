@@ -372,8 +372,10 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
 - **Core dispatches NOTHING to a plugin repository and waits for no dependent** (policy
   `dependents-verify-on-their-side`, which superseded `dependent-suites-affected-gate` — the register
   carries when). The `Dependent suites` jobs, the `Breaks-plugins:` declaration and their scripts are
-  gone; a dependent verifies each new SEALED core set in its own push and daily runs, and the deploy
-  side (arming, combo gate) refuses an unverified combination. `PlatformReleaseNotifyGuard` holds core
+  gone; a dependent verifies each new SEALED core set in its own push and daily runs. Nothing on the
+  deploy side REPLACES that check: arming judges the platform's own evidence, and the combo verdict is
+  ADVISORY (policy `platform-rolls-independently-of-packages`) — a Red is named on the roll and the
+  failing modules keep their previous generation, but the platform still rolls. `PlatformReleaseNotifyGuard` holds core
   at zero dispatch senders, with no ledger.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and

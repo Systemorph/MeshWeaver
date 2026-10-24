@@ -3950,8 +3950,9 @@ jobs:
     # NO dependent's suites are a NEED (policy `dependents-verify-on-their-side`, which superseded
     # `dependent-suites-affected-gate`): core merges on its OWN checks and asks no other repository to
     # run anything. MeshWeaver.Plugins and every satellite verify a new SEALED core set on their own
-    # side (their push and daily runs), and the deploy-side promotion gate (`one-promotion-gate`, combo
-    # verification) is what refuses a roll onto an unverified core + plugin combination.
+    # side (their push and daily runs). Nothing on the deploy side refuses a roll onto an unverified
+    # core + plugin combination: arming (`one-promotion-gate`) judges platform evidence only, and the
+    # combo verdict is ADVISORY (`platform-rolls-independently-of-packages`, ComboGateWiring).
     needs: [precheck, stage-gate, build, test, doc-gate, platform-compat, licence-gate, clients-gate, record-signatures, workflow-shell, shared-rules, cross-repo-pair, package-pin-removal, interface-addition, i18n-mirror-sync, closing-keywords]
     if: always()
     runs-on: ubuntu-latest

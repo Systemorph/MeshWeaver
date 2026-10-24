@@ -22,7 +22,7 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 |---|---|
 | ~~`core-merge-never-blocked`~~ → ~~`dependent-suites-affected-gate`~~ → `dependents-verify-on-their-side` | A core pull request merges on core's OWN required checks; no core job asks MeshWeaver.Plugins (or any satellite) to run anything, waits for it or reads its verdict. The intermediate policy made every core pull request wait on Plugins' affected suites against the candidate; that wait held a core runner per pull request for up to 45 minutes polling another repository, while the polled runs queued for the runners it held, and it was removed. Each dependent now verifies a new SEALED core set on its own side (its push runs and its once-a-day full run). |
 | `build-latest-green` | Every CI consumer — Plugins pull requests, Plugins `main`, the image build — takes the NEWEST GREEN core `main` build. A red core `main` falls back to the last green one, never forward into red. No pin to move for ordinary changes; the freeze variable `MW_PLATFORM_REF` stays for incidents. |
-| `one-promotion-gate` | The fleet rolls only to an ARMED set. A set is armed on its PLATFORM verdict (see the superseding note above — no Plugins verdict decides arming any more). No MeshWeaver.Plugins verdict decides a core merge either (`dependents-verify-on-their-side`): what keeps a fleet off an unverified core + plugin combination is this arming plus the combo gate ([Combo Gate Wiring](../ComboGateWiring)). |
+| `one-promotion-gate` | The fleet rolls only to an ARMED set. A set is armed on its PLATFORM verdict (see the superseding note above — no Plugins verdict decides arming any more). No MeshWeaver.Plugins verdict decides a core merge either (`dependents-verify-on-their-side`): compatibility is seen in the dependents' own runs. Neither this arming nor the combo gate holds a roll on a core + plugin combination — the combo verdict is advisory ([Combo Gate Wiring](../ComboGateWiring)). |
 
 ## Why — measured on 2026-09-27
 
@@ -80,9 +80,13 @@ served only them (`await-dependent-verdict.py`, `check-plugins-break-declaration
   newest SEALED platform set on their own pushes (affected suites) and once a day (the full run). A
   core change that breaks one of them shows up there, as that repository's red, and is fixed by a
   counterpart pull request in whichever repository owns the defect.
-- **On the deploy side.** The fleet rolls only to an ARMED set (below), and the combo gate
-  ([Combo Gate Wiring](../ComboGateWiring)) refuses a roll onto a core + plugin combination recorded
-  red. That — not a pull-request wait — is what keeps an unverified combination off a portal.
+- **On the deploy side — ADVISORY, not a hold.** The fleet rolls only to an ARMED set (below), but
+  arming judges the PLATFORM's own evidence, never a dependent's suites. The combo verdict
+  ([Combo Gate Wiring](../ComboGateWiring)) is advisory under policy
+  `platform-rolls-independently-of-packages`: a Red is named among the roll's advisories and the
+  failing modules keep their previous generation, while the platform still rolls; `NotVerifiable`
+  and an absent verdict roll unverified. So nothing on the deploy side replaces the removed
+  pull-request wait — the dependent's own runs are the compatibility signal.
 
 Measure the required set through the ruleset endpoint —
 `gh api repos/Systemorph/MeshWeaver/rules/branches/main` — never the classic protection endpoint,
