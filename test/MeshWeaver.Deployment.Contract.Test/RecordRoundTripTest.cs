@@ -57,7 +57,7 @@ public class RecordRoundTripTest
     /// (<c>DeploymentRecordJson.Options.IgnoreReadOnlyProperties</c>): derivations, not fields.
     /// </summary>
     private static readonly HashSet<string> Derivations = new(StringComparer.Ordinal)
-        { "budgetSeconds", "effectiveRef", "normalizedName", "normalizedUrl", "isEmpty" };
+        { "budgetSeconds", "effectiveRef", "normalizedName", "normalizedUrl", "isEmpty", "isComplete" };
 
     /// <summary>Every value under <paramref name="expected"/> is present, with the same value, under <paramref name="actual"/>.</summary>
     private static void Subset(string path, JsonNode expected, JsonNode? actual, List<string> mismatches)
