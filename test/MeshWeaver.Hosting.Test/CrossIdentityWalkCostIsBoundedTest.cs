@@ -66,6 +66,7 @@ public class CrossIdentityWalkCostIsBoundedTest : IDisposable
         public override bool DirectoryExists(string path) { Count(); return base.DirectoryExists(path); }
         public override bool FileExists(string path) { Count(); return base.FileExists(path); }
         public override IReadOnlyList<string> EnumerateDirectories(string path) { Count(); return base.EnumerateDirectories(path); }
+        public override IEnumerable<string> ListDirectories(string path) { Count(); return base.ListDirectories(path); }
         public override string[] ReadAllLines(string path) { Count(); return base.ReadAllLines(path); }
         public override string ReadAllText(string path) { Count(); return base.ReadAllText(path); }
         public override Plugin.Packaging.BundleReader.Manifest? ReadManifest(string bundlePath)

@@ -768,7 +768,7 @@ public sealed class ModuleDiscoveryService : IHostedService, IDisposable
     /// keeps today's behaviour — the same fail-open the gate itself has.
     ///
     /// <para><b>The local-disk read runs inline, deliberately, and here is the measurement.</b> Every
-    /// caller of <see cref="SealedPublicationIndex.ReadFor"/> reads it this way —
+    /// caller of <see cref="SealedPublicationIndex.ReadFor(string, string, ILogger)"/> reads it this way —
     /// <c>GitHubWebhookProcessor</c> inside its own <c>Select</c>, and <c>ShippedPrebuiltBundles</c>
     /// twice during seeding; there is no <c>IIoPool</c>-wrapped bundle reader to be consistent with,
     /// so wrapping this one alone would make the four call sites disagree about a shared pure

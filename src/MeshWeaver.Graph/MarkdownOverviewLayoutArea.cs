@@ -71,6 +71,7 @@ public static class MarkdownOverviewLayoutArea
             .DistinctUntilChanged()
             .Select(t => string.IsNullOrWhiteSpace(t.Text)
                 ? Observable.Return<string?>(null)
+                // atomic-blocking-leaf: one Markdig render of text already in memory; no IO, no step boundary
                 : pool.InvokeBlocking(_ => (string?)MarkdownViewLogic.Render(t.Text, t.Path, t.Path).Html))
             .Switch();
 

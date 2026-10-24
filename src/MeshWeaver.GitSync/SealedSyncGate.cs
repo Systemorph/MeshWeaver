@@ -113,7 +113,7 @@ public static class SealedSyncGate
     /// <param name="repo">The repository the Space's sync source reads.</param>
     /// <param name="requested">What was asked for: the configured branch, or the typed commitish.</param>
     /// <param name="lastSyncSha">The commit the sync source currently sits on, or null.</param>
-    /// <param name="readOutcome">Whether the seal index was READ (<see cref="SealedPublicationIndex.ReadingFor"/>).</param>
+    /// <param name="readOutcome">Whether the seal index was READ (<see cref="SealedPublicationIndex.ReadingFor(string, string, Microsoft.Extensions.Logging.ILogger)"/>).</param>
     /// <param name="sealedForThisIdentity">What the registry sealed under this instance's identity.</param>
     /// <param name="identity">This instance's framework identity.</param>
     /// <param name="newerLine">The newest publication line above this identity's, or null — log
@@ -181,7 +181,7 @@ public static class SealedSyncGate
     /// (policy <c>module-sync-per-manifest-hash</c>), which is why no platform lane holds on this
     /// answer any more. The method keeps its shape for callers in other repositories.</para>
     /// </summary>
-    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
+    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor(string, string, Microsoft.Extensions.Logging.ILogger)"/> reported.</param>
     /// <param name="identity">This instance's framework identity — log copy only.</param>
     /// <returns>A <see cref="Verdict"/> naming the unreadable index, or null when it was read.</returns>
     public static Verdict? RefusedForUnreadableIndex(SealedReadOutcome outcome, string identity)
@@ -202,7 +202,7 @@ public static class SealedSyncGate
     /// added overload makes every parameterless <c>&lt;see cref&gt;</c> to that name ambiguous
     /// (<c>CS0419</c> under <c>-warnaserror</c>).</para>
     /// </summary>
-    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor"/> reported.</param>
+    /// <param name="outcome">What <see cref="SealedPublicationIndex.ReadingFor(string, string, Microsoft.Extensions.Logging.ILogger)"/> reported.</param>
     /// <param name="identity">This instance's framework identity — log copy only.</param>
     /// <returns>A holding <see cref="FirstImportPlan"/>, or null when the reading is usable.</returns>
     public static FirstImportPlan? RefusedFirstImportForUnreadableIndex(

@@ -98,7 +98,7 @@ public sealed class ModuleLiveActivation(
     /// </summary>
     /// <param name="reason">Why the pass runs — carried into every recycled hub's quiesce line.</param>
     public IObservable<ModuleLiveActivationResult> ActivatePending(string reason) =>
-        pool.InvokeBlocking(_ => (Report: activations.Read(), Root: landing.BaseDirectory))
+        pool.InvokeBlocking(ct => (Report: activations.Read(ct), Root: landing.BaseDirectory))
             .Zip(landing.GetActivation(), (read, list) => (read.Report, read.Root, List: list))
             .SelectMany(state =>
             {
@@ -156,8 +156,8 @@ public sealed class ModuleLiveActivation(
             return Observable.Return(new Resolved(new ModuleSwapOutcome(entry.Name, ModuleSwapKind.NotHeld,
                 $"{entry.Name} does not run in its own load context in this process (the image binds it, or it "
                 + "was not installed at boot) — a restart activates the landed generation"), null));
-        return pool.InvokeBlocking(_ => ModuleGenerationPin.PinnedLoadPath(
-                root, entry, onWarn: warning => logger?.LogWarning("[ModuleLiveUpdate] {Warning}", warning)))
+        return pool.InvokeBlocking(ct => ModuleGenerationPin.PinnedLoadPath(
+                root, entry, ct, onWarn: warning => logger?.LogWarning("[ModuleLiveUpdate] {Warning}", warning)))
             .Select(path => new Resolved(null, path));
     }
 }
