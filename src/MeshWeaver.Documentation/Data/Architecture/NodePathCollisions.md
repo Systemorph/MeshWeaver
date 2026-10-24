@@ -59,11 +59,16 @@ reds it.
 ## The one pair that is merged on purpose
 
 `FileSystemStorageAdapter.MergeIndexMarkdownAsync` reads `X.json` and lays `X/index.md` in as its
-content — the "JSON registry + index.md split". Core's samples tree uses it (`ACME.json` +
-`ACME/index.md`), and `stage-samples-gate.sh` removes the `index.md` before a gate install for that
-reason. Only that adapter merges; the installer and GitSync do not. So the pair is admitted only
-with `--filesystem-layout`, only for a `--tree`, and only as exactly those two files — the same pair
-in a node repo is an ordinary collision.
+content — the "JSON registry + index.md split". Only that adapter merges; the installer and GitSync
+do not. So the pair is admitted only with `--filesystem-layout`, only for a `--tree`, and only as
+exactly those two files — the same pair in a node repo is an ordinary collision.
+
+Core's samples tree used it for one pair, `ACME.json` + `ACME/index.md`, and CI passed
+`--filesystem-layout` for that tree. ACME left core with the other product demos (see
+[Carving Projects Out Of Core](../CarvingProjectsOutOfCore)). Its new home in MeshWeaver.Plugins keeps
+`ACME/index.md` alone, because that repo's `--root` check refuses the pair. So core's samples tree
+is now checked WITHOUT the flag, and no tree in the fleet relies on the exemption. The flag stays
+in the script for a FileSystem-served tree that genuinely needs it.
 
 ## Measured when the guard landed
 

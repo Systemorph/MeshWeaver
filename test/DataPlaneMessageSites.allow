@@ -26,7 +26,6 @@
 DataChangeRequest	src/MeshWeaver.Graph/VersionLayoutArea.cs	1
 DataChangeRequest	src/MeshWeaver.Layout/Client/LayoutClientExtensions.cs	1
 DataChangeRequest	src/MeshWeaver.Mesh.Contract/MeshExtensions.cs	2
-DataChangeRequest	samples/Graph/Data/ACME/Project/Todo/Source/TodoLayoutAreas.cs	1
 DataChangeRequest	samples/Todo/MeshWeaver.Todo/LayoutAreas/TodoLayoutAreas.cs	2
 GetDataRequest	src/MeshWeaver.ContentCollections/ContentCollectionsExtensions.cs	2
 GetDataRequest	src/MeshWeaver.ContentCollections/ContentFileResolver.cs	1

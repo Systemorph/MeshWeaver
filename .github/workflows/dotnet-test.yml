@@ -2403,10 +2403,12 @@ jobs:
 
     # Two source files importing to ONE node path (`X.md` + `X.json`, `X.md` + `X/index.json`,
     # case-folded) are silently last-writer-wins at import. Every node repo's validate lane fetches
-    # this guard from here, so it is proven here; and core's own trees are held to it. The samples
-    # tree is served by FileSystemStorageAdapter, which MERGES `X.json` + `X/index.md` by design
-    # (ACME is laid out that way) — `--filesystem-layout` admits that one pair and nothing else.
-    # The doc tree is served by DocumentationNodeProvider, which merges nothing.
+    # this guard from here, so it is proven here; and core's own trees are held to it. Both trees
+    # are held to the strict form. The samples tree is served by FileSystemStorageAdapter, which
+    # MERGES `X.json` + `X/index.md`, and it used to need `--filesystem-layout` for the one pair it
+    # carried (ACME.json + ACME/index.md). ACME left with the product demos, so no tree here needs
+    # the exemption, and a new merged pair is refused. The doc tree is served by
+    # DocumentationNodeProvider, which merges nothing.
     - name: "Two files importing to one node path are caught (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-node-path-collisions.py --self-test
@@ -2415,7 +2417,7 @@ jobs:
       run: |
         set -euo pipefail
         python3 .github/scripts/check-node-path-collisions.py --tree src/MeshWeaver.Documentation/Data
-        python3 .github/scripts/check-node-path-collisions.py --filesystem-layout --tree samples/Graph/Data
+        python3 .github/scripts/check-node-path-collisions.py --tree samples/Graph/Data
 
     # A node file carrying a member MeshNode no longer has is a BUILD ERROR (#6638): GitSync's strict
     # reader refuses the whole snapshot on one such file, and the platform stays strict, so the

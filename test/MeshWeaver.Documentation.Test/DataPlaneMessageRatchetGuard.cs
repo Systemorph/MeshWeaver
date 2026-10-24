@@ -59,7 +59,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     {
         ["GetDataRequest"] = 18,
         ["GetDataResponse"] = 26,
-        ["DataChangeRequest"] = 7,
+        ["DataChangeRequest"] = 6,
         ["PatchDataChangeRequest"] = 0,
         ["DataChangedEvent"] = 0,
     }.ToImmutableDictionary(StringComparer.Ordinal);
