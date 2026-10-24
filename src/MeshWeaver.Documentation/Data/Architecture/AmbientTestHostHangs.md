@@ -152,6 +152,55 @@ They are a **clock, not a cause** — and they arrive in bursts at a handful of 
 is the shape of successive test classes disposing their meshes, i.e. progress. On one captured run the
 last straggler landed **7 m 53 s before** the kill.
 
+## A host that deadlocks on its own stdout
+
+This one is solved. Its signature is worth knowing because it reads as a teardown stall.
+
+**What it looked like.** Core PR #7128, shard 0 (run 40102602726, attempt 1): the
+`MeshWeaver.Hosting.Orleans.Test` host's console output **stopped in the middle of one test's
+captured-output block** at 14:39:26, and it printed nothing more. There was no `[PASS]` line for
+tests that the trace log shows finishing later, and no `[Long Running Test]` line, although
+`-longRunning 60` prints one every minute while any test runs. Meanwhile
+`collected-logs/_meshweaver-test-trace.log` went on recording until 14:42:58. The host was killed
+at the 8-minute cap (`exit=137 TIMEOUT`).
+
+The discriminator is **the trace log still advancing while the job log has stopped, and the
+`[Long Running Test]` reporter silent too.** A test that is merely slow keeps the reporter printing.
+Only a blocked console stops it.
+
+**What it was.** A local loop of the host with a 90-second output-silence detector caught it on the
+9th run. `dotnet-dump analyze <core> -c syncblk` named two `SyncTextWriter`s, each owned by one
+thread and wanted by the other:
+
+- xUnit's reporter thread had captured `Console.Out` at startup. It held that original writer and,
+  inside its flush, entered `ConsolePal.WriteFromConsoleStream`. On Unix that method takes
+  `lock (Console.Out)`.
+- By then a kernel cell had installed `CapturingTextWriter` with `Console.SetOut`, so
+  `Console.Out` was the hook's synchronized wrapper. The Microsoft console-logger thread held that
+  wrapper, and its write fell through the hook to the fallback, which was the ORIGINAL writer.
+
+After that, every other console writer queued behind the two: the long-running reporter, the
+end-of-run summary, and `OrleansMeshPool`'s receipt line. So the host could never exit. The same
+inversion is reachable in a portal, where any component that kept the startup `Console.Out` plays
+the reporter's part.
+
+**The fix.** The hook's fallback is a writer over the raw standard stream, never the writer it
+replaced. A write through the hook then holds only the wrapper's lock, and `ConsolePal` re-enters
+that same lock. `ConsoleHookTakesNoLockOfTheWriterItReplacedTest` holds the replaced writer's lock
+the way the reporter does and requires a write through the hooked console to finish anyway. Against
+the old fallback both of its cases fail after their 10-second bound, and the host exits normally.
+The test asserts the property and never builds the cycle, so its negative control cannot wedge the
+host. With the fix, 25 consecutive local runs of the whole host finished with no stall.
+
+**The "3 minutes after the last test" was not teardown.** The triage that led here read main's shard
+0 (run 40105736575) as a host that idled 3 min 19 s after its last test. The last test was still
+running: `CrossGenerationManifestExchangeTest.WithoutTheLegacyPath_…` waits through a full
+`TestTimeouts.CrossSilo` window of silence by design. That is (30 s + 1 s + 5 s) × 3 × 2 = 216 s on CI.
+It has no `TEST START` marker because it does not derive from a mesh test base, so it does not show
+up in a `TEST_START`/`TEST_END` census. Its own `[Long Running Test]` lines name it. Across 35
+recent CI runs the host took 261–279 s every time except the one deadlock, and it exits the moment
+that test reports.
+
 ## What is still open
 
 **What ends a live node's synchronization streams roughly five seconds into an operation that is
