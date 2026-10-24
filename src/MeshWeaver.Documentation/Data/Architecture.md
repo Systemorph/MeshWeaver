@@ -330,6 +330,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Build Process — compile and test as a dependency cascade](BuildProcess)
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
+- [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
 - [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica

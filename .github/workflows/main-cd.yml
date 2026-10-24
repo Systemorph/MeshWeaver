@@ -3951,6 +3951,130 @@ jobs:
           docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
             "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
           echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
+  # 🔥 STANDING BUILD HOSTS — core's CD deploys the updated host (Doc/Architecture/BuildHosts;
+  # MeshWeaver.Plugins Hosting/StandingBuildHosts §2, rule 2 "core's CD deploys the updated host").
+  # In the run that ARMS a set, `build-latest` is handed that set's tester and portal digests: a
+  # SIGNED `build-host-update-available` event into the control plane's inbox, which the operations
+  # instance turns into a change of its OWN record (`buildHosts.latest.*`) and that record's
+  # Reconcile — the supported record path, the same inbox `control-first` hands control its next
+  # image through. Never `kubectl set image`, never a hand-edited Deployment.
+  #
+  # 🚨 A NO-OP UNTIL DECLARED: `.github/build-hosts.json` `enabled: false` (the default) ⇒ one
+  # summary line, nothing sent, no credential used. The receiver guards the same fact again on the
+  # record (`buildHosts.enabled`). NEVER BACKWARDS: only the newest armed set is sent (the reading
+  # notify-platform-update makes). Outside `delivery-verdict` and `alert-on-failure`: the fleet's
+  # delivery does not depend on a build host, and a red here names itself on this job.
+  build-host-latest:
+    name: "Build host: hand the armed set to build-latest (record path)"
+    needs: [preflight, arm]
+    if: always() && needs.preflight.result == 'success' && needs.arm.outputs.armed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+            .github/build-hosts.json
+          sparse-checkout-cone-mode: false
+      - name: "The announcement can say no (self-test)"
+        run: python3 .github/scripts/build-host-announcement.py --self-test
+      - name: "Does this estate run standing build hosts?"
+        id: build_host
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/build-host-announcement.py decide --channel latest | tee -a "$GITHUB_OUTPUT"
+      - name: Not enabled — say so and send nothing
+        if: steps.build_host.outputs.enabled != 'true'
+        env:
+          WHY: ${{ steps.build_host.outputs.why }}
+        run: |
+          echo "- build-latest: $WHY" >> "$GITHUB_STEP_SUMMARY"
+      - name: Ensure Azure CLI
+        if: steps.build_host.outputs.enabled == 'true'
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        if: steps.build_host.outputs.enabled == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: "Is this still the newest armed set?"
+        id: build_host_current
+        if: steps.build_host.outputs.enabled == 'true'
+        env:
+          V_SELF: ${{ needs.arm.outputs.version }}
+        run: |
+          set -euo pipefail
+          az acr manifest list-metadata --registry meshweaver --name memex-portal-ai --top 300 --orderby time_desc \
+            -o json --only-show-errors > "$RUNNER_TEMP/portal-manifests.json"
+          st=$(python3 .github/scripts/arm-promoted-set.py armed-state --manifests "$RUNNER_TEMP/portal-manifests.json")
+          newest=$(printf '%s' "$st" | jq -r '.version')
+          n_self=$(python3 .github/scripts/platform-version.py ordinal "$V_SELF") \
+            || { echo "::error::V_SELF '$V_SELF' carries no run ordinal — refusing to hand build-latest a set on no evidence"; exit 1; }
+          n_newest=$(python3 .github/scripts/platform-version.py ordinal "$newest") \
+            || { echo "::error::the newest armed set '$newest' carries no run ordinal — the armed-state reading is not trustworthy"; exit 1; }
+          if [ "$n_newest" -gt "$n_self" ]; then
+            echo "superseded=true" >> "$GITHUB_OUTPUT"
+            echo "- build-latest: $V_SELF was superseded by $newest — the newer arming hands it on" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "superseded=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: "Sign and POST build-host-update-available for build-latest"
+        if: steps.build_host.outputs.enabled == 'true' && steps.build_host_current.outputs.superseded == 'false'
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          DEPLOYMENT: ${{ steps.build_host.outputs.deployment }}
+          V_SET: ${{ needs.arm.outputs.version }}
+          CORE_SHA: ${{ needs.arm.outputs.core_sha }}
+          PLUGINS_SHA: ${{ needs.arm.outputs.plugins_sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
+          esac
+          bash .github/scripts/acr-login.sh
+          # Resolved from the ARMED set's version tag, never a moving name — the same rule
+          # notify-platform-update follows, so the host runs exactly the set the fleet is offered.
+          resolve() {
+            local d
+            if d=$(docker buildx imagetools inspect "meshweaver.azurecr.io/$1:$V_SET" --format '{{json .Manifest.Digest}}'); then
+              printf '%s' "$d" | tr -d '"'
+            fi
+          }
+          TESTER_DIGEST=$(resolve mw-plugin-test)
+          PORTAL_DIGEST=$(resolve memex-portal-ai)
+          BODY=$(python3 .github/scripts/build-host-announcement.py body --deployment "$DEPLOYMENT" --channel latest \
+            --version "$V_SET" --tester-image meshweaver.azurecr.io/mw-plugin-test --tester-digest "$TESTER_DIGEST" \
+            --portal-image meshweaver.azurecr.io/memex-portal-ai --portal-digest "$PORTAL_DIGEST" \
+            --core-sha "$CORE_SHA" --plugins-sha "$PLUGINS_SHA" --instance "$RUN_URL")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/build-host-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/build-host-resp" || true
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/build-host-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              [ "$verdict" = verified ] || { echo "::error::the inbox stored the build-host event but did not VERIFY its signature (signature: '${verdict:-<none>}') — the router drops what it cannot verify, so build-latest would not move"; exit 1; }
+              # STORED AND VERIFIED IS NOT DELIVERED: the receiver changes the record only when that
+              # record declares buildHosts.enabled. Whether build-latest RUNS the set is read on the
+              # run nodes it claims (`PlatformVersion`), never inferred from this 200.
+              echo "- build-latest handed \`$V_SET\` (tester \`${TESTER_DIGEST:7:12}\`, portal \`${PORTAL_DIGEST:7:12}\`) for record \`$DEPLOYMENT\`: STORED and signature-verified (HTTP $code). Not yet a roll — the record's Reconcile is" >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            000) echo "::error::could not reach the control plane's inbox — build-latest was NOT handed $V_SET"; exit 1 ;;
+            401) echo "::error::the inbox REFUSED the signature (HTTP 401): secrets.CONTROL_WEBHOOK_SECRET and the instance's Hosting:PlatformWebhookSecret differ — build-latest was NOT handed $V_SET"; exit 1 ;;
+            *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-latest was NOT handed $V_SET"; exit 1 ;;
+          esac
+
   # ────────── THE PUBLISHED MODULE SET — READ, NEVER BUILT HERE (policy `platform-module-deploy-separate`) ──────────
   # "we separate platform deploy 100% from module deploy". This run does NOT pack, bake or seal any
   # MeshWeaver.Plugins module: modules publish on their OWN lanes (MeshWeaver.Plugins `ci.yml`
