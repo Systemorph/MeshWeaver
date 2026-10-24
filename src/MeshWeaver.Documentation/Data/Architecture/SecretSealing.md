@@ -1,0 +1,49 @@
+---
+Name: Secret Sealing
+Category: Architecture
+Description: How an installation hands a secret to its control instance without the value ever being plaintext in a node, an event or a log. An ECDH P-256 + HKDF-SHA256 + AES-256-GCM envelope, sealed to a public key the control instance publishes, bound to the deployment and object it is for, with key rotation.
+Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+---
+
+# Secret Sealing
+
+An installation's administrator types a secret into their OWN portal. For the secret to reach the control
+instance (to be written to the vault by a governed action) it must travel through nodes and signed events. It does so
+as **ciphertext only**: the installation's portal *seals* it to a public key the control instance publishes, and only
+the control instance opens it.
+
+## The envelope
+
+`SecretEnvelope` (`MeshWeaver.Mesh.Contract`), version 1, .NET built-ins only:
+
+- **ECDH P-256** with a fresh ephemeral sender key per seal,
+- **HKDF-SHA256** over the shared secret (random 16-byte salt, info `mw-secret-envelope v1`),
+- **AES-256-GCM** with a random 12-byte nonce.
+
+The associated data is `mw-secret-envelope|v1|{keyId}|{context}`. For a vault write the context is
+`{deployment}|{object}`, so a sealed value **cannot be replayed onto another deployment or object**: unsealing
+with a different context fails authentication, like a wrong key, a wrong key id, a different version or any changed
+byte. `Unseal` answers `null` for every failure, never an exception that could say which.
+
+Wire form: `{ "v":1, "kid":"…", "epk":"…", "salt":"…", "nonce":"…", "ct":"…", "tag":"…" }`.
+
+## The control instance's key
+
+`SecretSealingKeyService` (`MeshWeaver.PluginCatalog`) owns one node, `Admin/SecretSealingKey/current`, minted on
+first use after an installation authenticates (an anonymous request cannot provoke the write) and read back so
+replicas agree. It holds the **public key in the clear** and the **private key only as `enc:` ciphertext of the
+platform key protector**, refused when no master key exists.
+
+**Rotation:** every 90 days, or on demand. The outgoing key stays accepted for 7 days, so a value sealed just before
+the rotation still opens; after that only the new key does.
+
+## Publishing the public key
+
+`GET /api/instances/seal-key`, authenticated by the installation's instance key (or its short-lived token), answers
+`{ keyId, publicKey, algorithm, version }`. Nothing else leaves the control instance.
+
+## Who uses it
+
+The governed secret write for an installation's own record (Hosting, `instance-secret-write`): the installation seals
+the value for `{deployment}|{vault object}`, the signed event carries the envelope, and the control plane unseals it
+into the ONE operator Job's environment, scrubbing the ciphertext when the run ends.
