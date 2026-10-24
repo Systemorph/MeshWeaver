@@ -13,9 +13,12 @@ namespace MeshWeaver.Mesh.Security;
 /// breaking a sealed value in flight.
 ///
 /// <para>🚨 The associated data binds the ciphertext to its <b>context</b> (for a vault write:
-/// <c>deployment|object</c>) and to the key id and version, each field length-prefixed so no split of the same
-/// characters between key id and context authenticates as another. A sealed value cannot be replayed onto another
-/// deployment or object: unsealing with a different context fails authentication.</para>
+/// <c>deployment|object</c>), to the key id and version, and to the <b>ephemeral public key exactly as
+/// transmitted</b> (its SPKI bytes), each field length-prefixed so no split of the same characters between key id
+/// and context authenticates as another. A sealed value cannot be replayed onto another deployment or object:
+/// unsealing with a different context fails authentication. Binding the ephemeral key closes the one tamper ECDH
+/// alone cannot see: the negated point <c>(x, p − y)</c> yields the same shared x-coordinate, hence the same AES
+/// key, so without it a rewritten <c>epk</c> would still authenticate.</para>
 ///
 /// <para>Wire shape (JSON, camelCase): <c>{ "v":1, "kid":"…", "epk":"base64 SPKI of the ephemeral public
 /// key", "salt":"base64(16)", "nonce":"base64(12)", "ct":"base64", "tag":"base64(16)" }</c>.</para>
@@ -78,14 +81,15 @@ public sealed record SecretEnvelope(
         using var ephemeral = ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var salt = RandomNumberGenerator.GetBytes(16);
         var nonce = RandomNumberGenerator.GetBytes(12);
+        var ephemeralPublicKey = ephemeral.ExportSubjectPublicKeyInfo();
         var key = DeriveKey(ephemeral.DeriveRawSecretAgreement(recipient.PublicKey), salt);
         var ciphertext = new byte[data.Length];
         var tag = new byte[16];
         using (var aes = new AesGcm(key, 16))
-            aes.Encrypt(nonce, data, ciphertext, tag, Aad(CurrentVersion, keyId, context));
+            aes.Encrypt(nonce, data, ciphertext, tag, Aad(CurrentVersion, keyId, context, ephemeralPublicKey));
         CryptographicOperations.ZeroMemory(key);
         return new SecretEnvelope(CurrentVersion, keyId,
-            Convert.ToBase64String(ephemeral.ExportSubjectPublicKeyInfo()),
+            Convert.ToBase64String(ephemeralPublicKey),
             Convert.ToBase64String(salt), Convert.ToBase64String(nonce),
             Convert.ToBase64String(ciphertext), Convert.ToBase64String(tag));
     }
@@ -108,13 +112,14 @@ public sealed record SecretEnvelope(
                 return null;
             using var recipient = ECDiffieHellman.Create();
             recipient.ImportPkcs8PrivateKey(recipientPrivateKey, out _);
+            var ephemeralPublicKey = Convert.FromBase64String(EphemeralPublicKey);
             using var sender = ECDiffieHellman.Create();
-            sender.ImportSubjectPublicKeyInfo(Convert.FromBase64String(EphemeralPublicKey), out _);
+            sender.ImportSubjectPublicKeyInfo(ephemeralPublicKey, out _);
             if (sender.KeySize != 256) return null;
             var key = DeriveKey(recipient.DeriveRawSecretAgreement(sender.PublicKey), salt);
             var plain = new byte[ciphertext.Length];
             using (var aes = new AesGcm(key, 16))
-                aes.Decrypt(nonce, ciphertext, tag, plain, Aad(Version, KeyId, context));
+                aes.Decrypt(nonce, ciphertext, tag, plain, Aad(Version, KeyId, context, ephemeralPublicKey));
             CryptographicOperations.ZeroMemory(key);
             return Encoding.UTF8.GetString(plain);
         }
@@ -167,22 +172,29 @@ public sealed record SecretEnvelope(
 
     // 🚨 Every variable field is LENGTH-PREFIXED (4-byte big-endian byte count, then its UTF-8 bytes), so the
     // encoding is injective: ("k1|a", "b") and ("k1", "a|b") are different associated data. A separator alone
-    // would let a caller move it between the key id and the context and still authenticate.
-    private static byte[] Aad(int version, string keyId, string context)
+    // would let a caller move it between the key id and the context and still authenticate. The ephemeral public
+    // key's SPKI bytes are the last field: ECDH authenticates only the shared x-coordinate, which the negated point
+    // shares, so the transmitted key itself must be authenticated.
+    private static byte[] Aad(int version, string keyId, string context, byte[] ephemeralPublicKey)
     {
         var prefix = Encoding.UTF8.GetBytes($"mw-secret-envelope v{version}");
         var kid = Encoding.UTF8.GetBytes(keyId);
         var ctx = Encoding.UTF8.GetBytes(context);
-        var aad = new byte[prefix.Length + 4 + kid.Length + 4 + ctx.Length];
+        var aad = new byte[prefix.Length + 4 + kid.Length + 4 + ctx.Length + 4 + ephemeralPublicKey.Length];
         var span = aad.AsSpan();
         prefix.CopyTo(span);
         span = span[prefix.Length..];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(span, kid.Length);
-        kid.CopyTo(span[4..]);
-        span = span[(4 + kid.Length)..];
-        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(span, ctx.Length);
-        ctx.CopyTo(span[4..]);
+        span = WriteField(span, kid);
+        span = WriteField(span, ctx);
+        WriteField(span, ephemeralPublicKey);
         return aad;
+    }
+
+    private static Span<byte> WriteField(Span<byte> span, byte[] field)
+    {
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(span, field.Length);
+        field.CopyTo(span[4..]);
+        return span[(4 + field.Length)..];
     }
 }
 
@@ -222,21 +234,35 @@ public record SecretSealingKey
     /// <summary>When a new key is due.</summary>
     public DateTimeOffset? RotateAfter { get; init; }
 
-    /// <summary>The protected private key that opens <paramref name="keyId"/> at <paramref name="now"/>: the current one, or a retired one inside its window; null otherwise.</summary>
+    /// <summary>
+    /// The protected private key that opens <paramref name="keyId"/> at <paramref name="now"/>: the current one, or
+    /// a retired one inside its window; null otherwise.
+    ///
+    /// <para>🚨 A key retires ONCE, and its FIRST deadline holds. Two rotations computed from the same key at
+    /// different times each append a retirement for it, with different deadlines, and the owner's array merge keeps
+    /// both (they differ as elements). The earliest entry for the id decides; a later one never extends the
+    /// window.</para>
+    /// </summary>
     public string? ProtectedPrivateKeyFor(string keyId, DateTimeOffset now)
         => keyId == CurrentId ? ProtectedCurrentPrivateKey
-            : Retired?.FirstOrDefault(r => r.Id == keyId && r.StillValid(now))?.ProtectedPrivateKey;
+            : (Retired ?? []).Where(r => r.Id == keyId).MinBy(r => r.ValidUntil) is { } retired && retired.StillValid(now)
+                ? retired.ProtectedPrivateKey
+                : null;
 
     /// <summary>
     /// This key retired in favour of <paramref name="next"/> at <paramref name="now"/>: the outgoing current key
     /// joins the retired keys for <paramref name="grace"/>, retired keys already past their deadline are dropped,
-    /// and every other one is kept. Pure.
+    /// and every other one is kept. Idempotent by key id: a key already retired keeps its first (earliest)
+    /// deadline, and duplicate entries a concurrent rotation merged in collapse to that one. Pure.
     /// </summary>
     public SecretSealingKey RotatedTo(SecretSealingKey next, DateTimeOffset now, TimeSpan grace)
         => next with
         {
-            Retired = (Retired ?? []).Where(r => r.StillValid(now))
+            Retired = (Retired ?? [])
                 .Append(new RetiredSealingKey(CurrentId, ProtectedCurrentPrivateKey, now.Add(grace)))
+                .GroupBy(r => r.Id)
+                .Select(sameKey => sameKey.MinBy(r => r.ValidUntil)!)
+                .Where(r => r.StillValid(now))
                 .ToImmutableList(),
         };
 }

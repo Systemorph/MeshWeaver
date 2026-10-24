@@ -84,6 +84,39 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         Assert.Null((envelope with { EphemeralPublicKey = "not base64" }).Unseal(privateKey, Context));
     }
 
+    /// <summary>
+    /// 🚨 The ephemeral public key is authenticated, not only its shared secret. Replacing the valid point
+    /// <c>(x, y)</c> with its negation <c>(x, p − y)</c> is still a valid P-256 point and yields the SAME ECDH
+    /// x-coordinate, hence the same AES key: unless the associated data binds the transmitted key, the tampered
+    /// envelope would still authenticate.
+    /// </summary>
+    [Fact]
+    public void ANegatedEphemeralPoint_DoesNotAuthenticate()
+    {
+        var (publicKey, privateKey) = SecretEnvelope.GenerateKeyPair();
+        var envelope = SecretEnvelope.Seal(Secret, publicKey, "k1", Context);
+
+        using var ephemeral = ECDiffieHellman.Create();
+        ephemeral.ImportSubjectPublicKeyInfo(Convert.FromBase64String(envelope.EphemeralPublicKey), out _);
+        var q = ephemeral.ExportParameters(false);
+        var prime = System.Numerics.BigInteger.Parse(
+            "0FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", System.Globalization.NumberStyles.HexNumber);
+        var y = new System.Numerics.BigInteger(q.Q.Y, isUnsigned: true, isBigEndian: true);
+        var negated = (prime - y).ToByteArray(isUnsigned: true, isBigEndian: true);
+        var negatedY = new byte[32];
+        negated.CopyTo(negatedY, 32 - negated.Length);
+        using var tampered = ECDiffieHellman.Create(new ECParameters
+        {
+            Curve = ECCurve.NamedCurves.nistP256,
+            Q = new ECPoint { X = q.Q.X, Y = negatedY },
+        });
+        var tamperedKey = Convert.ToBase64String(tampered.ExportSubjectPublicKeyInfo());
+        Assert.NotEqual(envelope.EphemeralPublicKey, tamperedKey);
+
+        Assert.Equal(Secret, envelope.Unseal(privateKey, Context));
+        Assert.Null((envelope with { EphemeralPublicKey = tamperedKey }).Unseal(privateKey, Context));
+    }
+
     [Fact]
     public void AnEmptyOrOversizedSecret_IsRefusedAtSealing_AndGarbageParsesToNull()
     {
@@ -232,6 +265,48 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         merged.ProtectedPrivateKeyFor("kA", now).Should().Be("enc:kA",
             "KA was retired at the owner after the delayed writer read its mirror, and is still inside its window");
         merged.ProtectedPrivateKeyFor("k0", now).Should().Be("enc:k0");
+    }
+
+    /// <summary>
+    /// 🚨 Two rotations computed from K0 at DIFFERENT times each retire K0, with different deadlines. The owner's
+    /// array merge compares whole elements, so both entries land. K0 retired ONCE: its first deadline holds, and
+    /// the later writer's entry must not extend it. Driven through the REAL diff and the REAL owner merge.
+    /// </summary>
+    [Fact]
+    public void TwoRotationsOfTheSameKeyAtDifferentTimes_KeepTheFirstDeadline()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var now = DateTimeOffset.UtcNow;
+        var later = now.AddDays(1);
+        var grace = SecretSealingKeys.RotationGrace;
+        SecretSealingKey Minted(string id, DateTimeOffset at) => new()
+        {
+            CurrentId = id, CurrentPublicKey = "pub-" + id, ProtectedCurrentPrivateKey = "enc:" + id,
+            CurrentIssuedAt = at, RotateAfter = at.AddDays(90),
+        };
+        JsonObject Json(SecretSealingKey key) => MeshNodeStreamHandle.ToJsonObject(
+            new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { NodeType = SecretSealingKeys.NodeType, Content = key },
+            options);
+
+        var k0 = Minted("k0", now.AddDays(-90)) with { RotateAfter = now.AddMinutes(-1) };
+        // The owner rotated K0 → KA at `now`.
+        var live = k0.RotatedTo(Minted("kA", now), now, grace);
+        // A writer whose mirror still holds K0 rotates it a day LATER.
+        var proposed = SecretSealingKeyService.RotateAtOwner(k0, Minted("kX", later), k => SecretSealingKeyService.IsDue(k, later), later);
+
+        var mirror = Json(k0);
+        var patch = MeshNodeStreamHandle.ComputeMergePatchDiff(mirror, Json(proposed));
+        var owner = Json(live);
+        MeshNodePatchMerge.Apply(owner, patch, MeshNodePatchMerge.ExtractBaseValues(mirror, patch));
+
+        var merged = owner.Deserialize<MeshNode>(options)!.ContentAs<SecretSealingKey>(options)!;
+        merged.ProtectedPrivateKeyFor("k0", now.Add(grace).AddMinutes(-1)).Should().Be("enc:k0");
+        merged.ProtectedPrivateKeyFor("k0", now.Add(grace)).Should().BeNull(
+            "K0 retired at the owner first; a later writer's retirement of the same key must not extend its window");
+
+        // And the next rotation keeps ONE entry per key id, the first deadline.
+        var next = merged.RotatedTo(Minted("kN", now.AddDays(2)), now.AddDays(2), grace);
+        next.Retired.Where(r => r.Id == "k0").Should().ContainSingle().Which.ValidUntil.Should().Be(now.Add(grace));
     }
 
     [Fact]

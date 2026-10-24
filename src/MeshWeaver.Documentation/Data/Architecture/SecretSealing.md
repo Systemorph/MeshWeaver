@@ -20,9 +20,12 @@ the control instance opens it.
 - **HKDF-SHA256** over the shared secret (random 16-byte salt, info `mw-secret-envelope v1`),
 - **AES-256-GCM** with a random 12-byte nonce.
 
-The associated data is `mw-secret-envelope v1`, then the key id and the context, each as a 4-byte big-endian
-byte length followed by its UTF-8 bytes. The length prefixes make it unambiguous: moving a `|` from the key id
-into the context (`k1|a` + `b` against `k1` + `a|b`) is different associated data and does not authenticate. `Seal`
+The associated data is `mw-secret-envelope v1`, then the key id, the context and the ephemeral public key (its SPKI
+bytes exactly as transmitted in `epk`), each as a 4-byte big-endian byte length followed by its bytes (UTF-8 for the
+key id and the context). The length prefixes make it unambiguous: moving a `|` from the key id into the context
+(`k1|a` + `b` against `k1` + `a|b`) is different associated data and does not authenticate. The ephemeral key is
+bound because ECDH alone does not see it: the negated point `(x, p − y)` is another valid P-256 point with the same
+shared x-coordinate, hence the same AES key, so a rewritten `epk` would otherwise still authenticate. `Seal`
 refuses a key id its own reader would refuse (1 to 64 characters). For a vault write the context is
 `{deployment}|{object}`, so a sealed value **cannot be replayed onto another deployment or object**: unsealing
 with a different context fails authentication, like a wrong key, a wrong key id, a different version or any changed
@@ -43,7 +46,9 @@ platform key protector**, refused when no master key exists.
 **Rotation:** every 90 days, or on demand. Each outgoing key stays accepted for 7 days from its own rotation, so a
 value sealed just before the rotation still opens; after that only the newer keys do. **Every** retired key inside its
 window is kept (`SecretSealingKey.Retired`), so two rotations within one window never drop the first outgoing key
-early.
+early. A key retires **once**, and its **first** deadline holds: two rotations computed from the same key at different
+times can both land a retirement for it (the owner's list merge keeps both, since they differ as elements), so the
+earliest entry for a key id decides whether it still opens, and the next rotation collapses the duplicates to it.
 
 The due-check and the rotation happen together, inside ONE `GetMeshNodeStream(path).Update`. The lambda runs on the
 writer's mirror, and what reaches the owning hub is the merge patch of what it changed plus the writer's base values,
