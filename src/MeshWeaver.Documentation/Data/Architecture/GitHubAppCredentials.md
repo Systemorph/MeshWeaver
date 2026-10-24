@@ -14,7 +14,7 @@ what the token may do.**
 
 | App | Grants | Installed on | Mints for | Secrets |
 |---|---|---|---|---|
-| `meshweaver-cloud` | Contents, Pull requests: **write**; Metadata: read | the org (measured 2026-09-11: `repository_selection: all`, 35 repositories); Memex is leaving it | WRITES to the repository the workflow runs in — `auto-arm`, `arm-credential`, `merge-queue-steward`, `release` (the next-line PR), the satellites' `node-repo-platform-ref-bump` | `MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY` |
+| `meshweaver-cloud` | Contents, Pull requests: **write**; Metadata: read | the org (measured 2026-09-11: `repository_selection: all`, 35 repositories); Memex is leaving it | WRITES to the repository the workflow runs in — `auto-arm`, `arm-credential`, `merge-queue-steward`, `release` (the next-line PR) | `MESHWEAVER_APP_ID`, `MESHWEAVER_APP_PRIVATE_KEY` |
 | `fleet-reader` | Contents, Metadata, Pull requests: **read only** | the eight fleet repositories — MeshWeaver, MeshWeaver.Plugins, Memex, MeshWeaver.Education, MeshWeaver.Reinsurance, MeshWeaver.SocialMedia, MeshWeaver.Manufacturing, MeshWeaver.Crm | every cross-repo READ (next table) | `FLEET_READER_APP_ID`, `FLEET_READER_APP_PRIVATE_KEY`, in **both** secret stores |
 
 The rule that makes this auditable from the workflow files alone: **a `create-github-app-token`

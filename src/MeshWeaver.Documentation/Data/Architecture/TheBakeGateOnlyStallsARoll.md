@@ -1,7 +1,7 @@
 ---
 Name: The Bake Gate Only Stalls a Roll
 Category: Architecture
-Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, and why its verdict is read by readiness alone and never by the startup probe.
+Description: Why the NodeType bake readiness gate took the control instance fully down, the two rules that now make a refusal possible only on an image that is newer than the build it would be protecting, why its verdict is read by readiness alone and never by the startup probe, and how a sweep a store outage faulted is re-run on the same pod.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/><path d="M9 12l2 2 4-4"/></svg>
 ---
 
@@ -245,6 +245,74 @@ This table is correct for core's `main` and Plugins' `main` on the day it was wr
 later that can answer Unhealthy must be placed deliberately: startup (`/health`, the container is
 killed) or roll gate (`/ready`, the roll stalls).
 
+## A sweep the store refused is re-run on the same pod
+
+Taking the gate off the startup probe removed the only thing that ever re-ran a faulted sweep. On
+2026-10-22 the managed database behind memex restarted and refused connections from about
+21:22:51Z to 21:23:34Z (#7068). One pod was mid-boot. Its sweep met the refusal on `Admin/Build` at
+21:22:55Z and recorded `Faulted`. It logged no further `DynamicTypePreWarmer` line, and
+`nodetype_bake` answered Unhealthy every ten seconds until the pod was replaced at 22:37Z. That was
+74 minutes after the database came back, and the roll could not converge in between
+([#7066](https://github.com/Systemorph/MeshWeaver/issues/7066)).
+
+The sweep is now re-run on the same pod when its fault was a transient store fault.
+
+**What counts as transient** is `StandingWatchRecovery.IsTransient`, the same classification a
+standing watch re-opens on ([Standing Watches Re-open](../StandingWatchesReopen)). It covers a
+database connect or IO fault, the query fan-in's stall terminal, and a store fault that an owner hub
+met and classified before it answered. The last one matters for this incident. The exception never
+crosses a hub boundary; only the `MeshNodeError` record does. So the sweep held
+`MeshNode Unknown at 'Admin/Build': NpgsqlException: Failed to connect` with no inner exception,
+and nothing could classify it. The owner now classifies the fault while it still has its type
+(`ClassifyPatchException`) and sends the answer on the record as `MeshNodeError.Transient`. The
+caller reads that flag, never the message text. A compile error, a query or schema error, or a
+deserialization defect is not transient. It ends the sweep on its first occurrence and stays a
+named failure, as before.
+
+**What triggers the re-run** is the platform's one "the store answers again" evidence,
+`StoreReachability.StoreAnswersAgain` (#7072, the same evidence a refused NodeType release re-cut is
+re-issued on). It fires on a declared `ChangeFeedGap`, which a backend whose cross-process feed can
+drop declares when it re-opens its session (the PostgreSQL listener does so after a lost
+connection). It also fires on a commit the store announced (`IMeshInvalidationFeed.DurableCommits`),
+because such a commit is announced only after the store accepted it. The sweep reads every
+partition, so a commit in any partition counts. The sweep applies the same two rules
+`ReissueWhenStoreAnswers` applies to a single write:
+
+- Evidence is observed for the sweep's whole life. Evidence that arrives while an attempt is still
+  in flight is retained, and the re-run starts the moment that attempt faults. The feed never
+  replays a reconnect, so without this it would be lost.
+- A re-run started by a commit that meets the same fault shows that a commit is not evidence for
+  this sweep. From then on only a reconnect starts one, so a busy mesh cannot turn into a re-run
+  loop.
+
+The evidence alone is not enough, and the sweep adds one documented clock to it. A gap is declared
+only after the feed had come up once, and a backend with no cross-process feed and no announced
+commits gives no evidence at all. So for the first few re-runs a timer races the evidence, on the
+schedule a standing watch uses (2 s, 5 s, 15 s, 30 s, 60 s). After those, only evidence can trigger
+a re-run, and no clock runs at all. `StoreRecoveryRerun` holds the rule; `StoreRecoveryRerunPolicy`
+holds the schedule. It defines no second "the store is back" signal.
+
+**What the pod says while it waits.** The fault is recorded honestly first: the gate reads
+`Faulted`, and its detail names the pending re-run and what will trigger it. The log line is a
+Warning that says the fault is not final. A re-run puts a strict pod back to `Running`, which is
+still not ready, and now names its progress again. A pod whose fault already granted readiness
+stays in rotation through the re-run: an image that has served here, or `AllowUnprovenBake`. A
+completed re-run supersedes the fault, so the gate lands on `Complete` and readiness follows.
+The served-build witness is offered again on each re-run, because the first offer was discarded
+when the fault refused the pod. The bake barrier that boot flows sequence on (#1114) is held while
+a timed re-run is pending, and released once only the signal can trigger one.
+
+The regression test is `AWarmUpSweepRerunsWhenTheStoreRecoversTest` (MeshWeaver.FaultInjection.Test).
+It runs the real hosted service on a real mesh, refuses the sweep's catalog read with the incident's
+fault shape, and allows no timed re-run. It asserts that the same gate instance reaches `Complete`
+once the store recovers and the change feed declares the gap, through `StoreReachability`. Its negative control holds the sweep the way the
+service held it before. That gate stays unready after the same recovery, while a fresh sweep on the
+same mesh passes. A third case shows a non-transient fault is not re-run.
+
+The host's readiness message (`NodeTypeBakeHealthCheck`, in the MeshWeaver.Plugins host) still
+ends "A restart re-runs the sweep". For a transient fault the gate's own detail, which that
+message carries, now names the re-run that is actually pending.
+
 ## What this does not cover
 
 - **A `Faulted` sweep on an image that has NOT served here still refuses readiness** unless
@@ -254,9 +322,11 @@ killed) or roll gate (`/ready`, the roll stalls).
   because a sweep that errored has no per-type evidence for rule 1 to judge.
 - **A `Faulted` sweep is no longer retried by a restart.** While the gate rode the startup probe,
   a refused pod was killed at the end of the budget and the restart re-ran the sweep. Now a refused
-  pod stays alive and out of the Service, so a sweep that errored stays errored until someone acts:
-  a governed `Restart` of the instance, or `PreWarm:AllowUnprovenBake`. That is the price of never
-  killing anything, and it is paid on purpose.
+  pod stays alive and out of the Service. A sweep that faulted on a TRANSIENT store fault is re-run
+  by the pod itself once the store is reachable again (next section). A sweep that faulted on
+  anything else stays errored until someone acts: a governed `Restart` of the instance, or
+  `PreWarm:AllowUnprovenBake`. That is the price of never killing anything, and it is paid on
+  purpose.
 - **Legacy records** that carry no `CompiledPlatformVersion` get the strict reading until they are
   next stamped.
 - **The first armed boot after this ships writes no marker for the images already serving.** A
@@ -286,6 +356,7 @@ maximum and its declaration moved into the estate's governed infrastructure lane
 ## Related
 
 [Deploying Across Platform Versions](../DeployingAcrossPlatformVersions) ·
+[Standing Watches Re-open](../StandingWatchesReopen) ·
 [Mesh Admission](../MeshAdmission) ·
 [NodeType Compilation](../NodeTypeCompilation) ·
 [Deployment (AKS)](../DeploymentAKS)
