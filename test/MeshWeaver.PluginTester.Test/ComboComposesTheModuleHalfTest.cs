@@ -172,6 +172,123 @@ public class ComboComposesTheModuleHalfTest
         }
     }
 
+    /// <summary>Review finding on #7099: the module NAME comes from the producer's manifest and
+    /// becomes a directory. A traversing name must be refused before ANY byte is written — a
+    /// per-file check would already have written the files listed before the bad one.</summary>
+    [Fact]
+    public void Compose_RefusesATraversingModuleName_BeforeWritingAnything()
+    {
+        var dir = Directory.CreateTempSubdirectory("combo-modules-").FullName;
+        try
+        {
+            var seal = Directory.CreateDirectory(Path.Combine(dir, "a", "b", "seal")).FullName;
+            const string evil = "../../escaped-module";
+            WriteBundle(Path.Combine(seal, "x.module.nupkg"), evil,
+                files: ["payload.dll", evil + ".dll"]);
+
+            Assert.Throws<InvalidOperationException>(() =>
+                ComboModuleSet.Compose([evil], [seal], Path.Combine(dir, "a", "b", "out")));
+            Assert.Empty(Directory.EnumerateFiles(dir, "payload.dll", SearchOption.AllDirectories));
+            Assert.False(Directory.Exists(Path.Combine(dir, "a", "escaped-module")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>Review finding on #7099: two DISTINCT entry modules carrying two builds of one
+    /// shared sibling are refused, exactly as node-repo-gate.yml refuses them (MeshWeaver#3732);
+    /// the same build carried twice is fine.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Compose_RefusesTwoBuildsOfASharedSibling_AcrossDistinctModules(bool diverge)
+    {
+        var dir = Directory.CreateTempSubdirectory("combo-modules-").FullName;
+        try
+        {
+            WriteBundle(Path.Combine(dir, "ai.module.nupkg"), "MeshWeaver.AI",
+                files: ["MeshWeaver.AI.dll", "MeshWeaver.Shared.dll"],
+                contents: new Dictionary<string, string> { ["MeshWeaver.Shared.dll"] = "build-A" });
+            WriteBundle(Path.Combine(dir, "chat.module.nupkg"), "MeshWeaver.Blazor.Chat",
+                files: ["MeshWeaver.Blazor.Chat.dll", "MeshWeaver.Shared.dll"],
+                contents: new Dictionary<string, string>
+                {
+                    ["MeshWeaver.Shared.dll"] = diverge ? "build-B" : "build-A",
+                });
+
+            ComboModuleComposition Compose() => ComboModuleSet.Compose(
+                ["MeshWeaver.AI", "MeshWeaver.Blazor.Chat"], [dir], Path.Combine(dir, "out"));
+
+            if (diverge)
+                Assert.Contains("two different builds",
+                    Assert.Throws<InvalidOperationException>(Compose).Message);
+            else
+                Assert.Equal(2, Compose().Modules.Length);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>Review finding on #7099: an existing but EMPTY bundle directory must not run the
+    /// gate with no modules — that is #4413 itself, behind a directory that merely exists.</summary>
+    [Fact]
+    public void Compose_RefusesBundleDirectoriesThatCarryNoDeclaredModule()
+    {
+        var dir = Directory.CreateTempSubdirectory("combo-modules-").FullName;
+        try
+        {
+            Assert.Contains("carry none of them",
+                Assert.Throws<InvalidOperationException>(() => ComboModuleSet.Compose(
+                    ["MeshWeaver.AI"], [dir], Path.Combine(dir, "out"))).Message);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    /// <summary>Review finding on #7099: the composed bytes are the set sealed for the candidate,
+    /// which can be newer than what the instance has installed. The divergence is named per
+    /// module, never silent.</summary>
+    [Fact]
+    public void VersionDivergence_NamesEveryModuleComposedAtAnotherVersionThanInstalled()
+    {
+        var dir = Directory.CreateTempSubdirectory("combo-modules-").FullName;
+        try
+        {
+            WriteBundle(Path.Combine(dir, "ai.module.nupkg"), "MeshWeaver.AI",
+                files: ["MeshWeaver.AI.dll"], version: "1.38.0");
+            WriteBundle(Path.Combine(dir, "chat.module.nupkg"), "MeshWeaver.Blazor.Chat",
+                files: ["MeshWeaver.Blazor.Chat.dll"], version: "1.7.56");
+            var combo = Combo(("AI", "MeshWeaver.AI"), ("Chat", "MeshWeaver.Blazor.Chat"));
+            combo = combo with
+            {
+                Modules =
+                [
+                    .. combo.Modules.Select(m => m with
+                    {
+                        Package = m.Package! with { Version = m.ModuleId == "AI" ? "1.37.12" : "1.7.56" },
+                    }),
+                ],
+            };
+
+            var composition = ComboModuleSet.Compose(
+                ComboModuleSet.DeclaredBy(combo), [dir], Path.Combine(dir, "out"));
+
+            Assert.Equal(
+                new[] { "MeshWeaver.AI: installed 1.37.12, composed 1.38.0" },
+                composition.VersionDivergence(combo).ToArray());
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
     [Fact]
     public void Compose_RefusesAMissingBundleDirectory() =>
         Assert.Throws<InvalidOperationException>(() => ComboModuleSet.Compose(
@@ -183,10 +300,11 @@ public class ComboComposesTheModuleHalfTest
     /// each section carries what it declares (every file's content is its own name).</summary>
     private static void WriteBundle(
         string path, string module, IReadOnlyList<string> files,
-        IReadOnlyList<string>? assets = null, IReadOnlyList<string>? natives = null)
+        IReadOnlyList<string>? assets = null, IReadOnlyList<string>? natives = null,
+        string version = "1.0.0", IReadOnlyDictionary<string, string>? contents = null)
     {
         var manifest = new BundleReader.Manifest(
-            Plugin: module, Version: "1.0.0", FrameworkMvid: null, Assemblies: [],
+            Plugin: module, Version: version, FrameworkMvid: null, Assemblies: [],
             Module: new BundleReader.ModuleRef(module, files, StaticAssets: assets)
             {
                 NativeAssets = natives,
@@ -195,7 +313,8 @@ public class ComboComposesTheModuleHalfTest
         using var archive = new ZipArchive(stream, ZipArchiveMode.Create);
         Add(archive, NuGetPackageWriter.ManifestEntry, JsonSerializer.Serialize(manifest, Web));
         foreach (var file in files)
-            Add(archive, NuGetPackageWriter.ModuleEntryPathFor(file), file);
+            Add(archive, NuGetPackageWriter.ModuleEntryPathFor(file),
+                contents is not null && contents.TryGetValue(file, out var c) ? c : file);
         foreach (var asset in assets ?? [])
             Add(archive, NuGetPackageWriter.ModuleAssetEntryPathFor(asset), asset);
         foreach (var native in natives ?? [])

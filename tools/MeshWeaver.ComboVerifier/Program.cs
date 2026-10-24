@@ -263,6 +263,10 @@ if (declaredModules.Length > 0)
             $"modules: {moduleSet.NotSealed.Length} declared but carried by no fetched seal, so NOT "
             + $"loaded (the producing repository's own gate does not load them either): "
             + string.Join(", ", moduleSet.NotSealed));
+    if (moduleSet.VersionDivergence(combo) is { Length: > 0 } diverged)
+        Console.WriteLine(
+            $"modules: {diverged.Length} composed at a version other than the installed one: "
+            + string.Join("; ", diverged));
     if (moduleSet.NotDeclared.Length > 0)
         Console.WriteLine(
             $"modules: {moduleSet.NotDeclared.Length} sealed but not installed on this instance, so "
@@ -298,15 +302,20 @@ run.WriteSummary(Console.Out);
 
 // The verdict names its exact input, the module half included: a declared module no seal carried
 // ran unloaded, and a failure that needs it must be attributable from the verdict alone.
-var verdictToWrite = moduleSet is { NotSealed.Length: > 0 }
-    ? run.Verdict with
-    {
-        Caveats = run.Verdict.Caveats.Add(
-            $"{moduleSet.NotSealed.Length} compiled module(s) this instance declares were carried by "
-            + "no sealed publication for the candidate's framework identity and were NOT loaded: "
-            + string.Join(", ", moduleSet.NotSealed)),
-    }
-    : run.Verdict;
+var moduleCaveats = ImmutableList<string>.Empty;
+if (moduleSet is { NotSealed.Length: > 0 })
+    moduleCaveats = moduleCaveats.Add(
+        $"{moduleSet.NotSealed.Length} compiled module(s) this instance declares were carried by "
+        + "no sealed publication for the candidate's framework identity and were NOT loaded: "
+        + string.Join(", ", moduleSet.NotSealed));
+if (moduleSet?.VersionDivergence(combo) is { Length: > 0 } divergent)
+    moduleCaveats = moduleCaveats.Add(
+        $"{divergent.Length} module(s) ran at the version sealed for the candidate's framework "
+        + "identity — what the instance lands once it rolls there — which is not the version it has "
+        + $"installed today: {string.Join("; ", divergent)}");
+var verdictToWrite = moduleCaveats.IsEmpty
+    ? run.Verdict
+    : run.Verdict with { Caveats = run.Verdict.Caveats.AddRange(moduleCaveats) };
 var fullVerdictPath = Path.GetFullPath(verdictPath);
 File.WriteAllText(
     fullVerdictPath, JsonSerializer.Serialize(verdictToWrite, InstanceComboAssembler.Json));
