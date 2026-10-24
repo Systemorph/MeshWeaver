@@ -2,7 +2,7 @@
 # hosting-dump-analyze --namespace <ns> [--dump <pod dir>/coredump.<pid>.<epoch> | --pod <pod> | --around <yyyy-mm-ddThh:mm[:ss]Z>]
 #
 # READ a crash or heap dump a portal pod left on its instance's dump volume, IN THE CLUSTER, and
-# report only the TEXTUAL analysis — thread stacks, lock owners, the thread pool — as ONE machine
+# report only the TEXTUAL analysis — thread stacks, lock owners, the thread pool, what holds the heap — as ONE machine
 # line the control plane lands under `Ops/Dumps/<action>` (MeshWeaver.Plugins Hosting/InstanceAction,
 # kind `AnalyzeDump`; MeshWeaver#6432):
 #
@@ -29,9 +29,11 @@
 #   • the claim is mounted `readOnly: true`; nothing on the volume is written, moved or deleted
 #     (retention stays the chart's crash-dump-retention.sh);
 #   • the raw dump never leaves the pod — only the text of the fixed commands below does;
-#   • the commands are FIXED here (eeversion, threadpool, syncblk, clrthreads, clrstack -all,
-#     dumpasync --coalesce). None prints object fields, strings or the environment (no dumpobj,
-#     dumpheap, !env), and the text is still passed through a redaction of key=value secrets;
+#   • the commands are FIXED here (eeversion, threadpool, gcheapstat, dumpheap -stat, syncblk,
+#     clrthreads, clrstack -all, dumpasync --coalesce). None prints object fields, strings or the
+#     environment (no dumpobj, no plain `dumpheap` object listing, no !env) — `dumpheap -stat` prints
+#     one row per TYPE (count, total bytes, name), never an object — and the text is still passed
+#     through a redaction of key=value secrets;
 #   • the analysis Job carries no secret, mounts no ServiceAccount token, and runs as non-root.
 #
 # 🚨 THE SELECTOR IS A PATH INTO SOMEONE ELSE'S VOLUME, so it is validated twice: here, as the shape
@@ -59,7 +61,9 @@ HOSTING_CMD="hosting-dump-analyze"
 ANALYZER_IMAGE="${HOSTING_DUMP_ANALYZER_IMAGE:-mcr.microsoft.com/dotnet/sdk:10.0}"
 DOTNET_DUMP_VERSION="${HOSTING_DOTNET_DUMP_VERSION:-10.0.750501}"
 # The Job's own budget, and the per-command bound inside it (a heap walk over a 16 GiB dump is the
-# slow one). Both sit well inside the operations lane's 45-minute hard cut.
+# slow one — `dumpheap -stat` and `dumpasync` each walk it once). Both sit well inside the operations
+# lane's 45-minute hard cut. The per-command bound is per command, not a share of the Job's: commands
+# that ALL ran to their bound would outlast the Job, which then FAILS by name — never a partial report.
 JOB_DEADLINE="${HOSTING_DUMP_DEADLINE:-1800}"
 CMD_TIMEOUT="${HOSTING_DUMP_COMMAND_TIMEOUT:-300}"
 # Bytes of one command's output the pod prints at most (the rest is counted, never silently cut).
@@ -251,7 +255,8 @@ cleanup
 
 # ── condense ────────────────────────────────────────────────────────────────────────────────────
 # One jq program: parse the sentinels, group `clrstack -all` threads by identical stack, cap each
-# text section, redact key=value secrets. The caps shrink until the encoded fact fits the budget;
+# text section, redact key=value secrets, and turn `dumpheap -stat` into the N types holding the most
+# bytes (largest first, each with its share of the heap's `Total … bytes`). The caps shrink until the encoded fact fits the budget;
 # every cap is STATED in the result (shown vs total), so a cut is never silent.
 #
 # 🚨 THE THREAD THAT HOLDS A MONITOR IS NEVER CUT, and it comes FIRST. A wedged process is read by
@@ -274,6 +279,9 @@ def epoch: tonumber | todate;
 def norm: sub("\\s+\\[/[^\\]]*\\]\\s*$"; "") | gsub("\\[(?<k>[A-Za-z0-9_]+): [0-9a-fA-F]{6,}\\]"; "[\(.k)]");
 def clip($n): if length <= $n then . else (($n * 2 / 3) | floor) as $h | ($n - $h - 1) as $t
   | .[:$h] + ["… \(length - $h - $t) frame(s) cut …"] + .[length - $t:] end;
+def num: gsub(","; "") | tonumber;
+def thou: tostring | if length <= 3 then . else (.[:-3] | thou) + "," + .[-3:] end;
+def lpad($n): tostring | ([range(0; ([$n - length, 0] | max))] | map(" ") | join("")) + .;
 (split("\n") | reduce .[] as $l ({cur: null, listing: [], sections: [], selected: null};
   if ($l | startswith("@@MW-DUMP ")) then
     ($l[10:] | split("\t")) as $f
@@ -289,6 +297,38 @@ def clip($n): if length <= $n then . else (($n * 2 / 3) | floor) as $h | ($n - $
   else . end)) as $r
 | ($r.sections | map(select(.name == "clrstack")) | first // {lines: []}) as $cs
 | ($r.sections | map(select(.name == "syncblk")) | first // {lines: []}) as $sb
+# dumpheap -stat: `<MT> <count> <total bytes> <type>` per type (SOS prints the numbers with or without
+# thousands separators), then `Total <n> objects, <m> bytes`. Only rows BEFORE that Total line are
+# statistics (the pod already drops what SOS prints after it; this holds for any log). The pod kept the
+# TAIL of a long table, which is where the largest types are, so the header of the table is gone
+# exactly when rows were cut — rowsCut is read off that, never off a byte count that also counts the
+# lines that are not the table, and says the type count is then a floor.
+| ($r.sections | map(select(.name == "dumpheap")) | first // null) as $dh
+| (if $dh == null then null else
+     ($dh.lines | (first(range(0; length) as $i | select(.[$i] | test("^\\s*Total\\s+[0-9][0-9,]*\\s+objects")) | $i) // length)) as $end
+     | ([ $dh.lines[:$end][]
+        | capture("^\\s*(?:0x)?[0-9a-fA-F]{8,}\\s+(?<count>[0-9][0-9,]*)\\s+(?<size>[0-9][0-9,]*)\\s+(?<type>\\S.*?)\\s*$")
+        | {type: (.type | redact), objects: (.count | num), bytes: (.size | num)} ]
+      | sort_by(-.bytes)) as $rows
+     | ([ $dh.lines[$end:][] | capture("^\\s*Total\\s+(?<o>[0-9][0-9,]*)\\s+objects,\\s+(?<b>[0-9][0-9,]*)\\s+bytes") ] | first // null) as $tot
+     | {exit: $dh.exit, bytes: $dh.bytes,
+        rowsCut: (($rows | length) > 0 and ($dh.lines[:$end] | any(test("^\\s*Statistics:|^\\s*MT\\s+Count\\s+TotalSize")) | not)),
+        totalObjects: (if $tot == null then null else ($tot.o | num) end),
+        totalBytes: (if $tot == null then null else ($tot.b | num) end),
+        typeCount: ($rows | length), typesShown: ([($rows | length), $heapTypes] | min), typesCap: $heapTypes,
+        types: [ $rows[:$heapTypes][]
+                 | . + {share: (if $tot == null or ($tot.b | num) == 0 then null
+                                else ((.bytes * 1000 / ($tot.b | num)) | floor) / 10 end)} ]}
+   end) as $heap
+| (if $heap == null then "" else
+     ([ (if $heap.totalBytes == null
+         then "No `Total … objects` line: the heap walk did not finish (exit \($heap.exit // "unknown")) — the rows below are what it printed."
+         else "Total \($heap.totalObjects | thou) objects, \($heap.totalBytes | thou) bytes on the managed heap." end),
+        "The \($heap.typesShown) largest of \(if $heap.rowsCut then "at least " else "" end)\($heap.typeCount) type(s) by total size\(if $heap.typesShown < $heap.typeCount then "; the rest are cut" else "" end).",
+        "",
+        "\("bytes" | lpad(18))  \("share" | lpad(6))  \("objects" | lpad(14))  type" ]
+      + [ $heap.types[] | "\(.bytes | thou | lpad(18))  \(if .share == null then "" elif .share == 0 and .bytes > 0 then "<0.1%" else "\(.share)%" end | lpad(6))  \(.objects | thou | lpad(14))  \(.type)" ]
+     | join("\n")) end) as $heapText
 # syncblk: Index SyncBlock MonitorHeld Recursion <thread object> <OS id, hex> <managed id> <object> <type>.
 # MonitorHeld counts 1 for the owner and 2 per waiter.
 | ([ $sb.lines[]
@@ -313,7 +353,10 @@ def clip($n): if length <= $n then . else (($n * 2 / 3) | floor) as $h | ($n - $
     analyzer: {image: $image, dotnetDump: $version},
     listingCount: ($r.listing | length), listing: $r.listing[:50],
     dump: $r.selected,
-    sections: [ $r.sections[] | select(.name != "clrstack") | if $text == 0 and (.name == "dumpasync" or .name == "clrthreads") then
+    heap: $heap,
+    sections: [ $r.sections[] | select(.name != "clrstack") | if .name == "dumpheap" then
+                  {name, command, exit, bytes, truncated: ($heap.rowsCut or $heap.typesShown < $heap.typeCount), text: $heapText}
+                elif $text == 0 and (.name == "dumpasync" or .name == "clrthreads") then
                   {name, command, exit, bytes, truncated: true, omitted: true, text: ""}
                 else (.lines | join("\n") | redact) as $t
                   | {name, command, exit, bytes, truncated: ((.bytes // 0) > $sectionBytes or ($t | length) > (if $text == 0 then 1200 else $text end)), text: $t[:(if $text == 0 then 1200 else $text end)]} end ],
@@ -323,12 +366,13 @@ def clip($n): if length <= $n then . else (($n * 2 / 3) | floor) as $h | ($n - $
   }'
 
 fact="" analysis=""
-# text bytes · frames per stack · groups · thread ids per group · frames of a LOCK OWNER's stack.
-for caps in "6000 40 80 8 240" "3000 25 40 6 240" "1500 15 25 4 160" "800 10 15 3 120" "0 8 10 2 80"; do
-  read -r text frames groups ids owner_frames <<< "$caps"
+# text bytes · frames per stack · groups · thread ids per group · frames of a LOCK OWNER's stack ·
+# heap types. The heap table is never omitted: on an out-of-memory dump it is the answer.
+for caps in "6000 40 80 8 240 40" "3000 25 40 6 240 30" "1500 15 25 4 160 25" "800 10 15 3 120 20" "0 8 10 2 80 15"; do
+  read -r text frames groups ids owner_frames heap_types <<< "$caps"
   analysis="$(printf '%s' "$pod_log" | jq -R -s -c \
     --arg ns "$namespace" --arg claim "$claim" --arg root "$root" --arg image "$ANALYZER_IMAGE" --arg version "$DOTNET_DUMP_VERSION" \
-    --argjson sectionBytes "$SECTION_BYTES" --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" --argjson ownerFrames "$owner_frames" "$condense")" \
+    --argjson sectionBytes "$SECTION_BYTES" --argjson text "$text" --argjson frames "$frames" --argjson maxGroups "$groups" --argjson ids "$ids" --argjson ownerFrames "$owner_frames" --argjson heapTypes "$heap_types" "$condense")" \
     || hosting::die "the analysis text of ${job} could not be condensed (jq failed) — nothing is reported"
   fact="$(printf '%s' "$analysis" | gzip -9 -n | base64 | tr -d '\n')"
   [ "${#fact}" -gt "$FACT_BUDGET" ] || break
@@ -343,6 +387,9 @@ listing="$(printf '%s' "$analysis" | jq -r '.listingCount')"
 hosting::log "read ${file_read} ($(printf '%s' "$analysis" | jq -r '.dump.bytes') bytes, written $(printf '%s' "$analysis" | jq -r '.dump.modifiedAt')) — one of ${listing} dump(s) on the volume"
 hosting::log "${threads} managed thread(s) in $(printf '%s' "$analysis" | jq -r '.stacks.groupCount') distinct stack(s), $(printf '%s' "$analysis" | jq -r '.stacks.lockOwners') of them a monitor's owner (shown first, never cut); first groups:"
 printf '%s' "$analysis" | jq -r '.stacks.groups[:5][] | "    \(.threads) × \(.frames[0] // "(no managed frame)")"'
+printf '%s' "$analysis" | jq -r 'if .heap == null then "heap: no `dumpheap -stat` section in the analysis"
+  else "heap: \(.heap.totalBytes // "unknown") bytes in \(.heap.totalObjects // "unknown") object(s); largest types:",
+       (.heap.types[:5][] | "    \(.bytes) bytes × \(.objects) — \(.type)") end' | while IFS= read -r line; do hosting::log "$line"; done
 hosting::say dump_listing "$listing"
 hosting::say dump_file "$file_read"
 hosting::say dump_threads "$threads"
