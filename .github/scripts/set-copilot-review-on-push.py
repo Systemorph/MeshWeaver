@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 """set-copilot-review-on-push.py — reconcile every fleet ruleset's `copilot_code_review` rule to the in-force `review_on_push` value, nothing else.
 
-Policy `copilot-code-review` as amended (Doc/Architecture/PolicyNotProse; manual:
-Doc/Architecture/ReviewFindingsAnswered → "Every push is reviewed again"): every push to a non-draft
-pull request gets a fresh Copilot review, so the rule runs with `review_on_push: true`. The value
-lives in ONE place, `REVIEW_ON_PUSH` below; the script only ever moves a ruleset TO it, so following
-its help can never restore a retired configuration. (It replaces `set-copilot-review-once.py`, which
-hard-coded the retired `false` of `review-once-per-pull-request`'s ruleset half.)
+Policy `review-on-real-change` (Doc/Architecture/PolicyNotProse; manual:
+Doc/Architecture/ReviewFindingsAnswered → "A review on every real change, none for a merge of main"):
+Copilot reviews a pull request when it opens, a push that only merges the default branch costs NO
+review, and a push that changes the pull request's own diff gets one from the review-on-change lane
+(node-repo-request-review.yml) — so the rule runs with `review_on_push: false`. The value lives in
+ONE place, `REVIEW_ON_PUSH` below; the script only ever moves a ruleset TO it.
+
+🚨 Apply it to a repository ONLY once that repository CALLS the review-on-change lane
+(`request-review-on-change.yml`) — `--repo NAME` per adopted repository. Flipping a repository that
+does not call it leaves every real change after the opening review unreviewed, and its
+`Automatic review answered` red until a person re-requests the review. Every ruleset's before-state
+is the restore point: `--out DIR` writes each body before anything is PUT.
 
 What it does, per repository:
   1. lists the rulesets (REST), reads each in full, and picks every one carrying `copilot_code_review`
@@ -38,10 +44,11 @@ import sys
 
 OWNER = "Systemorph"
 FLEET = ("MeshWeaver", "MeshWeaver.Plugins", "Memex", "MeshWeaver.Crm", "MeshWeaver.Education",
-         "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting")
+         "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting",
+         "MeshWeaver.Deploy")
 RULE = "copilot_code_review"
-# The in-force value (policy `copilot-code-review`, as amended). Change it only with the policy.
-REVIEW_ON_PUSH = True
+# The in-force value (policy `review-on-real-change`). Change it only with the policy.
+REVIEW_ON_PUSH = False
 BODY_FIELDS = ("name", "target", "enforcement", "bypass_actors", "conditions", "rules")
 
 
@@ -137,7 +144,7 @@ def self_test() -> int:
     check("does not mutate the ruleset as read", base["rules"][1]["parameters"]["review_on_push"] is (not REVIEW_ON_PUSH))
     _, again = put_body(dict(base, rules=body["rules"]))
     check("idempotent: already at the in-force value -> unchanged", again is False)
-    check("in-force value is true (policy copilot-code-review, amended)", REVIEW_ON_PUSH is True)
+    check("in-force value is false (policy review-on-real-change)", REVIEW_ON_PUSH is False)
     for name, bad in [("no bypass_actors read -> refused", {k: v for k, v in base.items() if k != "bypass_actors"}),
                       ("no copilot rule -> refused", dict(base, rules=[{"type": "deletion"}])),
                       ("rule without review_on_push -> refused", dict(base, rules=[{"type": RULE, "parameters": {}}]))]:

@@ -125,6 +125,14 @@ repos:
         job: review-answered
         lane: node-repo-review-answered.yml
         grants: {actions: write, checks: read, contents: read, issues: read, pull-requests: read}
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.Education ──────────────────────────────────────────────────────────────────────
   # The ONE satellite that still pins its lanes to a platform sha rather than `@main`, so a core
@@ -192,6 +200,14 @@ repos:
         lane: read-store-artifact.yml
         grants: {contents: read}
         pending: Systemorph/MeshWeaver.Education#405 lands the caller after the lane (MeshWeaver#7032) is on core main
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.Reinsurance ────────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Reinsurance:
@@ -258,6 +274,14 @@ repos:
         lane: node-repo-retry-transients.yml
         grants: {actions: write, checks: read, contents: read}
         pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.SocialMedia ────────────────────────────────────────────────────────────────────
   # Its `module` caller ALREADY grants `id-token: write`, which is why #3933 did not break this repo
@@ -331,6 +355,14 @@ repos:
         lane: node-repo-retry-transients.yml
         grants: {actions: write, checks: read, contents: read}
         pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.Manufacturing ──────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Manufacturing:
@@ -393,6 +425,14 @@ repos:
         lane: node-repo-retry-transients.yml
         grants: {actions: write, checks: read, contents: read}
         pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.Crm ────────────────────────────────────────────────────────────────────────────
   Systemorph/MeshWeaver.Crm:
@@ -459,6 +499,14 @@ repos:
         lane: node-repo-retry-transients.yml
         grants: {actions: write, checks: read, contents: read}
         pending: this repository's retry-known-transients.yml is replaced by the thin caller in its own PR, after core's node-repo-retry-transients.yml lands (Systemorph/MeshWeaver.Manufacturing#84)
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── MeshWeaver.FundReporting (private content repo; stood up 2026-09-20 from Crm's caller) ─────
   Systemorph/MeshWeaver.FundReporting:
@@ -504,6 +552,14 @@ repos:
         job: validate
         lane: node-repo-validate.yml
         grants: inherit
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)
 
   # ── Systemorph/Memex (the private deployment-config repository) ───────────────────────────────
   # 🚨 THE ONE ROW NOTHING RE-MEASURES, AND IT SAYS SO. Memex calls exactly one platform lane —
@@ -520,3 +576,11 @@ repos:
         job: arm
         lane: auto-arm.yml
         grants: {contents: write, pull-requests: write}
+      # ── Request review on real change (policy review-on-real-change) — ARRIVING. With the ruleset's Copilot rule at
+      # `review_on_push: false`, this caller requests the review a push still owes (its own diff changed); the lane's
+      # one GraphQL requestReviews needs `pull-requests: write`.
+      - workflow: request-review-on-change.yml
+        job: request
+        lane: node-repo-request-review.yml
+        grants: {contents: read, pull-requests: write}
+        pending: this repository's thin request-review-on-change.yml caller lands after core's node-repo-request-review.yml is on main (policy review-on-real-change)

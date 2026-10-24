@@ -1,0 +1,107 @@
+# Request a Copilot review on a REAL change — and none for a push that only merges the default branch.
+#
+# 🚨 WHY (policy `review-on-real-change`, Doc/Architecture/PolicyNotProse). With the rulesets'
+# `copilot_code_review` rule at `review_on_push: true`, every push to a pull request — a merge of
+# `main` included — bought a full Copilot round: new threads, and a red `Automatic review answered`
+# until a person answered findings about code the pull request did not change. The rule now runs with
+# `review_on_push: false` (Copilot still reviews a pull request when it opens), and THIS lane asks for
+# the review a push still owes: exactly when the pull request's OWN diff (merge-base..head) changed
+# since Copilot's last review. The predicate lives in check-review-answered.py
+# (`review_request_action`, over `merge_only_same_diff` — the SAME function the merge gate uses to
+# decide whether Copilot's last review still covers the head, so this lane requests a review exactly
+# when the gate would otherwise hold the head for one).
+#
+# The request is ONE GraphQL `requestReviews` call with `botIds` (REST `requested_reviewers`
+# refuses a bot), and its success signal is the mutation's own answer listing Copilot as requested —
+# never "the call returned". It is idempotent and cannot loop: a pending request or a review of the
+# head means nothing is requested, and requesting a review pushes nothing, so it raises no
+# `synchronize`.
+#
+# 🛡️ NO SKIP-TRAPDOOR: no job-level `if:`, no `continue-on-error`, no secret test. A fork pull
+# request is an EVENT property and is decided inside the script, printed as a ::warning:: naming the
+# manual step; every read or request that fails is RED, named.
+#
+# A CALLER (one per repository, `request-review-on-change.yml`):
+#
+#   on:
+#     pull_request:
+#       types: [synchronize]
+#   permissions:
+#     contents: read
+#     pull-requests: write
+#   jobs:
+#     request:
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-request-review.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#
+# The caller's grant is recorded in .github/lane-caller-grants.yml (a called job holds only what its
+# caller grants — a missing `pull-requests: write` is a refused mutation here, a missing `contents:
+# read` a `startup_failure`).
+name: Node repo request review on real change (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at (the same contract as
+          node-repo-review-answered.yml). `main` by default.
+        required: false
+        type: string
+        default: main
+
+jobs:
+  request:
+    name: Request review on real change
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write   # the one GraphQL requestReviews mutation
+    # One evaluation per pull request at a time; a newer push REPLACES a pending one, and every run
+    # judges the pull request's CURRENT head, so nothing is lost by the replacement.
+    concurrency:
+      group: request-review-${{ github.repository }}-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the platform's review predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review predicate has no ref to be fetched at"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-review-answered.py" > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+          echo "predicate: check-review-answered.py from Systemorph/MeshWeaver@${SCRIPTS_REF} ($(wc -c < "$RUNNER_TEMP/check-review-answered.py") bytes)"
+
+      - name: "Prove the predicate can say no (self-test)"
+        run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
+
+      - name: Request a Copilot review iff the pull request's own diff changed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PR:-}" ]; then
+            echo "::error::event '${EVENT_NAME}' carries no pull request — wire the caller to pull_request: synchronize"
+            exit 1
+          fi
+          if [ -n "${BEFORE:-}" ]; then
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR" --before "$BEFORE"
+          else
+            python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --request-review-on-change --pr "$PR"
+          fi
