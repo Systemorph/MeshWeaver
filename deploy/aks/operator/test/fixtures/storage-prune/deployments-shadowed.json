@@ -1,6 +1,0 @@
-{"items":[{"metadata":{"name":"memex-portal-deployment"},"spec":{"template":{"spec":{
-  "containers":[{"name":"memex-portal","volumeMounts":[
-    {"name":"data","mountPath":"/data"},{"name":"dumps","mountPath":"/data/dumps"},{"name":"content","mountPath":"/content"}]}],
-  "volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"memex-data"}},
-             {"name":"dumps","persistentVolumeClaim":{"claimName":"memex-dumps"}},
-             {"name":"content","persistentVolumeClaim":{"claimName":"memex-content"}}]}}}}]}
