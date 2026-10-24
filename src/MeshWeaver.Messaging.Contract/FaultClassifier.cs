@@ -483,9 +483,15 @@ public static class FaultClassifier
     // defect, exactly as one flagged driver over it does.
     private static bool IsTransientDriverCause(Exception inner)
         => IsTransportFrame(inner)
-           || IsUnreachableSqlState(inner)
+           || IsUnreachableSqlStateFrame(inner)
            || (inner is DbException { IsTransient: true } flagged
                && !ExceptionChain.Contains<AggregateException>(flagged.InnerException));
+
+    // 🚨 The same rule for a connection-class SQLSTATE: it is the evidence for its frame only when that
+    // frame encloses no aggregate. Over one, its branches decide — 57P03 over Aggregate(socket,
+    // JsonException) carries the defect, directly or as a nested driver frame (#7117 review).
+    private static bool IsUnreachableSqlStateFrame(Exception e)
+        => IsUnreachableSqlState(e) && !ExceptionChain.Contains<AggregateException>(e.InnerException);
 
     // 🚨 A timeout or IO frame inside a driver exception is the evidence only when it has NO cause: with
     // one, its cause is — EveryBranchReaches then walks into it, so Timeout(Aggregate(socket,
@@ -508,7 +514,9 @@ public static class FaultClassifier
 
         if (e is DbException db)
         {
-            if (IsUnreachableSqlState(db))
+            if (IsUnreachableSqlState(db)
+                && (!ExceptionChain.Contains<AggregateException>(db.InnerException)
+                    || EveryBranchReaches(db.InnerException, IsTransientDriverCause)))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             // The network-level cause INSIDE a driver exception: drivers wrap the socket fault, so
             // the DbException is the OUTER frame and decides for the whole chain below it — and so
@@ -516,7 +524,7 @@ public static class FaultClassifier
             // EVERY branch below must be such a fault: a permanent defect beside a socket fault in the
             // same graph is not an unreachable store.
             if (EveryBranchReaches(db.InnerException,
-                    static inner => IsTransportFrame(inner) || IsUnreachableSqlState(inner)))
+                    static inner => IsTransportFrame(inner) || IsUnreachableSqlStateFrame(inner)))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             // The provider's flag speaks for the driver frame — but not over NESTED branch evidence:
             // a flagged driver over an aggregate in which one branch is a permanent defect (a socket

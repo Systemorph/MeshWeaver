@@ -177,6 +177,35 @@ public class FaultClassifierTest
     }
 
     /// <summary>
+    /// 🚨 A connection-class SQLSTATE (<c>57P03</c>) over <c>Aggregate(socket, JsonException)</c> carries
+    /// the content defect, like a flagged driver over it does — directly, and as a nested driver frame
+    /// under another driver. The SQLSTATE speaks for its frame, never for the branches it encloses.
+    /// </summary>
+    [Fact]
+    public void AConnectClassSqlStateOverAMixedAggregate_IsNotTransient()
+    {
+        AggregateException Mixed() => new(new SocketException((int)SocketError.ConnectionReset), new System.Text.Json.JsonException("bad content"));
+        var direct = new FakeDbException("cannot connect now", Mixed(), sqlState: "57P03");
+        var nested = new FakeDbException("read failed", new FakeDbException("cannot connect now", Mixed(), sqlState: "57P03"));
+        var nestedFlagged = new FakeDbException("read failed",
+            new FakeDbException("cannot connect now", Mixed(), sqlState: "57P03"), transient: true);
+
+        foreach (var shape in new Exception[] { direct, nested, nestedFlagged })
+        {
+            InfrastructureFault.IsTransient(shape).Should().BeFalse("the JsonException branch is a permanent defect");
+            FaultClassifier.Classify(shape).Kind.Should().Be(FaultKind.Fault);
+        }
+
+        // The control: the same SQLSTATE over an all-transport aggregate is still an unreachable store.
+        var allTransport = new FakeDbException("cannot connect now",
+            new AggregateException(new SocketException((int)SocketError.ConnectionReset), new SocketException()), sqlState: "57P03");
+        FaultClassifier.Classify(allTransport).EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.Network).Should().BeTrue();
+        InfrastructureFault.IsTransient(new FakeDbException("read failed",
+                new FakeDbException("cannot connect now", new AggregateException(new SocketException(), new SocketException()), sqlState: "57P03")))
+            .Should().BeTrue();
+    }
+
+    /// <summary>
     /// 🚨 Disagreement: two test-side copies accepted the Autofac "nested lifetimes cannot be
     /// created" text on ANY exception type; the product's copy required an
     /// <see cref="ObjectDisposedException"/>. Autofac raises it as one, so the text on anything else
