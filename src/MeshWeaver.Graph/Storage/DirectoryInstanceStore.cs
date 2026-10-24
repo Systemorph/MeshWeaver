@@ -55,6 +55,7 @@ public sealed partial class DirectoryInstanceStore : IInstanceStore
 
     /// <inheritdoc />
     public IObservable<ImmutableList<string>> ListContainers()
+        // atomic-blocking-leaf: one existence probe and one GetDirectories listing of the store root, sorted in memory
         => pool.InvokeBlocking(_ => System.IO.Directory.Exists(root)
             ? System.IO.Directory.GetDirectories(root)
                 .Select(Path.GetFileName)
@@ -68,6 +69,7 @@ public sealed partial class DirectoryInstanceStore : IInstanceStore
     {
         if (ValidateName(name) is { } reason)
             return Observable.Return(StorageProbe.Refused(name, reason));
+        // atomic-blocking-leaf: one existence probe and at most one CreateDirectory of a single directory
         return pool.InvokeBlocking(_ =>
         {
             var path = Path.Combine(root, name);
@@ -83,6 +85,7 @@ public sealed partial class DirectoryInstanceStore : IInstanceStore
     {
         if (ValidateName(name) is { } reason)
             return Observable.Return(StorageProbe.Refused(name, reason));
+        // atomic-blocking-leaf: at most two directory existence probes, no listing
         return pool.InvokeBlocking(_ => System.IO.Directory.Exists(root)
                 ? new StorageProbe(name, Reachable: true, Exists: System.IO.Directory.Exists(Path.Combine(root, name)), Created: false)
                 : StorageProbe.Unreachable(name, "the store's root directory does not exist"))

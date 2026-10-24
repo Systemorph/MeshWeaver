@@ -211,6 +211,7 @@ internal sealed class CellSurfaceAssemblyProvider(
                         localPath!, pool,
                         cacheService, serviceProvider.GetService<MeshWeaver.NuGet.INuGetAssemblyResolver>(),
                         httpPool, bound, logger)
+                    // atomic-blocking-leaf: one assembly load into its path-keyed context under a lease
                     .SelectMany(_ => pool.InvokeBlocking(_ => LoadLeased(node.Path, localPath!, cacheService)));
             })
             // A single pack's failure (evicted context, corrupt bytes) must not take the whole
