@@ -487,6 +487,14 @@ public partial class MeshQuery : IMeshQueryCore
             // One gate for the whole subscription: the stall terminal is delivered from a timer
             // thread while the providers may be emitting on their own.
             var gate = new object();
+            // The observer is never called while `gate` is held — see GateFreeEmitter.
+            var emitter = new GateFreeEmitter<IReadOnlyCollection<QueryResult>>(observer);
+            void UnderGate(Action body)
+            {
+                lock (gate)
+                    body();
+                emitter.Drain();
+            }
             var emitted = false;
             var terminated = false;
             var legs = matched.Select((p, i) => leg(p)
@@ -504,7 +512,7 @@ public partial class MeshQuery : IMeshQueryCore
                 .Subscribe(
                     frame =>
                     {
-                        lock (gate)
+                        UnderGate(() =>
                         {
                             if (terminated) return;
                             // Only a LEADING empty frame is withheld — one from before anything was
@@ -514,38 +522,38 @@ public partial class MeshQuery : IMeshQueryCore
                             // still silent, or the removed rows would stay on screen for ever.
                             if (!emitted && !frame.Complete && frame.Rows.Count == 0) return;
                             emitted = true;
-                            observer.OnNext(frame.Rows);
-                        }
+                            emitter.OnNext(frame.Rows);
+                        });
                     },
                     ex =>
                     {
-                        lock (gate)
+                        UnderGate(() =>
                         {
                             if (terminated) return;
                             terminated = true;
-                            observer.OnError(ex);
-                        }
+                            emitter.OnError(ex);
+                        });
                     },
                     () =>
                     {
-                        lock (gate)
+                        UnderGate(() =>
                         {
                             if (terminated) return;
                             terminated = true;
-                            observer.OnCompleted();
-                        }
+                            emitter.OnCompleted();
+                        });
                     });
             var arm = probe.Arm(budget, logger, query, userId, (stalled, reportTermination) =>
             {
-                lock (gate)
+                UnderGate(() =>
                 {
                     // Something real was already shown, or the stream already ended: a laggard
                     // provider is then not an unanswered query, and the terminal is declined.
                     if (terminated || emitted) return;
                     terminated = true;
                     reportTermination();
-                    observer.OnError(stalled);
-                }
+                    emitter.OnError(stalled);
+                });
             });
             return new System.Reactive.Disposables.CompositeDisposable(subscription, arm);
         });
@@ -837,13 +845,23 @@ public partial class MeshQuery : IMeshQueryCore
                 // the stall terminal is delivered from a timer thread while the provider may be
                 // emitting on its own, and an observer may not be touched by two threads at once.
                 var singleGate = new object();
+                // 🚨 …and the observer is NEVER called while that gate is held — see
+                // GateFreeEmitter: a frame's consumer can run on into a storage write whose change
+                // delivery waits for a lock another thread holds while it waits for this gate.
+                var singleEmitter = new GateFreeEmitter<QueryResultChange<T>>(observer);
+                void UnderSingleGate(Action body)
+                {
+                    lock (singleGate)
+                        body();
+                    singleEmitter.Drain();
+                }
                 var sawInitial = false;
                 var terminated = false;
                 var probeArm = singleProbe.Arm(
                     singleBudget, singleProbeLogger, singleProbeQuery, singleProbeUser,
                     (stalled, reportTermination) =>
                     {
-                        lock (singleGate)
+                        UnderSingleGate(() =>
                         {
                             // Answered (or already terminal) while the timer callback was in
                             // flight — the disposal in MarkSeen races it by design, so the check
@@ -851,13 +869,13 @@ public partial class MeshQuery : IMeshQueryCore
                             if (terminated || sawInitial) return;
                             terminated = true;
                             reportTermination();
-                            observer.OnError(stalled);
-                        }
+                            singleEmitter.OnError(stalled);
+                        });
                     });
                 var sub = single.Subscribe(
                     change =>
                     {
-                        lock (singleGate)
+                        UnderSingleGate(() =>
                         {
                             if (terminated) return;
                             if (change.ChangeType == QueryChangeType.Initial)
@@ -873,17 +891,17 @@ public partial class MeshQuery : IMeshQueryCore
                                 if (change.SnapshotIncomplete && change.SilentProviders is null or { Count: 0 })
                                     change = change with { SilentProviders = [singleProviderName] };
                             }
-                            observer.OnNext(change);
-                        }
+                            singleEmitter.OnNext(change);
+                        });
                     },
                     ex =>
                     {
-                        lock (singleGate)
+                        UnderSingleGate(() =>
                         {
                             if (terminated) return;
                             terminated = true;
-                            observer.OnError(ex);
-                        }
+                            singleEmitter.OnError(ex);
+                        });
                     },
                     () =>
                     {
@@ -895,7 +913,7 @@ public partial class MeshQuery : IMeshQueryCore
                         // nothing" just as durably as it would cache a fabricated empty. Emit the
                         // empty Initial and NAME the provider on it, so the answer is delivered
                         // (nothing hangs) and is visibly one nobody gave (MeshWeaver#4557).
-                        lock (singleGate)
+                        UnderSingleGate(() =>
                         {
                             if (terminated) return;
                             if (!sawInitial)
@@ -909,7 +927,7 @@ public partial class MeshQuery : IMeshQueryCore
                                     singleProviderName, singleProbeQuery, singleProbeUser);
                                 sawInitial = true;
                                 singleProbe.MarkSeen(0);
-                                observer.OnNext(new QueryResultChange<T>
+                                singleEmitter.OnNext(new QueryResultChange<T>
                                 {
                                     ChangeType = QueryChangeType.Initial,
                                     Items = Array.Empty<T>(),
@@ -920,8 +938,8 @@ public partial class MeshQuery : IMeshQueryCore
                                 });
                             }
                             terminated = true;
-                            observer.OnCompleted();
-                        }
+                            singleEmitter.OnCompleted();
+                        });
                     });
                 return new System.Reactive.Disposables.CompositeDisposable(probeArm, sub);
             });
@@ -969,6 +987,18 @@ public partial class MeshQuery : IMeshQueryCore
             var silentProviders = new List<string>();
             ParsedQuery? lastQuery = null;
             var gate = new object();
+            // 🚨 `gate` guards the merge's STATE; the observer is NEVER called while it is held
+            // (GateFreeEmitter). It used to be: the consumer of a frame — a create's validator —
+            // ran on SYNCHRONOUSLY into a storage write, whose change delivery needs the storage
+            // feed's Merge gate, while another thread held that gate delivering a change into this
+            // merge and waited for `gate`. Neither write ever answered (MeshWeaver#7117).
+            var emitter = new GateFreeEmitter<QueryResultChange<T>>(observer);
+            void UnderGate(Action body)
+            {
+                lock (gate)
+                    body();
+                emitter.Drain();
+            }
             // 🚨 The merged stream's terminal, taken EXACTLY ONCE and under `gate` — because the
             // stall terminal below is delivered from a timer thread while the providers may be
             // emitting on their own, and Rx forbids both an observer touched concurrently and any
@@ -1022,7 +1052,7 @@ public partial class MeshQuery : IMeshQueryCore
                 var parsed = lastQuery
                     ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? "");
                 var clipped = ClipMergedInitial<T>(ordered, template, parsed, request);
-                observer.OnNext(clipped with
+                emitter.OnNext(clipped with
                 {
                     Partitions = UnionReportedPartitions(providerPartitions),
                     PartiallyReadPartitions = MergePartialReads(providerPartitions, providerPartial),
@@ -1042,7 +1072,7 @@ public partial class MeshQuery : IMeshQueryCore
                     {
                         if (change.ChangeType == QueryChangeType.Initial)
                         {
-                            lock (gate)
+                            UnderGate(() =>
                             {
                                 if (terminated) return;
                                 // Pair items with their score (or 0 when the
@@ -1090,11 +1120,11 @@ public partial class MeshQuery : IMeshQueryCore
                                 stallProbe.MarkSeen(idx);
 
                                 EmitMergedInitialIfComplete(change);
-                            }
+                            });
                         }
                         else
                         {
-                            lock (gate)
+                            UnderGate(() =>
                             {
                                 if (terminated) return;
                                 // 🚨 Before the merged Initial is out, a delta belongs TO it — see
@@ -1108,18 +1138,18 @@ public partial class MeshQuery : IMeshQueryCore
                                     return;
                                 }
                                 if (TryFilterDuplicateLiveChange(change, liveItems, out var filtered))
-                                    observer.OnNext(filtered);
-                            }
+                                    emitter.OnNext(filtered);
+                            });
                         }
                     },
                     ex =>
                     {
-                        lock (gate)
+                        UnderGate(() =>
                         {
                             if (terminated) return;
                             terminated = true;
-                            observer.OnError(ex);
-                        }
+                            emitter.OnError(ex);
+                        });
                     },
                     // 🚨 Completion guard — the merged Initial gates on EVERY provider
                     // emitting one. A provider whose observable COMPLETES without an
@@ -1134,7 +1164,7 @@ public partial class MeshQuery : IMeshQueryCore
                     // the provider so the offending code path gets fixed at its root.
                     () =>
                     {
-                        lock (gate)
+                        UnderGate(() =>
                         {
                             if (terminated)
                                 return;
@@ -1166,7 +1196,7 @@ public partial class MeshQuery : IMeshQueryCore
                                     ?? new QueryParser().Parse(request.EffectiveQueries.FirstOrDefault() ?? ""),
                             };
                             EmitMergedInitialIfComplete(template);
-                        }
+                        });
                     });
 
                 subscriptions.Add(sub);
@@ -1205,7 +1235,7 @@ public partial class MeshQuery : IMeshQueryCore
                 OperationOptions.QueryInitialBudget, Logger, request.Query, request.UserId,
                 (stalled, reportTermination) =>
                 {
-                    lock (gate)
+                    UnderGate(() =>
                     {
                         // Answered (or already terminal) while the timer callback was in flight —
                         // MarkSeen's disposal races it by design, so this check is what makes the
@@ -1213,8 +1243,8 @@ public partial class MeshQuery : IMeshQueryCore
                         if (terminated || initialCount == initialTarget) return;
                         terminated = true;
                         reportTermination();
-                        observer.OnError(stalled);
-                    }
+                        emitter.OnError(stalled);
+                    });
                 }));
 
             return new System.Reactive.Disposables.CompositeDisposable(subscriptions);
