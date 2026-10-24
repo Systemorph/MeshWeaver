@@ -42,6 +42,8 @@ public static class InstanceRegistrationEndpoints
         // instances it serves (#6989) — mapped here so no registry can serve bundles without hearing
         // what its consumers run.
         endpoints.MapConsumerInventory();
+        // …and the public key an installation seals a secret to before handing it to this control instance.
+        endpoints.MapSealKey();
         return endpoints;
     }
 
