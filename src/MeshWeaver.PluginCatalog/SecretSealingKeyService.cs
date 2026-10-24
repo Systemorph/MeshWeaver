@@ -202,7 +202,11 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
     internal static SecretSealingKey? KeyFrom(NodeReadOutcome outcome, System.Text.Json.JsonSerializerOptions options)
         => outcome.Status switch
         {
-            NodeReadStatus.Present => outcome.Node!.ContentAs<SecretSealingKey>(options),
+            // 🚨 A node that is there but does not read as a key is a fault, not absence: null here would make
+            // Rotate/Resolve create a key at a path that already holds a node.
+            NodeReadStatus.Present => outcome.Node!.ContentAs<SecretSealingKey>(options)
+                ?? throw new InvalidOperationException(
+                    $"The node at {SecretSealingKeys.Path} is present but its content is not a {SecretSealingKeys.NodeType}."),
             NodeReadStatus.Absent => null,
             NodeReadStatus.DeleteInProgress => throw new InvalidOperationException(
                 $"The secret sealing key at {SecretSealingKeys.Path} is being deleted; refusing to treat it as absent."),

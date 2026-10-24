@@ -49,6 +49,10 @@ window is kept (`SecretSealingKey.Retired`), so two rotations within one window 
 early. A key retires **once**, and its **first** deadline holds: two rotations computed from the same key at different
 times can both land a retirement for it (the owner's list merge keeps both, since they differ as elements), so the
 earliest entry for a key id decides whether it still opens, and the next rotation collapses the duplicates to it.
+An expired retirement is **tombstoned, never dropped**: the next rotation clears its protected private key and keeps
+the entry with its deadline. The owner merges the list by element, so a writer removes only the entries its mirror
+held; dropping the first entry would let a later one for the same key (one that writer never saw, or one a delayed
+rotation adds after the cleanup) become the earliest and open the expired key again.
 
 The due-check and the rotation happen together, inside ONE `GetMeshNodeStream(path).Update`. The lambda runs on the
 writer's mirror, and what reaches the owning hub is the merge patch of what it changed plus the writer's base values,

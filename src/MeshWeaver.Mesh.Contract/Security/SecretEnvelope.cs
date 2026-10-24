@@ -241,7 +241,8 @@ public record SecretSealingKey
     /// <para>🚨 A key retires ONCE, and its FIRST deadline holds. Two rotations computed from the same key at
     /// different times each append a retirement for it, with different deadlines, and the owner's array merge keeps
     /// both (they differ as elements). The earliest entry for the id decides; a later one never extends the
-    /// window.</para>
+    /// window. An expired entry is kept as a TOMBSTONE (see <see cref="RotatedTo"/>), so the first deadline is
+    /// still here to decide after its key material is gone.</para>
     /// </summary>
     public string? ProtectedPrivateKeyFor(string keyId, DateTimeOffset now)
         => keyId == CurrentId ? ProtectedCurrentPrivateKey
@@ -251,9 +252,16 @@ public record SecretSealingKey
 
     /// <summary>
     /// This key retired in favour of <paramref name="next"/> at <paramref name="now"/>: the outgoing current key
-    /// joins the retired keys for <paramref name="grace"/>, retired keys already past their deadline are dropped,
-    /// and every other one is kept. Idempotent by key id: a key already retired keeps its first (earliest)
-    /// deadline, and duplicate entries a concurrent rotation merged in collapse to that one. Pure.
+    /// joins the retired keys for <paramref name="grace"/>, and every retired key already past its deadline loses
+    /// its key material but stays as a tombstone. Idempotent by key id: a key already retired keeps its first
+    /// (earliest) deadline, and duplicate entries a concurrent rotation merged in collapse to that one. Pure.
+    ///
+    /// <para>🚨 <b>Expired keys are tombstoned, never dropped.</b> This list reaches the owner as a three-way merge
+    /// by element, so a writer removes only the entries its mirror held. Dropping an expired first entry would
+    /// leave behind a later entry for the same key that the writer never saw, or one a delayed rotation adds after
+    /// the cleanup, and that later deadline would open the expired key again. The tombstone keeps the first
+    /// deadline for the id, so <see cref="ProtectedPrivateKeyFor"/> still decides on it. Tombstones are one small
+    /// entry per rotation and carry no secret.</para>
     /// </summary>
     public SecretSealingKey RotatedTo(SecretSealingKey next, DateTimeOffset now, TimeSpan grace)
         => next with
@@ -262,7 +270,7 @@ public record SecretSealingKey
                 .Append(new RetiredSealingKey(CurrentId, ProtectedCurrentPrivateKey, now.Add(grace)))
                 .GroupBy(r => r.Id)
                 .Select(sameKey => sameKey.MinBy(r => r.ValidUntil)!)
-                .Where(r => r.StillValid(now))
+                .Select(first => first.StillValid(now) ? first : first.Tombstone())
                 .ToImmutableList(),
         };
 }
@@ -275,6 +283,9 @@ public sealed record RetiredSealingKey(string Id, string ProtectedPrivateKey, Da
 {
     /// <summary>Whether it is still accepted at <paramref name="now"/>.</summary>
     public bool StillValid(DateTimeOffset now) => !string.IsNullOrWhiteSpace(ProtectedPrivateKey) && now < ValidUntil;
+
+    /// <summary>The same retirement without its key material: it opens nothing, and its deadline still decides.</summary>
+    public RetiredSealingKey Tombstone() => this with { ProtectedPrivateKey = "" };
 }
 
 /// <summary>Where the sealing key lives and how it rotates.</summary>

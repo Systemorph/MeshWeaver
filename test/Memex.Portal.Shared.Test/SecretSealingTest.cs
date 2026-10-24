@@ -190,6 +190,10 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var key = new SecretSealingKey { CurrentId = "k1", CurrentPublicKey = "pub", ProtectedCurrentPrivateKey = "enc:x" };
         var present = NodeReadOutcome.Present(new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { Content = key });
         Assert.Equal("k1", SecretSealingKeyService.KeyFrom(present, options)!.CurrentId);
+        // A node that IS there but does not read as a key is a fault too: null would let Rotate/Resolve create a
+        // key at a path that already holds a node.
+        var notAKey = NodeReadOutcome.Present(new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { Content = null });
+        Assert.Throws<InvalidOperationException>(() => SecretSealingKeyService.KeyFrom(notAKey, options));
     }
 
     [Fact]
@@ -224,7 +228,11 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         k2.ProtectedPrivateKeyFor("k0", now.Add(grace)).Should().BeNull("K0's window ends at its own deadline");
         k2.ProtectedPrivateKeyFor("k1", now.Add(grace)).Should().Be("enc:k1", "K1's window runs a day longer");
         var k3 = k2.RotatedTo(new SecretSealingKey { CurrentId = "k3", ProtectedCurrentPrivateKey = "enc:k3" }, now.Add(grace).AddMinutes(1), grace);
-        k3.Retired!.Select(r => r.Id).Should().Equal(["k1", "k2"], "a retired key past its deadline is dropped at the next rotation");
+        k3.Retired!.Select(r => r.Id).Should().Equal(["k0", "k1", "k2"],
+            "a retired key past its deadline stays as a tombstone, so its first deadline still decides");
+        k3.Retired!.Single(r => r.Id == "k0").ProtectedPrivateKey.Should().BeEmpty(
+            "the next rotation after its deadline drops the expired key's material");
+        k3.ProtectedPrivateKeyFor("k0", now.Add(grace).AddMinutes(1)).Should().BeNull();
     }
 
     /// <summary>
@@ -307,6 +315,77 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // And the next rotation keeps ONE entry per key id, the first deadline.
         var next = merged.RotatedTo(Minted("kN", now.AddDays(2)), now.AddDays(2), grace);
         next.Retired.Where(r => r.Id == "k0").Should().ContainSingle().Which.ValidUntil.Should().Be(now.Add(grace));
+    }
+
+    /// <summary>
+    /// 🚨 Cleaning up an expired key must not re-open it. The owner holds TWO retirements of K0 (days 7 and 8: two
+    /// rotations of K0 computed at different times both landed); a writer whose mirror holds only the first rotates
+    /// at day 7.5. The array merge removes only what the writer saw, so if the cleanup DROPPED the expired first
+    /// entry, the unseen day-8 entry would become the earliest and K0 would open again until day 8. Driven through
+    /// the REAL diff and the REAL owner merge.
+    /// </summary>
+    [Fact]
+    public void CleaningUpAnExpiredKey_FromAPartialMirror_DoesNotReopenIt()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var t0 = DateTimeOffset.UtcNow;
+        var first = new RetiredSealingKey("k0", "enc:k0", t0.AddDays(7));
+        var second = new RetiredSealingKey("k0", "enc:k0", t0.AddDays(8));
+        var kA = Minted("kA", t0) with { RotateAfter = t0.AddDays(7).AddHours(1) };
+        var live = kA with { Retired = [first, second] };
+        var mirror = kA with { Retired = [first] };
+        var cleanupAt = t0.AddDays(7.5);
+
+        var proposed = SecretSealingKeyService.RotateAtOwner(mirror, Minted("kB", cleanupAt), k => SecretSealingKeyService.IsDue(k, cleanupAt), cleanupAt);
+        var merged = MergedAtOwner(options, mirror, proposed, live);
+
+        merged.CurrentId.Should().Be("kB");
+        merged.ProtectedPrivateKeyFor("kA", cleanupAt).Should().Be("enc:kA");
+        merged.ProtectedPrivateKeyFor("k0", cleanupAt).Should().BeNull(
+            "K0's first deadline (day 7) has passed; a retirement the cleaning writer never saw must not re-open it");
+    }
+
+    /// <summary>
+    /// 🚨 A retirement that arrives AFTER the cleanup must not re-open the key either. The owner already cleaned up
+    /// K0 (first deadline day 7); a delayed rotation computed from K0 on day 1 lands a K0 entry ending day 8.
+    /// </summary>
+    [Fact]
+    public void ARetirementDelayedPastTheCleanup_DoesNotReopenTheKey()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var t0 = DateTimeOffset.UtcNow;
+        var grace = SecretSealingKeys.RotationGrace;
+        var k0 = Minted("k0", t0.AddDays(-90)) with { RotateAfter = t0.AddMinutes(-1) };
+        // The owner rotated K0 → KA at t0, and KA → KB at day 7.5, which cleaned K0 up.
+        var kA = k0.RotatedTo(Minted("kA", t0) with { RotateAfter = t0.AddDays(7).AddHours(1) }, t0, grace);
+        var cleanupAt = t0.AddDays(7.5);
+        var live = kA.RotatedTo(Minted("kB", cleanupAt), cleanupAt, grace);
+        // A writer whose mirror held K0 computed its rotation on day 1; it lands now.
+        var delayedAt = t0.AddDays(1);
+        var proposed = SecretSealingKeyService.RotateAtOwner(k0, Minted("kX", delayedAt), k => SecretSealingKeyService.IsDue(k, delayedAt), delayedAt);
+        var merged = MergedAtOwner(options, k0, proposed, live);
+
+        merged.ProtectedPrivateKeyFor("k0", cleanupAt).Should().BeNull(
+            "K0 retired once, at t0; a retirement that arrives after its cleanup must not give it a later deadline");
+    }
+
+    private static SecretSealingKey Minted(string id, DateTimeOffset at) => new()
+    {
+        CurrentId = id, CurrentPublicKey = "pub-" + id, ProtectedCurrentPrivateKey = "enc:" + id,
+        CurrentIssuedAt = at, RotateAfter = at.AddDays(90),
+    };
+
+    private static SecretSealingKey MergedAtOwner(JsonSerializerOptions options, SecretSealingKey mirror,
+        SecretSealingKey proposed, SecretSealingKey live)
+    {
+        JsonObject Json(SecretSealingKey key) => MeshNodeStreamHandle.ToJsonObject(
+            new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { NodeType = SecretSealingKeys.NodeType, Content = key },
+            options);
+        var mirrorJson = Json(mirror);
+        var patch = MeshNodeStreamHandle.ComputeMergePatchDiff(mirrorJson, Json(proposed));
+        var owner = Json(live);
+        MeshNodePatchMerge.Apply(owner, patch, MeshNodePatchMerge.ExtractBaseValues(mirrorJson, patch));
+        return owner.Deserialize<MeshNode>(options)!.ContentAs<SecretSealingKey>(options)!;
     }
 
     [Fact]
