@@ -245,11 +245,15 @@ public static class StoreReachability
             // first, that evidence ran Start before the hot `outcomes` subject had a subscriber, an
             // attempt that answered in that window lost its outcome, and InFlight stayed true for good
             // — every later piece of evidence was retained and none ever started an attempt.
-            // Evidence the caller holds from before the subscription is delivered first, after the
-            // outcomes are connected, as the non-disproving kind (see the summary).
+            // Evidence the caller holds from before the subscription is delivered LAST, as the
+            // non-disproving kind (see the summary): after the outcomes AND the live feed are
+            // connected, through the same serialised Merge (review on #7087). StartWith emitted it
+            // before the live feed was subscribed, so a reconnect that arrived while that first
+            // attempt was being subscribed was lost to the non-replaying feed, and an Unavailable
+            // answer then left an idle partition with nothing to start the next attempt.
             var evidence = EvidenceBySource(feed, partition);
             if (storeAnsweredBeforeSubscription)
-                evidence = evidence.StartWith(true);
+                evidence = evidence.Merge(Observable.Return(true));
             var events = outcomes.Select(x => (IsOutcome: true, x.ByGap, Outcome: (T?)x.Outcome))
                 .Merge(evidence.Select(byGap => (IsOutcome: false, ByGap: byGap, Outcome: default(T))));
 

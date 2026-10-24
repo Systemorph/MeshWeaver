@@ -372,7 +372,10 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
 
         /// <param name="whenStillUnavailable">Runs inside the still-unavailable callback, so a case can
         /// make the callback itself produce evidence (it re-enters the sequence synchronously).</param>
-        public Rig(Action<Rig>? whenStillUnavailable = null, bool storeAnsweredBeforeSubscription = false)
+        /// <param name="whenAttemptStarts">Runs as each attempt is subscribed, with its index, so a case
+        /// can make the feed deliver evidence DURING that subscription.</param>
+        public Rig(Action<Rig>? whenStillUnavailable = null, bool storeAnsweredBeforeSubscription = false,
+            Action<Rig, int>? whenAttemptStarts = null)
         {
             Feed = new InProcessMeshChangeFeed(Store);
             _subscription = Feed
@@ -382,6 +385,7 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
                     {
                         var attempt = new System.Reactive.Subjects.Subject<string>();
                         Attempts = Attempts.Add(attempt);
+                        whenAttemptStarts?.Invoke(this, Attempts.Count - 1);
                         return attempt;
                     },
                     outcome => outcome == Unavailable,
@@ -536,6 +540,26 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         rig.Gap();
         rig.Answer(0, Unavailable);
         rig.Attempts.Should().HaveCount(1, "a disposed re-issue never subscribes another write");
+    }
+
+    /// <summary>
+    /// Review on #7087: the live feed is connected BEFORE the evidence the caller already holds starts
+    /// the first attempt. A reconnect delivered while that attempt is being subscribed is retained,
+    /// and when the attempt answers Unavailable it starts the next one with no further feed event — on
+    /// an idle partition nothing else ever would.
+    /// </summary>
+    [Fact]
+    public void AGapDuringTheHeldEvidenceAttempt_IsRetained_AndStartsTheNextAttempt()
+    {
+        using var rig = new Rig(storeAnsweredBeforeSubscription: true,
+            whenAttemptStarts: (r, index) => { if (index == 0) r.Gap(); });
+        rig.Attempts.Should().HaveCount(1, "the held evidence starts the first re-issue");
+
+        rig.Answer(0, Unavailable);
+        rig.Attempts.Should().HaveCount(2,
+            "the reconnect that arrived while the first attempt was subscribing is retained, not lost");
+        rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
     }
 
     /// <summary>Without that evidence, nothing is re-issued before the feed says the store answers.</summary>
