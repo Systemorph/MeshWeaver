@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -78,7 +79,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewLayoutAreaBakesDataIntoControls()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -125,7 +126,7 @@ public class LayoutAreaDataBakeRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerSeesTheProductionTree()
     {
-        var found = Scan(SourceScan.FindRepoRoot());
+        var found = Scan(RepoPaths.Root);
         Assert.True(found.Values.Sum() > 0,
             "The scan found no layout area that bakes data anywhere under " + string.Join(", ", ScannedRoots)
             + ". Either every area was converted — then delete this guard and its allow file in the "

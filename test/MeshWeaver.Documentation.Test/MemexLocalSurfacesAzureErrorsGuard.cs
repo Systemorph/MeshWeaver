@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,20 +34,12 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class MemexLocalSurfacesAzureErrorsGuard
 {
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
-    }
 
     private static readonly string ScriptPath =
         Path.Combine("deploy", "homebrew", "bin", "memex-local");
 
     private static string Script() =>
-        File.ReadAllText(Path.Combine(RepoRoot(), ScriptPath));
+        File.ReadAllText(Path.Combine(RepoPaths.Root, ScriptPath));
 
     /// <summary>
     /// Every line that invokes the Azure CLI and sends its stderr to <c>/dev/null</c>.

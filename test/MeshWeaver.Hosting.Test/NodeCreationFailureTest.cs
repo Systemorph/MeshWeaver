@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -89,7 +90,7 @@ public class NodeCreationFailureTest
     [Fact]
     public void EveryProducersWording_IsMatchedByThePredicate()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var src = Path.Combine(root, "src");
         Assert.True(Directory.Exists(src), "src/ is gone — this guard now checks nothing.");
 
@@ -136,7 +137,7 @@ public class NodeCreationFailureTest
     [Fact]
     public void NoHandRolledRejectionMapping_OutsideTheOnePlace()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = Directory
             .EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(f => File.ReadAllText(f)
@@ -152,14 +153,5 @@ public class NodeCreationFailureTest
             + "release re-cut collision came to be swallowed."
             + Environment.NewLine
             + string.Join(Environment.NewLine, offenders.Select(o => "  · " + o)));
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "Could not locate the repository root (MeshWeaver.slnx).");
-        return dir!.FullName;
     }
 }

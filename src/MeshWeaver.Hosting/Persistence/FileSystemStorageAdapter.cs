@@ -287,15 +287,24 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// <remarks>Routed through the FileSystem <see cref="IIoPool"/> like Read/Write — the delete
     /// is synchronous file I/O and must never run on a hub/query subscriber's thread.</remarks>
     public IObservable<string> Delete(string path)
-        => _ioPool.InvokeBlocking(_ =>
+        // The unlinks are a fixed handful and always run to the end (stopping between them would leave
+        // a half-deleted node with no change notification). The upward empty-directory prune is an
+        // ascent of unbounded length and OPTIONAL, so it stops on the pool's token between ancestors.
+        => _ioPool.InvokeBlocking(ct =>
         {
-            DeleteCore(path);
+            DeleteCore(path, ct);
             // Committed above — publish after, notification-as-trigger (no entity needed).
             _changes.OnNext(DataChangeNotification.Deleted(path.Trim('/')));
             return path;
         });
 
-    private void DeleteCore(string path)
+    /// <summary>
+    /// Deletes one node's files, then prunes the directories it leaves empty, upward. The unlinks
+    /// always complete; <paramref name="cancellationToken"/> (the pool's) stops only the prune, between
+    /// ancestors — an empty directory left behind is what a concurrent writer leaves anyway, and the
+    /// committed deletion is still published by the caller.
+    /// </summary>
+    internal void DeleteCore(string path, CancellationToken cancellationToken)
     {
         // Delete any file with supported extensions
         foreach (var ext in SupportedExtensions)
@@ -335,6 +344,7 @@ public class FileSystemStorageAdapter : IStorageAdapter
             : Path.GetDirectoryName(GetFilePath(path, ".json"));
         while (!string.IsNullOrEmpty(directory) &&
                directory != _baseDirectory &&
+               !cancellationToken.IsCancellationRequested &&
                Directory.Exists(directory))
         {
             try

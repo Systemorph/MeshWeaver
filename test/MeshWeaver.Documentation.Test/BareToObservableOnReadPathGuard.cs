@@ -76,7 +76,7 @@ public class BareToObservableOnReadPathGuard
     [Fact]
     public void NoReadPathFile_UsesTheParameterlessToObservable()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new List<string>();
 
         // 🚨 A guard must never pass on no evidence. SourceFiles() silently drops a root that does

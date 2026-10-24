@@ -321,46 +321,6 @@ public static class PrebuiltAssemblySeeder
     }
 
     /// <summary>
-    /// 🚨 <b>THE TRAP-DOOR THAT MADE #2813's CURE INERT. Do not call it; pass the fingerprint.</b>
-    ///
-    /// <para>This overload defaulted <c>sourceFingerprint</c> to null, and BOTH production callers
-    /// bound to it — <c>PluginBundleClient</c> and <c>ShippedPrebuiltBundles</c>. So every adoption
-    /// on every mesh took the legacy "provenance unknown" branch, the three-way comparison in
-    /// <c>NodeTypeCompilationHelpers.ApplyAdoptedSourceStamp</c> could never reach its refusal, and
-    /// the whole mechanism sat armed and dead for months while the code implementing it looked
-    /// finished. A convenience overload whose default answer is "unverified" is not a convenience:
-    /// it is a silent opt-out of a safety check, taken by whoever writes the shortest call.</para>
-    ///
-    /// <para>Passing <c>null</c> is still legitimate — a legacy bundle genuinely records no
-    /// fingerprint — but it must be WRITTEN, at the call site, where a reviewer can see the claim
-    /// being waived. Use the eight-parameter
-    /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>.</para>
-    ///
-    /// <para>🚨 <b>Why this is <c>Obsolete(error)</c> and not DELETED.</b> Deleting a public
-    /// framework method is a breaking change to in-mesh code no compiler can see, and AGENTS.md
-    /// requires sweeping the live mesh before doing it. That sweep could not be completed: content
-    /// indexing is inactive on both reachable deployments (<c>search_chunks</c> answers
-    /// <c>"searched": false</c>, which is a FAILED sweep, not a clean one). Both repos' node trees
-    /// were swept by hand and hold no caller. So the symbol stays — nothing already compiled can
-    /// break — while every source call site fails loudly, at the call, with the reason.</para>
-    /// </summary>
-    [Obsolete(
-        "#2813: this overload silently adopts prebuilt bytes as UNVERIFIED. Call the eight-parameter "
-        + "Seed and pass the bundle's source fingerprint (BundleReader.Payload.SourceFingerprint), "
-        + "or an explicit null if the bundle genuinely records none.",
-        error: true)]
-    public static IObservable<bool> Seed(
-        IMessageHub hub,
-        string nodeTypePath,
-        byte[] assemblyBytes,
-        byte[]? pdbBytes,
-        string? frameworkMvid,
-        ILogger? logger = null,
-        IReadOnlyDictionary<string, string>? dependencies = null)
-        => Seed(hub, nodeTypePath, assemblyBytes, pdbBytes, frameworkMvid, logger, dependencies,
-            sourceFingerprint: null);
-
-    /// <summary>
     /// What one <see cref="SeedDetailed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string, string)"/> call did — the bool surface of
     /// <see cref="Seed(IMessageHub, string, byte[], byte[], string, ILogger, IReadOnlyDictionary{string, string}, string)"/>
     /// collapses everything but <see cref="Adopted"/> to <c>false</c>; a sweep that has to say WHY
@@ -1560,6 +1520,7 @@ public static class PrebuiltAssemblySeeder
                         // The MVID read is a blocking file/PE leaf — the shared Compile pool, as every
                         // other assembly-file read in the pipeline.
                         : (hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.Compile) ?? IoPool.Unbounded)
+                            // atomic-blocking-leaf: one MVID read from one assembly file's PE header
                             .InvokeBlocking(_ => string.Equals(ServedBuildIdentity.OfFile(path), named, StringComparison.Ordinal)))
                 .DefaultIfEmpty(false)
                 .Catch<bool, Exception>(ex =>

@@ -409,7 +409,7 @@ public sealed class PluginBundleClient
                 return Download(pluginId, bundle, index)
                     .SelectMany(result => result.Bytes is null
                         ? Observable.Return<IReadOnlyList<ShippedBuild>>([])
-                        : _httpPool.InvokeBlocking(_ => ShippedBuildsOf(BundleReader.Read(result.Bytes), origin, _logger)));
+                        : _httpPool.InvokeBlocking(ct => ShippedBuildsOf(BundleReader.Read(result.Bytes, ct), origin, _logger)));
             })
             .Catch((Exception ex) =>
             {
@@ -723,7 +723,8 @@ public sealed class PluginBundleClient
     internal IObservable<(int Count, string? Version, string? Refusal)> LandFromBundleOutcome(
         string pluginId, string moduleName, string? packagePath, string version, byte[] bundleBytes,
         string? advertisedFrameworkMvid = null) =>
-        _httpPool.InvokeBlocking(_ => BundleReader.ReadModule(bundleBytes))
+        // Not atomic: the closure is one decompression per declared assembly, checked between them.
+        _httpPool.InvokeBlocking(ct => BundleReader.ReadModule(bundleBytes, ct))
             .SelectMany(payload =>
             {
                 var (manifest, files) = payload;
@@ -1271,7 +1272,8 @@ public sealed class PluginBundleClient
     /// buys nothing (the writes serialise there anyway) while making the log order meaningless.</para>
     /// </summary>
     private IObservable<int> SeedAll(string pluginId, byte[] bundleBytes) =>
-        _httpPool.InvokeBlocking(_ => BundleReader.Read(bundleBytes))
+        // Not atomic: one decompression per manifest assembly, checked between them.
+        _httpPool.InvokeBlocking(ct => BundleReader.Read(bundleBytes, ct))
             .SelectMany(payload =>
             {
                 var (manifest, assemblies) = payload;

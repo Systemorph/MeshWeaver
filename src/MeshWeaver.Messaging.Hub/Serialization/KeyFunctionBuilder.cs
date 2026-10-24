@@ -15,30 +15,44 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public class KeyFunctionBuilder
 {
-    private readonly List<Func<Type, KeyFunction?>> factories =
+    // The CONVENTIONS, in order: a property marked [Key], then one named "id", then one named
+    // "systemname" (both case-insensitive). Immutable and identical for every builder, so a registry
+    // can tell — from the CLR type alone — whether they decide a type's key (HasConventionalKey).
+    private static readonly Func<PropertyInfo, bool>[] Conventions =
     [
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties().SingleOrDefault(p => p.HasAttribute<KeyAttribute>())
-            ),
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties()
-                    .SingleOrDefault(x =>
-                        x.Name.Equals("id", StringComparison.InvariantCultureIgnoreCase)
-                    )
-            ),
-        type =>
-            GetFromProperty(
-                type,
-                type.GetProperties()
-                    .SingleOrDefault(x =>
-                        x.Name.Equals("systemname", StringComparison.InvariantCultureIgnoreCase)
-                    )
-            ),
+        p => p.HasAttribute<KeyAttribute>(),
+        p => p.Name.Equals("id", StringComparison.InvariantCultureIgnoreCase),
+        p => p.Name.Equals("systemname", StringComparison.InvariantCultureIgnoreCase),
     ];
+
+    // One factory per convention, built once (declared after Conventions: static initializers run
+    // in textual order). Immutable; every builder starts from them.
+    private static readonly Func<Type, KeyFunction?>[] ConventionFactories =
+        Conventions.Select(convention => (Func<Type, KeyFunction?>)(type =>
+            GetFromProperty(type, type.GetProperties().SingleOrDefault(convention)))).ToArray();
+
+    private readonly List<Func<Type, KeyFunction?>> factories = [.. ConventionFactories];
+
+    /// <summary>
+    /// Whether the built-in conventions alone decide the key of <paramref name="type"/>: the first
+    /// convention any property matches is matched by exactly one property. Then every builder yields
+    /// the same key function for the type whatever factories it was given on top — those are only
+    /// consulted after the conventions — so two registries' definitions of the type are equivalent.
+    /// False when no convention matches, or when the first one that matches is ambiguous.
+    /// </summary>
+    /// <param name="type">The CLR type.</param>
+    /// <returns>True when the conventions decide the key.</returns>
+    internal static bool HasConventionalKey(Type type)
+    {
+        var properties = type.GetProperties();
+        foreach (var convention in Conventions)
+        {
+            var matches = properties.Count(convention);
+            if (matches > 0)
+                return matches == 1;
+        }
+        return false;
+    }
 
     /// <summary>
     /// Builds a <see cref="KeyFunction"/> whose key is a tuple of the supplied properties

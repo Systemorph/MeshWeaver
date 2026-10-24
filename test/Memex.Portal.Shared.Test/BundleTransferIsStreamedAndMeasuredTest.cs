@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -28,18 +29,9 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class BundleTransferIsStreamedAndMeasuredTest
 {
-    private static DirectoryInfo RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!;
-    }
-
     private static string BundleClientSource() =>
         File.ReadAllText(Path.Combine(
-            RepoRoot().FullName, "src", "MeshWeaver.PluginCatalog", "PluginBundleClient.cs"));
+            RepoPaths.Root, "src", "MeshWeaver.PluginCatalog", "PluginBundleClient.cs"));
 
     /// <summary>The body of one method of the client, from its signature to the next member.</summary>
     private static string MemberBody(string signature)

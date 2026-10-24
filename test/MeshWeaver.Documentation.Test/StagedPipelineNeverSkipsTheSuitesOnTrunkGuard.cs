@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.RepresentationModel;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -79,7 +80,7 @@ public class StagedPipelineNeverSkipsTheSuitesOnTrunkGuard
 
     private static IReadOnlyDictionary<string, Job> Jobs()
     {
-        var path = Path.Combine(FindRepoRoot(), ".github", "workflows", "dotnet-test.yml");
+        var path = Path.Combine(RepoPaths.Root, ".github", "workflows", "dotnet-test.yml");
         var stream = new YamlStream();
         using (var reader = new StringReader(File.ReadAllText(path)))
             stream.Load(reader);
@@ -115,14 +116,5 @@ public class StagedPipelineNeverSkipsTheSuitesOnTrunkGuard
                     frontier.Enqueue(name);
         }
         return found.ToList();
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException("Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

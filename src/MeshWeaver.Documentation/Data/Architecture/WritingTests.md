@@ -980,6 +980,7 @@ Use `FullyQualifiedName~` — it is the only `--filter` property this repo uses 
 - Framework code lives in `src/`, tests in `test/`, with one `*.Test` project per production project where it makes sense.
 - Shared fixtures live in `test/MeshWeaver.Hosting.Monolith.TestBase` and the Orleans test base.
 - NodeType tests live in the NodeType's `Test/` namespace (`Namespace/Type/Test/TypeTest.cs`).
+- A test that reads the source tree finds the repository root through **`RepoPaths.Root`** (`test/MeshWeaver.Fixture/RepoPaths.cs`) — or `RepoPaths.TryFindRoot()` when it skips outside a checkout. It anchors on `MeshWeaver.slnx`, which is the same kind of entry in a primary checkout, a worktree and a CI clone; a `.git` anchor is not (in a worktree `.git` is a file). Never write a private walk up from the binary: `RepoPathsTest.NoTestCarriesItsOwnRepoRootWalk` fails on one. A project that must stay free of the fixture's framework dependencies compiles the file in with `<Compile Include="..\MeshWeaver.Fixture\RepoPaths.cs" Link="RepoPaths.cs" />`.
 
 ---
 

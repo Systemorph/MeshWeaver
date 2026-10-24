@@ -30,7 +30,7 @@ namespace MeshWeaver.Documentation.Test;
 /// that returned <c>[]</c>. The fact that separates them was on the instance the whole time: the
 /// release markers under the published root name EVERY line, not only this instance's.</para>
 ///
-/// <para>These tests pin both halves: the reading (<see cref="SealedPublicationIndex.NewerLineThan"/>)
+/// <para>These tests pin both halves: the reading (<see cref="SealedPublicationIndex.NewerLineThan(string, string, Microsoft.Extensions.Logging.ILogger)"/>)
 /// and the sentence it produces — and, as much as the clause itself, the cases where it must say
 /// NOTHING rather than guess a direction. Since policy <c>module-sync-per-manifest-hash</c> the
 /// gate holds nothing, so the sentence rides the green build's plan instead of a hold note.</para>
@@ -151,7 +151,7 @@ public class HeldNoteNamesTheNewerLineTest
 
     /// <summary>
     /// 🚨 Ordering is sealed-publication LINEAGE, never SemVer — the same trap
-    /// <see cref="SealedPublicationIndex.ReleasesOf"/> documents (#3542). Under SemVer §11.4 the
+    /// <see cref="SealedPublicationIndex.ReleasesOf(string, Microsoft.Extensions.Logging.ILogger)"/> documents (#3542). Under SemVer §11.4 the
     /// retired <c>rc9</c> line sorts ABOVE a later <c>ci</c> build, which would report an instance
     /// on today's line as behind a three-day-old one and send an operator to roll BACKWARDS.
     /// </summary>

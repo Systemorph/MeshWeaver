@@ -147,6 +147,27 @@ public static class PublishedBundleCatalogue
     public static ReleaseObservation ReadWithLivePublication(
         string? publishedRoot, string? targetVersion, string? registryIdentity,
         LivePublicationReading? live, ILogger? logger = null)
+        => ReadCore(publishedRoot, targetVersion, registryIdentity, live, logger, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read(string?, string?, ILogger?)"/> from a pooled leaf: the walk of the identity's
+    /// publications is one round trip per source, bundle manifest and module bundle, so
+    /// <paramref name="cancellationToken"/> (the pool's) is checked before each. A cancel surfaces as
+    /// <see cref="OperationCanceledException"/>, never as an unreadable observation: the read did not
+    /// fail, the process is stopping. A distinct NAME rather than an overload of <c>Read</c>, so no
+    /// bare <c>cref</c> to <c>Read</c> turns ambiguous (CS0419).
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root, or null.</param>
+    /// <param name="targetVersion">The platform version being rolled to.</param>
+    /// <param name="cancellationToken">The pool's token. Required.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static ReleaseObservation ReadObservingToken(
+        string? publishedRoot, string? targetVersion, CancellationToken cancellationToken, ILogger? logger = null)
+        => ReadCore(publishedRoot, targetVersion, null, null, logger, cancellationToken);
+
+    private static ReleaseObservation ReadCore(
+        string? publishedRoot, string? targetVersion, string? registryIdentity,
+        LivePublicationReading? live, ILogger? logger, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(targetVersion))
             return new ReleaseObservation(
@@ -200,6 +221,7 @@ public static class PublishedBundleCatalogue
                     ReleaseArtifacts.Unreadable(
                         $"the release marker for {targetVersion} is empty"));
 
+            cancellationToken.ThrowIfCancellationRequested();
             var (surface, surfaceDetail) = ReleaseSurfaceOf(publishedRoot, targetVersion, identity, logger);
 
             // The live publication applies only to the identity the registry named, read from it.
@@ -222,10 +244,10 @@ public static class PublishedBundleCatalogue
 
             return new ReleaseObservation(
                 new ReleaseTarget(targetVersion, identity),
-                Live(ArtifactsForIdentity(Path.Combine(publishedRoot, identity), logger), liveHere, targetVersion, logger)
+                Live(ArtifactsForIdentityObservingToken(Path.Combine(publishedRoot, identity), logger, cancellationToken), liveHere, targetVersion, logger)
                     with { PlatformSurface = surface, PlatformSurfaceDetail = surfaceDetail });
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // Fail SAFE and NAMED: an IO fault against the share is an availability incident, and
             // the caller must be able to tell it apart from an incompatible release.
@@ -343,7 +365,7 @@ public static class PublishedBundleCatalogue
     /// action block.</summary>
     public static IObservable<ReleaseObservation> Observe(
         IIoPool pool, string? publishedRoot, string? targetVersion, ILogger? logger = null) =>
-        pool.InvokeBlocking(_ => Read(publishedRoot, targetVersion, logger));
+        pool.InvokeBlocking(ct => ReadObservingToken(publishedRoot, targetVersion, ct, logger));
 
     /// <summary>
     /// Every bundle sealed under one framework-identity directory, across all producing sources —
@@ -444,6 +466,19 @@ public static class PublishedBundleCatalogue
     /// </summary>
     public static PublishedReleaseCatalogue PublishedReleases(
         string? publishedRoot, ILogger? logger = null)
+        => PublishedReleasesObservingToken(publishedRoot, CancellationToken.None, logger);
+
+    /// <summary>
+    /// <see cref="PublishedReleases(string?, ILogger?)"/> from a pooled leaf: the marker listing is
+    /// materialised entry by entry, checking <paramref name="cancellationToken"/> (the pool's) before
+    /// each and before the sort. A cancel surfaces as <see cref="OperationCanceledException"/>, never
+    /// as an unreadable catalogue.
+    /// </summary>
+    /// <param name="publishedRoot">The published bundle root.</param>
+    /// <param name="cancellationToken">The pool's token. Required.</param>
+    /// <param name="logger">Diagnostics.</param>
+    internal static PublishedReleaseCatalogue PublishedReleasesObservingToken(
+        string? publishedRoot, CancellationToken cancellationToken, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(publishedRoot))
             return PublishedReleaseCatalogue.Unreadable(
@@ -460,13 +495,18 @@ public static class PublishedBundleCatalogue
         {
             return new PublishedReleaseCatalogue(
                 [.. Directory.EnumerateFiles(markers)
-                    .Select(Path.GetFileName)
+                    .Select(path =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return Path.GetFileName(path);
+                    })
+                    .ToList()
                     .Where(name => !string.IsNullOrWhiteSpace(name))
                     .Select(name => name!)
                     .OrderBy(name => name, StringComparer.Ordinal)],
                 null);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             logger?.LogWarning(ex,
                 "ReleaseAvailability: could not list the published releases under {Root}/{Markers}",
@@ -480,7 +520,7 @@ public static class PublishedBundleCatalogue
     /// file-system leaf runs on the caller's I/O pool, never on a hub action block.</summary>
     public static IObservable<PublishedReleaseCatalogue> ObserveReleases(
         IIoPool pool, string? publishedRoot, ILogger? logger = null) =>
-        pool.InvokeBlocking(_ => PublishedReleases(publishedRoot, logger));
+        pool.InvokeBlocking(ct => PublishedReleasesObservingToken(publishedRoot, ct, logger));
 
     public static SealedBundleFloor EverSealedBundles(string? publishedRoot, ILogger? logger = null)
     {
@@ -645,6 +685,13 @@ public static class PublishedBundleCatalogue
     /// reports, so a ride-only name must not start standing in for a module nothing declares.</para>
     /// </remarks>
     internal static ReleaseArtifacts ArtifactsForIdentity(string identityDirectory, ILogger? logger)
+        => ArtifactsForIdentityObservingToken(identityDirectory, logger, CancellationToken.None);
+
+    /// <summary><see cref="ArtifactsForIdentity"/>, checking
+    /// <paramref name="cancellationToken"/> before every source, bundle manifest and module bundle
+    /// it reads.</summary>
+    internal static ReleaseArtifacts ArtifactsForIdentityObservingToken(
+        string identityDirectory, ILogger? logger, CancellationToken cancellationToken)
     {
         var bundles = new List<string>();
         var records = ImmutableArray.CreateBuilder<BundleDependencyRecord>();
@@ -662,25 +709,35 @@ public static class PublishedBundleCatalogue
         // to a RELEASE, not to an identity's publications, and Read attaches the one recorded for
         // the release being judged. The meshweaver-content-first order is kept for the module
         // conflict attribution below, which names the first source that sealed a copy.
+        // The listing is a step boundary too (review on #7121): checked before it starts, and per entry
+        // as the sort drains it — the Select runs once per yielded directory, BEFORE ordering.
+        cancellationToken.ThrowIfCancellationRequested();
         foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory)
+                     .Select(d =>
+                     {
+                         cancellationToken.ThrowIfCancellationRequested();
+                         return d;
+                     })
                      .OrderBy(d => string.Equals(Path.GetFileName(d), "meshweaver-content", StringComparison.Ordinal) ? 0 : 1)
                      .ThenBy(d => d, StringComparer.Ordinal))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // 🚨 #3461: `publication` is where the bytes ARE (the pointed-to generation, or the
             // source directory in the flat layout); `sourceDirectory` only names the SOURCE.
-            var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+            var (publication, complete) = CompletePublicationOf(sourceDirectory, logger, cancellationToken);
             if (complete is null)
                 continue;
             var source = Path.GetFileName(sourceDirectory)!;
             bundles.AddRange(complete);
             foreach (var bundle in complete)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var (bundleRecords, range) = ManifestFactsOf(Path.Combine(publication, bundle), bundle, logger);
                 records.AddRange(bundleRecords);
                 if (range is not null)
                     ranges[StripZip(bundle)] = range;
             }
-            var modules = SealedModulesOf(sourceDirectory, logger);
+            var modules = ReadModuleSetObservingToken(sourceDirectory, logger, null, cancellationToken);
             if (modules.Modules is null)
             {
                 refusals.Add($"source '{source}': {modules.Refusal}");
@@ -688,12 +745,13 @@ public static class PublishedBundleCatalogue
             }
             foreach (var moduleBundle in modules.Modules)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var path = Path.Combine(
                     modules.Directory ?? publication, ModulesDirectoryName, moduleBundle);
                 ImmutableArray<SealedModuleAssembly> carried;
                 try
                 {
-                    carried = SealedModuleAssembliesOf(path);
+                    carried = SealedModuleAssembliesOf(path, cancellationToken);
                 }
                 catch (Exception ex) when (ex is IOException or InvalidDataException or BadImageFormatException or InvalidOperationException)
                 {
@@ -802,7 +860,16 @@ public static class PublishedBundleCatalogue
     /// is what the bundle contains, not what its manifest claims.</para>
     /// </summary>
     internal static ImmutableArray<SealedModuleAssembly> SealedModuleAssembliesOf(string moduleBundlePath)
+        => SealedModuleAssembliesOf(moduleBundlePath, CancellationToken.None);
+
+    /// <summary><see cref="SealedModuleAssembliesOf(string)"/> from a pooled leaf: each assembly is
+    /// inflated into memory to read its MVID, so <paramref name="cancellationToken"/> is checked before
+    /// the bundle is opened and before EACH assembly's extraction — a drain during the first one stops
+    /// before the next.</summary>
+    internal static ImmutableArray<SealedModuleAssembly> SealedModuleAssembliesOf(
+        string moduleBundlePath, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var manifest = BundleReader.ReadManifest(moduleBundlePath);
         using var file = File.OpenRead(moduleBundlePath);
         using var archive = new ZipArchive(file, ZipArchiveMode.Read);
@@ -826,12 +893,14 @@ public static class PublishedBundleCatalogue
                 $"{NuGetPackageWriter.ModuleFolder}/{name}.dll is missing from the bundle");
 
         var carried = ImmutableArray.CreateBuilder<SealedModuleAssembly>(flat.Count);
+        cancellationToken.ThrowIfCancellationRequested();
         carried.Add(new SealedModuleAssembly(name, MvidOf(entry), IsEntry: true));
         foreach (var sibling in flat)
         {
             var simple = Path.GetFileNameWithoutExtension(sibling.FullName);
             if (string.Equals(simple, name, StringComparison.Ordinal) || !IsPlatformAssemblyName(simple))
                 continue;
+            cancellationToken.ThrowIfCancellationRequested();
             carried.Add(new SealedModuleAssembly(simple, MvidOf(sibling), IsEntry: false));
         }
         return carried.ToImmutable();
@@ -1093,8 +1162,17 @@ public static class PublishedBundleCatalogue
     /// </summary>
     private static (string Directory, IReadOnlyList<string>? Bundles) CompletePublicationOf(
         string sourceDirectory, ILogger? logger)
+        => CompletePublicationOf(sourceDirectory, logger, CancellationToken.None);
+
+    /// <summary><see cref="CompletePublicationOf(string, ILogger?)"/> from a pooled walk: the pointer
+    /// is resolved under <paramref name="cancellationToken"/>, and it is checked before the seal is read
+    /// and before each listed bundle is probed (review on #7121). A cancel propagates; it is never a
+    /// torn publication.</summary>
+    private static (string Directory, IReadOnlyList<string>? Bundles) CompletePublicationOf(
+        string sourceDirectory, ILogger? logger, CancellationToken cancellationToken)
     {
-        var directory = ShippedPrebuiltBundles.PublicationDirectoryOf(sourceDirectory, logger);
+        var directory = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger).Directory;
+        cancellationToken.ThrowIfCancellationRequested();
         var sentinel = Path.Combine(
             directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
         var lines = ReadSealLines(sentinel);
@@ -1111,7 +1189,11 @@ public static class PublishedBundleCatalogue
             .Select(line => line.Trim())
             .Where(line => line.Length > 0)
             .ToList();
-        if (listed.Any(name => !File.Exists(Path.Combine(directory, name))))
+        if (listed.Any(name =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return !File.Exists(Path.Combine(directory, name));
+            }))
         {
             logger?.LogInformation(
                 "ReleaseAvailability: {SourceDirectory} is sealed but a listed bundle is "
@@ -1121,6 +1203,14 @@ public static class PublishedBundleCatalogue
         }
 
         return (directory, listed);
+    }
+
+    /// <summary>A predicate's step boundary: throws when <paramref name="cancellationToken"/> is
+    /// cancelled, else true — so a LINQ probe over a listing checks the token before each probe.</summary>
+    private static bool CheckedFor(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return true;
     }
 
     private static bool IsComplete(string sourceDirectory, ILogger? logger) =>
@@ -1232,10 +1322,17 @@ public static class PublishedBundleCatalogue
     // holding the same bare cref would have found out only when it moved its platform pin.
     internal static ModuleSetReading ReadModuleSet(
         string sourceDirectory, ILogger? logger, Func<string, string[]>? readIndex)
+        => ReadModuleSetObservingToken(sourceDirectory, logger, readIndex, CancellationToken.None);
+
+    /// <summary><see cref="ReadModuleSet"/> from a pooled walk: the seal verification and each listed
+    /// module bundle's probe check <paramref name="cancellationToken"/> first (review on #7121).</summary>
+    internal static ModuleSetReading ReadModuleSetObservingToken(
+        string sourceDirectory, ILogger? logger, Func<string, string[]>? readIndex,
+        CancellationToken cancellationToken)
     {
         // 🚨 #3461: one resolution, handed back on the reading. `publication` is the directory the
         // bytes are in; the module set is `<publication>/modules`, never `<source>/modules`.
-        var (publication, complete) = CompletePublicationOf(sourceDirectory, logger);
+        var (publication, complete) = CompletePublicationOf(sourceDirectory, logger, cancellationToken);
         if (complete is null)
             return new(null, "no sealed publication")
             { Directory = publication, PublicationUnavailable = true };
@@ -1247,6 +1344,7 @@ public static class PublishedBundleCatalogue
         // identity directories, so the index observed by the probe was gone by the time the read
         // opened it, and the FileNotFoundException (or DirectoryNotFoundException, which is what a
         // removed parent throws) reached ExceptionHandlerMiddleware as a 500 on the module routes.
+        cancellationToken.ThrowIfCancellationRequested();
         var lines = ReadSealLines(index, readIndex);
         if (lines is null)
         {
@@ -1289,7 +1387,7 @@ public static class PublishedBundleCatalogue
             .Where(line => line.Length > 0)
             .ToList();
         var bad = listed.FirstOrDefault(name =>
-            name.IndexOfAny(['/', '\\', ':']) >= 0 || name == "." || name == ".."
+            CheckedFor(cancellationToken) && name.IndexOfAny(['/', '\\', ':']) >= 0 || name == "." || name == ".."
             || !File.Exists(Path.Combine(directory, name)));
         if (bad is not null)
         {

@@ -14,183 +14,12 @@ using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace MeshWeaver.Graph.Test;
-
-/// <summary>
-/// A real <see cref="IStorageAdapter"/> over a real <see cref="InMemoryStorageAdapter"/> that can
-/// HOLD the next write to one path until the test releases it. It reproduces the one thing a busy
-/// mesh does that a fast in-memory suite hides: the owner acknowledges an own write from its
-/// in-memory commit, and the store receives that write one persistence-sampler interval LATER.
-/// Holding the write turns that window from ~200 ms into "until released", deterministically.
-/// </summary>
-internal sealed class HeldWriteStorageAdapter(InMemoryStorageAdapter inner) : IStorageAdapter
-{
-    private string? _holdPath;
-    private readonly AsyncSubject<Unit> _release = new();
-    private readonly AsyncSubject<Unit> _writeHeld = new();
-
-    /// <summary>
-    /// Arms the hold: the next write to <paramref name="path"/> (and every later one) waits until
-    /// <see cref="Release"/>. Never a sleep: the held write is an Rx continuation on the release.
-    /// </summary>
-    public void HoldWritesTo(string path) => Volatile.Write(ref _holdPath, path);
-
-    /// <summary>Completes when a write to the held path has reached the store and is being held.</summary>
-    public IObservable<Unit> WriteHeld => _writeHeld;
-
-    /// <summary>Lets every held write through. Idempotent.</summary>
-    public void Release()
-    {
-        Volatile.Write(ref _holdPath, null);
-        _release.OnNext(Unit.Default);
-        _release.OnCompleted();
-    }
-
-    private bool Held(string path)
-        => Volatile.Read(ref _holdPath) is { } held
-           && string.Equals(held, path, StringComparison.OrdinalIgnoreCase);
-
-    /// <inheritdoc />
-    public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options)
-        => Observable.Defer(() =>
-        {
-            if (!Held(node.Path))
-                return inner.Write(node, options);
-            _writeHeld.OnNext(Unit.Default);
-            _writeHeld.OnCompleted();
-            return _release.SelectMany(_ => inner.Write(node, options));
-        });
-
-    /// <inheritdoc />
-    public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-        => Observable.Defer(() => Held(node.Path)
-            ? _release.SelectMany(_ => inner.WriteIfVersion(node, expectedVersion, options))
-            : inner.WriteIfVersion(node, expectedVersion, options));
-
-    private string? _holdDeletePath;
-    private readonly AsyncSubject<Unit> _releaseDelete = new();
-    private readonly AsyncSubject<Unit> _deleteHeld = new();
-
-    /// <summary>
-    /// Arms the delete hold: a delete of <paramref name="path"/> that reaches the store waits until
-    /// <see cref="ReleaseDelete"/>. It pauses a delete AFTER every check it makes (the owner's
-    /// verdict included) and before its commit lands.
-    /// </summary>
-    public void HoldDeletesOf(string path) => Volatile.Write(ref _holdDeletePath, path);
-
-    /// <summary>Completes when a delete of the held path has reached the store and is being held.</summary>
-    public IObservable<Unit> DeleteHeld => _deleteHeld;
-
-    /// <summary>Lets every held delete through. Idempotent.</summary>
-    public void ReleaseDelete()
-    {
-        Volatile.Write(ref _holdDeletePath, null);
-        _releaseDelete.OnNext(Unit.Default);
-        _releaseDelete.OnCompleted();
-    }
-
-    private IObservable<T> HoldDelete<T>(IEnumerable<string> paths, Func<IObservable<T>> delete)
-        => Observable.Defer(() =>
-        {
-            var held = Volatile.Read(ref _holdDeletePath);
-            if (held is null || !paths.Any(p => string.Equals(p, held, StringComparison.OrdinalIgnoreCase)))
-                return delete();
-            _deleteHeld.OnNext(Unit.Default);
-            _deleteHeld.OnCompleted();
-            return _releaseDelete.SelectMany(_ => delete());
-        });
-
-    /// <inheritdoc />
-    public IObservable<string> Delete(string path) => HoldDelete([path], () => inner.Delete(path));
-
-    /// <inheritdoc />
-    public IObservable<bool> DeleteIfExists(string path) => HoldDelete([path], () => inner.DeleteIfExists(path));
-
-    /// <inheritdoc />
-    /// <remarks>Held like every delete, then decided ATOMICALLY by the inner store once released —
-    /// the default would read before the hold and delete after it.</remarks>
-    public IObservable<bool> DeleteIfVersionAtMost(string path, long maxVersion, JsonSerializerOptions options)
-        => HoldDelete([path], () => inner.DeleteIfVersionAtMost(path, maxVersion, options));
-
-    /// <inheritdoc />
-    public IObservable<bool> DeleteIfIncarnationAtMost(
-        string path, long maxVersion, DateTimeOffset incarnation, JsonSerializerOptions options)
-        => HoldDelete([path], () => inner.DeleteIfIncarnationAtMost(path, maxVersion, incarnation, options));
-
-    /// <inheritdoc />
-    public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths)
-        => HoldDelete(paths, () => ((IStorageAdapter)inner).DeleteMany(paths));
-
-    /// <inheritdoc />
-    public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-        => Volatile.Read(ref _fallback) is { } fallback
-           && string.Equals(fallback.Path, path, StringComparison.OrdinalIgnoreCase)
-            ? inner.Read(path, options).Select(stored => stored ?? fallback)
-            : inner.Read(path, options);
-
-    private MeshNode? _fallback;
-
-    /// <summary>
-    /// Serves <paramref name="shipped"/> on <see cref="Read"/> whenever no writable row exists at its
-    /// path — the shape of a READ-ONLY provider (shipped content) under a writable override. Writable
-    /// existence (<see cref="ExistsInWritableStorage"/>) is untouched, as a read-only provider's is.
-    /// </summary>
-    public void ServeReadOnlyFallback(MeshNode shipped) => Volatile.Write(ref _fallback, shipped);
-
-    /// <inheritdoc />
-    public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-    /// <inheritdoc />
-    public IObservable<bool> ExistsInWritableStorage(string path)
-        => ((IStorageAdapter)inner).ExistsInWritableStorage(path);
-
-    /// <inheritdoc />
-    public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(
-        string fullPath, JsonSerializerOptions options)
-        => inner.FindBestPrefixMatch(fullPath, options);
-
-    /// <inheritdoc />
-    public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(
-        string fullPath, JsonSerializerOptions options)
-        => inner.ResolvePath(fullPath, options);
-
-    /// <inheritdoc />
-    public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-        ListChildPaths(string? parentPath)
-        => inner.ListChildPaths(parentPath);
-
-    /// <inheritdoc />
-    public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath)
-        => inner.ListDescendantPaths(rootPath);
-
-    /// <inheritdoc />
-    public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath)
-        => ((IStorageAdapter)inner).ListPartitionSubPaths(nodePath);
-
-    /// <inheritdoc />
-    public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-        => inner.GetPartitionObjects(nodePath, subPath, options);
-
-    /// <inheritdoc />
-    public IObservable<Unit> SavePartitionObjects(
-        string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-        => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-    /// <inheritdoc />
-    public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-        => inner.DeletePartitionObjects(nodePath, subPath);
-
-    /// <inheritdoc />
-    public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-        => inner.GetPartitionMaxTimestamp(nodePath, subPath);
-
-    /// <inheritdoc />
-    public IObservable<DataChangeNotification> Changes => inner.Changes;
-}
 
 /// <summary>
 /// #6673: a delete guarded by <see cref="DeleteNodeRequest.ExpectedVersion"/> must never remove a
@@ -202,7 +31,15 @@ internal sealed class HeldWriteStorageAdapter(InMemoryStorageAdapter inner) : IS
 /// </summary>
 public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : MonolithMeshTestBase(output)
 {
-    private readonly HeldWriteStorageAdapter _storage = new(new InMemoryStorageAdapter());
+    /// <summary>The store of record, under the shared injector: a write or delete of one path can be
+    /// HELD until released. It reproduces the one thing a busy mesh does that a fast in-memory suite
+    /// hides: the owner acknowledges an own write from its in-memory commit, and the store receives
+    /// that write one persistence-sampler interval LATER. Holding it turns that window from ~200 ms
+    /// into "until released", deterministically.</summary>
+    private readonly FaultInjectingStorageAdapter _storage = new(new InMemoryStorageAdapter());
+
+    /// <summary>The write hold <see cref="AcknowledgedButNotStored"/> armed, released in each case's <c>finally</c>.</summary>
+    private FaultSwitch? _writeHold;
 
     /// <inheritdoc />
     protected override MeshBuilder ConfigureMesh(MeshBuilder builder)
@@ -242,11 +79,11 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
     /// </summary>
     private async Task<long> AcknowledgedButNotStored(IMessageHub owner, string path, long stored)
     {
-        _storage.HoldWritesTo(path);
+        _writeHold = _storage.HoldWrites(path);
         var acked = await owner.GetWorkspace().GetMeshNodeStream()
             .Update(n => n with { Name = "acknowledged, not yet stored" })
             .Should().Within(TestTimeouts.Convergence).Emit("the owner acknowledges its own write", cancellationToken: Ct);
-        await _storage.WriteHeld.Should().Within(TestTimeouts.Convergence)
+        await _writeHold.Arrivals.Should().Within(TestTimeouts.Convergence)
             .Emit("the sampler's flush reached the store and is held", cancellationToken: Ct);
         (await Stored(path))!.Version.Should().Be(stored,
             "the premise: the acknowledged write is NOT in the store yet");
@@ -296,7 +133,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         }
         finally
         {
-            _storage.Release();
+            _writeHold?.Release();
         }
     }
 
@@ -325,7 +162,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         }
         finally
         {
-            _storage.Release();
+            _writeHold?.Release();
         }
 
         using (connection)
@@ -370,7 +207,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         }
         finally
         {
-            _storage.Release();
+            _writeHold?.Release();
         }
 
         using (connection)
@@ -434,7 +271,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         var node = await Seed("owner-turn-wired-seal");
         var owner = await OwnerOf(node.Path);
         var read = (await Stored(node.Path))!.Version;
-        _storage.HoldDeletesOf(node.Path);
+        var deleteHold = _storage.HoldDeletes(node.Path);
         var delete = ObserveNodeOperation(new DeleteNodeRequest(node.Path) { ExpectedVersion = read }).Replay(1);
         using var connection = delete.Connect();
         var write = owner.GetWorkspace().GetMeshNodeStream()
@@ -445,7 +282,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         IDisposable writeConnection;
         try
         {
-            await _storage.DeleteHeld.Should().Within(TestTimeouts.Convergence)
+            await deleteHold.Arrivals.Should().Within(TestTimeouts.Convergence)
                 .Emit("the guarded delete passed the owner's verdict and reached the store", cancellationToken: Ct);
 
             writeConnection = write.Connect();
@@ -454,7 +291,7 @@ public class DeleteExpectedVersionOwnerTurnTest(ITestOutputHelper output) : Mono
         }
         finally
         {
-            _storage.ReleaseDelete();
+            deleteHold.Release();
         }
 
         using (writeConnection)

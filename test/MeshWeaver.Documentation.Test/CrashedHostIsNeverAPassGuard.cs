@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -176,7 +177,7 @@ public class CrashedHostIsNeverAPassGuard
     [Fact]
     public void EveryDeathBranchOfTheClassifier_AlsoRecordsTheCrashIntoTheTrx()
     {
-        var body = File.ReadAllText(Path.Combine(SourceScan.FindRepoRoot(), Workflow));
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
         var caseStart = body.IndexOf("case \"$rc\" in", StringComparison.Ordinal);
         Assert.True(caseStart > 0,
@@ -261,7 +262,7 @@ public class CrashedHostIsNeverAPassGuard
     private static (int ExitCode, string StdOut, string StdErr) RunRecorder(
         string trxPath, string label, int exitCode, string classification)
     {
-        var script = Path.Combine(SourceScan.FindRepoRoot(), Recorder);
+        var script = Path.Combine(RepoPaths.Root, Recorder);
         Assert.True(File.Exists(script), $"{Recorder} is missing — the crash evidence has no writer.");
 
         var psi = new ProcessStartInfo("python3")

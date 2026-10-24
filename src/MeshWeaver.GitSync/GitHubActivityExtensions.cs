@@ -390,9 +390,9 @@ public static class GitHubActivityExtensions
                 repo, requested, config.LastSyncCommitSha, SealedReadOutcome.Unreadable, [], identity, null));
         }
         return pools.Get(IoPoolNames.FileSystem)
-            .InvokeBlocking(_ => (
-                Reading: SealedPublicationIndex.ReadingFor(publishedRoot, identity, logger),
-                NewerLine: SealedPublicationIndex.NewerLineThan(publishedRoot, identity, logger)))
+            .InvokeBlocking(ct => (
+                Reading: SealedPublicationIndex.ReadingFor(publishedRoot, identity, ct, logger),
+                NewerLine: SealedPublicationIndex.NewerLineThan(publishedRoot, identity, ct, logger)))
             .Select(read => SealedSyncGate.DecideRequestedImport(
                 repo, requested, config.LastSyncCommitSha, read.Reading.Outcome, read.Reading.Sources,
                 identity, read.NewerLine))
