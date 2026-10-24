@@ -2119,7 +2119,19 @@ def run_request_review(repo: str, number: int, before: str | None, gh=None, swee
 SWEEP_MAX_PRS = 40
 
 
-def run_request_review_sweep(repo: str, gh=None) -> int:
+def sweep_window(numbers: list, now_epoch: int, size: int = SWEEP_MAX_PRS, period_s: int = 900) -> list:
+    """The slice of `numbers` (sorted) this sweep run judges. Pure. At most `size`; with more open
+    pull requests than that, the window ROTATES with the 15-minute schedule slot, so every open pull
+    request is judged within ceil(n / size) runs — a fixed "newest 40" never reconsidered the oldest
+    (#7142 review)."""
+    if len(numbers) <= size:
+        return list(numbers)
+    windows = -(-len(numbers) // size)
+    start = (now_epoch // period_s) % windows * size
+    return list(numbers[start:start + size])
+
+
+def run_request_review_sweep(repo: str, gh=None, now_epoch: int | None = None) -> int:
     """The scheduled half of the review-on-change lane (#7142 review). A `synchronize` that finds a
     Copilot review already PENDING requests nothing — and that pending review may then land on the
     PREVIOUS head, leaving the current one stale with no further event: Copilot's own review event
@@ -2137,8 +2149,10 @@ def run_request_review_sweep(repo: str, gh=None) -> int:
         return 1
     numbers = sorted(p["number"] for p in pulls if isinstance(p, dict) and not p.get("draft") and p.get("number"))
     if len(numbers) > SWEEP_MAX_PRS:
-        print(f"::warning::{len(numbers)} open pull requests — this sweep judges the newest {SWEEP_MAX_PRS}; the next takes the rest only if they stay newest")
-        numbers = numbers[-SWEEP_MAX_PRS:]
+        window = sweep_window(numbers, int(time.time()) if now_epoch is None else now_epoch)
+        print(f"::notice::{len(numbers)} open pull requests — this sweep judges {len(window)} ({window[0]}..{window[-1]}); "
+              f"the window rotates every run, so each is judged within {-(-len(numbers) // SWEEP_MAX_PRS)} runs")
+        numbers = window
     print(f"sweep: judging {len(numbers)} open non-draft pull request(s): {numbers}")
     failed = [n for n in numbers if run_request_review(repo, n, None, gh=gh, sweep=True) != 0]
     if failed:
@@ -3286,6 +3300,14 @@ def self_test() -> int:
         ok = rc == 0 and len(stub.mutations) == expect_mutations and not any(c.startswith("pulls/2") for c in stub.calls)
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    # The rotation: 41 open pull requests -> two windows; across consecutive slots every number is
+    # judged (a fixed "newest 40" never reached #1 — the negative control is the old slice).
+    many = list(range(1, 42))
+    seen = set(sweep_window(many, 0)) | set(sweep_window(many, 900))
+    ok = (seen == set(many) and len(sweep_window(many, 0)) <= SWEEP_MAX_PRS
+          and 1 not in set(many[-SWEEP_MAX_PRS:]) and sweep_window(many[:5], 900) == many[:5])
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'sweep: >40 open PRs -> the window rotates, every PR judged':60}")
     stub = _ReqGh({}, ANSWER_OK)
     printed = io.StringIO()
     with contextlib.redirect_stdout(printed):
