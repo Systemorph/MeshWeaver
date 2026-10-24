@@ -101,10 +101,13 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         var good = SecretEnvelope.Seal(Secret, publicKey, "k1", Context);
 
         Assert.Null(SecretEnvelope.TryParse(new string(' ', SecretEnvelope.MaxWireChars) + good.ToJson()));   // oversized wire
-        var huge = Convert.ToBase64String(new byte[SecretEnvelope.MaxPlaintextBytes + 1]);
+        var huge = Convert.ToBase64String(new byte[SecretEnvelope.MaxPlaintextBytes + 3]);
         Assert.Null(SecretEnvelope.TryParse((good with { Ciphertext = huge }).ToJson()));                      // oversized ciphertext
+        // One byte over the limit has the same base64 length as the limit itself: the decoded length refuses it.
+        Assert.Null((good with { Ciphertext = Convert.ToBase64String(new byte[SecretEnvelope.MaxPlaintextBytes + 1]) }).Unseal(privateKey, Context));
         Assert.Null(SecretEnvelope.TryParse((good with { KeyId = new string('k', 65) }).ToJson()));           // oversized key id
-        Assert.Null(SecretEnvelope.TryParse((good with { Salt = Convert.ToBase64String(new byte[17]) }).ToJson()));
+        Assert.Null(SecretEnvelope.TryParse((good with { Salt = Convert.ToBase64String(new byte[19]) }).ToJson()));
+        Assert.Null((good with { Salt = Convert.ToBase64String(new byte[17]) }).Unseal(privateKey, Context));   // same base64 length, wrong size
         Assert.Null(SecretEnvelope.TryParse((good with { EphemeralPublicKey = new string('A', 4096) }).ToJson()));
 
         // Unseal refuses the same shapes even when the envelope was built directly, never via TryParse.
@@ -245,6 +248,7 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // A second rotation inside the window keeps the first key too.
         var third = await service.Rotate("test").Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         third.KeyId.Should().NotBe(second.KeyId);
+        var sealedToThird = SecretEnvelope.Seal(Secret, Convert.FromBase64String(third.PublicKey), third.KeyId, Context);
         (await service.Unseal(sealedToFirst.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken))
             .Should().Be(Secret, "two rotations inside one window do not drop the first outgoing key before its deadline");
 
@@ -259,6 +263,8 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .Take(1).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
         (await service.Unseal(sealedToFirst.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken))
             .Should().BeNull("the outgoing key is accepted for a bounded window only");
-        (await service.Unseal(sealedToSecond.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().Be(Secret);
+        (await service.Unseal(sealedToSecond.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken))
+            .Should().BeNull("the second key is retired too, and its window is over");
+        (await service.Unseal(sealedToThird.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().Be(Secret);
     }
 }
