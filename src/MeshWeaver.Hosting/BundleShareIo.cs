@@ -34,6 +34,21 @@ internal class BundleShareIo
     public virtual IReadOnlyList<string> EnumerateDirectories(string path) =>
         [.. Directory.EnumerateDirectories(path)];
 
+    /// <summary>
+    /// The subdirectories of <paramref name="path"/>, LAZILY — <see cref="Directory.EnumerateDirectories(string)"/>.
+    /// For a walk that checks its token per entry while it materializes the listing
+    /// (<c>ShippedPrebuiltBundles.OrdinalListing</c>), so a drain is seen INSIDE a listing on a slow
+    /// share rather than after it (MeshWeaver#7049).
+    /// </summary>
+    /// <param name="path">The directory to list.</param>
+    public virtual IEnumerable<string> ListDirectories(string path) => Directory.EnumerateDirectories(path);
+
+    /// <summary>The files under <paramref name="path"/>, LAZILY — <see cref="Directory.EnumerateFiles(string, string, SearchOption)"/>.</summary>
+    /// <param name="path">The directory to list.</param>
+    /// <param name="option">Top directory only, or the whole tree.</param>
+    public virtual IEnumerable<string> ListFiles(string path, SearchOption option = SearchOption.TopDirectoryOnly) =>
+        Directory.EnumerateFiles(path, "*", option);
+
     /// <summary><see cref="File.ReadAllLines(string)"/>.</summary>
     /// <param name="path">The file path.</param>
     public virtual string[] ReadAllLines(string path) => File.ReadAllLines(path);

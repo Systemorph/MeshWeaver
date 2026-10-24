@@ -495,32 +495,50 @@ public static class PrebuiltBundleStore
     /// Read the whole store: every identity directory (skipping the <c>_…</c> bookkeeping
     /// directories) with its sources' seals, and every release marker. Throws when the root or the
     /// marker directory cannot be listed — the caller aborts on that.
+    ///
+    /// <para>🚨 <b>A WALK, so it checks <paramref name="cancellationToken"/> between steps</b>
+    /// (MeshWeaver#7049): it runs as an <c>IIoPool.InvokeBlocking</c> leaf over a network share —
+    /// one stat per file of every identity — and a leaf that never looks at its token holds the
+    /// silo's teardown join for as long as the share takes. A cancel throws
+    /// <see cref="OperationCanceledException"/>; it is never folded into "unreadable".</para>
     /// </summary>
-    public static PrebuiltStoreScan Scan(string root, ILogger? logger = null)
+    public static PrebuiltStoreScan Scan(string root, CancellationToken cancellationToken, ILogger? logger = null)
+        => Scan(root, cancellationToken, logger, BundleShareIo.Real);
+
+    /// <summary>
+    /// <see cref="Scan(string, CancellationToken, ILogger?)"/> through the share-walk IO seam. 🚨 Every
+    /// listing is materialized by <see cref="ShippedPrebuiltBundles.OrdinalListing"/> — a token check
+    /// per ENTRY, then the sort — never <c>Enumerate….OrderBy(…)</c>, whose sort drains the whole
+    /// listing before the first element reaches a check (review on #7096, as on #5452).
+    /// </summary>
+    internal static PrebuiltStoreScan Scan(string root, CancellationToken cancellationToken, ILogger? logger, BundleShareIo io)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var identities = ImmutableList.CreateBuilder<PrebuiltIdentityEntry>();
-        foreach (var identityDirectory in Directory.EnumerateDirectories(root).OrderBy(d => d, StringComparer.Ordinal))
+        foreach (var identityDirectory in ShippedPrebuiltBundles.OrdinalListing(io.ListDirectories(root), cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetFileName(identityDirectory);
             if (string.IsNullOrEmpty(name) || name.StartsWith('_') || name.StartsWith('.'))
                 continue;
-            identities.Add(ReadIdentity(identityDirectory, name, logger));
+            identities.Add(ReadIdentity(identityDirectory, name, logger, cancellationToken, io));
         }
 
         var markers = ImmutableList.CreateBuilder<ReleaseMarkerEntry>();
         var markerDirectory = Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName);
-        if (Directory.Exists(markerDirectory))
-            foreach (var file in Directory.EnumerateFiles(markerDirectory).OrderBy(f => f, StringComparer.Ordinal))
+        if (io.DirectoryExists(markerDirectory))
+            foreach (var file in ShippedPrebuiltBundles.OrdinalListing(io.ListFiles(markerDirectory), cancellationToken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var version = Path.GetFileName(file);
                 var written = new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
                 try
                 {
-                    var identity = File.ReadAllText(file).Trim();
+                    var identity = io.ReadAllText(file).Trim();
                     markers.Add(new ReleaseMarkerEntry(version, identity.Length == 0 ? null : identity, file, written,
                         identity.Length == 0 ? "the marker is empty" : null));
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
                 {
                     markers.Add(new ReleaseMarkerEntry(version, null, file, written, $"{ex.GetType().Name}: {ex.Message}"));
                 }
@@ -530,9 +548,10 @@ public static class PrebuiltBundleStore
         // cannot be listed throws, and the caller aborts the whole pass.
         var surfaces = ImmutableList.CreateBuilder<ReleaseSurfaceEntry>();
         var surfaceDirectory = Path.Combine(markerDirectory, SealedPublicationIndex.ReleaseSurfaceDirectoryName);
-        if (Directory.Exists(surfaceDirectory))
-            foreach (var file in Directory.EnumerateFiles(surfaceDirectory).OrderBy(f => f, StringComparer.Ordinal))
+        if (io.DirectoryExists(surfaceDirectory))
+            foreach (var file in ShippedPrebuiltBundles.OrdinalListing(io.ListFiles(surfaceDirectory), cancellationToken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var info = new FileInfo(file);
                 surfaces.Add(new ReleaseSurfaceEntry(info.Name, file,
                     new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero), info.Length));
@@ -541,7 +560,44 @@ public static class PrebuiltBundleStore
         return new PrebuiltStoreScan(identities.ToImmutable(), markers.ToImmutable()) { Surfaces = surfaces.ToImmutable() };
     }
 
-    private static PrebuiltIdentityEntry ReadIdentity(string identityDirectory, string identity, ILogger? logger)
+    /// <summary>
+    /// Every file under <paramref name="directory"/>, walked ONE directory at a time, with a token
+    /// check before each directory's listings and per entry.
+    ///
+    /// <para>🚨 Never <c>EnumerateFiles(…, SearchOption.AllDirectories)</c> here. A recursive
+    /// enumeration crosses a whole subtree of directories that hold no file inside ONE
+    /// <c>MoveNext()</c>, so a check placed per FILE never runs while it reads them, and on the share
+    /// each directory read is a round trip (second review on #7096). The walk's tallies are
+    /// order-independent, so visiting order does not matter.</para>
+    ///
+    /// <para>Reparse-point directories (symlinks, junctions) are not descended into, as the
+    /// recursive enumeration this replaces did not follow them: a link can lead outside the identity
+    /// or back into it.</para>
+    /// </summary>
+    private static IEnumerable<string> FilesUnder(string directory, CancellationToken cancellationToken, BundleShareIo io)
+    {
+        var pending = ImmutableStack.Create(directory);
+        while (!pending.IsEmpty)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            pending = pending.Pop(out var current);
+            foreach (var file in io.ListFiles(current))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return file;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var child in io.ListDirectories(current))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if ((File.GetAttributes(child) & FileAttributes.ReparsePoint) == 0)
+                    pending = pending.Push(child);
+            }
+        }
+    }
+
+    private static PrebuiltIdentityEntry ReadIdentity(
+        string identityDirectory, string identity, ILogger? logger, CancellationToken cancellationToken, BundleShareIo io)
     {
         var bytes = 0L;
         var newestWrite = new DateTimeOffset(Directory.GetLastWriteTimeUtc(identityDirectory), TimeSpan.Zero);
@@ -555,8 +611,10 @@ public static class PrebuiltBundleStore
         // run" — the cost would grow with exactly the thing the sweep is here to remove.
         var sourceNewest = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var generationTallies = new Dictionary<(string Source, string Name), GenerationTally>();
-        foreach (var file in Directory.EnumerateFiles(identityDirectory, "*", SearchOption.AllDirectories))
+        foreach (var file in FilesUnder(identityDirectory, cancellationToken, io))
         {
+            // One stat per file on the share — the step boundary of the longest part of the walk.
+            cancellationToken.ThrowIfCancellationRequested();
             var info = new FileInfo(file);
             bytes += info.Length;
             var write = new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero);
@@ -593,8 +651,9 @@ public static class PrebuiltBundleStore
         }
 
         var sources = ImmutableList.CreateBuilder<PrebuiltSourceEntry>();
-        foreach (var sourceDirectory in Directory.EnumerateDirectories(identityDirectory).OrderBy(d => d, StringComparer.Ordinal))
+        foreach (var sourceDirectory in ShippedPrebuiltBundles.OrdinalListing(io.ListDirectories(identityDirectory), cancellationToken))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var sourceName = Path.GetFileName(sourceDirectory);
             var sourceStamp = new DateTimeOffset(Directory.GetLastWriteTimeUtc(sourceDirectory), TimeSpan.Zero);
             if (sourceNewest.TryGetValue(sourceName, out var newestFile) && newestFile > sourceStamp)
@@ -605,11 +664,12 @@ public static class PrebuiltBundleStore
             // resolution is the READERS' — ShippedPrebuiltBundles.ResolvePublicationPointer is the
             // same call PublicationDirectoryOf makes — so what this sweep calls unreachable and
             // what a portal can reach can never drift apart.
-            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, logger);
+            var pointer = ShippedPrebuiltBundles.ResolvePublicationPointer(sourceDirectory, cancellationToken, logger, io);
             var publication = pointer.Directory;
-            var sourceGenerations = ReadGenerations(sourceDirectory, sourceName, pointer, generationTallies, logger);
+            var sourceGenerations = ReadGenerations(sourceDirectory, sourceName, pointer, generationTallies, logger, cancellationToken, io);
+            cancellationToken.ThrowIfCancellationRequested();
             var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
-            if (!File.Exists(sentinel))
+            if (!io.FileExists(sentinel))
             {
                 sources.Add(new PrebuiltSourceEntry(sourceName, false, null, sourceNewestWrite, null)
                     { Generations = sourceGenerations, PointerFault = pointer.Fault });
@@ -618,14 +678,21 @@ public static class PrebuiltBundleStore
             try
             {
                 var sealUtc = new DateTimeOffset(File.GetLastWriteTimeUtc(sentinel), TimeSpan.Zero);
-                var torn = File.ReadAllLines(sentinel)
-                    .Select(l => l.Trim())
-                    .Where(l => l.Length > 0)
-                    .Any(name => !File.Exists(Path.Combine(publication, name)));
+                var torn = false;
+                // One existence probe per sealed archive — a round trip each on the share, so the
+                // token is checked between them.
+                foreach (var name in io.ReadAllLines(sentinel).Select(l => l.Trim()).Where(l => l.Length > 0))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (io.FileExists(Path.Combine(publication, name)))
+                        continue;
+                    torn = true;
+                    break;
+                }
                 sources.Add(new PrebuiltSourceEntry(sourceName, !torn, torn ? null : sealUtc, sourceNewestWrite, null)
                     { Generations = sourceGenerations, PointerFault = pointer.Fault });
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
             {
                 // 🚨 Every read failure, not just IOException — a denied ACL is every bit as much
                 // "I cannot evaluate this seal" as a locked file. It PROTECTS the identity.
@@ -660,16 +727,16 @@ public static class PrebuiltBundleStore
         string sourceName,
         PublicationPointer pointer,
         Dictionary<(string Source, string Name), GenerationTally> tallies,
-        ILogger? logger)
+        ILogger? logger,
+        CancellationToken cancellationToken,
+        BundleShareIo io)
     {
         List<string> directories;
         try
         {
-            directories = Directory.EnumerateDirectories(sourceDirectory)
-                .OrderBy(d => d, StringComparer.Ordinal)
-                .ToList();
+            directories = ShippedPrebuiltBundles.OrdinalListing(io.ListDirectories(sourceDirectory), cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // Cannot list ⇒ cannot judge. An empty list collects nothing, which is the answer a
             // failed listing must give: it must never read as "there are no generations here".
@@ -682,6 +749,7 @@ public static class PrebuiltBundleStore
         var entries = ImmutableList.CreateBuilder<PrebuiltGenerationEntry>();
         foreach (var directory in directories)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var name = Path.GetFileName(directory);
             // The underscore convention every layer of this store uses for "never an addressable
             // name", and then the positive test.
@@ -1020,10 +1088,37 @@ public static class PrebuiltBundleStore
         PrebuiltBundleRetention retention,
         IIoPool pool,
         ILogger? logger = null)
-        => pool.InvokeBlocking(_ =>
-            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, DateTimeOffset.UtcNow, logger));
+        => Sweep(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, pool, logger,
+            deleteDirectory: null);
+
+    internal static IObservable<PrebuiltBundleSweepResult> Sweep(
+        string root,
+        string liveIdentity,
+        string? livePlatformVersion,
+        ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
+        PrebuiltBundleRetention retention,
+        IIoPool pool,
+        ILogger? logger,
+        Action<string, CancellationToken>? deleteDirectory,
+        DateTimeOffset? nowUtc = null)
+        // 🚨 `ct`, never `_` (MeshWeaver#7049): the pool's token is what Drain cancels at silo
+        // teardown, and SweepCore checks it between every step of the walk and before every removal.
+        // With `_` here the pass walked the whole share — and, armed, removed its whole plan — while
+        // IoPoolSiloTeardown waited out its budget and released the silo over it.
+        => pool.InvokeBlocking(ct =>
+            SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, nowUtc ?? DateTimeOffset.UtcNow, ct, logger,
+                deleteDirectory is null ? null : dir => deleteDirectory(dir, ct)));
 
     /// <summary>The sweep itself, with the clock passed in, so the deleting behaviour is exercised at an exact instant.</summary>
+    /// <remarks>
+    /// 🚨 <paramref name="cancellationToken"/> is REQUIRED, so no caller can drop the pool's token by
+    /// omission (MeshWeaver#7049). It is checked between every step of the store walk and before every
+    /// removal; a cancel ends the pass with <see cref="OperationCanceledException"/> at the next step
+    /// boundary. It never changes WHAT is collectable — the plan is the same plan — only how much of
+    /// it this pass gets through: whatever it had not reached stays, and the next pass re-plans it.
+    /// What an interrupted armed pass DID remove is still written to the ledger.
+    /// </remarks>
     public static PrebuiltBundleSweepResult SweepCore(
         string root,
         string liveIdentity,
@@ -1032,8 +1127,25 @@ public static class PrebuiltBundleStore
         ImmutableList<PinnedPlatformReference> pinned,
         PrebuiltBundleRetention retention,
         DateTimeOffset nowUtc,
+        CancellationToken cancellationToken,
         ILogger? logger = null,
         Action<string>? deleteDirectory = null)
+        => SweepCore(root, liveIdentity, livePlatformVersion, stampedIdentities, pinned, retention, nowUtc,
+            cancellationToken, logger, deleteDirectory, BundleShareIo.Real);
+
+    /// <summary><see cref="SweepCore(string, string, string?, ImmutableHashSet{string}, ImmutableList{PinnedPlatformReference}, PrebuiltBundleRetention, DateTimeOffset, CancellationToken, ILogger?, Action{string}?)"/> through the share-walk IO seam.</summary>
+    internal static PrebuiltBundleSweepResult SweepCore(
+        string root,
+        string liveIdentity,
+        string? livePlatformVersion,
+        ImmutableHashSet<string> stampedIdentities,
+        ImmutableList<PinnedPlatformReference> pinned,
+        PrebuiltBundleRetention retention,
+        DateTimeOffset nowUtc,
+        CancellationToken cancellationToken,
+        ILogger? logger,
+        Action<string>? deleteDirectory,
+        BundleShareIo io)
     {
         PrebuiltStoreScan scan;
         try
@@ -1045,9 +1157,9 @@ public static class PrebuiltBundleStore
                 logger?.LogWarning("PrebuiltBundleRetention: pass outcome — ABORTED: {Reason} — nothing collected", absent.AbortReason);
                 return absent;
             }
-            scan = Scan(root, logger);
+            scan = Scan(root, cancellationToken, logger, io);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // 🚨 FAIL CLOSED: a partial listing is not a picture of the store, so it licenses nothing.
             logger?.LogWarning(ex,
@@ -1058,6 +1170,7 @@ public static class PrebuiltBundleStore
             return failed;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         var plan = Plan(liveIdentity, livePlatformVersion, scan, stampedIdentities, pinned, retention, nowUtc);
         if (plan.AbortReason is not null)
         {
@@ -1096,19 +1209,49 @@ public static class PrebuiltBundleStore
         var deletedBytes = 0L;
         var failedDeletes = 0;
         var lines = new List<string>();
+
+        // Called at every removal's step boundary. A cancel there ends the pass, but what it already
+        // removed is a fact the ledger must still carry — so the ledger is written first (one append)
+        // and the cancel is then thrown, never folded into a result that reads as a finished pass.
+        void ThrowIfLeaving(int identities, int generations, int markers, int surfaces, long bytes, int failed)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+                return;
+            logger?.LogWarning(
+                "PrebuiltBundleRetention: pass outcome — INTERRUPTED: the pool cancelled the pass (teardown) after removing "
+                + "{Identities} identity(ies), {Generations} superseded generation(s), {Markers} marker(s) and "
+                + "{Surfaces} release surface(s) reclaiming {Reclaimed}, {Failed} removal(s) failed. The rest of the plan "
+                + "stays and the next pass re-plans it. {Summary}",
+                identities, generations, markers, surfaces, PrebuiltBundleSweepPlan.Mb(bytes), failed, plan.Summary);
+            var interrupted = new PrebuiltBundleSweepResult(nowUtc, plan, true, identities, bytes, markers, failed,
+                    "interrupted by the pool's cancel (teardown) — the rest of the plan is the next pass's")
+                { DeletedGenerations = generations, DeletedSurfaces = surfaces };
+            AppendLedger(root, interrupted, logger, lines);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         foreach (var identity in plan.Collectable)
         {
+            ThrowIfLeaving(deletedIdentities, 0, 0, 0, deletedBytes, failedDeletes);
             try
             {
                 // Unseal first: a reader that lists the directory mid-removal then sees "no
                 // sentinel" and backs off, instead of a sealed listing whose bundles are vanishing.
+                //
+                // 🚨 Each of these is its own round trip — a pointer read, a probe, a delete per
+                // source, then the recursive removal — so the token is checked between them, and the
+                // pointer is resolved under it (review on #7096). A cancel here leaves the identity
+                // partly unsealed and in place; it was collectable, the next pass re-plans it.
                 foreach (var source in identity.Sources)
                 {
-                    var publication = ShippedPrebuiltBundles.PublicationDirectoryOf(Path.Combine(identity.Directory, source.Name), logger);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var publication = ShippedPrebuiltBundles.ResolvePublicationPointer(
+                        Path.Combine(identity.Directory, source.Name), cancellationToken, logger, io).Directory;
                     var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
-                    if (File.Exists(sentinel))
+                    if (io.FileExists(sentinel))
                         File.Delete(sentinel);
                 }
+                cancellationToken.ThrowIfCancellationRequested();
                 delete(identity.Directory);
                 deletedIdentities++;
                 deletedBytes += identity.Bytes;
@@ -1117,6 +1260,12 @@ public static class PrebuiltBundleStore
                     identity.Identity, string.Join(",", identity.Sources.Select(s => s.Name)),
                     PrebuiltBundleSweepPlan.Mb(identity.Bytes), identity.NewestSealUtc?.ToString("O", CultureInfo.InvariantCulture) ?? "never");
                 lines.Add($"{nowUtc:O}   removed {identity.Identity} {PrebuiltBundleSweepPlan.Mb(identity.Bytes)} sources={string.Join(",", identity.Sources.Select(s => s.Name))}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // The pool's cancel, not a failed removal: the interrupted-ledger path, never failedDeletes.
+                ThrowIfLeaving(deletedIdentities, 0, 0, 0, deletedBytes, failedDeletes);
+                throw;
             }
             catch (Exception ex)
             {
@@ -1137,11 +1286,13 @@ public static class PrebuiltBundleStore
         var deletedGenerations = 0;
         foreach (var generation in plan.CollectableGenerations)
         {
+            ThrowIfLeaving(deletedIdentities, deletedGenerations, 0, 0, deletedBytes, failedDeletes);
             try
             {
                 var sentinel = Path.Combine(generation.Directory, ShippedPrebuiltBundles.CompletionSentinelFileName);
-                if (File.Exists(sentinel))
+                if (io.FileExists(sentinel))
                     File.Delete(sentinel);
+                cancellationToken.ThrowIfCancellationRequested();
                 delete(generation.Directory);
                 deletedGenerations++;
                 deletedBytes += generation.Bytes;
@@ -1152,6 +1303,11 @@ public static class PrebuiltBundleStore
                     generation.NewestWriteUtc.ToString("O", CultureInfo.InvariantCulture),
                     ShippedPrebuiltBundles.PublicationPointerFileName);
                 lines.Add($"{nowUtc:O}   removed generation {generation.Directory} {PrebuiltBundleSweepPlan.Mb(generation.Bytes)}");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                ThrowIfLeaving(deletedIdentities, deletedGenerations, 0, 0, deletedBytes, failedDeletes);
+                throw;
             }
             catch (Exception ex)
             {
@@ -1166,6 +1322,7 @@ public static class PrebuiltBundleStore
         var retiredVersions = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
         foreach (var marker in plan.CollectableMarkers)
         {
+            ThrowIfLeaving(deletedIdentities, deletedGenerations, deletedMarkers, 0, deletedBytes, failedDeletes);
             try
             {
                 File.Delete(marker.Path);
@@ -1189,6 +1346,7 @@ public static class PrebuiltBundleStore
         {
             if (markerRetiring.Contains(surface.Version) && !retiredVersions.Contains(surface.Version))
                 continue;
+            ThrowIfLeaving(deletedIdentities, deletedGenerations, deletedMarkers, deletedSurfaces, deletedBytes, failedDeletes);
             try
             {
                 File.Delete(surface.Path);

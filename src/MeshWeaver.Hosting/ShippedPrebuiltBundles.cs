@@ -330,7 +330,7 @@ public static class ShippedPrebuiltBundles
     /// element reaches a check, so on a large or slow share the listing itself was invisible to the
     /// drain (review on #5452).
     /// </summary>
-    private static List<string> OrdinalListing(IEnumerable<string> entries, CancellationToken cancellationToken)
+    internal static List<string> OrdinalListing(IEnumerable<string> entries, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var listed = new List<string>();
