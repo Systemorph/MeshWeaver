@@ -37,6 +37,12 @@ THE RULE (all three must hold, or the check is RED — it never skips)
    a fix), stays reviewed. The internal reviewer's clean review, a degradation run or elapsed time
    is not that evidence; the waiver label is the escape. With findings, the threads prove the
    review (review-once).
+   🚨 NARROWED by policy `review-on-real-change`: an earlier head's Copilot review counts only when it
+   COVERS the head — every commit since it a merge of the default branch that left the pull request's
+   own diff unchanged (`copilot_currency` over `merge_only_same_diff`, read by `read_copilot_carry`).
+   A head whose own diff changed is RED ("THIS HEAD OWES A REVIEW", `Verdict.stale`) until its own
+   review lands — the review-on-change lane (`--request-review-on-change`, node-repo-request-review.yml)
+   requests it — and is waited for like a review that has not landed. The waiver still releases it.
 2. Every inline thread the reviewer STARTED (a comment by the reviewer with no `in_reply_to_id`)
    has at least one reply by a non-bot account (`user.type == "User"`). A reply that says nothing
    counts; that limitation is known and accepted (the decision on #4299).
@@ -148,6 +154,9 @@ USAGE
         (the negative control: never carry a review over a clean merge of the base branch — see carry_over)
   check-review-answered.py --repo O/R --stage-advance --workflow ci.yml (--head-sha S | --pr N | --sweep)
         (node-repo-stage-advance.yml: re-run a waiting run's failed jobs now that stage 1 is green)
+  check-review-answered.py --repo O/R --pr N --request-review-on-change [--before <sha>]
+        (node-repo-request-review.yml: request ONE Copilot review iff the head changed the pull
+         request's own diff since Copilot's last review — see review_request_action)
   check-review-answered.py --repo O/R --pr N --refresh-read-run --event E --run-id R --evaluated-at T
         (node-repo-review-answered.yml: a GREEN verdict on an event branch protection does not read
          re-runs the newest `pull_request` run, whose verdict it does read — see refresh_action)
@@ -192,9 +201,11 @@ to replay a merge. Every GitHub call is `gh api` (REST) with the token in GH_TOK
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import datetime
 import hashlib
+import io
 import json
 import os
 import re
@@ -308,6 +319,39 @@ class Verdict:
     #: waiver). A structured field for the same reason as `refused`: its remedy is a Copilot review,
     #: which no wait delivers (the ruleset requests one at open), so the wait must not run for it.
     not_copilot: str = ""
+    #: Policy `review-on-real-change`: set when a Copilot review LANDED, but on an earlier head, and the
+    #: pull request's own diff changed since (anything but a clean merge of the default branch) — the
+    #: head owes its own review. Structured for the same reason as `refused`: its remedy is a review
+    #: that ARRIVES (the review-on-change lane requests it), so it is waited for, never "reply to threads".
+    stale: str = ""
+
+
+def newest_landed_copilot_review(reviews, as_of: str | None = None) -> dict | None:
+    """The newest landed Copilot review on the pull request, whichever head it reviewed."""
+    mine = landed_copilot_reviews(reviews, as_of)
+    return max(mine, key=lambda r: (r.get("submitted_at") or "", r.get("id") or 0)) if mine else None
+
+
+def copilot_currency(reviews, head: str, carry: Carry | None, as_of: str | None = None) -> tuple[dict | None, str, str]:
+    """Policy `review-on-real-change` — (the Copilot review that covers `head`, a note, '') or
+    (None, '', why the head owes a review), or (None, '', '') when no Copilot review has landed at all
+    (condition 1 decides that). A review covers the head it was submitted on, and a LATER head only
+    when `carry` proves — from the repository — that every commit since is a merge of the default
+    branch that left the pull request's own diff unchanged (`copilot_carry_over`). Pure."""
+    on_head = copilot_review_on(reviews, head, as_of)
+    if on_head is not None:
+        return on_head, "", ""
+    latest = newest_landed_copilot_review(reviews, as_of)
+    if latest is None:
+        return None, "", ""
+    reviewed = str(latest.get("commit_id") or "")
+    if carry is not None and carry.ok and carry.from_head == reviewed and reviewed:
+        return latest, carry.why, ""
+    why = carry.why if carry is not None and carry.from_head in ("", reviewed) else (
+        f"Copilot's latest review ({latest.get('id')}) is of {reviewed[:10] or '(unknown)'}, not of head {head[:10]}, "
+        "and nothing showed that only the default branch was merged in since")
+    return None, "", (f"head {head[:10]} owes its own Copilot review — the pull request's own diff changed since Copilot "
+                      f"reviewed it (policy review-on-real-change): {why}")
 
 
 def is_degradation_app(app: dict | None) -> bool:
@@ -336,11 +380,16 @@ def degradation_of(check_runs, as_of: str | None) -> dict | None:
 
 
 def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str | None = None,
-             check_runs: list | tuple = (), files: list | None = None, commits: list | None = None) -> Verdict:
+             check_runs: list | tuple = (), files: list | None = None, commits: list | None = None,
+             copilot_carry: Carry | None = None) -> Verdict:
+    """`copilot_carry` is the adapter's `copilot_carry_over` from Copilot's newest landed review to the
+    head (None when there is nothing to carry, or it was not computed — then an earlier head's review
+    does NOT cover the head: policy review-on-real-change fails closed)."""
     reasons: list[str] = []
     notes: list[str] = []
     refused: list[str] = []
     stale_reported = ""
+    owes_review = ""
 
     # 3 (checked first: an incomplete listing makes every other statement unreliable)
     incomplete = listing_incomplete(pr, comments)
@@ -374,6 +423,23 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
                      + ((" — reviewed, nothing found: a Copilot review with zero findings"
                          + ("" if head and on == head[:10] else f" (of an earlier head; current head {head[:10] or '(unknown)'})")
                          + " (policy review-evidence-any-head)") if not roots else ""))
+        # 1b — policy review-on-real-change: the review must COVER this head. An earlier head's
+        # Copilot review covers it only across clean merges of the default branch; a head whose own
+        # diff changed owes its own review (the review-on-change lane requests it), and the
+        # threads of the earlier review do not stand in for it.
+        _covering, carry_note, stale = copilot_currency(reviews, head, copilot_carry, as_of)
+        if carry_note:
+            notes.append(carry_note)
+        if stale:
+            granted, message = waiver_holder(waiver, as_of)
+            generated, generated_why = generated_only(pr, files, commits) if is_generated_bot(pr.get("user")) else (False, "")
+            if generated:
+                notes.append(f"NOT OWED: {stale}. {generated_why} — nothing to review (generated_only)")
+            elif granted:
+                notes.append(f"WAIVED: {stale}. {message}")
+            else:
+                reasons.append(stale)
+                owes_review = stale
     else:
         if not_copilot:
             why = ("no Copilot review of this pull request — \"reviewed, nothing found\" is ONLY a completed Copilot review "
@@ -428,7 +494,7 @@ def evaluate(pr: dict, reviews: list, comments: list, waiver: Waiver, as_of: str
         reasons.append(f"{len(unanswered)} of {len(roots)} thread(s) opened by the automatic reviewer have no reply from a person")
 
     return Verdict(green=not reasons, reasons=tuple(reasons), notes=tuple(notes), unanswered=unanswered,
-                   refused=tuple(refused), not_copilot=stale_reported)
+                   refused=tuple(refused), not_copilot=stale_reported, stale=owes_review)
 
 
 def listing_incomplete(pr: dict, comments: list) -> str | None:
@@ -501,11 +567,14 @@ def waiting_would_help(verdict: Verdict) -> bool:
     summary, and it spends a runner for it. The structured field is the discriminator — the same
     reason `Verdict.refused` exists rather than being derived back out of the text.
     """
+    # 🚨 A head that OWES its own review (policy review-on-real-change, `Verdict.stale`) is waited for
+    # exactly like a review that has not landed: the review-on-change lane requested it on the push
+    # that changed the diff, and its arrival starts no run here (the same `action_required` wall).
     return (not verdict.green
             and not verdict.refused
             and not verdict.not_copilot
             and len(verdict.reasons) == 1
-            and "has not landed" in verdict.reasons[0])
+            and (bool(verdict.stale) or "has not landed" in verdict.reasons[0]))
 
 
 UNANSWERED_REASON = "no reply from a person"
@@ -864,40 +933,68 @@ def find_reviewed_ancestor(head: str, own_commits: dict, runs_of) -> tuple[str |
     return None, None, (), f"no reviewed head within {CARRY_MAX_WALK} merges of {head[:10]}"
 
 
-def carry_over(head: str, new_cmp: dict, old_cmp: dict, old: str, run: dict) -> Carry:
-    """Conditions (b) and (c) for a reviewed ancestor `old` that (a) found. `new_cmp`/`old_cmp` are
-    compare(base...head) / compare(base...old) with COMPLETE `commits` (the adapter pages them). Pure."""
-    def no(why: str) -> Carry:
-        return Carry(False, f"no carry-over from reviewed head {old[:10]}: {why} — the head owes a fresh review")
+def merge_only_same_diff(head: str, new_cmp: dict, old_cmp: dict, old: str) -> tuple[str, str]:
+    """('', evidence) when every commit on the pull request at `head` that was not on it at `old` is a
+    MERGE commit and the pull request's own diff (merge-base(base, x)..x) is byte-identical at both —
+    i.e. only the base branch was merged in. (why not, '') otherwise. `new_cmp`/`old_cmp` are
+    compare(base...head) / compare(base...old) with COMPLETE `commits` (the adapter pages them).
+    ONE implementation, shared by the internal-review carry-over (`carry_over`), the merge gate's
+    Copilot-review currency (`copilot_carry_over`) and the review-on-change lane
+    (`review_request_action`), so the three can never disagree about what a "real change" is. Pure."""
     commits_new = {c.get("sha"): c for c in new_cmp.get("commits") or []}
     commits_old = {c.get("sha") for c in old_cmp.get("commits") or []}
     for name, cmp_, got in (("head", new_cmp, len(commits_new)), ("reviewed head", old_cmp, len(commits_old))):
         if not isinstance(cmp_.get("total_commits"), int) or got < cmp_["total_commits"]:
-            return no(f"the {name}'s commit listing returned {got} of {cmp_.get('total_commits')} commits")
+            return f"the {name}'s commit listing returned {got} of {cmp_.get('total_commits')} commits", ""
     if old not in commits_old:
-        return no("the reviewed head is no longer ahead of the base branch, so its diff is not comparable")
+        return "the reviewed head is no longer ahead of the base branch, so its diff is not comparable", ""
     if head not in commits_new:
-        return no("the head is not ahead of the base branch")
+        return "the head is not ahead of the base branch", ""
+    if old not in commits_new:
+        # A force-push that dropped the reviewed head: whatever replaced it was never reviewed.
+        return "the reviewed head is no longer on the pull request (its history was rewritten)", ""
     fresh = [c for s, c in commits_new.items() if s not in commits_old]
     content = [c for c in fresh if len(c.get("parents") or []) < 2]
     if content:
-        return no(f"{len(content)} non-merge commit(s) since it (first: {str(content[0].get('sha'))[:10]})")
+        return f"{len(content)} non-merge commit(s) since it (first: {str(content[0].get('sha'))[:10]})", ""
     id_old, why_old = pr_diff_id(old_cmp.get("files"))
     id_new, why_new = pr_diff_id(new_cmp.get("files"))
     if id_old is None or id_new is None:
-        return no(f"the pull request's diff cannot be fingerprinted ({why_old or why_new})")
+        return f"the pull request's diff cannot be fingerprinted ({why_old or why_new})", ""
     mb_old = str((old_cmp.get("merge_base_commit") or {}).get("sha") or "")[:10]
     mb_new = str((new_cmp.get("merge_base_commit") or {}).get("sha") or "")[:10]
     if id_old != id_new:
-        return no(f"the pull request's own diff changed — patch-id {id_old[:16]} ({mb_old}..{old[:10]}) vs "
-                  f"{id_new[:16]} ({mb_new}..{head[:10]}): a conflict resolution or a change inside the merge altered it")
+        return (f"the pull request's own diff changed — patch-id {id_old[:16]} ({mb_old}..{old[:10]}) vs "
+                f"{id_new[:16]} ({mb_new}..{head[:10]}): a new commit, a conflict resolution or a change inside the merge altered it"), ""
+    merges = ", ".join(str(c.get("sha"))[:10] for c in fresh) or "none"
+    return "", (f"the {len(fresh)} commit(s) since it are all merges of the base branch ({merges}), and the pull request's "
+                f"own diff is byte-identical — patch-id {id_new[:16]} over {len(new_cmp.get('files') or [])} file(s), "
+                f"{mb_old}..{old[:10]} = {mb_new}..{head[:10]}")
+
+
+def carry_over(head: str, new_cmp: dict, old_cmp: dict, old: str, run: dict) -> Carry:
+    """Conditions (b) and (c) for a reviewed ancestor `old` that (a) found (`merge_only_same_diff`). Pure."""
+    why, evidence = merge_only_same_diff(head, new_cmp, old_cmp, old)
+    if why:
+        return Carry(False, f"no carry-over from reviewed head {old[:10]}: {why} — the head owes a fresh review")
     title = ((run.get("output") or {}).get("title") or "").strip()
-    merges = ", ".join(str(c.get("sha"))[:10] for c in fresh)
     return Carry(True, (f"review CARRIED from head {old[:10]} (`{DEGRADATION_CHECK_NAME}` check run {run.get('id')}: "
-                        f"{run.get('conclusion')} \"{title}\") to {head[:10]}: the {len(fresh)} commit(s) since it are all merges "
-                        f"of the base branch ({merges}), and the pull request's own diff is byte-identical — patch-id "
-                        f"{id_new[:16]} over {len(new_cmp.get('files') or [])} file(s), {mb_old}..{old[:10]} = {mb_new}..{head[:10]} "
+                        f"{run.get('conclusion')} \"{title}\") to {head[:10]}: {evidence} "
                         "(policy review-carries-over-clean-base-merge)"), old, run)
+
+
+def copilot_carry_over(head: str, new_cmp: dict, old_cmp: dict, review: dict) -> Carry:
+    """Policy `review-on-real-change`: does Copilot's review of `review.commit_id` still cover `head`?
+    It does exactly when only the default branch was merged in since (`merge_only_same_diff`). `run`
+    of the returned Carry is the review itself. Pure."""
+    old = str(review.get("commit_id") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", old):
+        return Carry(False, f"Copilot review {review.get('id')} names no reviewed commit, so it cannot be shown to cover {head[:10]}")
+    why, evidence = merge_only_same_diff(head, new_cmp, old_cmp, old)
+    what = f"Copilot's review {review.get('id')} of {old[:10]}" if review.get("id") else f"the previous head {old[:10]}"
+    if why:
+        return Carry(False, f"{what} does not cover head {head[:10]}: {why}", old, review)
+    return Carry(True, f"{what} COVERS head {head[:10]}: {evidence} (policy review-on-real-change)", old, review)
 
 
 def arm_readiness(pr: dict, comments: list, check_runs, required=None, head_runs=None, carry: Carry | None = None,
@@ -1344,6 +1441,113 @@ def refresh_action(event: str, own_run_id, evaluated_at: str, repo: str, pr: dic
                      f"{candidate.get('id')}, which concluded {candidate.get('conclusion')} before it — re-running the whole run")
 
 
+# ─────────────────────────────── REVIEW ON REAL CHANGE (pure) ───────────────────────────────
+#
+# Policy `review-on-real-change` (Doc/Architecture/ReviewFindingsAnswered → "A review on every real
+# change, none for a merge of main"). The rulesets' `copilot_code_review` rule runs with
+# `review_on_push: false`: Copilot reviews a pull request when it opens, and a push that ONLY merges
+# the default branch must not cost a review round (new threads, a red `Automatic review answered`).
+# A push that changes the pull request's own diff still gets one — this lane requests it, with ONE
+# GraphQL `requestReviews` call (REST `requested_reviewers` refuses bots). What "only merged the
+# default branch" means is `merge_only_same_diff`, the SAME predicate the merge gate uses to decide
+# whether Copilot's last review still covers the head (`copilot_currency`), so the lane requests a
+# review exactly when the gate would otherwise hold the head for one.
+#
+# It compares the head against Copilot's newest LANDED review of the pull request — not merely the
+# previous head — so a real change whose review never landed is not forgotten by a merge-only push
+# on top of it. With no landed Copilot review at all (the review requested at open is still pending,
+# or was refused) it compares against the previous head (`before` of the push).
+
+#: The reviewer's GraphQL node id, read off `user.node_id` of its reviews (175728472 →
+#: BOT_kgDOCnlnWA, measured on #7140, 2026-10-24). A live read from the pull request's own reviews
+#: wins; this is the value when the pull request has none.
+COPILOT_BOT_NODE_ID = "BOT_kgDOCnlnWA"
+REQUEST_REVIEWS_MUTATION = (
+    "mutation($pr: ID!, $bot: ID!) { requestReviews(input: {pullRequestId: $pr, botIds: [$bot], union: true}) "
+    "{ pullRequest { number reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on Bot { id login } } } } } } }")
+
+
+def is_copilot_account(user: dict | None) -> bool:
+    """Copilot as a REQUESTED reviewer or a timeline actor: id 175728472, or the login GitHub prints for it
+    there (`Copilot`, `copilot-pull-request-reviewer`, with or without `[bot]`)."""
+    if not user:
+        return False
+    login = str(user.get("login") or "").removesuffix("[bot]")
+    return user.get("id") == REVIEWER_ACCOUNT_ID or login in ("Copilot", "copilot-pull-request-reviewer")
+
+
+def copilot_review_pending(timeline) -> bool:
+    """True when the newest Copilot event on the pull request's timeline is a `review_requested` — a
+    review is asked for and has not come back (no `reviewed`, no `review_request_removed` after it).
+    Read off the REST timeline because `requested_reviewers` is not relied on to list a bot. Pure."""
+    state = False
+    def stamp(e):
+        return (str(e.get("created_at") or e.get("submitted_at") or ""), e.get("id") or 0)
+    for e in sorted((e for e in timeline or () if isinstance(e, dict)), key=stamp):
+        kind = e.get("event")
+        if kind == "review_requested" and is_copilot_account(e.get("requested_reviewer")):
+            state = True
+        elif kind == "review_request_removed" and is_copilot_account(e.get("requested_reviewer")):
+            state = False
+        elif kind == "reviewed" and is_copilot_account(e.get("user")):
+            state = False
+    return state
+
+
+def review_request_action(pr: dict, reviews, carry: Carry | None, repo: str, pending: bool) -> tuple[str, str]:
+    """('request' | 'none' | 'manual', why) for the pull request's CURRENT head. Pure; idempotent by
+    construction — once requested, `pending` says so until the review lands, and once it lands the
+    head is reviewed, so a re-delivered event or a second run requests nothing.
+
+    `carry` is `merge_only_same_diff` from the reference head (Copilot's newest landed review, else
+    the push's previous head) to the head, as a Carry; None when there is no reference to compare."""
+    number, head = pr.get("number"), str((pr.get("head") or {}).get("sha") or "")
+    if pr.get("state") not in (None, "open"):
+        return "none", f"#{number} is {pr.get('state')}"
+    if pr.get("draft"):
+        return "none", (f"#{number} is a draft — its review is the ruleset's when it is marked ready for review "
+                        "(`review_draft_pull_requests` decides drafts), never this lane's")
+    author = pr.get("user") or {}
+    if author.get("type") == "Bot":
+        # Measured: Copilot's ruleset review does not reach an App's or Dependabot's own pull requests
+        # (generated_only; the standing Dependabot waiver), so a request here would buy a refusal or nothing.
+        # Their review condition is the merge gate's (generated_only, or a maintainer's waiver).
+        return "none", (f"#{number} was opened by the App @{author.get('login')} — Copilot does not review an App's own pull "
+                        "request; the merge gate decides its review condition (generated_only, or the waiver label)")
+    head_repo = str(((pr.get("head") or {}).get("repo") or {}).get("full_name") or "")
+    if head_repo and head_repo != repo:
+        return "manual", (f"#{number} comes from the fork {head_repo}: a fork's token cannot request a review, so a maintainer "
+                          f"requests the Copilot review for head {head[:10]} if its own diff changed")
+    on_head = copilot_review_on(reviews, head)
+    if on_head is not None:
+        return "none", f"Copilot already reviewed head {head[:10]} (review {on_head.get('id')})"
+    answered = [r for r in reviews or () if (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID
+                and (r.get("user") or {}).get("type") == "Bot" and r.get("commit_id") == head and r.get("state") != "PENDING"]
+    if answered:
+        # A REFUSAL (or an empty body) on this very head is Copilot's answer to a request already made.
+        # Re-requesting it on every sweep would loop on a quota refusal; a maintainer re-requests it.
+        return "none", (f"Copilot already ANSWERED head {head[:10]} without a review (review {answered[-1].get('id')}: "
+                        f"\"{first_line(answered[-1].get('body'))}\") — a maintainer re-requests it, never this lane")
+    if pending:
+        # 🚨 Not a permanent "nothing to do" (#7142 review): an in-flight review may land on the PREVIOUS
+        # head. The sweep (`--request-review-sweep`, on the caller's schedule) re-judges the pull request
+        # once it lands and requests again when that review does not cover the head.
+        return "none", (f"a Copilot review is already requested and pending on #{number} — if it lands on an earlier head, "
+                        "the scheduled sweep requests one for this head")
+    if carry is not None and carry.ok:
+        return "none", (f"ONLY THE DEFAULT BRANCH WAS MERGED IN — no review requested for head {head[:10]}: {carry.why}")
+    why = carry.why if carry is not None else f"there is no earlier head of #{number} to compare head {head[:10]} against"
+    return "request", f"head {head[:10]} changed the pull request's own diff — requesting a Copilot review: {why}"
+
+
+def requested_copilot(response) -> bool:
+    """True when the mutation's own response lists Copilot among the pull request's review requests —
+    the positive success signal (the call returning is not one). Pure."""
+    nodes = ((((((response or {}).get("data") or {}).get("requestReviews") or {}).get("pullRequest") or {})
+              .get("reviewRequests") or {}).get("nodes")) or []
+    return any(is_copilot_account((n or {}).get("requestedReviewer")) for n in nodes)
+
+
 def pr_from_queue_ref(ref: str) -> int:
     m = QUEUE_REF.fullmatch(ref or "")
     if not m:
@@ -1384,6 +1588,24 @@ class Gh:
         if p.returncode != 0:
             raise ReadError(f"POST repos/{self.repo}/{path} failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
 
+    def graphql(self, query: str, variables: dict) -> dict:
+        """ONE GraphQL call — used for what REST cannot express (requesting a BOT reviewer), never in a
+        loop. gh exits non-zero when the response carries `errors`; that, and an `errors` key on a
+        zero exit, are both a ReadError."""
+        cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
+        for k, v in variables.items():
+            cmd += ["-f", f"{k}={v}"]
+        p = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if p.returncode != 0:
+            raise ReadError(f"GraphQL call failed ({p.returncode}): {(p.stderr or p.stdout).strip()[:600]}")
+        try:
+            data = json.loads(p.stdout)
+        except json.JSONDecodeError as e:
+            raise ReadError(f"GraphQL call did not return JSON: {e}") from e
+        if not isinstance(data, dict) or data.get("errors"):
+            raise ReadError(f"GraphQL call answered errors: {str((data or {}).get('errors'))[:600]}")
+        return data
+
     def role(self, login: str) -> str:
         data = self.api(f"collaborators/{login}/permission")
         return (data or {}).get("role_name") or ""
@@ -1423,7 +1645,8 @@ def read_inputs(gh: Gh, number: int, as_of: str | None):
         # Only for the generated-files App's own pull requests — what `generated_only` judges provenance by.
         files = gh.api(f"pulls/{number}/files?per_page=100", paginate=True)
         commits = gh.api(f"pulls/{number}/commits?per_page=100", paginate=True)
-    return pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs, files, commits
+    return (pr, reviews, comments, Waiver(present, events, roles), author_role, check_runs, files, commits,
+            read_copilot_carry(gh, pr, reviews, as_of))
 
 
 def read_arm_inputs(gh: Gh, number: int, carry: bool = True):
@@ -1481,6 +1704,46 @@ def internal_review_listing(gh: Gh, sha: str) -> list:
     return runs
 
 
+def base_tip(gh: Gh, pr: dict) -> str:
+    """The pull request's base branch's CURRENT tip sha; a failed or shapeless read raises."""
+    base_ref = str((pr.get("base") or {}).get("ref") or "")
+    if not base_ref:
+        raise ReadError("the pull request names no base branch")
+    branch = gh.api(f"branches/{urllib.parse.quote(base_ref, safe='')}")
+    base_sha = str(((branch or {}).get("commit") or {}).get("sha") or "")
+    if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+        raise ReadError(f"branches/{base_ref} reported no tip sha")
+    return base_sha
+
+
+def read_diff_carry(gh: Gh, pr: dict, old: str, review: dict) -> Carry:
+    """`copilot_carry_over` from `old` (a reviewed — or, for the review-on-change lane, the previous —
+    head) to the pull request's head, every input read through REST: the base tip, compare(base...head)
+    and compare(base...old). A failed read is a Carry that does NOT hold, never an exception: an
+    unprovable "only main was merged" is a real change (policy review-on-real-change fails closed)."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    try:
+        base_sha = base_tip(gh, pr)
+        return copilot_carry_over(head, read_compare(gh, base_sha, head), read_compare(gh, base_sha, old),
+                                  dict(review, commit_id=old))
+    except (ReadError, KeyError, TypeError, AttributeError) as e:
+        return Carry(False, f"whether only the default branch was merged in since {old[:10]} could not be read ({e})", old, review)
+
+
+def read_copilot_carry(gh: Gh, pr: dict, reviews, as_of: str | None = None) -> Carry | None:
+    """The merge gate's input for policy review-on-real-change: None when Copilot reviewed the head
+    itself or has not landed a review at all (nothing to carry); otherwise whether its newest landed
+    review covers the head (`read_diff_carry`). `--as-of` replays compare against the base branch as
+    it is NOW — the commits and diffs are immutable, only the merge base may differ."""
+    head = str((pr.get("head") or {}).get("sha") or "")
+    if copilot_review_on(reviews, head, as_of) is not None:
+        return None
+    latest = newest_landed_copilot_review(reviews, as_of)
+    if latest is None:
+        return None
+    return read_diff_carry(gh, pr, str(latest.get("commit_id") or ""), latest)
+
+
 def read_carry(gh: Gh, pr: dict, check_runs) -> Carry | None:
     """The carry-over for the pull request's head (policy review-carries-over-clean-base-merge), or None
     when the head has a real review of its own (nothing to carry). Every input comes from the
@@ -1491,13 +1754,7 @@ def read_carry(gh: Gh, pr: dict, check_runs) -> Carry | None:
     if real_review_run(check_runs, head) is not None:
         return None
     try:
-        base_ref = str((pr.get("base") or {}).get("ref") or "")
-        if not base_ref:
-            raise ReadError("the pull request names no base branch")
-        branch = gh.api(f"branches/{urllib.parse.quote(base_ref, safe='')}")
-        base_sha = str(((branch or {}).get("commit") or {}).get("sha") or "")
-        if not re.fullmatch(r"[0-9a-f]{40}", base_sha):
-            raise ReadError(f"branches/{base_ref} reported no tip sha")
+        base_sha = base_tip(gh, pr)
         new_cmp = read_compare(gh, base_sha, head)
         own = {c.get("sha"): c for c in new_cmp["commits"]}
         old, run, _walked, why = find_reviewed_ancestor(head, own, lambda sha: internal_review_listing(gh, sha))
@@ -1791,12 +2048,126 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
     return 0
 
 
+def run_request_review(repo: str, number: int, before: str | None, gh=None, sweep: bool = False) -> int:
+    """The review-on-change lane (policy review-on-real-change). Exit 0 when it requested a review and
+    GitHub's answer lists Copilot as requested, or had nothing to do (both printed, with why); 1 (RED,
+    named) when a read, the request or its confirmation failed. `gh` defaults to `Gh(repo)`; the
+    self-test injects a stub and asserts the ONE mutation it issues."""
+    try:
+        gh = gh if gh is not None else Gh(repo)
+        pr = gh.api(f"pulls/{number}")
+        if not isinstance(pr, dict) or pr.get("number") != number:
+            raise ReadError(f"pulls/{number} did not return pull request #{number}")
+        head = str((pr.get("head") or {}).get("sha") or "")
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise ReadError(f"pulls/{number} reported no head sha")
+        reviews = read_reviews(gh, number)
+        timeline = gh.api(f"issues/{number}/timeline?per_page=100", paginate=True)
+        if not isinstance(timeline, list):
+            raise ReadError(f"issues/{number}/timeline did not return a listing")
+        before = before if before and re.fullmatch(r"[0-9a-f]{40}", before) and before != head else ""
+        latest = newest_landed_copilot_review(reviews)
+        if sweep and (latest is None or copilot_review_on(reviews, head) is not None):
+            # The sweep exists for ONE state (#7142 review): a review requested for this head landed on an
+            # EARLIER one. No landed review at all is the opening review's business (the ruleset's), and a
+            # reviewed head needs nothing — so the sweep never re-asks those, every 15 minutes, forever.
+            print(f"  #{number}: {'no Copilot review has landed yet' if latest is None else 'the head is reviewed'} — nothing for the sweep")
+            return 0
+        if latest is not None and copilot_review_on(reviews, head) is None:
+            reference, ref_kind = str(latest.get("commit_id") or ""), f"Copilot's newest review ({latest.get('id')})"
+        elif latest is None and before:
+            reference, ref_kind = before, "the push's previous head (no Copilot review has landed yet)"
+        else:
+            reference, ref_kind = "", ""
+        carry = read_diff_carry(gh, pr, reference, latest or {}) if reference else None
+        if reference:
+            print(f"  compared head {head[:10]} against {ref_kind}: {reference[:10]}")
+        if before and before != reference:
+            # Logged, not decided on: this push's own before -> after reading, for the reader.
+            print(f"  this push: {before[:10]} -> {head[:10]}: {read_diff_carry(gh, pr, before, {}).why}")
+        action, why = review_request_action(pr, reviews, carry, repo, copilot_review_pending(timeline))
+        if action == "request":
+            now = str(((gh.api(f"pulls/{number}") or {}).get("head") or {}).get("sha") or "")
+            if now != head:
+                action, why = "none", (f"the head moved from {head[:10]} to {now[:10]} while this run read it — the run "
+                                       "for that push judges it")
+        if action == "request":
+            node = str(pr.get("node_id") or "")
+            if not node:
+                raise ReadError(f"pulls/{number} reported no node_id, so the review cannot be requested")
+            bot = next((str((r.get("user") or {}).get("node_id")) for r in reviews
+                        if (r.get("user") or {}).get("id") == REVIEWER_ACCOUNT_ID and (r.get("user") or {}).get("node_id")),
+                       COPILOT_BOT_NODE_ID)
+            response = gh.graphql(REQUEST_REVIEWS_MUTATION, {"pr": node, "bot": bot})
+            if not requested_copilot(response):
+                raise ReadError(f"requestReviews for #{number} returned, but its answer lists no Copilot review request "
+                                f"(bot {bot}) — the review was NOT requested: {json.dumps(response)[:400]}")
+    except (ReadError, KeyError, TypeError) as e:
+        print(f"::error::the Copilot review of #{number} was NOT requested (policy review-on-real-change): {e}")
+        return 1
+    if action == "request":
+        print(f"::notice::#{number}: {why} — requested; GitHub's answer lists Copilot as requested")
+    elif action == "manual":
+        print(f"::warning::#{number}: {why}")
+    else:
+        print(f"  #{number}: {why}")
+    _append("GITHUB_STEP_SUMMARY", f"Review on real change — #{number}: {action} — {why}\n")
+    return 0
+
+
+#: At most this many pull requests are judged per sweep run (each costs ~5 REST reads, two compares more).
+SWEEP_MAX_PRS = 40
+
+
+def sweep_window(numbers: list, now_epoch: int, size: int = SWEEP_MAX_PRS, period_s: int = 900) -> list:
+    """The slice of `numbers` (sorted) this sweep run judges. Pure. At most `size`; with more open
+    pull requests than that, the window ROTATES with the 15-minute schedule slot, so every open pull
+    request is judged within ceil(n / size) runs — a fixed "newest 40" never reconsidered the oldest
+    (#7142 review)."""
+    if len(numbers) <= size:
+        return list(numbers)
+    windows = -(-len(numbers) // size)
+    start = (now_epoch // period_s) % windows * size
+    return list(numbers[start:start + size])
+
+
+def run_request_review_sweep(repo: str, gh=None, now_epoch: int | None = None) -> int:
+    """The scheduled half of the review-on-change lane (#7142 review). A `synchronize` that finds a
+    Copilot review already PENDING requests nothing — and that pending review may then land on the
+    PREVIOUS head, leaving the current one stale with no further event: Copilot's own review event
+    starts no run here (`waiting_would_help`). So the caller's `schedule` re-judges every open,
+    non-draft pull request with `run_request_review(..., sweep=True)`, which acts only when a landed
+    review does not cover the head and nothing is pending. Exit 1 when the listing or any one
+    pull request's judgement failed (every failure named); 0 otherwise."""
+    gh = gh if gh is not None else Gh(repo)
+    try:
+        pulls = gh.api("pulls?state=open&per_page=100", paginate=True)
+        if not isinstance(pulls, list):
+            raise ReadError("pulls?state=open did not return a listing")
+    except ReadError as e:
+        print(f"::error::the review-on-change sweep cannot list open pull requests: {e}")
+        return 1
+    numbers = sorted(p["number"] for p in pulls if isinstance(p, dict) and not p.get("draft") and p.get("number"))
+    if len(numbers) > SWEEP_MAX_PRS:
+        window = sweep_window(numbers, int(time.time()) if now_epoch is None else now_epoch)
+        print(f"::notice::{len(numbers)} open pull requests — this sweep judges {len(window)} ({window[0]}..{window[-1]}); "
+              f"the window rotates every run, so each is judged within {-(-len(numbers) // SWEEP_MAX_PRS)} runs")
+        numbers = window
+    print(f"sweep: judging {len(numbers)} open non-draft pull request(s): {numbers}")
+    failed = [n for n in numbers if run_request_review(repo, n, None, gh=gh, sweep=True) != 0]
+    if failed:
+        print(f"::error::the review-on-change sweep could not judge {failed}")
+    return 1 if failed else 0
+
+
 def render(number: int, pr: dict, verdict: Verdict, author_role: str | None, as_of: str | None) -> str:
     head = f"#{number} ({'draft' if pr.get('draft') else pr.get('state')}) head {str((pr.get('head') or {}).get('sha'))[:10]}"
     state = ("GREEN" if verdict.green else
              "RED — UNREVIEWABLE (the reviewer REFUSED to review this pull request)" if verdict.refused else
              "RED — NO COPILOT REVIEW (the clean review on file is not a Copilot review of this pull request)"
-             if verdict.not_copilot else "RED")
+             if verdict.not_copilot else
+             "RED — THIS HEAD OWES A REVIEW (its own diff changed since Copilot's last review)"
+             if verdict.stale else "RED")
     lines = [f"check-review-answered: {head}{' as of ' + as_of if as_of else ''} — {state}"]
     if author_role is not None:
         lines.append(f"  waiver path readable: author @{(pr.get('user') or {}).get('login')} holds `{author_role or 'none'}`")
@@ -1838,6 +2209,15 @@ def guidance(verdict: Verdict) -> list[str]:
                    "pending after the latest push — let it land; do not re-request it on top. Only if none arrives (the "
                    "reviewer refused or cannot review this change), a maintainer then re-requests the Copilot review, or applies "
                    f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
+    elif verdict.stale:
+        # Policy review-on-real-change. Pushes that only merge the default branch never owe a review;
+        # this head changed the pull request's own diff, so it does — and the review-on-change lane
+        # requested it on that push (request-review-on-change.yml / node-repo-request-review.yml).
+        out.append("a Copilot review of THIS head — the pull request's own diff changed since Copilot's last review, so the "
+                   "review-on-change lane requested one on the push that changed it; let it land and answer its threads. "
+                   "A push that only merges the default branch never owes one. If none arrives (the lane's run is red, or "
+                   "the reviewer refused), a maintainer re-requests the Copilot review, or applies "
+                   f"the `{WAIVER_LABEL}` label — never an agent, and never automatically.")
     elif "has not landed" in text:
         out.append("the automatic review must land. It usually arrives minutes after the pull request opens or after each push; if the "
                    "reviewer refused (quota) or cannot review this change, a maintainer re-requests the review, or applies "
@@ -1857,7 +2237,9 @@ def summary_markdown(number: int, verdict: Verdict) -> str:
              else "❌ red — **unreviewable right now**: the reviewer refused to review this pull request"
              if verdict.refused
              else "❌ red — **no Copilot review**: the clean review on file is not a Copilot review of this pull request"
-             if verdict.not_copilot else "❌ red")
+             if verdict.not_copilot
+             else "❌ red — **this head owes a review**: the pull request's own diff changed since Copilot's last review"
+             if verdict.stale else "❌ red")
     out = [f"### Automatic review answered — #{number}: {state}", ""]
     out += [f"- {r}" for r in verdict.reasons] + [f"- {n}" for n in verdict.notes]
     guide = guidance(verdict)
@@ -1893,11 +2275,11 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
     settled_for = 0.0
     while True:
         try:
-            pr, reviews, comments, waiver, author_role, check_runs, files, commits = read_inputs(gh, number, as_of)
+            pr, reviews, comments, waiver, author_role, check_runs, files, commits, copilot_carry = read_inputs(gh, number, as_of)
         except (ReadError, KeyError) as e:
             print(f"::error::check-review-answered cannot read the review of #{number}, so it cannot say it was answered: {e}")
             return 1
-        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits)
+        verdict = evaluate(pr, reviews, comments, waiver, as_of, check_runs, files, commits, copilot_carry)
         left = deadline - time.monotonic()
         if waiting_would_help(verdict) and left > POLL_SECONDS:
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
@@ -1988,12 +2370,12 @@ def self_test() -> int:
 
     def case(name: str, expect: tuple[str, ...], pr, reviews, comments, waiver=NO_WAIVER, as_of=None,
              mention: tuple[str, ...] = (), says: tuple[str, ...] = (), never_says: tuple[str, ...] = (),
-             check_runs=()):
+             check_runs=(), carry=None):
         """`says`/`never_says` assert what the READER is told — the guidance line and the step
         summary — not just the verdict. #4730 was entirely about those two strings being wrong while
         the verdict was right, so a case that checks only `reasons` cannot see it."""
         nonlocal failures
-        v = evaluate(pr, reviews, comments, waiver, as_of, check_runs)
+        v = evaluate(pr, reviews, comments, waiver, as_of, check_runs, copilot_carry=carry)
         text = "\n".join(v.reasons + v.notes)
         # 🚨 render() is IN here (#4730 review). Without it the run headline — the first of the
         # three surfaces the doc promises — could be deleted with every case still green.
@@ -2012,6 +2394,14 @@ def self_test() -> int:
     answers = [_comment(11, PERSON, 1, "2026-09-14T13:00:00Z"), _comment(12, PERSON, 2, "2026-09-14T13:01:00Z"),
                _comment(13, PERSON, 3, "2026-09-14T13:02:00Z")]
     GREEN: tuple[str, ...] = ()
+    # Policy review-on-real-change: what the adapter's `copilot_carry_over` hands the gate for a head
+    # that differs from Copilot's reviewed head `b…` — only by a clean main-merge (COVERS), or by a
+    # real change (NOT_COVERED). The carry's own derivation is proven further down, from commits.
+    OWES = "owes its own Copilot review"
+    COVERS = Carry(True, "Copilot's review 61 of bbbbbbbbbb COVERS head aaaaaaaaaa: the 1 commit(s) since it are all merges "
+                         "of the base branch (cccccccccc) … (policy review-on-real-change)", "b" * 40)
+    NOT_COVERED = Carry(False, "Copilot's review 61 of bbbbbbbbbb does not cover head aaaaaaaaaa: 1 non-merge commit(s) since it",
+                        "b" * 40)
 
     # condition 1 — has the review landed?
     case("no review at all", (NOT_LANDED,), _pr(0), [], [])
@@ -2091,15 +2481,37 @@ def self_test() -> int:
     older_clean = dict(_review(rid=61), commit_id="b" * 40)
     case("EVIDENCE: a clean Copilot review of the CURRENT head -> green, and named as such", GREEN, _pr(0), [_review()], [],
          mention=("reviewed, nothing found", EVIDENCE), never_says=("NO COPILOT REVIEW", "earlier head"))
-    case("EVIDENCE: a clean Copilot review of an EARLIER head, then a push -> green (no re-review per push)", GREEN,
-         _pr(0), [older_clean], [], mention=("reviewed, nothing found", "earlier head", "bbbbbbbbbb", EVIDENCE),
-         never_says=("NO COPILOT REVIEW", "NO REVIEW OF THIS HEAD", "re-requests the Copilot review"))
+    # 🔁 Policy review-on-real-change (supersedes "no re-review per push" for a REAL change): an earlier
+    # head's review covers the head only across clean merges of the default branch.
+    case("REAL CHANGE: a clean review of an EARLIER head, then a MAIN-ONLY merge -> green, the cover named", GREEN,
+         _pr(0), [older_clean], [], carry=COVERS,
+         mention=("reviewed, nothing found", "earlier head", "bbbbbbbbbb", EVIDENCE, "COVERS head aaaaaaaaaa"),
+         never_says=("NO COPILOT REVIEW", "OWES A REVIEW", "re-requests the Copilot review"))
+    case("REAL CHANGE NEG: a clean review of an EARLIER head, then a REAL change -> red, the head owes a review", (OWES,),
+         _pr(0), [older_clean], [], carry=NOT_COVERED, mention=("1 non-merge commit(s)",),
+         says=("RED — THIS HEAD OWES A REVIEW", "this head owes a review", "review-on-change lane"),
+         never_says=("RED — UNREVIEWABLE", "reply to each unanswered thread"))
+    case("REAL CHANGE NEG: an earlier head's review and NO carry computed -> red (fails closed)", (OWES,),
+         _pr(0), [older_clean], [], carry=None, mention=("nothing showed that only the default branch",))
+    case("REAL CHANGE NEG: a carry from ANOTHER head does not cover -> red", (OWES,),
+         _pr(0), [older_clean], [], carry=Carry(True, "covers", "c" * 40))
+    case("REAL CHANGE: the real change's OWN review lands -> green (what the red waits for)", GREEN,
+         _pr(0), [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], carry=NOT_COVERED,
+         never_says=("OWES A REVIEW",))
+    case("REAL CHANGE: the waiver releases a head that owes a review", GREEN, _pr(0, [WAIVER_LABEL]), [older_clean], [],
+         Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), carry=NOT_COVERED, mention=("WAIVED", OWES))
+    v_owes = evaluate(_pr(0), [older_clean], [], NO_WAIVER, copilot_carry=NOT_COVERED)
+    v_three = evaluate(_pr(3), [older_clean], three, NO_WAIVER, copilot_carry=NOT_COVERED)
+    ok = waiting_would_help(v_owes) and not waiting_would_help(v_three)
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'REAL CHANGE: a head owing its review is waited for; owing + unanswered is not':60} "
+          f"owes={waiting_would_help(v_owes)} owes+threads={waiting_would_help(v_three)}")
     case("EVIDENCE NEG: no review EVER (no review object at all) -> red", (NOT_LANDED,), _pr(0), [], [],
          never_says=("reviewed, nothing found",))
     case("EVIDENCE NEG: a REFUSAL on an earlier head, then a push -> still red (a refusal is no review)", (NOT_LANDED,),
          _pr(0), [dict(_review(REFUSAL_QUOTA, rid=66), commit_id="b" * 40)], [], says=("RED — UNREVIEWABLE",))
-    case("EVIDENCE: refusal, then a clean review of an EARLIER head -> green, the refusal is history", GREEN, _pr(0),
-         [_review(REFUSAL_QUOTA, rid=64, at="2026-09-14T11:00:00Z"), dict(_review(rid=65), commit_id="b" * 40)], [],
+    case("EVIDENCE: refusal, then a clean review of an EARLIER head (main merged since) -> green, the refusal is history", GREEN, _pr(0),
+         [_review(REFUSAL_QUOTA, rid=64, at="2026-09-14T11:00:00Z"), dict(_review(rid=65), commit_id="b" * 40)], [], carry=COVERS,
          never_says=("RED — UNREVIEWABLE", "unreviewable right now", "REFUSED to review it"))
     case("EVIDENCE: an earlier clean review AND one of the current head -> green, the current one named", GREEN, _pr(0),
          [older_clean, _review(rid=62, at="2026-09-14T14:00:00Z")], [], mention=("reviewed, nothing found", "review 62"),
@@ -2119,8 +2531,10 @@ def self_test() -> int:
     case("EVIDENCE: the waiver still releases an internal-only clean review", GREEN, _pr(0, [WAIVER_LABEL]),
          [_review("**Internal review (GLM-5.3)** — no blocking findings.", user=INTERNAL_REVIEWER_USER)], [],
          Waiver(True, (_labeled(PERSON),), {"rbuergi": "admin"}), mention=("WAIVED",), never_says=("NO COPILOT REVIEW",))
-    case("EVIDENCE: WITH findings, an earlier head's review + every thread answered -> green (review-once)", GREEN, _pr(2),
-         [older_clean], [_comment(1), _comment(11, PERSON, 1)])
+    case("EVIDENCE: WITH findings, an earlier head's review + every thread answered + main-only merge -> green", GREEN, _pr(2),
+         [older_clean], [_comment(1), _comment(11, PERSON, 1)], carry=COVERS)
+    case("REAL CHANGE NEG: WITH findings all answered, a REAL change since -> red (the threads do not stand in)", (OWES,), _pr(2),
+         [older_clean], [_comment(1), _comment(11, PERSON, 1)], carry=NOT_COVERED)
     case("EVIDENCE NEG: the 'Reviewer unavailable' degradation no longer releases condition 1", (NOT_LANDED,), _pr(0), [], [],
          check_runs=[_check_run()], says=("release nothing",), never_says=("REVIEWER UNAVAILABLE —",))
     case("EVIDENCE NEG: degradation + the internal reviewer's thread answered -> still red (no review object)", (NOT_LANDED,),
@@ -2345,11 +2759,14 @@ def self_test() -> int:
     # The MERGE gate never looked at the head (condition 1 reads every review on the pull request);
     # these pin that, so a later "fix" scoping it to the head reds here instead of re-buying rounds.
     older = dict(_review(rid=60), commit_id="b" * 40)
-    case("ONCE merge: review on an OLDER head, every thread answered -> green", (), _pr(2), [older],
-         [_comment(1), _comment(11, PERSON, 1)])
+    # 🔁 Policy review-on-real-change narrows this: an OLDER head's review counts across a main-only merge.
+    case("ONCE merge: review on an OLDER head, main-only merge since, every thread answered -> green", (), _pr(2), [older],
+         [_comment(1), _comment(11, PERSON, 1)], carry=COVERS)
     case("ONCE merge: NO review at all -> red", (NOT_LANDED,), _pr(0), [], [])
-    case("ONCE merge: review on an OLDER head, a thread unanswered -> red", (UNANSWERED,), _pr(3), [older],
-         [_comment(1), _comment(2), _comment(11, PERSON, 1)])
+    case("ONCE merge: review on an OLDER head, main-only merge since, a thread unanswered -> red", (UNANSWERED,), _pr(3), [older],
+         [_comment(1), _comment(2), _comment(11, PERSON, 1)], carry=COVERS)
+    case("ONCE merge NEG: review on an OLDER head, a REAL change AND a thread unanswered -> red for both", (OWES, UNANSWERED), _pr(3),
+         [older], [_comment(1), _comment(2), _comment(11, PERSON, 1)], carry=NOT_COVERED)
     def _cop(sha=HEAD, body=REVIEW_BODY_SEPT, state="COMMENTED", user=REVIEWER_REVIEW_USER, rid=77):
         return dict(_review(body=body, user=user, state=state, rid=rid), commit_id=sha)
     def cop_arm(name, ready, reviews, runs=(), comments=(), pr=None, required=None, head_runs=None, says="", noted=""):
@@ -2526,9 +2943,10 @@ def self_test() -> int:
     # person's lock-only PR, and on an App PR carrying one hand-written file, stays RED (refused).
     LOCK_REFUSAL = ("Copilot wasn't able to review any files in this pull request. Check if the **Files changed** "
                     "in this pull request are included in [default exclusions](https://docs.github.com).")
-    def verdict_case(name, want_green, pr, files, commits, comments=(), want_refused=None, reviews=None):
+    def verdict_case(name, want_green, pr, files, commits, comments=(), want_refused=None, reviews=None, carry=None):
         nonlocal failures
-        v = evaluate(pr, [_review(LOCK_REFUSAL)] if reviews is None else reviews, list(comments), NO_WAIVER, None, (), files, commits)
+        v = evaluate(pr, [_review(LOCK_REFUSAL)] if reviews is None else reviews, list(comments), NO_WAIVER, None, (), files, commits,
+                     copilot_carry=carry)
         ok = v.green == want_green and (want_refused is None or bool(v.refused) == want_refused)
         failures += 0 if ok else 1
         print(f"self-test {'ok' if ok else 'FAIL':4} verdict: {name:51} green={v.green} refused={bool(v.refused)}")
@@ -2555,7 +2973,10 @@ def self_test() -> int:
     stale = [dict(_review(rid=63), commit_id="b" * 40)]
     verdict_case("settle PR rewritten after a clean review of an EARLIER head -> GREEN (not owed)", True, gpr(), LOCKS, BOT_COMMITS,
                  want_refused=False, reviews=stale)
-    verdict_case("a person's lock PR after a clean earlier-head review -> GREEN (review-evidence-any-head)", True, gpr(user=HUMAN), LOCKS,
+    verdict_case("a person's lock PR after a clean earlier-head review + main-only merge -> GREEN", True, gpr(user=HUMAN), LOCKS,
+                 [{"author": HUMAN}], want_refused=False, reviews=stale,
+                 carry=Carry(True, "covers", "b" * 40))
+    verdict_case("NEGATIVE CONTROL: a person's lock PR, a REAL change after the earlier-head review -> RED", False, gpr(user=HUMAN), LOCKS,
                  [{"author": HUMAN}], want_refused=False, reviews=stale)
     verdict_case("NEGATIVE CONTROL: a person's lock PR, only the internal reviewer's clean review -> RED", False, gpr(user=HUMAN), LOCKS,
                  [{"author": HUMAN}], want_refused=False,
@@ -2697,6 +3118,8 @@ def self_test() -> int:
                 if path.startswith(prefix):
                     return value
             raise ReadError(f"GET {path} (no stub)")
+        def role(self, login):
+            return (self.api(f"collaborators/{login}/permission") or {}).get("role_name") or ""
     def listing(runs):
         return {"total_count": len(runs), "check_runs": runs}
     routes = {
@@ -2720,6 +3143,178 @@ def self_test() -> int:
     ok = got is not None and not got.ok and "could not be read" in got.why
     failures += 0 if ok else 1
     print(f"self-test {'ok' if ok else 'FAIL':4} adapter: {'an unreadable compare does NOT carry':51} got={got.why[:60] if got else got}")
+
+    # ── policy review-on-real-change, derived from COMMITS (the same fixture topology): Copilot reviewed
+    # O; M merges B2 into O. Does Copilot's review of O cover M? Only when nothing but main came in.
+    COP_O = dict(_review(rid=81), commit_id=O)
+    def cop_carry_case(name, expect_ok, c, says):
+        nonlocal failures
+        ok = c.ok == expect_ok and says in c.why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} real-change: {name:53} expected={'COVERS' if expect_ok else 'OWES'} "
+              f"got={'COVERS' if c.ok else 'OWES'}{'' if ok else ' — ' + c.why}")
+    cop_carry_case("main-only merge after the review -> covered", True, copilot_carry_over(M, NEW_CMP, OLD_CMP, COP_O),
+                   f"COVERS head {M[:10]}")
+    cop_carry_case("NEG: a real (non-merge) commit after the review -> owes", False,
+                   copilot_carry_over(X, cmp_(NEW_CMP["commits"] + [commit(X, M)], files(PATCH_SHIFTED), B2), OLD_CMP, COP_O),
+                   "non-merge commit(s) since it")
+    cop_carry_case("NEG: a real commit, THEN a main-only merge -> still owes", False,
+                   copilot_carry_over(M3, cmp_(OLD_CMP["commits"] + [commit(X, O), commit(M3, X, B2)], files(PATCH_SHIFTED), B2),
+                                      OLD_CMP, COP_O), "non-merge commit(s) since it")
+    cop_carry_case("NEG: a main merge whose conflict resolution changed the diff -> owes", False,
+                   copilot_carry_over(M, dict(NEW_CMP, files=files(PATCH_RESOLVED)), OLD_CMP, COP_O), "own diff changed")
+    cop_carry_case("NEG: the reviewed head was force-pushed away -> owes", False,
+                   copilot_carry_over(X, cmp_([commit(P1, B0), commit(X, P1)], files(PATCH_SHIFTED), B0), OLD_CMP, COP_O),
+                   "no longer on the pull request")
+    cop_carry_case("NEG: a review naming no commit -> owes", False,
+                   copilot_carry_over(M, NEW_CMP, OLD_CMP, dict(COP_O, commit_id=None)), "names no reviewed commit")
+    # ...and the merge gate's ADAPTER end to end: read_inputs computes the carry from the base tip and
+    # two compares, and evaluate turns it into the verdict.
+    cop_routes = {
+        "pulls/1/reviews": [COP_O], "pulls/1/comments": [], "issues/1/events": [],
+        "pulls/1": dict(MPR, base={"ref": "main"}), f"commits/{M}/check-runs": listing([]),
+        "branches/main": {"commit": {"sha": sha("b")}},
+        f"compare/{sha('b')}...{M}": NEW_CMP, f"compare/{sha('b')}...{O}": OLD_CMP,
+        "collaborators/": {"role_name": "admin"},
+    }
+    def gate_e2e(name, routes, want_green, says):
+        nonlocal failures
+        got = read_inputs(_RestStub(routes), 1, None)
+        v = evaluate(*got[:3], got[3], None, got[5], got[6], got[7], got[8])
+        ok = v.green == want_green and says in "\n".join(v.reasons + v.notes)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} real-change gate: {name:48} green={v.green}"
+              + ("" if ok else f" {v.reasons} {v.notes}"))
+    gate_e2e("main-only merge after Copilot's review -> GREEN", cop_routes, True, "COVERS head")
+    gate_e2e("NEG: same, the merge changed the diff -> RED", dict(cop_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED))}),
+             False, "owes its own Copilot review")
+    gate_e2e("NEG: same, a compare unreadable -> RED (fails closed)",
+             {k: v for k, v in cop_routes.items() if k != f"compare/{sha('b')}...{O}"}, False, "could not be read")
+    gate_e2e("Copilot reviewed the head itself -> GREEN", dict(cop_routes, **{"pulls/1/reviews": [dict(COP_O, commit_id=M)]}),
+             True, "automatic review landed")
+    gate_e2e("main-only merge covered, a thread unanswered -> RED", dict(cop_routes, **{
+        "pulls/1/comments": [_comment(1)], "pulls/1": dict(MPR, base={"ref": "main"}, review_comments=1)}), False, "1 of 1 thread(s)")
+    gate_e2e("NEG: main-only merge covered, the thread answered -> GREEN", dict(cop_routes, **{
+        "pulls/1/comments": [_comment(1), _comment(11, PERSON, 1)], "pulls/1": dict(MPR, base={"ref": "main"}, review_comments=2)}),
+        True, "answered by a person: 1")
+
+    # ── the REVIEW-ON-CHANGE lane (step 1): request ONE review exactly when the head owes one.
+    RPR = dict(MPR, node_id="PR_node", head={"sha": M, "repo": {"full_name": "Systemorph/MeshWeaver"}})
+    COVERED = copilot_carry_over(M, NEW_CMP, OLD_CMP, COP_O)
+    CHANGED = copilot_carry_over(M, dict(NEW_CMP, files=files(PATCH_RESOLVED)), OLD_CMP, COP_O)
+    def req_case(name, expect, pr, reviews, carry, pending=False, says=""):
+        nonlocal failures
+        action, why = review_request_action(pr, reviews, carry, "Systemorph/MeshWeaver", pending)
+        ok = action == expect and says in why
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} request: {name:51} expected={expect} got={action} ({why[:70]})")
+    req_case("main-only merge since the review -> NO request, logged", "none", RPR, [COP_O], COVERED, says="ONLY THE DEFAULT BRANCH")
+    req_case("NEG: a real change since the review -> request", "request", RPR, [COP_O], CHANGED, says="own diff changed")
+    req_case("NEG: no reference head at all -> request", "request", RPR, [], None, says="no earlier head")
+    req_case("already requested and pending -> none (idempotent)", "none", RPR, [COP_O], CHANGED, pending=True, says="already requested")
+    req_case("the head is already reviewed -> none (idempotent)", "none", RPR, [dict(COP_O, commit_id=M)], CHANGED, says="already reviewed")
+    req_case("a refusal ON the head is Copilot's answer -> none (never re-asks a refusal)", "none", RPR,
+             [COP_O, dict(_review(REFUSAL_QUOTA, rid=82), commit_id=M)], CHANGED, says="ANSWERED head")
+    req_case("draft -> none (the ruleset decides drafts)", "none", dict(RPR, draft=True), [COP_O], CHANGED, says="draft")
+    req_case("closed -> none", "none", dict(RPR, state="closed"), [COP_O], CHANGED, says="closed")
+    req_case("an App's own pull request -> none (Copilot does not review it)", "none",
+             dict(RPR, user={"login": "dependabot[bot]", "type": "Bot", "id": 49699333}), [], CHANGED, says="opened by the App")
+    req_case("fork -> manual, never a silent skip", "manual",
+             dict(RPR, head={"sha": M, "repo": {"full_name": "someone/MeshWeaver"}}), [COP_O], CHANGED, says="fork")
+    COP_ACTOR = {"login": "Copilot", "type": "Bot", "id": REVIEWER_ACCOUNT_ID}
+    for name, timeline, expect in [
+        ("pending: requested, nothing since", [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"}], True),
+        ("pending: requested, then reviewed -> not pending",
+         [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"},
+          {"event": "reviewed", "user": REVIEWER_REVIEW_USER, "submitted_at": "2026-10-24T10:02:00Z"}], False),
+        ("pending: reviewed, then requested again -> pending",
+         [{"event": "reviewed", "user": REVIEWER_REVIEW_USER, "submitted_at": "2026-10-24T10:02:00Z"},
+          {"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:05:00Z"}], True),
+        ("pending: requested, then removed -> not pending",
+         [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"},
+          {"event": "review_request_removed", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:01:00Z"}], False),
+        ("pending: a PERSON requested -> not Copilot's", [{"event": "review_requested", "requested_reviewer": PERSON, "created_at": "2026-10-24T10:00:00Z"}], False),
+        ("pending: empty timeline", [], False),
+    ]:
+        ok = copilot_review_pending(timeline) == expect
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} expected={expect}")
+    ANSWER_OK = {"data": {"requestReviews": {"pullRequest": {"number": 1, "reviewRequests": {"nodes": [
+        {"requestedReviewer": {"__typename": "Bot", "id": COPILOT_BOT_NODE_ID, "login": "copilot-pull-request-reviewer"}}]}}}}}
+    ANSWER_EMPTY = {"data": {"requestReviews": {"pullRequest": {"number": 1, "reviewRequests": {"nodes": []}}}}}
+    class _ReqGh(_RestStub):
+        def __init__(self, routes, answer):
+            super().__init__(routes)
+            self.answer, self.mutations = answer, []
+        def graphql(self, query, variables):
+            self.mutations.append((query, dict(variables)))
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return self.answer
+    req_routes = dict(cop_routes, **{"pulls/1": dict(RPR, base={"ref": "main"}), "issues/1/timeline": []})
+    for name, routes, answer, before, expect_rc, expect_mutations in [
+        ("lane: real change -> ONE requestReviews with the bot id, rc 0",
+         dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED))}), ANSWER_OK, O, 0, 1),
+        ("lane NEG: main-only merge -> no mutation, rc 0", req_routes, ANSWER_OK, O, 0, 0),
+        ("lane: answer lists no Copilot request -> RED", dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED))}),
+         ANSWER_EMPTY, O, 1, 1),
+        ("lane: the mutation refused -> RED, named", dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED))}),
+         ReadError("GraphQL call failed (1): Resource not accessible by integration"), O, 1, 1),
+        ("lane: no landed review, previous head main-only -> no mutation", dict(req_routes, **{"pulls/1/reviews": []}), ANSWER_OK, O, 0, 0),
+        ("lane NEG: no landed review, no previous head -> request", dict(req_routes, **{"pulls/1/reviews": []}), ANSWER_OK, None, 0, 1),
+        ("lane: already pending -> no mutation (idempotent)", dict(req_routes, **{
+            f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED)),
+            "issues/1/timeline": [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"}]}),
+         ANSWER_OK, O, 0, 0),
+    ]:
+        stub = _ReqGh(routes, answer)
+        # Captured, so a red case's `::error::` line is asserted here instead of becoming an annotation
+        # on the self-test step of every run.
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = run_request_review("Systemorph/MeshWeaver", 1, before, gh=stub)
+        if rc and "::error::the Copilot review of #1 was NOT requested" not in printed.getvalue():
+            rc = -1
+        bot_ok = all(v.get("bot") == COPILOT_BOT_NODE_ID and v.get("pr") == "PR_node" and "botIds: [$bot]" in q and "union: true" in q
+                     for q, v in stub.mutations)
+        ok = rc == expect_rc and len(stub.mutations) == expect_mutations and bot_ok
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    # ── the SWEEP (#7142 review): a real-change push H2 found a review pending, so it requested nothing;
+    # that review then landed on the EARLIER head O. No event follows — the sweep is what re-judges it.
+    RACE = [{"event": "review_requested", "requested_reviewer": COP_ACTOR, "created_at": "2026-10-24T10:00:00Z"},
+            {"event": "reviewed", "user": REVIEWER_REVIEW_USER, "submitted_at": "2026-10-24T10:06:00Z"}]
+    race_routes = dict(req_routes, **{f"compare/{sha('b')}...{M}": dict(NEW_CMP, files=files(PATCH_RESOLVED)),
+                                      "issues/1/timeline": RACE})
+    for name, routes, expect_mutations in [
+        ("sweep: pending review landed on the EARLIER head -> requests for this head", race_routes, 1),
+        ("sweep NEG: the review is still pending -> no mutation", dict(race_routes, **{"issues/1/timeline": RACE[:1]}), 0),
+        ("sweep NEG: the landed review covers the head (main-only) -> no mutation", dict(req_routes, **{"issues/1/timeline": RACE}), 0),
+        ("sweep NEG: no Copilot review has landed at all -> no mutation", dict(race_routes, **{"pulls/1/reviews": []}), 0),
+        ("sweep NEG: the head is reviewed -> no mutation", dict(race_routes, **{"pulls/1/reviews": [dict(COP_O, commit_id=M)]}), 0),
+    ]:
+        stub = _ReqGh(dict(routes, **{"pulls?state=open": [{"number": 1, "draft": False}, {"number": 2, "draft": True}]}), ANSWER_OK)
+        printed = io.StringIO()
+        with contextlib.redirect_stdout(printed):
+            rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+        ok = rc == 0 and len(stub.mutations) == expect_mutations and not any(c.startswith("pulls/2") for c in stub.calls)
+        failures += 0 if ok else 1
+        print(f"self-test {'ok' if ok else 'FAIL':4} {name:60} rc={rc} mutations={len(stub.mutations)}")
+    # The rotation: 41 open pull requests -> two windows; across consecutive slots every number is
+    # judged (a fixed "newest 40" never reached #1 — the negative control is the old slice).
+    many = list(range(1, 42))
+    seen = set(sweep_window(many, 0)) | set(sweep_window(many, 900))
+    ok = (seen == set(many) and len(sweep_window(many, 0)) <= SWEEP_MAX_PRS
+          and 1 not in set(many[-SWEEP_MAX_PRS:]) and sweep_window(many[:5], 900) == many[:5])
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'sweep: >40 open PRs -> the window rotates, every PR judged':60}")
+    stub = _ReqGh({}, ANSWER_OK)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        rc = run_request_review_sweep("Systemorph/MeshWeaver", gh=stub)
+    ok = rc == 1 and "cannot list open pull requests" in printed.getvalue()
+    failures += 0 if ok else 1
+    print(f"self-test {'ok' if ok else 'FAIL':4} {'sweep: an unreadable listing -> RED, named':60} rc={rc}")
 
     # ── the EVENT half: only a FAILED gate on the CURRENT head with a GREEN stage 1 is re-run.
     def adv_case(name, expect, pr, run, job, verdict, says=""):
@@ -2943,6 +3538,14 @@ def main(argv=None) -> int:
     ap.add_argument("--stage-advance", action="store_true",
                     help="the event half: re-run a held run's failed jobs once stage 1 is green; takes --repo, "
                          "--workflow and exactly one of --pr / --head-sha / --sweep")
+    ap.add_argument("--request-review-on-change", action="store_true",
+                    help="the review-on-change lane (policy review-on-real-change): request ONE Copilot review for --pr's "
+                         "head when its own diff changed since Copilot's last review (or since --before), and nothing "
+                         "when only the default branch was merged in (review_request_action)")
+    ap.add_argument("--request-review-sweep", action="store_true",
+                    help="the scheduled half of the review-on-change lane: re-judge every open non-draft pull request and "
+                         "request a review where a landed one no longer covers the head (run_request_review_sweep)")
+    ap.add_argument("--before", help="--request-review-on-change: the push's previous head (github.event.before)")
     ap.add_argument("--since", help="--stage-gate: when the head's CI run was created (ISO-8601 UTC)")
     ap.add_argument("--no-carry", action="store_true",
                     help="--stage-gate / --arm-gate: do NOT carry a review over a clean merge of the base branch — the "
@@ -2982,6 +3585,19 @@ def main(argv=None) -> int:
             print(f"::error::--refresh-read-run needs --pr <number> and --run-id <number>, got {args.pr!r} / {args.run_id!r}")
             return 2
         return run_refresh(args.repo, int(args.pr), args.event, args.run_id, args.evaluated_at or "")
+    if args.request_review_sweep:
+        if args.pr or args.merge_group_ref or args.before:
+            print("::error::--request-review-sweep takes --repo only")
+            return 2
+        return run_request_review_sweep(args.repo)
+    if args.request_review_on_change:
+        if not args.pr or args.merge_group_ref or not re.fullmatch(r"[1-9]\d*", args.pr):
+            print("::error::--request-review-on-change takes --repo, --pr <number> and optionally --before <sha>")
+            return 2
+        if args.before and not re.fullmatch(r"[0-9a-f]{40}", args.before):
+            print(f"::error::--before must be a full 40-hex sha (github.event.before), got {args.before!r}")
+            return 2
+        return run_request_review(args.repo, int(args.pr), args.before)
     if args.stage_advance:
         if not args.workflow or not re.fullmatch(r"[A-Za-z0-9_.-]+\.ya?ml", args.workflow):
             print("::error::--stage-advance needs --workflow <file>.yml (the caller's pull-request CI workflow)")

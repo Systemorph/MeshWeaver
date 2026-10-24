@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
 """set-copilot-review-on-push.py — reconcile every fleet ruleset's `copilot_code_review` rule to the in-force `review_on_push` value, nothing else.
 
-Policy `copilot-code-review` as amended (Doc/Architecture/PolicyNotProse; manual:
-Doc/Architecture/ReviewFindingsAnswered → "Every push is reviewed again"): every push to a non-draft
-pull request gets a fresh Copilot review, so the rule runs with `review_on_push: true`. The value
-lives in ONE place, `REVIEW_ON_PUSH` below; the script only ever moves a ruleset TO it, so following
-its help can never restore a retired configuration. (It replaces `set-copilot-review-once.py`, which
-hard-coded the retired `false` of `review-once-per-pull-request`'s ruleset half.)
+Policy `review-on-real-change` (Doc/Architecture/PolicyNotProse; manual:
+Doc/Architecture/ReviewFindingsAnswered → "A review on every real change, none for a merge of main"):
+Copilot reviews a pull request when it opens, a push that only merges the default branch costs NO
+review, and a push that changes the pull request's own diff gets one from the review-on-change lane
+(node-repo-request-review.yml) — so the rule runs with `review_on_push: false`. The value lives in
+ONE place, `REVIEW_ON_PUSH` below; the script only ever moves a ruleset TO it.
+
+🚨 Apply it to a repository ONLY once that repository CALLS the review-on-change lane
+(`request-review-on-change.yml`) — `--repo NAME` per adopted repository. Flipping a repository that
+does not call it leaves every real change after the opening review unreviewed, and its
+`Automatic review answered` red until a person re-requests the review. `--out DIR` writes, before
+anything is PUT, BOTH files per ruleset: `<repo>.<id>.before.json` — the restore body, the ruleset's
+fields AS READ (`review_on_push` at its old value) — and `<repo>.<id>.put.json`, the body this run
+PUTs. Restoring is a PUT of the `.before.json` body (`gh api --method PUT … --input <file>`).
 
 What it does, per repository:
   1. lists the rulesets (REST), reads each in full, and picks every one carrying `copilot_code_review`
@@ -16,7 +24,8 @@ What it does, per repository:
      `REVIEW_ON_PUSH` (`review_draft_pull_requests` keeps its value);
   3. already at that value → "unchanged", nothing is written (idempotent);
   4. `--apply` PUTs it, reads the ruleset back and fails unless the read-back equals the body it sent.
-Without `--apply` it prints each body (a dry run). `--out DIR` also writes `<repo>.<id>.json`.
+Without `--apply` it prints each body (a dry run). `--out DIR` also writes `<repo>.<id>.before.json`
+(the restore body, as read) and `<repo>.<id>.put.json` (what is PUT).
 
 A ruleset read without `bypass_actors` (a token that cannot see them) is REFUSED: a PUT without the
 field could not be shown to keep them.
@@ -30,18 +39,22 @@ or failed read-back, 2 = usage error.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import io
 import json
 import os
 import subprocess
 import sys
+import tempfile
 
 OWNER = "Systemorph"
 FLEET = ("MeshWeaver", "MeshWeaver.Plugins", "Memex", "MeshWeaver.Crm", "MeshWeaver.Education",
-         "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting")
+         "MeshWeaver.Reinsurance", "MeshWeaver.SocialMedia", "MeshWeaver.Manufacturing", "MeshWeaver.FundReporting",
+         "MeshWeaver.Deploy")
 RULE = "copilot_code_review"
-# The in-force value (policy `copilot-code-review`, as amended). Change it only with the policy.
-REVIEW_ON_PUSH = True
+# The in-force value (policy `review-on-real-change`). Change it only with the policy.
+REVIEW_ON_PUSH = False
 BODY_FIELDS = ("name", "target", "enforcement", "bypass_actors", "conditions", "rules")
 
 
@@ -71,6 +84,14 @@ def put_body(ruleset: dict) -> tuple[dict, bool]:
     return body, changed
 
 
+def restore_body(ruleset: dict) -> dict:
+    """The ruleset's own PUT-able fields AS READ — the restore point, written before any PUT. Pure."""
+    missing = [f for f in BODY_FIELDS if f not in ruleset]
+    if missing:
+        raise Refused(f"ruleset {ruleset.get('id')} was read without {', '.join(missing)} — no complete restore body")
+    return {f: copy.deepcopy(ruleset[f]) for f in BODY_FIELDS}
+
+
 def readback_matches(sent: dict, readback: dict) -> str:
     """'' when every field the PUT sent reads back identically; otherwise the first difference."""
     for f in BODY_FIELDS:
@@ -97,7 +118,11 @@ def one_repo(repo: str, apply: bool, out_dir: str | None) -> bool:
         body, changed = put_body(rs)
         tag = f"{repo} ruleset {rs['id']} ({rs.get('name')}, {rs.get('enforcement')})"
         if out_dir:
-            with open(os.path.join(out_dir, f"{repo}.{rs['id']}.json"), "w") as f:
+            # 🚨 The BEFORE state is the restore point (#7142 review): `body` already carries the new
+            # value, so writing only it would "restore" the change itself.
+            with open(os.path.join(out_dir, f"{repo}.{rs['id']}.before.json"), "w") as f:
+                json.dump(restore_body(rs), f, indent=2)
+            with open(os.path.join(out_dir, f"{repo}.{rs['id']}.put.json"), "w") as f:
                 json.dump(body, f, indent=2)
         if not changed:
             print(f"unchanged  {tag}: review_on_push is already {json.dumps(REVIEW_ON_PUSH)}")
@@ -137,7 +162,7 @@ def self_test() -> int:
     check("does not mutate the ruleset as read", base["rules"][1]["parameters"]["review_on_push"] is (not REVIEW_ON_PUSH))
     _, again = put_body(dict(base, rules=body["rules"]))
     check("idempotent: already at the in-force value -> unchanged", again is False)
-    check("in-force value is true (policy copilot-code-review, amended)", REVIEW_ON_PUSH is True)
+    check("in-force value is false (policy review-on-real-change)", REVIEW_ON_PUSH is False)
     for name, bad in [("no bypass_actors read -> refused", {k: v for k, v in base.items() if k != "bypass_actors"}),
                       ("no copilot rule -> refused", dict(base, rules=[{"type": "deletion"}])),
                       ("rule without review_on_push -> refused", dict(base, rules=[{"type": RULE, "parameters": {}}]))]:
@@ -146,6 +171,29 @@ def self_test() -> int:
             check(name, False)
         except Refused:
             check(name, True)
+    before = restore_body(base)
+    check("restore body keeps the OLD review_on_push (the before-state, not the PUT)",
+          [r for r in before["rules"] if r["type"] == RULE][0]["parameters"]["review_on_push"] is (not REVIEW_ON_PUSH)
+          and before != body and set(before) == set(BODY_FIELDS))
+    with tempfile.TemporaryDirectory() as d:
+        calls = []
+
+        def fake_gh(*args, stdin=None):
+            calls.append(args)
+            return [{"id": 1}] if args[0].endswith("/rulesets") else copy.deepcopy(base)
+        real = globals()["gh"]
+        globals()["gh"] = fake_gh
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                one_repo("R", False, d)
+        finally:
+            globals()["gh"] = real
+        with open(os.path.join(d, "R.1.before.json")) as f:
+            saved_before = json.load(f)
+        with open(os.path.join(d, "R.1.put.json")) as f:
+            saved_put = json.load(f)
+        check("--out writes the before-state AND the PUT body, and a dry run PUTs nothing",
+              saved_before == before and saved_put == body and not any("PUT" in a for a in calls))
     check("read-back identical -> ''", readback_matches(body, dict(body, id=1)) == "")
     check("read-back differs -> named", "rules" in readback_matches(body, dict(body, rules=base["rules"])))
     print("self-test: " + ("every case held" if not failures else f"{failures} FAILED"))
