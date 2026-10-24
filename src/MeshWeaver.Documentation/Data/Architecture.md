@@ -261,6 +261,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Python Code Nodes](PythonCodeNodes)
 - [Script Execution — Try It](ScriptExecutionDemo)
 - [Sending Email](SendingEmail)
+- [The Opt-In Mail Copy](MailCopy) — the provider-neutral copy of a mailbox that lives in core: stored shapes, engine, attachment rules, and the per-installation, per-account switch
 
 ### UI
 
