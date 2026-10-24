@@ -14,6 +14,10 @@
     <PackageReference Include="xunit.v3.extensibility.core" />
   </ItemGroup>
   <ItemGroup>
+    <!-- FaultSwitchTest drives the reservation window through the internal AfterReservation seam. -->
+    <InternalsVisibleTo Include="MeshWeaver.FaultInjection.Test" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\..\src\MeshWeaver.Hosting\MeshWeaver.Hosting.csproj" />
     <ProjectReference Include="..\..\src\MeshWeaver.Mesh.Contract\MeshWeaver.Mesh.Contract.csproj" />
   </ItemGroup>
