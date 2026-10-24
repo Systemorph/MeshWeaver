@@ -345,6 +345,82 @@ public class NodeUpdateContentTypeChangeTest(ITestOutputHelper output) : HubTest
     }
 
     /// <summary>
+    /// 🚨 #5736 / #6639 — a <c>MarkdownContent</c> payload that carries NO <c>content</c> member and
+    /// nothing but members the record declares is a document with no body yet. While
+    /// <c>Content</c> was <c>required</c> its bind threw, and because the payload names its own
+    /// record the update of the node logged <c>As&lt;MarkdownContent&gt; for … could not recover
+    /// value: JsonException</c> at Error and handed the validators an untyped snapshot. It must
+    /// type as an EMPTY document, keep its other members, and log nothing. Both JSON shapes.
+    /// </summary>
+    /// <param name="json">The stored payload.</param>
+    /// <param name="asDom">Whether it is stored as the as-written DOM rather than a JsonElement.</param>
+    [Theory]
+    [InlineData("""{"$type":"MarkdownContent"}""", false)]
+    [InlineData("""{"$type":"MarkdownContent"}""", true)]
+    [InlineData("""{"$type":"MarkdownContent","tags":["draft"],"abstract":"Summary"}""", false)]
+    [InlineData("""{"$type":"MarkdownContent","tags":["draft"],"abstract":"Summary"}""", true)]
+    [InlineData("""{"tags":["draft"],"abstract":"Summary"}""", false)]
+    public void MarkdownWithoutContentMember_IsTypedAsAnEmptyDocument(string json, bool asDom)
+    {
+        object stored = asDom
+            ? JsonNode.Parse(json) ?? throw new InvalidOperationException("a JSON object literal parses to a node")
+            : JsonDocument.Parse(json).RootElement.Clone();
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        var typed = result.Content.Should().BeOfType<MarkdownContent>(
+            "a payload with no body and only declared members IS a MarkdownContent — an empty one").Subject;
+        typed.Content.Should().BeEmpty("an absent body is the empty body");
+        if (json.Contains("tags"))
+        {
+            typed.Tags.Should().Equal("draft");
+            typed.Abstract.Should().Be("Summary", "the members that were there are carried across");
+        }
+        (typed.UnknownMembers?.Count ?? 0).Should().Be(0, "the discriminator is metadata, never a stray member");
+        logger.Entries.Should().BeEmpty(
+            "nothing failed: the stored snapshot binds. Captured: {0}",
+            string.Join(" | ", logger.Entries.Select(e => $"{e.Level}: {e.Text}")));
+    }
+
+    /// <summary>
+    /// 🚨 THE COUNTERPARTY that keeps the empty default from HIDING a body. A payload that names
+    /// <c>MarkdownContent</c>, has no <c>content</c>, and carries its text under a member the record
+    /// does not declare (the measured <c>body</c> / <c>markdown</c> / <c>text</c> rows of #6639) must
+    /// NOT bind as an empty document — that is #4600's "No content yet" invitation over a full
+    /// document. It stays a refused bind, at Error (it claims the record), naming the node's path
+    /// and never its text.
+    /// </summary>
+    /// <param name="member">The undeclared member the body was stored under.</param>
+    [Theory]
+    [InlineData("body")]
+    [InlineData("markdown")]
+    [InlineData("text")]
+    public void MarkdownWithItsBodyUnderAnUndeclaredMember_IsNotBoundAsEmpty(string member)
+    {
+        var stored = JsonDocument.Parse(
+            $$"""{"$type":"MarkdownContent","{{member}}":"{{StoredMarkdownText}}"}""").RootElement.Clone();
+        var logger = new RecordingLogger();
+
+        var result = NodeUpdatePipeline.WithExistingContentTyped(
+            Proposed(new MarkdownContent { Content = "# Edited" }),
+            Stored(stored),
+            GetHost().JsonSerializerOptions,
+            logger);
+
+        result.Content.Should().BeOfType<JsonElement>(
+            "binding an empty MarkdownContent over a body stored under another key would hide it")
+            .Which.GetRawText().Should().Be(stored.GetRawText());
+        var error = logger.Entries.Should().ContainSingle(e => e.Level == LogLevel.Error).Subject;
+        error.Text.Should().Contain(NodePath, "the line must name the node a repair has to visit");
+        error.Text.Should().NotContain(StoredMarkdownText, "content never reaches a log");
+    }
+
+    /// <summary>
     /// 🚨 COUNTERPARTY — undiscriminated bytes that DO bind are still typed by the proposal
     /// (the #3056 cure), with the real record and its real stored value.
     /// </summary>

@@ -581,13 +581,36 @@ public static class MarkdownOverviewLayoutArea
             return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
 
         if (node.Content is MarkdownContent markdownContent)
+        {
+            // 🚨 A MISSING source over a cached rendering is a document that is there, not an empty
+            // one (review on #7097): inviting an edit over it is how the cached document is lost.
+            // An explicit "" (a deliberate clear) has a source and stays Absent.
+            if (!markdownContent.HasSource)
+            {
+                if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
+                    return new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "preRenderedHtml");
+                if (!string.IsNullOrWhiteSpace(markdownContent.PrerenderedHtml))
+                    return new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "prerenderedHtml");
+            }
             return Text(markdownContent.Content);
+        }
 
         if (node.Content is string stringContent)
             return Text(stringContent);
 
         if (node.Content is JsonElement jsonElement)
-            return FromJson(jsonElement);
+        {
+            var fromJson = FromJson(jsonElement);
+            // The same missing-source rule for raw content: an object with no `content` member at
+            // all, over a cached rendering on the node, is not an empty document.
+            return fromJson.State == MarkdownContentState.Absent
+                   && jsonElement.ValueKind == JsonValueKind.Object
+                   && !jsonElement.EnumerateObject().Any(p =>
+                       string.Equals(p.Name, "content", StringComparison.OrdinalIgnoreCase))
+                   && !string.IsNullOrWhiteSpace(node.PreRenderedHtml)
+                ? new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "preRenderedHtml")
+                : fromJson;
+        }
 
         // Typed content of some other shape: there is no markdown here, and saying so is honest.
         return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
@@ -597,6 +620,20 @@ public static class MarkdownOverviewLayoutArea
                 ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
                 : new MarkdownRead(MarkdownContentState.Present, value, string.Empty);
     }
+
+    /// <summary>
+    /// The JSON names of the members <see cref="MarkdownContent"/> declares BESIDE its body
+    /// (camelCase, as every hub serialises them) — immutable, computed once from the record so it
+    /// cannot drift from it. <c>content</c> itself is excluded: a non-string <c>content</c> is
+    /// unreadable, never a metadata member; so is the extension-data buffer.
+    /// </summary>
+    private static readonly System.Collections.Immutable.ImmutableHashSet<string> DeclaredMarkdownMembers =
+        typeof(MarkdownContent)
+            .GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)
+            .Where(p => p.Name != nameof(MarkdownContent.Content)
+                        && !p.IsDefined(typeof(System.Text.Json.Serialization.JsonExtensionDataAttribute), true))
+            .Select(p => JsonNamingPolicy.CamelCase.ConvertName(p.Name))
+            .ToImmutableHashSet(StringComparer.Ordinal);
 
     private static MarkdownRead FromJson(JsonElement jsonElement)
     {
@@ -632,15 +669,59 @@ public static class MarkdownOverviewLayoutArea
             return Content(fallbackContent);
 
         // Nothing here carries markdown. An object with NO authored member is an empty node; one
-        // that carries members is a payload holding something nobody can read.
-        var members = jsonElement.EnumerateObject()
+        // that carries members is a payload holding something nobody can read — UNLESS
+        // MarkdownContent's own contract binds it, which is the one authority on whether a body-less
+        // payload is an empty document (#5736, #6639): `{"tags":["x"]}` binds (empty), while a body
+        // under an undeclared key, a rendering without its source, or a declared member holding a
+        // value of the wrong shape (`"tags":"# text"`, review on #7097) does not, and stays
+        // Unreadable naming what is there.
+        var authored = jsonElement.EnumerateObject()
             .Select(p => p.Name)
-            .Where(n => !string.Equals(n, "$type", StringComparison.Ordinal))
+            .Where(n => !n.StartsWith('$'))
             .ToArray();
-        return members.Length == 0
-            ? new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty)
-            : new MarkdownRead(
-                MarkdownContentState.Unreadable, string.Empty, string.Join(", ", members));
+        if (authored.Length == 0)
+            return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
+        try
+        {
+            // 🚨 Classify the BOUND body, never "it bound, so it is empty" (review on #7097): the
+            // contract binds case-insensitively, so `{"Content":"# doc"}` — which the exact-case
+            // lookups above miss — binds WITH the document.
+            var bound = jsonElement.Deserialize<MarkdownContent>(JsonSerializerOptions.Web);
+            return bound?.Content is { Length: > 0 } text
+                ? new MarkdownRead(MarkdownContentState.Present, text, string.Empty)
+                : new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
+        }
+        catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            var undeclared = authored.Where(n => !DeclaredMarkdownMembers.Contains(n)).ToArray();
+            var offending = undeclared.Length > 0
+                ? undeclared
+                : BlamedMember(ex as JsonException) is { } member && authored.Contains(member)
+                    ? [member]
+                    : authored;
+            return new MarkdownRead(
+                MarkdownContentState.Unreadable, string.Empty, string.Join(", ", offending));
+        }
+
+        // The top-level member a JsonException blames (`$.tags`, `$.tags[0]`, `$['abstract']`), or
+        // null for a whole-document failure (`$`).
+        static string? BlamedMember(JsonException? ex)
+        {
+            var path = ex?.Path;
+            if (path is null || path.Length < 2 || path[0] != '$')
+                return null;
+            var rest = path[1..];
+            if (rest.StartsWith("['", StringComparison.Ordinal))
+            {
+                var end = rest.IndexOf("']", StringComparison.Ordinal);
+                return end > 2 ? rest[2..end] : null;
+            }
+            if (rest[0] != '.')
+                return null;
+            var name = rest[1..];
+            var cut = name.IndexOfAny(['.', '[']);
+            return cut < 0 ? name : name[..cut];
+        }
 
         // 🚨 A `content` member that is NOT a string is the same defect one level in (review on
         // #4626): mapping it to Absent would put the invitation back over a payload that is there

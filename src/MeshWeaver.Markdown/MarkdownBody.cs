@@ -76,6 +76,9 @@ public static class MarkdownBody
 
         var markdown = content switch
         {
+            // A MISSING source (no `content` was stored) is not an empty one: fall through to the
+            // cached rendering below. An explicit "" is a deliberate clear and renders empty.
+            MarkdownContent markdownContent => markdownContent.HasSource ? markdownContent.Content : null,
             string text => text,
             JsonElement { ValueKind: JsonValueKind.String } json => json.GetString(),
             JsonValue value when value.TryGetValue<string>(out var text) => text,
