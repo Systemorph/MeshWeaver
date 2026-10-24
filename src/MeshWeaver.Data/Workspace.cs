@@ -1749,12 +1749,13 @@ public class Workspace : IWorkspace
     /// </summary>
     internal void RegisterClientSubscription(
         Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream,
-        bool acceptsCoalescedEnd = false, IObservable<System.Reactive.Unit>? fullsPosted = null)
+        bool acceptsCoalescedEnd = false, IObservable<System.Reactive.Unit>? fullsPosted = null,
+        bool byPerson = false)
     {
         if (subscriber is null || string.IsNullOrEmpty(streamId))
             return;
         var key = (subscriber.ToString(), streamId);
-        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd, fullsPosted);
+        _clientSubscriptions[key] =new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd, fullsPosted);
         // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
         // a later stream that legitimately took over this key must not be unregistered by an
         // earlier stream's teardown.
@@ -1764,6 +1765,38 @@ public class Workspace : IWorkspace
                 && ReferenceEquals(current.Stream, stream))
                 _clientSubscriptions.TryRemove(key, out _);
         }));
+
+        // 🚨 The grain's view of this subscription (#6623): one lease for as long as the server-side
+        // STREAM lives — every route out of the registry (unsubscribe, eviction, refusal, the hub's
+        // own teardown) ends in that stream's disposal, so the lease cannot outlive it or be released
+        // twice. With the last lease gone, an activation that has served only the platform ends
+        // instead of waiting out Orleans' idle collection. The lease carries whether a PERSON opened
+        // the stream: a same-silo subscribe reaches a hosted hub directly and never passes the
+        // grain's own delivery seam, and a hosted child's stream belongs to the same activation.
+        // No grain (Monolith): no callback, no lease.
+        if (GrainSubscriberLeasesOf(Hub) is { } leases)
+            stream.RegisterForDisposal(leases.Acquire(byPerson));
+    }
+
+    /// <summary>
+    /// The grain's <see cref="GrainSubscriberLeases"/> for <paramref name="hub"/>, found by walking
+    /// up the parent chain — the grain registers it on its top-level hub, and a hosted child hub
+    /// (a thread, an <c>_Exec</c> kernel) serves streams of the same activation. Null when no
+    /// ancestor is a grain hub.
+    /// </summary>
+    private static GrainSubscriberLeases? GrainSubscriberLeasesOf(IMessageHub hub)
+    {
+        var current = hub;
+        while (current is not null)
+        {
+            if (current.Configuration.Get<GrainSubscriberLeases>() is { } leases)
+                return leases;
+            var parent = current.Configuration.ParentHub;
+            if (parent is null || ReferenceEquals(parent, current))
+                return null;
+            current = parent;
+        }
+        return null;
     }
 
     /// <summary>

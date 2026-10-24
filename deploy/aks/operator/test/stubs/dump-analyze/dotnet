@@ -39,6 +39,17 @@ case "$cmd" in
     printf 'OS Thread Id: 0x2c (12)\n        Child SP               IP Call Site\n00007F0000000001 00007F0000000002 System.Threading.Monitor.Wait(System.Object)\n'
     printf 'OS Thread Id: 0x2d (13)\n        Child SP               IP Call Site\n00007F0000000003 00007F0000000004 System.Threading.Monitor.Wait(System.Object)\n' ;;
   "dumpasync --coalesce") echo "1 MeshWeaver.Messaging.MessageHub+<Deliver>d__1" ;;
+  gcheapstat) printf 'Heap             Gen0         Gen1         Gen2          LOH\nHeap0         1,000,000      200,000   90,000,000    5,000,000\n' ;;
+  "dumpheap -stat")
+    # SOS lists types SMALLEST first and ends with the Total line; HOSTING_DA_HEAP_ROWS rows (default
+    # 3000, ~180 KB) so a 100 KB section cap must keep the TAIL to keep the largest types and the total.
+    echo "Statistics:"
+    echo "          MT     Count     TotalSize Class Name"
+    n="${HOSTING_DA_HEAP_ROWS:-3000}" i=1
+    while [ "$i" -le "$n" ]; do printf '7f12a%07x %9d %13d Generated.Type%06d\n' "$i" "$i" "$((i * 1000))" "$i"; i=$((i + 1)); done
+    echo "Total $((n * (n + 1) / 2)) objects, $((n * (n + 1) / 2 * 1000)) bytes"
+    # What SOS may print after the table: fragmentation rows naming object addresses.
+    printf 'Fragmented blocks larger than 0.5 MB:\n    Addr     Size      Followed By\n700000000000   99999999999999 700000000100 System.Byte[]\n' ;;
   *) echo "unknown command $cmd"; exit 2 ;;
 esac
 STUB
