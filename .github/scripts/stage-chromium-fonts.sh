@@ -43,15 +43,33 @@ listed_packages() { grep -vE '^[[:space:]]*(#|$)' "$1" | sed -e 's/[[:space:]]//
 # The font packages the pinned Playwright asks for on THIS runner's release, from its own
 # dry run. Anything that is neither in the list nor already installed is DRIFT.
 check_drift() {
-  local list="$1" asked missing="" p
+  local list="$1" asked missing="" p out rc=0
   : "${PLAYWRIGHT_VERSION:?PLAYWRIGHT_VERSION must be set}"
-  asked=$(timeout --signal=TERM --kill-after=15 "$STAGE_NET_TIMEOUT" \
-            npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps --dry-run chromium 2>/dev/null \
-          | tr -s '[:space:]"' '\n' | grep -E '^x?fonts-[A-Za-z0-9.+-]+$' | sort -u || :)
+  out=$(mktemp)
+  # The dry run's exit status is NOT a verdict: playwright-core exits 1 when it lists missing
+  # dependencies, and missing dependencies are exactly what it is asked for here. So the status
+  # is read and classified rather than discarded. A stall or any other failure stops the stage
+  # with the dry run's own stderr in the log, never an empty list.
+  timeout --signal=TERM --kill-after=15 "$STAGE_NET_TIMEOUT" \
+    npx --yes "playwright-core@${PLAYWRIGHT_VERSION}" install-deps --dry-run chromium > "$out" 2>&1 || rc=$?
+  case "$rc" in
+    0|1) ;;
+    124|137)
+      echo "::error::playwright-core@${PLAYWRIGHT_VERSION} install-deps --dry-run did not finish within ${STAGE_NET_TIMEOUT}s (npm registry/network) — the drift check could not run. Refusing to stage."
+      cat "$out" >&2; rm -f "$out"; return 1 ;;
+    *)
+      echo "::error::playwright-core@${PLAYWRIGHT_VERSION} install-deps --dry-run failed (exit $rc) — the drift check could not run. Refusing to stage. Its output:"
+      cat "$out" >&2; rm -f "$out"; return 1 ;;
+  esac
+  # `grep` exits 1 on no match; an empty `asked` is then reported below as a check that
+  # measured nothing, with the dry run's output beside it.
+  asked=$(tr -s '[:space:]"' '\n' < "$out" | { grep -E '^x?fonts-[A-Za-z0-9.+-]+$' || [ "$?" -eq 1 ]; } | sort -u)
   if [ -z "$asked" ]; then
+    cat "$out" >&2; rm -f "$out"
     echo "::error::playwright-core@${PLAYWRIGHT_VERSION} install-deps --dry-run named no font package — the drift check measured nothing, so the list in $list cannot be trusted. Refusing to stage."
     return 1
   fi
+  rm -f "$out"
   for p in $asked; do
     if listed_packages "$list" | grep -qxF "$p"; then continue; fi
     if dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed'; then continue; fi
