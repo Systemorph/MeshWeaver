@@ -162,15 +162,11 @@ public class PlatformBakeLaneGuard
         // while the seal probe asks about another — an availability answer about the wrong identity,
         // which is the one thing a seal check must never get wrong.
         var all = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
-        var jobs = Enumerable.Range(0, all.Length)
-            .Where(i => IsJobKey(all[i]))
-            .ToList();
-        var jobsWithRecovery = jobs
-            .Select((startLine, idx) =>
+        var jobsWithRecovery = WorkflowJobText.Ranges(all)
+            .Select(job =>
             {
-                var endLine = idx + 1 < jobs.Count ? jobs[idx + 1] : all.Length;
-                var text = ExecutableLinesOf(string.Join("\n", all[startLine..endLine]));
-                return (name: all[startLine].Trim().TrimEnd(':'), hasRead: text.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
+                var text = ExecutableLinesOf(string.Join("\n", all[job.Start..job.End]));
+                return (name: job.Key, hasRead: text.Contains("az acr manifest list-metadata", StringComparison.Ordinal)
                     && text.Contains("--name memex-migration", StringComparison.Ordinal));
             })
             .Where(x => x.hasRead)
@@ -520,12 +516,11 @@ public class PlatformBakeLaneGuard
     public void SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication()
     {
         var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
-        var start = Array.FindIndex(lines, l => l.Equals($"  {BaselineDownloadJob}:", StringComparison.Ordinal));
-        Assert.True(start >= 0, $"no '{BaselineDownloadJob}:' job in {Workflow} — the exemption in "
+        var range = WorkflowJobText.Range(lines, BaselineDownloadJob);
+        Assert.True(range is not null, $"no '{BaselineDownloadJob}:' job in {Workflow} — the exemption in "
             + "PlatformBake_NeverAdoptsAnotherBuildsBundles names a block that does not exist, so it excuses nothing "
             + "and this guard measures nothing. Delete the exemption with the job, in the same change.");
-        var end = Array.FindIndex(lines, start + 1, IsJobKey);
-        var block = ExecutableLinesOf(string.Join("\n", lines[start..(end < 0 ? lines.Length : end)]));
+        var block = ExecutableLinesOf(string.Join("\n", lines[range!.Value.Start..range.Value.End]));
 
         Assert.Contains("gh run download", block, StringComparison.Ordinal);
         Assert.Contains("name: satellite-compat-baseline-bundles", block, StringComparison.Ordinal);
@@ -545,11 +540,8 @@ public class PlatformBakeLaneGuard
     /// block is exempt from by a positive assertion elsewhere.</summary>
     private static string WithoutJob(string[] lines, string jobName)
     {
-        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
-        if (start < 0) return string.Join("\n", lines);
-        var end = Array.FindIndex(lines, start + 1, IsJobKey);
-        if (end < 0) end = lines.Length;
-        return string.Join("\n", lines[..start].Concat(lines[end..]));
+        if (WorkflowJobText.Range(lines, jobName) is not { } range) return string.Join("\n", lines);
+        return string.Join("\n", lines[..range.Start].Concat(lines[range.End..]));
     }
 
     /// <summary>
@@ -1007,15 +999,12 @@ public class PlatformBakeLaneGuard
         Assert.True(File.Exists(path), $"expected {Workflow} at the repo root");
         var lines = File.ReadAllLines(path);
 
-        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
-        Assert.True(start >= 0, $"no '{jobName}:' job in {Workflow} — the platform's own content "
+        var range = WorkflowJobText.Range(lines, jobName);
+        Assert.True(range is not null, $"no '{jobName}:' job in {Workflow} — the platform's own content "
             + "bake is what publishes the shipped NodeType bundles the portals adopt; deleting it "
             + "returns every pod to compiling every shipped type at boot (#1347, #1725).");
 
-        var end = Array.FindIndex(lines, start + 1, IsJobKey);
-        if (end < 0)
-            end = lines.Length;
-        return string.Join("\n", lines[start..end]);
+        return string.Join("\n", lines[range!.Value.Start..range.Value.End]);
     }
 
     /// <summary>The [start, end) line range of one job's block — the job key line through the line
@@ -1023,19 +1012,11 @@ public class PlatformBakeLaneGuard
     /// otherwise turn its assertions into a pass over an empty string.</summary>
     private static (int Start, int End) JobRange(string[] lines, string jobName)
     {
-        var start = Array.FindIndex(lines, l => l.Equals($"  {jobName}:", StringComparison.Ordinal));
-        Assert.True(start >= 0, $"no '{jobName}:' job in {Workflow} — the per-build satellite compatibility "
+        var range = WorkflowJobText.Range(lines, jobName);
+        Assert.True(range is not null, $"no '{jobName}:' job in {Workflow} — the per-build satellite compatibility "
             + "measurement (2026-09-12) is the counterweight to the fleet's once-a-day rebuild; without it a "
             + "core merge that breaks a satellite is found at 03:00 or on a portal at self-update.");
-        var end = Array.FindIndex(lines, start + 1, IsJobKey);
-        return (start, end < 0 ? lines.Length : end);
+        return range!.Value;
     }
-
-    private static bool IsJobKey(string line) =>
-        line.Length > 3
-        && line.StartsWith("  ", StringComparison.Ordinal)
-        && line[2] != ' '
-        && line[^1] == ':'
-        && line[2..^1].All(c => char.IsLetterOrDigit(c) || c == '-' || c == '_');
 
 }
