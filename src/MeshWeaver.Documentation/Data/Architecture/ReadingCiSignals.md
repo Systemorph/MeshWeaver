@@ -226,8 +226,11 @@ The fix took the mirror out of the shards rather than widening anything:
   the pinned Playwright's `install-deps --dry-run`, so the set stays the one the portal image ships.
 - **A shard only restores and unpacks it.** No apt runs in a shard, so there is no mirror, no lock
   and no orphaned apt-get. A missing cache is a warning, and the smoke print still decides.
-- **The browser has an end-to-end bound.** The restore step's 1 min and the provision step's 6 min
-  `timeout-minutes` (420 s) are the whole browser cost. Every inner bound fits inside them.
+- **The browser has an end-to-end bound.** The restore step's 2 min and the provision step's 5 min
+  `timeout-minutes` (420 s) are the whole browser cost. Every inner bound fits inside them. The
+  restore's cap is deliberately longer than its 1 min download abort: an abandoned download is
+  reported as a cache miss, while the step cap firing first would fail the shard over an optional
+  input.
 - **The weights were re-measured and re-split, and `CI_SHARD_TOTAL` went 6→8.** The scheduled suite
   is ~4,100 s. After the 420 s browser bound and ~150 s of setup, a shard has ~630 s for tests;
   eight shards average ~513 s.

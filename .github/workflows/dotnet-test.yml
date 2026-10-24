@@ -244,7 +244,7 @@ env:
   # 8, not 6. The 20-minute shard cap has to hold the shard's tests beside the browser steps'
   # END-TO-END bound and ~150 s of download and setup. Since the font set is staged once and
   # restored from a cache, no shard reaches an Ubuntu mirror. The browser bound is the restore's
-  # 1 min plus the provision step's 6 min `timeout-minutes` (it was ~10 min while a shard ran
+  # 2 min plus the provision step's 5 min `timeout-minutes` (it was ~10 min while a shard ran
   # apt), which leaves ~630 s. The scheduled suite is ~4,100 s of tests (re-measured 2026-10-23,
   # with #7087's Compiler.Pipeline split). That is ~513 s per shard at eight, inside the guard's
   # 90% (567 s), and ~586 s at seven, outside it.
@@ -1065,24 +1065,32 @@ jobs:
       run: echo "key=$(.github/scripts/stage-chromium-fonts.sh key .github/chromium-fonts.list)" >> "$GITHUB_OUTPUT"
     - name: "Restore the browser font set (staged by browser-fonts)"
       uses: actions/cache/restore@v6
-      timeout-minutes: 1
+      # 🚨 The step cap must be LONGER than the download's own abort (review on #7102). A stalled
+      # segment is abandoned after SEGMENT_DOWNLOAD_TIMEOUT_MINS, and the action reports that as a
+      # cache MISS (a warning), so the shard goes on to the browser step and its "no staged font
+      # set" warning. The abort's clock starts only after the cache lookup, so with equal bounds
+      # the step cap could fire first and fail the shard over an optional input. The second
+      # minute is room for the lookup and the extraction.
+      # ShardWeightHeadroomGuard.TheFontRestoreMissesBeforeItsCap holds the ordering.
+      timeout-minutes: 2
       env:
-        # A cache segment that stops arriving is abandoned as a miss, inside the step's minute.
         SEGMENT_DOWNLOAD_TIMEOUT_MINS: 1
       with:
         path: chromium-fonts.tar.zst
         key: ${{ steps.fonts-key.outputs.key }}
     - name: "Provision the headless browser (infra, not a test)"
-      timeout-minutes: 6
+      timeout-minutes: 5
       env:
         PLAYWRIGHT_BROWSERS_PATH: /opt/ms-playwright
-        # The download's ceiling: the 115 MiB shell downloads in ~2 s (run 40011143666), and an
-        # attempt is bounded at 90 s, so two attempts plus one back-off fit. Every attempt is
-        # clamped to what is left of the budget. The step's `timeout-minutes` holds this, one
-        # --kill-after grace, the font install and the smoke print.
-        BROWSER_STEP_BUDGET: 180
+        # The download's ceiling. The 115 MiB shell downloads in ~2 s (run 40011143666), and an
+        # attempt is bounded at 90 s, so one full attempt, a back-off and a second capped attempt
+        # fit. Every attempt is clamped to what is left of the budget. The step's
+        # `timeout-minutes` holds this, one --kill-after grace, the font install (21 MB unpacked
+        # and indexed in seconds) and the smoke print:
+        # 150 + 30 + 40 + 5 + 60 = 285 s of the step's 300 s (TheProvisionStepsInnerBoundsFitItsCap).
+        BROWSER_STEP_BUDGET: 150
         BROWSER_INSTALL_TIMEOUT: 90
-        FONT_INSTALL_TIMEOUT: 70
+        FONT_INSTALL_TIMEOUT: 40
       run: |
         set -euo pipefail
         sudo mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"

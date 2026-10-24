@@ -177,6 +177,27 @@ public class ShardWeightHeadroomGuard
             + "TheIdealShardLoadFitsTheShardJobCap re-check the shard count against it");
     }
 
+    /// <summary>
+    /// The font-cache restore is OPTIONAL, so a stalled download must end as a reported cache MISS,
+    /// never as the step's own cap firing (review on #7102). A cap that fires fails the shard
+    /// before the browser step can warn and the tests can run. The download's abort
+    /// (<c>SEGMENT_DOWNLOAD_TIMEOUT_MINS</c>) starts only after the cache lookup, so the step cap
+    /// must leave room beyond it. At least 30 s is required, for the lookup and the extraction.
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void TheFontRestoreMissesBeforeItsCap()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var workflow = File.ReadAllText(Path.Combine(SourceScan.FindRepoRoot(), WorkflowPath));
+        var cap = ReadStepTimeoutMinutes(workflow, RestoreStepName) * 60;
+        var abort = ReadIntSetting(workflow, @"SEGMENT_DOWNLOAD_TIMEOUT_MINS:\s*(\d+)", "SEGMENT_DOWNLOAD_TIMEOUT_MINS") * 60;
+        (cap - abort).Should().BeGreaterThanOrEqualTo(30,
+            $"\"{RestoreStepName}\" is capped at {cap} s, but its download only aborts (as a cache miss) "
+            + $"after {abort} s, counted from after the lookup. The cap would fail the shard over an "
+            + "optional input first. Raise the step's timeout-minutes above the abort, and let "
+            + "TheIdealShardLoadFitsTheShardJobCap re-check the shard count");
+    }
+
     /// <summary>The parses the budget guards rest on, asserted.</summary>
     [Fact]
     public void TheShardBudgetGuardParsesItsInputs()
