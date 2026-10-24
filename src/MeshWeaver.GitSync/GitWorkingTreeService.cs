@@ -144,6 +144,7 @@ public sealed class GitWorkingTreeService(
 
     /// <summary>Writes a repo-relative file in the working tree (UTF-8), creating directories as needed.</summary>
     public IObservable<Unit> WriteFile(string userId, string repoSlug, string relativePath, string content) =>
+        // atomic-blocking-leaf: one CreateDirectory plus one File.WriteAllText of one file
         FileSystem.InvokeBlocking<Unit>(_ =>
         {
             var full = ResolveInTree(userId, repoSlug, relativePath);

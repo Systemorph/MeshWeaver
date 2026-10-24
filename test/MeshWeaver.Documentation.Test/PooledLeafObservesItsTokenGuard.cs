@@ -97,16 +97,17 @@ public class PooledLeafObservesItsTokenGuard
     /// <summary>
     /// A call to <c>Invoke</c>, <c>Run</c>, <c>InvokeBlocking</c> or <c>RunBlocking</c> whose first
     /// argument is a lambda, capturing the method name and the lambda's parameter. <c>async</c> is
-    /// optional. The <c>\s*\(</c> right after the alternation is what keeps <c>InvokeObservable</c>,
-    /// <c>InvokeStream</c> and <c>RunStream</c> out: each has its own projection (see the type
-    /// remarks).
+    /// optional, and so is an explicit type argument (<c>InvokeBlocking&lt;Unit&gt;(…)</c>, one level
+    /// of nesting). The <c>\s*</c> then <c>(</c> or <c>&lt;</c> right after the alternation is what
+    /// keeps <c>InvokeObservable</c>, <c>InvokeStream</c> and <c>RunStream</c> out: each has its own
+    /// projection (see the type remarks).
     ///
     /// <para>🚨 <c>DeliveryObservable.Run</c> is excluded BY NAME, and it is not a pool: it is
     /// <c>MessageHub</c>'s own handler bridge, which passes <c>CancellationToken.None</c>
     /// deliberately and says so at the site.</para>
     /// </summary>
     private static readonly Regex PooledLeaf = new(
-        @"(?<!DeliveryObservable)\.(?<method>InvokeBlocking|RunBlocking|Invoke|Run)\s*\(\s*(?:async\s+)?(?<param>\w+)\s*=>",
+        @"(?<!DeliveryObservable)\.(?<method>InvokeBlocking|RunBlocking|Invoke|Run)\s*(?:<(?:[^<>()]|<[^<>()]*>)*>)?\s*\(\s*(?:async\s+)?(?<param>\w+)\s*=>",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly Regex Marker = new(
@@ -182,6 +183,11 @@ public class PooledLeafObservesItsTokenGuard
         Assert.Equal(["_"], Offenders("=> pool.InvokeBlocking(_ =>\n    SweepCore(rootDirectory, liveTag, retention, DateTimeOffset.UtcNow, logger));"));
         Assert.Equal(["ct"], Offenders(".Select(_ => pool.InvokeBlocking(ct => pending.Read())"));
         Assert.Equal(["token"], Offenders("IoPool.RunBlocking(token => { ReadDisk(); return Unit.Default; })"));
+
+        // An explicit type argument, nested generics included. The guard's second draft missed this
+        // shape (GitProtocolRepoClient's temp-checkout cleanup).
+        Assert.Equal(["_"], Offenders("FileSystem.InvokeBlocking<System.Reactive.Unit>(_ => { Directory.Delete(tmp, recursive: true); return Unit.Default; })"));
+        Assert.Equal(["_"], Offenders("pool.Invoke<ImmutableList<string>>(_ => client.ListAsync())"));
     }
 
     /// <summary>
