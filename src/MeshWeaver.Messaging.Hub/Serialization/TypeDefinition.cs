@@ -54,9 +54,10 @@ public record TypeDefinition : ITypeDefinition
         // the null until GetKey dereferenced it — a bare NullReferenceException at every
         // activation of a hub whose data source registered such a type, naming nothing
         // (Systemorph/MeshWeaver#6643). GetKey/GetKeyType now refuse it BY NAME.
-        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
-        getKeyIsOverridden = new(() =>
-            GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition));
+        // Resolved on first use from the builder (see Key) — plain fields, no closure, no Lazy.
+        // A definition is held once per registry per type, so its per-instance objects multiply by the
+        // number of hubs (Doc/Architecture/PortalHeapIsHubs → "Per-hub DI and type metadata").
+        this.keyFunctionBuilder = keyFunctionBuilder;
 
         // 🚨 LAZY, and it must stay lazy — this is the FutuRe.Test teardown SIGSEGV (exit=139).
         // XmlDocs.Summary reflects into the type's assembly XML documentation. Constructing a
@@ -138,12 +139,12 @@ public record TypeDefinition : ITypeDefinition
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="instance"/> is null.</exception>
     public virtual object GetKey(object instance)
     {
-        var key = Key.Value ?? throw NoKeyMapping();
+        var keyFunction = Key ?? throw NoKeyMapping();
         if (instance is null)
             throw new ArgumentNullException(nameof(instance),
                 $"Cannot compute the key of a null instance of type {Type.FullName} (collection '{CollectionName}'): "
                 + "the instance sequence handed to this collection contains a null element.");
-        return key.Function(instance)
+        return keyFunction.Function(instance)
                ?? throw new InvalidOperationException(
                    $"An instance of type {Type.FullName} (collection '{CollectionName}') has a null key. "
                    + "Every instance of a data-source collection needs a non-null key value.");
@@ -163,23 +164,71 @@ public record TypeDefinition : ITypeDefinition
     /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
     public virtual object? GetKeyOrNull(object instance) =>
-        getKeyIsOverridden.Value ? GetKey(instance) : (Key.Value ?? throw NoKeyMapping()).Function(instance);
+        GetKeyIsOverridden() ? GetKey(instance) : (Key ?? throw NoKeyMapping()).Function(instance);
 
-    // Whether the runtime type overrides GetKey(object). Per instance and lazy — a reflection read
-    // once, on first use, never on the hub-construction path (see the description note above).
-    private readonly Lazy<bool> getKeyIsOverridden;
+    // Whether the runtime type overrides GetKey(object). The exact type cannot, so only a subclass
+    // pays the reflection read — on use, never on the hub-construction path (see the description
+    // note above).
+    private bool GetKeyIsOverridden() =>
+        GetType() != typeof(TypeDefinition)
+        && GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition);
 
     /// <summary>
     /// Returns the CLR type of the key produced by the type's configured key function.
     /// </summary>
     /// <returns>The key's CLR type.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
-    public Type GetKeyType() => (Key.Value ?? throw NoKeyMapping()).KeyType;
+    public Type GetKeyType() => (Key ?? throw NoKeyMapping()).KeyType;
 
     private InvalidOperationException NoKeyMapping() =>
         new($"No key mapping is defined for type {Type.FullName} (collection '{CollectionName}'). "
             + "A type served as a data-source collection needs a key: mark one property [Key], "
             + "name it Id or SystemName, or configure WithKey(...) on its type source.");
 
-    internal Lazy<KeyFunction?> Key { get; init; }
+    // The builder the key is resolved from on first use, or null once the key is fixed (an explicit
+    // key function, WithKeyFunction). Racing first readers resolve the same key function from the
+    // same builder, so either write is correct — the same guarantee the Lazy this replaces gave.
+    private KeyFunctionBuilder? keyFunctionBuilder;
+    private KeyFunction? key;
+    private volatile bool keyResolved;
+
+    /// <summary>The key function of this type, resolved from the registry's builder on first use.</summary>
+    internal KeyFunction? Key
+    {
+        get
+        {
+            if (keyResolved)
+                return key;
+            key = keyFunctionBuilder?.GetKeyFunction(Type);
+            keyResolved = true;
+            return key;
+        }
+    }
+
+    /// <summary>
+    /// True while this definition's key comes from the key-function CONVENTIONS of a registry's
+    /// builder rather than an explicit key function — i.e. it is the plain definition any registry
+    /// would build for the type. What lets a hub-level registry reuse its parent's definition of a
+    /// type whose key the conventions decide instead of holding a copy (TypeRegistry.WithType).
+    /// </summary>
+    internal bool KeyFromBuilder => keyFunctionBuilder is not null;
+
+    /// <summary>
+    /// True when the description and icon are the ones the type itself declares — neither was
+    /// overridden on this definition (<c>with { Description = … }</c> / <c>with { Icon = … }</c>).
+    /// </summary>
+    internal bool DescribedByType =>
+        ReferenceEquals(description, DisplayMetadata.Description) && Equals(Icon, DisplayMetadata.Icon);
+
+    /// <summary>A copy of this definition whose key is <paramref name="keyFunction"/>.</summary>
+    /// <param name="keyFunction">The explicit key function.</param>
+    /// <returns>The copy.</returns>
+    internal TypeDefinition WithKey(KeyFunction keyFunction)
+    {
+        var copy = this with { };
+        copy.keyFunctionBuilder = null;
+        copy.key = keyFunction;
+        copy.keyResolved = true;
+        return copy;
+    }
 }
