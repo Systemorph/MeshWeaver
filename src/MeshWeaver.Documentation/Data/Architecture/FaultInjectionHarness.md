@@ -18,7 +18,7 @@ Two projects under `test/`:
 
 | Project | What it holds |
 |---|---|
-| `MeshWeaver.Testing.FaultInjection` | the single-process injectors: `FaultSwitch`, `FaultInjectingStorageAdapter`, `HeldFirstFrameQueryProvider`, `CrossProcessChangeRelay`, `FaultInjectingHttpHandler`, `FaultInjectingInbox<TMessage,TResult>`, and `AddFaultInjectingStorage()` / `AddHeldFirstFrame()` for a monolith mesh. No Orleans dependency. |
+| `MeshWeaver.Testing.FaultInjection` | the single-process injectors: `FaultSwitch`, `FaultInjectingStorageAdapter`, `HeldFirstFrameQueryProvider`, `CrossProcessChangeRelay`, `FaultInjectingHttpHandler`, `FaultInjectingInbox<TMessage,TResult>`, and `AddFaultInjectingStorage()` / `AddFaultInjectingStorageOverTheChain()` / `AddHeldFirstFrame()` for a monolith mesh. No Orleans dependency. |
 | `MeshWeaver.Hosting.Orleans.TestBase` → `FaultInjectionCluster` | the multi-silo harness: N in-process silos over ONE store of record, each silo's store under its own injector, the LISTEN model between them, and `Kill` / `Drain` / `Linger`. |
 | `MeshWeaver.FaultInjection.Test` | one isolated regression per incident, plus one worked example per injector (`InjectorExamplesTest`). |
 
@@ -121,6 +121,50 @@ writes nothing. The create handler's store-unreachable arm answers `Unavailable`
 production answer during a managed database restart (#7068). Releasing the switch is the store
 coming back. Pair it with `DeliverChangeFeedGap(...)`, which is what the LISTEN reconnect declares
 after such a restart.
+
+### Any storage operation fails (read, write, delete, enumeration — once or until released)
+
+`FailOperations(matches, legs, error, times)`: the chosen `StorageLegs` (`Read`, `Exists`, `Write`,
+`Delete`, `Enumerate`, or a union) of every path the predicate selects throw the exception the case
+names, and the store underneath is never asked. `FailOperations(path, legs, …)` is the one-path form.
+A batch (`ReadMany`, `WriteMany`, `DeleteMany`) naming a selected path faults AS A WHOLE, the shape
+of one batched statement failing. The error defaults to the driver's command timeout
+(`TimeoutException("The operation has timed out.")`); pass a `DbException` subclass for a connect
+failure or an `InvalidOperationException` for a refused write. `times: 1` is a ONE-SHOT: the switch
+releases itself with that application, atomically, so the re-attempt lands. Every faulted call is an
+arrival, and `FaultSwitch.ArrivalCount` is the number a faulted case asserts to prove the fault was
+injected at all.
+
+```csharp
+// A read that does not answer, for every path containing the type's name:
+using var fault = store.FailOperations(p => p.Contains("StoredType"), StorageLegs.Read);
+// … run the case …
+fault.ArrivalCount.Should().BeGreaterThan(0, "the fault was actually injected");
+
+// The per-node hub's own save fails exactly once:
+var once = Injector.FailOperations(path, StorageLegs.Write, times: 1);
+await once.Arrivals.Should().Within(60.Seconds()).Emit("the save reached the store and failed");
+```
+
+`ServeReadOnlyFallback(shipped)` is the other read shape: `Read` (and a `ReadMany` naming the path)
+answers the shipped row whenever the store holds none, while existence, writes and deletes see only
+the writable store — a read-only provider under a writable override.
+
+**Where it sits is the case's decision.** `AddFaultInjectingStorage()` (before the base config) puts
+the injector UNDER every guard; `AddFaultInjectingStorageOverTheChain(arm)` (after it) wraps the
+OUTERMOST registration, so the caller's own read or write — the create handler's, the per-node hub's
+save — is what faults, before any guard sees it; and a case that hands an adapter to the code under
+test directly constructs `new FaultInjectingStorageAdapter(inner)` over whatever it wraps. Every
+`IStorageAdapter` member is forwarded, so no interface default silently replaces the store below.
+
+🚨 **Prefer it to a hand-rolled decorator.** A decorator that does not declare a defaulted member
+(`ReadMany`, `WriteMany`, `WriteIfVersion`, `DeleteIfExists`, the compare-and-deletes,
+`ListDescendantPaths`, `FindBestPrefixMatch`) does not pass it through: dispatch lands on the
+interface default INSIDE the decorator, and the case measures that default instead of the store.
+`FindBestPrefixMatch`'s default answers "nothing matched", and `WriteIfVersion`'s is a
+non-atomic read-compare-write through the decorator's own `Read` — so a read fault on a path also
+faults its conditional writes. Most of the hand-rolled copies the shared adapter replaced inherited
+at least one such default.
 
 ### Change-feed hold
 

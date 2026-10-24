@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -27,7 +28,7 @@ public class OwnerTeardownStoreFenceTest
     private static MeshNode Confirmed(long version) =>
         new("Doc", "Fence") { Name = "confirmed", NodeType = "Markdown", Version = version, CreatedDate = Born };
 
-    private static async Task<bool> Fence(HeldWriteStorageAdapter storage, MeshNode confirmed, Func<bool>? stop = null)
+    private static async Task<bool> Fence(FaultInjectingStorageAdapter storage, MeshNode confirmed, Func<bool>? stop = null)
         => await MeshExtensions.FenceTheConfirmedRow(storage, confirmed, Options, NullLogger.Instance, stop ?? (() => false))
             .Should().Within(TestTimeouts.Convergence).Emit("the fence terminates", TestContext.Current.CancellationToken);
 
@@ -39,7 +40,7 @@ public class OwnerTeardownStoreFenceTest
     public async Task TheConfirmedRow_IsMovedPastTheConfirmedVersion()
     {
         var inner = new InMemoryStorageAdapter();
-        var storage = new HeldWriteStorageAdapter(inner);
+        var storage = new FaultInjectingStorageAdapter(inner);
         await Put(inner, Confirmed(3));
 
         (await Fence(storage, Confirmed(3))).Should().BeFalse("the row exists; it is fenced, not gone");
@@ -53,7 +54,7 @@ public class OwnerTeardownStoreFenceTest
     public async Task ARemovedOverrideAboveAnUnversionedFallback_IsGone_AndIsNotRecreated()
     {
         var inner = new InMemoryStorageAdapter();
-        var storage = new HeldWriteStorageAdapter(inner);
+        var storage = new FaultInjectingStorageAdapter(inner);
         storage.ServeReadOnlyFallback(Confirmed(0) with { Name = "shipped" });
 
         (await Fence(storage, Confirmed(3))).Should().BeTrue("the WRITABLE row is gone: the delete won");
@@ -66,7 +67,7 @@ public class OwnerTeardownStoreFenceTest
     public async Task ANodeDeletedAndCreatedAgain_IsLeftAlone()
     {
         var inner = new InMemoryStorageAdapter();
-        var storage = new HeldWriteStorageAdapter(inner);
+        var storage = new FaultInjectingStorageAdapter(inner);
         await Put(inner, Confirmed(1) with { Name = "recreated", CreatedDate = Born.AddDays(1) });
 
         (await Fence(storage, Confirmed(3))).Should().BeFalse();
@@ -80,7 +81,7 @@ public class OwnerTeardownStoreFenceTest
     public async Task OnceTheDeletesVerdictArrived_TheFenceWritesNothing()
     {
         var inner = new InMemoryStorageAdapter();
-        var storage = new HeldWriteStorageAdapter(inner);
+        var storage = new FaultInjectingStorageAdapter(inner);
         await Put(inner, Confirmed(3));
 
         (await Fence(storage, Confirmed(3), stop: () => true)).Should().BeFalse();
