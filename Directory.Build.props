@@ -10,8 +10,10 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/Systemorph/MeshWeaver</RepositoryUrl>
     <!-- 🚨 NOTHING IN THIS REPOSITORY IS A NUGET PACKAGE UNLESS IT SAYS SO. Exactly ONE project
-         opts back in — memex/aspire/Memex.Aspire.Hosting (MeshWeaver.Aspire.Hosting.Memex) — and
-         the only other survivor, MeshWeaver.MemexTemplate, lives in MeshWeaver.Plugins. Everything
+         opts back in — src/MeshWeaver.Cli (MeshWeaver.Cli, policy `cli-thin-wrapper-own-version`) —
+         and both other survivors live in MeshWeaver.Plugins: MeshWeaver.MemexTemplate and the Aspire
+         integration (src/Memex.Aspire.Hosting, MeshWeaver.Aspire.Hosting.Memex, which moved there
+         from memex/aspire with the core-slimming carve). Everything
          else under the MeshWeaver prefix is retired (maintainer, 2026-09-07: "we retire most nuget
          packages completely… we leave the dotnet new package and the aspire integration").
 
@@ -365,24 +367,13 @@
     <PackageReference Include="System.Security.Cryptography.Pkcs" PrivateAssets="all" />
     <PackageReference Include="System.Security.Cryptography.Xml" PrivateAssets="all" />
   </ItemGroup>
-  <!-- MessagePack GHSA-qhrr-8q5h-9q3h (vulnerable < 2.5.303) arrives transitively as 2.5.302 through
-       Aspire.Hosting -> StreamJsonRpc 2.25.29, and no parent ships a patched dependency yet. Scoped
-       to the projects whose graph carries it (measured with `dotnet nuget why` and the
-       vulnerable-package listing), so no other project gains a package. A new project taking
-       Aspire.Hosting reports NU1902 and belongs here. Drop both blocks (and the PackageVersion) once
-       StreamJsonRpc ships against a patched MessagePack.
-       🚨 Memex.Aspire.Hosting is PACKED (MeshWeaver.Aspire.Hosting.Memex) and its consumers'
-       AppHosts take the same vulnerable chain, so its reference is EXPORTED — no PrivateAssets —
-       and the nuspec declares MessagePack >= 2.5.303, which lifts every consumer's graph. That is
-       the one deliberate exception to the PrivateAssets="all" rule below: here the override IS
-       what the package must hand on. Memex.Deploy.AppHost is never packed, so its own reference
-       stays private (it also receives the exported one across its ProjectReference). -->
-  <ItemGroup Condition=" '$(MSBuildProjectName)' == 'Memex.Aspire.Hosting' ">
-    <PackageReference Include="MessagePack" />
-  </ItemGroup>
-  <ItemGroup Condition=" '$(MSBuildProjectName)' == 'Memex.Deploy.AppHost' ">
-    <PackageReference Include="MessagePack" PrivateAssets="all" />
-  </ItemGroup>
+  <!-- MessagePack GHSA-qhrr-8q5h-9q3h: no project in this tree takes Aspire.Hosting any more. The two
+       that did (Memex.Aspire.Hosting, packed as MeshWeaver.Aspire.Hosting.Memex, and
+       Memex.Deploy.AppHost) moved to MeshWeaver.Plugins src/, whose src/Directory.Build.props now
+       carries their scoped overrides — the packed one still EXPORTED, so the nuspec keeps lifting
+       every consumer. Those references are VERSIONLESS and resolve against the MessagePack
+       PackageVersion in Directory.Packages.props here, which therefore stays until StreamJsonRpc
+       ships against a patched MessagePack. -->
   <!-- Overrides are the exception, not the rule.
        This block used to force patched versions of System.Security.Cryptography.Xml,
        Microsoft.AspNetCore.DataProtection, OpenTelemetry.Api and AngleSharp. Every one of those

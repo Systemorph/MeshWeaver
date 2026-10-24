@@ -14,7 +14,8 @@ their own subscription; they own the infra + data; we ship updates as new offer 
 
 ```bash
 # 1. Aspire emits the ACA bicep from the dedicated image-based AppHost's `azure` mode:
-aspire publish --apphost deploy/aspire/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
+# from a MeshWeaver.Plugins checkout (the AppHost moved there from deploy/aspire):
+aspire publish --apphost src/Memex.Deploy.AppHost/Memex.Deploy.AppHost.csproj \
     -o deploy/aca -- --mode azure
 # 2. Convert bicep -> ARM JSON:
 az bicep build --file deploy/aca/main.bicep --outfile deploy/marketplace/mainTemplate.json

@@ -17,7 +17,6 @@
     <Project Path="memex/Memex.Portal.Shared/Memex.Portal.Shared.csproj" />
   </Folder>
   <Folder Name="/memex/aspire/">
-    <Project Path="memex/aspire/Memex.Aspire.Hosting/Memex.Aspire.Hosting.csproj" />
     <Project Path="memex/aspire/Memex.Portal.ServiceDefaults/Memex.Portal.ServiceDefaults.csproj" />
   </Folder>
   <Folder Name="/Solution Items/">

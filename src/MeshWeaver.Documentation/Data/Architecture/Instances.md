@@ -79,7 +79,7 @@ provisioned with the deploy tooling, not from the running app — the control in
 **Create** a new instance — full runbook in
 [OnboardingNewEnvironment.md](/Doc/Architecture/OnboardingNewEnvironment):
 
-1. Add the namespace to `portalNamespaces` in `deploy/aks/infra/main.bicep` (creates its federated
+1. Add the namespace to `portalNamespaces` in `infra/platform/main.bicep` (Systemorph/Memex) (creates its federated
    credential + AcrPull) and redeploy the identity module.
 2. Create the instance's **database** on the shared `<pg-server>` server.
 3. Author the env's `values.<env>.yaml` (host, `MEMEX_DATABASENAME`, TLS secret, AI + auth config,
@@ -89,7 +89,8 @@ provisioned with the deploy tooling, not from the running app — the control in
 > 🚨 **Env folders live in the estate's PRIVATE configuration repository**, not under
 > `deploy/aks/envs/<env>/` — their directory names are tenant identities (see
 > [Where an estate's instances are declared](#where-an-estates-instances-are-declared)).
-> `deploy/aks/envs/example/` in this repository is the reference template only.
+> The reference template is `deployments/aks/example/` in Systemorph/Memex (it left this repository with the
+> core-slimming carve).
 5. Wire sign-in redirect URIs + invitation/email config for the new domain.
 
 **Delete** an instance:

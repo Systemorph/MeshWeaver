@@ -32,7 +32,8 @@
          >= US$10,000 annual revenue from revenue-generating use to pay it (OSMFEULA.txt §1-§4).
 
          🚨 The exposure is NOT the memex image — nothing there references Aspire at any depth.
-         It is memex/aspire/Memex.Aspire.Hosting, which is IsPackable and PUBLISHED as
+         It is the Aspire integration (MeshWeaver.Plugins src/Memex.Aspire.Hosting, moved there from
+         memex/aspire; it still takes its Aspire versions from THIS list), PUBLISHED as
          MeshWeaver.Aspire.Hosting.Memex. Its nuspec carries these three as dependencies, so
          bumping to 13.5.x hands the fee obligation to everyone who installs our integration and
          calls builder.AddMemex() — people who never chose it. Measured on both pins:
@@ -187,8 +188,9 @@
            - MessagePack: 2.5.302 via Aspire.Hosting -> StreamJsonRpc 2.25.29 — GHSA-qhrr-8q5h-9q3h
              (Moderate; first patched 2.5.303). No parent fixes it yet: StreamJsonRpc 2.25.29 is the
              newest and still depends on 2.5.302.
-         Lifted only in the projects whose graph carries it (the scoped ItemGroup in the root
-         Directory.Build.props); remove both once StreamJsonRpc ships against a patched MessagePack. -->
+         Lifted only in the projects whose graph carries it — since the Aspire projects moved, those are
+         MeshWeaver.Plugins' (its src/Directory.Build.props, versionless against this entry); remove
+         this once StreamJsonRpc ships against a patched MessagePack, as a Satellite-pins: change. -->
     <PackageVersion Include="MessagePack" Version="2.5.303" />
     <!-- The portal's own passkey rung of the approval step-up (Doc/Architecture/ApprovalStepUp):
          attestation and assertion verification by the maintained FIDO2 library, never by hand. -->
