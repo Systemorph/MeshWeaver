@@ -40,5 +40,5 @@ grpc:
 ```
 
 `MESH_GRPC_URL` and `MESH_GATE_ADDRESS` (the container's env) override the endpoint and address; the
-defaults match `deploy/helm` `values.grpc`. The Node gate (`javascript`/`typescript`) is the sibling —
+defaults match MeshWeaver.Plugins `deploy/helm` `values.grpc`. The Node gate (`javascript`/`typescript`) is the sibling —
 see `deploy/node-gate`.

@@ -131,7 +131,7 @@ public static class SetupOnlyHost
     /// <summary>
     /// Every path the deployment may probe while this instance waits to be set up.
     ///
-    /// <para>🚨 These are the CHART's paths, not a guess: <c>deploy/helm</c> gives the portal a
+    /// <para>🚨 These are the CHART's paths, not a guess: <c>deploy/helm</c> (MeshWeaver.Plugins) gives the portal a
     /// startup probe on <c>/health</c>, a readiness probe on <c>/ready</c> and a liveness probe on
     /// <c>/alive</c>, and the ASP.NET service defaults add <c>/healthz</c>. A path missing here is
     /// a probe that 404s, a pod that never reports READY, and a wizard nobody can reach — the

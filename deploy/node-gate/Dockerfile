@@ -33,7 +33,7 @@ COPY src/MeshWeaver.Mesh.Contract/Protos/mesh.proto /app/mesh.proto
 USER 10001
 
 # The trusted endpoint + the well-known address the .NET side routes js/ts submissions to; both
-# overridable, defaults match deploy/helm values.grpc. NODE_ENV=production; no buffering so the
+# overridable, defaults match the MeshWeaver.Plugins deploy/helm values.grpc. NODE_ENV=production; no buffering so the
 # worker's connect line + errors reach the pod log immediately.
 ENV MESH_GRPC_URL=http://127.0.0.1:8082 \
     MESH_GATE_ADDRESS=node/node-kernel \

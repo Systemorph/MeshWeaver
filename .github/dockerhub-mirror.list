@@ -19,9 +19,9 @@
 #     https://registry-1.docker.io/v2/<name>/manifests/<tag> | grep -i docker-content-digest
 
 # The registry's token server — chart-gate `Bundle registry scripts (executed)`; the same digest
-# deploy/helm/values.registry.example.yaml pins (the script refuses a mismatch).
+# MeshWeaver.Plugins deploy/helm/values.registry.example.yaml pins (the script refuses a mismatch).
 cesanta/docker_auth:1.14.0@sha256:98e0307e0d2dcbafe10098814a97d248143b78ca478693f78c3c0d67fe776ab4
 
 # The Loki binary that validates the rendered config — chart-gate `Observability values`; the tag
-# is the appVersion of the pinned loki-stack chart (deploy/aks/scripts/check-observability-values.sh).
+# is the appVersion of the pinned loki-stack chart (MeshWeaver.Plugins deploy/aks/scripts/check-observability-values.sh).
 grafana/loki:2.9.3@sha256:eb92f1a439171542fd718f929fad38c917b3cad15ec830ba4742e2ba5ab03313

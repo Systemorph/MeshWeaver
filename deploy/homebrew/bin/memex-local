@@ -184,7 +184,8 @@ resolve_chart() {
   if [ -n "${MEMEX_REPO:-}" ] && [ -f "$MEMEX_REPO/deploy/helm/Chart.yaml" ]; then
     printf '%s' "$MEMEX_REPO/deploy/helm"; return
   fi
-  # repo checkout: deploy/homebrew/bin/memex-local -> deploy/helm
+  # repo checkout with a chart beside it: deploy/homebrew/bin/memex-local -> deploy/helm. The chart
+  # lives in MeshWeaver.Plugins now, so a core checkout has none — set MEMEX_CHART_DIR.
   if [ -f "$SELF_DIR/../../helm/Chart.yaml" ]; then
     ( cd "$SELF_DIR/../../helm" && pwd ); return
   fi
@@ -193,7 +194,7 @@ resolve_chart() {
   if [ -f "$share/helm/Chart.yaml" ]; then
     printf '%s' "$share/helm"; return
   fi
-  die "cannot locate the deploy/helm chart (set MEMEX_REPO or MEMEX_CHART_DIR)"
+  die "cannot locate the deploy/helm chart (set MEMEX_CHART_DIR to a MeshWeaver.Plugins checkout's deploy/helm, or MEMEX_REPO to that checkout)"
 }
 
 # Resolve the repo root (needed only for the local-build image path, Option B).

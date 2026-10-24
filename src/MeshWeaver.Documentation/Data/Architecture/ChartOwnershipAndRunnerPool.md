@@ -106,6 +106,21 @@ fails none). It is worth doing when CI volume makes the per-job seconds dominate
 saying out loud that until then, the caching already in place is most of the benefit for none of the
 standing cost.
 
+## Outcome: the chart moved to MeshWeaver.Plugins
+
+The chart, the database chart, `deploy/aks/manifests`, `deploy/aks/scripts`, `values.aks.yaml`,
+`scripts/check-config-key-coverage.py`, the bundle-registry harness and `chart-gate.yml` moved to
+`MeshWeaver.Plugins` at the same paths, beside the hosting operator (core slimming). The
+relocation checklist above is answered there, reader by reader, in Plugins `Hosting/ChartHome`:
+the operator image now stages the chart from its own repository, the chart-reading guard tests
+moved to Plugins `Memex.Hosts.Test/Chart`, the estate's lanes read the chart with a scoped App token,
+and this repository's registry-retention gate names the chart's new home (`chartRepository`) and
+leaves its re-derivation to the Plugins `Chart Gate`. Nothing estate-specific was in the moved
+material — this repository is public — so the estate's own repository received nothing.
+
+What remains open is an owner decision: `MeshWeaver.Plugins` is private, so material that was public
+is now readable only with a credential, and the homebrew tap (a public artifact) still vendors it.
+
 ## See also
 
 - [The Continuous Delivery Contract](../ContinuousDeliveryContract) — what a published image set guarantees

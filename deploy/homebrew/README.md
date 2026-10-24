@@ -4,8 +4,9 @@ A `brew`-installable CLI that stands up the **prod-like memex stack on Colima k3
 **1:1 with [`LocalColimaMac.md`](../../src/MeshWeaver.Documentation/Data/Architecture/LocalColimaMac.md)**
 — same defaults, same topology, no substitutions. It *orchestrates*
 `colima` / `helm` / `kubectl` / `mkcert` / `ollama`; it does **not** reimplement
-the chart. The [`deploy/helm`](../helm) chart + values stay the single source of
-truth.
+the chart. The `deploy/helm` chart + values — in
+[MeshWeaver.Plugins](https://github.com/Systemorph/MeshWeaver.Plugins), beside the hosting
+operator that installs it — stay the single source of truth.
 
 > Why: the manual doc has ~14 steps across colima, image build, ingress, mkcert,
 > Helm, Ollama, and a launchd port-forward. This packages all of it behind
@@ -20,9 +21,10 @@ brew install memex-local
 ```
 
 The tap is **published by this repository's own CI**: `.github/workflows/homebrew.yml`
-installs and tests the formula from every PR that touches `deploy/homebrew/**` or
-`deploy/helm/**` (on a macOS runner, under macOS's bash 3.2), and on every merge to
-`main` attaches a tarball of exactly those two directories to a release of the tap and
+installs and tests the formula from every PR that touches `deploy/homebrew/**` (on a
+macOS runner, under macOS's bash 3.2), and on every merge to `main` attaches a tarball of
+`deploy/homebrew` plus the chart (checked out of MeshWeaver.Plugins with a read-only App
+token and packed at `deploy/helm`) to a release of the tap and
 commits the formula with its `sha256`. The version is `0.2.<main commit count>`, so
 **`brew upgrade memex-local` follows main**. The formula declares the **exact brew
 toolchain `LocalColimaMac.md` §1 installs** — `colima`, `kubernetes-cli` (kubectl),
@@ -38,8 +40,9 @@ default pulls the CI-built image instead. Install it separately for Option B
 chart + share assets relative to the script — or install a local tap over the template
 formula (`brew tap-new systemorph/memex-dev`, copy `Formula/memex-local.rb` in, `brew
 install --HEAD systemorph/memex-dev/memex-local`). A brew install's wrapper pins
-`MEMEX_CHART_DIR` to the vendored chart; run-from-checkout uses the live `deploy/helm`
-(or `MEMEX_REPO`/`MEMEX_CHART_DIR`) directly.
+`MEMEX_CHART_DIR` to the vendored chart; run-from-checkout needs `MEMEX_CHART_DIR` (or
+`MEMEX_REPO`) pointing at a MeshWeaver.Plugins checkout, since this repository no longer
+carries the chart.
 
 ## Two modes — where the plugins come from
 

@@ -28,7 +28,7 @@ namespace Memex.Portal.Shared.Test;
 ///
 /// <para>Everything here drives the REAL <see cref="ServiceDefaults.AddDefaultHealthChecks"/> +
 /// <see cref="ServiceDefaults.MapDefaultEndpoints"/> composition over a TestServer, for the same
-/// reason <see cref="ProbeSeparationTest"/> does: a restatement of the wiring would agree with
+/// reason <c>ProbeSeparationTest</c> (now in MeshWeaver.Plugins, with the chart) does: a restatement of the wiring would agree with
 /// itself while the deployment answered something else.</para>
 /// </summary>
 public class HealthCensusTest

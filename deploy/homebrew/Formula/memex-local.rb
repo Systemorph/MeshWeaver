@@ -4,7 +4,8 @@
 # memex-local — stand up the prod-like memex stack on Colima k3s (Mac), 1:1 with
 # Doc/Architecture/LocalColimaMac. The formula declares the brew toolchain and
 # installs the orchestration CLI; it vendors a snapshot of the deploy/helm chart
-# so a standalone install works. Run-from-checkout mode uses the live deploy/helm
+# (MeshWeaver.Plugins; make-tarball.sh packs it at deploy/helm) so a standalone
+# install works. Run-from-checkout mode uses a live chart checkout
 # (or MEMEX_REPO/MEMEX_CHART_DIR) directly — that checkout stays the single source
 # of truth. NOTE: a brew install's wrapper sets MEMEX_CHART_DIR to the vendored
 # snapshot, so on a brew install an *exported* MEMEX_CHART_DIR/MEMEX_REPO does NOT
