@@ -111,6 +111,68 @@ public class AnInfrastructureActivationEndsWithItsLastSubscriberTest(ITestOutput
             + "its last stream ends would rebuild the hub on every navigate-away-and-back", ct);
     }
 
+    [Fact(Timeout = 120_000)]
+    public async Task ALastSubscriberLeavingDuringAHold_RetiresWhenTheHoldEnds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = GetClient();
+        var path = (await CreateNodes(client, $"TestUser/hold6623-{Guid.NewGuid():N}", 1)).Single();
+        await NoHubLive([path], "precondition: a cold address");
+
+        var access = SiloMesh.ServiceProvider.GetRequiredService<AccessService>();
+        await access.RunAsSystem(() => SiloMesh.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null).Take(1))
+            .Should().Within(TestTimeouts.Convergence).Emit($"the pass reads {path}", ct);
+        var hub = LiveHub(path);
+        hub.Should().NotBeNull("the pass's read activated the hub");
+
+        // A long-running operation holds the activation while its last subscriber goes.
+        var hold = hub!.Configuration.Get<GrainLongRunningOperationCallback>()!.BeginOperation();
+        try
+        {
+            await ReleaseWhenUnwatched(SiloServices().GetRequiredService<IMeshNodeStreamCache>(), path);
+            await hub.DisposalCompleted.Take(1).Should().NotEmit(TimeSpan.FromSeconds(2),
+                "a held activation is not retired under its operation", ct);
+        }
+        finally
+        {
+            hold.Dispose();
+        }
+
+        await hub.DisposalCompleted.Take(1).Should().Within(TestTimeouts.Convergence).Emit(
+            "the last subscriber left while the hold was up; that decision is kept pending and taken "
+            + "when the hold ends — otherwise the activation waits out idle collection after all", ct);
+    }
+
+    [Fact(Timeout = 120_000)]
+    public async Task ASameSiloPersonRead_KeepsIdleCollection()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var client = GetClient();
+        var path = (await CreateNodes(client, $"TestUser/silo6623-{Guid.NewGuid():N}", 1)).Single();
+        await NoHubLive([path], "precondition: a cold address");
+
+        // A PERSON subscribes from the SILO's own process — the shape of a Blazor view's stream on a
+        // portal co-hosted with its silo. The subscribe reaches the hosted hub through the mesh hub's
+        // hosted-hub routing and never passes the grain's DeliverMessage.
+        var access = SiloMesh.ServiceProvider.GetRequiredService<AccessService>();
+        var person = new AccessContext { ObjectId = "TestUser", Name = "TestUser" };
+        ISynchronizationStream<System.Text.Json.JsonElement> stream;
+        using (access.SwitchAccessContext(person))
+            stream = SiloMesh.GetWorkspace().GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
+                new Address(path), new LayoutAreaReference("Overview"));
+        await stream.Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit($"TestUser's view of {path} on the silo renders", ct);
+        var hub = LiveHub(path);
+        hub.Should().NotBeNull("the person's subscribe activated the hub");
+
+        // Every stream ends: the person's, and the silo's own activation mirror.
+        stream.Dispose();
+        await ReleaseWhenUnwatched(SiloServices().GetRequiredService<IMeshNodeStreamCache>(), path);
+
+        await hub!.DisposalCompleted.Take(1).Should().NotEmit(TimeSpan.FromSeconds(5),
+            "a person reached this activation on the silo itself; it keeps Orleans' idle collection", ct);
+    }
+
     private async Task<ImmutableList<string>> CreateNodes(IMessageHub client, string prefix, int count)
     {
         var ct = TestContext.Current.CancellationToken;

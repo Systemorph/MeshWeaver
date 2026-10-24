@@ -1749,12 +1749,13 @@ public class Workspace : IWorkspace
     /// </summary>
     internal void RegisterClientSubscription(
         Address? subscriber, string? streamId, WorkspaceReference reference, ISynchronizationStream stream,
-        bool acceptsCoalescedEnd = false, IObservable<System.Reactive.Unit>? fullsPosted = null)
+        bool acceptsCoalescedEnd = false, IObservable<System.Reactive.Unit>? fullsPosted = null,
+        bool byPerson = false)
     {
         if (subscriber is null || string.IsNullOrEmpty(streamId))
             return;
         var key = (subscriber.ToString(), streamId);
-        _clientSubscriptions[key] = new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd, fullsPosted);
+        _clientSubscriptions[key] =new ClientSubscription(subscriber, reference, stream, acceptsCoalescedEnd, fullsPosted);
         // Pair-exact removal by REFERENCE identity (never value equality — see ClientSubscription):
         // a later stream that legitimately took over this key must not be unregistered by an
         // earlier stream's teardown.
@@ -1769,9 +1770,12 @@ public class Workspace : IWorkspace
         // STREAM lives — every route out of the registry (unsubscribe, eviction, refusal, the hub's
         // own teardown) ends in that stream's disposal, so the lease cannot outlive it or be released
         // twice. With the last lease gone, an activation that has served only the platform ends
-        // instead of waiting out Orleans' idle collection. No grain (Monolith): no callback, no lease.
+        // instead of waiting out Orleans' idle collection. The lease carries whether a PERSON opened
+        // the stream: a same-silo subscribe reaches a hosted hub directly and never passes the
+        // grain's own delivery seam, and a hosted child's stream belongs to the same activation.
+        // No grain (Monolith): no callback, no lease.
         if (GrainSubscriberLeasesOf(Hub) is { } leases)
-            stream.RegisterForDisposal(leases.Acquire());
+            stream.RegisterForDisposal(leases.Acquire(byPerson));
     }
 
     /// <summary>

@@ -771,6 +771,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
                     // with its LAST subscriber when it has served nobody but the platform — see
                     // AcquireSubscriberLease.
                     .Set(new GrainSubscriberLeases(AcquireSubscriberLease))
+                    // …and the SAME person check on the hub's own delivery seam: a same-silo
+                    // delivery reaches this hub directly through the mesh hub's hosted-hub routing
+                    // and never passes DeliverMessage below.
+                    .AddDeliveryPipeline(pipeline => pipeline.AddPipeline((d, ct, next) =>
+                    {
+                        NotePerson(d.AccessContext);
+                        return next.Invoke(d, ct);
+                    }))
                     // The completion counterpart to the three callbacks around it: they are what a
                     // straggler DOES to this activation, this is what the activation TELLS anyone
                     // waiting for it to be gone. Subscribing to it is the alternative to polling
@@ -1047,8 +1055,13 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     {
         // Stamp the start of the active-operation RUN on the 0→1 transition so the keep-alive timer can
         // bound it (see MaxLongRunningOperationDuration / #147).
-        if (Interlocked.Increment(ref _activeOperations) == 1)
-            Volatile.Write(ref _longRunningStartedTicks, DateTime.UtcNow.Ticks);
+        // Counted under the lifetime gate so the #6623 retirement decision can never read a count
+        // this hold has already raised (see TryRetire).
+        lock (_lifetimeGate)
+        {
+            if (++_activeOperations == 1)
+                Volatile.Write(ref _longRunningStartedTicks, DateTime.UtcNow.Ticks);
+        }
         // DelayDeactivation is thread-safe in Orleans; guarded because a round can start
         // on a pool thread after the activation already died (teardown race).
         TryDelayDeactivation(TimeSpan.FromMinutes(10));
@@ -1060,11 +1073,23 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         {
             if (Interlocked.Exchange(ref released, 1) != 0)
                 return;
-            var remaining = Interlocked.Decrement(ref _activeOperations);
-            if (remaining == 0)
-                Volatile.Write(ref _longRunningStartedTicks, 0);   // run ended — clear the bound clock
+            int remaining;
+            var retire = false;
+            lock (_lifetimeGate)
+            {
+                remaining = --_activeOperations;
+                if (remaining == 0)
+                {
+                    Volatile.Write(ref _longRunningStartedTicks, 0);   // run ended — clear the bound clock
+                    // The last subscriber may have gone WHILE this hold was up; that release could
+                    // not retire the activation then, so it left the decision pending (#6623).
+                    retire = _retirementPending && TryRetire();
+                }
+            }
             logger.Log(level, "Grain {GrainId}: {Purpose} completed (active={Count})",
                 this.GetPrimaryKeyString(), purpose, remaining);
+            if (retire)
+                Retire();
         });
     }
 
@@ -1073,32 +1098,66 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         public void Dispose() => onDispose();
     }
 
-    // #6623 — how many server-side streams the hubs of this activation serve right now (one lease
-    // each, see GrainSubscriberLeases), and whether any delivery to it ever carried a PERSON's
-    // identity (AccessService.ReaderOf). 0/1 flag, set once, never cleared.
+    // #6623 — the lifetime counts behind the retirement decision, all moved under _lifetimeGate:
+    // how many server-side streams the hubs of this activation serve (one lease each, see
+    // GrainSubscriberLeases), whether a PERSON ever reached it (sticky), and whether a retirement
+    // was due while a hold was up. The gate is a short SYNCHRONOUS critical section over plain
+    // counters — nothing inside it waits or posts — so a hold or a lease is counted either before
+    // the decision (and blocks it) or after it, never in between.
+    private readonly object _lifetimeGate = new();
     private int _subscriberLeases;
-    private int _servedAPerson;
+    private bool _servedAPerson;
+    private bool _retirementPending;
+    private bool _retiring;
 
     /// <summary>
     /// Takes one subscriber lease (<see cref="GrainSubscriberLeases"/>). The workspace takes it
     /// when it registers a server-side stream and releases it when that stream is disposed.
     /// </summary>
+    /// <param name="byPerson">Whether the subscribe carried a person's identity.</param>
     /// <returns>The lease; disposing it more than once releases it once.</returns>
-    private IDisposable AcquireSubscriberLease()
+    private IDisposable AcquireSubscriberLease(bool byPerson)
     {
-        Interlocked.Increment(ref _subscriberLeases);
+        lock (_lifetimeGate)
+        {
+            _subscriberLeases++;
+            _servedAPerson |= byPerson;
+        }
         var released = 0;
         return new LongRunningOperationScope(() =>
         {
             if (Interlocked.Exchange(ref released, 1) != 0)
                 return;
-            if (Interlocked.Decrement(ref _subscriberLeases) == 0)
-                OnLastSubscriberLeft();
+            bool retire;
+            lock (_lifetimeGate)
+                retire = --_subscriberLeases == 0 && TryRetire();
+            if (retire)
+                Retire();
         });
     }
 
     /// <summary>
-    /// 🚨 The end of an activation that only the PLATFORM ever used (#6623).
+    /// Records that a delivery to this activation carried a person's identity
+    /// (<see cref="AccessService.ReaderOf"/>). Called from the grain's own delivery seam AND from
+    /// the hub's delivery pipeline, because a same-silo delivery reaches the hosted hub directly
+    /// and never passes the grain.
+    /// </summary>
+    /// <param name="context">The delivery's identity.</param>
+    private void NotePerson(AccessContext? context)
+    {
+        if (Volatile.Read(ref _servedAPerson) || AccessService.ReaderOf(context) is null)
+            return;
+        lock (_lifetimeGate)
+        {
+            _servedAPerson = true;
+            _retirementPending = false;
+        }
+    }
+
+    /// <summary>
+    /// 🚨 The end of an activation that only the PLATFORM ever used (#6623). Call under
+    /// <see cref="_lifetimeGate"/> when the last subscriber has gone or the last hold has ended;
+    /// true means "retire now" and the caller runs <see cref="Retire"/> outside the gate.
     ///
     /// <para><b>Why.</b> A boot step reads many nodes as System through the process's mesh-node
     /// cache — <c>GetMeshNodeStream(path).Take(1)</c> — and each read builds the node's hub. The read
@@ -1111,31 +1170,45 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     ///
     /// <para><b>The rule.</b> When the LAST server-side stream of an activation ends, and no delivery
     /// to it ever carried a person's identity, it has nothing left to do: ask Orleans to deactivate it
-    /// now. The next access builds it again, as after any idle collection. It applies only while
-    /// nothing else holds the activation — not during its build or a long-running operation
-    /// (<see cref="HoldActivation"/>), not to an instance singleton (<c>RelocateOnDrain</c>), which
-    /// lives for its own work rather than for subscribers, and not to a hub already tearing down.</para>
+    /// now. The next access builds it again, as after any idle collection. Not to an instance
+    /// singleton (<c>RelocateOnDrain</c>), which lives for its own work rather than for subscribers,
+    /// and not to a hub already tearing down. While a hold is up (the build, a long-running
+    /// operation — <see cref="HoldActivation"/>) the decision is kept PENDING and taken again when
+    /// the last hold ends, so a subscriber leaving mid-build does not lose it.</para>
     ///
     /// <para><b>Why "never a person".</b> A reader who navigates away and back closes and reopens its
     /// streams; retiring the hub between the two would rebuild it on every navigation. Such an
     /// activation keeps Orleans' idle collection, exactly as before. The flag is sticky for the
     /// activation's life because one person is enough to make that the right trade.</para>
     ///
-    /// <para>Event-driven: it runs on the release that brings the count to zero, from the stream's own
-    /// disposal. No timer and no sweep.</para>
+    /// <para>Event-driven: it runs on the release that brings a count to zero. No timer, no sweep. A
+    /// lease or hold taken AFTER the decision meets an activation that is deactivating — the case
+    /// every Orleans idle collection already presents, which a subscriber rides out through its
+    /// re-ask and a hold through the disposal it registered.</para>
     /// </summary>
-    private void OnLastSubscriberLeft()
+    /// <returns>True when the caller must retire the activation.</returns>
+    private bool TryRetire()
     {
-        if (Volatile.Read(ref _servedAPerson) != 0 || Volatile.Read(ref _activeOperations) != 0)
-            return;
+        _retirementPending = false;
+        if (_retiring || _servedAPerson || _subscriberLeases != 0)
+            return false;
         if (_hub is not { RunLevel: MessageHubRunLevel.Started } hub || hub is MessageHub { IsDisposing: true })
-            return;
+            return false;
         if (hub.ServiceProvider.GetService(typeof(HostDrainSignal)) is HostDrainSignal signal
             && signal.Relocates(hub.Address))
-            return;
-        // A subscriber that arrived between the release and here keeps the activation.
-        if (Volatile.Read(ref _subscriberLeases) != 0)
-            return;
+            return false;
+        if (_activeOperations != 0)
+        {
+            _retirementPending = true;
+            return false;
+        }
+        _retiring = true;
+        return true;
+    }
+
+    /// <summary>Asks Orleans to deactivate an activation <see cref="TryRetire"/> released.</summary>
+    private void Retire()
+    {
         logger.LogDebug(
             "Grain {GrainId}: its last subscriber has gone and only the platform ever used this activation "
             + "— deactivating instead of waiting for idle collection (#6623)",
@@ -1223,9 +1296,8 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
         }
 
         // #6623: remember, for the life of this activation, that a PERSON reached it. Sticky by
-        // design — see OnLastSubscriberLeft for the one decision it feeds.
-        if (Volatile.Read(ref _servedAPerson) == 0 && AccessService.ReaderOf(delivery.AccessContext) is not null)
-            Volatile.Write(ref _servedAPerson, 1);
+        // design — see TryRetire for the one decision it feeds.
+        NotePerson(delivery.AccessContext);
 
         // 🚨 THE GRAIN CALL IS ANSWERED NOW, NEVER WHEN THE HUB IS BUILT — issues #5286 / #5417.
         //

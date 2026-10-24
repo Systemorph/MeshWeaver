@@ -515,7 +515,19 @@ released, `MessageHubGrain` deactivates the activation through Orleans (`Deactiv
   subscribers;
 - it is not already tearing down.
 
-It runs on the release that brings the count to zero, so there is no timer and no sweep. The
+A last subscriber that leaves while a hold is up does not lose the decision: it is kept pending and
+taken again when the last hold ends. Holds, leases and the decision share one short synchronous
+critical section (`_lifetimeGate`, plain counters, nothing awaited inside). A hold or lease is
+therefore counted either before the decision, which it blocks, or after it. "After" is the case
+every Orleans idle collection already presents: a subscriber rides it out through its re-ask.
+A person is recognised at three seams: the grain's `DeliverMessage`, the hub's own delivery
+pipeline (a same-silo delivery can reach a hosted hub without passing the grain), and the
+subscribe that takes a lease (a hosted child's stream belongs to the same activation). A person
+reading through the shared mesh-node cache does NOT mark the owner, because the cache subscribes as
+itself. That reuse is the cache's: its mirror holds the lease while the person reads, and for its
+10-minute window after.
+
+It runs on the release that brings a count to zero, so there is no timer and no sweep. The
 Monolith hosts no grain, registers no lease callback, and is unchanged.
 
 **What this does and does not shorten.** A platform-only activation now ends when its last

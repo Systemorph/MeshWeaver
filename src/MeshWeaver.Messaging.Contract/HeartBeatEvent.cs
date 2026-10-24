@@ -49,8 +49,10 @@ public record GrainLongRunningOperationCallback(Func<IDisposable> BeginOperation
 /// until idle collection. An activation a person has used is not affected.</para>
 /// <para>In monolith mode no callback is set and no lease is taken.</para>
 /// </summary>
-/// <param name="Acquire">Takes one subscriber lease; disposing the result releases it once.</param>
-public record GrainSubscriberLeases(Func<IDisposable> Acquire);
+/// <param name="Acquire">Takes one subscriber lease; disposing the result releases it once. The
+/// argument says whether the subscribe carried a PERSON's identity, which keeps the activation on
+/// ordinary idle collection for the rest of its life.</param>
+public record GrainSubscriberLeases(Func<bool, IDisposable> Acquire);
 
 /// <summary>
 /// Registered on the hub configuration by the Orleans grain during activation
