@@ -384,7 +384,7 @@ function of the filter and the legs.
 
 > **Layout (2026-10).** Every filter below lives in a side panel beside the list (a platform `LayoutGrid`: the
 > panel stacks ABOVE the list on a narrow page), grouped under small titles — Kind, Tags, Source, Options. The
-> toolbar over the list holds the bulk acts only, icon-only (the name is the tooltip and accessible name):
+> toolbar over the list holds the bulk acts only, icon-only (the name is the tooltip and accessible name; all four buttons share one quiet appearance — none is picked out in the accent colour):
 > Delete, Undo and — only while the list or the ticked rows hold an approval request the viewer decides
 > (`InboxLayoutArea.ToolbarOf`) — Approve and Reject. The grid's first column is headed **Source** and shows the
 > MEDIUM the item came through; `InboxSourceIcons` maps the leg's source id to a Fluent symbol (Approvals,
@@ -393,8 +393,9 @@ function of the filter and the legs.
 > symbol and a switch. "N item(s) needing you are hidden by the source filter" is one quiet line with a Show all
 > action that clears Only and switches every source on.
 >
-> Kinds, tags, sources and "Show ignorable" are CHECKBOXES (`filter.kinds/{key}`, a bound list of `InboxTagItem`
-> for tags, `sources/{key}`): the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
+> Kinds, states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
+> (`kinds/{key}`, `states/{key}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
+> tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
 > column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
 > Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
 > for activities, Unread for mail and notifications. A check mark is reserved for done states; approval requests
@@ -403,7 +404,8 @@ function of the filter and the legs.
 | Control | Bound to | What it does |
 |---|---|---|
 | search box (top of the side panel) | `search` | the term goes to the query engine with EVERY leg, as free text (full text and the semantic index), under the owner's identity — never a match over the rows already loaded |
-| one symbol + switch per source (side panel, Source) | `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, its symbol `InboxSourceIcons.Resolve`; a source with no entry is shown, so a leg a package brings later never arrives switched off — unless its legs say `ShownByDefault: false` (notifications: the feed is long, so it is one click away) |
+| one symbol + switch per CONFIGURED source (side panel, Source) | the preferences node's `sources/{key}` (the id, hex-encoded) | shows or hides what one provider brought, its symbol `InboxSourceIcons.Resolve`; a source with no entry is shown, so a leg a package brings later never arrives switched off. A source the viewer has not connected has no switch at all |
+| the Account select (`SelectControl`), under the Only select | the preferences node's `account` (an address key, empty for all) | one option per configured ADDRESS — each mailbox, not each provider — fed from the addresses the rows reached; picking one lists only what reached it |
 | the Only select (`SelectControl`), above the source rows | `only` (a source key, empty for all) | picking one source lists that source alone and wins over its switch; "All sources" gives the switches back exactly as they were. A side-menu category still wins over both |
 | the Show ignorable switch (side panel, Options) | `showIgnorable` | items a triage judged `ignorable` (`InboxImportance` — spam, promotions, noise) stay out of the list until it is on; the notice above the grid counts what it hides. Items nobody judged are always shown |
 | the tags (`RadioGroupControl`, side panel) | `tag` | GitHub's label filter over the triage's tags (`InboxRow.Tags`): Important first, then each tag by use, each with its count. A tag narrows the folder and sources shown |
@@ -480,6 +482,30 @@ and the notification feed no longer carries them. 🚨 `NotificationType.Approva
 DEFAULT and is omitted from stored JSON, so the leg NEGATES every stamped type
 (`InboxQueries.StampedNotificationTypes`, pinned against the enum by a test).
 
+**The approval is the row — never the announcement (2026-10-23).** The "approval required" notification
+stays in the approver's partition after the request is decided, wherever it was decided (the inbox's
+Approve, the approval's own page, an operator's button), and listing it for ever made the inbox a log of
+decisions long taken (*"something announcing i had an approval?! … i should just see approvals which are not
+approved yet"*). So the Approvals source files a request by what the node it names
+(`Notification.TargetNodePath`, `InboxRow.Target`) says about it (`InboxApprovalTargets.Read`), **judged by the target's own
+lifecycle, never by the absence of an approver** (2026-10-23, second round: a reconcile the control plane had REFUSED as stale
+carried no `approvedBy` and so still read "Awaiting decision"). The target is OPEN only while it still waits: its lifecycle word
+(`state`, then `status`) is not final and nothing closes it. It is CLOSED when that word is final — `Refused`, `Failed`,
+`Cancelled`, `Stale`/`Superseded`, `Expired`, `Done`/`Completed`/`Closed`/`Merged`, or a decision being carried out
+(`Running`, `Requested`) — when an end stamp (`finishedAt`, `closedAt`, `completedAt`) is set, or when it carries a
+recorded decision: a `status` of approved/rejected, or an `approvedBy`/`approvedAt`/`approvalDate`/`rejectedBy`/`rejectedAt`/
+`decidedBy`/`decidedAt`. The inbox knows no approval kind; any approval-gated type shares that vocabulary. A closed target keeps
+its request as a **closed row**: its State is the outcome — **Stale** for a target retired because what it was planned against
+moved on (a word `stale`/`superseded`, or a refusal whose `error` begins "stale"), else Approved, Rejected, Refused, Failed,
+Cancelled, Expired or Done — and it is listed only under the *Done* state filter, so the default (*Open*) view lists the
+requests that still wait. The grid's **Status** column carries the detailed text (`Refused · stale`, `Done`, `Awaiting
+decision`; for a running activity `Running · step 3/7`), beside the short State badge. 🚨 A decision that is recorded but not yet CONFIRMED is not decided: with step-up required ([Approval step-up](/Doc/Architecture/ApprovalStepUp)) a recorded decision with no receipt stamped (`stepUpReceipts`) is HELD, so the request stays until the receipt lands — the approver who walked away from the confirmation still finds it. The target is observed live through its own stream (a decision taken on the approval's own page drops the request from an open inbox; a deleted and recreated approval is picked up again). A target read that fails or times out keeps the
+request (logged); a target that answers completely with nothing — gone, or not the approver's to see — has
+nothing left to decide and the request leaves altogether. A **click on the row opens the approval** (`InboxLayoutArea.OpenTarget`),
+and the inbox address of such a notification (`/{user}/Inbox/{item}`, an old link) redirects to it
+(`InboxReadingView`). A notification raised for the approvals feature is never a row of the Notifications
+source, whatever its type: what became of an approval is the ledger's row below.
+
 **The Approvals source also carries a ledger: requested by me, and recently decided.** Three groups
 share the one Approvals switch and category, in band order. *Needs you* is the notifications above.
 *Running* lists the approvals the viewer REQUESTED that still wait for their approver, each saying
@@ -511,6 +537,35 @@ covering every held decision (`StepUpPaths.StartUrl` with all targets — the en
 a receipt per target), then back to the inbox. Each type's control plane consumes its own receipt
 and ratifies, and the request leaves the inbox once its type files it away.
 
+### What the inbox shows by default — and what it keeps (2026-10-23)
+
+*"Default only open approvals and important notifications … let's configure the category filter on the left freely."*
+The filters that persist are one node per person, `InboxPreferences` at `{user}/_Settings/Inbox` (the shape of
+the notification settings): `kinds`, `sources`, `states` (each `{key: bool}`), `account` and `showIgnorable`. The
+checkboxes are bound **directly to that node** (`LayoutAreaReference.GetMeshNodeDataContext`, per-field writes
+through the node stream — [DataBinding](/Doc/GUI/DataBinding)): there is no `/data` copy and no save subscription,
+so a tick is one write, the next open of the inbox finds it, and a change from another device re-feeds the grid
+live. The search text, the Only select and the tags stay in the page's data section: they are the view's, and end
+with it.
+
+A person who never chose gets the node on first open, seeded with `InboxPreferencesNodeType.Defaults`:
+
+- **Kinds** — ticked: those whose legs say `InboxQueryLeg.DefaultKind` (Approvals and Notifications); every other
+  kind is one tick away. Kinds and sources now **both** apply (a ticked kind used to replace the source switches).
+- **States** — only *Open*: an approval awaiting a decision, never one already decided, refused or retired as stale; *Done* is one tick away.
+- **Important notifications only.** A notification is `important` when it is a platform/system event and
+  `ignorable` otherwise (`InboxRows.NotificationImportance`; a triage's own judgement wins), so the quiet ones stay
+  out until *Show ignorable* is ticked, and the notice above the grid counts what it hides.
+
+The page never overwrites a choice: a kind or source a package brings LATER is added by one idempotent merge of the
+missing keys into the node's current content (sources at their `ShownByDefault`, kinds unticked, and a second
+pass finds nothing missing — a pass that did would be logged as an error and not repeated).
+
+**By address.** A multi-account source is filtered by the ADDRESS an item reached, not by provider: a row's
+`Account` is the content's `account` (a live mailbox stamps it) or the address of its `to` (stored mail); the
+Account select offers one option per address the rows named — each once, whatever its case — and the choice is
+the preference `account`. An address no row names filters nothing, so it has no option.
+
 **Categories (policy `inbox-categories-by-kind`).** A side menu — the platform's one-choice
 control (`RadioGroupControl`), its value bound to the filter's `category` and its options fed with
 the live counts (`InboxLayoutArea.CategoryOptions`) — lists All, then each category with its symbol
@@ -532,8 +587,13 @@ and switch is declared, each with its style BOUND to `InboxLayoutArea.SourceStyl
 feed asks every connection query once (`InboxLayoutArea.Connected`), publishes the styles and the
 Only options, and reads only the connected sources' legs: a mailbox nobody connected is hidden
 (`display: none`), not offered in Only or the side menu, and never read. Until the reads answer,
-only the sources that need none are shown. A source whose legs name no
-connection query (approvals, notifications, portal chats) is listed for everyone. A connection query
+only the sources that need none are shown. A source is
+listed for the viewer only when it is **always on** (`InboxQueryLeg.AlwaysOn` — the platform's own: approvals,
+notifications, activities) or its connection query finds a node. 🚨 A leg that names NEITHER is not connected: "no
+declaration" is not a connection, and the old reading (*no query ⇒ listed for everyone*) put every forgetful
+provider's source — portal chats among them — on every viewer's page, configured or not (*"i should not see
+those, only if they are really configured"*). A provider names the query that finds ITS connection; the
+declaration lives in the leg, not in a list in the layout (`EveryBuiltInLeg_IsAlwaysOn_OrNamesItsConnection`). A connection query
 that fails or does not answer within `InboxLayoutArea.ConnectionWait` LISTS its source and is
 logged — an unreadable connection must never hide a mailbox the viewer did connect. So does an
 INCOMPLETE empty answer (a silent provider, an unfinished storage read — `InboxLayoutArea.FoundConnection`):

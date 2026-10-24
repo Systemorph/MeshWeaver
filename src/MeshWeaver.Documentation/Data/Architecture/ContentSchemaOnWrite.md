@@ -117,16 +117,32 @@ with a `required` member fail, across every writer in the fleet, which is the sc
 this guard was explicitly scoped away from. Narrowing it later is a decision about which writers may
 send partial content — not a bug fix — and it needs the producer side enumerated first.
 
-**Why `MarkdownContent.Content` stays `required` although such rows exist.** Measured rows carry
+**When `MarkdownContent` binds without `content`, and when it refuses.** Rows exist that carry
 `$type: MarkdownContent` and no `content`
-([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639)). Relaxing the member to default to
-`""` was tried and refused. The `required` member is what makes a body stored under ANOTHER key
-(`{"markdown": …}`, `{"text": …}`) fail to bind instead of binding into a `MarkdownContent` with an
-empty body. Raw, such content reads as **Unreadable** and names its members
-(`MarkdownOverviewLayoutArea.ReadMarkdownContent`, #4600). Typed and empty, it would put the "No
-content yet" placeholder over a document that is still there. `NodeUpdateContentTypeChangeTest`
-depends on the same throw (#5736). So such a row is a DATA defect. The page already shows it as
-Unreadable, and the repair is to rewrite the body under `content`.
+([#6639](https://github.com/Systemorph/MeshWeaver/issues/6639),
+[#5736](https://github.com/Systemorph/MeshWeaver/issues/5736)). They come in two kinds, and the
+record tells them apart when it is read (`IJsonOnDeserialized`):
+
+| Payload without `content` | Binds as | Why |
+|---|---|---|
+| only members `MarkdownContent` declares (`{"$type":"MarkdownContent"}`, `{"tags":[…]}`) | an **empty** `MarkdownContent`, other members kept | a document with no body yet. Nothing else could be the body |
+| any member it does NOT declare (`{"body": …}`, `{"markdown": …}`, `{"text": …}`) | **refused** (`JsonException` naming the stray members, never their values) | the body is probably under that key, and an empty document would put the "No content yet" placeholder over it (#4600) |
+| a stored `prerenderedHtml` | **refused** | the source is MISSING, not empty: `MarkdownBody.Render` must fall back to the stored HTML. An explicit `"content": ""` is a deliberate clear and still binds and renders empty |
+
+The overview's raw-JSON reader (`ReadMarkdownContent`) asks the record's own contract the same
+question, so a declared member holding a value of the wrong shape (`"tags": "# text"`, an object
+under `abstract`) stays **Unreadable** and is named, rather than reading as empty because its name
+is declared.
+
+`Content` is therefore no longer `required`. Its getter never returns null, but the record keeps a
+MISSING source apart from an EMPTY one (`HasSource`). A missing source is omitted again on
+write-back, and `MarkdownBody.Render` falls back to the node's cached `PreRenderedHtml` for it. The
+overview shows it as Unreadable when such a rendering exists, and as Absent otherwise. An explicit
+`"content": ""` is a deliberate clear: it renders empty and never revives the cached HTML. The refused kind is still a DATA defect. Raw, it
+reads as **Unreadable** and names the stray member (`MarkdownOverviewLayoutArea.ReadMarkdownContent`,
+which counts only undeclared members as unreadable). An update over it still logs
+`As<MarkdownContent> for <path> …` at Error, because the content claims the record and does not bind
+(`NodeUpdateContentTypeChangeTest`). The repair is to rewrite the body under `content`.
 
 When content of a KNOWN type fails to bind, the read seam that holds the node
 (`MeshNodeStreamCache`, both the `GetStream` and `GetQuery` paths) names the node's path and says that

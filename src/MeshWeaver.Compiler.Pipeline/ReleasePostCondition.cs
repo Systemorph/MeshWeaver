@@ -167,11 +167,17 @@ internal static class ReleasePostCondition
     /// release exists, and whenever the settle was not a violation at all.
     /// </param>
     /// <param name="UnreleasedBuildReason">Why, in the re-cut's own words; <c>null</c> with the path.</param>
+    /// <param name="UnreleasedBuildFailureClass">
+    /// The <see cref="ReleaseFailureClass"/> of that reason (#7072) — stamped beside it, so the
+    /// activation holding the stamp re-issues a create the store never saw once the store answers
+    /// again, and leaves every other class standing. <c>null</c> with the path.
+    /// </param>
     internal sealed record Settle(
         string? ReleasePath,
         LogMessage? Diagnosis,
         string? UnreleasedBuildPath = null,
-        string? UnreleasedBuildReason = null);
+        string? UnreleasedBuildReason = null,
+        string? UnreleasedBuildFailureClass = null);
 
     /// <summary>
     /// The settle-path remedy. Emits the release path the terminal stamp should use: the one this
@@ -323,7 +329,8 @@ internal static class ReleasePostCondition
                     return new Settle(
                         null, AbandonedEntry(violation, firstFailure, recut),
                         UnreleasedBuildPath: unreleased,
-                        UnreleasedBuildReason: AbandonedReason(recut));
+                        UnreleasedBuildReason: AbandonedReason(recut),
+                        UnreleasedBuildFailureClass: recut.FailureClass);
                 }
 
                 logger?.LogError(
@@ -338,7 +345,12 @@ internal static class ReleasePostCondition
                     UnreleasedBuildPath: unreleased,
                     UnreleasedBuildReason: recut.Failure is { Length: > 0 } reason
                         ? reason
-                        : "the re-cut reported no reason, which is itself a defect in this pipeline");
+                        : "the re-cut reported no reason, which is itself a defect in this pipeline",
+                    // 🚨 #7072 — an Unavailable re-cut is NOT the end of the story on this pod: the
+                    // store never saw the create, and the activation holding this stamp re-issues it
+                    // at the same id once the store is evidenced to answer again
+                    // (LateReleaseAdoption.ReissueWhenTheStoreAnswers).
+                    UnreleasedBuildFailureClass: recut.FailureClass ?? ReleaseFailureClass.Faulted);
             });
     }
 

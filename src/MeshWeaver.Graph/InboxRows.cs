@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text.Json;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 
@@ -42,6 +43,12 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>The resolved query that finds the source's connection (<see cref="InboxQueryLeg.ConnectedWhen"/>), or null.</summary>
     public string? ConnectedWhen { get; init; }
+
+    /// <summary>Whether the source needs no connection (<see cref="InboxQueryLeg.AlwaysOn"/>).</summary>
+    public bool AlwaysOn { get; init; }
+
+    /// <summary>Whether the kind is ticked for a viewer who never chose (<see cref="InboxQueryLeg.DefaultKind"/>).</summary>
+    public bool DefaultKind { get; init; }
 }
 
 /// <summary>
@@ -90,6 +97,12 @@ public sealed record InboxRow
     public string StateText { get; init; } = string.Empty;
 
     /// <summary>
+    /// The detailed status of the item, as text — <c>Refused · stale</c> for an approval whose target was retired, <c>Done</c>,
+    /// <c>Running · step 3/7: Build</c> for an activity; empty without a state. The State badge stays the short form. Filled by the page.
+    /// </summary>
+    public string Status { get; init; } = string.Empty;
+
+    /// <summary>
     /// For a running activity: where it stands, as <c>3/7</c> (the step it is on out of its sub-activities),
     /// or empty when it has no sub-activities. Read from the activity's content; shown in the State badge.
     /// </summary>
@@ -128,6 +141,13 @@ public sealed record InboxRow
 
     /// <summary>The side-menu category the row is filed under (<see cref="InboxSection.Category"/>).</summary>
     public string Category { get; init; } = string.Empty;
+
+    /// <summary>
+    /// The node the row is ABOUT, when the row only announces it — the <c>targetNodePath</c> of an
+    /// approval request. A click on the row opens THAT node (the approval), never the announcement;
+    /// empty for every item that is its own subject.
+    /// </summary>
+    public string Target { get; init; } = string.Empty;
 
     /// <summary>
     /// How much the item matters to the viewer, when a triage said (the content's <c>importance</c>):
@@ -225,6 +245,12 @@ public sealed record InboxFilter
     /// shown: a leg a package brings later must not arrive switched off.
     /// </summary>
     public ImmutableDictionary<string, bool> Sources { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The one account (mailbox address) the viewer narrowed the list to, by <see cref="InboxRows.AccountKey"/>,
+    /// or empty for every account. While set only rows that reached that address are listed.
+    /// </summary>
+    public string Account { get; init; } = string.Empty;
 
     /// <summary>
     /// The one source the viewer narrowed the list to, by <see cref="InboxRows.SourceKey"/>, or empty
@@ -328,13 +354,23 @@ public static class InboxRows
         => "s" + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(source)).ToLowerInvariant();
 
     /// <summary>
+    /// The key of <paramref name="account"/> (a mailbox address) as <see cref="InboxFilter.Account"/> names it —
+    /// the value of its option in the Account select. The address trimmed and lower-cased (an
+    /// address is not case-sensitive in practice), hex-encoded like <see cref="SourceKey"/> and prefixed
+    /// <c>a</c>, so one address is one key whatever its spelling and it never collides with a source key.
+    /// </summary>
+    /// <param name="account">The address.</param>
+    public static string AccountKey(string account)
+        => "a" + Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(account.Trim().ToLowerInvariant())).ToLowerInvariant();
+
+    /// <summary>
     /// <paramref name="filter"/> by VALUE — what the page compares to tell a change the viewer made
     /// from a re-emission of the same state. The record's own equality cannot: its dictionary is
     /// compared by reference, and every read of the data section deserializes a new one.
     /// </summary>
     /// <param name="filter">The filter.</param>
     public static string Fingerprint(InboxFilter filter)
-        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
+        => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Account, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}"))
             .Concat(filter.Kinds.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"kind:{s.Key}={s.Value}"))
             .Concat(filter.States.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"state:{s.Key}={s.Value}"))
@@ -426,7 +462,10 @@ public static class InboxRows
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Category = section.Category.Length > 0 ? section.Category : section.Source,
-            Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() ?? string.Empty,
+            Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() is { Length: > 0 } judged
+                ? judged
+                : NotificationImportance(section.Source, content),
+            Target = ApprovalTargetOf(node.NodeType, content),
             Tags = tags,
             TagText = string.Join(' ', tags.Select(t => "#" + t)),
             Unread = unread,
@@ -435,10 +474,90 @@ public static class InboxRows
             StepMessage = running ? step.Message : string.Empty,
             RowClass = unread ? UnreadClass : string.Empty,
             From = string.IsNullOrWhiteSpace(from) ? sourceLabel ?? section.Source : from,
-            Account = StringOf(content, "account")?.Trim() ?? string.Empty,
+            Account = StringOf(content, "account")?.Trim() is { Length: > 0 } account ? account : AddressOf(StringOf(content, "to")),
             Link = StringOf(content, "webLink") is { } link && Uri.TryCreate(link, UriKind.Absolute, out var uri)
                    && uri.Scheme == Uri.UriSchemeHttps ? link : string.Empty,
         };
+    }
+
+    /// <summary>
+    /// How much a NOTIFICATION matters when nothing judged it: a platform/system event (a failure, an
+    /// alert) is <see cref="InboxImportance.Important"/>, every other notification — access granted, chat
+    /// ready, general — is <see cref="InboxImportance.Ignorable"/>, which the inbox hides until the
+    /// viewer asks (owner, 2026-10-23: "default only open approvals and important notifications"). Any
+    /// other source gets nothing: its rows are judged by their own triage, or not at all. Pure.
+    /// </summary>
+    /// <param name="source">The leg's source.</param>
+    /// <param name="content">The row's content, or null.</param>
+    internal static string NotificationImportance(string source, JsonElement? content)
+    {
+        if (!string.Equals(source, InboxQueries.NotificationsSource, StringComparison.Ordinal))
+            return string.Empty;
+        var type = PropertyOf(content, "notificationType") is { } value
+            ? value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n)
+                ? Enum.GetName(typeof(NotificationType), n)
+                : value.ValueKind == JsonValueKind.String ? value.GetString() : null
+            : null;
+        return string.Equals(type, nameof(NotificationType.System), StringComparison.OrdinalIgnoreCase)
+            ? InboxImportance.Important
+            : InboxImportance.Ignorable;
+    }
+
+    /// <summary>
+    /// The node an APPROVAL REQUEST announces — the <c>targetNodePath</c> of a NOTIFICATION whose feature is
+    /// <c>approvals</c> — else empty. A row about an approval opens the approval, not the notification that
+    /// mentioned it. The feature is the notification's EFFECTIVE one (<see cref="NotificationFeatures.FeatureOf"/>):
+    /// stored when it was raised with one, else derived from its type — so a notification written before the
+    /// feature key existed, and the default <see cref="NotificationType.ApprovalRequired"/> (omitted from stored
+    /// JSON), are approval requests too. Pure.
+    /// </summary>
+    /// <param name="nodeType">The node's type; only a <c>Notification</c> announces anything.</param>
+    /// <param name="content">The row's content, or null.</param>
+    internal static string ApprovalTargetOf(string? nodeType, JsonElement? content)
+        => string.Equals(nodeType, NotificationNodeType.NodeType, StringComparison.Ordinal)
+           && string.Equals(EffectiveFeature(content), NotificationFeatures.Approvals, StringComparison.Ordinal)
+           && StringOf(content, "targetNodePath")?.Trim().Trim('/') is { Length: > 0 } target
+            ? target
+            : string.Empty;
+
+    /// <summary>A notification's feature: its own, else the one its <c>notificationType</c> implies (omitted ⇒ the default, an approval request). Pure.</summary>
+    private static string EffectiveFeature(JsonElement? content)
+    {
+        if (StringOf(content, "feature") is { Length: > 0 } feature)
+            return feature;
+        var type = PropertyOf(content, "notificationType") is { } value
+            ? value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var n)
+                ? Enum.GetName(typeof(NotificationType), n)
+                : value.ValueKind == JsonValueKind.String ? value.GetString() : null
+            : null;
+        return type is null ? NotificationFeatures.Approvals
+            : Enum.TryParse<NotificationType>(type, ignoreCase: true, out var parsed) ? parsed.ToFeature() : NotificationFeatures.System;
+    }
+
+    /// <summary>
+    /// The address in a recipient field — <c>Max Muster &lt;max@example.com&gt;</c>, <c>"Roe, Jane" &lt;jane@example.com&gt;</c>
+    /// or a bare address — lower-cased and trimmed; empty when there is none. The first recipient, where several
+    /// are listed. Read as a mailbox list, so a comma inside a quoted display name is not a separator. Pure.
+    /// </summary>
+    /// <param name="recipient">A <c>to</c> value, or null.</param>
+    internal static string AddressOf(string? recipient)
+    {
+        if (string.IsNullOrWhiteSpace(recipient))
+            return string.Empty;
+        try
+        {
+            var list = new System.Net.Mail.MailAddressCollection();
+            list.Add(recipient.Replace(';', ','));
+            return list.Count > 0 ? list[0].Address.Trim().ToLowerInvariant() : string.Empty;
+        }
+        catch (Exception ex) when (ex is FormatException or ArgumentException)
+        {
+            // Not a mailbox list: a bare token that carries an @ is still an address.
+            var first = recipient.Split(',', ';')[0].Trim();
+            return first.Contains('@', StringComparison.Ordinal) && !first.Contains(' ', StringComparison.Ordinal)
+                ? first.ToLowerInvariant()
+                : string.Empty;
+        }
     }
 
     private static readonly JsonSerializerOptions ContentOptions = new(JsonSerializerDefaults.Web);
@@ -582,7 +701,7 @@ public static class InboxRows
             : null;
     }
 
-    private static string? StringOf(JsonElement? content, string name)
+    internal static string? StringOf(JsonElement? content, string name)
         => PropertyOf(content, name) is { ValueKind: JsonValueKind.String } v ? v.GetString() : null;
 
     /// <summary>The content's <c>tags</c>: its strings, trimmed, lower-cased, each once, in order. Pure.</summary>
@@ -642,11 +761,13 @@ public static class InboxRows
     {
         var (_, before, after) = SplitDates(filter.Search);
         var kinds = TickedKinds(filter);
+        // 🚨 The source switches and the account switches ALWAYS apply; the ticked kinds narrow further.
+        // (They used to replace the switches, so a default that ticks kinds would have made every switch dead.)
+        // A category picked in the legacy single-category select still lists everything filed under it.
         var shown = !string.IsNullOrEmpty(category)
             ? rows.Where(row => string.Equals(row.Category, category, StringComparison.Ordinal))
-            : kinds.Count > 0
-                ? rows.Where(row => kinds.Contains(SourceKey(row.Category)))
-                : rows.Where(row => Shown(row, filter));
+            : rows.Where(row => (kinds.Count == 0 || kinds.Contains(SourceKey(row.Category)))
+                                && Shown(row, filter) && AccountShown(row, filter));
         var tags = ActiveTags(filter);
         var states = TickedStates(filter);
         return shown.Where(row => InRange(row.Stamp, before, after))
@@ -676,6 +797,15 @@ public static class InboxRows
     /// <param name="state">An <see cref="InboxState"/> constant, or empty.</param>
     public static string StateGroupOf(string state)
         => state is InboxState.Awaiting or InboxState.Requested or InboxState.Running or InboxState.Unread ? OpenKey : DoneKey;
+
+    /// <summary>
+    /// Whether <paramref name="row"/> is an approval request the viewer can still decide: from the Approvals source AND still
+    /// awaiting. A closed request (stale, refused, failed, already decided) stays viewable and deletable, never decidable. Pure.
+    /// </summary>
+    /// <param name="row">The row.</param>
+    internal static bool IsDecidable(InboxRow row)
+        => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
+           && string.Equals(row.State, InboxState.Awaiting, StringComparison.Ordinal);
 
     /// <summary>The state groups ticked (<see cref="OpenKey"/>, <see cref="DoneKey"/>); empty when none is (all are listed). Pure.</summary>
     /// <param name="filter">The filter.</param>
@@ -747,6 +877,13 @@ public static class InboxRows
             : !filter.Sources.TryGetValue(SourceKey(row.SourceId), out var on) || on;
 
     /// <summary>
+    /// Whether <paramref name="row"/> reached the account the viewer narrowed the list to: always, while no
+    /// account is picked; else only a row that carries that very address. Pure.
+    /// </summary>
+    internal static bool AccountShown(InboxRow row, InboxFilter filter)
+        => filter.Account.Length == 0 || (row.Account.Length > 0 && string.Equals(AccountKey(row.Account), filter.Account, StringComparison.Ordinal));
+
+    /// <summary>
     /// The side menu's counts: how many rows each category holds, and how many of them are unread —
     /// read off the merged rows BEFORE the switches and the category apply, so a category's count is
     /// never filtered away with its rows. Pure.
@@ -800,9 +937,13 @@ public static class InboxRows
     public static int HiddenObligations(IEnumerable<InboxRow> rows, InboxFilter filter, int? needsYouRank)
         // A picked category shows every row filed under it whatever the source filter says, so the
         // source filter hides nothing then — counting would report a visible obligation as hidden.
-        => needsYouRank is not { } rank || filter.Category.Length > 0 || TickedKinds(filter).Count > 0
+        => needsYouRank is not { } rank || filter.Category.Length > 0
             ? 0
-            : rows.Count(row => row.Rank == rank && !Shown(row, filter));
+            // Only what "Show all" can REVEAL is counted: rows the other filters (kinds, states, tags, ignorable, dates)
+            // would list if the source and account restrictions were lifted. A row hidden by an unticked kind stays hidden
+            // after the action, so counting it would advertise something the button does not deliver.
+            : Apply(rows, filter with { Sources = ImmutableDictionary<string, bool>.Empty, Only = string.Empty, Account = string.Empty }, filter.Category)
+                .Count(row => row.Rank == rank && (!Shown(row, filter) || !AccountShown(row, filter)));
 
     /// <summary>
     /// The rows a bulk act may touch: the selected keys re-checked against the rows as they stand

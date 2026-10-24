@@ -31,10 +31,14 @@ public static class InboxState
     public const string Cancelled = "cancelled";
     /// <summary>A mail, message or notification not yet read.</summary>
     public const string Unread = "unread";
+    /// <summary>An approval the system refused to carry out (a target that is <c>Refused</c>).</summary>
+    public const string Refused = "refused";
+    /// <summary>An approval that was retired because what it was planned against moved on, or that a newer request replaced.</summary>
+    public const string Stale = "stale";
 
     /// <summary>Every state, in the order a filter would list them.</summary>
     public static ImmutableArray<string> All { get; } =
-        [Awaiting, Approved, Rejected, Expired, Requested, Running, Done, Failed, Cancelled, Unread];
+        [Awaiting, Approved, Rejected, Expired, Requested, Running, Done, Failed, Cancelled, Unread, Refused, Stale];
 
     /// <summary>The catalog key of a state's label.</summary>
     /// <param name="state">A state, or empty.</param>
@@ -72,6 +76,8 @@ public static class InboxState
             "pending" or "awaiting" or "awaitingdecision" => Awaiting,
             "approved" => Approved,
             "rejected" or "declined" => Rejected,
+            "refused" => Refused,
+            "stale" or "superseded" => Stale,
             "expired" => Expired,
             "requested" or "queued" => Requested,
             "running" or "inprogress" => Running,
@@ -87,8 +93,8 @@ public static class InboxState
     {
         Awaiting => "#9D5D00",
         Approved or Done => "#107C10",
-        Rejected or Failed => "#C42B1C",
-        Expired or Cancelled => "#6E6E6E",
+        Rejected or Failed or Refused => "#C42B1C",
+        Expired or Cancelled or Stale => "#6E6E6E",
         Requested or Running or Unread => "#0F6CBD",
         _ => string.Empty,
     };
@@ -98,7 +104,7 @@ public static class InboxState
     public static string Mark(string state) => state switch
     {
         Approved or Done => "✓ ",
-        Rejected or Failed => "✕ ",
+        Rejected or Failed or Refused => "✕ ",
         _ => string.Empty,
     };
 }

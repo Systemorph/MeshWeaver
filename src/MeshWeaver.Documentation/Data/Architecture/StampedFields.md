@@ -163,6 +163,13 @@ handler is ever made to apply changes, it must apply them through the owner, whe
   written under the old type in a field the new type stamps, until the clear lands. What the rule
   guarantees is the state the activation bound to the new type starts from, not every intermediate
   emission — one more reason a consumer re-checks before it acts (next section).
+- **A started activation is no happens-before for the shared mesh-node handle.** Once the
+  activation bound to the new type has started, the process-wide handle for the path can still
+  replay the PRE-retype node for a moment (the new activation's snapshot, or the retiring one's echo,
+  is in flight). A test that checks what the new type starts from therefore reads it off that
+  activation's own node stream, filtered on the new `nodeType` — never off the shared handle with a
+  predicate the pre-retype node also satisfies (the negative-control test did, and failed
+  intermittently on CI).
 - A write straight to storage that changes `nodeType` (a repair migration, a raw import) passes no
   node hub and therefore no guard at all, retype or otherwise.
 

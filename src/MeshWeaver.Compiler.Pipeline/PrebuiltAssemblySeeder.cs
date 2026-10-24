@@ -1389,6 +1389,7 @@ public static class PrebuiltAssemblySeeder
                             // of the SAME coordinates still owes its pending release, so keep it.
                             UnreleasedBuildPath = retirePendingRelease ? null : def.UnreleasedBuildPath,
                             UnreleasedBuildReason = retirePendingRelease ? null : def.UnreleasedBuildReason,
+                            UnreleasedBuildFailureClass = retirePendingRelease ? null : def.UnreleasedBuildFailureClass,
                             // The adopted bytes' own identity (#2471), read from the image
                             // in hand — no file, no load. An adopted build is exactly the
                             // case where a path says least: several pods adopt the same

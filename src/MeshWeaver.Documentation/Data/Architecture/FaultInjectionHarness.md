@@ -113,6 +113,15 @@ if the path did not exist yet; writes still land. The shape of a resolver that h
 with a create another process acknowledged. Resolution stops at the parent, so the router answers
 `No node found at '…'` exactly as production logs it.
 
+### Unreachable store for one path
+
+`RefuseWritesAsUnreachable(path)`: every write of the path (`Write`, `WriteIfVersion`, a `WriteMany`
+naming it) faults with a driver connection failure, a `DbException` with SQLSTATE `08006`, and
+writes nothing. The create handler's store-unreachable arm answers `Unavailable`, which is the
+production answer during a managed database restart (#7068). Releasing the switch is the store
+coming back. Pair it with `DeliverChangeFeedGap(...)`, which is what the LISTEN reconnect declares
+after such a restart.
+
 ### Change-feed hold
 
 `HoldChangeFeed()`: the silo's change notifications — its own commits and relayed ones — queue in
@@ -152,6 +161,7 @@ sweep re-fed exactly what the sender lost.
 | 4 | Steward's first write after its create (Plugins#2530, #6045, #6046) | `ARoutedWriteRightAfterItsCreateTest` (6 cases) | `HidePath`, `Relay.Hold`, a real pre-create probe | `MeshNodeStreamCache.ResetFailureState` made a no-op → the probe case red: `No node found at '…/Item'`; the read-window write fast-fail restored in `UpdateRaw` → the cross-replica case red with the same line; the cached-remainder route restored in `PathResolutionService` → the existing-parent case red: `… Closest ancestor is '…' (remainder='Item')` |
 | 6 | Fleet watch freeze (#5011) | `AHeldReadSurvivesItsSourceSilo{BeingKilled,Draining}Test`, `AHeldReadOnAThirdSilo…`, `AHeldReadFollowsItsOwnersHandOffTest`, `AHeldReadFollowsItsOwnersHandOffWithoutTheChangeFeedTest` | `Kill`, `Drain`, `Linger`, `HoldChangeFeed`, `HandOffTarget` | held-stream heartbeat pushed beyond the budget → all four kill/drain cases red (the owner never re-activates); the owner's answer to a heartbeat for a stream it does not serve removed (`MeshExtensions.HandleHeartBeat`) → the withheld-feed hand-off case red: the held read emits nothing |
 | 7 | Resumer hold without a heartbeat (Plugins#2403, #6048), core half | `AHeldReadUnderAShortIdleWindowSurvivesItsOwnerSiloBeingKilledTest`, `AHandleHeldReadUnderAShortIdleWindow…`, `AReadThenHoldAcrossTheIdleRelease…` | `Kill`, idle sweep 500 ms / 100 ms (`ShortIdleSiloConfigurator`) | `Entry.IsIdleCandidate`/`TryMarkIdleEvicted` ignoring the subscriber count → red after 36 s: the owner never re-activates, "emitted nothing at all" |
+| 9 | A release re-cut refused during a database restart, never re-issued on the live pod (#7072) | `AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest` (MeshWeaver.Compiler.Pipeline.Test) | `RefuseWritesAsUnreachable`, `DeliverChangeFeedGap` | the re-issue watch removed from `LateReleaseAdoption.Install` → red at the final wait: the pointer never reaches the stamped id; a `Refused` stamp under the same signals is never re-issued |
 
 Cases 2, 3, 5, 7 and 8 exercise code that lives in MeshWeaver.Plugins, which reaches this harness by
 `ProjectReference` through its platform checkout (`Requires-platform: MeshWeaver#5879`):

@@ -91,6 +91,9 @@ public static class NodeTypeOperationalContent
         // null would erase the one readable trace of a release create that expired its bound.
         "unreleasedBuildPath",
         "unreleasedBuildReason",
+        // #7072 — the CLASS of that reason; it decides whether the activation holding the stamp
+        // re-issues the create when the store answers again. Operational for the same reason.
+        "unreleasedBuildFailureClass",
         "releaseNotes",
         "latestAssemblyCollection",
         "latestAssemblyPath",

@@ -185,7 +185,8 @@ As<MarkdownContent> for Plyona/Konzeptpapier could not recover value: JsonExcept
 Two stored shapes reach that line deterministically when a markdown writer saves: a **bare JSON
 string** (a *sanctioned* markdown shape — `WithMarkdownContent` keeps a string a string and
 `ReadMarkdownContent` reads it as Present) and the legacy **`{"markdown": …}`** key (#4600's
-Unreadable shape; `MarkdownContent`'s one `required` member is `content`). In both, the update is the
+Unreadable shape; `MarkdownContent` refuses a payload with no `content` that carries a member it does
+not declare — see [Content Schema on Write](../ContentSchemaOnWrite)). In both, the update is the
 write that *replaces* the content — the repair — and it was being reported as the fault.
 
 So the seam now splits on whether the stored JSON **names its own record**:
