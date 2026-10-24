@@ -80,6 +80,12 @@ Three properties follow, and each is pinned by `InstanceKeyLiveResolutionTest`
    it — eventually, not at the writer's completion. `PluginBundlePlanTest
    .PromotingTheInstance_WidensTheNextRequest` pins it by holding the owner's echo back at its
    outbound pipeline: the promotion must not report done while the mirror still says `free`.
+
+   🚨 Waiting at the WRITER only works for the writer's own replica, so it is the right tool for a
+   WIDENING change (a promotion seen a moment late costs a retry) and the wrong one for a
+   REVOCATION, which must hold on every replica from its commit. The build-principal leg therefore
+   reads its node from the OWNER, not from this mirror — see
+   [Plugin Build Contract](../PluginBuildContract).
 3. **An unknown key never opens a point read on an absent path.** The listing is empty-on-absent, so
    the definitive 401 is served from memory and the storm breaker is never armed — the failure mode
    that page's table warns about cannot start here.
