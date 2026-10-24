@@ -45,12 +45,14 @@ public static class ChildrenQueryExtensions
     /// Gets the content from a MeshNode, handling both direct types and JsonElement deserialization.
     /// Uses Hub's JsonSerializerOptions via the host for proper type handling.
     /// </summary>
+    [Obsolete("Use node.ContentAs<T>(hub.JsonSerializerOptions) — it also re-types the as-written JsonObject DOM and same-named types from another collectible assembly, which this helper reads as null.")]
     public static T? GetContent<T>(this MeshNode node, LayoutAreaHost host) where T : class
         => node.GetContent<T>(host.Hub.JsonSerializerOptions);
 
     /// <summary>
     /// Gets the content from a MeshNode, handling both direct types and JsonElement deserialization.
     /// </summary>
+    [Obsolete("Use node.ContentAs<T>(hub.JsonSerializerOptions) — it also re-types the as-written JsonObject DOM and same-named types from another collectible assembly, which this helper reads as null.")]
     public static T? GetContent<T>(this MeshNode node, System.Text.Json.JsonSerializerOptions options) where T : class
     {
         if (node.Content == null)

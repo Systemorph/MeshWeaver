@@ -137,7 +137,7 @@ public sealed class ModuleLandingService : IDisposable
     /// landing this replica has not seen the SECOND half of yet — the race behind #2303.
     ///
     /// <para>🚨 <b>The race.</b> A landing is two writes on the shared <c>/data</c> volume,
-    /// deliberately ordered bytes-then-entry (<see cref="LandCore"/>): <c>Directory.Move</c> lands
+    /// deliberately ordered bytes-then-entry (<c>LandCore</c>): <c>Directory.Move</c> lands
     /// the generation directory, THEN <see cref="ModuleActivationSidecar.WriteEntry"/> records the
     /// pointer. Those two writes are adjacent in one synchronous call on the LANDING replica, but
     /// nothing serializes them against a GC pass running on ANOTHER replica at the same moment —
@@ -215,11 +215,13 @@ public sealed class ModuleLandingService : IDisposable
     /// <param name="nowUtc">The reference "now" the age check compares against. Defaults to
     /// <see cref="DateTime.UtcNow"/>; a test seam so the race and its fix are provable without a
     /// real sleep.</param>
-    /// <param name="cancellationToken">Observed BETWEEN directories — the unit of atomic removal.
-    /// A cancelled pass stops before its next rename and returns what it removed so far; whatever
-    /// is left (an intact orphan, or a <c>.trash-*</c> whose delete did not finish) is a later
-    /// pass's job by construction. This is the pool's token when the pass runs through
-    /// <c>IIoPool</c>, so a mesh teardown cancels the sweep instead of waiting on it.</param>
+    /// <param name="cancellationToken">Observed BETWEEN directories — the unit of atomic removal —
+    /// and between landing records. A cancelled pass stops before its next rename, records one
+    /// <c>pass outcome — INTERRUPTED</c> line carrying what it removed so far, and throws
+    /// <see cref="OperationCanceledException"/>; whatever is left (an intact orphan, or a
+    /// <c>.trash-*</c> whose delete did not finish) is a later pass's job by construction. This is
+    /// the pool's token when the pass runs through <c>IIoPool</c>, so a mesh teardown cancels the
+    /// sweep instead of waiting on it.</param>
     /// <returns>How many directories were removed — where "removed" means gone from the
     /// <c>modules/</c> namespace (a rename into <c>.trash-*</c> counts even when the final delete
     /// is finished by a later pass).</returns>
@@ -241,6 +243,8 @@ public sealed class ModuleLandingService : IDisposable
         if (!Directory.Exists(modulesRoot))
             return 0;
         var delete = deleteDirectory ?? (dir => Directory.Delete(dir, recursive: true));
+        // 🚨 The pass's one outcome line and its step boundary (#6991, #7049): see PassLedger.
+        var ledger = new PassLedger(GcPassName, logger);
         var readFaults = 0;
         void OnReadFault(string msg)
         {
@@ -292,6 +296,34 @@ public sealed class ModuleLandingService : IDisposable
             onNotice: msg => logger?.LogInformation("Modules GC: {Message}", msg));
         foreach (var generation in ModuleSetStore.ReferencedGenerations(setIndex))
             referenced.Add(generation);
+        // The pass's counters, for its one outcome line (#6991) — declared before the first step
+        // that can be interrupted, so an INTERRUPTED outcome carries the same denominator a
+        // finished pass does.
+        var prunedSets = 0;
+        var pruneProblems = 0;
+        var retired = 0;
+        var removed = 0;
+        var scanned = 0;
+        var keptReferenced = 0;
+        var keptOther = 0;
+        var keptYoung = 0;
+        var keptInUse = 0;
+        var skippedUnreliable = 0;
+        var deleteUnfinished = 0;
+        void Outcome(string verdict) => ledger.Record(verdict,
+            ": removed {Removed} of {Scanned} directory(ies) under {ModulesRoot}; "
+            + "kept {Referenced} referenced generation(s), {Other} non-generation director(ies) (metadata such as sets/, "
+            + "unknown names — never collected), {Young} younger than {MinAge}, {InUse} in use; "
+            + "{SkippedUnreliable} unreferenced generation(s) NOT deleted because {Faults} reference file(s) "
+            + "could not be read; {Unfinished} delete(s) left for a later pass; retired {Sets} module set "
+            + "record(s) ({PruneProblems} could not be read or removed) and {Records} landing record file(s)",
+            removed, scanned, modulesRoot, keptReferenced, keptOther, keptYoung, minAge ?? DefaultGarbageMinAge,
+            keptInUse, skippedUnreliable, readFaults, deleteUnfinished, prunedSets, pruneProblems, retired);
+        // 🚨 Between directories, never mid-removal: a rename is atomic, and a .trash-* whose delete
+        // was cut short is exactly the state a later pass already finishes (#2509). The token is the
+        // IIoPool's (#2684) — a teardown drain must not wait out a slow unlink.
+        ledger.OnInterrupted = () => Outcome(PassOutcome.Interrupted);
+        ledger.Step(cancellationToken);
         // Superseded set records are housekeeping like the rest of this pass — and only ever below
         // the CURRENT set, so a record whose generations are still in the reference set above is
         // never the one removed. Skipped entirely when anything was unreadable, for the same
@@ -299,8 +331,6 @@ public sealed class ModuleLandingService : IDisposable
         // #6991: the per-record problems of BOTH prune calls below are itemized at Information and
         // COUNTED into the pass's one Warning outcome line — N refused records never become N
         // shipped lines, and never a "0 could not be read or removed" either.
-        var prunedSets = 0;
-        var pruneProblems = 0;
         void OnPruneProblem(string msg)
         {
             pruneProblems++;
@@ -334,13 +364,11 @@ public sealed class ModuleLandingService : IDisposable
         // (ModuleActivationSidecar.PruneLandingRecords). Behind the same fail-closed counter and
         // the same grace window as the generation deletes: a record younger than the window may be
         // a landing on another replica, and with anything unreadable nothing is retired.
-        var retired = 0;
         if (referencesReliable)
         {
             foreach (var moduleName in ModuleActivationSidecar.ModuleNamesWithLandingRecords(baseDirectory))
             {
-                if (cancellationToken.IsCancellationRequested)
-                    break;
+                ledger.Step(cancellationToken);
                 var storedEntry = stored.For(moduleName);
                 retired += ModuleActivationSidecar.PruneLandingRecords(
                     baseDirectory, moduleName, storedEntry,
@@ -353,29 +381,10 @@ public sealed class ModuleLandingService : IDisposable
                     "Modules GC: retired {Count} landing record file(s) the derived activation no "
                     + "longer needs", retired);
         }
-        var removed = 0;
-        // The pass's denominator, for its one outcome line (#6991).
-        var scanned = 0;
-        var keptReferenced = 0;
-        var keptOther = 0;
-        var keptYoung = 0;
-        var keptInUse = 0;
-        var skippedUnreliable = 0;
-        var deleteUnfinished = 0;
-        var cancelled = false;
         foreach (var dir in Directory.EnumerateDirectories(modulesRoot))
         {
-            // 🚨 Between directories, never mid-removal: a rename is atomic, and a .trash-* whose
-            // delete was cut short is exactly the state a later pass already finishes (#2509). The
-            // token is the IIoPool's (#2684) — a teardown drain must not wait out a slow unlink.
-            if (cancellationToken.IsCancellationRequested)
-            {
-                cancelled = true;
-                logger?.LogInformation(
-                    "Modules GC: cancelled after removing {Removed} directory(ies) — the rest is a "
-                    + "later pass's job.", removed);
-                break;
-            }
+            // Between directories, never mid-removal (see the step boundary above).
+            ledger.Step(cancellationToken);
             scanned++;
             var leaf = Path.GetFileName(dir);
             var isTrash = leaf.StartsWith(".trash-", StringComparison.OrdinalIgnoreCase);
@@ -468,16 +477,7 @@ public sealed class ModuleLandingService : IDisposable
         // and without this line nobody could tell whether the pass ran, what it removed, or that it
         // refused. The pass runs once per pod start (ModuleGenerationsGcHostedService), so this is
         // one line per replica boot; the per-directory "removed" lines above stay Information.
-        logger?.LogWarning(
-            "Modules GC: pass outcome — {Verdict}: removed {Removed} of {Scanned} directory(ies) under {ModulesRoot}; "
-            + "kept {Referenced} referenced generation(s), {Other} non-generation director(ies) (metadata such as sets/, "
-            + "unknown names — never collected), {Young} younger than {MinAge}, {InUse} in use; "
-            + "{SkippedUnreliable} unreferenced generation(s) NOT deleted because {Faults} reference file(s) "
-            + "could not be read; {Unfinished} delete(s) left for a later pass; retired {Sets} module set "
-            + "record(s) ({PruneProblems} could not be read or removed) and {Records} landing record file(s)",
-            cancelled ? "CANCELLED" : readFaults > 0 ? "FAILED CLOSED" : "completed",
-            removed, scanned, modulesRoot, keptReferenced, keptOther, keptYoung, minAge ?? DefaultGarbageMinAge,
-            keptInUse, skippedUnreliable, readFaults, deleteUnfinished, prunedSets, pruneProblems, retired);
+        Outcome(readFaults > 0 ? GcPassOutcome.FailedClosed : PassOutcome.Collected);
         return removed;
     }
 
@@ -489,6 +489,9 @@ public sealed class ModuleLandingService : IDisposable
     // and /data is shared by every replica. Cross-process safety comes from the record's SHAPE —
     // one file per module (ModuleActivationSidecar), and one immutable record per landing within
     // it (#4026), so concurrent writers never decide through a path they both write.
+    /// <summary>The modules GC's name on its one <c>pass outcome</c> line (<see cref="PassLedger"/>).</summary>
+    public const string GcPassName = "Modules GC";
+
     private readonly IoPool pool = new(1);
     private readonly string baseDirectory;
     private readonly ILogger<ModuleLandingService>? logger;
@@ -667,11 +670,11 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
         string? sourceCommit = null,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets = null)
-        => pool.InvokeBlocking(_ =>
+        => pool.InvokeBlocking(ct =>
         {
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
                 staticAssets, sourceCommit, nativeAssets,
-                holdUnloadable: false, keepNewerHead: false);
+                holdUnloadable: false, keepNewerHead: false, ct);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
@@ -737,10 +740,10 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets = null,
         string? sourceCommit = null,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets = null)
-        => pool.InvokeBlocking(_ =>
+        => pool.InvokeBlocking(ct =>
             LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion,
                 staticAssets, sourceCommit, nativeAssets,
-                holdUnloadable: true, keepNewerHead: true))
+                holdUnloadable: true, keepNewerHead: true, ct))
             .Do(_ => AnnounceActivationChanged());
 
     /// <summary>
@@ -809,8 +812,8 @@ public sealed class ModuleLandingService : IDisposable
     /// written to the caller meanwhile.</para>
     /// </summary>
     public IObservable<ModuleActivationList> GetActivation()
-        => ReadPool.InvokeBlocking(_ => ModuleActivationSidecar.ReadFor(baseDirectory,
-            msg => logger?.LogError("{Message}", msg), platform));
+        => ReadPool.InvokeBlocking(ct => ModuleActivationSidecar.ReadFor(baseDirectory,
+            msg => logger?.LogError("{Message}", msg), platform, ct));
 
     /// <summary>
     /// The pool <see cref="GetActivation"/> reads the volume on — the mesh's file-system pool in
@@ -924,18 +927,21 @@ public sealed class ModuleLandingService : IDisposable
                 continue; // another reader installed one first — go round and share it
             // Service-owned: the outcome reaches every reader, and the slot is released, whether
             // or not any reader is still subscribed.
-            ReadPool.InvokeBlocking(_ => DeriveServedActivation(mine)).Subscribe(mine.Result);
+            ReadPool.InvokeBlocking(ct => DeriveServedActivation(mine, ct)).Subscribe(mine.Result);
             return mine.Result;
         }
     }
 
-    private ServedActivation DeriveServedActivation(ServedRefresh refresh)
+    private ServedActivation DeriveServedActivation(ServedRefresh refresh, CancellationToken cancellationToken)
     {
         try
         {
+            // The pool's token reaches the record walk; a cancel faults this derivation (every
+            // reader sharing it sees the cancel) and the finally below releases the slot, so the next
+            // served read starts a fresh one.
             var served = new ServedActivation(
                 ModuleActivationSidecar.ReadFor(baseDirectory,
-                    msg => logger?.LogError("{Message}", msg), platform),
+                    msg => logger?.LogError("{Message}", msg), platform, cancellationToken),
                 ServedActivationClock.GetUtcNow(),
                 refresh.Generation);
             BeforeServedPublish?.Invoke(refresh.Generation);
@@ -996,7 +1002,7 @@ public sealed class ModuleLandingService : IDisposable
     /// a dependent repository into a CS0419 under <c>-warnaserror</c>.</para>
     /// <returns>The set that was proposed, or null when the wave changed nothing.</returns>
     public IObservable<ModuleSet?> ProposeCheckedModuleSet(IReadOnlyList<PackageManifest> installed)
-        => pool.InvokeBlocking(_ =>
+        => pool.InvokeBlocking(ct =>
         {
             // 🚨 Never from a PARTIAL read (post-merge review of #4427): a module the read dropped,
             // or one derived without a record it could not read, would be proposed as the mesh's
@@ -1008,7 +1014,7 @@ public sealed class ModuleLandingService : IDisposable
                 {
                     faults = faults.Add(msg);
                     logger?.LogError("{Message}", msg);
-                }, platform);
+                }, platform, ct);
             if (!faults.IsEmpty)
                 throw new InvalidOperationException(
                     $"Not proposing a module set: the activation record could not be read whole "
@@ -1029,6 +1035,10 @@ public sealed class ModuleLandingService : IDisposable
                     + "The mesh stays on the set it runs until a wave lands a dependency that satisfies "
                     + "every floor (MeshWeaver#6067).");
             }
+            // The last boundary: nothing is written until here, so a cancel stops a wave's proposal
+            // whole and the mesh stays on the set it runs (the state every caller already handles
+            // when a proposal faults). Past this point the proposal is one write and runs to the end.
+            ct.ThrowIfCancellationRequested();
             var proposed = ModuleSetStore.Propose(baseDirectory, landed,
                 proposedBy: Environment.MachineName,
                 onCorrupt: msg => logger?.LogWarning("{Message}", msg));
@@ -1055,9 +1065,9 @@ public sealed class ModuleLandingService : IDisposable
     /// are not this service's to delete.
     /// </summary>
     public IObservable<Unit> RemoveModule(string name)
-        => pool.InvokeBlocking(_ =>
+        => pool.InvokeBlocking(ct =>
         {
-            RemoveCore(name);
+            RemoveCore(name, ct);
             return Unit.Default;
         })
         .Do(_ => AnnounceActivationChanged());
@@ -1092,6 +1102,32 @@ public sealed class ModuleLandingService : IDisposable
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets,
         bool holdUnloadable,
         bool keepNewerHead)
+        => LandCore(name, assemblies, frameworkMvid, packagePath, version, minMeshVersion, staticAssets,
+            sourceCommit, nativeAssets, holdUnloadable, keepNewerHead, CancellationToken.None);
+
+    /// <summary>
+    /// The landing from a pooled leaf. A landing is a write TRANSACTION, so
+    /// <paramref name="cancellationToken"/> (the pool's) is checked only where stopping leaves a
+    /// state this code already recovers from: before each file written into the private
+    /// <c>.staging-*</c> directory and before the rename that commits it. A cancel there takes the
+    /// existing failure path, which deletes the staging directory (and the modules GC collects a
+    /// <c>.staging-*</c> left by a process that died) — nothing is recorded and no activation moves.
+    /// Past the commit rename the landing records itself and runs to the end: a generation on the
+    /// volume with no record of it is a landing that never happened, and the next one adopts it.
+    /// </summary>
+    internal ModuleLandingOutcome LandCore(
+        string name,
+        IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
+        string? frameworkMvid,
+        string? packagePath,
+        string? version,
+        string? minMeshVersion,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
+        string? sourceCommit,
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets,
+        bool holdUnloadable,
+        bool keepNewerHead,
+        CancellationToken cancellationToken)
     {
         foreach (var (relativePath, _) in staticAssets ?? [])
             ValidateAssetPath(relativePath, name);
@@ -1309,7 +1345,20 @@ public sealed class ModuleLandingService : IDisposable
         // own volume while the store was down, must still publish it once the store is back. The local
         // half then runs whenever the local copy exists — resolution takes it first, so it keeps its
         // repair path — or when the shared half did not serve the landing.
-        var servedFromShared = LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets);
+        // 🚨 The pool's token governs the shared half too (review on #7121): an already-cancelled
+        // landing publishes nothing, adopts nothing and records nothing. The publication itself checks
+        // it between files and never seals on a cancel.
+        cancellationToken.ThrowIfCancellationRequested();
+        var servedFromShared = LandInSharedTier(name, generation, assemblies, staticAssets, nativeAssets,
+            cancellationToken);
+        if (servedFromShared && !Directory.Exists(target))
+        {
+            // Served from the store and nothing written locally: the landing's own commit is the
+            // record below, so this is the last point at which stopping leaves nothing referenced.
+            // An owner's sealed publication left unrecorded is the same content address the next
+            // landing of these bytes adopts.
+            cancellationToken.ThrowIfCancellationRequested();
+        }
         if (!servedFromShared || Directory.Exists(target))
         {
             var staging = Path.Combine(modulesRoot, $".staging-{name}-{Guid.NewGuid():N}");
@@ -1317,12 +1366,16 @@ public sealed class ModuleLandingService : IDisposable
             try
             {
                 foreach (var (fileName, bytes) in assemblies)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
                     File.WriteAllBytes(Path.Combine(staging, fileName), bytes);
+                }
                 // Static web assets keep their RELATIVE path — a view pack's components request
                 // _content/<pack>/leaflet/leaflet.js, and the host's module asset provider serves
                 // <module folder>/wwwroot, so the shape has to survive the trip intact.
                 foreach (var (relativePath, bytes) in staticAssets ?? [])
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var destination = Path.Combine(
                         staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -1336,6 +1389,7 @@ public sealed class ModuleLandingService : IDisposable
                 // the top of this method, before anything touched the disk.
                 foreach (var (relativePath, bytes) in nativeAssets ?? [])
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var destination = Path.Combine(
                         staging, relativePath.Replace('/', Path.DirectorySeparatorChar));
                     Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
@@ -1348,6 +1402,8 @@ public sealed class ModuleLandingService : IDisposable
                 // instead of writing a second copy under a second name, which is the whole point of
                 // addressing it by content. Probed first and caught as well: the other replica's
                 // rename can land between the probe and ours.
+                // The commit boundary: the last point at which stopping leaves only staging to clean up.
+                cancellationToken.ThrowIfCancellationRequested();
                 var alreadyLanded = Directory.Exists(target);
                 if (!alreadyLanded)
                 {
@@ -1362,7 +1418,7 @@ public sealed class ModuleLandingService : IDisposable
                 }
                 if (alreadyLanded)
                 {
-                    RestoreMissingFiles(staging, target, name, generation);
+                    RestoreMissingFiles(staging, target, name, generation, cancellationToken);
                     Directory.Delete(staging, recursive: true);
                     AdoptLandedGeneration(target, name, generation);
                 }
@@ -1650,12 +1706,13 @@ public sealed class ModuleLandingService : IDisposable
         string name, string generation,
         IReadOnlyList<(string FileName, byte[] Bytes)> assemblies,
         IReadOnlyList<(string RelativePath, byte[] Bytes)>? staticAssets,
-        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets)
+        IReadOnlyList<(string RelativePath, byte[] Bytes)>? nativeAssets,
+        CancellationToken cancellationToken)
     {
         var sharedRoot = SharedRoot;
         if (sharedRoot is null)
             return false;
-        if (SharedModuleTier.SealedDirectory(sharedRoot, generation) is { } sealedCopy)
+        if (SharedModuleTier.SealedDirectoryObservingToken(sharedRoot, generation, cancellationToken) is { } sealedCopy)
         {
             logger?.LogInformation(
                 "Module '{Name}': generation {Generation} is already sealed in the shared artifact store "
@@ -1671,7 +1728,7 @@ public sealed class ModuleLandingService : IDisposable
                 .Concat(staticAssets ?? [])
                 .Concat(nativeAssets ?? [])
                 .ToList();
-            var published = SharedModuleTier.Publish(sharedRoot, generation, files);
+            var published = SharedModuleTier.PublishObservingToken(sharedRoot, generation, files, cancellationToken);
             logger?.LogInformation(
                 "Module '{Name}': generation {Generation} PUBLISHED to the shared artifact store at "
                 + "{Directory} (this instance owns the store)", name, generation, published);
@@ -1746,12 +1803,16 @@ public sealed class ModuleLandingService : IDisposable
     /// file the target lacks is moved in from it. A file the target HAS is never touched: a
     /// running pod may hold it open, which is why landings write generations instead of swapping.
     /// </summary>
-    private void RestoreMissingFiles(string staging, string target, string name, string generation)
+    private void RestoreMissingFiles(string staging, string target, string name, string generation, CancellationToken cancellationToken)
     {
         var restored = ImmutableList<string>.Empty;
         foreach (var staged in Directory.EnumerateFiles(staging, "*", SearchOption.AllDirectories)
                      .ToImmutableArray())
         {
+            // One probe (and maybe one move) per file. A cancel here leaves a content-addressed
+            // directory with some files restored and none overwritten; the landing then takes its
+            // failure path and records nothing.
+            cancellationToken.ThrowIfCancellationRequested();
             var relative = Path.GetRelativePath(staging, staged);
             var destination = Path.Combine(target, relative);
             if (File.Exists(destination))
@@ -1772,7 +1833,17 @@ public sealed class ModuleLandingService : IDisposable
 
     // Internal for the #4427 review pins (InternalsVisibleTo): an uninstall on a second REPLICA
     // runs inside the first one's projection window, on the calling thread.
-    internal void RemoveCore(string name)
+    internal void RemoveCore(string name) => RemoveCore(name, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="RemoveCore(string)"/> from a pooled leaf. <paramref name="cancellationToken"/> (the
+    /// pool's) is checked where stopping leaves a state the code already recovers from: across the
+    /// record walk and before the tombstone (nothing written yet, the uninstall simply did not
+    /// happen), and before each best-effort generation delete (the cleared pointers already let the
+    /// next GC pass reclaim whatever is left). Between the tombstone and the projection it is NOT
+    /// checked: those are the uninstall's own writes, and they run to the end.
+    /// </summary>
+    internal void RemoveCore(string name, CancellationToken cancellationToken)
     {
         ValidateFileName(name, "module name");
 
@@ -1785,9 +1856,10 @@ public sealed class ModuleLandingService : IDisposable
                 $"Module '{name}': its activation records could not be read whole, so nothing is "
                 + "uninstalled now; repeat the uninstall once they read whole.");
         var list = ModuleActivationSidecar.ReadFor(baseDirectory,
-            msg => logger?.LogError("{Message}", msg), platform);
+            msg => logger?.LogError("{Message}", msg), platform, cancellationToken);
         var existing = list.Entries.FirstOrDefault(e =>
             string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
+        cancellationToken.ThrowIfCancellationRequested();
         if (existing is null)
             throw new InvalidOperationException(
                 $"Module '{name}' was not landed by the store lane (no activation entry) — "
@@ -1840,8 +1912,11 @@ public sealed class ModuleLandingService : IDisposable
             targets.Add(Path.Combine(baseDirectory, "modules", existing.Directory!));
         if (!string.IsNullOrWhiteSpace(existing.PreviousDirectory))
             targets.Add(Path.Combine(baseDirectory, "modules", existing.PreviousDirectory!));
-        foreach (var target in targets.Where(Directory.Exists))
+        foreach (var target in targets)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!Directory.Exists(target))
+                continue;
             try
             {
                 Directory.Delete(target, recursive: true);

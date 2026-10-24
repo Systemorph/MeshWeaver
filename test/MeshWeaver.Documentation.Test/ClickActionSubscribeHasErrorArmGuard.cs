@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -47,7 +48,7 @@ public class ClickActionSubscribeHasErrorArmGuard
     [Fact]
     public void NoClickActionSubscribesWithoutAnErrorArm()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var scanned = 0;
         var clickLambdas = 0;
         var offenders = new List<string>();

@@ -75,7 +75,7 @@ public class UnthrottledResubscribeInTestRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoTestWaitsOnAMeshStreamWithAnUnthrottledResubscribe()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -137,7 +137,7 @@ public class UnthrottledResubscribeInTestRatchetGuard(ITestOutputHelper output)
 
         // And the guard's own file — which quotes both markers repeatedly in prose — must scan clean,
         // or every count this ratchet reports is measured against documentation rather than code.
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var self = Path.Combine(root, "test", "MeshWeaver.Documentation.Test",
             "UnthrottledResubscribeInTestRatchetGuard.cs");
         Assert.True(File.Exists(self), "the guard's own file must exist for this check to mean anything");

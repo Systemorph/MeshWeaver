@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -52,7 +53,7 @@ public class SyntheticProbeNamesNoInstalledContentGuard
 
     private static string WorkflowBody()
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), Workflow);
+        var path = Path.Combine(RepoPaths.Root, Workflow);
 
         // 🚨 THE DENOMINATOR. A guard whose subject was renamed or deleted, and whose own path was
         // not, passes having checked nothing — the failure mode this repo keeps re-learning. Assert

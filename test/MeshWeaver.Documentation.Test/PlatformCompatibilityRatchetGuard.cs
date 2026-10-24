@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -49,7 +50,7 @@ public class PlatformCompatibilityRatchetGuard
     [Fact]
     public void NoPerBuildIdentityDecidesAdoptionLoadingOrRolling()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .SelectMany(f => ProvenanceComparisonsIn(File.ReadAllText(f))
                 .Select(s => $"  {SourceScan.Relative(root, f)}: {s}"))
@@ -68,7 +69,7 @@ public class PlatformCompatibilityRatchetGuard
     [Fact]
     public void NoPluginLoadContextHardLinksAnExactVersion()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .Where(f => ExactVersionLoadContext(File.ReadAllText(f)))
             .Select(f => "  " + SourceScan.Relative(root, f))
@@ -85,7 +86,7 @@ public class PlatformCompatibilityRatchetGuard
     [Fact]
     public void TheModuleLinkProbeAppliesTheOneBindingRule()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var code = SourceScan.MaskCommentsAndStrings(File.ReadAllText(
             Path.Combine(root, "src", "MeshWeaver.Mesh.Contract", "ModulePlatformLink.cs")));
         Assert.Contains("PlatformBinding.MayBind(", code);

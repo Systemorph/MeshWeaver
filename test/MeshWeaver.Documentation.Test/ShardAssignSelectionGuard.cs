@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -35,7 +36,7 @@ public class ShardAssignSelectionGuard
     public void EverySelectionModeExitsZero(string selection, bool expectProjects)
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var script = Path.Combine(root, ScriptPath);
         File.Exists(script).Should().BeTrue($"{ScriptPath} is the subject of this guard");
 

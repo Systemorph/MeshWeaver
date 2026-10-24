@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -80,7 +81,7 @@ public class RootedRxConnectionRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void EveryRootedRxConnectionInSrc_IsOwnedOrInventoried()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = ReadAllowFile(Path.Combine(root, "test", AllowFileName));
         var sites = Scan(root);
 
@@ -212,7 +213,7 @@ public class RootedRxConnectionRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerStillSeesTheConvertedSitesAndTheInventory()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var helperCalls = 0;
         foreach (var file in SourceScan.SourceFiles(root, ScannedRoots))
         {

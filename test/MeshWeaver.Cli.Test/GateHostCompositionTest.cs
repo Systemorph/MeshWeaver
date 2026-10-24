@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using MeshWeaver.Cli;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Cli.Test;
 
@@ -42,7 +43,7 @@ public class GateHostCompositionTest
     [Fact]
     public void TheEmbeddedComposeScript_IsTheLanesScript_ByteForByte()
     {
-        var onDisk = Path.Combine(FindRepoRoot(), ".github", "scripts", "compose-gate-host.sh");
+        var onDisk = Path.Combine(RepoPaths.Root, ".github", "scripts", "compose-gate-host.sh");
         Assert.True(File.Exists(onDisk),
             $"{onDisk} is missing — it is the ONE implementation of the gate-host composition rules, "
             + "fetched by node-repo-gate.yml / node-repo-publish-bake.yml / node-repo-module-pack.yml "
@@ -290,13 +291,5 @@ public class GateHostCompositionTest
             if (args[i] == flag && args[i + 1] == value)
                 return;
         Assert.Fail($"expected '{flag} {value}' in: {string.Join(' ', args)}");
-    }
-
-    internal static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }

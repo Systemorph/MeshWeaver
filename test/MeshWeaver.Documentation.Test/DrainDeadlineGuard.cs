@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -52,7 +53,7 @@ public class DrainDeadlineGuard
     [Fact]
     public void ThePreStopDrain_HasADeadlineOfItsOwn_AndDoesNotRelyOnTheGraceCeiling()
     {
-        var preStop = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Deployment)));
+        var preStop = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Deployment)));
 
         Assert.True(preStop.Contains("/drain", StringComparison.Ordinal),
             $"{Deployment} must still run the SESSION drain — without it a roll cuts every open "
@@ -86,7 +87,7 @@ public class DrainDeadlineGuard
     [Fact]
     public void TheMargin_LeavesRoomForTheHostsOwnShutdown_AndStillLeavesASessionDrain()
     {
-        var values = File.ReadAllText(Path.Combine(FindRepoRoot(), Values));
+        var values = File.ReadAllText(Path.Combine(RepoPaths.Root, Values));
 
         var drain = ScalarUnder(values, "portal", "drainSeconds");
         var margin = ScalarUnder(values, "portal", "shutdownMarginSeconds");
@@ -111,7 +112,7 @@ public class DrainDeadlineGuard
     public void TheGraceCeiling_IsStillDrainSeconds()
     {
         var deployment = ExecutableLinesOf(
-            File.ReadAllText(Path.Combine(FindRepoRoot(), Deployment)));
+            File.ReadAllText(Path.Combine(RepoPaths.Root, Deployment)));
 
         Assert.Contains("terminationGracePeriodSeconds:", deployment, StringComparison.Ordinal);
         Assert.True(
@@ -142,7 +143,7 @@ public class DrainDeadlineGuard
     [Fact]
     public void ThePreStopProbe_TargetsARouteTheCodeMaps_OnThePortTheContainerServes()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var deployment = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Deployment)));
 
         var probe = Regex.Match(deployment, @"curl[^\n]*?http://127\.0\.0\.1:(?<port>\d+)(?<path>/\S*)");
@@ -198,7 +199,7 @@ public class DrainDeadlineGuard
     [Fact]
     public void ThePreStopProbeTool_IsInstalledInThePortalBaseImage()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var preStop = ExecutableLinesOf(File.ReadAllText(Path.Combine(root, Deployment)));
 
         var guard = Regex.Match(preStop, @"command -v (?<tool>\w+)");
@@ -246,15 +247,5 @@ public class DrainDeadlineGuard
             $"{Values} must declare {parent}.{key} as an integer — it is half of the arithmetic "
             + "that keeps a roll from SIGKILLing a live silo (#1971).");
         return int.Parse(scalar.Groups["value"].Value);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

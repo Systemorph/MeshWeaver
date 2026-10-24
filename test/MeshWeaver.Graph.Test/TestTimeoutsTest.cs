@@ -283,7 +283,7 @@ public class TestTimeoutsTest
                 + $"({TestTimeouts.DefaultOuterBound}) — a cap equal to a budget kills the wait at "
                 + "the instant it expires, which reports nothing.");
 
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         var configs = Directory
             .GetFiles(Path.Combine(root, "test"), "xunit.runner.json", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
@@ -342,20 +342,5 @@ public class TestTimeoutsTest
             "a [HubFact] whose own Timeout is at or below the convergence wait can only ever fail "
             + "anonymously — the attribute kills the method before the wait reports.");
 #endif
-    }
-
-    /// <summary>
-    /// Locates the repository root by its solution file. Fails rather than skips: a guard that
-    /// cannot find its subject has checked nothing, and saying so is the whole point.
-    /// </summary>
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null,
-            $"walked up from {AppContext.BaseDirectory} and found no MeshWeaver.slnx — this guard "
-            + "cannot locate the configs it exists to check.");
-        return dir!.FullName;
     }
 }
