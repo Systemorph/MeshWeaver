@@ -46,6 +46,14 @@ NOTATIONS = ("any", "legacy")
 PLACEHOLDERS = ("major", "minor", "patch")
 REQUIRED_FIELDS = ("id", "tag", "edition", "meaning", "writers", "notation", "status")
 BINDING_FIELDS = ("workflow", "job", "repositories")
+# The repository whose workflows this file's bindings name by default. A binding may name ANOTHER
+# repository's workflow with `"repo": "<owner>/<name>"` — the hosting operator's image is published
+# by Systemorph/MeshWeaver.Plugins (its hosting-operator.yml), and its `main` label must stay
+# declared, and so protected, here. Such a binding is shape-validated, but its workflow cannot be
+# read from this tree, so `check` does not open it; that repository's lane spells the tag and the
+# repository itself.
+THIS_REPO = "Systemorph/MeshWeaver"
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A label must look like a tag and must NEVER be SELECTABLE as a version. The self-updater
 # (memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs) keeps every tag matching
 # `PlatformVersionTag` = ^\d+\.\d+\.\d+([-+].*)?$ EXCEPT one ending in `-latest` (`MovingPointer`), so
@@ -186,6 +194,8 @@ def validate(doc: dict) -> list[str]:
                 problems.append(f"{at}: `repositories` must be a list of repository names")
             if binding.get("notation", "any") not in NOTATIONS:
                 problems.append(f"{at}: notation {binding.get('notation')!r} is not one of {NOTATIONS}")
+            if "repo" in binding and not (isinstance(binding["repo"], str) and REPO_RE.match(binding["repo"])):
+                problems.append(f"{at}: `repo` must be '<owner>/<name>', got {binding['repo']!r}")
     return problems
 
 
@@ -280,6 +290,8 @@ def check(doc: dict, root: Path, platform_version=None, is_floating=None) -> lis
     workflows = root / ".github" / "workflows"
     for entry in channels(doc):
         for binding in entry["writers"]:
+            if binding.get("repo", THIS_REPO) != THIS_REPO:
+                continue  # another repository's workflow: shape-validated above, not readable here
             wf = binding["workflow"]
             path = workflows / wf
             if not path.is_file():
@@ -451,8 +463,22 @@ def self_test() -> int:
     # The publishers outside main-cd/release.yml are declared too (regression: they were omitted).
     expect("edge is protected (edge-images.yml writes it for portal and migration)",
            is_protected(real, "edge") and tags_for(real, "3.1.10050", "edge-images.yml", repository="memex-migration") == ["edge"])
-    expect("hosting-operator:main is declared (hosting-operator.yml#publish)",
-           tags_for(real, "3.1.10050", "hosting-operator.yml", job="publish", repository="hosting-operator") == ["main"])
+    expect("hosting-operator:main is declared (MeshWeaver.Plugins hosting-operator.yml#operator)",
+           tags_for(real, "3.1.10050", "hosting-operator.yml", job="operator", repository="hosting-operator") == ["main"])
+    expect("the hosting-operator writer names the repository that publishes it",
+           any(b.get("repo") == "Systemorph/MeshWeaver.Plugins" and b["workflow"] == "hosting-operator.yml"
+               for e in real["channels"] if e["id"] == "main" for b in e["writers"]))
+    # A binding into ANOTHER repository is not opened here; one into THIS repository still is.
+    elsewhere = json.loads(json.dumps(real))
+    elsewhere["channels"][3]["writers"][0].update(workflow="no-such-workflow.yml", repo="Systemorph/Elsewhere")
+    expect("a writer in another repository is not looked for in this tree",
+           not any("no-such-workflow.yml" in p for p in check(elsewhere, root, FakePV, always_floating)))
+    here = json.loads(json.dumps(real))
+    here["channels"][3]["writers"][0].update(workflow="no-such-workflow.yml", repo=THIS_REPO)
+    expect("a writer that names THIS repository explicitly is still looked for",
+           any("does not exist" in p for p in check(here, root, FakePV, always_floating)))
+    expect("validate refuses a malformed `repo`",
+           bool(broken(lambda d: d["channels"][3]["writers"][0].update(repo="not a repo"))))
     expect("memex-portal-ai-base:latest is declared (base-image-acr.yml#base)",
            tags_for(real, "3.1.10050", "base-image-acr.yml", job="base", repository="memex-portal-ai-base") == ["latest"])
     patterns = {p["id"]: p["repositories"] for p in protected_patterns(real)}

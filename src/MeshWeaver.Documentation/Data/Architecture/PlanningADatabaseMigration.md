@@ -33,7 +33,7 @@ Four gaps made that possible, and each now has a mechanism:
 | Nothing forced a migration to be planned | The `Db-migration:` declaration and a rehearsal against a real Postgres | MeshWeaver.Plugins CI |
 | No planner could see a schema bump coming | `ExpectedDbVersion` published with every release | core CD, `ReleaseSchemaMarker` |
 | An image could move without its migration | Every roll path migrates first or refuses | operator `run.sh` interlock, `hosting-deploy`, the Hosting `Roll` plan, the self-updater |
-| The migrate-first planner could be stranded behind a seal | The interlock lives in the operator image, which floats on `main`. Content sync is decided per module, by the module's manifest hash | `deploy/aks/operator`, policy `module-sync-per-manifest-hash` |
+| The migrate-first planner could be stranded behind a seal | The interlock lives in the operator image, which floats on `main`. Content sync is decided per module, by the module's manifest hash | `MeshWeaver.Plugins/deploy/hosting-operator`, policy `module-sync-per-manifest-hash` |
 
 ## 1. Every migration is EXPAND-ONLY
 
@@ -132,7 +132,7 @@ These paths were verified against the code on 2026-09-25:
 | `HelmRelease` (Systemorph/Memex `helm-release.yml`, break-glass) | `helm upgrade` | ⚠️ **not migrate-first**: the chart's migration Job is not a hook, so it runs *alongside* the new pods. It converges, because the new pods crash-loop on `DbVersionGate` until the Job finishes while the old ones serve, but it is a race. Use `Reconcile` instead; tracked for the Memex lane |
 | `Restart`, `Reactivate`, `Suspend`, `RotateRegistryKey`, `SetSecrets` | none (same image) | n/a |
 
-**The operator interlock** (`deploy/aks/operator/bin/run.sh`) is the one piece of the roll path that
+**The operator interlock** (`MeshWeaver.Plugins/deploy/hosting-operator/bin/run.sh`) is the one piece of the roll path that
 does not depend on the build being rolled. The operator image is `hosting-operator:main`, pulled
 with `Always`. Before it runs any step that moves the portal image (`set image … memex-portal=<ref>`),
 it checks that the same plan already ran `hosting-migrate` for that namespace and tag. If not, it

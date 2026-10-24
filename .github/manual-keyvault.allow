@@ -7,28 +7,10 @@
 # 🚨 "TRANSITIONAL" marks a governed verb that still READS a value (or checks existence with a value
 # read). Migration step 3 in the design page rewrites each so the writer identity never needs `get`;
 # the line goes when that rewrite lands.
-
-# The writer's own verbs: set with tags, status from metadata, lifecycle. None reads a value.
-deploy/aks/operator/bin/hosting-kv-set  — writer verb: writes through --file, confirms by list-versions. TRANSITIONAL (policy secret-actions-interim-actions-lane): its --generate mode also runs as hosting-operator on the aks-ops lane until the writer identity is provisioned and every secret action runs in the in-cluster Job under it
-deploy/aks/operator/bin/hosting-kv-state  — writer verb: set-attributes / delete / recover / purge, no value
-deploy/aks/operator/bin/hosting-kv-purge  — teardown verb: deletes an instance's objects by prefix, no value read
-
-# Governed provisioning verbs that still run as hosting-operator.
-deploy/aks/operator/bin/_common.sh  — TRANSITIONAL: hosting::pg_password reads the server admin password to compose connection strings
-deploy/aks/operator/bin/hosting-kv-ensure  — TRANSITIONAL: the admin-password read for the connection string (existence is checked with `list`), and the download of an existing helm-values-<release> to filter it to the record's declared keys (policy one-values-half-per-release)
-deploy/aks/operator/bin/hosting-kv-values-set  — TRANSITIONAL: the governed key-level writer of helm-values-<release> downloads the half to change named declared keys and keep the rest (a read-modify-write); retired with the vault half
-deploy/aks/operator/bin/hosting-kv-copy  — TRANSITIONAL: copyFrom reads the source value to write the per-prefix copy
-deploy/aks/operator/bin/hosting-kv-rotate  — TRANSITIONAL: reads the vaulted registry key to compare before rotating
-deploy/aks/operator/bin/hosting-registry-register  — TRANSITIONAL: reads the held instance key and the bootstrap key to call the registry
-deploy/aks/operator/bin/hosting-registry-coupon  — TRANSITIONAL: reads the registry's coupon-mint credential to call the registry; writes the minted coupon through --file, existence checked with `list`
-deploy/aks/operator/bin/hosting-signin-app  — writes the minted Entra client secret through --file; existence is checked with `list`, no value read
-deploy/aks/operator/bin/hosting-image-mirror  — TRANSITIONAL: reads the registry publisher password to push the mirror
-deploy/aks/operator/bin/hosting-pull-secret  — TRANSITIONAL: reads the registry pull key to render the image pull Secret
-deploy/aks/operator/bin/hosting-deploy  — TRANSITIONAL: downloads the helm values half (helm-values-<release>); retired with the vault half
-
-# Their behaviour suite and its stand-in binaries (they answer the commands, they do not run them).
-deploy/aks/operator/test/run-tests.sh  — asserts the verbs write through --file, never print a value and never read one back
-deploy/aks/operator/test/stubs/*/az  — stand-in az binaries for that suite
+#
+# The hosting operator's governed `hosting-kv-*` verbs moved to Systemorph/MeshWeaver.Plugins with the
+# operator ("core slimming"); their entries live in its deploy/hosting-operator/manual-keyvault.allow,
+# and its hosting-operator.yml runs this gate over that directory.
 
 # This gate, which has to spell the commands it refuses.
 .github/scripts/check-manual-keyvault.py  — the gate itself

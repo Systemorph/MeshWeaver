@@ -83,7 +83,7 @@ one instance and not another is a guess about provenance; the declaration is not
 ## What is unchanged
 
 - A value applied by hand and never rendered by the record is still refused — the negative control
-  in `deploy/aks/operator/test/run-tests.sh` pins it with a manifest present.
+  in `MeshWeaver.Plugins/deploy/hosting-operator/test/run-tests.sh` pins it with a manifest present.
 - A first install reads no live values and is never asked.
 - The operator logs paths only, never a value.
 
