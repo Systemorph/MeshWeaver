@@ -2464,6 +2464,22 @@ public static class DynamicTypePreWarmer
     /// </summary>
     public static IDisposable WatchForRecovery(
         IMessageHub mesh, NodeTypeBakeGateState gate, string typePath, ILogger? logger)
+        => WatchForRecovery(mesh, gate, typePath, logger, onTerminated: null);
+
+    /// <summary>
+    /// <see cref="WatchForRecovery(IMessageHub, NodeTypeBakeGateState, string, ILogger?)"/>, telling
+    /// <paramref name="onTerminated"/> when the watch ENDS — after its recovery (it watches for one),
+    /// on a fault, or on disposal — so an owner that de-duplicates watches per type knows the type is
+    /// no longer watched and a later regression of it needs a fresh one (#7066 review).
+    /// </summary>
+    /// <param name="mesh">The mesh hub.</param>
+    /// <param name="gate">The gate whose regression the watch retracts.</param>
+    /// <param name="typePath">The condemned NodeType.</param>
+    /// <param name="logger">Diagnostics.</param>
+    /// <param name="onTerminated">Told once when the watch has ended, however it ended.</param>
+    /// <returns>The watch; dispose it to stop watching.</returns>
+    public static IDisposable WatchForRecovery(
+        IMessageHub mesh, NodeTypeBakeGateState gate, string typePath, ILogger? logger, Action? onTerminated)
     {
         const string RemovedWitness = "the NodeType definition no longer exists";
         var workspace = mesh.GetWorkspace();
@@ -2528,6 +2544,7 @@ public static class DynamicTypePreWarmer
                                 ? Observable.Throw<string>(ex)
                                 : Observable.Return(RemovedWitness)));
                 })
+            .Finally(() => onTerminated?.Invoke())
             .Subscribe(
                 witness =>
                 {
