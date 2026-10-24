@@ -434,6 +434,15 @@ At-least-once, and deliberately so:
 | Split | every queued report into pieces under `LogIncidentDelivery.MaxReportBytes` | A report too large for one request is no longer refused whole; see below for what a split preserves and the two cases it cannot. |
 | Deliver | oldest first, stop at first retryable failure | A wedged portal is retried next tick, not hammered once per queued report. |
 
+🚨 **Collection and delivery are two loops, never one pass** (#7043). Each runs on its own
+`PollInterval` cadence (`LogWatchWorker.Watch`), serialised on itself. They used to share one pass —
+collect, then drain the WHOLE queue, one POST per report — so a portal answering slowly but
+successfully held the next collection for `reports × latency`, and the late pass then found the queue
+already EMPTIED: `log-pipeline-behind-*` with *"0 report(s) still undelivered"* is the signature of
+that, not evidence against it. The shared queue serialises its own writes (`WatcherState`), each
+applied to the queue as it stands in its turn, so the two loops cannot persist over each other.
+Pinned by `ASlowDeliveryCannotHoldCollectionTest` (MeshWeaver.Plugins).
+
 Only a status that describes the PAYLOAD is permanent (`LogIncidentDelivery.IsPermanent`: 400, 414,
 415, 422) — a malformed report will not become valid by being resent, so it is dropped and the drop
 is filed as a finding (below). Every status that describes the portal's STATE (401 mid token

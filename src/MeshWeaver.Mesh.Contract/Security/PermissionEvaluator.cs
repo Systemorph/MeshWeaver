@@ -109,6 +109,7 @@ internal static class PermissionEvaluator
 
     public static IObservable<Permission> GetEffectivePermissions(IMessageHub hub, string nodePath, string userId)
     {
+        nodePath = ToMeshPath(nodePath);
         if (string.IsNullOrEmpty(userId))
             userId = WellKnownUsers.Anonymous;
 
@@ -485,7 +486,7 @@ internal static class PermissionEvaluator
     /// <returns>Live: true while the scope chain's cap carries <see cref="Permission.Api"/>.</returns>
     public static IObservable<bool> GetApiCapability(IMessageHub hub, string nodePath)
     {
-        var path = nodePath ?? "";
+        var path = ToMeshPath(nodePath);
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         return ObserveScopePolicies(hub, cache, path, staticPolicies)
@@ -513,7 +514,7 @@ internal static class PermissionEvaluator
 
     public static IObservable<PartitionAccessPolicy?> GetPolicy(IMessageHub hub, string targetNamespace)
     {
-        var ns = targetNamespace ?? "";
+        var ns = ToMeshPath(targetNamespace);
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         return ObserveScopePolicies(hub, cache, ns, staticPolicies)
@@ -528,7 +529,7 @@ internal static class PermissionEvaluator
     /// </summary>
     public static IObservable<string?> GetRedirectOnDenied(IMessageHub hub, string targetNamespace)
     {
-        var ns = targetNamespace ?? "";
+        var ns = ToMeshPath(targetNamespace);
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         var fromPolicy = ObserveScopePolicies(hub, cache, ns, staticPolicies)
@@ -585,7 +586,7 @@ internal static class PermissionEvaluator
         if (AnonymousAccess.IsDenied(hub.ServiceProvider))
             return Observable.Return(false);
 
-        var ns = targetNamespace ?? "";
+        var ns = ToMeshPath(targetNamespace);
         var cache = hub.ServiceProvider.GetRequiredService<IMeshNodeStreamCache>();
         var staticPolicies = CollectStaticPolicies(hub);
         return ObserveScopePolicies(hub, cache, ns, staticPolicies)
@@ -1057,6 +1058,22 @@ internal static class PermissionEvaluator
     /// its <c>_Access</c> / <c>_Policy</c> nodes live in (one schema per partition). Empty for the
     /// root scope, which belongs to no partition.
     /// </summary>
+    /// <summary>
+    /// The mesh path a permission question is about. 🚨 A path written in REFERENCE form —
+    /// <c>@/acme/x</c> or <c>@acme/x</c>, the spelling of markdown links, autocomplete and every tool
+    /// argument — names <c>acme/x</c>; no mesh path segment begins with <c>@</c>. Taken verbatim, the
+    /// fold read <c>@</c> as the PARTITION and issued <c>path:@ scope:descendants
+    /// nodeType:AccessAssignment … limit:all</c> plus its <c>_Policy</c> twin: the query parser strips
+    /// the <c>@</c> (#6828), leaving no first segment, so Postgres served both as a UNION over every
+    /// partition schema (#7090). The scope chain was wrong the same way (<c>@</c>, <c>@/acme</c>, …),
+    /// so no grant on the real path applied and the verdict failed CLOSED. Stripped HERE, at every
+    /// public entry, with the same rule the query parser applies to <c>path:</c>/<c>namespace:</c>.
+    /// </summary>
+    private static string ToMeshPath(string? pathOrReference)
+        => string.IsNullOrEmpty(pathOrReference)
+            ? string.Empty
+            : QueryParser.StripReferencePrefix(pathOrReference);
+
     private static string GetPartition(string? pathOrScope)
     {
         if (string.IsNullOrEmpty(pathOrScope))
