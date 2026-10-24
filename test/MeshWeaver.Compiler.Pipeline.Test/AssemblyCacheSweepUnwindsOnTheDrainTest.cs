@@ -164,5 +164,10 @@ public class AssemblyCacheSweepUnwindsOnTheDrainTest : IDisposable
         Assert.ThrowsAny<OperationCanceledException>(() => AssemblyCacheGenerations.SweepCore(
             root, LiveTag, armed, Now, cancelled.Token));
         collectable.Should().OnlyContain(path => File.Exists(path));
+
+        // Before the first round trip too: a missing root is still probed only under a live token.
+        var missing = Path.Combine(root, "no-such-cache");
+        Assert.ThrowsAny<OperationCanceledException>(() => AssemblyCacheGenerations.Scan(missing, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => AssemblyCacheGenerations.ReadClaims(missing, cancelled.Token));
     }
 }
