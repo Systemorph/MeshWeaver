@@ -241,12 +241,15 @@ env:
   # per-shard upload steps (both read SHARD_TOTAL from here). A mismatch is loud (the
   # assertion fails), never silent.
   #
-  # 8, not 6: the 20-minute shard cap is sized for ~8.4 min of tests per shard beside the
-  # browser step's ~9.5 min worst case (see the `test` job). Re-measured 2026-10-23 the suite
-  # is ~3,900 s of tests, ~650 s per shard at six — so a shard whose apt mirror stalled was cut
-  # even with perfectly balanced weights. At eight it is ~490 s. The arithmetic and the runs
-  # it comes from are in .github/scripts/shard-assign.sh.
-  CI_SHARD_TOTAL: 8
+  # 10, not 6: the 20-minute shard cap has to hold the shard's tests beside the browser step's
+  # END-TO-END worst case (588 s: its 480 s budget, then the last attempt's kill grace, the apt
+  # reap and the 60 s smoke print) and ~150 s of download and setup, which leaves ~460 s.
+  # Re-measured 2026-10-23, the scheduled suite is ~3,830 s of tests: ~640 s per shard at six,
+  # so a shard whose apt mirror stalled was cut even with perfectly balanced weights. At ten it
+  # is ~383 s (~410 s once #7087 splits Compiler.Pipeline). ShardWeightHeadroomGuard.
+  # TheIdealShardLoadFitsTheShardJobCap holds this arithmetic; the runs it comes from are in
+  # .github/scripts/shard-assign.sh.
+  CI_SHARD_TOTAL: 10
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -874,6 +877,12 @@ jobs:
     - name: "Upload artifact: shard 7"
       uses: actions/upload-artifact@v7
       with: { name: build-output-7, path: build-output-7.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 8"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-8, path: build-output-8.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 9"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-9, path: build-output-9.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
 
   # ───────────────────────────── TEST ──────────────────────────────
   # Matrix-sharded: the ~45 test projects are split across SHARD_TOTAL parallel
@@ -913,7 +922,7 @@ jobs:
       # results so the PR shows the full failure picture, not just the first.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
     - uses: actions/checkout@v7

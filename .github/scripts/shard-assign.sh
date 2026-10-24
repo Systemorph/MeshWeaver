@@ -13,7 +13,7 @@
 #
 # Portable on purpose: no `declare -A`, so it runs on the runner's bash 5 AND on
 # a stock macOS bash 3.2 — you can verify a change locally before pushing.
-#   SHARD_INDEX=0 SHARD_TOTAL=8 .github/scripts/shard-assign.sh
+#   SHARD_INDEX=0 SHARD_TOTAL=10 .github/scripts/shard-assign.sh
 #
 # ── Balancing ────────────────────────────────────────────────────────────────
 # Greedy LPT: heaviest first onto the currently least-loaded shard, ties to the
@@ -54,15 +54,17 @@
 #         Test, 180 s) dominates that part.
 #       - MeshWeaver.Hosting.Test 3→2: 223/226. Its total fell from ~600 to ~450 s, and
 #         its 3-part split had become 128/116/206, the unevenness that stacks a shard.
-#   * CI_SHARD_TOTAL 6→8 (dotnet-test.yml). The suite is ~3,900 s of tests. At six
-#     shards that is ~650 s per shard even with perfect balance. The job cap leaves a
-#     shard about 590 s of tests after a stalled browser step (480 s) and a slow
-#     artifact download (~110 s). At eight the average is ~490 s.
+#   * CI_SHARD_TOTAL 6→10 (dotnet-test.yml). Every scheduled project together (unlisted
+#     ones at DEFAULT_WEIGHT) is ~3,830 s of tests, ~640 s per shard at six even with
+#     perfect balance. The job cap leaves a shard ~460 s of tests after the browser
+#     step's end-to-end worst case (588 s) and ~150 s of download and setup. At ten the
+#     average is ~383 s, or ~410 s once #7087 splits Compiler.Pipeline.
+#     ShardWeightHeadroomGuard.TheIdealShardLoadFitsTheShardJobCap checks this arithmetic.
 #
 # 🚨 The every-Nth split is uneven, and the LPT loop cannot see it. It weights every
 # part at total÷N, so two heavy parts can land on one shard. Estimated from the per-part
-# figures above, the heaviest of the eight shards runs ~545 s once #7087 splits
-# Compiler.Pipeline, and ~650 s until then. Re-check with the per-part numbers, not
+# figures above, the heaviest of the ten shards runs ~490 s once #7087 splits
+# Compiler.Pipeline, and ~550 s until then. Re-check with the per-part numbers, not
 # with the loads this script prints.
 #
 # 🚨 RE-MEASURE WHEN A PROJECT GROWS — nothing here does it for you, and a stale

@@ -208,17 +208,20 @@ evidence. Keep the job and per-project caps in place: they make a real wedge obs
 
 **Balanced weights are not enough once the suite outgrows the shard count.** The 20-minute job cap
 has to hold the browser step's worst case as well as the tests. When the runner's apt mirror stalls,
-that step spends its whole `BROWSER_STEP_BUDGET` (480 s). With the artifact download (up to ~110 s),
-a shard then has about 570 s left for tests. The cancellations of 2026-10-23 had both causes at
+that step spends its whole `BROWSER_STEP_BUDGET` (480 s), and the last attempt's kill grace, the apt
+reap and the smoke print then run after it: 588 s end to end. With ~150 s of download and setup, a
+shard then has about 460 s left for tests. The cancellations of 2026-10-23 had both causes at
 once:
 
 - PR runs 40011143666 and 40011313475, and main run 40027189653, each lost a shard on attempt 1.
 - Shard 4 owed ~880 s of tests against a printed ~454 s, because the weights were stale.
-- The re-measured suite was ~3,900 s, which is ~650 s per shard at six, even with perfect balance.
+- The re-measured suite was ~3,830 s, which is ~640 s per shard at six, even with perfect balance.
 
-So the fix was a re-measure, re-splits and `CI_SHARD_TOTAL` 6→8. The cap was not widened.
+So the fix was a re-measure, re-splits and `CI_SHARD_TOTAL` 6→10. The cap was not widened.
 `ShardWeightHeadroomGuard.TheIdealShardLoadFitsTheShardJobCap` now checks that arithmetic. It reads
-the cap, the browser budget and the shard count from the workflow.
+the cap, every bound of the browser step and the shard count from the workflow. It sums the load
+over the projects the scheduler actually discovers, with unlisted ones at `DEFAULT_WEIGHT`, never
+over the table's rows.
 
 That guard can only be as right as the table, and the table goes stale without telling anyone. The
 LPT loop also weights every part of a split project as total ÷ N, while the every-Nth class split
