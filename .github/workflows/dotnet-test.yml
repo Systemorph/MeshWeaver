@@ -2531,6 +2531,13 @@ jobs:
     # page. Offline cases: aged-out, paginated, duplicates (keep the oldest), closed-only, a labelled
     # PR, an unknown label (must FAIL, not answer "none"), an API failure; the old window scan and a
     # first-page-only pager are the negative controls and must miss.
+    # The ONE GitHub REST client the scripts share. Two local servers on two ports prove the token
+    # reaches GitHub's origin and never the signed-storage origin a 302 points to — with the stock
+    # urllib request driven as the negative control, which DOES forward it.
+    - name: "The shared GitHub client keeps the token off a redirect to another host (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: python3 .github/scripts/ghrest.py --self-test
+
     - name: "A standing tracking issue is found by its label, never by a recent-issues window (self-test)"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/sentinel-issue.py --self-test

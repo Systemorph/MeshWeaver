@@ -75,6 +75,85 @@ public class CiRestBudgetGuard
         Assert.Empty(JobsCallingTheReaderUninstalled(installed));
     }
 
+    /// <summary>A lane fetches core's scripts ONE FILE AT A TIME into <c>$RUNNER_TEMP</c>. A script
+    /// that imports the shared REST client (<c>import ghrest</c>, from beside itself) dies there with
+    /// <c>ModuleNotFoundError</c> unless the same step fetches <c>.github/scripts/ghrest.py</c> too.</summary>
+    [Theory]
+    [MemberData(nameof(Lanes))]
+    public void EveryFetchedScriptThatImportsTheSharedClient_IsFetchedWithIt(string lane)
+    {
+        var problems = FetchesMissingTheSharedClient(File.ReadAllText(LanePath(lane)), ImportsSharedClient);
+        Assert.True(problems.Count == 0,
+            $"{lane} fetches a script that does `import ghrest` without fetching .github/scripts/ghrest.py " +
+            "beside it in the same step — on the runner it fails with ModuleNotFoundError:\n  " +
+            string.Join("\n  ", problems));
+    }
+
+    /// <summary>Negative control: the detector fires on the uncovered shape (literal and loop form)
+    /// and stays silent when the client is fetched, or when the script does not import it.</summary>
+    [Fact]
+    public void TheSharedClientDetector_FiresOnTheShapeItExistsToCatch()
+    {
+        static bool Imports(string script) => script == "needs.py";
+        const string missing = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/needs.py\" > \"$T/needs.py\"\n";
+        const string loopMissing = "jobs:\n  a:\n    steps:\n      - run: |\n          for s in other.py needs.py; do\n            \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/${s}\" > \"$T/${s}\"\n          done\n";
+        const string covered = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/needs.py\" > \"$T/needs.py\"\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/ghrest.py\" > \"$T/ghrest.py\"\n";
+        const string unrelated = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/other.py\" > \"$T/other.py\"\n";
+        Assert.Single(FetchesMissingTheSharedClient(missing, Imports));
+        Assert.Single(FetchesMissingTheSharedClient(loopMissing, Imports));
+        Assert.Empty(FetchesMissingTheSharedClient(covered, Imports));
+        Assert.Empty(FetchesMissingTheSharedClient(unrelated, Imports));
+        // And the real predicate reads real sources: a migrated script imports the client, ghrest itself does not.
+        Assert.True(ImportsSharedClient("retry-known-transients.py"));
+        Assert.False(ImportsSharedClient("ghrest.py"));
+    }
+
+    private static readonly Regex FetchedScript = new(@"\.github/scripts/([A-Za-z0-9_.-]+\.py)\b", RegexOptions.Compiled);
+    private static readonly Regex FetchLoop = new(@"for\s+\w+\s+in\s+([^;\n]+);\s*do", RegexOptions.Compiled);
+    private static readonly Regex ImportLine = new(@"^import ghrest\b", RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static bool ImportsSharedClient(string script)
+    {
+        var path = Path.Combine(FindRepoRoot(), ".github", "scripts", script);
+        return File.Exists(path) && ImportLine.IsMatch(File.ReadAllText(path));
+    }
+
+    private static List<string> FetchesMissingTheSharedClient(string yaml, Func<string, bool> imports)
+    {
+        var stream = new YamlStream();
+        stream.Load(new StringReader(yaml));
+        var root = (YamlMappingNode)stream.Documents[0].RootNode;
+        var problems = new List<string>();
+        if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode jobs)
+            return problems;
+        foreach (var (name, jobNode) in jobs.Children)
+        {
+            if (jobNode is not YamlMappingNode job
+                || !job.Children.TryGetValue(new YamlScalarNode("steps"), out var stepsNode)
+                || stepsNode is not YamlSequenceNode steps)
+                continue;
+            for (var i = 0; i < steps.Children.Count; i++)
+            {
+                if (steps.Children[i] is not YamlMappingNode step) continue;
+                var run = Scalar(step, "run");
+                if (run is null || !run.Contains("mw-core-file", StringComparison.Ordinal)) continue;
+                var fetched = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var line in run.Split('\n').Where(l => l.Contains("mw-core-file", StringComparison.Ordinal)))
+                    foreach (Match m in FetchedScript.Matches(line))
+                        fetched.Add(m.Groups[1].Value);
+                if (run.Contains(".github/scripts/${", StringComparison.Ordinal))
+                    foreach (Match loop in FetchLoop.Matches(run))
+                        foreach (var token in loop.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                            if (token.EndsWith(".py", StringComparison.Ordinal))
+                                fetched.Add(token);
+                if (fetched.Contains("ghrest.py")) continue;
+                foreach (var script in fetched.Where(imports).OrderBy(s => s, StringComparer.Ordinal))
+                    problems.Add($"job `{name}` step {i + 1} ({Scalar(step, "name") ?? "unnamed"}): {script}");
+            }
+        }
+        return problems;
+    }
+
     private static List<string> RestReadsIn(string yaml) =>
         yaml.Split('\n').Select((line, i) => (line, i))
             .Where(x => !x.line.TrimStart().StartsWith('#') && RestRead.IsMatch(x.line))

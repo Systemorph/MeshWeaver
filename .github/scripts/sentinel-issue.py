@@ -43,11 +43,14 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
+import os
 import sys
 import time
 from typing import Callable, Optional
 from urllib.parse import quote
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
 
 PER_PAGE = 100
 
@@ -61,22 +64,8 @@ class LookupError_(Exception):
 
 
 def gh_api(method: str, path: str, fields: Optional[dict] = None) -> "tuple[int, object]":
-    cmd = ["gh", "api", "-X", method, "-i", path]
-    for k, v in (fields or {}).items():
-        cmd += ["-f", f"{k}={v}"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    # `-i` puts the status line first; the body follows the blank line.
-    head, _, body = r.stdout.replace("\r\n", "\n").partition("\n\n")
-    status_line = head.split("\n", 1)[0] if head else ""
-    try:
-        status = int(status_line.split()[1])
-    except (IndexError, ValueError):
-        raise LookupError_(f"gh api {method} {path}: no HTTP status (rc={r.returncode}): {r.stderr.strip()}")
-    try:
-        parsed = json.loads(body) if body.strip() else None
-    except json.JSONDecodeError:
-        raise LookupError_(f"gh api {method} {path}: HTTP {status}, body is not JSON")
-    return status, parsed
+    # `gh api -X METHOD -i` with the status line parsed; an unreadable answer is a LookupError_.
+    return ghrest.gh_cli_status(method, path, fields, error=LookupError_)
 
 
 def ensure_label(api: Api, repo: str, label: str, create: bool, color: str, description: str) -> None:
