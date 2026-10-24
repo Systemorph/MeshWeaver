@@ -1,7 +1,7 @@
 ---
 Name: One Promotion Gate
 Category: Architecture
-Description: A core merge waits on one cross-repository verdict only — the affected-only Plugins suites on the pull request (policy dependent-suites-affected-gate); always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set on its platform verdict (no longer on MeshWeaver.Plugins' dependent suites for that exact pair, see Platform and Module Deploy). What changed on 2026-09-27, why, and where each piece lives.
+Description: A core merge waits on no other repository (policy dependents-verify-on-their-side) — dependents verify a new sealed core set on their own side; always build the newest green core with the newest Plugins, and let exactly one gate decide what the fleet rolls to — the arming of a promoted set on its platform verdict (no longer on MeshWeaver.Plugins' dependent suites for that exact pair, see Platform and Module Deploy). What changed on 2026-09-27, why, and where each piece lives.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12h10"/><path d="M10 6l6 6-6 6"/><rect x="17" y="4" width="3" height="16" rx="1"/></svg>
 ---
 
@@ -20,9 +20,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 | policy | the rule |
 |---|---|
-| ~~`core-merge-never-blocked`~~ → `dependent-suites-affected-gate` | SUPERSEDED. A core pull request now waits on ONE cross-repository verdict: MeshWeaver.Plugins' suites that the diff can REACH, per realm, against the candidate — or a declared break with a green counterpart ([Cross-Repo Pair Gate](../CrossRepoPairGate) → "The dependent's suites run against the candidate"). Only what is affected runs; the four-hour wait below was a merge-queue entry waiting on an unbounded run, which the affected-only selection and the refusal rule bound. |
+| ~~`core-merge-never-blocked`~~ → ~~`dependent-suites-affected-gate`~~ → `dependents-verify-on-their-side` | A core pull request merges on core's OWN required checks; no core job asks MeshWeaver.Plugins (or any satellite) to run anything, waits for it or reads its verdict. The intermediate policy made every core pull request wait on Plugins' affected suites against the candidate; that wait held a core runner per pull request for up to 45 minutes polling another repository, while the polled runs queued for the runners it held, and it was removed. Each dependent now verifies a new SEALED core set on its own side (its push runs and its once-a-day full run). |
 | `build-latest-green` | Every CI consumer — Plugins pull requests, Plugins `main`, the image build — takes the NEWEST GREEN core `main` build. A red core `main` falls back to the last green one, never forward into red. No pin to move for ordinary changes; the freeze variable `MW_PLATFORM_REF` stays for incidents. |
-| `one-promotion-gate` | The fleet rolls only to an ARMED set. A set is armed on its PLATFORM verdict (see the superseding note above — no Plugins verdict decides arming any more); the one place a MeshWeaver.Plugins verdict decides anything is now the pull request, under `dependent-suites-affected-gate`. |
+| `one-promotion-gate` | The fleet rolls only to an ARMED set. A set is armed on its PLATFORM verdict (see the superseding note above — no Plugins verdict decides arming any more). No MeshWeaver.Plugins verdict decides a core merge either (`dependents-verify-on-their-side`): compatibility is seen in the dependents' own runs. Neither this arming nor the combo gate holds a roll on a core + plugin combination — the combo verdict is advisory ([Combo Gate Wiring](../ComboGateWiring)). |
 
 ## Why — measured on 2026-09-27
 
@@ -67,13 +67,30 @@ Plugins push to main ──(image-relevant?)──► main-cd rebuild ───�
 
 ### Never block a core merge
 
-`Consolidate test results` no longer needs `preflight`, `dependent-suites-dispatch` or
-`dependent-suites`, and no step of it reads them. The dependent-suites run on a pull request is
-**advisory**: requested by the `dependent-suites` label or by a declared Plugins counterpart
-(`Pairs-with: Systemorph/MeshWeaver.Plugins#<n>`, see [Paired Change Sets](../PairedChangeSets)),
-reported on the pull request, and blocking nothing. Measure the required set through the ruleset
-endpoint — `gh api repos/Systemorph/MeshWeaver/rules/branches/main` — never the classic protection
-endpoint, which answers 404 for this repository.
+`Consolidate test results` needs no cross-repository job: the jobs `Dependent suites (request)` and
+`Dependent suites (MeshWeaver.Plugins)`, their credential preflight (`Required CI inputs`) and the
+`Breaks-plugins:` body declaration are gone from `dotnet-test.yml`, together with the scripts that
+served only them (`await-dependent-verdict.py`, `check-plugins-break-declaration.py`,
+`paired-plugins-head.py`). Core dispatches to no repository on a pull request
+(`PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository` holds it at zero, with no ledger).
+
+**Where compatibility is verified instead** (policy `dependents-verify-on-their-side`):
+
+- **On the dependent's side.** MeshWeaver.Plugins and every satellite build and test against the
+  newest SEALED platform set on their own pushes (affected suites) and once a day (the full run). A
+  core change that breaks one of them shows up there, as that repository's red, and is fixed by a
+  counterpart pull request in whichever repository owns the defect.
+- **On the deploy side — ADVISORY, not a hold.** The fleet rolls only to an ARMED set (below), but
+  arming judges the PLATFORM's own evidence, never a dependent's suites. The combo verdict
+  ([Combo Gate Wiring](../ComboGateWiring)) is advisory under policy
+  `platform-rolls-independently-of-packages`: a Red is named among the roll's advisories and the
+  failing modules keep their previous generation, while the platform still rolls; `NotVerifiable`
+  and an absent verdict roll unverified. So nothing on the deploy side replaces the removed
+  pull-request wait — the dependent's own runs are the compatibility signal.
+
+Measure the required set through the ruleset endpoint —
+`gh api repos/Systemorph/MeshWeaver/rules/branches/main` — never the classic protection endpoint,
+which answers 404 for this repository.
 
 ### Always build latest
 

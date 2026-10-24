@@ -72,7 +72,7 @@ public class AssemblyCacheRetentionTest : IDisposable
         var result = AssemblyCacheGenerations.SweepCore(
             CacheRoot, LiveTag,
             AssemblyCacheRetention.ReportOnly with { Delete = true, KeepGenerations = 1 },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(claimed).Should().BeTrue(
             "a generation a live pod claims must never be collected — that pod loads these bytes");
@@ -97,7 +97,7 @@ public class AssemblyCacheRetentionTest : IDisposable
     {
         AssemblyCacheGenerations.AssertClaim(CacheRoot, "bbbbbbbb", "pod-b");
 
-        var claims = AssemblyCacheGenerations.ReadClaims(CacheRoot);
+        var claims = AssemblyCacheGenerations.ReadClaims(CacheRoot, CancellationToken.None);
 
         claims.Count.Should().Be(1);
         claims[0].Tag.Should().Be("bbbbbbbb");
@@ -122,7 +122,7 @@ public class AssemblyCacheRetentionTest : IDisposable
         // Metadata says a year ago; the content still says now.
         File.SetLastWriteTimeUtc(claimFile, DateTime.UtcNow - TimeSpan.FromDays(365));
 
-        AssemblyCacheGenerations.ReadClaims(CacheRoot)[0].AtUtc!.Value.Should()
+        AssemblyCacheGenerations.ReadClaims(CacheRoot, CancellationToken.None)[0].AtUtc!.Value.Should()
             .BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromMinutes(1),
                 "a cached-stale timestamp must not be able to condemn a live generation");
     }
@@ -148,7 +148,7 @@ public class AssemblyCacheRetentionTest : IDisposable
                 KeepGenerations = 0,
                 MinimumAge = TimeSpan.Zero
             },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(claimed).Should().BeTrue(
             "a claim that cannot be parsed is not a claim that is absent");
@@ -174,7 +174,7 @@ public class AssemblyCacheRetentionTest : IDisposable
                 KeepGenerations = 0,
                 MinimumAge = TimeSpan.Zero
             },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(live).Should().BeTrue();
     }
@@ -195,7 +195,7 @@ public class AssemblyCacheRetentionTest : IDisposable
         var result = AssemblyCacheGenerations.SweepCore(
             CacheRoot, LiveTag,
             AssemblyCacheRetention.ReportOnly with { Delete = true, KeepGenerations = 3 },
-            Now);
+            Now, CancellationToken.None);
 
         // Newest first: aaaaaaaa (live), bbbbbbbb, cccccccc are the three kept by recency.
         result.Plan!.Collectable.Select(g => g.Tag).Should()
@@ -223,7 +223,7 @@ public class AssemblyCacheRetentionTest : IDisposable
                 KeepGenerations = 0,
                 MinimumAge = TimeSpan.FromDays(7)
             },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(young).Should().BeTrue();
     }
@@ -244,7 +244,7 @@ public class AssemblyCacheRetentionTest : IDisposable
             {
                 Delete = true,
                 MinimumAge = TimeSpan.FromDays(configuredDays)
-            }, Now);
+            }, Now, CancellationToken.None);
 
         File.Exists(recent).Should().BeTrue();
         File.Exists(expired).Should().BeFalse();
@@ -271,7 +271,7 @@ public class AssemblyCacheRetentionTest : IDisposable
                 KeepGenerations = 0,
                 ClaimTtl = TimeSpan.FromHours(24)
             },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(abandoned).Should().BeFalse();
         result.DeletedFiles.Should().Be(1);
@@ -314,7 +314,7 @@ public class AssemblyCacheRetentionTest : IDisposable
                 KeepGenerations = 0,
                 MinimumAge = TimeSpan.Zero
             },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(abandoned).Should().BeFalse("the sweep must actually have run");
         File.Exists(key).Should().BeTrue(
@@ -342,7 +342,7 @@ public class AssemblyCacheRetentionTest : IDisposable
         var result = AssemblyCacheGenerations.SweepCore(
             CacheRoot, LiveTag,
             AssemblyCacheRetention.ReportOnly with { KeepGenerations = 0 },
-            Now);
+            Now, CancellationToken.None);
 
         File.Exists(abandoned).Should().BeTrue();
         result.Deleted.Should().BeFalse();
@@ -425,7 +425,7 @@ public class AssemblyCacheRetentionTest : IDisposable
         AssemblyCacheGenerations.SweepCore(
             CacheRoot, LiveTag,
             AssemblyCacheRetention.ReportOnly with { Delete = armed, KeepGenerations = 1 },
-            Now, log);
+            Now, CancellationToken.None, log);
 
         var warnings = log.Entries.Where(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Warning).ToArray();
         warnings.Should().ContainSingle("one outcome line per pass is what keeps Warning+ affordable");
@@ -457,7 +457,7 @@ public class AssemblyCacheRetentionTest : IDisposable
             var result = AssemblyCacheGenerations.SweepCore(
                 CacheRoot, LiveTag,
                 AssemblyCacheRetention.ReportOnly with { Delete = true, KeepGenerations = 1 },
-                Now, log);
+                Now, CancellationToken.None, log);
 
             result.FailedDeletes.Should().Be(2);
         }

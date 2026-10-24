@@ -502,6 +502,18 @@ whatever was not reached is re-planned by the next pass. Pinned by `RetentionSwe
   further IO call.
 - The guarded pass must report a drained pass as cancelled, never as faulted.
 
+`AssemblyCacheGenerations.Sweep`, the assembly-cache retention pass, was the fourth walk with this
+shape: `pool.InvokeBlocking(_ => SweepCore(…))`, listing every per-NodeType directory and claim file
+of the cache and, where collection is armed, deleting its plan one file at a time. It is fixed the
+same way. `SweepCore`, `Scan` and `ReadClaims` take a REQUIRED token. It is checked per directory
+and per file of the listing, per claim, and before each delete. A cancel during the walk propagates
+and is never reported as "cache could not be read". A cancel during collection logs one
+`pass outcome — INTERRUPTED` line carrying what the pass did delete, and then throws. The hosted
+service reports a cancelled pass apart from a faulted one. Pinned by
+`AssemblyCacheSweepUnwindsOnTheDrainTest`, which parks the armed pass inside its first delete and
+drains the pool. The test requires residual 0 and the rest of the plan still on disk. Run against
+the pre-fix leaf (the pool's token not handed to `SweepCore`), it measured residual 1.
+
 The distinction the guard cannot draw lexically, and a reviewer must: a blocking leaf that is **one
 short syscall** (`_ => File.ReadAllText(path)`) has no step at which to look and is correct as it
 stands; a blocking leaf that **walks** — a directory tree, a list of archives, a sweep — takes the
