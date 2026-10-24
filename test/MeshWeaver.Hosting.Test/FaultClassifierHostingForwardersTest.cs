@@ -93,6 +93,48 @@ public class FaultClassifierHostingForwardersTest
             .Should().BeFalse("the inner driver's flag does not stand in for the defect it encloses");
     }
 
+    /// <summary>
+    /// 🚨 A time-box over a fault the OWNER classified as transient (<see cref="MeshWeaver.Mesh.MeshNodeError.Transient"/>
+    /// on a <see cref="MeshWeaver.Mesh.MeshNodeStreamException"/>) is that store outage, not a plain timeout —
+    /// the standing watch re-opens on it, as the walk it replaced did. Unclassified, the same wrapper is not.
+    /// </summary>
+    [Fact]
+    public void AStandingWatch_ReopensOnATimeoutOverAnOwnerClassifiedStoreFault()
+    {
+        MeshWeaver.Mesh.MeshNodeStreamException Owner(bool transient) => new(new MeshWeaver.Mesh.MeshNodeError(
+            MeshWeaver.Mesh.MeshNodeErrorCode.Unknown, "Admin/Build", "NpgsqlException: Failed to connect") { Transient = transient });
+
+        StandingWatchRecovery.IsTransient(new TimeoutException("read failed", Owner(transient: true)))
+            .Should().BeTrue("the owner classified the store fault beneath the time-box as transient");
+        StandingWatchRecovery.IsTransient(new TimeoutException("read failed", Owner(transient: false)))
+            .Should().BeFalse("the control: an owner fault it did NOT classify transient stays a plain timeout");
+    }
+
+    /// <summary>
+    /// 🚨 A timeout or IO wrapper INSIDE a driver exception is not the evidence when it has a cause — its cause
+    /// is. A driver over Timeout(Aggregate(socket, JsonException)) carries a permanent content defect, flagged
+    /// or not, and a standing watch must not retry it; a driver over a CAUSE-FREE timeout, or over IO(socket),
+    /// stays a transient store fault.
+    /// </summary>
+    [Fact]
+    public void ADriverProbe_ReadsTheBranchesBeneathATimeoutOrIoWrapper()
+    {
+        Exception Defect() => new TimeoutException("read timed out",
+            new AggregateException(new SocketException((int)SocketError.ConnectionReset), new System.Text.Json.JsonException("bad content")));
+
+        StandingWatchRecovery.IsTransient(new FakeDbException("read failed", Defect()))
+            .Should().BeFalse("the timeout wraps a content defect beside the socket reset");
+        StandingWatchRecovery.IsTransient(new FlaggedDbException("read failed", Defect()))
+            .Should().BeFalse("the provider's flag does not stand in for the defect beneath the timeout");
+        StandingWatchRecovery.IsTransient(new FakeDbException("read failed", new TimeoutException("read timed out")))
+            .Should().BeTrue("a cause-free driver timeout is still an unreachable store");
+        StandingWatchRecovery.IsTransient(new FlaggedDbException("read failed", new TimeoutException("read timed out")))
+            .Should().BeTrue("and so is a flagged one");
+        StandingWatchRecovery.IsTransient(new FakeDbException("read failed",
+                new System.IO.IOException("broken pipe", new SocketException((int)SocketError.ConnectionReset))))
+            .Should().BeTrue("an IO wrapper over a socket fault reaches the socket fault");
+    }
+
     private sealed class FakeDbException(string message, Exception? inner = null)
         : System.Data.Common.DbException(message, inner);
 

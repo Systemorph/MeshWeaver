@@ -417,12 +417,13 @@ public static class FaultClassifier
     private static readonly FaultClassification Undecided = Leaf(FaultKind.Fault);
 
     /// <summary>True when <paramref name="exception"/>'s graph carries typed store or network evidence:
-    /// a stalled query provider (a typed <see cref="FaultLayer.StoreStall"/>), a socket fault, or a
-    /// driver exception. The frames below then decide, by the same walk; a defect beside that evidence
+    /// a stalled query provider (a typed <see cref="FaultLayer.StoreStall"/>), a store fault the owner
+    /// classified as transient (<see cref="FaultLayer.OwnerStore"/>), a socket fault, or a driver
+    /// exception. The frames below then decide, by the same walk; a defect beside that evidence
     /// still wins as the worst branch.</summary>
     private static bool WrapsTypedStoreOrNetworkCause(Exception? exception)
         => ExceptionChain.Contains(exception, static e =>
-            e is IClassifiedFault { ClassifiedKind: FaultKind.Transient, ClassifiedLayer: FaultLayer.StoreStall }
+            e is IClassifiedFault { ClassifiedKind: FaultKind.Transient, ClassifiedLayer: FaultLayer.StoreStall or FaultLayer.OwnerStore }
             || e is DbException
             || IsNetworkFault(e));
 
@@ -481,10 +482,18 @@ public static class FaultClassifier
     // frame then does not accept. Two flagged drivers over Aggregate(socket, JsonException) carry the
     // defect, exactly as one flagged driver over it does.
     private static bool IsTransientDriverCause(Exception inner)
-        => inner is TimeoutException or SocketException or IOException
+        => IsTransportFrame(inner)
            || IsUnreachableSqlState(inner)
            || (inner is DbException { IsTransient: true } flagged
                && !ExceptionChain.Contains<AggregateException>(flagged.InnerException));
+
+    // 🚨 A timeout or IO frame inside a driver exception is the evidence only when it has NO cause: with
+    // one, its cause is — EveryBranchReaches then walks into it, so Timeout(Aggregate(socket,
+    // JsonException)) carries the defect and IO(socket) reaches the socket. A cause-free one stays a
+    // transient driver fault. A socket fault is network evidence by itself.
+    private static bool IsTransportFrame(Exception e)
+        => e is SocketException
+           || (e is TimeoutException or IOException && e.InnerException is null);
 
     private static bool IsUnreachableSqlState(Exception e)
         => e is DbException { SqlState: { } sqlState } && StoreUnreachableSqlStates.Contains(sqlState);
@@ -507,8 +516,7 @@ public static class FaultClassifier
             // EVERY branch below must be such a fault: a permanent defect beside a socket fault in the
             // same graph is not an unreachable store.
             if (EveryBranchReaches(db.InnerException,
-                    static inner => inner is TimeoutException or SocketException or IOException
-                                    || IsUnreachableSqlState(inner)))
+                    static inner => IsTransportFrame(inner) || IsUnreachableSqlState(inner)))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             // The provider's flag speaks for the driver frame — but not over NESTED branch evidence:
             // a flagged driver over an aggregate in which one branch is a permanent defect (a socket

@@ -65,13 +65,17 @@ owner's verdict (a standing watch) acts on it.
 - **A timeout over a stalled provider is the stall.** A typed `TimeoutException` (or a cancellation
   carrying one) whose graph holds a `StoreStall` only stands in, like a text match: the stall below
   it decides, so `IsStorageUnavailable` renders it and `IsTransientHubFailure` never retries it. A
-  stall beside a defect under the timeout is still a fault.
+  stall beside a defect under the timeout is still a fault. The same holds for a store fault the
+  OWNER classified as transient (`OwnerStore`): a timeout over it is that outage, so a standing
+  watch re-opens on it.
 - **Each exception instance is its own branch.** The walk memoizes by REFERENCE, so two distinct
   driver exceptions a provider type compares equal by value are judged separately.
 - **A driver exception over a network cause needs it in EVERY branch.** A non-transient
   `DbException` is a store outage only when every branch below it reaches a timeout, socket or IO
   fault, or a nested driver frame carrying a connection-class SQLSTATE; a permanent defect beside a
-  socket fault is a fault. The probe charges its budget once per DISTINCT node, so a graph that
+  socket fault is a fault. A timeout or IO frame counts only when it has NO cause: with one, its cause
+  is the evidence, so a driver over `Timeout(Aggregate(socket, JsonException))` is a fault (flagged
+  or not), while one over `IO(socket)` or over a cause-free timeout is a store outage. The probe charges its budget once per DISTINCT node, so a graph that
   shares one child between many aggregates is judged, not cut off.
 - **A driver frame that decides nothing by type is still read by its text.** An unflagged
   `DbException` with no recognised SQLSTATE and no deciding cause reaches the message markers, so
