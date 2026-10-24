@@ -88,6 +88,47 @@ public class SealedPublicationIndexTest : IDisposable
         SealedPublicationIndex.ReadFor(root, Identity).Select(s => s.Source).Should().Equal("education", "plugins");
     }
 
+    // ---- the pooled walk observes the pool's token (the #7049 shape) ---------------------------
+
+    /// <summary>
+    /// The per-source walk is a pointer, two markers, a seal, a probe and a manifest read per bundle,
+    /// one share round trip each. On a pool leaf it must stop when the pool cancels, and a cancel is
+    /// never reported as an UNREADABLE reading (which holds every source) or as an empty one.
+    /// </summary>
+    [Fact]
+    public void ACancelledWalk_Throws_AndIsNeverReportedAsAReading()
+    {
+        Source("education", sentinel: true, "1111111111111111", "Systemorph/MeshWeaver.Education", "Edu.zip");
+        Source("plugins", sentinel: true, "abcdef1234567890", "Systemorph/MeshWeaver.Plugins", "Store.zip");
+        Directory.CreateDirectory(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName));
+        File.WriteAllText(Path.Combine(root, SealedPublicationIndex.ReleaseMarkerDirectoryName, "3.0.0-ci.1"), Identity + "\n");
+        using var cancelled = new System.Threading.CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.ThrowsAny<OperationCanceledException>(() => SealedPublicationIndex.ReadingFor(root, Identity, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => SealedPublicationIndex.ReadFor(root, Identity, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => SealedPublicationIndex.ReleasesOf(root, cancelled.Token));
+        Assert.ThrowsAny<OperationCanceledException>(() => SealedPublicationIndex.NewerLineThan(root, Identity, cancelled.Token));
+    }
+
+    [Fact]
+    public void AnUncancelledTokenWalk_ReadsExactlyWhatTheTokenlessWalkReads()
+    {
+        // The positive control: the token changes how far a cancelled walk gets, never what it reads.
+        Source("education", sentinel: true, "1111111111111111", "Systemorph/MeshWeaver.Education", "Edu.zip");
+        Source("plugins", sentinel: false, "abcdef1234567890", null, "Store.zip");
+
+        var withToken = SealedPublicationIndex.ReadingFor(root, Identity, System.Threading.CancellationToken.None);
+        var without = SealedPublicationIndex.ReadingFor(root, Identity);
+
+        static string Shape(SealedSource s) => $"{s.Source}|{s.Repository}|{s.SourceCommit}|{s.IsSealed}|{s.Refusal}";
+        withToken.Outcome.Should().Be(without.Outcome);
+        withToken.Sources.Select(Shape).Should().Equal(without.Sources.Select(Shape));
+        withToken.Sources.Count(s => s.IsSealed).Should().Be(1);
+        SealedPublicationIndex.ReadFor(root, Identity, System.Threading.CancellationToken.None).Select(Shape)
+            .Should().Equal(SealedPublicationIndex.ReadFor(root, Identity).Select(Shape));
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(root, recursive: true); } catch { /* best effort */ }

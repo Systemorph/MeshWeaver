@@ -21,4 +21,9 @@
     <None Include="..\..\src\MeshWeaver.Documentation\Data\**\*.md" LinkBase="DocData" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The one repo-root lookup (MeshWeaver.Fixture/RepoPaths.cs), compiled in rather than referenced:
+         this project stays free of the test fixture's framework dependencies. -->
+    <Compile Include="..\MeshWeaver.Fixture\RepoPaths.cs" Link="RepoPaths.cs" />
+  </ItemGroup>
 </Project>

@@ -5,6 +5,7 @@ using MeshWeaver.Security.MeshTest;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.PluginTester.Test;
 
@@ -110,7 +111,7 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
     [Fact]
     public void NoShippingProject_ReferencesTheTester()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new[] { "src", "memex", "clients", "samples" }
             .Select(d => Path.Combine(root, d))
             .Where(Directory.Exists)
@@ -415,15 +416,6 @@ public class MeshTestSuiteTest(ITestOutputHelper output)
             .Where(p => !string.IsNullOrEmpty(p) && File.Exists(p))
             .Select(p => (MetadataReference)MetadataReference.CreateFromFile(p))),
     ];
-
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
-    }
 
     /// <summary>Routes the runner's progress lines into the test's output.</summary>
     private sealed class TestWriter(ITestOutputHelper output) : TextWriter

@@ -296,19 +296,9 @@ public class OneFloorComparatorGuard
             .Add("src/MeshWeaver.Plugin.Packaging/PlatformFloor.cs", "the one floor decision")
             .Add("src/MeshWeaver.Plugin.Packaging/PlatformReleaseOrder.cs", "the one release order");
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException(
-            "MeshWeaver.slnx not found above the test's base directory — the guard cannot see src/, so it "
-            + "must fail rather than pass having checked nothing");
-    }
-
     private static ImmutableList<(string Path, string Text)> Sources()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         return Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
             .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
                         && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))

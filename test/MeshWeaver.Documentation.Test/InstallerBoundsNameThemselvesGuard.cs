@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -38,7 +39,7 @@ public class InstallerBoundsNameThemselvesGuard
     private const int Window = 20;
 
     private static string[] SubjectLines() =>
-        File.ReadAllLines(Path.Combine(FindRepoRoot(), Subject.Replace('/', Path.DirectorySeparatorChar)));
+        File.ReadAllLines(Path.Combine(RepoPaths.Root, Subject.Replace('/', Path.DirectorySeparatorChar)));
 
     /// <summary>`.Timeout(X)` sites where X is a named bound, not a literal or a parameter.</summary>
     private static List<(int Line, string Bound)> BoundedWaits(string[] lines)
@@ -106,14 +107,5 @@ public class InstallerBoundsNameThemselvesGuard
         Assert.True(odd.Count == 0,
             "every bounded wait should name a budget-shaped identifier, so the scanner is provably "
             + "matching bounds rather than incidental tokens:\n  " + string.Join("\n  ", odd));
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root");
-        return dir!.FullName;
     }
 }

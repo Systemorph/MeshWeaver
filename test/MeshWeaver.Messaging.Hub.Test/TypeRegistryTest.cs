@@ -147,6 +147,23 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// Setting a key on the FULL-name registration of a type whose canonical (write) name is its short
+    /// name must not flip the canonical name back to the full name — the operation only sets a key.
+    /// </summary>
+    [Fact]
+    public void KeyingTheFullNameRegistration_KeepsTheShortWriteName()
+    {
+        var typeRegistry = MessageHubExtensions.CreateTypeRegistry();
+        typeRegistry.WithType(typeof(AliasedContent), typeof(AliasedContent).FullName!);
+        typeRegistry.WithType(typeof(AliasedContent), nameof(AliasedContent));
+
+        typeRegistry.WithKeyFunction(typeof(AliasedContent).FullName!, new KeyFunction(_ => "k", typeof(string)));
+
+        typeRegistry.TryGetCollectionName(typeof(AliasedContent), out var writeName).Should().BeTrue();
+        writeName.Should().Be(nameof(AliasedContent));
+    }
+
+    /// <summary>
     /// GitSync uses strict deserialization for authored node files. The polymorphic object
     /// converter must let an unknown nested member fail that read instead of recovering it as raw
     /// JSON and letting the import acknowledge a record this image cannot understand.
@@ -369,6 +386,33 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
         StrongMapsHolding(typeRegistry, collectibleType).Should().BeEmpty(
             "after Unloading fires, only the weak shadow may serve the type — a strong entry "
             + "would root the superseded load context forever (the recompile ALC leak dfac3366d closed)");
+    }
+
+    /// <summary>
+    /// A hub registry that binds a collectible type its parent already defines (shared definition), and
+    /// then keys it, holds the type STRONGLY — so it must hear the context unload itself. Without that,
+    /// unloading demotes only the parent's entries and the hub's keyed definition roots the assembly.
+    /// </summary>
+    [Fact]
+    public void SharedCollectibleType_KeyedOnTheHub_IsDemotedOnUnload_NotRootedByTheHub()
+    {
+        var context = new AssemblyLoadContext("shared-keyed-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HubRegistryInheritsEquivalentDefinitionsTest.KeyedContent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HubRegistryInheritsEquivalentDefinitionsTest.KeyedContent).FullName!)!;
+        collectibleType.Assembly.IsCollectible.Should().BeTrue("the fixture must reproduce the recompile shape");
+
+        var parent = MessageHubExtensions.CreateTypeRegistry().WithType(collectibleType, "SharedKeyed");
+        var hub = MessageHubExtensions.CreateTypeRegistry(parent).WithType(collectibleType, "SharedKeyed");
+        hub.WithKeyFunction("SharedKeyed", new KeyFunction(_ => "hub-key", typeof(string)));
+        StrongMapsHolding(hub, collectibleType).Should().NotBeEmpty("the precondition: the hub holds its keyed definition");
+
+        context.Unload();
+
+        StrongMapsHolding(hub, collectibleType).Should().BeEmpty(
+            "after Unloading fires the hub's keyed definition must be demoted to the weak shadow, "
+            + "or the hub roots the superseded load context");
+        hub.TryGetType("SharedKeyed", out var demoted).Should().BeTrue("a live user still resolves it");
+        demoted!.Type.Should().BeSameAs(collectibleType);
     }
 
     /// <summary>

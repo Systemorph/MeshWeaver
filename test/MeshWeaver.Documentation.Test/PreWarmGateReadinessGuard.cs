@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -40,7 +41,7 @@ public class PreWarmGateReadinessGuard
     [Fact]
     public void TheChart_NeverStatesAStartupBudgetItDoesNotShip()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var (period, threshold) = StartupBudget(File.ReadAllText(Path.Combine(root, Values)));
         var shipped = period * threshold;
 
@@ -79,7 +80,7 @@ public class PreWarmGateReadinessGuard
     [Fact]
     public void ArmingTheReadinessGate_MovesEveryPrerequisiteInTheSameChange()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var values = File.ReadAllText(Path.Combine(root, Values));
         var deployment = File.ReadAllText(Path.Combine(root, Deployment));
 
@@ -176,14 +177,5 @@ public class PreWarmGateReadinessGuard
         var start = text.LastIndexOf('\n', Math.Min(index, text.Length - 1)) + 1;
         var end = text.IndexOf('\n', index);
         return end < 0 ? text[start..] : text[start..end];
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

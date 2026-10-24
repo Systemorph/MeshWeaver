@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -78,7 +79,7 @@ public class GateAllowEntrySubjectGuard
     [Fact]
     public void EveryAllowEntryNamesASubjectThisRepoStillShips()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new List<string>();
 
         foreach (var lane in Lanes(root))
@@ -148,7 +149,7 @@ public class GateAllowEntrySubjectGuard
     [Fact]
     public void TheResolverIsNotVacuous()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var lanes = Lanes(root).ToList();
         Assert.Equal(2, lanes.Count);
 
@@ -326,13 +327,4 @@ public class GateAllowEntrySubjectGuard
     private static string SourceScanRelative(string root, string path) =>
         Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

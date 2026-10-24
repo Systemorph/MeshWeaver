@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -134,7 +135,7 @@ public class HubDisposalJoinRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoHarnessDisposesAHubWithoutJoiningItsTeardown()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root, out var bare);
 
@@ -229,7 +230,7 @@ public class HubDisposalJoinRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerStillSeesTheHarnessSurface()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var harnessFiles = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => SourceScan.Relative(root, f))
             .Where(IsHarnessFile)

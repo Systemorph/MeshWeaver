@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -47,7 +48,7 @@ internal static class WorkflowJobText
     /// </summary>
     internal static string Body(string lane, string job)
     {
-        var (body, refusal) = Read(File.ReadAllText(Path.Combine(FindRepoRoot(), lane)), lane, job);
+        var (body, refusal) = Read(File.ReadAllText(Path.Combine(RepoPaths.Root, lane)), lane, job);
         Assert.True(body is not null, refusal);
         return body!;
     }
@@ -195,14 +196,6 @@ internal static class WorkflowJobText
     private static bool EndsJobsMap(string line) =>
         line.Length > 0 && line[0] is not (' ' or '#' or '\t' or '\r');
 
-    internal static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }
 
 /// <summary>

@@ -82,6 +82,15 @@ internal static class SourceGeneratorLoader
     /// the runtime group for this RID does not carry the assembly (nothing to load here).
     /// </summary>
     internal static string? RuntimeAssetOf(string compilePath)
+        => RuntimeAssetObservingToken(compilePath, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="RuntimeAssetOf"/> from a pooled leaf: the package's recursive file listing is one
+    /// round trip per entry, so <paramref name="cancellationToken"/> is checked before each one is
+    /// handed to the selector. A distinct name, not an overload, so the bare <c>cref</c>s to
+    /// <see cref="RuntimeAssetOf"/> stay unambiguous (CS0419).
+    /// </summary>
+    internal static string? RuntimeAssetObservingToken(string compilePath, CancellationToken cancellationToken)
     {
         var tfmDir = Path.GetDirectoryName(compilePath);
         var libDir = tfmDir is null ? null : Path.GetDirectoryName(tfmDir);
@@ -90,8 +99,13 @@ internal static class SourceGeneratorLoader
         var packageRoot = Path.GetDirectoryName(libDir);
         if (packageRoot is null || !Directory.Exists(Path.Combine(packageRoot, "runtimes")))
             return compilePath;
+        cancellationToken.ThrowIfCancellationRequested();
         var files = Directory.EnumerateFiles(packageRoot, "*", SearchOption.AllDirectories)
-            .Select(f => Path.GetRelativePath(packageRoot, f));
+            .Select(f =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Path.GetRelativePath(packageRoot, f);
+            });
         var assets = MeshWeaver.NuGet.RuntimeAssetSelector.Select(
             packageRoot, files, global::NuGet.Frameworks.NuGetFramework.Parse("net10.0"),
             MeshWeaver.NuGet.RuntimeAssetSelector.RidFallbackChain());

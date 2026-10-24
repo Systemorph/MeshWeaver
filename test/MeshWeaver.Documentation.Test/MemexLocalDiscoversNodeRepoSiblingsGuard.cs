@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,17 +34,8 @@ public class MemexLocalDiscoversNodeRepoSiblingsGuard : IDisposable
     private readonly string root =
         Path.Combine(Path.GetTempPath(), "memex-local-discovery-" + Guid.NewGuid().ToString("N")[..8]);
 
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
-    }
-
     private static string Script() =>
-        Path.Combine(RepoRoot(), "deploy", "homebrew", "bin", "memex-local");
+        Path.Combine(RepoPaths.Root, "deploy", "homebrew", "bin", "memex-local");
 
     public MemexLocalDiscoversNodeRepoSiblingsGuard()
     {

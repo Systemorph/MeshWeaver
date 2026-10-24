@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -160,7 +161,7 @@ public class PlatformBakeLaneGuard
         // of one fact can disagree, and then the bake publishes a release marker for one version
         // while the seal probe asks about another — an availability answer about the wrong identity,
         // which is the one thing a seal check must never get wrong.
-        var all = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var all = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var jobsWithRecovery = WorkflowJobText.Ranges(all)
             .Select(job =>
             {
@@ -216,7 +217,7 @@ public class PlatformBakeLaneGuard
         //   (b) EVERY container command that materialises image bytes (run / pull / create) must
         //       carry that pin — one unpinned `docker run` is enough to bake against the runner's
         //       own architecture, which is exactly the silent form of this defect.
-        var workflow = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        var workflow = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow)));
         var declaredPlatforms = Regex.Matches(workflow, @"docker_platform""?\s*:\s*""?([^""\s,}]+)")
             .Select(m => m.Groups[1].Value.Trim())
             .Distinct()
@@ -319,7 +320,7 @@ public class PlatformBakeLaneGuard
             + "unknowable, and every environment holds on a release that is in fact fine.");
 
         var script = File.ReadAllText(
-            Path.Combine(FindRepoRoot(), ".github", "scripts", "publish-bake-bundles.sh"));
+            Path.Combine(RepoPaths.Root, ".github", "scripts", "publish-bake-bundles.sh"));
         Assert.Contains(
             $"RELEASES_DIR=\"{PublishedBundleCatalogue.ReleaseMarkerDirectoryName}\"", script,
             StringComparison.Ordinal);
@@ -336,7 +337,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void TheExactReleaseSurface_IsWrittenCarriedAndReadUnderOneDirectoryName()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var script = File.ReadAllText(Path.Combine(root, ".github", "scripts", "publish-bake-bundles.sh"));
         Assert.Contains(
             $"RELEASE_SURFACE_DIR=\"{PublishedBundleCatalogue.ReleaseSurfaceDirectoryName}\"", script,
@@ -420,7 +421,7 @@ public class PlatformBakeLaneGuard
         // lists exactly the five, and OUTSIDE that job the only repository named is Plugins — so a
         // sixth satellite, a satellite named by another job, or a matrix that silently lost one all
         // fail here by name. (`${{` is the matrix expression itself, seen through the same regex.)
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var (compatStart, compatEnd) = JobRange(lines, "satellite-compat");
         var compat = ExecutableLinesOf(string.Join("\n", lines[compatStart..compatEnd]));
         var satellites = Regex.Matches(compat, @"repository:\s*(\S+)")
@@ -472,7 +473,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void PlatformBake_NeverAdoptsAnotherBuildsBundles()
     {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var workflows = Path.Combine(RepoPaths.Root, ".github", "workflows");
         var offenders = Directory
             .EnumerateFiles(workflows, "*.yml", SearchOption.TopDirectoryOnly)
             // Comments stripped for the same reason as above, in the other direction: a workflow is
@@ -514,7 +515,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void SatelliteCompatBaselineDownload_IsAReferenceNeverAPublication()
     {
-        var lines = File.ReadAllLines(Path.Combine(FindRepoRoot(), Workflow));
+        var lines = File.ReadAllLines(Path.Combine(RepoPaths.Root, Workflow));
         var range = WorkflowJobText.Range(lines, BaselineDownloadJob);
         Assert.True(range is not null, $"no '{BaselineDownloadJob}:' job in {Workflow} — the exemption in "
             + "PlatformBake_NeverAdoptsAnotherBuildsBundles names a block that does not exist, so it excuses nothing "
@@ -528,7 +529,7 @@ public class PlatformBakeLaneGuard
 
         // The consumer side: the reusable lane unpacks the baseline bundles into the BASELINE
         // reference directory and nowhere else, and the lane publishes nothing.
-        var lane = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), ".github", "workflows", "node-repo-compile-check.yml")));
+        var lane = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, ".github", "workflows", "node-repo-compile-check.yml")));
         Assert.Contains("baseline-module-artifacts", lane, StringComparison.Ordinal);
         Assert.Contains("refs-baseline/", lane, StringComparison.Ordinal);
         foreach (var publishing in new[] { "publish-bake-bundles.sh", "push-bundle-publication.sh", "--bake-output", "az storage" })
@@ -563,7 +564,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void EveryPreWarmKeyInValues_IsTemplatedInTheConfigMap()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var configMap = File.ReadAllText(
             Path.Combine(root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
@@ -648,7 +649,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void EveryConfigKeySetInAValuesFile_IsBoundInTheConfigMap()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var configMap = File.ReadAllText(Path.Combine(
             root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
@@ -771,7 +772,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void NoValuesFile_DeclaresAModulesRequiredIndexAboveTheCeiling()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var configMap = ReadPortalConfigMap();
         var rendered = RenderedRequiredModuleIndices(configMap);
         var ceiling = rendered.Length == 0 ? -1 : rendered[^1];
@@ -798,7 +799,7 @@ public class PlatformBakeLaneGuard
 
     private static string ReadPortalConfigMap() =>
         File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "deploy", "helm", "templates", "memex-portal", "config.yaml"));
+            RepoPaths.Root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
     /// <summary>
     /// The <c>Modules__Required__N</c> indices the configmap actually BINDS, ascending. Candidates
@@ -915,7 +916,7 @@ public class PlatformBakeLaneGuard
     [Fact]
     public void NoValuesFileArmsTheBakeGateWithoutTheSweepBehindIt()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new[]
             {
                 Path.Combine(root, "deploy", "helm", "values.yaml"),
@@ -954,7 +955,7 @@ public class PlatformBakeLaneGuard
     public void LocalDefaults_NameABundleRootToAdoptFrom()
     {
         var values = File.ReadAllLines(Path.Combine(
-                FindRepoRoot(), "deploy", "homebrew", "share", "values.local.defaults.yaml"))
+                RepoPaths.Root, "deploy", "homebrew", "share", "values.local.defaults.yaml"))
             .Select(l => l.Trim())
             .Where(l => !l.StartsWith('#'))
             .ToList();
@@ -994,7 +995,7 @@ public class PlatformBakeLaneGuard
 
     private static string ReadJobBlock(string jobName)
     {
-        var path = Path.Combine(FindRepoRoot(), Workflow);
+        var path = Path.Combine(RepoPaths.Root, Workflow);
         Assert.True(File.Exists(path), $"expected {Workflow} at the repo root");
         var lines = File.ReadAllLines(path);
 
@@ -1018,13 +1019,4 @@ public class PlatformBakeLaneGuard
         return range!.Value;
     }
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

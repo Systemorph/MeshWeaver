@@ -8,6 +8,7 @@ using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Hosting;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Compiler.Pipeline.Test;
 
@@ -112,7 +113,7 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
     [Fact]
     public void TheCompileServiceReportsFailuresOnlyThroughTheClassifyingReporter()
     {
-        var src = Path.Combine(FindRepoRoot(), "src");
+        var src = Path.Combine(RepoPaths.Root, "src");
         var service = File.ReadAllText(
             Path.Combine(src, "MeshWeaver.Compiler.Pipeline", "MeshNodeCompilationService.cs"));
 
@@ -132,14 +133,6 @@ public class ARetiredTypesCompileFailureIsNotAnErrorTest
         offenders.Should().BeEmpty(
             "logging FormatCompileFailureReport directly fixes the level by hand and skips the "
             + "retirement check (#5219). Offenders: " + string.Join(", ", offenders));
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("MeshWeaver.slnx not found above the test bin");
     }
 
     private sealed class RecordingLogger : ILogger

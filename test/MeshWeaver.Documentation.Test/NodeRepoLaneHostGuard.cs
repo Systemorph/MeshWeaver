@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -41,7 +42,7 @@ public class NodeRepoLaneHostGuard
     [InlineData(Gate)]
     public void TheLane_DeclaresThePlatformImageAsARequiredInput(string workflow)
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), workflow));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, workflow));
         var input = Regex.Match(text, @"\n      platform-image:\n(?<body>(?:        .*\n)+)");
         Assert.True(input.Success, $"{workflow} must declare a `platform-image` input — the portal the bake compiles against.");
         Assert.Contains("required: true", input.Groups["body"].Value, StringComparison.Ordinal);
@@ -52,7 +53,7 @@ public class NodeRepoLaneHostGuard
     [Fact]
     public void ThePublishBakeLane_RunsCompileAndGateFromTheComposedHost_InsideThePlatformImage()
     {
-        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), PublishBake)));
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, PublishBake)));
 
         // The host is composed by the one script, from the portal's /app and the tester's.
         Assert.Contains("compose-gate-host.sh", lines, StringComparison.Ordinal);
@@ -99,7 +100,7 @@ public class NodeRepoLaneHostGuard
     [Fact]
     public void TheGateLane_RunsCompileAndGateFromTheComposedHost_InBothPlatformModes()
     {
-        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Gate)));
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Gate)));
 
         Assert.Contains("compose-gate-host.sh", lines, StringComparison.Ordinal);
 
@@ -171,7 +172,7 @@ public class NodeRepoLaneHostGuard
     [Fact]
     public void TheGateLane_VolumeHost_RunsAsTheSetItWasServed()
     {
-        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(FindRepoRoot(), Gate)));
+        var lines = ExecutableLinesOf(File.ReadAllText(Path.Combine(RepoPaths.Root, Gate)));
 
         Assert.True(lines.Contains("VOLUME_SET: ${{ steps.platform-source.outputs.set }}", StringComparison.Ordinal),
             $"{Gate}: the gate step must receive the set the volume served (steps.platform-source.outputs.set).");
@@ -218,7 +219,7 @@ public class NodeRepoLaneHostGuard
     [Fact]
     public void ThePlatformDeploy_CallsNoModuleLane()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), MainCd));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, MainCd));
         Assert.Empty(ModuleLaneCalls(text));
         // Negative control: a module lane called from the platform deploy is caught by name.
         var mutated = text.Replace("\n  published-modules:\n",
@@ -255,7 +256,7 @@ public class NodeRepoLaneHostGuard
     [Fact]
     public void ThePublishBakeLane_DefaultsToTheGenerationLayout()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), PublishBake));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, PublishBake));
         var input = Regex.Match(text, @"\n      publication-layout:\n(?<body>(?:        .*\n|\n)+?)(?=      [a-z][a-z-]*:\n)");
         Assert.True(input.Success, $"{PublishBake} must declare a `publication-layout` input — the fleet's publication layout.");
         Assert.Contains("default: 'generation'", input.Groups["body"].Value, StringComparison.Ordinal);
@@ -289,7 +290,7 @@ public class NodeRepoLaneHostGuard
     public void NoCallerInThisRepository_PublishesFlat()
     {
         foreach (var workflow in Directory.EnumerateFiles(
-                     Path.Combine(FindRepoRoot(), ".github", "workflows"), "*.yml"))
+                     Path.Combine(RepoPaths.Root, ".github", "workflows"), "*.yml"))
         {
             var lines = ExecutableLinesOf(File.ReadAllText(workflow));
             Assert.DoesNotContain("publication-layout: flat", lines, StringComparison.Ordinal);
@@ -300,12 +301,4 @@ public class NodeRepoLaneHostGuard
     private static string ExecutableLinesOf(string yaml) =>
         string.Join('\n', yaml.Split('\n').Where(l => !l.TrimStart().StartsWith('#')));
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

@@ -306,19 +306,12 @@ public record NodeTypeCompileState
 }
 
 /// <summary>
-/// Phase-1 dual-write of issue #748: mirrors a NodeType's operational compile state from its own
-/// MeshNode onto the fixed-id satellite at <c>{type}/_Activity/compile-state</c> — an Activity
-/// node whose <see cref="ActivityLog.ReturnValue"/> carries the <see cref="NodeTypeCompileState"/>
-/// (the import-manifest pattern). Was installed on the per-NodeType hub beside the compile
-/// watchers; 🚨 no longer installed anywhere (#5389) — see <see cref="Install"/>. The value shape
-/// (<see cref="StateNode"/>, <see cref="Parse"/>) stays for any satellite already on disk.
-///
-/// <para>Write discipline: the mirror seeds itself with the ALREADY-PERSISTED satellite state so a
-/// mere hub re-activation writes nothing; it writes only when the projected state actually changes
-/// (serialized-form comparison — record equality is reference-based for the dictionary members);
-/// writes run under System (the satellite is framework bookkeeping, not user content) and are
-/// best-effort — a failed mirror write logs and never disturbs the compile pipeline. No self-feed:
-/// the mirror writes a satellite, never the node it observes.</para>
+/// The value shape of the retired compile-state satellite (issue #748 phase 1) at the fixed-id
+/// <c>{type}/_Activity/compile-state</c> — an Activity node whose
+/// <see cref="ActivityLog.ReturnValue"/> carries the <see cref="NodeTypeCompileState"/>. The mirror
+/// that wrote it was retired in #5389 and its installer since deleted; the value shape
+/// (<see cref="StatePath"/>, <see cref="StateNode"/>, <see cref="Parse"/>) stays so any satellite
+/// already on disk can still be read. See <c>Doc/Architecture/CompileStateSatelliteRetired</c>.
 /// </summary>
 public static class NodeTypeCompileStateMirror
 {
@@ -374,88 +367,4 @@ public static class NodeTypeCompileStateMirror
                 ReturnValue = JsonSerializer.SerializeToElement(state, options),
             },
         };
-
-    /// <summary>
-    /// Installs the mirror on the per-NodeType hub: every REAL change of the node's operational
-    /// members lands on the satellite; activations, authored edits and duplicate emissions write
-    /// nothing. Returns the subscription for <c>RegisterForDisposal</c>.
-    ///
-    /// <para>🚨 <b>Retired — nothing installs it (#5389).</b> The satellite never gained a reader
-    /// (phase 2 of issue #748 did not happen), while the write cost one node-operation round trip
-    /// per NodeType activation and one extra grain activation per NodeType whenever the state
-    /// moved — measured as the dominant destination of boot-time placement timeouts and stalled
-    /// activations on memex-cloud. Kept as an obsolete member rather than deleted, because a caller
-    /// in in-mesh source is invisible to every CI build and a deletion would break it at runtime
-    /// compile; the obsolete warning tells it instead. See
-    /// <c>Doc/Architecture/CompileStateSatelliteRetired</c>.</para>
-    /// </summary>
-    [Obsolete("Retired (#5389): the compile-state satellite has no reader and its per-type write was a boot-time burst source. Read compile state off the NodeType node itself. See Doc/Architecture/CompileStateSatelliteRetired.")]
-    public static IDisposable Install(IMessageHub hub, IWorkspace workspace)
-    {
-        var mesh = hub.ServiceProvider.GetService<IMeshService>();
-        if (mesh is null)
-            return Disposable.Empty;
-        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
-            ?.CreateLogger("MeshWeaver.Graph.CompileStateMirror");
-        var accessService = hub.ServiceProvider.GetService<AccessService>();
-        var options = hub.JsonSerializerOptions;
-        var nodeTypePath = hub.Address.Path;
-
-        // Installed on EVERY per-node hub (like the compile watchers) — only actual
-        // type-definition nodes mirror. The tolerant ContentAs would otherwise coerce
-        // arbitrary content into an empty definition, and a node whose content merely
-        // NAMES an operational member must not sprout a compile-state satellite.
-        //
-        // ONE subscription, no stored-state pre-read: the own stream does not replay to a
-        // late second subscriber, so any two-stage seeding design silently never writes
-        // (the first cut did exactly that). The first observed state per activation is
-        // written unconditionally — the owner's no-op upsert guard makes a redundant
-        // re-activation write version-free — and every subsequent write is gated by
-        // DistinctUntilChanged on the serialized state (record equality is reference-based
-        // for the dictionary members, so the serialized form is the value identity).
-        return workspace.GetMeshNodeStream()
-            .Where(NodeTypeOperationalContent.IsNodeTypeNode)
-            .Select(node => NodeTypeCompileState.FromDefinition(
-                node?.ContentAs<NodeTypeDefinition>(options, logger)))
-            .Where(state => state is { IsEmpty: false })
-            .Select(state => (State: state!, Key: JsonSerializer.Serialize(state, options)))
-            .DistinctUntilChanged(entry => entry.Key)
-            // One write at a time, latest state last — Concat keeps the satellite's final
-            // content equal to the final observed state without interleaving.
-            .Select(entry => Observable.Using(
-                    () => accessService?.ImpersonateAsSystem() ?? Disposable.Empty,
-                    _ => mesh.CreateOrUpdateNode(StateNode(nodeTypePath, entry.State, options)).Take(1))
-                .Select(_ => true)
-                .Catch<bool, Exception>(ex =>
-                {
-                    logger?.LogWarning(ex,
-                        "[CompileStateMirror] {NodeTypePath}: satellite write failed (state stays on the node; next change retries).",
-                        nodeTypePath);
-                    return Observable.Return(false);
-                }))
-            .Concat()
-            .Subscribe(
-                _ => { },
-                ex =>
-                {
-                    // Teardown is not a fault. From the first instant of Dispose the hub refuses
-                    // hosted-hub creation, so the own MeshNode stream cannot build its `sync/`
-                    // sub-hub and the mirror's subscribe throws HubDisposingException for THIS
-                    // address. The mirror is registered for the hub's disposal — dying with the
-                    // hub is the contract, and the fresh activation installs a new one — so the
-                    // warning reported routine shutdown as a defect (one line per per-NodeType
-                    // hub teardown in memex-cloud, alongside the compile watchers' ERRORs).
-                    if (ActivityControlPlaneExtensions.IsOwnHubDisposing(ex, hub.Address))
-                    {
-                        logger?.LogDebug(ex,
-                            "[CompileStateMirror] {NodeTypePath}: hub is disposing — the mirror stops with it "
-                            + "(the next activation installs a new one).",
-                            nodeTypePath);
-                        return;
-                    }
-                    logger?.LogWarning(ex,
-                        "[CompileStateMirror] {NodeTypePath}: mirror stream faulted — satellite no longer updates until the hub recycles.",
-                        nodeTypePath);
-                });
-    }
 }

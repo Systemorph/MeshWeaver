@@ -163,6 +163,82 @@ definition. Resource/override/key-isolation tests for standalone definitions liv
 `TypeDefinitionMetadataTest`. This is a measured reduction of per-hub metadata, not a closure of
 the queue-starvation/OOM investigation (#5555, #1186).
 
+### Per-hub DI and type metadata
+
+The out-of-memory dump of the memex portal (MeshWeaver#7082, 2026-10-23) put a number on defect 3:
+of 12.3 GB of managed heap, 5.78 GiB were Autofac child-scope rows (12,060,761
+`ExternalComponentRegistration`, 50.8 M `MiddlewareDeclaration`) and 1.49 GiB were per-hub
+`TypeRegistry` rows (2.79 M `TypeDefinition`). The dump's own counters size the hub population:
+~101,600 `ConcurrentDictionary<String,TypeDefinition>` tables and ~303,000 registration-queue segments
+(three per scope) say **~100,000 hubs**, so a hub carried **~120 wrappers ≈ 58 KB of Autofac and
+~15 KB of type metadata** — not one copy of the whole parent registration set, but a
+per-hub constant multiplied by a very large population. (The ~4,700 per *grain activation* in the
+first reading is that constant times the ~40 hubs an activation hosts.)
+
+**Where the wrappers come from.** A hub's scope is `BeginLifetimeScope(configurationAction)`, and a
+scope with registrations of its own answers a service its parents provide by wrapping each parent
+registration of it in an `ExternalComponentRegistration` with a fresh resolve-pipeline builder — kept
+for the life of the hub. Most wrappers are what the hub genuinely resolves (its loggers, the mesh
+services, the per-hub `INodeValidator`/`IDataValidator` set), and those are what keep a parent-scoped
+service resolved in a hub bound to the HUB's own `IMessageHub` and overrides. **One group was pure
+waste:** Autofac runs its startable pass on every such scope (the scope's property bag falls back to
+the root's build options), asks the CHILD registry for `AutoActivate`, and every `RegisterInstance` —
+which is every `AddSingleton(instance)` of every module — provides `AutoActivate`. So every hub scope
+wrapped every instance registration of its ancestors, and started none of them: each was already
+activated in the scope that owns it. Measured in a test mesh: 26 of a node hub's 125 wrappers, 26 of a
+hosted child hub's 48; with 200 instance registrations at the root, a hosted hub held 221.
+
+**The fix.** `HubScopeStartables` sets the hub scope's own build option to *ignore startable
+components* unless the hub's own service collection registers an `IStartable` — the only thing an
+`IServiceCollection` can produce that the pass would really start (an `AddSingleton(instance)` is
+auto-activated, but as an externally owned provided instance its activation does nothing). The decision
+is read from the descriptors before the scope is built: a first version that made it in a
+`Registered` handler closing over the scope's builder kept disposed hubs reachable
+(`StreamReleasesItsHubTest` caught it). Under 200 root instances a hosted hub now
+holds 15 wrappers, a child-plus-grandchild pair 4 (407 before) —
+`HubScopeDeclaresOnlyItsOwnServicesTest`, with the negative controls that a hub's own registration still
+overrides the parent's (directly, through a parent-scoped service built in the hub, and in enumeration
+order) and that a hub's own `IStartable` is still started.
+
+**Type definitions.** A hub's registry already chains to its parent's; the copies came from the hub's
+own `WithType` calls for types the mesh registry already held under the same name (a node hub: 344 own
+definitions of 427 resolvable). `TypeRegistry.WithType` now binds the parent's definition OBJECT in the hub's own maps, instead of
+building a copy, when it is exactly the one the hub would build — same type and name, no owning address, no description or icon
+override, no resource-backed display text, and a key the conventions decide (`[Key]`, `Id`,
+`SystemName`), because a registry's own key-function providers are consulted only after them. A type
+whose key would come from the hub's own providers keeps its own definition, as before
+(`HubRegistryInheritsEquivalentDefinitionsTest`). The binding stays LOCAL — the hub keeps its name and
+type entries, and only the definition is shared — because a registry the hub inherits from can change
+after the hub registered: a later `WithKeyFunction` on the parent, a module replacing the name's type
+while the mesh runs, or an intermediate hub binding the same name to another type must not change what
+this hub registered. For the same reason a closed generic (its name is synthesised locally before the
+parent is asked) is never shared, the parent chain must resolve the registered name and the full-name
+alias to the very same definition, and a hub that binds a collectible type, or keys one, listens to
+that context's unloading itself. Each remaining `TypeDefinition` also lost its seven
+per-instance key objects (two `Lazy`, two `LazyHelper`, two delegates, a closure); the key is now
+resolved from the builder on first use, and the two weak-shadow name maps are created on the first
+demotion only.
+
+**Measured on a realistic population** (before the binding was made local; the hub's two map entries
+per shared type are back, the definition objects stay shared) — 99 activated Markdown node hubs with the standard data-source
+setup plus their hosted hubs, 516 `MessageHub`s, in one test mesh (`dumpheap -stat -live`):
+
+| | Before | After |
+|---|---:|---:|
+| Live heap | 158.4 MB | 133.9 MB |
+| Autofac rows | 31.9 MB (62 KB/hub) | 28.5 MB (55 KB/hub) |
+| TypeRegistry rows | 30.6 MB (59 KB/hub) | 11.7 MB (23 KB/hub) |
+| Retained per node-hub activation (`GC.GetTotalMemory`) | 2.49 MB | 2.04 MB |
+
+**What this does NOT close.** The remaining ~55 KB of Autofac per hub is the services a hub resolves,
+and it is the price of an Autofac child scope per hub: the wrapper is how a parent-scoped service gets
+the hub's own dependencies. Removing it means replacing the per-hub child scope with something that
+still gives parent-scoped services the hub's own `IMessageHub` — a redesign, not this change. Nor does
+it touch defects 1 and 2, which set how many hubs there are; the per-hub cost only multiplies them.
+How much of the production 120-wrapper constant was `AutoActivate` depends on how many instance
+registrations the portal's modules make at the root; the next dump answers it directly (the
+`ExternalComponentRegistration` count against the hub count).
+
 ## Why the LIVE ones are never released
 
 `HostedHubsCollection.messageHubs` (the field in `src/MeshWeaver.Messaging.Hub/HostedHubsCollection.cs`):
@@ -355,6 +431,9 @@ They are independent, and conflating them is how this stayed open.
    fit a 12 GiB ceiling with room to serve. Each child `ILifetimeScope` wraps 262 parent
    registrations in `ExternalComponentRegistration`, each with its own ~4-stage resolve pipeline.
    Fixing (1) and (2) alone leaves a portal whose working set is set by its DI cost per actor.
+   The share that was waste — every ancestor's instance registrations, wrapped by a startable pass
+   that started nothing, and a copy of every type definition the mesh already held — is removed;
+   what remains is measured in *Per-hub DI and type metadata* above.
 
 🚨 **None of the three is fixed by raising the memory limit, lowering the GC hard limit, recycling pods on a
 timer, or deleting pods by hand.** The pod-deletion stopgap has been applied at least four times

@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -98,7 +99,7 @@ public class SubscribeErrorArmRatchetGuard
     [Fact]
     public void EverySubscriptionCarriesAnErrorArm_AndTheCountOnlyFalls()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var perFile = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
             .Where(x => x.Count > 0)
@@ -132,7 +133,7 @@ public class SubscribeErrorArmRatchetGuard
     [Fact]
     public void TheBaselineStaysCloseToTheTree()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var total = SourceScan.SourceFiles(root, ScannedRoots).Sum(CountIn);
 
         Assert.True(Baseline - total <= 15,

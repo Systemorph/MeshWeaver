@@ -214,6 +214,7 @@ internal static class BundleKeyedHoldReading
         IMessageHub hub, string imageDirectory, string? publishedRoot, string identity, ILogger? logger)
         => hub.ServiceProvider.GetService<IoPoolRegistry>() is { } pools
             ? pools.Get(IoPoolNames.FileSystem)
+                // atomic-blocking-leaf: at most two Directory.Exists probes, a constant with no walk
                 .InvokeBlocking(_ => PrebuiltBundleInventory.Presence(
                     imageDirectory, publishedRoot, identity, logger))
             : Observable.Return(SealedReadOutcome.NotConfigured);
