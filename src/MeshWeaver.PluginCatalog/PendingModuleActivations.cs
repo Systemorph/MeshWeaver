@@ -898,24 +898,6 @@ public sealed class PendingModuleActivations(string moduleRoot)
     }
 
     /// <summary>
-    /// The last-write times of the three directories every activation writer renames into.
-    /// 🚨 No longer the memo key (MeshWeaver#6829): a directory's last-write time need not move on a
-    /// rename into it on an SMB share, which froze the reading. Kept so a host compiled against the
-    /// previous platform still binds; <see cref="PendingModuleActivations"/> keys on the listings.
-    /// </summary>
-    [Obsolete("A directory's last-write time need not move on a rename into it (SMB) — MeshWeaver#6829. PendingModuleActivations keys its memo on the directory listings instead.")]
-    public readonly record struct DiskFingerprint(DateTime Modules, DateTime Entries, DateTime Sets)
-    {
-        public static DiskFingerprint Of(string baseDirectory) => new(
-            LastWrite(Path.Combine(baseDirectory, "modules")),
-            LastWrite(ModuleActivationSidecar.EntriesDirectory(baseDirectory)),
-            LastWrite(ModuleSetStore.SetsDirectory(baseDirectory)));
-
-        private static DateTime LastWrite(string directory) =>
-            Directory.Exists(directory) ? Directory.GetLastWriteTimeUtc(directory) : DateTime.MinValue;
-    }
-
-    /// <summary>
     /// Takes the reading. <paramref name="token"/> is the pool's own — <c>IIoPool</c> links its
     /// teardown cancellation into every leaf — and it is observed BETWEEN the units of volume work,
     /// which is the same granularity the modules GC states for its own pass ("between directories").

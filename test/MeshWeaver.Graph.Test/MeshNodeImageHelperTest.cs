@@ -16,7 +16,7 @@ public class MeshNodeImageHelperTest
     [InlineData("path/to/image.png", "path/to/image.png")]
     [InlineData("", null)]
     [InlineData(null, null)]
-    public void GetIconAsImageUrl_ReturnsExpected(string? icon, string? expected)
+    public void GetIconForRendering_ReturnsExpected(string? icon, string? expected)
     {
         MeshNodeImageHelper.GetIconForRendering(icon).Should().Be(expected);
     }
