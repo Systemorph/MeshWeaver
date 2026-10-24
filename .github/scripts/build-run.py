@@ -1588,7 +1588,8 @@ class Host:
             # probe runs are not merged. The base is named in the plan; the instance refuses a PR
             # success whose plan names another sha, or none.
             merge_base = None
-            if not trunk and str(claim.get("kind") or "").lower() != "probe":
+            probe = claim.get("isProbe") is True or str(claim.get("kind") or "").lower() == "probe"
+            if not trunk and not probe:
                 try:
                     merge_base = self.merge_onto_base(repo, checkout_dir, claim.get("mergeBaseSha"), token)
                 except Refusal as r:
@@ -2855,6 +2856,9 @@ def self_test() -> int:
         gl = []
         merge_host(gl).run(dict(claim, isTrunk=False, kind="probe", mergeBaseSha=None))
         check("merge/probe: no merge, no mergeBase", gl == [] and "mergeBase" not in plans()[0], (gl, plans()))
+        gl = []
+        merge_host(gl).run(dict(claim, isTrunk=False, isProbe=True, mergeBaseSha=None))
+        check("merge/isProbe: no merge, no mergeBase", gl == [] and "mergeBase" not in plans()[0], (gl, plans()))
         gl = []
         merge_host(gl, merge_rc=1).run(dict(claim, isTrunk=False, mergeBaseSha=None))
         rf = [e for _, es in posted for e in es if e["kind"] == "run-finished"]
