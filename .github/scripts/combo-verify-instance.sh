@@ -159,6 +159,18 @@ if [ "$(jq -r '.isComplete' <"$combo")" != "true" ]; then
 fi
 note "combo: $(jq -r '.modules | length' <"$combo") module(s), readAt=$(jq -r '.readAt' <"$combo")"
 
+# The sources whose sealed module sets the gate needs (MeshWeaver#4413; composed below, once the
+# tester's framework identity is known). The publication share is asserted HERE — right after the
+# combo read and BEFORE either image is pulled — so a missing `vars.BAKE_PUBLISH_TARGETS` is a red
+# naming it, not one that arrives after two image pulls. It is not a `preflight` input: that step
+# carries only what is needed to REACH the roster derivation (check-combo-verify.py, part one), and
+# only a combo that declares a compiled module needs it.
+module_sources=$(jq -r '[.modules[].package | select(. != null and ((.compiledModule // "") | length) > 0)
+  | (.sourceName // "") | ascii_downcase] | unique | .[]' <"$combo")
+if [ -n "$module_sources" ]; then
+  : "${BAKE_PUBLISH_TARGETS:?vars.BAKE_PUBLISH_TARGETS is empty — the sealed module publications cannot be read, so the gate would run without the modules this instance lands}"
+fi
+
 # ── 3. Verify ─────────────────────────────────────────────────────────────────────────────────
 verdict=$out_dir/combo-verdict-$tag.json
 src_args=()
@@ -206,6 +218,55 @@ docker run --rm --init --platform "$PLATFORM" -v "$host_root/portal-app:/portal:
 bash .github/scripts/compose-gate-host.sh "$host_root/portal-app" "$host_root/tester-app" "$host_root/host"
 note "gate host: $PORTAL_IMAGE /app + the $TESTER_IMAGE CLI, framework identity $tester_identity ($PLATFORM)"
 
+# ───── THE MODULE HALF OF THE COMBO (MeshWeaver#4413) ─────
+# 🚨 An instance runs every installed package's COMPILED MODULE (the combo names it per package as
+# `package.compiledModule`): the portal image ships only its boot modules, and AI, Chat,
+# Collaboration and the rest are LANDED per package. The tester image ships no module at all. So a
+# gate handed only the CONTENT registers no `Skill`/`Agent` type, `Store` (first in install order)
+# fails "NodeType(s) not registered: Skill", and every later package "NodeType 'Store/Plugin' is not
+# registered" — measured as 54 of 54 red on every slot that reached the gate, a verdict about the
+# CONTENT whose cause was the INSTRUMENT.
+#
+# The bytes come from where every gate in the fleet takes them: the publication SEALED for this
+# candidate's framework identity, per source (compose-sealed-modules.sh — the unit of consistency,
+# no registry fallback), read with the same OIDC login the ACR pull above used, exactly as main-cd's
+# `published-modules` job reads it. `--packages '*'` takes each source's whole sealed set; the
+# verifier then loads ONLY the modules this combo declares (ComboModuleSet) and names the declared
+# ones no seal carries. A source with no seal for this identity is RED here — never a gate run
+# without the modules the instance lands.
+module_args=()
+if [ -n "$module_sources" ]; then
+  storage_target="${BAKE_PUBLISH_TARGETS%% *}"
+  bundles_root="$host_root/module-bundles"
+  rm -rf "$bundles_root"
+  mkdir -p "$bundles_root"
+  while IFS= read -r src; do
+    [ -n "$src" ] || fail "a package in the combo read from $where declares a compiled module but names no source, so there is no sealed publication to take its module from — nothing was verified and nothing is landed."
+    mkdir -p "$bundles_root/$src"
+    set +e
+    if [ "$PRIVATE" = false ]; then
+      bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
+        --upstreams "$src" --out "$bundles_root/$src" --storage-target "$storage_target"
+    else
+      mkdir -p "$WORK_ROOT"
+      bash .github/scripts/compose-sealed-modules.sh --identity "$tester_identity" --packages '*' \
+        --upstreams "$src" --out "$bundles_root/$src" --storage-target "$storage_target" \
+        >>"$WORK_ROOT/modules-$tag.log" 2>&1
+    fi
+    compose_exit=$?
+    set -e
+    if [ "$compose_exit" -ne 0 ]; then
+      if [ "$PRIVATE" = false ]; then
+        fail "the sealed module set of source '$src' for framework identity $tester_identity could not be composed (exit $compose_exit, above) — the gate would run without modules this instance lands, so nothing was verified and nothing is landed."
+      else
+        fail "a source's sealed module set for framework identity $tester_identity could not be composed (exit $compose_exit; source and output withheld: private roster row) — nothing was verified and nothing is landed."
+      fi
+    fi
+  done <<<"$module_sources"
+  module_args=(--module-bundles "$bundles_root")
+  note "module half: the sealed module set of $(printf '%s\n' "$module_sources" | grep -c .) source(s) composed for identity $tester_identity"
+fi
+
 # 🚨 A private row's verifier output names every module it materialises, so it goes to a file that
 # is never uploaded and only its line count is printed. The verdict below carries the counts.
 verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.ComboVerifier.csproj
@@ -217,7 +278,8 @@ verifier_cmd=(dotnet run --project tools/MeshWeaver.ComboVerifier/MeshWeaver.Com
   --work-root "$WORK_ROOT/$tag"
   --platform "$PLATFORM"
   --gate-timeout "$GATE_TIMEOUT"
-  "${src_args[@]}")
+  "${src_args[@]}"
+  ${module_args[@]+"${module_args[@]}"})
 set +e
 if [ "$PRIVATE" = false ]; then
   "${verifier_cmd[@]}"
@@ -235,7 +297,7 @@ set -e
 # instrument was absent" as "the candidate was examined and could not be verified".
 TESTER_MISSING_EXIT=3
 [ "$verify_exit" -ne "$TESTER_MISSING_EXIT" ] \
-  || fail "the composed gate host for $CANDIDATE ($PLATFORM) is not runnable — it lacks the tester CLI, its runtimeconfig or the portal's manifest — so there is no instrument to run: nothing was verified and NOTHING was landed. The verifier's message names the missing file(s) (above, or in its withheld log for a private row)."
+  || fail "the composed gate for $CANDIDATE ($PLATFORM) is not runnable — its host lacks the tester CLI, its runtimeconfig or the portal's manifest, or the combo's compiled modules could not be composed (MeshWeaver#4413) — so there is no instrument to run: nothing was verified and NOTHING was landed. The verifier's message names what is missing (above, or in its withheld log for a private row)."
 [ -f "$verdict" ] || fail "mw-combo-verify exited $verify_exit and wrote no verdict file — nothing was verified, so there is nothing to land."
 KIND=$(jq -r '.verdict' <"$verdict")
 note "verdict=$KIND for $CANDIDATE (tool exit $verify_exit)"
