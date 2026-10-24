@@ -32,6 +32,10 @@
          pre-#6849 swap committed (N+1 made current with the boot forwarders intact), which the shape
          check now refuses to reach — so the test assembles that commit from the swap's own parts. -->
     <InternalsVisibleTo Include="MeshWeaver.Compiler.Pipeline.Test" />
+    <!-- The secret sealing key's rotation is proven against the REAL merge patch a cross-hub
+         stream.Update ships (MeshNodeStreamHandle.ComputeMergePatchDiff / ToJsonObject), never a
+         hand-rolled stand-in that could drift from it. -->
+    <InternalsVisibleTo Include="Memex.Portal.Shared.Test" />
   </ItemGroup>
 
   <ItemGroup>
