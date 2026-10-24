@@ -37,7 +37,7 @@ namespace MeshWeaver.Fixture;
 /// <para>The two benign races, both "a message/continuation runs AFTER the test's
 /// scope is gone":</para>
 /// <list type="number">
-///   <item><b>Disposed Autofac <c>LifetimeScope</c></b> — when a <c>TestCluster</c>
+///   <item><b>Disposed service scope</b> — when a <c>TestCluster</c>
 ///   / mesh is disposed, an in-flight message is still being (de)serialized on a
 ///   ThreadPool task; resolving a codec from the now-disposed container throws
 ///   <see cref="ObjectDisposedException"/> ("LifetimeScope … already disposed").</item>
@@ -70,11 +70,9 @@ internal static class TestTeardownExceptionSuppressor
     {
         var msg = ex.Message ?? string.Empty;
 
-        // (1) disposed Autofac LifetimeScope during in-flight (de)serialization
-        if (ex is ObjectDisposedException
-            && msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase))
-            return true;
-        if (msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase))
+        // (1) a disposed service scope during in-flight (de)serialization
+        if (MeshWeaver.Messaging.HubDisposingException.IsDisposedContainer(ex)
+            || MeshWeaver.Messaging.HubDisposingException.IsDisposedContainerReason(msg))
             return true;
 
         // (2) xUnit "no currently active test" — a continuation ran after teardown

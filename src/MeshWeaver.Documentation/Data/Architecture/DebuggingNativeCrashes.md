@@ -7,6 +7,10 @@ Icon: Bug
 
 # Debugging native crashes (core dumps)
 
+> **History note (MeshWeaver#7145).** The DI container named in the readings on this page — Autofac,
+> its `LifetimeScope`, child-scope registries and type names — has since been removed and replaced by
+> MeshWeaver's own [MeshServiceProvider](../HubServiceLayers). The readings are kept as measured.
+
 A test host that dies on a **signal** does not fail a test — it fails the *shard*. There is no
 assertion, no stack in the trx, often no trx at all. CI reds it via the exit-marker gate:
 

@@ -2404,7 +2404,7 @@ public static class JsonSynchronizationStream
     /// <para>🚨 Resolved through <see cref="GetLogger"/> rather than a bare
     /// <c>ServiceProvider.GetService&lt;ILoggerFactory&gt;()</c>, and that matters here more than
     /// anywhere else in this file: a stream whose hub was just released is very often one whose HOST
-    /// is winding down too, and Autofac throws <c>ObjectDisposedException</c> from a closed scope. A
+    /// is winding down too, and the DI container throws <c>ObjectDisposedException</c> from a closed scope. A
     /// raw resolution would turn a benign "no patch derived" into a fault raised BY THE DIAGNOSTIC,
     /// on the exact teardown path this code exists to make quiet. <c>GetLogger</c> already answers
     /// that with a <c>NullLogger</c> — losing the line is the correct price, and

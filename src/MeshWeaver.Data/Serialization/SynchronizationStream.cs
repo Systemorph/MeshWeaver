@@ -107,7 +107,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     // nor garbage-collectable.
     //
     // CreateReducedStream constructs a SynchronizationStream — hence a hosted `sync/{id}` sub-hub
-    // with its own Autofac scope, TypeRegistry and JsonSerializerOptions (~140 KB) — and registers
+    // with its own service scope, TypeRegistry and JsonSerializerOptions (~140 KB) — and registers
     // it for disposal ON THIS STREAM. So when THIS stream is hub-lifetime (a data source's primary
     // EntityStore), every uncached reduce is a hub that survives until the hub dies. MeshDataSource's
     // own-node factory paid exactly that once per inbound SubscribeRequest, which is the residual
@@ -504,8 +504,8 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     /// 1 496 <c>MessageHub</c>s at <c>RunLevel=Dead</c> still reachable, and the ONLY thing holding
     /// them was this property: 1 485 <c>SynchronizationStream&lt;MeshNode&gt;</c> + 11
     /// <c>&lt;JsonElement&gt;</c>, one stream per corpse, exactly. Closing a DI scope does not null
-    /// the fields of an object that outlives it, so each dead hub kept its own Autofac
-    /// <c>ILifetimeScope</c> and <c>TypeRegistry</c> alive — ~390 KB apiece, ~580 MB of the 3.5 GB
+    /// the fields of an object that outlives it, so each dead hub kept its own DI container
+    /// <c>MeshServiceProvider</c> and <c>TypeRegistry</c> alive — ~390 KB apiece, ~580 MB of the 3.5 GB
     /// live heap. <see cref="ReleaseHub"/> is now called from BOTH ends of that lifetime:
     /// <see cref="Dispose"/>, and a hook on the sub-hub's own disposal for the far more common case
     /// where the PARENT tears the sub-hub down while nobody ever disposes the stream (1 485 of the
@@ -1025,7 +1025,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
     {
         // A late background trigger can reach stream.Update while the hub is tearing down —
         // e.g. a FileSystemWatcher Changed event racing ContentCollection disposal. By then the
-        // hub's Autofac LifetimeScope may already be disposed, and GetService THROWS
+        // hub's service scope may already be disposed, and GetService THROWS
         // ObjectDisposedException on a disposed scope. There is no caller AccessContext to capture
         // during teardown, so fall back to null (the method's documented no-context path; the
         // resulting post is then dropped by the hub's teardown guard). Surfacing it instead would
@@ -1377,7 +1377,7 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
         // Defensively, because a hub that has finished disposing no longer HAS a container — its
         // lifetime scope is closed as the last act of its teardown
         // (HostedHubsCollection.CloseScopeWhenDisposed). A hard `GetRequiredService` there throws
-        // Autofac's raw `ObjectDisposedException: … LifetimeScope … already disposed`, which is the
+        // the container's raw `ObjectDisposedException` for a closed scope, which is the
         // same family as the refusal below but names the CONTAINER instead of the hub, carries no
         // HubAddress for the caller to retry, and never reaches the ErrorType.ShuttingDown
         // classification. This is not re-wrapping that failure: the refusal still comes from the
@@ -2710,10 +2710,10 @@ public record SynchronizationStream<TStream> : ISynchronizationStream<TStream>, 
             ownHub.Dispose();
 
         // 🚨 DROP THE REFERENCE — the whole point of #3321 step 3. Hub.Dispose() above only STARTS
-        // the hub's teardown (it posts ShutdownRequest and returns), and closing the hub's Autofac
+        // the hub's teardown (it posts ShutdownRequest and returns), and closing the hub's DI container
         // scope — which HostedHubsCollection does, correctly, several turns later — does not null
         // the fields of an object that outlives it. Until this line the stream kept the corpse and
-        // everything it had resolved (its own ILifetimeScope, its own TypeRegistry) reachable
+        // everything it had resolved (its own MeshServiceProvider, its own TypeRegistry) reachable
         // forever. The hub-death hook registered in the constructor covers the other direction.
         ReleaseHub();
     }

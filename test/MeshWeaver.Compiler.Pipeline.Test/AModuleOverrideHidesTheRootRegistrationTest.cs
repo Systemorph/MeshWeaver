@@ -55,7 +55,7 @@ public sealed class AModuleOverrideHidesTheRootRegistrationTest
         var module = ModuleServiceProvider.Create(moduleServices, root, _ => false, []);
 
         ModuleServiceProvider.BuildRootReachableSingletons(
-            module, root, service => service is Autofac.Core.TypedService { ServiceType: var t } && t == typeof(ReachableSingleton));
+            module, root, (type, key) => key is null && type == typeof(ReachableSingleton));
         return (built, module);
     }
 

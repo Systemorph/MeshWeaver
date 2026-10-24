@@ -11,7 +11,7 @@ namespace MeshWeaver.Mesh;
 /// state machine); callers that go on to tear down the hub's service scope —
 /// tests between <c>[Fact]</c>s, a silo on stop, a host on shutdown — must wait
 /// for ALL of the hub's activity to finish first, or a late continuation resolves
-/// a service from the already-disposed Autofac scope and throws
+/// a service from the already-disposed service scope and throws
 /// <see cref="ObjectDisposedException"/> ("LifetimeScope … has already been
 /// disposed"). Unobserved, that surfaces as an xUnit "catastrophic failure" that
 /// corrupts the rest of the run.

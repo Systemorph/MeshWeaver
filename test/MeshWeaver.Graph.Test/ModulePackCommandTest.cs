@@ -1134,7 +1134,7 @@ public class ModulePackCommandTest : IDisposable
         // framework-trimmed (absent), but the folder plainly materializes package assets — a
         // platform-reachable package file is right there. That is a valid entry-only bundle,
         // not a broken lane; refusing it blocked 2 of 14 modules on CI (2026-08-20).
-        File.WriteAllBytes(Path.Combine(root, "closure", "Autofac.dll"), "AF"u8.ToArray());
+        File.WriteAllBytes(Path.Combine(root, "closure", "System.Reactive.dll"), "RX"u8.ToArray());
         File.WriteAllText(Path.Combine(root, "closure", "Widget.deps.json"), """
             {
               "runtimeTarget": { "name": ".NETCoreApp,Version=v10.0" },
@@ -1145,17 +1145,17 @@ public class ModulePackCommandTest : IDisposable
                     "runtime": { "Widget.dll": {} }
                   },
                   "MeshWeaver.AI/3.0.0": {
-                    "dependencies": { "Autofac": "8.0.0" },
+                    "dependencies": { "System.Reactive": "6.0.0" },
                     "runtime": { "MeshWeaver.AI.dll": {} }
                   },
-                  "Autofac/8.0.0": { "runtime": { "lib/net8.0/Autofac.dll": {} } },
+                  "System.Reactive/6.0.0": { "runtime": { "lib/net6.0/System.Reactive.dll": {} } },
                   "Microsoft.Extensions.Options/10.0.0": { "runtime": { "lib/net10.0/Microsoft.Extensions.Options.dll": {} } }
                 }
               },
               "libraries": {
                 "Widget/1.0.0": { "type": "project" },
                 "MeshWeaver.AI/3.0.0": { "type": "project" },
-                "Autofac/8.0.0": { "type": "package" },
+                "System.Reactive/6.0.0": { "type": "package" },
                 "Microsoft.Extensions.Options/10.0.0": { "type": "package" }
               }
             }
@@ -1176,10 +1176,10 @@ public class ModulePackCommandTest : IDisposable
         Assert.Equal(0, exit);
         var (manifest, _) = BundleReader.ReadModule(File.ReadAllBytes(
             Path.Combine(outDir, "MeshWeaver.Plugin.WidgetPkg.1.6.0.module.nupkg")));
-        // Entry only: the trimmed dependency stays out, and the platform-reachable Autofac —
+        // Entry only: the trimmed dependency stays out, and the platform-reachable System.Reactive —
         // present in the folder — must NOT ride either.
         Assert.DoesNotContain("Microsoft.Extensions.Options.dll", manifest!.Module!.Assemblies!);
-        Assert.DoesNotContain("Autofac.dll", manifest.Module.Assemblies!);
+        Assert.DoesNotContain("System.Reactive.dll", manifest.Module.Assemblies!);
     }
 
     [Fact]

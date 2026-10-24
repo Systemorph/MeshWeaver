@@ -2,6 +2,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -87,11 +88,10 @@ public class HubConstructionOutcomeReportingTest
     // 2026-09-18T05:39:52Z sighting is that arm's line, `activation faulted for
     // Admin/_Notification/…`, on a pod rolling.
 
-    /// <summary>The #3243 signature exactly: Autofac's scope is gone underneath the activation.</summary>
+    /// <summary>The #3243 signature exactly: the container's scope is gone underneath the activation.</summary>
     private static Exception DisposedScope() =>
-        new ObjectDisposedException("LifetimeScope",
-            "Instances cannot be resolved and nested lifetimes cannot be created from this "
-            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+        new ObjectDisposedException(MeshServiceProvider.DisposedObjectName,
+            MeshServiceProvider.DisposedMessage);
 
     /// <summary>
     /// 🚨 THE PIN. Pre-fix this arm was an unconditional <c>LogError</c>, so the expected teardown

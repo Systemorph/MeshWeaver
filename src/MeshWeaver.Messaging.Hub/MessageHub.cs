@@ -782,8 +782,8 @@ public sealed class MessageHub : IMessageHub
                 //
                 // 🚨 IsShuttingDown alone does NOT see every teardown (issue #2444). When the hub's
                 // DI scope is disposed OUT-OF-BAND — the host's root container torn down on a
-                // Host.StartAsync abort or pod shutdown, or an ancestor's Autofac scope disposing
-                // this hub's child scope — Autofac flips the scope's disposed flag BEFORE its
+                // Host.StartAsync abort or pod shutdown, or an ancestor's service scope disposing
+                // this hub's child scope — the DI container flips the scope's disposed flag BEFORE its
                 // disposer reaches the tracked hub instance (Disposable.Dispose sets the flag,
                 // THEN runs Dispose(true)). A BuildupAction resolving in that window observes
                 // ObjectDisposedException while IsShuttingDown is still false: no ancestor HUB
@@ -2559,7 +2559,7 @@ public sealed class MessageHub : IMessageHub
     /// <c>StartActivityControlPlane</c> (→ <c>WatchControlPlane</c> → <c>AcquireStream</c> →
     /// <c>Workspace.GetStream</c>) — and <c>SynchronizationStream</c>'s constructor ALWAYS calls
     /// <c>GetHostedHub(…, HostedHubCreation.Always)</c>. So every data-enabled hub built at least
-    /// one <c>sync/{clientId}</c> sub-hub, and a second Autofac container, inside its own
+    /// one <c>sync/{clientId}</c> sub-hub, and a second service container, inside its own
     /// <c>Build</c>. Measured with a depth counter on a GREEN run of
     /// <c>MeshWeaver.FutuRe.Test</c>: <b>1,350 nested Builds</b>, all depth=2.</para>
     ///

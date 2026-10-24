@@ -10,8 +10,8 @@ namespace MeshWeaver.Graph.Test;
 /// and shared, in the root.</b>
 ///
 /// <para>Read off the FailFast dump of the evicted memex-cloud pod (control instance,
-/// <c>Ops/Actions/analyzedump-memex-cloud-20261011-ltlwc-3</c>). Two threads, two Autofac
-/// shared-instance locks, taken in opposite orders:</para>
+/// <c>Ops/Actions/analyzedump-memex-cloud-20261011-ltlwc-3</c>). Two threads, two scope-wide
+/// shared-instance locks of the container this replaced, taken in opposite orders:</para>
 /// <list type="bullet">
 ///   <item>OS thread <c>0x1e</c>, the host's <c>ApplicationStarted</c> callback: the WhatsApp module's
 ///     reply sender, from a scope of its OWN container, asks for <c>PortalApplication</c> (a scoped
@@ -92,12 +92,15 @@ public sealed class AScopedRootServiceIsNeverBuiltInTheRootTest
     }
 
     /// <summary>
-    /// The negative control: the same two constructions in the same forced order, with the scoped
-    /// service resolved IN THE ROOT — where the module fallback used to resolve it. They deadlock, so
-    /// the test above can tell a deadlock from a pass.
+    /// The shape that DEADLOCKED under the container this replaced — the same two constructions in the
+    /// same forced order, with the scoped service resolved IN THE ROOT, where the module fallback used to
+    /// resolve it — now completes: <see cref="MeshWeaver.ServiceProvider.MeshServiceProvider"/> locks each
+    /// shared instance on its own, so no root-wide lock exists to be held while the hub scope's is
+    /// awaited. On the scope-wide lock (core main before #7145) this arrangement asserted the deadlock.
+    /// (The scoped service is still never built in the root — the test above pins that separately.)
     /// </summary>
     [Fact]
-    public void TheSameShape_WithTheScopedServiceBuiltInTheRoot_Deadlocks()
+    public void TheShapeThatDeadlockedOnAScopeWideLock_WithTheScopedServiceBuiltInTheRoot_Completes()
     {
         var mesh = new Mesh();
         mesh.Gate.Arm();
@@ -112,8 +115,10 @@ public sealed class AScopedRootServiceIsNeverBuiltInTheRootTest
             SpinWait.SpinUntil(() => mesh.Gate.ScopedEntered && mesh.Gate.HubEntered, TestTimeouts.Convergence)
                 .Should().BeTrue("both constructions must be inside their own lock at the same time");
 
-            rootSide.Join(JoinBound).Should().BeFalse("the root lock is held while the hub scope's lock is awaited");
-            hubSide.Join(TimeSpan.Zero).Should().BeFalse("the hub scope's lock is held while the root lock is awaited");
+            rootSide.Join(JoinBound).Should().BeTrue("no root-wide lock is held while the hub scope's instance is built");
+            hubSide.Join(JoinBound).Should().BeTrue("the hub scope's construction gets the root singleton");
+            rootSide.Fault.Should().BeNull();
+            hubSide.Fault.Should().BeNull();
         }
         finally
         {

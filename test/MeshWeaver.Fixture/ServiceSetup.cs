@@ -103,9 +103,9 @@ public class ServiceSetup
     /// </summary>
     public virtual void Dispose()
     {
-        // Dispose the SP so Autofac's lifetime scope tears down + IDisposable
+        // Dispose the SP so the container tears down + IDisposable
         // singletons (DBs, file handles, background workers) get to release
-        // their resources. The Autofac Reflection.Emit factories themselves
+        // their resources. The compiled service factories themselves
         // remain pinned in the JIT code heap until the AppDomain unloads —
         // that is a separate problem that ShareMeshAcrossTests sidesteps by
         // building the SP once per test class instead of once per [Fact].

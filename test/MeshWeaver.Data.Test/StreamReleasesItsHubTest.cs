@@ -22,8 +22,8 @@ namespace MeshWeaver.Data.Test;
 /// 51 562 911 objects named exactly ONE holder: <c>SynchronizationStream&lt;T&gt;.Hub</c>, 1 485
 /// <c>&lt;MeshNode&gt;</c> plus 11 <c>&lt;JsonElement&gt;</c>, one stream per corpse, exactly. No GC
 /// root pointed at a dead hub directly. <c>HostedHubsCollection</c> had done its job (1 495 of 1 496
-/// entries removed) and the hubs' Autofac scopes had been closed — but closing a scope does not null
-/// the fields of an object that outlives it, so each corpse kept its own <c>ILifetimeScope</c> and
+/// entries removed) and the hubs' service scopes had been closed — but closing a scope does not null
+/// the fields of an object that outlives it, so each corpse kept its own <c>MeshServiceProvider</c> and
 /// <c>TypeRegistry</c> alive at ~390 KB apiece.</para>
 ///
 /// <para>🚨 <b>The split that decides what "fixing it" means.</b> Of those 1 496, only <b>11</b> sat

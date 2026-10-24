@@ -1,7 +1,7 @@
 ---
 NodeType: Markdown
 Name: "A release refused at the source — the farewell that ends an owner-side hub was dropped by the hub posting it"
-Abstract: "An UnsubscribeRequest is the only thing that ever ends an owner-side per-subscriber stream and its sync/{id} hub. It is posted from the SUBSCRIBING hub by a disposable registered on the client-side sync/{id} hub, so on the hub-teardown route — a circuit close, a DisposeRequest, a recycle — it runs while the subscribing hub is in DisposeHostedHubs BY CONSTRUCTION, and the teardown post guard refused it at the only door it has. The owner was never told: one RunLevel=Started hub per subscription, each holding its own Autofac scope and TypeRegistry, for the life of the process. Why the guard is right for events and wrong for a release, the surviving ancestor that carries it, and the teardown regression controls."
+Abstract: "An UnsubscribeRequest is the only thing that ever ends an owner-side per-subscriber stream and its sync/{id} hub. It is posted from the SUBSCRIBING hub by a disposable registered on the client-side sync/{id} hub, so on the hub-teardown route — a circuit close, a DisposeRequest, a recycle — it runs while the subscribing hub is in DisposeHostedHubs BY CONSTRUCTION, and the teardown post guard refused it at the only door it has. The owner was never told: one RunLevel=Started hub per subscription, each holding its own service scope and TypeRegistry, for the life of the process. Why the guard is right for events and wrong for a release, the surviving ancestor that carries it, and the teardown regression controls."
 Icon: "<svg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'><rect width='24' height='24' rx='4' fill='#2f6f5e'/><path d='M4 12h9' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/><path d='M10 9l3 3-3 3' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/><path d='M16.5 6v12' fill='none' stroke='white' stroke-width='1.8' stroke-linecap='round'/><circle cx='20' cy='12' r='1.6' fill='white'/></svg>"
 Thumbnail: "images/DataMesh.svg"
 Authors:
@@ -39,7 +39,7 @@ A cross-hub subscription builds **two** `SynchronizationStream`s and therefore t
 the client's, hosted by the subscribing hub, and the owner's twin, hosted by the owner
 ([Sync hub population](../SyncHubPopulation) shows the arithmetic — 6 925 `Started` + 1 495 `Dead`
 sync hubs against 8 461 streams, 0.5 % apart, so there is no separate hub population to explain).
-Each retains roughly 390 KB: its own Autofac `ILifetimeScope` and its own `TypeRegistry`.
+Each retains roughly 390 KB: its own service scope and its own `TypeRegistry`.
 
 Three earlier causes have landed, each removing a way the population GROWS:
 

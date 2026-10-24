@@ -48,7 +48,7 @@ public partial record MeshBuilder
         {
             // Its first resolve also runs the boot publication when nothing claimed it yet
             // (MeshWeaver#6557): the hook every host kind calls, so a host built with plain MS DI
-            // withdraws a module whose shared instances cannot be built just as the Autofac root does
+            // withdraws a module whose shared instances cannot be built just as the root container does
             // (which claims it earlier, outside any lock — ModulesBuiltBeforePublished).
             services.TryAddSingleton(sp =>
             {
@@ -62,7 +62,7 @@ public partial record MeshBuilder
             services.TryAddSingleton<MeshWeaver.Layout.Client.IViewContributionSource>(sp => sp.GetRequiredService<ModuleContexts>());
             // 🚨 The installed-module set is ONE registry the mesh owns (MeshWeaver#6557), and the
             // enumerable every consumer resolves IS that registry — an explicit IEnumerable<T>
-            // registration, which MS DI and Autofac alike answer ahead of the per-descriptor collection.
+            // registration, which the standard provider and MeshServiceProvider alike answer ahead of the per-descriptor collection.
             // A held module withdrawn after the container was built is then absent, never a
             // registration that can only throw.
             if (!services.Any(d => d.ImplementationInstance is InstalledModules))
@@ -72,7 +72,7 @@ public partial record MeshBuilder
                 services.AddTransient<IEnumerable<InstalledModuleAssembly>>(sp =>
                     sp.GetRequiredService<InstalledModules>().Current(sp));
                 // The modules this replica carries and does not run — the same registry, so a module
-                // withdrawn at boot is listed on every container kind (an Autofac registration source
+                // withdrawn at boot is listed on every container kind (a registration source
                 // served it before, which a plain MS DI host ignores).
                 services.AddTransient<IEnumerable<IncompatibleModule>>(sp =>
                     sp.GetRequiredService<InstalledModules>().Incompatible(sp));
@@ -94,7 +94,7 @@ public partial record MeshBuilder
         ConfigureServices(services =>
         {
             if (!services.Any(d => d.ImplementationInstance is ModuleOwnedRootSource))
-                services.AddSingleton<Autofac.Core.IRegistrationSource>(new ModuleOwnedRootSource(modules));
+                services.AddSingleton<MeshWeaver.ServiceProvider.IServiceRegistrationSource>(new ModuleOwnedRootSource(modules));
             // Built before published (MeshWeaver#6542): every held module's shared instances are built
             // once the root container exists and before the provider is handed out.
             // Who owns each instance a module container builds — read by the ownership diagnostics

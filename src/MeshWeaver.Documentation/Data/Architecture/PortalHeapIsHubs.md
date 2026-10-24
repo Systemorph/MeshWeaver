@@ -13,6 +13,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Portal Heap Is Hubs
 
+> **History note (MeshWeaver#7145).** The per-hub DI rows measured on this page are those of Autofac,
+> the container then in use; it has since been removed and replaced by MeshWeaver's own
+> [MeshServiceProvider](../HubServiceLayers) — see *Per-hub DI and type metadata* for the measurement
+> after the replacement.
+
 A portal replica of the public instance grows ~215 MB/h, monotonically, through hundreds of full
 collections, and never returns to an earlier floor. This page is the heap-dump evidence for
 **what is actually in that memory**, taken read-only from a live production pod on
@@ -188,7 +193,7 @@ wrapped every instance registration of its ancestors, and started none of them: 
 activated in the scope that owns it. Measured in a test mesh: 26 of a node hub's 125 wrappers, 26 of a
 hosted child hub's 48; with 200 instance registrations at the root, a hosted hub held 221.
 
-**The fix.** `HubScopeStartables` sets the hub scope's own build option to *ignore startable
+**The first fix (MeshWeaver#7131, superseded by the replacement below).** `HubScopeStartables` set the hub scope's own build option to *ignore startable
 components* unless the hub's own service collection registers an `IStartable` — the only thing an
 `IServiceCollection` can produce that the pass would really start (an `AddSingleton(instance)` is
 auto-activated, but as an externally owned provided instance its activation does nothing). The decision
@@ -230,14 +235,43 @@ setup plus their hosted hubs, 516 `MessageHub`s, in one test mesh (`dumpheap -st
 | TypeRegistry rows | 30.6 MB (59 KB/hub) | 11.7 MB (23 KB/hub) |
 | Retained per node-hub activation (`GC.GetTotalMemory`) | 2.49 MB | 2.04 MB |
 
-**What this does NOT close.** The remaining ~55 KB of Autofac per hub is the services a hub resolves,
-and it is the price of an Autofac child scope per hub: the wrapper is how a parent-scoped service gets
-the hub's own dependencies. Removing it means replacing the per-hub child scope with something that
-still gives parent-scoped services the hub's own `IMessageHub` — a redesign, not this change. Nor does
-it touch defects 1 and 2, which set how many hubs there are; the per-hub cost only multiplies them.
-How much of the production 120-wrapper constant was `AutoActivate` depends on how many instance
-registrations the portal's modules make at the root; the next dump answers it directly (the
-`ExternalComponentRegistration` count against the hub count).
+**What that did NOT close** — the remaining ~55 KB of Autofac per hub was the services a hub resolves,
+the price of an Autofac child scope per hub: the wrapper was how a parent-scoped service got the hub's
+own dependencies. Closing it took the redesign below.
+
+#### The replacement: a hub level holds only its own descriptors (MeshWeaver#7145)
+
+Autofac is removed. Every container — the mesh's root, each hub's level, each module generation's
+container — is MeshWeaver's own `MeshServiceProvider` ([Hub Service Layers](../HubServiceLayers)). A
+hub's level holds exactly the descriptors the hub declared, frozen, and a slot per instance it built;
+a parent's scoped or transient service resolved in the hub is built by the level with the hub's own
+dependencies, so nothing standing for a parent registration exists per hub. The startable pass, its
+workaround and the reflection-cache eviction went with Autofac.
+
+**Measured with one harness, on both sides** — 99 Markdown node hubs activated through
+`GetMeshNodeStream` in one Monolith test mesh, subscriptions held, three full collections, then a
+`--type Heap` dump of the test host (`dotnet-dump analyze … dumpheap -stat -live`); "before" is core
+at the merge base (Autofac, after #7131), "after" the replacement, everything else identical. This
+harness holds 608 `MessageHub`s on both sides (the 516 of the #7131 table above was a different
+harness, so compare columns within one table, not across the two):
+
+| | Before (Autofac, after #7131) | After (`MeshServiceProvider`) |
+|---|---:|---:|
+| Live heap | 150.2 MB | 119.0 MB |
+| DI-container rows | 27.1 MB (44.5 KB/hub) | 1.6 MB (2.7 KB/hub) |
+| Wrapper registrations (`ExternalComponentRegistration`) | 18,146 (≈30/hub) | 0 |
+| TypeRegistry rows | 12.6 MB (20.7 KB/hub) | 12.6 MB (20.7 KB/hub) |
+| Retained per node-hub activation (`GC.GetTotalMemory`) | 2.31 MB | 1.77 MB |
+
+The container rows that remain are the registrations themselves (one small object per descriptor, of
+the root and of every level, in a frozen lookup), the instance slots, and the activation plans —
+nothing grows with what a hub's PARENTS registered (`HubScopeDeclaresOnlyItsOwnServicesTest` pins
+zero parent registrations per hub). Not touched: defects 1 and 2, which set how many hubs there are,
+and the type-registry rows; the per-hub cost only multiplies them.
+
+**Owed after the roll:** a fresh production dump read with the governed `AnalyzeDump` (heap stats) on
+the control instance, against the #7082 OOM reading above — the per-hub container rows and the absence
+of `ExternalComponentRegistration` at production's hub population.
 
 ## Why the LIVE ones are never released
 

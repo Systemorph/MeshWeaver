@@ -708,15 +708,7 @@ internal sealed class NodeAssemblyLoadContext : AssemblyLoadContext, IDisposable
         _logger = logger;
         _buildMvidFromFile = new Lazy<string?>(() => ServedBuildIdentity.OfFile(dllPath));
 
-        // Purge Autofac's process-static reflection cache of this context's assemblies the instant
-        // it starts unloading — while the metadata the predicate walks is still valid. A cached
-        // ConstructorInfo/Assembly key otherwise (1) roots this collectible context so it can never
-        // be collected, and (2) makes a later, unrelated concurrent GetOrAdd bucket-probe compare
-        // against the freed key → AccessViolationException/SIGSEGV under concurrent hub construction.
-        // Autofac does this automatically for BeginLoadContextLifetimeScope; we manage the context
-        // by hand, so we mirror it. Static handler ⇒ no self-reference that would defeat collection.
-        Unloading += ReflectionCacheEviction.EvictFor;
-        // …and System.Text.Json's process-static member-accessor cache, the one strong root of the
+        // Purge System.Text.Json's process-static member-accessor cache, the one strong root of the
         // contexts a FutuRe teardown could not collect (Plugins#1605, gcroot): without this, a context
         // whose types were serialised is freed whenever STJ's 1 s eviction timer fires — while the NEXT
         // mesh is already starting. See JsonMemberAccessorCacheEviction.
@@ -1780,8 +1772,9 @@ internal class CompilationCacheService(
     /// <see cref="System.Runtime.Loader.AssemblyLoadContext.Unload"/>, which does not rip out loaded
     /// types — a context still referenced by a live hub stays fully mapped and usable and is
     /// collected only once that hub recycles onto the new assembly and drops its last reference. The
-    /// context's <c>Unloading</c> handler (<c>ReflectionCacheEviction.EvictFor</c>) purges Autofac's
-    /// shared reflection cache so the freed context is neither rooted nor left as a dangling key.
+    /// context's <c>Unloading</c> handler (<c>JsonMemberAccessorCacheEviction.EvictFor</c>) purges
+    /// System.Text.Json's process-static accessor cache so the freed context is not rooted there; the DI
+    /// container keeps no process-static cache (<c>MeshServiceProvider</c>).
     /// Mirrors the match in <see cref="UnloadNodeContexts"/>/<see cref="InvalidateCache"/> (both key
     /// on <see cref="NodeAssemblyLoadContext.NodeName"/>), just triggered per PUBLISHED build
     /// rather than only on hub teardown — see <see cref="PublishLoadContextForPath"/> for why the

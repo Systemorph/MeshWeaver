@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting.Test;
 /// 🚨 <b>Queues and pools drain LAST; a hosted hub's lifetime scope closes AFTER them, never
 /// before.</b>
 ///
-/// <para><c>HostedHubsCollection.CloseScopeWhenDisposed</c> closes the Autofac scope a hosted hub owns
+/// <para><c>HostedHubsCollection.CloseScopeWhenDisposed</c> closes the service scope a hosted hub owns
 /// once that hub's <c>DisposalCompleted</c> fires. That signal covers the action block and the
 /// message round-trips only. The offloaded work the hub issued — <c>IIoPool</c> leaves, synced-query
 /// pipelines on the pool scheduler, async cleanup on the <c>AsyncDisposeQueue</c> — is joined by the
@@ -26,7 +26,7 @@ namespace MeshWeaver.Hosting.Test;
 ///
 /// <para>The fix hands the close to <see cref="IHubScopeDisposalSequencer"/>, which the mesh
 /// implements as <see cref="TeardownOrderedScopeDisposal"/>: on a LIVE mesh a recycled hub's scope
-/// still closes immediately (an Autofac parent tracks every child scope until it is closed — the
+/// still closes immediately (an unclosed scope keeps everything it built — the
 /// leak the close was introduced for); while the mesh is TEARING DOWN the close waits for
 /// <see cref="MeshTeardownSignal.Completed"/>, which fires after the last drain phase. These two
 /// facts are pinned separately because they run different branches, and a sequencer that deferred

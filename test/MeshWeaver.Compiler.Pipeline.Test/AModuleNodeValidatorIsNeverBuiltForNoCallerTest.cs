@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
-using Autofac;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Hosting.Persistence;
 using MeshWeaver.Mesh;
@@ -28,7 +27,7 @@ public sealed class ModuleValidatorBuilds
     /// <summary>Records a build in the module scope <paramref name="provider"/> belongs to.</summary>
     public void Record(IServiceProvider provider)
     {
-        var caller = ModuleServiceProvider.CallerOfModuleScope(provider.GetService<ILifetimeScope>());
+        var caller = ModuleServiceProvider.CallerOfModuleScope(MeshServiceProvider.From(provider));
         ImmutableInterlocked.Update(ref callers, list => list.Add(caller?.Tag?.ToString() ?? (caller is null ? null : "untagged caller")));
     }
 }

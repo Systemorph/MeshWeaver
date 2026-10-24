@@ -23,8 +23,8 @@ namespace MeshWeaver.Fixture;
 /// ODE is thrown from Orleans' own connection message pump —
 /// <c>Orleans.Runtime.Messaging.Connection.ProcessIncoming</c> → <c>MessageSerializer.TryRead</c> →
 /// <c>CodecProvider.TryCreateCodec</c> → <c>ActivatorUtilities.CreateInstance</c> →
-/// <c>AutofacServiceProvider.GetService</c> on a disposed <c>LifetimeScope</c>. A silo/client
-/// connection is still deserializing an in-flight message while its Autofac container is torn down
+/// <c>the hub's service provider's GetService</c> on a disposed <c>LifetimeScope</c>. A silo/client
+/// connection is still deserializing an in-flight message while its service container is torn down
 /// during <c>TestCluster</c> teardown. Purely Orleans-internal (the #231 mesh drain never covered it);
 /// fixed at the disposal seam — <c>OrleansClusterDisposal</c> now runs the graceful
 /// <c>StopAllSilosAsync()</c> (which drains the pumps) BEFORE <c>DisposeAsync()</c>. This capturer
@@ -33,7 +33,7 @@ namespace MeshWeaver.Fixture;
 /// <para><b>What this capturer does</b> — record, never suppress:</para>
 /// <list type="number">
 ///   <item><see cref="AppDomain.FirstChanceException"/>, filtered STRICTLY to the teardown
-///   disposed-resource <see cref="ObjectDisposedException"/> shapes (Autofac <c>LifetimeScope</c> +
+///   disposed-resource <see cref="ObjectDisposedException"/> shapes (service scope +
 ///   mesh-owned <c>MemoryCache</c> — see <see cref="IsTeardownDisposedStraggler"/>): records the full
 ///   throw-site stack (<see cref="Environment.StackTrace"/> — at first-chance time the exception's own
 ///   StackTrace has only the throw frame) + thread/task context. This fires even when the runtime
@@ -73,7 +73,7 @@ internal static class TeardownStragglerCapturer
     {
         AppDomain.CurrentDomain.FirstChanceException += static (_, e) =>
         {
-            // Strict filter — only the teardown disposed-resource shapes (Autofac LifetimeScope +
+            // Strict filter — only the teardown disposed-resource shapes (service scope +
             // MemoryCache); everything else is untouched. Recursion safety: nothing our own
             // recording code can throw matches this filter.
             if (!IsTeardownDisposedStraggler(e.Exception))
@@ -126,19 +126,17 @@ internal static class TeardownStragglerCapturer
     /// <summary>
     /// The teardown disposed-resource shapes this capturer names: a late continuation touching a
     /// resource whose owning scope has already been torn down. Two known shapes, both
-    /// <see cref="ObjectDisposedException"/>: (1) the Autofac root container — the Orleans connection
+    /// <see cref="ObjectDisposedException"/>: (1) the root service container — the Orleans connection
     /// message pump resolving a codec from a disposed <c>LifetimeScope</c> (task #20, fixed at
     /// <c>OrleansClusterDisposal</c>); (2) a mesh-owned <c>MemoryCache</c> — a late write/read hitting
     /// e.g. <c>MeshNodeStreamCache._updateQueues</c> after the cache hub disposed. Both are the same
     /// "graceful terminal, never an unobserved throw" defect class (#228/#231 doctrine).
     /// </summary>
     private static bool IsTeardownDisposedStraggler(Exception? ex) =>
-        IsAutofacDisposedScope(ex) || IsDisposedMemoryCache(ex);
+        IsDisposedServiceScope(ex) || IsDisposedMemoryCache(ex);
 
-    private static bool IsAutofacDisposedScope(Exception? ex) =>
-        ex is ObjectDisposedException
-        && (ex.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) == true
-            || ex.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) == true);
+    private static bool IsDisposedServiceScope(Exception? ex) =>
+        ex is ObjectDisposedException && MeshWeaver.Messaging.HubDisposingException.IsDisposedContainer(ex);
 
     private static bool IsDisposedMemoryCache(Exception? ex) =>
         ex is ObjectDisposedException ode

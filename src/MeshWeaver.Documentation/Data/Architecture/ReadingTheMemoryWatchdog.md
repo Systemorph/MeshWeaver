@@ -18,8 +18,9 @@ host when RSS crosses 6 GiB — before the runner's OOM killer turns the shard i
 wall-clock timeout. The signal it produces is `exit=134 SIGNAL SIGABRT` plus a synthetic
 `<Project>.HOST_CRASHED` trx entry.
 
-Until 2026-09-13 its message also named the cause: *"This is the cumulative Autofac Reflection.Emit
-factory leak from non-shared MonolithMeshTestBase classes."* This page records the occurrence on
+Until 2026-09-13 its message also named the cause: *"This is the cumulative [container] Reflection.Emit
+factory leak from non-shared MonolithMeshTestBase classes."* (the container then in use was Autofac,
+since removed in MeshWeaver#7145) This page records the occurrence on
 which the watchdog's own trace refuted that sentence, what the trace actually shows, and the rule
 for reading one.
 
@@ -128,7 +129,7 @@ Two sites of the same shape remain at low volume and are named rather than chang
 
 > A guard's message states what it MEASURED and where the cause can be read. It does not name the
 > cause. The watchdog measures RSS against a threshold; the trace measures which class was active
-> and what each released; neither measures Autofac. A message that names a mechanism its
+> and what each released; neither measures the DI container. A message that names a mechanism its
 > instrument cannot see sends the reader to the wrong repository of fixes — here, to the mesh
 > classes that were flat, away from the plain ones that were not.
 
