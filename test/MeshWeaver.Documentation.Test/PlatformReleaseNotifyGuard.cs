@@ -202,14 +202,14 @@ public class PlatformReleaseNotifyGuard
     /// was silent because the broadcaster had NO CALLER, not because a mesh hop is unreliable. Two
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
-    /// <para>ONE ledgered exception, and it is not a release event (policy
-    /// <c>dependent-suites-affected-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
-    /// Core's pull-request/merge-queue gate asks MeshWeaver.Plugins to run its suites against the
-    /// CANDIDATE commit (<c>core-candidate-suites</c>) and waits for the verdict — a TEST REQUEST
-    /// about an unmerged commit, which memex cannot carry because nothing has been published. The
-    /// release wave stays memex's, and every other sender is still a regression.</para>
+    /// <para>There is NO ledgered exception. The one there was — <c>dotnet-test.yml</c> asking
+    /// MeshWeaver.Plugins to run its suites against a core CANDIDATE (<c>core-candidate-suites</c>,
+    /// policy <c>dependent-suites-affected-gate</c>) — was removed with that policy: it held a core
+    /// runner for up to 45 minutes polling another repository. Under policy
+    /// <c>dependents-verify-on-their-side</c> a dependent verifies a new SEALED core set on its own
+    /// side, and the deploy-side promotion gate refuses an unverified combination.</para>
     ///
-    /// <para>Otherwise there is no ledger. The reusable lanes core hosts for the satellites
+    /// <para>The reusable lanes core hosts for the satellites
     /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send
     /// <c>meshweaver-upstream-published</c> / <c>meshweaver-modules-published</c> in the calling
     /// satellite's context — CI-to-CI coupling by another name; since 2026-09-03 a lane ENDS by
@@ -229,7 +229,7 @@ public class PlatformReleaseNotifyGuard
 
         var senders = Directory.EnumerateFiles(workflows, "*.yml")
             .Select(f => (Name: Path.GetFileName(f), Sends: SendsARepositoryDispatch(f)))
-            .Where(x => x.Sends && !DispatchLedger.ContainsKey(x.Name))
+            .Where(x => x.Sends)
             .Select(x => x.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
@@ -257,53 +257,6 @@ public class PlatformReleaseNotifyGuard
         // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
         Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);
         Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update:"), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// The ONE permitted sender: <c>dotnet-test.yml</c> asks MeshWeaver.Plugins to test a core
-    /// CANDIDATE — REQUIRED under policy <c>dependent-suites-affected-gate</c> (one POST line, at most two requests: Plugins' default branch, and a declared counterpart's head). The promotion
-    /// gate's verdict (main-cd <c>arm</c>) is requested by MeshWeaver.Plugins' own poller, so
-    /// main-cd sends nothing and stays off this ledger. Keyed by file, and every sending line in that
-    /// file is held to the one event type and the one target by
-    /// <see cref="TheLedgeredSender_SendsOnlyTheCandidateTestRequest"/>.
-    /// </summary>
-    private static readonly System.Collections.Immutable.ImmutableDictionary<string, string> DispatchLedger =
-        System.Collections.Immutable.ImmutableDictionary.CreateRange(StringComparer.Ordinal,
-        [
-            new System.Collections.Generic.KeyValuePair<string, string>("dotnet-test.yml",
-                "`dependent-suites-dispatch` sends `core-candidate-suites` to MeshWeaver.Plugins so its "
-                + "suites run against the candidate core commit before it lands (#2689; #5635/#5647/#5655 "
-                + "each turned Plugins' main red through a behaviour change no core gate could see)"),
-        ]);
-
-    /// <summary>
-    /// 🚨 The ledger entry is NOT a licence to dispatch anything from <c>dotnet-test.yml</c>. Every
-    /// sending line there must name the one event type and the one target — a second event, or a
-    /// dispatch to another repository, would be a new coupling hiding behind an old entry.
-    /// And the entry must still MATCH: a ledger line whose sender vanished is a detector that
-    /// stopped seeing its subject.
-    /// </summary>
-    [Fact]
-    public void TheLedgeredSender_SendsOnlyTheCandidateTestRequest()
-    {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
-        foreach (var (file, _) in DispatchLedger)
-        {
-            var lines = File.ReadAllLines(Path.Combine(workflows, file))
-                .Where(l => !l.TrimStart().StartsWith('#')).ToArray();
-            Assert.True(SendsARepositoryDispatch(lines),
-                $"{file} is ledgered as a dispatch sender but sends nothing any more — delete the ledger entry in the same change.");
-            // EXACTLY one of each: a second POST — even to the same target with the same event —
-            // would start a duplicate candidate run racing on the same verdict ref.
-            var posts = lines.Where(l => l.Contains("/dispatches", StringComparison.Ordinal)).ToArray();
-            Assert.True(posts.Length == 1, $"{file} must send exactly ONE dispatch; found {posts.Length}:\n  " + string.Join("\n  ", posts));
-            Assert.Contains("repos/Systemorph/MeshWeaver.Plugins/dispatches", posts[0], StringComparison.Ordinal);
-            var events = lines.Where(l => l.Contains("event_type", StringComparison.Ordinal)).ToArray();
-            Assert.True(events.Length == 1, $"{file} must build exactly ONE event_type payload; found {events.Length}");
-            Assert.Contains("event_type: \"core-candidate-suites\"", events[0], StringComparison.Ordinal);
-            Assert.DoesNotContain("repository-dispatch@", string.Join("\n", lines), StringComparison.Ordinal);
-            Assert.DoesNotContain("createDispatchEvent", string.Join("\n", lines), StringComparison.Ordinal);
-        }
     }
 
     /// <summary>

@@ -369,22 +369,15 @@ is open, draft, closed-unmerged, or **merged into anything but its repo's defaul
   contains `searched: false` is refused (#2741: no embedding provider, nothing was searched —
   #3137's PR read exactly that as "no callers"), and a reason that mentions a sweep without the
   positive marker is refused too.
-- **Core dispatches ONE thing to a plugin repository: a REQUIRED request to test a CANDIDATE**
-  (policy `dependent-suites-affected-gate`, which superseded `core-merge-never-blocked` — the register
-  carries when). `Dependent suites (MeshWeaver.Plugins)` in `dotnet-test.yml` runs on EVERY non-fork,
-  non-Dependabot PR, sends `core-candidate-suites` (and a second request at a declared counterpart's
-  head), reads the verdicts Plugins writes at `refs/core-candidate/<key>`, and `Consolidate test
-  results` NEEDS it. Plugins selects PER REALM only what the diff reaches (edges printed, unreached
-  realms named), REFUSES (red) rather than running everything when it cannot tell, and reports each
-  realm's conclusion. A measured break merges only by `Breaks-plugins: <realms> — <what> — counterpart
-  Systemorph/MeshWeaver.Plugins#<n>; semver: <major|minor|ceiling>` with that counterpart green
-  against the same candidate and the semver bump in the diff
-  (`.github/scripts/check-plugins-break-declaration.py`). Fork/Dependabot: printed NOT MEASURED. The
-  fleet's arming still reads the PLATFORM verdict (`platform-module-deploy-separate`); the release
-  wave is still memex's; `PlatformReleaseNotifyGuard.DispatchLedger` admits the one PR-side sender.
+- **Core dispatches NOTHING to a plugin repository and waits for no dependent** (policy
+  `dependents-verify-on-their-side`, which superseded `dependent-suites-affected-gate` — the register
+  carries when). The `Dependent suites` jobs, the `Breaks-plugins:` declaration and their scripts are
+  gone; a dependent verifies each new SEALED core set in its own push and daily runs, and the deploy
+  side (arming, combo gate) refuses an unverified combination. `PlatformReleaseNotifyGuard` holds core
+  at zero dispatch senders, with no ledger.
 - **It reads, it never checks out.** A checkout puts plugin SOURCE into core's build; an API read
   puts only a FACT into a verdict. That is the line `PlatformNeverDependsOnPluginsGuard` draws, and
-  its `ApiReadLedger` enumerates the reads on that side of it (the dependent-suites verdict is one).
+  its `ApiReadLedger` enumerates the reads on that side of it.
 - **The `none` escape is a declaration, not a skip** — printed into the log, and refused without a
   reason. Core cannot see a private repo's callers; what the gate removes is nobody being asked.
 
