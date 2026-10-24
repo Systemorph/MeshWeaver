@@ -69,11 +69,14 @@ public class BrowserProvisioningGateGuard
     [Fact]
     public void EveryBrowserProvisioner_TreatsADependencyFailureAsAWarning()
     {
+        // 🚨 No `Assert.NotEmpty` here any more. Since the test shards stopped running apt (the font
+        // set is staged once and restored from a cache, see TheTestShardsNeverReachAPackageMirror),
+        // a repo can legitimately have NO `--with-deps` provisioner, and that is the stronger state.
+        // Non-vacuity lives in ProvisioningWorkflows(), which still requires at least one
+        // browser provisioner to exist.
         var provisioners = ProvisioningWorkflows()
             .Where(w => w.lines.Any(UsesWithDeps))
             .ToList();
-
-        Assert.NotEmpty(provisioners);   // the guard must have something to guard
 
         var fatal = provisioners
             .Where(w => w.lines.Any(l => Mentions(l, "::error::") && Mentions(l, "with-deps")))
@@ -97,6 +100,40 @@ public class BrowserProvisioningGateGuard
             + "warning is the context the later failure needs — without it the run reports a "
             + "rendering fault and names no cause. Emit a ::warning:: mentioning `--with-deps`. "
             + "Offending workflow(s): " + string.Join(", ", silent));
+    }
+
+    /// <summary>
+    /// 🚨 The test shards provision the browser with NO apt at all. `--with-deps` added only font
+    /// packages there, and a stalled Ubuntu mirror then spent the step's whole 480 s budget on
+    /// them inside a shard's 20-minute cap. On 2026-10-23 that cut four shards whose tests were
+    /// still running (PR runs 40011143666 and 40011313475, main run 40027189653). The fonts are now
+    /// staged once by the `browser-fonts` job and restored from the `chromium-fonts` cache, so a
+    /// shard never reaches a mirror. This keeps it that way: an executable `--with-deps`,
+    /// `install-deps` or `apt-get` line in the test job puts the mirror back on the shard's
+    /// critical path.
+    /// </summary>
+    [Fact]
+    public void TheTestShardsNeverReachAPackageMirror()
+    {
+        var dir = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var lines = File.ReadAllLines(Path.Combine(dir, "dotnet-test.yml"));
+        var start = Array.FindIndex(lines, l => l == "  test:");
+        Assert.True(start >= 0, "could not find the `test:` job in dotnet-test.yml — the guard measured nothing");
+        var end = Array.FindIndex(lines, start + 1, l => l.Length > 2 && l.StartsWith("  ", StringComparison.Ordinal)
+            && !l.StartsWith("   ", StringComparison.Ordinal) && !l.TrimStart().StartsWith('#'));
+        var job = lines[start..(end < 0 ? lines.Length : end)]
+            .Where(l => !l.TrimStart().StartsWith('#'))
+            .ToArray();
+
+        Assert.Contains(job, l => Mentions(l, "stage-chromium-fonts.sh install"));   // the replacement is there
+
+        var apt = job.Where(l => UsesWithDeps(l) || Mentions(l, "install-deps") || Mentions(l, "apt-get"))
+            .ToList();
+        Assert.True(apt.Count == 0,
+            "The test job reaches a package mirror again. Every shard then waits on an Ubuntu mirror "
+            + "inside its 20-minute cap, which is what cut four shards on 2026-10-23. Stage what you "
+            + "need in the browser-fonts job (.github/scripts/stage-chromium-fonts.sh) and restore it "
+            + "from the cache. Offending line(s): " + string.Join(" | ", apt.Select(l => l.Trim())));
     }
 
     /// <summary>A <c>playwright install</c> command line — the real invocation, not prose about it.</summary>
