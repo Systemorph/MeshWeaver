@@ -201,4 +201,58 @@ public class FaultClassifierTest
         verdict.Kind.Should().Be(FaultKind.Transient);
         verdict.ByMessage.Should().BeTrue();
     }
+
+    /// <summary>
+    /// 🚨 Eight levels of <c>AggregateException(current, current)</c> over one socket fault hold
+    /// nine DISTINCT nodes but 511 paths. The driver's every-branch probe counted paths, ran out of
+    /// budget, and the unflagged driver frame lost its typed <see cref="FaultLayer.Store"/> verdict.
+    /// </summary>
+    [Fact]
+    public void ADriverException_OverASharedGraphOfSocketFaults_IsAStoreOutage()
+    {
+        Exception current = new SocketException((int)SocketError.ConnectionRefused);
+        for (var level = 0; level < 8; level++)
+            current = new AggregateException(current, current);
+
+        var verdict = FaultClassifier.Classify(new FakeDbException("Exception while reading from stream", current));
+
+        verdict.Kind.Should().Be(FaultKind.Transient);
+        verdict.Layer.Should().Be(FaultLayer.Store);
+        verdict.EveryBranchTypedTransientIn(FaultLayer.Store).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A transient driver frame with no SQLSTATE over a nested driver frame carrying the
+    /// connection-class <c>57P03</c> is an unreachable store — not contention because the outer
+    /// frame happened to be flagged.
+    /// </summary>
+    [Fact]
+    public void ATransientDriverException_OverAConnectClassSqlState_IsAStoreOutage()
+    {
+        var verdict = FaultClassifier.Classify(new FakeDbException("read failed",
+            new FakeDbException("the database system is starting up", sqlState: "57P03"), transient: true));
+
+        verdict.Kind.Should().Be(FaultKind.Transient);
+        verdict.Layer.Should().Be(FaultLayer.Store);
+        verdict.ByMessage.Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 An unflagged driver frame with no recognised SQLSTATE and no cause decides nothing by
+    /// type, so its TEXT must still be read — exactly as the same text flattened across a grain
+    /// boundary is.
+    /// </summary>
+    [Fact]
+    public void AnUndecidedDriverException_IsReadByItsText_LikeItsFlattenedForm()
+    {
+        var driver = FaultClassifier.Classify(new FakeDbException("connection refused"));
+        var flattened = FaultClassifier.Classify(new InvalidOperationException("connection refused"));
+
+        driver.Kind.Should().Be(FaultKind.Transient);
+        driver.Layer.Should().Be(FaultLayer.Store);
+        driver.ByMessage.Should().BeTrue();
+        flattened.Kind.Should().Be(driver.Kind);
+        flattened.Layer.Should().Be(driver.Layer);
+        flattened.ByMessage.Should().BeTrue();
+    }
 }

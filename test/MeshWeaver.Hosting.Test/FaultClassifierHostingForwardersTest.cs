@@ -43,4 +43,22 @@ public class FaultClassifierHostingForwardersTest
     [Fact]
     public void ACooperativeCancellation_IsNotAnOwnerFailure()
         => MeshNodeStreamCache.IsTransientOwnerFailure(new OperationCanceledException()).Should().BeFalse();
+
+    /// <summary>
+    /// 🚨 The stream cache read the connect banners on EVERY frame, a driver frame included. An
+    /// unflagged driver exception saying "connection refused" with no SQLSTATE and no cause must stay
+    /// a transient owner failure — otherwise an "activation failed" wrapper around it is taken for a
+    /// missing node and an EXISTING node is negative-cached.
+    /// </summary>
+    [Fact]
+    public void AnUndecidedDriverFault_ByItsText_IsNotAMissingNode()
+    {
+        var driver = new FakeDbException("connection refused");
+        MeshNodeStreamCache.IsTransientOwnerFailure(driver).Should().BeTrue();
+        MeshNodeStreamCache.IsMissingNodeFailure(new InvalidOperationException("activation failed", driver))
+            .Should().BeFalse();
+    }
+
+    private sealed class FakeDbException(string message, Exception? inner = null)
+        : System.Data.Common.DbException(message, inner);
 }

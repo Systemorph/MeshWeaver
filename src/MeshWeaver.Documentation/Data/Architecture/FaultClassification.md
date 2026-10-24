@@ -62,7 +62,12 @@ owner's verdict (a standing watch) acts on it.
   cause that decides, the typed verdict replaces it.
 - **A driver exception over a network cause needs it in EVERY branch.** A non-transient
   `DbException` is a store outage only when every branch below it reaches a timeout, socket or IO
-  fault; a permanent defect beside a socket fault is a fault.
+  fault, or a nested driver frame carrying a connection-class SQLSTATE; a permanent defect beside a
+  socket fault is a fault. The probe charges its budget once per DISTINCT node, so a graph that
+  shares one child between many aggregates is judged, not cut off.
+- **A driver frame that decides nothing by type is still read by its text.** An unflagged
+  `DbException` with no recognised SQLSTATE and no deciding cause reaches the message markers, so
+  "connection refused" is the same `ByMessage` store verdict whether it arrives typed or flattened.
 
 ## What the caller knows: `TeardownContext`
 

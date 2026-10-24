@@ -378,30 +378,32 @@ public static class FaultClassifier
     /// <summary>
     /// True when EVERY branch of <paramref name="exception"/>'s graph reaches a frame that
     /// <paramref name="frame"/> accepts. An aggregate needs all of its branches; a chain that ends
-    /// without one, an empty aggregate, a cycle and an exhausted budget are all false.
+    /// without one, an empty aggregate, a cycle and an exhausted budget are all false. A node's
+    /// answer is memoized by reference BEFORE the budget is charged again, so a graph that shares a
+    /// child between many aggregates costs one visit per DISTINCT node, not one per path to it.
     /// </summary>
     private static bool EveryBranchReaches(Exception? exception, Func<Exception, bool> frame)
     {
         var budget = MaxNodes;
         var path = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        var known = new Dictionary<Exception, bool>(ReferenceEqualityComparer.Instance);
         return Reaches(exception);
 
         bool Reaches(Exception? e)
         {
-            if (e is null || --budget < 0 || !path.Add(e))
+            if (e is null)
+                return false;
+            if (known.TryGetValue(e, out var answer))
+                return answer;
+            if (--budget < 0 || !path.Add(e))
                 return false;
             try
             {
-                if (e is AggregateException aggregate)
-                {
-                    if (aggregate.InnerExceptions.Count == 0)
-                        return false;
-                    foreach (var inner in aggregate.InnerExceptions)
-                        if (!Reaches(inner))
-                            return false;
-                    return true;
-                }
-                return frame(e) || Reaches(e.InnerException);
+                answer = e is AggregateException aggregate
+                    ? aggregate.InnerExceptions.Count > 0 && aggregate.InnerExceptions.All(Reaches)
+                    : frame(e) || Reaches(e.InnerException);
+                known[e] = answer;
+                return answer;
             }
             finally
             {
@@ -409,6 +411,9 @@ public static class FaultClassifier
             }
         }
     }
+
+    private static bool IsUnreachableSqlState(Exception e)
+        => e is DbException { SqlState: { } sqlState } && StoreUnreachableSqlStates.Contains(sqlState);
 
     /// <summary>The verdict of ONE frame, or null when the frame does not decide.</summary>
     private static FaultClassification? Decide(Exception e, bool isHead, TeardownContext? context)
@@ -420,18 +425,23 @@ public static class FaultClassifier
 
         if (e is DbException db)
         {
-            if (db.SqlState is { } sqlState && StoreUnreachableSqlStates.Contains(sqlState))
+            if (IsUnreachableSqlState(db))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             // The network-level cause INSIDE a driver exception: drivers wrap the socket fault, so
-            // the DbException is the OUTER frame and decides for the whole chain below it.
+            // the DbException is the OUTER frame and decides for the whole chain below it — and so
+            // does a nested driver frame carrying a connection-class SQLSTATE.
             // EVERY branch below must be such a fault: a permanent defect beside a socket fault in the
             // same graph is not an unreachable store.
             if (EveryBranchReaches(db.InnerException,
-                    static inner => inner is TimeoutException or SocketException or IOException))
+                    static inner => inner is TimeoutException or SocketException or IOException
+                                    || IsUnreachableSqlState(inner)))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             if (db.IsTransient)
                 return Leaf(FaultKind.Transient, FaultLayer.StoreContention);
-            return null;
+            // Nothing typed decided: the driver's TEXT may still name an unreachable store (the same
+            // banner a remote reader matches once the type is flattened away) — a verdict by message,
+            // which a typed cause further down still replaces.
+            return DecideByMessage(db);
         }
 
         if (e is OperationCanceledException cancelled)
@@ -452,6 +462,13 @@ public static class FaultClassifier
         if (e.GetType().Name == "OrleansMessageRejectionException")
             return Leaf(FaultKind.Transient, FaultLayer.Transport);
 
+        return DecideByMessage(e);
+    }
+
+    /// <summary>The verdict a frame's message TEXT reaches, or null; always <see cref="FaultClassification.ByMessage"/>.</summary>
+    /// <param name="e">One frame.</param>
+    private static FaultClassification? DecideByMessage(Exception e)
+    {
         var message = e.Message ?? string.Empty;
         if (TransportTimeout.IsRoutedTransportTimeout(e)
             || message.Contains(TransportTimeout.ResponseTimeoutPhrase, StringComparison.OrdinalIgnoreCase)

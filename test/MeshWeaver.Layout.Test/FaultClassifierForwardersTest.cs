@@ -111,4 +111,38 @@ public class FaultClassifierForwardersTest
         AreaErrorClassifier.IsTransientHubFailure(new AggregateException(stall, new TimeoutException()))
             .Should().BeFalse("a timeout sibling must not out-rank the stall");
     }
+
+    /// <summary>
+    /// 🚨 The connect retry and the render frame recognised a driver frame over a nested driver
+    /// frame carrying <c>57P03</c> (they walked the chain to it); the refactor stopped at the outer
+    /// frame and called it contention.
+    /// </summary>
+    [Fact]
+    public void ADriverException_OverANestedConnectClassSqlState_IsAStoreOutage()
+    {
+        var fault = new FakeTransientDbException("read failed",
+            new FakeDbException("the database system is starting up", sqlState: "57P03"));
+        StorageFaults.IsTransientConnectFault(fault).Should().BeTrue();
+        AreaErrorClassifier.IsStorageUnavailable(fault).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// 🚨 A driver frame over a SHARED aggregate graph of socket faults (nine distinct nodes, 511
+    /// paths) is still a store outage — the probe's budget counts nodes, not paths.
+    /// </summary>
+    [Fact]
+    public void ADriverException_OverASharedSocketGraph_IsAStoreOutage()
+    {
+        Exception current = new SocketException((int)SocketError.ConnectionRefused);
+        for (var level = 0; level < 8; level++)
+            current = new AggregateException(current, current);
+        StorageFaults.IsTransientConnectFault(new FakeDbException("Exception while reading from stream", current))
+            .Should().BeTrue();
+    }
+
+    private sealed class FakeTransientDbException(string message, Exception? inner = null)
+        : DbException(message, inner)
+    {
+        public override bool IsTransient => true;
+    }
 }
