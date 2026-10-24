@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -75,7 +76,7 @@ public class CachedHubReferenceGuard
     [Fact]
     public void NoHubReferenceIsCachedWithoutRevalidation()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots())
             .SelectMany(f => FindIn(File.ReadAllText(f))
                 .Select(field => $"{SourceScan.Relative(root, f)}: {field} ??= …"))

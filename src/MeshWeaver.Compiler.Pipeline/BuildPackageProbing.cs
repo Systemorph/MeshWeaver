@@ -50,6 +50,7 @@ internal static class BuildPackageProbing
         IIoPool resolvePool,
         TimeSpan bound,
         ILogger logger)
+        // atomic-blocking-leaf: one read of the build's recorded NuGet references beside the assembly
         => readPool.InvokeBlocking(_ => RecordedReferences(assemblyLocation))
             .SelectMany(recorded => Arm(
                 assemblyLocation, recorded, cacheService, resolver, resolvePool, bound, logger));

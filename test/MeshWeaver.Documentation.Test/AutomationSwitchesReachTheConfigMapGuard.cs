@@ -9,6 +9,7 @@ using System.Text.RegularExpressions;
 using Xunit;
 using YamlDotNet.Core;
 using YamlDotNet.RepresentationModel;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -223,5 +224,5 @@ public class AutomationSwitchesReachTheConfigMapGuard
         }
     }
 
-    private static string ChartRoot() => Path.Combine(SourceScan.FindRepoRoot(), "deploy", "helm");
+    private static string ChartRoot() => Path.Combine(RepoPaths.Root, "deploy", "helm");
 }

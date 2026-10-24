@@ -119,9 +119,11 @@ public sealed class ModuleGenerationsGcHostedService : IHostedService, IDisposab
                 {
                     // A faulted pass reclaims nothing and breaks nothing: every state it can leave
                     // behind (an intact orphan, a .trash-* remainder) is one a later pass — the
-                    // next pod start — already plans for. Surfaced, never swallowed.
-                    logger?.LogWarning(ex,
-                        "Modules GC: pass outcome — FAULTED: [ModuleActivation] modules GC pass over {ModuleRoot} faulted — nothing "
+                    // next pod start — already plans for. Surfaced, never swallowed. A pass the
+                    // pool cancelled (teardown) is not a fault: it has already recorded its
+                    // INTERRUPTED outcome with what it removed.
+                    PassLedger.ReportTerminal(ModuleLandingService.GcPassName, logger, ex,
+                        ": [ModuleActivation] modules GC pass over {ModuleRoot} faulted — nothing "
                         + "was collected; the next pod start plans it again.", moduleRoot);
                     completed.OnError(ex);
                 });

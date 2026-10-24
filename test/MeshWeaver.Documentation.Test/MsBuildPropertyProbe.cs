@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,7 +34,7 @@ internal static class MsBuildPropertyProbe
         IReadOnlyList<string> propertyNames,
         params string[] extraArguments)
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var projectPath = Path.Combine(root, project.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(projectPath),
             $"{project} does not exist — a #3022 guard evaluates it to prove that a property CD "
@@ -111,15 +112,5 @@ internal static class MsBuildPropertyProbe
             name => name,
             name => properties.GetProperty(name).GetString() ?? string.Empty,
             StringComparer.Ordinal);
-    }
-
-    /// <summary>The repository root — the directory holding <c>MeshWeaver.slnx</c>.</summary>
-    public static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException("Could not locate the repository root (no MeshWeaver.slnx above the test binary).");
     }
 }

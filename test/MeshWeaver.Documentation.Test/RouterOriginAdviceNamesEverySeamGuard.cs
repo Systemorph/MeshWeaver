@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -46,7 +47,7 @@ public class RouterOriginAdviceNamesEverySeamGuard(ITestOutputHelper output)
     [Fact]
     public void TheOriginLine_NamesEverySeamACallerMayHopOnto()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var source = File.ReadAllText(Path.Combine(root, MessageHubFile));
 
         // NEGATIVE CONTROL. A guard that cannot find its subject passes having checked nothing —
@@ -89,7 +90,7 @@ public class RouterOriginAdviceNamesEverySeamGuard(ITestOutputHelper output)
     [Fact]
     public void EverySeamNameTheRatchetsUse_IsARealSeamOnMeshExtensions()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var source = File.ReadAllText(Path.Combine(root, MeshExtensionsFile));
 
         RouterOriginScan.SeamNames.Length.Should().BeGreaterThanOrEqualTo(3,

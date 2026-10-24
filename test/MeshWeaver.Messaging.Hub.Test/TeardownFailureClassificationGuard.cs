@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -39,7 +40,7 @@ public class TeardownFailureClassificationGuard
     public void EveryTeardownFailure_InMessageService_CarriesAClassification()
     {
         var source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "src", "MeshWeaver.Messaging.Hub", "MessageService.cs"));
+            RepoPaths.Root, "src", "MeshWeaver.Messaging.Hub", "MessageService.cs"));
 
         // `Failed("...")` with a single STRING-LITERAL argument — the overload that records no
         // ErrorType. Two args (message, ErrorType) and FailedAndNacked(message) both classify, and
@@ -69,7 +70,7 @@ public class TeardownFailureClassificationGuard
     public void EveryInterpolatedTeardownFailure_InMessageService_CarriesAClassification()
     {
         var source = File.ReadAllText(Path.Combine(
-            FindRepoRoot(), "src", "MeshWeaver.Messaging.Hub", "MessageService.cs"));
+            RepoPaths.Root, "src", "MeshWeaver.Messaging.Hub", "MessageService.cs"));
 
         var unclassified = Regex
             .Matches(source, """(?<!AndNacked)\bFailed\(\s*\$"([^"]*)"\s*\)""")
@@ -82,13 +83,5 @@ public class TeardownFailureClassificationGuard
             "MessageService produces an interpolated teardown failure with NO ErrorType (#2350). "
             + "Use Failed(message, ErrorType.ShuttingDown) or FailedAndNacked(message).\n"
             + "Unclassified:\n  - " + string.Join("\n  - ", unclassified));
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }
