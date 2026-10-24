@@ -90,9 +90,6 @@ rules:
   - apiGroups: ["autoscaling"]
     resources: ["horizontalpodautoscalers"]
     verbs: ["get", "list"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["networkpolicies"]
-    verbs: ["get", "list"]
   # READ-ONLY and CLUSTER-SCOPED, for hosting-db-release's platform-layer preflight — the scope note
   # at the top carries the decision, the reason and the cost. get + list, never watch, never write:
   # the platform layer is installed once by the approved lane, never by a lifecycle run.
@@ -118,6 +115,13 @@ rules:
     verbs: ["get", "list", "create", "update", "patch", "delete"]
   - apiGroups: ["keda.sh"]
     resources: ["scaledobjects"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # The standing build hosts' NetworkPolicy (templates/build-host/, Doc/Architecture/BuildHosts —
+  # rendered only on a record whose buildHosts.enabled is true). It used to be a READ-ONLY grant
+  # for hosting-audit's live-only-config listing; get + list stay, and the write verbs are what
+  # helm needs to apply the release that renders it.
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
   # The chart's rbac.yaml (ungated) renders the portal's own Role + RoleBinding (self-update: get/
   # patch its Deployment). Kubernetes refuses a Role that grants more than its creator holds, so
