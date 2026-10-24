@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -75,7 +76,7 @@ public class StandingQueryWatchRatchetGuard
     [Fact]
     public void NoNewStandingQueryWatchDiesOnItsFirstFault()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var sites = Scan(root, ScannedRoots);
 
         Assert.True(sites.Count <= Baseline,
@@ -91,7 +92,7 @@ public class StandingQueryWatchRatchetGuard
     [Fact]
     public void TheBaselineStaysCloseToTheTree()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var count = Scan(root, ScannedRoots).Count;
         Assert.True(Baseline - count <= 0,
             $"The tree holds {count} unguarded standing query watches but Baseline is {Baseline}. "

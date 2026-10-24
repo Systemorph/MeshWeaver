@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -39,11 +40,8 @@ public class RedirectSinksUseOnePolicyGuard
 
     private static string SharedRoot()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        var root = Path.Combine(dir!.FullName, "memex", "Memex.Portal.Shared");
+        var repoRoot = RepoPaths.Root;
+        var root = Path.Combine(repoRoot, "memex", "Memex.Portal.Shared");
         Assert.True(Directory.Exists(root), $"{root} not found — update this guard's path.");
         return root;
     }

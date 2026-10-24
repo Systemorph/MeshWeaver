@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -83,7 +84,7 @@ public class CallerCapturedAtEntryGuard(ITestOutputHelper output)
     [Fact]
     public void CallerFacingSurfaces_ReadTheAmbientIdentityOnlyAtTheirEntry()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = new List<string>();
         var counts = new Dictionary<string, int>();
         var seen = 0;

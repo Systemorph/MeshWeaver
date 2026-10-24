@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -98,7 +99,7 @@ public class HandWovenGateRatchetGuard
     [Fact]
     public void ProductionCodeHasNoHandWovenGate_OutsideTheSanctionedOne()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var sanctioned = SanctionedGates.Select(s => s.File).ToHashSet(StringComparer.Ordinal);
 
         var offenders = SourceScan.SourceFiles(root, ProductionRoots)
@@ -126,7 +127,7 @@ public class HandWovenGateRatchetGuard
     [Fact]
     public void TheSanctionedRegisterIsStillAccurate()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         foreach (var (file, why) in SanctionedGates)
         {
             var full = Path.Combine(root, file);
@@ -161,7 +162,7 @@ public class HandWovenGateRatchetGuard
     [Fact]
     public void TheTestTreeAllowFileStaysDeleted()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allow = Path.Combine(root, "test", "HandWovenGateSites.allow");
 
         Assert.False(File.Exists(allow),

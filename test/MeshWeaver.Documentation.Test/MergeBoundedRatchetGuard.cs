@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -40,7 +41,7 @@ public class MergeBoundedRatchetGuard
     [Fact]
     public void EveryBoundedFanOutIsStackSafe()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (Path: SourceScan.Relative(root, f), Count: CountIn(f)))
             .Where(x => x.Count > 0)

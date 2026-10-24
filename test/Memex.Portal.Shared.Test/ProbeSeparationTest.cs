@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -156,12 +157,9 @@ public class ProbeSeparationTest
     /// </summary>
     private static (string Readiness, string Liveness) ChartProbePaths()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
+        var repoRoot = RepoPaths.Root;
 
-        var path = Path.Combine(dir!.FullName, "deploy", "helm", "templates",
+        var path = Path.Combine(repoRoot, "deploy", "helm", "templates",
             "memex-portal", "deployment.yaml");
         Assert.True(File.Exists(path), $"the portal deployment template is not at {path}");
 

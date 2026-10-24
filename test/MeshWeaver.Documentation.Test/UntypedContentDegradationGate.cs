@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -83,7 +84,7 @@ public class UntypedContentDegradationGate
 
     private static string Read(string relative)
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), relative);
+        var path = Path.Combine(RepoPaths.Root, relative);
         Assert.True(File.Exists(path), $"{relative} is missing — this gate's subject moved; follow it.");
         return File.ReadAllText(path);
     }
@@ -153,7 +154,7 @@ public class UntypedContentDegradationGate
         const string ShortDiversion = "ILogger<MeshNodeStreamCache>";
         const string Assertion = "AssertReportedFor(";
 
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var diverting = SourceScan.SourceFiles(root, ["test"])
             .Select(path => (Path: path, Text: File.ReadAllText(path)))
             .Where(f => DivertsTheEmitterLogger(f.Text))

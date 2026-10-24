@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -92,7 +93,7 @@ public class AgentsRuleAndSkillAgreementGuard
     [Fact]
     public void EveryPairsRuleIsStillStatedInAgentsMd()
     {
-        var agents = File.ReadAllText(Path.Combine(FindRepoRoot(), "AGENTS.md"));
+        var agents = File.ReadAllText(Path.Combine(RepoPaths.Root, "AGENTS.md"));
 
         var stale = Pairs
             .Where(p => !agents.Contains(p.RuleEvidence, StringComparison.Ordinal))
@@ -114,7 +115,7 @@ public class AgentsRuleAndSkillAgreementGuard
     [Fact]
     public void NoSkillCarriesASupersededRulesWording()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var findings = SkillFiles(root)
             .SelectMany(file => Contradictions(File.ReadAllText(file))
                 .Select(hit => $"  {Path.GetRelativePath(root, file)} — {hit}"))
@@ -138,7 +139,7 @@ public class AgentsRuleAndSkillAgreementGuard
     [Fact]
     public void NoSkillMintsAFileUnderAWhatsNewPath()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var findings = SkillFiles(root)
             .SelectMany(file => MintingLines(File.ReadAllText(file))
                 .Select(line => $"  {Path.GetRelativePath(root, file)} — {line}"))
@@ -239,15 +240,5 @@ public class AgentsRuleAndSkillAgreementGuard
             $"🚨 {skills} exists and contains no .md file, so this guard scanned NOTHING.");
 
         return files;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

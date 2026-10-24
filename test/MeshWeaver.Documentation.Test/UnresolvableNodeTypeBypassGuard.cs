@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -68,7 +69,7 @@ public class UnresolvableNodeTypeBypassGuard(ITestOutputHelper output)
     [Fact]
     public void TheDanglingNodeTypeBypassIsReachableFromNowhereNew()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = SourceScan.SourceFiles(root, ScannedRoots)
             .Where(f => File.ReadAllText(f).Contains(Marker, StringComparison.Ordinal))
             // Comments and string literals are blanked so the RULE is measured, not the prose

@@ -18,6 +18,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -174,7 +175,7 @@ public class RollMidSessionDrainTest
     /// <summary>Lifts <c>lifecycle.preStop.exec.command</c>'s folded scalar out of the chart.</summary>
     private static string ShippedPreStopCommand()
     {
-        var chart = File.ReadAllText(Path.Combine(FindRepoRoot(), Deployment));
+        var chart = File.ReadAllText(Path.Combine(RepoPaths.Root, Deployment));
         var preStop = chart.IndexOf("preStop:", StringComparison.Ordinal);
         Assert.True(preStop > 0, $"{Deployment} no longer has a preStop hook — without it a roll "
                                  + "cuts every open circuit the moment the ingress window closes (#1342).");
@@ -207,15 +208,6 @@ public class RollMidSessionDrainTest
             + "Helm expression itself; if its shape changed, update the substitution rather than "
             + "running a script that is not what ships.");
         return token.Replace(script, replacement);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 
     // ── the pod under test ───────────────────────────────────────────────────

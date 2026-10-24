@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -26,7 +27,7 @@ public class UpstreamBuildGateGuard
     /// <summary>The workflow's steps, comments stripped — a guard must judge what RUNS, never the
     /// prose explaining it.</summary>
     private static string Body() => ExecutableLinesOf(
-        File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow)));
 
     [Fact]
     public void TheGateAsksTheSharedPredicate_AgainstTheIdentityTheImageResolves()
@@ -85,15 +86,6 @@ public class UpstreamBuildGateGuard
                                 + "been removed or renamed, which no other check would catch.");
         var next = body.IndexOf("\n      - name:", start + marker.Length, StringComparison.Ordinal);
         return next < 0 ? body[start..] : body[start..next];
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 
     /// <summary>

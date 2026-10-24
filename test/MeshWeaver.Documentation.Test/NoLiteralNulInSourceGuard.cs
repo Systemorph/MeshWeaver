@@ -4,6 +4,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -87,7 +88,7 @@ public class NoLiteralNulInSourceGuard(ITestOutputHelper output)
     [Fact]
     public void NoTrackedTextFileContainsALiteralNulCharacter()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // 🚨 Every declared root exists, or this test cannot say what it scanned. A root that has
         // moved is reported here by name rather than silently contributing zero files.
@@ -258,13 +259,4 @@ public class NoLiteralNulInSourceGuard(ITestOutputHelper output)
             .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(ExcludedSegments.Contains);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

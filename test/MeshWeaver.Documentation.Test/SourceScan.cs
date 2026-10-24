@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -23,17 +24,6 @@ internal static class SourceScan
 {
     private static readonly string[] ExcludedSegments =
         ["bin", "obj", "node_modules", "TestResults", ".git", ".vs", "dist"];
-
-    /// <summary>The repo root, found by walking up from the test binary until <c>MeshWeaver.slnx</c>.</summary>
-    public static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 
     /// <summary>Repo-relative, forward-slashed — the key form every allow file uses.</summary>
     public static string Relative(string root, string path) =>

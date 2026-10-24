@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Compiler;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -205,7 +206,7 @@ public class CdImageLegPropertiesDoNotForkTheIdentityGuard
     /// </summary>
     private static IReadOnlyList<string> PropertiesOf(string publishCommand)
     {
-        var path = Path.Combine(MsBuildPropertyProbe.FindRepoRoot(),
+        var path = Path.Combine(RepoPaths.Root,
             Workflow.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(path), $"{Workflow} does not exist — this guard reads CD's publish commands out of it.");
 

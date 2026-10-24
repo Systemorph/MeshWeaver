@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -30,14 +31,6 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class MemexLocalRepoPathGuard
 {
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
-    }
 
     private static string Script(string root) =>
         File.ReadAllText(Path.Combine(root, "deploy", "homebrew", "bin", "memex-local"));
@@ -76,7 +69,7 @@ public class MemexLocalRepoPathGuard
     [Fact]
     public void EveryNpmPrefixUnderTheRepo_HasAPackageJson()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         var missing = NpmPrefixTargets(Script(root))
             .Where(p => !File.Exists(Under(root, p + "/package.json")))
             .ToList();
@@ -92,7 +85,7 @@ public class MemexLocalRepoPathGuard
     [Fact]
     public void EveryDockerfileUnderTheRepo_Exists()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         var missing = DockerfileTargets(Script(root))
             .Where(p => !File.Exists(Under(root, p)))
             .ToList();
@@ -105,7 +98,7 @@ public class MemexLocalRepoPathGuard
     [Fact]
     public void EveryFileUnderTheRepo_Exists()
     {
-        var root = RepoRoot();
+        var root = RepoPaths.Root;
         var missing = FileTargets(Script(root))
             .Where(p => !File.Exists(Under(root, p)))
             .ToList();
