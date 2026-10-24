@@ -412,8 +412,14 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         public ImmutableList<string> Results { get; private set; } = [];
         public ImmutableList<string> StillUnavailable { get; private set; } = [];
 
-        public void Commit() => Feed.Publish(new MeshChangeEvent(
+        /// <summary>A commit the STORE announced in the partition (the durable relay's path).</summary>
+        public void Commit() => Feed.PublishLocal(new MeshChangeEvent(
             "P", "other", "P/other", MeshChangeKind.Updated, null, 1, DateTimeOffset.UtcNow));
+
+        /// <summary>An OPTIMISTIC notification in the partition: a direct publish that may precede
+        /// persistence, as a compile settle's own-stream update is.</summary>
+        public void OptimisticCommit() => Feed.Publish(new MeshChangeEvent(
+            "P", "stamp", "P/stamp", MeshChangeKind.Updated, null, 1, DateTimeOffset.UtcNow));
 
         public void Gap() => Store.DeliverChangeFeedGap(new ChangeFeedGap(
             "postgresql:mesh_node_changes", DateTimeOffset.UtcNow.AddSeconds(-1), DateTimeOffset.UtcNow));
@@ -559,6 +565,24 @@ public class AnUnavailableReleaseRecutIsReissuedWhenTheStoreAnswersTest(ITestOut
         rig.Attempts.Should().HaveCount(2,
             "the reconnect that arrived while the first attempt was subscribing is retained, not lost");
         rig.Answer(1, Landed);
+        rig.Results.Should().Equal(Landed);
+    }
+
+    /// <summary>
+    /// Review on #7087: an optimistic notification — a direct publish that may precede persistence —
+    /// is no evidence the store answers. It starts nothing, so it cannot disprove commits, and the
+    /// durable commit that follows starts the re-issue with no gap in between.
+    /// </summary>
+    [Fact]
+    public void AnOptimisticNotification_IsNotEvidence_AndADurableCommitStillStartsTheReissue()
+    {
+        using var rig = new Rig();
+        rig.OptimisticCommit();
+        rig.Attempts.Should().BeEmpty("a notification published before persistence proves nothing about the store");
+
+        rig.Commit();
+        rig.Attempts.Should().HaveCount(1, "a commit the store announced is evidence");
+        rig.Answer(0, Landed);
         rig.Results.Should().Equal(Landed);
     }
 

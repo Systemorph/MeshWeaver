@@ -576,7 +576,11 @@ The log line said the retry was meaningful, and no component on the live pod mad
 3. **It waits for evidence, never for time.** `StoreReachability.ReissueWhenStoreAnswers` in
    `MeshWeaver.Mesh.Contract` waits for `StoreAnswersAgain`. That signal fires on a declared
    `ChangeFeedGap`, which is the LISTEN connection resuming after a database restart, or on a commit
-   announced in the type's partition, which the store must have accepted. While the store is away,
+   that the STORE announced in the type's partition (`IMeshInvalidationFeed.DurableCommits`), which
+   it must have accepted. A notification published directly on the feed is not counted, because it
+   may precede persistence: a compile settle publishes its own-stream update before the persistence
+   sampler stores it. Counting it could start a re-issue that disproves commits before any durable
+   commit arrives. While the store is away,
    neither fires and nothing is re-issued. Evidence is observed for the whole life of the watch:
    evidence that arrives while an attempt is in flight is kept (the event that started the attempt
    is not), and starts the next attempt as soon as that one is answered `Unavailable`. A feed does

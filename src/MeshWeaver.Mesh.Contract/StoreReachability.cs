@@ -111,8 +111,10 @@ public static class StoreReachability
     /// <summary>
     /// The EVIDENCE that the store answers again, as this process can observe it (#7072): each
     /// declared <see cref="ChangeFeedGap"/> — the backend's cross-process feed lost its connection
-    /// and RESUMED, which a database restart always produces — and each commit announced in
-    /// <paramref name="partition"/>, since a commit is announced only after the store accepted it.
+    /// and RESUMED, which a database restart always produces — and each commit THE STORE announced
+    /// in <paramref name="partition"/> (<see cref="IMeshInvalidationFeed.DurableCommits"/>), since
+    /// such a commit is announced only after the store accepted it. An optimistic notification
+    /// published before persistence is not evidence and is not counted.
     ///
     /// <para>🚨 Facts, never a clock. Nothing here fires because time passed; while the store is
     /// unreachable no commit lands and no feed resumes, so the signal stays silent exactly as long as
@@ -136,9 +138,11 @@ public static class StoreReachability
     {
         if (feed is null)
             return Observable.Never<bool>();
-        // The handler is forwarded as-is and the filter runs as an operator, so a fault in it reaches
-        // the subscriber's OnError instead of being thrown out of the feed's delivery callback.
-        var commits = Observable.Create<MeshChangeEvent>(observer => feed.Subscribe(observer.OnNext))
+        // 🚨 DURABLE commits only (review on #7087). The invalidation feed also carries optimistic
+        // notifications published before persistence; one of those starting a re-issue that is
+        // answered Unavailable would disprove commits for good, and the durable commit that follows
+        // when the store's write connections recover could then never start the next one.
+        var commits = feed.DurableCommits
             .Where(change => partition is null || InPartition(change.Path, partition))
             .Select(_ => false);
         return commits.Merge(feed.Gaps.Select(_ => true));
