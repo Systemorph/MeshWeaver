@@ -2972,6 +2972,17 @@ jobs:
         python3 .github/scripts/module-pack-batch.py --self-test
         --workflow .github/workflows/node-repo-module-pack.yml
 
+    # The module lane ends a wedged suite below the job cap, with evidence (Plugins #4155: a
+    # MeshWeaver.AI suite went silent and the cap's cancel kept no trx, no trace and no dump).
+    # A wrapper that stopped ending its tree, or a dump request framed wrongly, would only show on
+    # the next wedge — the one run it exists for.
+    - name: "The module lane's stuck-suite wrapper and dump request hold (self-test)"
+      if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
+      run: |
+        set -euo pipefail
+        python3 .github/scripts/diag-dump.py --self-test
+        .github/scripts/run-bounded-suite.sh --self-test
+
     - name: "Gate the shell CI itself runs"
       if: ${{ !cancelled() && steps.ready.outputs.ok == 'true' }}   # an independent guard REPORTS; only a PREREQUISITE masks it (#4784)
       run: python3 .github/scripts/check-workflow-shell.py
