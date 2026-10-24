@@ -38,6 +38,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / "check-release-availability.sh"
 
@@ -153,30 +156,11 @@ def expect_only(case, out, present, absent_list):
 
 def extract_step():
     """The step's `run:` and `env:`, EXTRACTED from the workflow by id — never a copy."""
-    import re as _re
-
-    import yaml  # noqa: PLC0415
-
-    doc = yaml.safe_load(WORKFLOW.read_text())
-    for job in doc.get("jobs", {}).values():
-        for step in job.get("steps", []) or []:
-            if step.get("id") == STEP_ID:
-                run, env = step["run"], step.get("env", {}) or {}
-
-                def fill(text):
-                    def sub(m):
-                        expr = m.group(1).strip()
-                        if expr not in KNOWN_EXPRESSIONS:
-                            raise SystemExit(
-                                f"REFUSING to execute: step '{STEP_ID}' uses an expression this "
-                                f"harness cannot supply: ${{{{ {expr} }}}}. Add it to "
-                                f"KNOWN_EXPRESSIONS deliberately — never guess."
-                            )
-                        return KNOWN_EXPRESSIONS[expr]
-                    return _re.sub(r"\$\{\{([^}]*)\}\}", sub, text)
-
-                return fill(run), {k: fill(str(v)) for k, v in env.items()}
-    raise SystemExit(f"REFUSING: no step with id '{STEP_ID}' in {WORKFLOW}")
+    try:
+        return (workflow_yaml.step_run(WORKFLOW, STEP_ID, expressions=KNOWN_EXPRESSIONS),
+                workflow_yaml.step_env(WORKFLOW, STEP_ID, expressions=KNOWN_EXPRESSIONS))
+    except workflow_yaml.WorkflowYamlError as e:
+        raise SystemExit(f"REFUSING: {e} Add an expression to KNOWN_EXPRESSIONS deliberately — never guess.")
 
 
 def run_step(headline: str):

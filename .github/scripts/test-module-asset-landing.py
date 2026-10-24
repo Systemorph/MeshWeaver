@@ -83,6 +83,9 @@ import tempfile
 import zipfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # (workflow, step id) — extraction is by STEP ID alone, across every job in the file. Both lanes
@@ -152,21 +155,10 @@ def module_folder() -> str:
 
 # ── extracting the real step ────────────────────────────────────────────────────────────────
 def extract_step(workflow: str, step_id: str) -> str:
-    import yaml
-
-    doc = yaml.safe_load((ROOT / workflow).read_text(encoding="utf-8"))
-    for job in (doc.get("jobs") or {}).values():
-        for step in job.get("steps") or []:
-            if step.get("id") == step_id:
-                body = step.get("run")
-                if not body:
-                    die(f"{workflow}: step '{step_id}' has no `run:` body")
-                if "${{" in body:
-                    die(f"{workflow}: step '{step_id}' grew a ${{{{ }}}} expression this harness "
-                        "cannot supply — teach it, do not skip it")
-                return body
-    die(f"{workflow}: no step with id '{step_id}'. The harness EXTRACTS the lane's own shell by "
-        "id; if the step was renamed or the id dropped, this harness would test nothing.")
+    try:
+        return workflow_yaml.step_run(ROOT / workflow, step_id)
+    except workflow_yaml.WorkflowYamlError as e:
+        die(f"{workflow}: {e}")
     raise AssertionError("unreachable")
 
 
