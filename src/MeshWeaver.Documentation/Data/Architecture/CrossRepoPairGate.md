@@ -162,7 +162,7 @@ nothing**. The whole board, so that "uncovered" is written down rather than infe
 | 4 | a **comment** another repo's regex parses as data | — | **UNCOVERED** |
 | 5 | an i18n **value** change | — | **UNCOVERED** (the mirror guard compares against a *pinned* core commit) |
 | 6 | a public **member** leaves a type that stays | `Cross-repo pair (public surface)` | **gated** |
-| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | `Dependent suites (MeshWeaver.Plugins)` | **gated** for every Plugins suite the diff can reach — REQUIRED on every pull request, a measured break merges only when declared (`Breaks-plugins:`, below); still undetectable by any SURFACE detector, unmeasured for in-mesh Tests areas, and uncovered for the other satellites |
+| 7 | a public method's **BEHAVIOUR** changes behind an unchanged signature | — on core's side | **not gated on the core pull request** (policy `dependents-verify-on-their-side`): each dependent sees it in its own push and daily runs against the next sealed core set. The deploy side does NOT hold it back: arming judges platform evidence only, and the combo verdict is advisory ([Combo Gate Wiring](../ComboGateWiring)) — a Red is named on the roll while the platform still rolls. Undetectable by any SURFACE detector |
 | 8 | a `PackageVersion` a satellite consumes VERSIONLESS is removed | `Satellite package pins (removal declared)` | **gated** (#3349) |
 | 9 | a RENDERED-UI change a satellite's e2e asserts on | — | **UNCOVERED**; the honest instrument is the release note |
 | 10 | a member **ADDED** to a public interface breaks external IMPLEMENTERS | `Interface additions (implementers declared)` | **gated** (#3465) |
@@ -793,7 +793,21 @@ now **refused**, and a reason that mentions a sweep (`sweep`, `swept`, `search_c
 quoting `searched: true` is refused too. A reason that rests on something else — *"only read by the
 test this PR rewrites"* — is judged on its length alone, as before.
 
-## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)` — REQUIRED)
+## The dependent's suites run against the candidate (`Dependent suites (MeshWeaver.Plugins)` — REMOVED)
+
+> 🚨 **REMOVED — this section is the historical record of a gate that no longer exists.** Policy
+> `dependent-suites-affected-gate` is SUPERSEDED by `dependents-verify-on-their-side`
+> ([Policy Not Prose](../PolicyNotProse)): core knows nothing about its dependents. The jobs
+> `Dependent suites (request)` and `Dependent suites (MeshWeaver.Plugins)`, their preflight, the
+> `Breaks-plugins:` declaration and `await-dependent-verdict.py` / `check-plugins-break-declaration.py`
+> / `paired-plugins-head.py` are deleted from core, and MeshWeaver.Plugins' `core-candidate.yml`
+> receiver is deleted after them. The reason: the wait held one core runner per pull request for up
+> to 45 minutes doing nothing but poll, while the polled Plugins runs queued for the runners those
+> waits held (measured: 7 core runs polling at once beside 21 queued Plugins runs). A dependent now
+> verifies each new SEALED core set on its own side. Nothing on the deploy side replaces the
+> removed check: arming ([One Promotion Gate](../OnePromotionGate)) judges platform evidence only,
+> and the combo verdict is advisory ([Combo Gate Wiring](../ComboGateWiring)). Read what follows as
+> evidence of how the gate worked and what it measured — not as instructions.
 
 **Policy `dependent-suites-affected-gate` ([Policy Not Prose](../PolicyNotProse)), which superseded
 `core-merge-never-blocked`: a core pull request PROVES it does not break MeshWeaver.Plugins before it
