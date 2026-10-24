@@ -29,7 +29,7 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 | Part | What it is |
 |---|---|
 | `CatalogApp(title)` | A `PageTitle` (when a title is given), the shared bar, and the menu. `Render(host)` renders it into the host's area. |
-| **Category** — `WithCategory(id, label, params CatalogSearch[])` | One menu entry. `id` is stable and URL-safe: it is the menu AREA id and what a deep link names; `label` is the visible text (localise it before passing it). A category shows its searches one under the other. |
+| **Category** — `WithCategory(id, label, params CatalogSearch[])` | One menu entry. `id` is stable and URL-safe: it is the menu AREA id and what a deep link names; `label` is the visible text (localise it before passing it). A category shows its searches one under the other. A category with ONE search whose title is absent or equals the label shows no section title: the tab already says it (see *The page header*). |
 | `CatalogCategory { When = IObservable<bool> }` | A conditional category: in the menu only while `When` emits true (the AI catalogs' "This space" tab). Until it first answers it counts as false, so it never holds back the other categories. |
 | `CatalogCategory { Header = control }` | A control above the category's searches — e.g. the legend of what the hits' badges mean. |
 | **Search** — `CatalogSearch.Of(filter, title?, itemArea?, sort?)` | One hidden query: a filter WITHOUT `sort:` plus its default `CatalogSort` (Last activity unless stated; `CatalogSort.Name` is cheaper over `partitions:all`, because last activity costs a read per hit). Rendered as `Controls.Catalog` with the search box hidden. |
@@ -38,7 +38,26 @@ public static IObservable<UiControl?> Portfolio(LayoutAreaHost host, RenderingCo
 | `.WithMaxColumns(n)` · `.WithPageSize(n)` | A card grid instead of one hit per row; hits per page before "Load more". |
 | `.WithConfigure(c => …)` | The last-mile hook over the composed `MeshSearchControl` — grouping (`WithGroupBy(…).WithSectionCounts(true)`), render mode, anything. Applied last. |
 | `WithoutQueryBar()` | No shared bar — an embedded start tab carries none. |
-| `WithPlaceholder(text)` | The bar's placeholder (localise before passing); otherwise a language-neutral `🔍 sort:name, sort:lastModified-desc`. |
+| `WithPlaceholder(text)` | The bar's placeholder (localise before passing); otherwise a language-neutral `sort:name, sort:lastModified-desc` (the bar carries its own search icon). |
+
+### The page header
+
+Title, bar and menu form one tight block (`CatalogApp.HeaderGap`, 8px between them). The shared bar
+is a text field with a start search icon, full width up to `CatalogApp.QueryBarMaxWidth` (40rem) so
+it keeps a readable measure on a wide screen. The menu is the platform tab strip. Under the active
+tab, `CatalogSearch.ShownTitle(label, sole)` decides the section title: for a **sole** search whose
+`Title` is absent or equals the category label (case and surrounding blanks ignored) it is empty and
+MeshSearch omits the heading and its rule — no "Clients" under the "Clients" tab. A different title,
+or any title when the category holds several searches, is kept (it tells the sections apart). The
+`Render`/`Section` overloads without `sole` keep the old behaviour for callers that compose a search
+themselves.
+
+### Hover actions on a hit
+
+A hit's delete and drill-down buttons share one `mesh-search-hover-actions` container in the hit's
+top-right corner (vertically centred on a list row). It appears on hover, on keyboard focus within it
+and on keyboard selection, hides instantly so moving to the next hit never shows two, and stays up
+while the delete confirm is armed. It never sits on the hit's title or icon.
 
 ### The shared query bar
 
