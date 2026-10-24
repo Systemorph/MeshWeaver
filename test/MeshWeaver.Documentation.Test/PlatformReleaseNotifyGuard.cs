@@ -51,7 +51,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void PreflightAssertsBothHalvesOfTheReleaseEventCredential()
     {
-        var preflight = JobBlock(Body(), "preflight:");
+        var preflight = JobBlock(Body(), "preflight");
 
         Assert.Contains("PLATFORM_WEBHOOK_URL", preflight, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_WEBHOOK_SECRET", preflight, StringComparison.Ordinal);
@@ -78,7 +78,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void NotifyDependsOnPreflight_AndCarriesNoInputShapedCondition()
     {
-        var notify = JobBlock(Body(), "notify-platform-update:");
+        var notify = JobBlock(Body(), "notify-platform-update");
 
         Assert.Contains("needs: [preflight", notify, StringComparison.Ordinal);
         Assert.DoesNotContain("continue-on-error", notify, StringComparison.Ordinal);
@@ -139,7 +139,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void TheSignatureVerdictIsItsOwnStep_AndItsMisconfigurationBranchEndsTheJob()
     {
-        var notify = JobBlock(Body(), "notify-platform-update:");
+        var notify = JobBlock(Body(), "notify-platform-update");
 
         var post = StepBlock(notify, "Sign and POST the build fact");
         Assert.DoesNotContain("::warning", post, StringComparison.Ordinal);
@@ -180,7 +180,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void AFailedReleaseEventIsAlerted()
     {
-        var alert = JobBlock(Body(), "alert-on-failure:");
+        var alert = JobBlock(Body(), "alert-on-failure");
         var needs = alert.Split('\n').First(l => l.TrimStart().StartsWith("needs:", StringComparison.Ordinal));
 
         Assert.Contains("preflight", needs, StringComparison.Ordinal);
@@ -250,7 +250,7 @@ public class PlatformReleaseNotifyGuard
         Assert.DoesNotContain("uses: ./.github/workflows/notify-dependents.yml", body, StringComparison.Ordinal);
         Assert.DoesNotContain("BAKE_SUBSCRIBER_REPOS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
-        var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
+        var legs = SectionAfter(JobBlock(body, "delivery-verdict"), "LEGS: >-");
         Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
         // 🚨 Under policy `one-promotion-gate` the release event follows `arm`, which
         // arms the fleet only for a promoted set whose platform verdict is green (its ladder, and
@@ -258,7 +258,7 @@ public class PlatformReleaseNotifyGuard
         // often in a later run — so it is NOT a leg of the platform delivery verdict any more. It
         // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
         Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);
-        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update:"), StringComparison.Ordinal);
+        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update"), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -307,25 +307,23 @@ public class PlatformReleaseNotifyGuard
         return next < 0 ? body[start..] : body[start..next];
     }
 
-    /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
+    /// <summary>One job's block, by its WHOLE key (<see cref="WorkflowJobText.Block"/>).</summary>
     private static string JobBlock(string body, string jobKey)
     {
-        var start = body.IndexOf("\n  " + jobKey, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
+        var block = WorkflowJobText.Block(body, jobKey);
+        Assert.True(block is not null, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
                                 + "renamed, which no other check would catch.");
-        var next = NextAtIndent(body, start + jobKey.Length + 3, "\n  ");
-        return next < 0 ? body[start..] : body[start..next];
+        return block!;
     }
 
-    /// <summary>Everything from a step's name to the next step boundary at the same indent, so an
-    /// assertion about one step cannot be satisfied by another.</summary>
+    /// <summary>The step whose name carries <paramref name="stepName"/>, bounded by the next step and
+    /// by the end of its job, so an assertion about one step cannot be satisfied by another.</summary>
     private static string StepBlock(string body, string stepName)
     {
-        var start = body.IndexOf(stepName, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"step '{stepName}' is gone from {Workflow} — the delivery leg it "
+        var step = WorkflowJobText.Step(body, stepName);
+        Assert.True(step is not null, $"step '{stepName}' is gone from {Workflow} — the delivery leg it "
                                 + "belongs to has been removed or renamed.");
-        var next = body.IndexOf("\n      - name:", start + stepName.Length, StringComparison.Ordinal);
-        return next < 0 ? body[start..] : body[start..next];
+        return step!;
     }
 
     /// <summary>The next line whose indent is exactly <paramref name="prefix"/> followed by a
