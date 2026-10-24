@@ -601,6 +601,14 @@ public record DeploymentContent
     [Description("Shared artifact store (Owner on control, Consumer elsewhere)")]
     public ArtifactStoreSpec? ArtifactStore { get; init; }
 
+    /// <summary>
+    /// The standing build hosts this record runs (the operations record only) — one warm host per
+    /// release channel; see <see cref="BuildHostsBlock"/> and Doc/Architecture/BuildHosts. Null →
+    /// none, and nothing renders.
+    /// </summary>
+    [Description("Standing build hosts per release channel (the operations record only)")]
+    public BuildHostsBlock? BuildHosts { get; init; }
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }
