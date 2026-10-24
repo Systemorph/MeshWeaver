@@ -71,6 +71,41 @@ public class CatalogAppTest
     }
 
     [Fact]
+    public void ASoleSearch_ThatRepeatsTheCategoryLabel_ShowsNoTitleOfItsOwn()
+    {
+        // Absent title, or the same word as the tab (case and blanks aside): the tab already says it.
+        Assert.Equal("", ((MeshSearchControl)CatalogSearch.Of(Clients).Render(Clients, "", true, "Clients", sole: true)).Title);
+        Assert.Equal("", ((MeshSearchControl)CatalogSearch.Of(Clients, " clients ").Render(Clients, "", true, "Clients", sole: true)).Title);
+        // A different title is real information and stays.
+        Assert.Equal("Open", ((MeshSearchControl)CatalogSearch.Of(Deals, "Open").Render(Deals, "", true, "Deals", sole: true)).Title);
+        // Several searches in one category keep their titles (they tell the sections apart) ...
+        Assert.Equal("Deals", ((MeshSearchControl)CatalogSearch.Of(Deals).Render(Deals, "", true, "Deals", sole: false)).Title);
+        // ... and the pre-existing overload is unchanged.
+        Assert.Equal("Clients", ((MeshSearchControl)CatalogSearch.Of(Clients).Render(Clients, "", true, "Clients")).Title);
+    }
+
+    [Fact]
+    public void TheBody_DropsTheRepeatedTitle_OnlyForASingleSearchCategory()
+    {
+        var single = new CatalogCategory("clients", "Clients", [CatalogSearch.Of(Clients, itemArea: "Card")]);
+        var several = new CatalogCategory("deals", "Deals", [CatalogSearch.Of(Deals), CatalogSearch.Of(Deals, "Won")]);
+
+        Assert.Equal("", Assert.IsType<MeshSearchControl>(Assert.Single(Collect(single.Searches[0].Section(NothingTyped, single.Label, single.Searches.Count == 1)))).Title);
+        Assert.Equal("Deals", Assert.IsType<MeshSearchControl>(Assert.Single(Collect(several.Searches[0].Section(NothingTyped, several.Label, several.Searches.Count == 1)))).Title);
+        Assert.Equal(["Search0"], CatalogApp.Body(single, NothingTyped).Areas.Select(a => a.Id?.ToString()));
+    }
+
+    [Fact]
+    public void TheQueryBar_HasASearchIcon_AReadableMaxWidth_AndNoGlyphPlaceholder()
+    {
+        var bar = new CatalogApp("Portfolio").QueryBar();
+
+        Assert.NotNull(bar.IconStart);
+        Assert.Contains($"max-width: {CatalogApp.QueryBarMaxWidth}", bar.Style?.ToString());
+        Assert.DoesNotContain("🔍", CatalogApp.DefaultPlaceholder);
+    }
+
+    [Fact]
     public void TheCreatePlus_And_Columns_And_TheHook_AreApplied()
     {
         var search = CatalogSearch.Of(Deals, "Open").WithCreate("Crm/Opportunity", "Fabrikam").WithMaxColumns(3)
