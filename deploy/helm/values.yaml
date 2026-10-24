@@ -1172,10 +1172,16 @@ buildHosts:
     # and Azure's platform endpoint 168.63.129.16 (WireServer; DNS on 53 stays allowed by the rule
     # above). Stages share the pod's network namespace, so this is the boundary, not the sandbox.
     privateCidrs: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "168.63.129.16/32"]
-  # Optional Postgres sidecar for the substrate suites (Build service §1.4).
-  postgres:
-    enabled: false
-    image: ""
+  # H8: the plugins layer from the REGISTRY's bundle index (what an instance on this framework identity
+  # installs), read before every claim with a READ-ONLY `mwi_` instance key from a Secret, mounted
+  # into the host container only. Blank url → the sealed publication (GET /hosts/inputs) instead.
+  # (There is no `postgres` sidecar: a stage needing a database starts a disposable one inside its
+  # own sandbox — sandbox-postgres.sh in the runner image.)
+  registry:
+    url: ""                       # e.g. https://portal.example.com
+    instanceKeySecret:
+      name: ""
+      key: "key"
   latest:
     enabled: true
     maxReplicas: 2

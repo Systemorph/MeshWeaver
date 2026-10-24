@@ -1,5 +1,5 @@
 # The standing build hosts ON (Doc/Architecture/BuildHosts): the only combination that renders
-# templates/build-host/. Both channels, a stated seccomp profile and the Postgres sidecar, so every
+# templates/build-host/. Both channels, a stated seccomp profile and the registry bundle index, so every
 # branch of the template renders somewhere. Neutral sample names; no credential.
 buildHosts:
   enabled: true
@@ -13,9 +13,10 @@ buildHosts:
     clientId: "00000000-0000-0000-0000-000000000001"
   sandbox:
     seccompProfile: "Unconfined"
-  postgres:
-    enabled: true
-    image: "ghcr.io/example/postgres:16"
+  registry:
+    url: "https://portal.example.com"
+    instanceKeySecret:
+      name: "build-registry-key"
   latest:
     enabled: true
     maxReplicas: 2

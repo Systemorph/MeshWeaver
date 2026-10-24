@@ -2,27 +2,35 @@
 #
 # What a stage needs and nothing it does not: bash, python3, git, bubblewrap (every stage runs in a
 # `bwrap` sandbox — the host refuses to start without it), the .NET 10 SDK (the src/ half still
-# builds with it), and the runner itself. The PLATFORM (the compiler and the reference set) is NOT
+# builds with it), the PostgreSQL SERVER BINARIES (no server runs: a stage that needs a database
+# starts a disposable one inside its own sandbox with sandbox-postgres.sh), and the runner with its
+# helpers — module-build-key.py (the host recomputes every module cache key before promoting it)
+# and core's `meshweaver-plugin-build` (module-fetch: the plugins layer from the registry's index). The PLATFORM (the compiler and the reference set) is NOT
 # here: it is the set's tester and portal images, copied in by the host's init containers by digest.
 #
 # Built and pushed by core's CD (`main-cd.yml` job `build-host-image`) as
 # `mw-build-host:<version>` for every published platform build, and handed to the hosts BY DIGEST
 # with the rest of the set (`BuildHostChannel.RunnerDigest`). No moving tag names it anywhere.
 #
-# Build from the REPO ROOT (the runner and the gate-host composer live in .github/scripts):
+# Build from the REPO ROOT, after publishing the plugin-build tool beside the context:
+#   dotnet publish src/MeshWeaver.Plugin.Build -c Release -o artifacts/plugin-build -p:MeshWeaverRoot=$PWD/
 #   docker build -f deploy/build-host/Dockerfile -t mw-build-host:local .
 FROM mcr.microsoft.com/dotnet/sdk:10.0
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash python3 git bubblewrap ca-certificates \
+ && apt-get install -y --no-install-recommends bash python3 git bubblewrap ca-certificates postgresql \
  && rm -rf /var/lib/apt/lists/* \
- && bwrap --version && python3 --version && git --version && dotnet --version
+ && bwrap --version && python3 --version && git --version && dotnet --version \
+ && find /usr/lib/postgresql -maxdepth 3 -name initdb | grep -q initdb
 
 # The runner and the composer, from the SAME commit as the rest of this platform build — one
 # implementation, versioned with the image (the chart ships no copy).
-COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh /opt/build-host/
-RUN chmod 0555 /opt/build-host/build-run.py /opt/build-host/compose-gate-host.sh \
- && python3 /opt/build-host/build-run.py --self-test
+COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py /opt/build-host/
+COPY artifacts/plugin-build/ /opt/build-host/plugin-build/
+RUN chmod 0555 /opt/build-host/*.py /opt/build-host/*.sh \
+ && test -f /opt/build-host/plugin-build/MeshWeaver.Plugin.Build.dll \
+ && python3 /opt/build-host/build-run.py --self-test \
+ && bash /opt/build-host/sandbox-postgres.sh --self-test
 
 # The SDK image's unprivileged `app` user (uid 1654). bwrap creates its namespaces unprivileged.
 USER 1654

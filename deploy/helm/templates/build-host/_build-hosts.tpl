@@ -47,9 +47,17 @@ The refusals, and why each one exists:
 {{- fail "buildHosts.bakeShares is not supported — a build host mounts NO bake share; publication is the publish lane's, on build/verdict" -}}
 {{- end -}}
 {{- $cache := required "buildHosts.cacheClaimName is required — the shared RWX build-cache claim" $b.cacheClaimName -}}
-{{- $pg := ($b.postgres | default dict) -}}
-{{- if and $pg.enabled (not $pg.image) -}}
-{{- fail "buildHosts.postgres.enabled needs buildHosts.postgres.image — the substrate suites' Postgres sidecar, from the fleet's mirror" -}}
+{{- if ($b.postgres | default dict).enabled -}}
+{{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
+{{- end -}}
+{{- $reg := ($b.registry | default dict) -}}
+{{- $regUrl := trimSuffix "/" ($reg.url | default "") -}}
+{{- $regSecret := "" -}}
+{{- if $regUrl -}}
+{{- if not (hasPrefix "https://" $regUrl) -}}
+{{- fail (printf "buildHosts.registry.url %q must be https — the instance key rides on it" $regUrl) -}}
+{{- end -}}
+{{- $regSecret = required "buildHosts.registry.instanceKeySecret.name is required with buildHosts.registry.url — the Secret holding the read-only mwi_ instance key" ($reg.instanceKeySecret | default dict).name -}}
 {{- end -}}
 {{- $channels := list -}}
 {{- range $name := (list "latest" "stable") -}}
@@ -90,7 +98,7 @@ The refusals, and why each one exists:
       "pollingInterval" (int ($b.pollingInterval | default 15)) "cooldownPeriod" (int ($b.cooldownPeriod | default 600))
       "networkPolicy" (dict "enabled" ($np.enabled | default false) "apiPodSelector" ($np.apiPodSelector | default dict)
                             "apiPort" (int ($np.apiPort | default 8080)) "privateCidrs" ($np.privateCidrs | default list))
-      "postgres" (dict "enabled" ($pg.enabled | default false) "image" ($pg.image | default ""))
+      "registry" (dict "url" $regUrl "keySecret" $regSecret "keySecretKey" ((($reg.instanceKeySecret | default dict).key) | default "key"))
       "channels" $channels) -}}
 {{- end -}}
 {{- end -}}

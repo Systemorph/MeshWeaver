@@ -104,7 +104,7 @@ spec:
       annotations:
         # The projected identity token reaches the HOST container alone — never the init containers
         # or the Postgres sidecar, and no sandbox binds it (build-run.py).
-        azure.workload.identity/skip-containers: "tester;portal;oras;postgres"
+        azure.workload.identity/skip-containers: "tester;portal;oras"
       {{- end }}
     spec:
       serviceAccountName: "build-host"
@@ -155,21 +155,6 @@ spec:
           volumeMounts:
             - { name: "tools", mountPath: "/tools" }
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
-        {{- if $b.postgres.enabled }}
-        # A NATIVE SIDECAR (an init container with restartPolicy Always): Kubernetes starts it before
-        # the build container and stops it only AFTER the build container has exited — so a roll or a
-        # scale-in that lets the runner finish its run does not take the substrate suites' database
-        # away mid-run (an ordinary container is signalled at the same moment as the runner).
-        - name: "postgres"
-          image: {{ $b.postgres.image | quote }}
-          imagePullPolicy: "IfNotPresent"
-          restartPolicy: "Always"
-          env:
-            - { name: POSTGRES_PASSWORD, value: "build" }
-          resources:
-            requests: { cpu: "1", memory: 2Gi }
-            limits: { memory: 4Gi }
-        {{- end }}
       containers:
         - name: "build"
           image: {{ $c.runner | quote }}
@@ -203,8 +188,11 @@ spec:
             - { name: ORAS, value: "/tools/oras" }
             - { name: MW_PLUGINS_REGISTRY, value: {{ $b.pluginsRegistry | quote }} }
             - { name: MW_PLUGINS_SOURCE, value: {{ $b.pluginsSource | quote }} }
-            {{- if $b.postgres.enabled }}
-            - { name: MW_BUILD_POSTGRES, value: "Host=localhost;Username=postgres;Password=build" }
+            {{- if $b.registry.url }}
+            # H8: the plugins layer from the REGISTRY's bundle index, read with a read-only `mwi_`
+            # instance key — a file in this container, never bound into a stage's sandbox.
+            - { name: MW_REGISTRY_URL, value: {{ $b.registry.url | quote }} }
+            - { name: MW_REGISTRY_KEY_FILE, value: "/run/registry-key/key" }
             {{- end }}
           readinessProbe:
             exec: { command: ["/bin/sh", "-c", "test -f /tmp/build-host-ready"] }
@@ -232,6 +220,9 @@ spec:
             - { name: "work", mountPath: "/work" }
             - { name: "cache", mountPath: "/cache" }
             - { name: "worker-token", mountPath: "/run/build-worker", readOnly: true }
+            {{- if $b.registry.url }}
+            - { name: "registry-key", mountPath: "/run/registry-key", readOnly: true }
+            {{- end }}
       volumes:
         - { name: "tester", emptyDir: {} }
         - { name: "portal", emptyDir: {} }
@@ -246,6 +237,13 @@ spec:
             secretName: {{ $b.tokenSecret | quote }}
             defaultMode: 0400
             items: [{ key: {{ $b.tokenKey | quote }}, path: "token" }]
+        {{- if $b.registry.url }}
+        - name: "registry-key"
+          secret:
+            secretName: {{ $b.registry.keySecret | quote }}
+            defaultMode: 0400
+            items: [{ key: {{ $b.registry.keySecretKey | quote }}, path: "key" }]
+        {{- end }}
 ---
 # Queue depth → replicas: ONE metrics-api trigger on the build API's anonymous per-channel count,
 # `valueLocation: demand` (= claimable + running), so the metric never drops to zero while a host

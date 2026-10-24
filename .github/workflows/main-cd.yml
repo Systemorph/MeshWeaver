@@ -2004,6 +2004,15 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
       - name: ACR login
         run: bash .github/scripts/acr-login.sh
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # core's `meshweaver-plugin-build` (module-fetch) rides in the image: the host stages the
+      # plugins layer from the registry's bundle index with it (H8). Framework-dependent — the
+      # image's SDK carries the runtime.
+      - name: Publish meshweaver-plugin-build into the image context
+        run: dotnet publish src/MeshWeaver.Plugin.Build/MeshWeaver.Plugin.Build.csproj -c Release -o artifacts/plugin-build -nologo
       - uses: docker/setup-buildx-action@v4
       - name: "Build + push mw-build-host:<version> (linux/amd64), and read its digest"
         id: push

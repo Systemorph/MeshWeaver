@@ -49,8 +49,9 @@ run's **GitHub OIDC token** as the bearer (audience = the API's origin unless `a
 prints the lines inside a `::group::`, and exits with the stage's verdict. The rules, each pinned by
 `build-follow.py --self-test` (run on every core pull request):
 
-- **only `succeeded` is green.** Failed, cancelled, skipped and any state the follower does not
-  know are RED, named. A skipped stage is not a passed one.
+- **only `succeeded` is green.** Failed, `not-run` (the run ended before the stage started),
+  cancelled, skipped and any state the follower does not know are RED, named. A skipped or
+  never-run stage is not a passed one.
 - **a timeout is RED** (`timeout-minutes`, at most 43 — the job is hard-cut at 45). No verdict in
   time means the run is not judged.
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
@@ -81,9 +82,27 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    `/cache/plugins/<hex>/` — an existing complete directory is reused — and only then claims. An
    unreadable `inputs` or a failed pull means **no claim this cycle**: `claim` stamps the host's
    `pluginsDigest` on the run, and a run records exactly what compiled it.
-2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest}`. 204 → sleep;
-   200 → the run. The claim's `path` is authoritative (a non-latest run's node id is
-   `<sha>-<channel>`).
+   **With `buildHosts.registry.url` set (H8) the layer comes from the REGISTRY's bundle index
+   instead** — `GET /api/plugins/bundles/index.json`, what an instance on this framework identity
+   installs (the index core's `module-fetch` reads), with the host's read-only `mwi_` instance key
+   (a file in the host container, never bound into a sandbox). The layer's KEY is the digest of the
+   sorted `package@version[@bundle-hash]` list; a changed bundle is fetched with core's
+   `meshweaver-plugin-build module-fetch` (key through `--key-env`, never argv) into
+   `/cache/bundles/<h>/`, the set linked under `/cache/plugin-sets/<key>/`, and the key presented
+   as `pluginsKey`. An unreadable index, an index for another framework identity, a missing key or
+   a failed fetch means no claim this cycle.
+2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest, pluginsKey,
+   claimId}`. `claimId` is a fresh uuid per claim attempt; a network error or a 5xx is retried
+   with the SAME claimId, so the instance answers the assignment it already made. A host keeps no
+   claim across a restart — it claims afresh, never resumes an old one. 204 → sleep; 200 → the run.
+   The claim's `path` is authoritative (a non-latest run's node id is `<sha>-<channel>`).
+   Right after the stages are known the host posts the PLAN — `{"kind":"plan","stages":[…]}`,
+   host-emitted, never accepted from a stage — and the instance refuses a host-run success unless
+   every planned stage reported success.
+   **The lease.** The instance's lease on a claim lasts 10 minutes past the host's last batch, so
+   the host posts at least every 45 s for the whole run (the checkout included): an empty batch
+   `{"host","seq":n,"events":[]}` is the heartbeat. Each stage route's batches are numbered 1, 2, …
+   (`seq`), and a retried batch keeps its number.
 3. **Check out** `repo@sha` — the HOST does it, through the shared git MIRROR
    `/cache/git/<repo>.git`: `git clone --mirror` on first use, `git fetch --prune` (plus the run's
    sha and refs) before every checkout, under an exclusive file lock shared by every replica, then
@@ -136,12 +155,25 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    - `MW_BUILD_PUBLISH=true|false` (from the claim) is **informational**: a host holds no
      publication credential and mounts no bake share. Publication stays in the publish lane, which
      consumes `build/verdict` — "only latest publishes" is that lane's property.
-6. **Cache promotion is the host's, and trunk-only.** A stage writes reusable outputs to
-   `$MW_BUILD_OUTPUTS/<content key>/` (16–128 lower-case hex). After a stage SUCCEEDS on a trunk run
-   (`isTrunk: true`) the host copies each key into the shared cache `<cache>/outputs/<key>/` (an
-   existing key is kept; a name that is not a key, or a symlink, is not promoted; links inside are
-   copied as links, never followed). A pull request's outputs **never** enter the shared cache, so
-   PR code cannot poison a later trunk build.
+6. **Cache promotion is the host's: trunk-only, BUILD stages only, recomputed keys.** Only
+   compilation is reused across runs — never a test verdict — so only a SUCCEEDED `build` stage of
+   a trunk run (`isTrunk: true`) has its outputs promoted. A stage writes each reusable output to
+   `$MW_BUILD_OUTPUTS/<key>/` with a `.cache-key.json` naming its inputs, and the host promotes it
+   into `<cache>/outputs/<key>/` only when it RECOMPUTES that key from those inputs itself:
+   - **a module** (`{"kind":"module","entry":{…}}`): core's `module-build-key.py` — the sources, the
+     dependency closure, `Directory.Build.props`/`.targets`, `Directory.Packages.props`, the project
+     file and the toolchain identity — run with the HOST's tester and portal digests;
+   - **a NodeType** (`{"kind":"nodetype","sources":[…],"options":"…","allowList":"…"}`): the
+     declared source set (each file's hash), the reference-set identity (framework identity, portal
+     digest, the plugins key), the canonical compile-check options and allow-list, and the compiler
+     (the tester digest).
+   A stage computes the same key with `python3 /opt/build-host/build-run.py --cache-key spec.json`.
+   An existing key is kept; a name that is not the recomputed key, a symlink, or a path outside the
+   checkout is not promoted. A pull request's outputs **never** enter the shared cache.
+   **PostgreSQL** is never shared: a stage that needs one runs
+   `eval "$(/opt/build-host/sandbox-postgres.sh)"` — a disposable server inside its own sandbox, data
+   on the stage's tmpfs, a random per-stage password, a Unix socket only (`listen_addresses=''`, no
+   TCP), torn down with the stage's process tree.
 7. **Progress events**, batched (≤ 200 per POST, every 2 s) to
    `POST {api}/{repo}/{sha}/stages/{stage}/events?channel=<c>` with the worker token:
    compiler `file(line,col): error|warning CODE: message` and `::error file=…,line=…::` lines become
@@ -200,9 +232,10 @@ Shared: a ServiceAccount `build-host` with no token mounted and no rights, a Net
 ingress and egress only to DNS, the build API's pods and 80/443 outside the excluded ranges — the
 cluster-private ranges, link-local `169.254.0.0/16` (the instance metadata service, where a node
 identity's tokens are minted) and `168.63.129.16/32` (WireServer). Stages share the pod's network
-namespace, so that policy — not the sandbox — is the network boundary. The optional Postgres for the
-substrate suites is a NATIVE sidecar (an init container with `restartPolicy: Always`), stopped only
-after the runner has exited, so a roll that lets the runner finish its run keeps the database too.
+namespace, so that policy — not the sandbox — is the network boundary. There is no shared database
+container: the gate refuses `buildHosts.postgres` (a stage's database is disposable, in its own
+sandbox). With `buildHosts.registry.url` the read-only `mwi_` instance key is mounted from
+`registry.instanceKeySecret` as a FILE at `/run/registry-key/key`.
 The gate host is composed into `/host/app` (the composer replaces its output directory; the
 emptyDir's mount point cannot be removed). The chart carries
 no ConfigMap. The cache is an **existing** RWX claim

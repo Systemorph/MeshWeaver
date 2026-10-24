@@ -23,8 +23,9 @@ exactly the run that asked. `--sha` is the commit the build is keyed by — the 
 merge commit (the lane passes `github.event.pull_request.head.sha || github.sha`).
 
 THE RULES, each of which is a way this step could otherwise read green on no evidence:
-  * exit 0 ONLY on state `succeeded`. Every other terminal state — failed, cancelled, skipped,
-    timed out, anything new — is exit 1, naming it. A skipped stage is not a passed one.
+  * exit 0 ONLY on state `succeeded`. Every other terminal state — failed, `not-run` (the run
+    ended before this stage started), cancelled, skipped, timed out, anything new — is exit 1,
+    naming it. A skipped or never-run stage is not a passed one.
   * a TIMEOUT is RED. No verdict within --timeout-minutes means the run is NOT judged; the job
     never times out into a green or into GitHub's own cancellation (which reads as neither).
   * an UNREADABLE endpoint is RED, naming why: 403 at once (the token's claims do not name this
@@ -256,6 +257,9 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
         out(f"{stage}: succeeded on build-{query['channel']} in {took / 60:.1f} min"
             + (f" — {summary}" if summary else ""))
         return 0
+    if state == "not-run":
+        raise Failure(f"{stage} did NOT RUN on build-{query['channel']}: the run ended before this stage started"
+                      + (f" — {summary}" if summary else "") + " (a stage that never ran is not a pass)")
     raise Failure(f"{stage} ended {state!r} on build-{query['channel']}"
                   + (f" — {summary}" if summary else "")
                   + ("" if state == "failed" else " (only `succeeded` is a pass)"))
@@ -424,6 +428,9 @@ def self_test() -> int:
     check("failed/annotation passed through",
           "::error file=Hosting/Build/Source/BuildApi.cs,line=41::CS0246 X" in out, out)
     check("failed/drained before the verdict", len(http.urls) == 2, http.urls)
+    code, err, out, _ = _run([_page([], 0, "not-run", summary="stage compile-check failed first")])
+    check("verdict/not-run is a terminal RED, said as such", code == 1 and err and "did NOT RUN" in err
+          and "compile-check failed first" in err, (code, err))
     for st in ("cancelled", "skipped", "something-new"):
         code, err, _, _ = _run([_page([], 0, st)])
         check(f"verdict/{st} is red", code == 1 and err and st in err, (code, err))

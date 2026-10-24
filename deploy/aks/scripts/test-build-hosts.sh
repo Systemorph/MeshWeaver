@@ -40,13 +40,15 @@ if [ -f "$CHART/files/build-run.py" ]; then
   report "deploy/helm/files/build-run.py exists — the chart must not carry a second copy of the runner; it ships in the mw-build-host image"
 fi
 if [ -f "$DOCKERFILE" ] \
-   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh /opt/build-host/$' "$DOCKERFILE" \
+   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py /opt/build-host/$' "$DOCKERFILE" \
+   && grep -q '^COPY artifacts/plugin-build/ /opt/build-host/plugin-build/$' "$DOCKERFILE" \
    && grep -q 'bubblewrap' "$DOCKERFILE" \
+   && grep -q 'sandbox-postgres.sh --self-test' "$DOCKERFILE" \
    && grep -q 'build-run.py --self-test' "$DOCKERFILE" \
    && ! grep -Eq '^FROM [^ ]*:latest' "$DOCKERFILE"; then
-  ok "deploy/build-host/Dockerfile ships .github/scripts' runner + composer, installs bubblewrap, runs the runner's self-test, and pins no :latest"
+  ok "deploy/build-host/Dockerfile ships .github/scripts' runner, composer, sandbox-postgres and module-build-key plus the plugin-build tool, installs bubblewrap, runs both self-tests, and pins no :latest"
 else
-  report "deploy/build-host/Dockerfile must COPY .github/scripts/build-run.py and compose-gate-host.sh to /opt/build-host/, install bubblewrap, run build-run.py --self-test, and name no :latest base"
+  report "deploy/build-host/Dockerfile must COPY .github/scripts/{build-run.py,compose-gate-host.sh,sandbox-postgres.sh,module-build-key.py} and artifacts/plugin-build/ to /opt/build-host/, install bubblewrap, run both self-tests, and name no :latest base"
 fi
 if python3 "$REPO/.github/scripts/build-run.py" --self-test; then
   ok "build-run.py passes its self-test"
@@ -113,7 +115,7 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
     if spec["template"]["metadata"].get("labels", {}).get("azure.workload.identity/use") != "true":
         problems.append(f"{ch}: the pod does not opt into Azure workload identity (label azure.workload.identity/use)")
     skip = set((spec["template"]["metadata"].get("annotations") or {}).get("azure.workload.identity/skip-containers", "").split(";"))
-    if skip != {"tester", "portal", "oras", "postgres"}:
+    if skip != {"tester", "portal", "oras"}:
         problems.append(f"{ch}: the identity token is not restricted to the build container (skip-containers {sorted(skip)})")
     env = {e["name"]: e for e in build.get("env", [])}
     if "BUILD_TOKEN" in env:
@@ -135,9 +137,13 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
     cmd = " ".join(build.get("command", []))
     if "compose-gate-host.sh /portal/app /tester /host/app" not in cmd or env.get("MW_BUILD_GATE_HOST", {}).get("value") != "/host/app":
         problems.append(f"{ch}: the gate host must be composed into /host/app (the composer removes its output; /host is a mount point)")
-    pg = next((c for c in pod.get("initContainers", []) if c["name"] == "postgres"), None)
-    if not pg or pg.get("restartPolicy") != "Always" or any(c["name"] == "postgres" for c in pod["containers"]):
-        problems.append(f"{ch}: Postgres is not a native sidecar (init container, restartPolicy Always) — it would stop with the runner mid-run")
+    if any(c["name"] == "postgres" for c in pod.get("containers", []) + pod.get("initContainers", [])):
+        problems.append(f"{ch}: a shared Postgres container renders — a stage's database is disposable, inside its own sandbox")
+    if env.get("MW_REGISTRY_URL", {}).get("value") != "https://portal.example.com" or env.get("MW_REGISTRY_KEY_FILE", {}).get("value") != "/run/registry-key/key":
+        problems.append(f"{ch}: the registry bundle index (H8) is not wired: {env.get('MW_REGISTRY_URL')}")
+    rk = vols.get("registry-key", {}).get("secret", {}) if (vols := {v["name"]: v for v in pod.get("volumes", [])}) else {}
+    if rk.get("secretName") != "build-registry-key":
+        problems.append(f"{ch}: the mwi_ instance key is not mounted as a file from its Secret: {rk}")
     vols = {v["name"]: v for v in pod.get("volumes", [])}
     if vols.get("cache", {}).get("persistentVolumeClaim", {}).get("claimName") != "build-cache":
         problems.append(f"{ch}: the cache is not the build-cache claim")
@@ -145,7 +151,7 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
     if wt.get("secretName") != "build-worker" or wt.get("items") != [{"key": "token", "path": "token"}]:
         problems.append(f"{ch}: the worker token is not the build-worker Secret mounted as a file: {wt}")
     secret_vols = sorted(v["name"] for v in pod.get("volumes", []) if "secret" in v)
-    if secret_vols != ["worker-token"]:
+    if secret_vols != ["registry-key", "worker-token"]:
         problems.append(f"{ch}: a host mounts no credential but the worker token; secret volumes: {secret_vols}")
     if any("bake" in v["name"] for v in pod.get("volumes", [])):
         problems.append(f"{ch}: a bake share is mounted")
@@ -190,7 +196,8 @@ fi
 for entry in \
   "values.build-hosts-tag-not-digest.yaml|must be a sha256:<64 hex> digest" \
   "values.build-hosts-public-http.yaml|must be https, or http to a cluster-local host" \
-  "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential"; do
+  "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential" \
+  "values.build-hosts-postgres-sidecar.yaml|runs NO shared database"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"
