@@ -1052,8 +1052,10 @@ public partial class QueryParser
     /// <summary>
     /// Strips the <c>@</c> reference prefix from one location value: <c>@acme/x</c> and
     /// <c>@/acme/x</c> are both <c>acme/x</c>. A value without the prefix is returned unchanged.
+    /// Shared with the permission fold (<c>PermissionEvaluator</c>), which takes the same spelling
+    /// at its entry so a reference-form path is never read as a partition named <c>@</c> (#7090).
     /// </summary>
-    private static string StripReferencePrefix(string value)
+    internal static string StripReferencePrefix(string value)
     {
         if (string.IsNullOrEmpty(value) || value[0] != '@')
             return value;
