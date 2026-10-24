@@ -238,8 +238,18 @@ env:
   # point: `collect-results` compares the number of shards that REPORTED against this
   # number, rather than inferring coverage from whatever artifacts happened to arrive.
   # 🚨 Keep in sync with the `test` job's `matrix.shard` list and the build job's
-  # SHARD_TOTAL. A mismatch is loud (the assertion fails), never silent.
-  CI_SHARD_TOTAL: 6
+  # per-shard upload steps (both read SHARD_TOTAL from here). A mismatch is loud (the
+  # assertion fails), never silent.
+  #
+  # 10, not 6: the 20-minute shard cap has to hold the shard's tests beside the browser step's
+  # END-TO-END worst case (588 s: its 480 s budget, then the last attempt's kill grace, the apt
+  # reap and the 60 s smoke print) and ~150 s of download and setup, which leaves ~460 s.
+  # Re-measured 2026-10-23, the scheduled suite is ~3,830 s of tests: ~640 s per shard at six,
+  # so a shard whose apt mirror stalled was cut even with perfectly balanced weights. At ten it
+  # is ~383 s (~410 s once #7087 splits Compiler.Pipeline). ShardWeightHeadroomGuard.
+  # TheIdealShardLoadFitsTheShardJobCap holds this arithmetic; the runs it comes from are in
+  # .github/scripts/shard-assign.sh.
+  CI_SHARD_TOTAL: 10
 
 jobs:
   # 🚨 No `jlumbroso/free-disk-space` in any job — do not re-add it. Removed 2026-08-09 after
@@ -736,7 +746,7 @@ jobs:
         echo "All $(find test -name '*.csproj' ! -path '*/bin/*' | wc -l | tr -d ' ') test projects are solution members."
     - name: Package test outputs (one tarball per shard)
       env:
-        SHARD_TOTAL: 6
+        SHARD_TOTAL: ${{ env.CI_SHARD_TOTAL }}
         TEST_SELECTION: ${{ needs.precheck.outputs.tests-mode }}
         TEST_PROJECTS: ${{ needs.precheck.outputs.tests-projects }}
       run: |
@@ -825,9 +835,9 @@ jobs:
           tar -I 'zstd -T0 --long=27' -cf "build-output-$i.tar.zst" -T ".build-paths-$i.txt"
           echo "shard $i: $(wc -l < ".build-paths-$i.txt") bin trees, $(du -h "build-output-$i.tar.zst" | cut -f1)"
         done
-    # One artifact per shard. Six near-identical steps because a step cannot be
-    # generated in a loop — keep them in sync with SHARD_TOTAL above and with the
-    # test job's matrix.
+    # One artifact per shard. CI_SHARD_TOTAL near-identical steps because a step cannot be
+    # generated in a loop — keep them in sync with CI_SHARD_TOTAL and with the test job's
+    # matrix.
     #
     # 🚨 `overwrite: true` is the OTHER half of #4303, and it is deliberately the opposite remedy
     # from the shard RESULTS. Both families can hold two artefacts under one name in one run (a
@@ -861,6 +871,18 @@ jobs:
     - name: "Upload artifact: shard 5"
       uses: actions/upload-artifact@v7
       with: { name: build-output-5, path: build-output-5.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 6"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-6, path: build-output-6.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 7"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-7, path: build-output-7.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 8"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-8, path: build-output-8.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
+    - name: "Upload artifact: shard 9"
+      uses: actions/upload-artifact@v7
+      with: { name: build-output-9, path: build-output-9.tar.zst, retention-days: 1, compression-level: 0, overwrite: true }
 
   # ───────────────────────────── TEST ──────────────────────────────
   # Matrix-sharded: the ~45 test projects are split across SHARD_TOTAL parallel
@@ -880,6 +902,11 @@ jobs:
     # browser-provision step can cost ~9.5 min on a slow apt mirror. Run 37830774943
     # hit this cap while tests still progressed because stale weights stacked >16 min
     # of tests on shard 4. Re-measure/split units in shard-assign.sh, never widen the cap.
+    # 🚨 The 8.4 min is a BUDGET, not a description: when the suite outgrows it the remedy is
+    # more shards (CI_SHARD_TOTAL), never a wider cap. Runs 40011143666, 40011313475 and
+    # 40027189653 (2026-10-23) were cut here with every project still progressing: the browser
+    # step had spent its whole 480 s budget on a stalled apt mirror, and the shard owed ~14.6 min
+    # of tests (stale weights on top of a suite that had grown to ~11 min per shard at six).
     timeout-minutes: 20
     # 🚨 TEMPORARY STOPGAP (#5212, policy tiered-pgo-off-5212) — remove when the runtime fix ships.
     # The .NET 10 Tier-1 JIT under Dynamic PGO drops a type check in an inlined guarded
@@ -895,7 +922,7 @@ jobs:
       # results so the PR shows the full failure picture, not just the first.
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
 
     steps:
     - uses: actions/checkout@v7
@@ -912,7 +939,7 @@ jobs:
     - name: "Download artifact: this shard's build output"
       uses: actions/download-artifact@v8
       with:
-        # Only THIS shard's test bins (~1/6 of the output). The old single
+        # Only THIS shard's test bins (~1/CI_SHARD_TOTAL of the output). The old single
         # 3.3 GB artifact was pulled by every shard and its 35–318 s transfer
         # variance, not the tests, decided which shard was the long pole.
         name: build-output-${{ matrix.shard }}
@@ -1254,7 +1281,7 @@ jobs:
         DOTNET_ENVIRONMENT: Development
         Logging__LogLevel__Default: Warning
         SHARD_INDEX: ${{ matrix.shard }}
-        SHARD_TOTAL: 6
+        SHARD_TOTAL: ${{ env.CI_SHARD_TOTAL }}
         TEST_SELECTION: ${{ needs.precheck.outputs.tests-mode }}
         TEST_PROJECTS: ${{ needs.precheck.outputs.tests-projects }}
         # Native-crash diagnosability (SIGSEGV/SIGABRT of a test host): the runtime
