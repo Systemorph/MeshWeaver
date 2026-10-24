@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -248,7 +249,7 @@ public class InboxSignatureVerdictGuard
     /// </summary>
     private static string VerdictScript(string workflow, string stepName)
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(),
+        var path = Path.Combine(RepoPaths.Root,
             workflow.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(path), $"{workflow} is gone — the publishing lane it holds has moved.");
         var lines = File.ReadAllLines(path);

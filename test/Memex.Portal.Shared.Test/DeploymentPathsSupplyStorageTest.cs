@@ -2,6 +2,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using MeshWeaver.Deployment;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -22,21 +23,12 @@ namespace Memex.Portal.Shared.Test;
 /// </summary>
 public class DeploymentPathsSupplyStorageTest
 {
-    private static DirectoryInfo RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!;
-    }
-
     [Fact]
     public void TheHelmChartStatesTheStorageType()
     {
         // The AKS lane. Every portal the chart deploys reads Graph__Storage__Type from its
         // ConfigMap, and the ConfigMap emits the key only when the values state it.
-        var values = Path.Combine(RepoRoot().FullName, "deploy", "helm", "values.yaml");
+        var values = Path.Combine(RepoPaths.Root, "deploy", "helm", "values.yaml");
         Assert.True(File.Exists(values), $"the chart's values are not at {values}");
 
         var match = Regex.Match(File.ReadAllText(values),
@@ -64,7 +56,7 @@ public class DeploymentPathsSupplyStorageTest
         // guard has two halves, each with its subject: the adapter must still route through that
         // derivation, and the derivation must state the storage type for a record that says
         // NOTHING about storage (a bare AddMemex(name) is exactly that record).
-        var hosting = Path.Combine(RepoRoot().FullName, "memex", "aspire",
+        var hosting = Path.Combine(RepoPaths.Root, "memex", "aspire",
             "Memex.Aspire.Hosting", "MemexHostingExtensions.cs");
         Assert.True(File.Exists(hosting), $"the Aspire hosting extensions are not at {hosting}");
         Assert.Contains("DeploymentPortalConfig.PortalConfig(", File.ReadAllText(hosting));

@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Hosting;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -42,7 +43,7 @@ public class PrebuiltBundleRetentionArmingGuard
     [Fact]
     public void DeletionIsNeverArmedByOmission()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var configMap = File.ReadAllText(
             Path.Combine(root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
@@ -102,14 +103,5 @@ public class PrebuiltBundleRetentionArmingGuard
 
         Assert.StartsWith("0 identity directory(ies)", empty.Summary, StringComparison.Ordinal);
         Assert.Contains("collectable=0", empty.Summary, StringComparison.Ordinal);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "Could not locate the repository root (MeshWeaver.slnx).");
-        return dir!.FullName;
     }
 }

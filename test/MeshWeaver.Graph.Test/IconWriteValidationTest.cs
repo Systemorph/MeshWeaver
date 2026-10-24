@@ -82,12 +82,8 @@ public class IconSafetyTest
         localized.Key.Should().Be(IconSafety.RefusalMessageKey);
         localized.English.Should().Be(IconSafety.RefusalMessage(path, detail));
 
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        dir.Should().NotBeNull();
         using var catalog = JsonDocument.Parse(File.ReadAllText(Path.Combine(
-            dir!.FullName, "src", "MeshWeaver.Messaging.Hub", "Localization", "strings.en.json")));
+            RepoPaths.Root, "src", "MeshWeaver.Messaging.Hub", "Localization", "strings.en.json")));
         var template = catalog.RootElement.GetProperty(IconSafety.RefusalMessageKey).GetString()!;
         template.Replace("{path}", path).Replace("{detail}", detail)
             .Should().Be(IconSafety.RefusalMessage(path, detail));
@@ -277,7 +273,7 @@ public class IconCorpusTest(ITestOutputHelper output)
     [Fact]
     public void EveryShippedIcon_PassesTheRule()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var trees = new[]
         {
             Path.Combine(root, "src", "MeshWeaver.Documentation", "Data"),
@@ -333,15 +329,6 @@ public class IconCorpusTest(ITestOutputHelper output)
         }
     }
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }
 
 /// <summary>

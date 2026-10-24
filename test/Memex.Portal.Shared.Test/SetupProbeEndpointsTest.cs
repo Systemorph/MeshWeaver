@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.TestHost;
 using Memex.Portal.Shared.Setup;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -28,11 +29,8 @@ public class SetupProbeEndpointsTest
 {
     private static string ChartDeployment()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        var path = Path.Combine(dir!.FullName, "deploy", "helm", "templates",
+        var repoRoot = RepoPaths.Root;
+        var path = Path.Combine(repoRoot, "deploy", "helm", "templates",
             "memex-portal", "deployment.yaml");
         Assert.True(File.Exists(path), $"the portal deployment template is not at {path}");
         return File.ReadAllText(path);
@@ -116,17 +114,14 @@ public class SetupProbeEndpointsTest
     /// <summary>The scalar at a dotted key in <c>values.yaml</c>, walked by indentation.</summary>
     private static string? ValuesLeaf(string dottedKey)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
+        var repoRoot = RepoPaths.Root;
 
         var segments = dottedKey.Split('.');
         var depth = 0;
         var indent = -1;
 
         foreach (var line in File.ReadAllLines(
-                     Path.Combine(dir!.FullName, "deploy", "helm", "values.yaml")))
+                     Path.Combine(repoRoot, "deploy", "helm", "values.yaml")))
         {
             if (line.TrimStart().StartsWith('#') || line.Trim().Length == 0) continue;
             var thisIndent = line.Length - line.TrimStart().Length;

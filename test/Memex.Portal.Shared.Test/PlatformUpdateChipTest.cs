@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using Memex.Portal.Shared.SelfUpdate;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -231,16 +232,8 @@ public class PlatformUpdateChipTest
 
     private static Dictionary<string, string> Catalog(string locale)
     {
-        var path = Path.Combine(FindRepoRoot(),
+        var path = Path.Combine(RepoPaths.Root,
             "src", "MeshWeaver.Messaging.Hub", "Localization", $"strings.{locale}.json");
         return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(path))!;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName ?? throw new InvalidOperationException("repo root not found");
     }
 }

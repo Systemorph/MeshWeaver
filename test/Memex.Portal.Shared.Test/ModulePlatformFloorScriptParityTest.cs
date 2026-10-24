@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -39,11 +40,8 @@ public class ModulePlatformFloorScriptParityTest
     {
         get
         {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-                dir = dir.Parent;
-            Assert.NotNull(dir);
-            var script = Path.Combine(dir!.FullName, ".github", "scripts", "check-module-platform-floor.py");
+            var repoRoot = RepoPaths.Root;
+            var script = Path.Combine(repoRoot, ".github", "scripts", "check-module-platform-floor.py");
             Assert.True(File.Exists(script),
                 $"{script} is missing — this test would compare the runtime against nothing while "
                 + "the module-pack lane's floor gate is unreachable. Follow the script if it moved.");

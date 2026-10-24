@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -86,7 +87,7 @@ public class PackageFamiliesMoveTogetherGuard
     ];
 
     private static string PropsPath() =>
-        Path.Combine(FindRepoRoot(), "Directory.Packages.props");
+        Path.Combine(RepoPaths.Root, "Directory.Packages.props");
 
     /// <summary>Every <c>PackageVersion</c> entry as (id, version).</summary>
     private static List<(string Id, string Version)> Pins() =>
@@ -232,21 +233,5 @@ public class PackageFamiliesMoveTogetherGuard
         Assert.Equal("5.9.0", BaseVersion("5.9.0-beta.1"));
         // And it must NOT collapse genuinely different versions.
         Assert.NotEqual(BaseVersion("13.5.3"), BaseVersion("13.4.6"));
-    }
-
-    /// <summary>
-    /// 🚨 Anchors on the SOLUTION file, not on Directory.Packages.props. There are two of the
-    /// latter — the root one with ~150 pins, and test/Directory.Packages.props with 6 — and
-    /// walking up from the test binary reaches the test one FIRST. The guard's first version did
-    /// exactly that and policed six pins while believing it policed the tree; its own
-    /// scanner-sees-what-it-claims test is what caught it ("expected the full CPM pin list; saw 6").
-    /// </summary>
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (no MeshWeaver.slnx found)");
-        return dir!.FullName;
     }
 }

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -53,7 +54,7 @@ public class ShardWeightHeadroomGuard
     public void NoScheduledUnitRunsCloseToThePerProjectCap()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var capSeconds = ReadPerProjectCapSeconds(File.ReadAllText(Path.Combine(root, WorkflowPath)));
         var budget = capSeconds * MaxCapFraction;
 
@@ -130,7 +131,7 @@ public class ShardWeightHeadroomGuard
     public void TheIdealShardLoadFitsTheShardJobCap()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var workflow = File.ReadAllText(Path.Combine(root, WorkflowPath));
         var script = File.ReadAllText(Path.Combine(root, WeightsPath));
         var shards = ReadIntSetting(workflow, @"\n\s*CI_SHARD_TOTAL:\s*(\d+)", "CI_SHARD_TOTAL");
@@ -168,7 +169,7 @@ public class ShardWeightHeadroomGuard
     public void TheProvisionStepsInnerBoundsFitItsCap()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var workflow = File.ReadAllText(Path.Combine(SourceScan.FindRepoRoot(), WorkflowPath));
+        var workflow = File.ReadAllText(Path.Combine(RepoPaths.Root, WorkflowPath));
         var cap = ReadStepTimeoutMinutes(workflow, ProvisionStepName) * 60;
         var inner = ReadProvisionInnerBoundsSeconds(workflow);
         inner.Should().BeLessThanOrEqualTo(cap,
@@ -188,7 +189,7 @@ public class ShardWeightHeadroomGuard
     public void TheFontRestoreMissesBeforeItsCap()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var workflow = File.ReadAllText(Path.Combine(SourceScan.FindRepoRoot(), WorkflowPath));
+        var workflow = File.ReadAllText(Path.Combine(RepoPaths.Root, WorkflowPath));
         var cap = ReadStepTimeoutMinutes(workflow, RestoreStepName) * 60;
         var abort = ReadIntSetting(workflow, @"SEGMENT_DOWNLOAD_TIMEOUT_MINS:\s*(\d+)", "SEGMENT_DOWNLOAD_TIMEOUT_MINS") * 60;
         (cap - abort).Should().BeGreaterThanOrEqualTo(30,

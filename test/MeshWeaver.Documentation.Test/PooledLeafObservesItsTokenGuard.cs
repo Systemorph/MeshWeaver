@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -115,7 +116,7 @@ public class PooledLeafObservesItsTokenGuard
     [Fact]
     public void EveryPooledAsyncLeafObservesItsCancellationToken()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // ONE immutable pass. Both readings below are derived from this single array rather than
         // accumulated side by side: two counters advanced by hand can drift, and the drift that
