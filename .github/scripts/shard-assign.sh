@@ -5,7 +5,7 @@
 #
 # 🚨 Used by BOTH jobs in dotnet-test.yml and they MUST agree:
 #   * `build` calls it once per shard to pack that shard's test bins into its OWN
-#     artifact (so a shard downloads ~1/6 of the output instead of all 3.3 GB);
+#     artifact (so a shard downloads ~1/SHARD_TOTAL of the output instead of all 3.3 GB);
 #   * `test` calls it to decide which projects to run.
 # If the two ever disagreed, a shard would run a project whose bin it never
 # downloaded. That is why the assignment lives in one file instead of being
@@ -13,7 +13,7 @@
 #
 # Portable on purpose: no `declare -A`, so it runs on the runner's bash 5 AND on
 # a stock macOS bash 3.2 — you can verify a change locally before pushing.
-#   SHARD_INDEX=0 SHARD_TOTAL=6 .github/scripts/shard-assign.sh
+#   SHARD_INDEX=0 SHARD_TOTAL=8 .github/scripts/shard-assign.sh
 #
 # ── Balancing ────────────────────────────────────────────────────────────────
 # Greedy LPT: heaviest first onto the currently least-loaded shard, ties to the
@@ -25,12 +25,45 @@
 # ALC-heaviest projects — onto shard 0 and made it the ~19-minute long pole of
 # every run.
 #
-# Weights are wall-clock SECONDS, the MAX over three full, green main runs
-# (37815766695, 37821637421 and 37822062147, all 2026-10-08), plus completed
-# project markers in red run 37830774943. Size for the bad case, not the average.
-# The per-project `[CI] <name> exit=` markers in the test
-# job's log ARE the measurement: take the delta between each `::group::<name>`
-# and its marker.
+# Weights are wall-clock SECONDS, the MAX over three full (TEST_SELECTION=all), green
+# main runs: 40014951907, 40021939021 and 40027189653, all 2026-10-23. A split
+# project's weight is the SUM of its parts' elapsed times. Size for the bad case, not
+# the average. The per-project `[CI] <name> exit=<n> elapsed=<s>` markers in the test
+# job's log ARE the measurement.
+#
+# The 2026-10-23 re-measure (the previous table was from 2026-10-08). The table had
+# drifted the usual way. It reported loads of ~454 s on every shard, while shard 4
+# really ran 875-894 s (Compiler.Pipeline 227→395, Portal.Shared 651→929, FaultInjection
+# 61→143). Under the 20-minute job cap that only held while the browser step was quick.
+# Whenever its apt mirror stalled, the step spent its whole 480 s budget, and the shard
+# was cancelled with every project still progressing. That happened on PR runs
+# 40011143666 and 40011313475 and on main run 40027189653, all attempt 1. It was not a
+# hang: Memex.Portal.Shared.Test part 3/3 was entering a new class every few seconds
+# until the cut, and it measured 315-343 s on the green runs.
+# Three things changed:
+#   * weights re-measured (above);
+#   * splits re-derived from the trx per-class durations. Simulating the every-Nth
+#     split of the SORTED class list reproduces the measured parts exactly
+#     (Messaging.Hub 106/408, Portal.Shared 315/261/341, Graph 293/250/312):
+#       - Memex.Portal.Shared.Test 3→4 parts: 240/179/243/254 s (parts 1/3 and 3/3 were
+#         327 and 343 s, past the 288 s headroom threshold below).
+#       - MeshWeaver.Graph.Test 3→4: 210/221/252/172 (part 3/3 was 319 s).
+#       - MeshWeaver.Messaging.Hub.Test 2→3: 136/223/154. Part 2/2 measured 409-416 s,
+#         85-87% of the cap. The guard below did not see it because it divides the
+#         total by the part count, and one class (TimeoutMessageNamesTheCallersOwnState-
+#         Test, 180 s) dominates that part.
+#       - MeshWeaver.Hosting.Test 3→2: 223/226. Its total fell from ~600 to ~450 s, and
+#         its 3-part split had become 128/116/206, the unevenness that stacks a shard.
+#   * CI_SHARD_TOTAL 6→8 (dotnet-test.yml). The suite is ~3,900 s of tests. At six
+#     shards that is ~650 s per shard even with perfect balance. The job cap leaves a
+#     shard about 590 s of tests after a stalled browser step (480 s) and a slow
+#     artifact download (~110 s). At eight the average is ~490 s.
+#
+# 🚨 The every-Nth split is uneven, and the LPT loop cannot see it. It weights every
+# part at total÷N, so two heavy parts can land on one shard. Estimated from the per-part
+# figures above, the heaviest of the eight shards runs ~545 s once #7087 splits
+# Compiler.Pipeline, and ~650 s until then. Re-check with the per-part numbers, not
+# with the loads this script prints.
 #
 # 🚨 RE-MEASURE WHEN A PROJECT GROWS — nothing here does it for you, and a stale
 # table is INVISIBLE: the LPT loop still reports six perfectly balanced shards
@@ -43,7 +76,7 @@
 # drifted the same way (Monolith 200→345, Data 25→73, PluginTester 60→8).
 #
 # The floor for ANY sharding is the heaviest single SCHEDULABLE UNIT — a project,
-# or one part of a split one. Today that is Hosting.Orleans.Test at 269 s. Adding
+# or one part of a split one. Today that is Hosting.Orleans.Test at 272 s. Adding
 # shards below that floor buys nothing.
 #
 # SPLIT RULE — TWO independent triggers. Either one is sufficient.
@@ -146,16 +179,16 @@ fi
 
 # "<seconds> <project-name>", heaviest first.
 WEIGHTS=$(cat <<'EOF'
-651 Memex.Portal.Shared.Test 3
-269 MeshWeaver.Hosting.Orleans.Test
-91 MeshWeaver.Data.Test
-435 MeshWeaver.Messaging.Hub.Test 2
-49 MeshWeaver.PluginTester.Test
-730 MeshWeaver.Graph.Test 3
-61 MeshWeaver.FaultInjection.Test
-20 MeshWeaver.Updates.Test
-600 MeshWeaver.Hosting.Test 3
-43 MeshWeaver.Layout.Test
+929 Memex.Portal.Shared.Test 4
+272 MeshWeaver.Hosting.Orleans.Test
+142 MeshWeaver.Data.Test
+522 MeshWeaver.Messaging.Hub.Test 3
+51 MeshWeaver.PluginTester.Test
+861 MeshWeaver.Graph.Test 4
+143 MeshWeaver.FaultInjection.Test
+25 MeshWeaver.Updates.Test
+453 MeshWeaver.Hosting.Test 2
+68 MeshWeaver.Layout.Test
 7 MeshWeaver.ContentCollections.Test
 37 MeshWeaver.Documentation.Test
 227 MeshWeaver.Compiler.Pipeline.Test

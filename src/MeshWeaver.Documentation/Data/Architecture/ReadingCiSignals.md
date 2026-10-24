@@ -203,8 +203,29 @@ before classifying that red. The completed `[CI] … elapsed=` markers identify 
 drifted; a `TEST_START` without `TEST_END` identifies the test in flight, whose surrounding trace
 distinguishes a stalled edge from a job cut during steady progress. Re-measure the table from
 full, executed green runs, split a project whose part exceeds the per-project headroom rule, and
-check the six assignments again. A green-tree reuse run skips the shards and supplies no timing
+check every shard's assignment again. A green-tree reuse run skips the shards and supplies no timing
 evidence. Keep the job and per-project caps in place: they make a real wedge observable and bounded.
+
+**Balanced weights are not enough once the suite outgrows the shard count.** The 20-minute job cap
+has to hold the browser step's worst case as well as the tests. When the runner's apt mirror stalls,
+that step spends its whole `BROWSER_STEP_BUDGET` (480 s). With the artifact download (up to ~110 s),
+a shard then has about 570 s left for tests. The cancellations of 2026-10-23 had both causes at
+once:
+
+- PR runs 40011143666 and 40011313475, and main run 40027189653, each lost a shard on attempt 1.
+- Shard 4 owed ~880 s of tests against a printed ~454 s, because the weights were stale.
+- The re-measured suite was ~3,900 s, which is ~650 s per shard at six, even with perfect balance.
+
+So the fix was a re-measure, re-splits and `CI_SHARD_TOTAL` 6→8. The cap was not widened.
+`ShardWeightHeadroomGuard.TheIdealShardLoadFitsTheShardJobCap` now checks that arithmetic. It reads
+the cap, the browser budget and the shard count from the workflow.
+
+That guard can only be as right as the table, and the table goes stale without telling anyone. The
+LPT loop also weights every part of a split project as total ÷ N, while the every-Nth class split
+is uneven: Messaging.Hub's two parts were 106 s and 408 s. So re-check against the measured
+per-part `elapsed=` markers, not against the loads the script prints. The trx per-class durations,
+fed through the sorted every-Nth split, reproduce the measured parts exactly. That makes them the
+way to choose a part count before you push.
 
 ## 🚨 A narrow instrument does not answer a wide question — and it is RIGHT while you misread it
 

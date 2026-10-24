@@ -83,6 +83,93 @@ public class ShardWeightHeadroomGuard
     }
 
     /// <summary>
+    /// The seconds a shard's job reserves before its first test: the artifact download (measured up
+    /// to 107 s on run 40011143666, shard 4) plus checkout, SDK setup and extraction (~20 s), rounded
+    /// up. Everything else the preamble can cost is the browser step, which is read from the workflow.
+    /// </summary>
+    private const int PreambleSeconds = 150;
+
+    /// <summary>
+    /// The share of the per-shard test budget the IDEAL load may fill. The rest is held back for
+    /// what the LPT loop cannot see: it weights every part of a split project at total ÷ N, while
+    /// the every-Nth class split is uneven. On 2026-10-23 that put the heaviest shard ~11% above
+    /// the ideal load.
+    /// </summary>
+    private const double MaxBudgetFraction = 0.9;
+
+    /// <summary>
+    /// The shard job's cap must hold the shard's tests even when the browser step spends its whole
+    /// budget. Runs 40011143666, 40011313475 and 40027189653 (2026-10-23) were cancelled at the
+    /// 20-minute cap with every project still progressing. In each, the browser step had spent
+    /// its 480 s on a stalled apt mirror, and the shard owed ~14.6 min of tests. Two causes
+    /// stacked. The weights were stale, so the LPT loop reported ~454 s on a shard that ran
+    /// ~880 s. And the suite had outgrown six shards: re-measured, the weights are ~3,900 s, ~650 s
+    /// per shard even with perfect balance.
+    ///
+    /// <para>The per-unit guard above cannot see the second cause, because every unit was under its
+    /// own cap. This one checks the shard count against the job cap. The fix it points to is more
+    /// shards (CI_SHARD_TOTAL) or a lighter suite, never a wider cap. All three numbers are read
+    /// from the workflow, so the guard cannot disagree with the budget it guards.</para>
+    /// </summary>
+    [Fact(Timeout = 60000)]
+    public void TheIdealShardLoadFitsTheShardJobCap()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var root = SourceScan.FindRepoRoot();
+        var workflow = File.ReadAllText(Path.Combine(root, WorkflowPath));
+        var shards = ReadIntSetting(workflow, @"\n\s*CI_SHARD_TOTAL:\s*(\d+)", "CI_SHARD_TOTAL");
+        var jobCapSeconds = ReadShardJobCapMinutes(workflow) * 60;
+        var browserBudget = ReadIntSetting(workflow, @"BROWSER_STEP_BUDGET:\s*(\d+)", "BROWSER_STEP_BUDGET");
+
+        var totalSeconds = ReadWeights(File.ReadAllText(Path.Combine(root, WeightsPath))).Sum(u => u.TotalSeconds);
+        var idealLoad = (double)totalSeconds / shards;
+        var testBudget = (jobCapSeconds - browserBudget - PreambleSeconds) * MaxBudgetFraction;
+
+        totalSeconds.Should().BeGreaterThan(1000,
+            "the weight table must actually have been parsed — a near-empty total would pass this "
+            + "guard having measured nothing");
+        idealLoad.Should().BeLessThanOrEqualTo(testBudget,
+            $"the weights in {WeightsPath} sum to {totalSeconds} s, which is {idealLoad:0} s per shard "
+            + $"at CI_SHARD_TOTAL={shards}. A shard whose browser step spends its whole "
+            + $"{browserBudget} s budget then has {jobCapSeconds - browserBudget - PreambleSeconds} s "
+            + $"of its {jobCapSeconds / 60} min cap left for tests, and the ideal load may fill "
+            + $"{MaxBudgetFraction:P0} of that ({testBudget:0} s). Past it, a stalled apt mirror cancels "
+            + "a shard whose tests are still progressing (runs 40011143666, 40011313475). Raise "
+            + "CI_SHARD_TOTAL (matrix, upload steps) — do NOT widen the job cap");
+    }
+
+    /// <summary>The parses <see cref="TheIdealShardLoadFitsTheShardJobCap"/> rests on, asserted.</summary>
+    [Fact]
+    public void TheShardBudgetGuardParsesItsInputs()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        const string workflow = "env:\n  CI_SHARD_TOTAL: 8\njobs:\n  build:\n    timeout-minutes: 45\n"
+            + "  test:\n    name: \"Run tests (shard ${{ matrix.shard }})\"\n    # cap\n    timeout-minutes: 20\n"
+            + "  other:\n    timeout-minutes: 30\n";
+        ReadIntSetting(workflow, @"\n\s*CI_SHARD_TOTAL:\s*(\d+)", "CI_SHARD_TOTAL").Should().Be(8);
+        ReadShardJobCapMinutes(workflow).Should().Be(20,
+            "the cap is the SHARD job's, not the first `timeout-minutes` in the file");
+    }
+
+    private static int ReadIntSetting(string workflow, string pattern, string what)
+    {
+        var m = Regex.Match(workflow, pattern);
+        Assert.True(m.Success, $"could not find {what} in {WorkflowPath} — restore the parse rather than "
+            + "hard-coding the number here.");
+        return int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>The <c>timeout-minutes</c> of the job named <c>Run tests (shard …)</c>.</summary>
+    private static int ReadShardJobCapMinutes(string workflow)
+    {
+        var m = Regex.Match(workflow,
+            @"name:\s*""Run tests \(shard \$\{\{ matrix\.shard \}\}\)""(?:(?!\n  [A-Za-z_-]+:\n).)*?\n\s*timeout-minutes:\s*(\d+)",
+            RegexOptions.Singleline);
+        Assert.True(m.Success, $"could not find the shard job's timeout-minutes in {WorkflowPath}.");
+        return int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     /// 🚨 The guard's own failure modes, asserted rather than assumed — both halves of the parse are
     /// places it could silently stop measuring: a cap it fails to find, and a parts column it
     /// ignores (which would make every split project look over budget, or every unsplit one look
