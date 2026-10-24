@@ -58,7 +58,7 @@ public class DataPlaneMessageRatchetGuard(ITestOutputHelper output)
     private static readonly ImmutableDictionary<string, int> TotalBudget = new Dictionary<string, int>
     {
         ["GetDataRequest"] = 18,
-        ["GetDataResponse"] = 26,
+        ["GetDataResponse"] = 25,
         ["DataChangeRequest"] = 7,
         ["PatchDataChangeRequest"] = 0,
         ["DataChangedEvent"] = 0,

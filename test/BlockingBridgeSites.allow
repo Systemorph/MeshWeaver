@@ -80,9 +80,6 @@
 # helper that might accidentally deadlock the suite, it IS the deadlock, constructed on a private
 # single-threaded SynchronizationContext and proven via a BOUNDED wait from a genuinely separate
 # thread. It exists to pin the mechanism this whole ratchet is about; see the file's own remarks.
-test/MeshWeaver.ContentCollections.Indexing.Test/ChunkNavigationStoreTest.cs	2
-test/MeshWeaver.ContentCollections.Indexing.Test/ContentChunkSearchTest.cs	6
-test/MeshWeaver.ContentCollections.Indexing.Test/ContentSearchHitContractTest.cs	2
 test/MeshWeaver.ContentCollections.Test/ObservableCollectionSurfaceTest.cs	2
 test/MeshWeaver.Documentation.Test/BlockingBridgeSelfDeadlockMechanismTest.cs	1
 test/MeshWeaver.Compiler.Pipeline.Test/NodeTypeAdoptionRegistryTest.cs	3
