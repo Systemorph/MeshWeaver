@@ -660,8 +660,13 @@ public static class MarkdownOverviewLayoutArea
             return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
         try
         {
-            jsonElement.Deserialize<MarkdownContent>(JsonSerializerOptions.Web);
-            return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
+            // 🚨 Classify the BOUND body, never "it bound, so it is empty" (review on #7097): the
+            // contract binds case-insensitively, so `{"Content":"# doc"}` — which the exact-case
+            // lookups above miss — binds WITH the document.
+            var bound = jsonElement.Deserialize<MarkdownContent>(JsonSerializerOptions.Web);
+            return bound?.Content is { Length: > 0 } text
+                ? new MarkdownRead(MarkdownContentState.Present, text, string.Empty)
+                : new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
         }
         catch (Exception ex) when (ex is JsonException or NotSupportedException or InvalidOperationException)
         {

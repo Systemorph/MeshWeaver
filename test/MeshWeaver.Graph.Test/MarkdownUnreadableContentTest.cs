@@ -350,6 +350,25 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
         read.Shape.Should().Be(member);
     }
 
+    /// <summary>
+    /// 🚨 Review on #7097, thread three. A successful bind is not an empty body: raw
+    /// <c>{"Content": "# Existing document"}</c> misses the case-sensitive <c>content</c> lookups,
+    /// yet the record's contract binds it case-insensitively WITH the document. Calling that Absent
+    /// would put the invitation to edit over it — the classification must read the BOUND body.
+    /// </summary>
+    [Fact]
+    public void PascalCaseBody_IsReadFromTheBoundRecord_NotCalledEmpty()
+    {
+        var read = Read(Node(Json("""{"Content":"# Existing document","tags":["draft"]}""")));
+        read.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Present,
+            "the bind carried the document — it is there, not absent");
+        read.Text.Should().Be("# Existing document");
+
+        Read(Node(Json("""{"Content":""}"""))).State
+            .Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent,
+                "…and a bound EMPTY body is still the empty document");
+    }
+
     private static MarkdownOverviewLayoutArea.MarkdownRead Read(MeshNode? node) =>
         MarkdownOverviewLayoutArea.ReadMarkdownContent(node);
 
