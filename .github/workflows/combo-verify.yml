@@ -354,6 +354,12 @@ jobs:
           ARTIFACT_TAG: slot-${{ matrix.slot }}
           GITHUB_TOKEN: ${{ steps.repo-token.outputs.token }}
           WORK_ROOT: ${{ runner.temp }}/combo
+          # The combo's MODULE half (MeshWeaver#4413): the sealed publications the instance's
+          # compiled modules are read from, through the OIDC login above — the same share main-cd's
+          # `published-modules` job reads. The lander asserts it (`${…:?}`) whenever the combo
+          # declares a compiled module, so an empty value is a red naming it, never a gate run
+          # without the modules.
+          BAKE_PUBLISH_TARGETS: ${{ vars.BAKE_PUBLISH_TARGETS }}
         run: |
           set -euo pipefail
           : "${INSTANCE_NAME:?the slot step resolved no installation name}"

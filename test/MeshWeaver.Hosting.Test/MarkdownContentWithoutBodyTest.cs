@@ -12,10 +12,12 @@ namespace MeshWeaver.Hosting.Test;
 
 /// <summary>
 /// Systemorph/MeshWeaver#6639. A <c>Markdown</c> row whose stored content names
-/// <c>$type: MarkdownContent</c> but carries no <c>content</c> member does not bind — and that is
-/// deliberate: <c>MarkdownContent.Content</c> is <c>required</c> precisely so that content carrying
-/// its body under another key (<c>{"markdown": …}</c>, <c>{"text": …}</c>) THROWS instead of
-/// binding into an empty page (#4600, #5736). What was wrong is the diagnosis: the warning that
+/// <c>$type: MarkdownContent</c> but carries no <c>content</c> member and carries its body under
+/// another key (<c>{"markdown": …}</c>, <c>{"text": …}</c>) does not bind — and that is deliberate:
+/// <c>MarkdownContent</c> refuses that shape instead of binding it into an empty page (#4600, #5736).
+/// One WITHOUT any such key — only members the record declares — is an empty document and binds
+/// as one (<see cref="MarkdownContentWithOnlyDeclaredMembers_BindsAsAnEmptyDocument"/>). What was
+/// wrong with the refused kind is the diagnosis: the warning that
 /// names the node's PATH said "TypeRegistry lacks the $type discriminator" for a type the process
 /// knows, sending the reader to fix a registration that is not missing, while the serializer's own
 /// warning — which does name the cause — cannot name the node.
@@ -71,6 +73,31 @@ public class MarkdownContentWithoutBodyTest
         Assert.Contains("Space/APageWithoutABody", record.Message);
         Assert.Contains("'MarkdownContent' is registered, but the stored JSON does not bind", record.Message);
         Assert.DoesNotContain("TypeRegistry lacks", record.Message);
+    }
+
+    /// <summary>
+    /// 🚨 #5736 / #6639 — the shape with NO body anywhere: <c>$type: MarkdownContent</c> and only
+    /// members the record declares. Through both production read seams it must arrive TYPED, as an
+    /// empty document carrying its other members, with nothing logged. Negative control: while
+    /// <c>Content</c> was <c>required</c> both seams left it raw JSON and logged the bind failure.
+    /// </summary>
+    /// <param name="seam">The read seam under test.</param>
+    [Theory]
+    [MemberData(nameof(Seams))]
+    public void MarkdownContentWithOnlyDeclaredMembers_BindsAsAnEmptyDocument(string seam)
+    {
+        var registry = new MeshContentTypeRegistry();
+        registry.Register(typeof(MarkdownContent), MarkdownNodeType);
+        var logger = new RecordingLogger();
+
+        var read = Run(seam,
+            NodeWith(MarkdownNodeType, """{"$type":"MarkdownContent","tags":["draft"]}"""),
+            logger, registry);
+
+        var typed = Assert.IsType<MarkdownContent>(read.Content);
+        Assert.Equal(string.Empty, typed.Content);
+        Assert.Equal(["draft"], typed.Tags!);
+        Assert.Empty(logger.Records.Where(r => r.Level >= LogLevel.Warning));
     }
 
     /// <summary>A record with a genuinely <c>required</c> member — content that omits it cannot bind.</summary>

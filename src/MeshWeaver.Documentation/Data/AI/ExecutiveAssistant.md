@@ -48,7 +48,7 @@ The EA agent declares the `Mesh` + `ExecutiveAssistant` plugins. The `ExecutiveA
 
 | Area | Tools |
 |---|---|
-| Mail | `ListInbox`, `SearchMail`, `ReadMail`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
+| Mail | `ListInbox`, `SearchMail`, `ReadMail`, `SaveAttachment`, `DraftMail`, `DraftReply`, `GetDraft`, `UpdateDraft`, `DiscardDraft` — and `SendMail`, `ReplyToMail` **only where the deployment opted in**, see below |
 | Mailings | `PrepareMailing` — one subject and body template merged per recipient into personal mails, saved as a page the person reviews; **never sends** — see below |
 | Calendar | `ListEvents`, `GetEvent`, `CreateEvent` (book + invite attendees), `UpdateEvent`, `CancelEvent` |
 | Teams | `ListTeams`, `ListChannels`, `ReadChannelMessages`, `ListChats`, `ReadChat` — the user's own organisation's teams and chats; and `PostChannelMessage`, `ReplyToChannelMessage`, `SendChatMessage` **only where the deployment opted in** (`Teams:AgentSend=Send`), see below |
@@ -83,16 +83,29 @@ through the document path instead — **Share ⇒ as email** in the node menu, i
 Skill/share-email`, served from MeshWeaver.Plugins). It sends **as the user**, off the same
 `EaCredential`, so it needs no second consent.
 
-### Inbound attachments are listed, never read
+### Inbound attachments are listed, never read — and saved on request
 
 The other direction has a limit too. When a message carries attachments, `ReadMail` lists each
 one by **metadata only**: `name`, `contentType`, `size` in bytes, `isInline` and `kind` (`file`,
 `item` or `reference`). The listing asks Graph for exactly those fields, and `contentBytes` is not
-among them, so an attachment's bytes are never even fetched. No external file content becomes model
-input, and none enters the mesh unless the person acts. An agent tells the person what arrived, by
-name. To work with a file, the person saves it from their mail client and uploads it into the mesh.
-If Graph refuses the listing, the message body still comes back, with a note naming the error.
-This is a maintainer decision, recorded on MeshWeaver.Plugins#3704; the tool itself lives in
+among them, so listing never downloads a file. No external file content becomes model input. If
+Graph refuses the listing, the message body still comes back, with a note naming the error. This is
+a maintainer decision, recorded on MeshWeaver.Plugins#3704.
+
+To **keep** a file, the agent saves it with `SaveAttachment(id, attachment, target)`:
+
+- **Target** — `{space}/content/{subpath}/{file}`, or a folder ending in `/` to keep the
+  attachment's own name (`LastWar/content/presentations/`). `{space}` is a top-level space: only a
+  space root has a writable `content` collection, so a nested target is refused by name.
+- **Server-side, as the person.** The bytes go from Graph to the mesh upload
+  (`MeshOperations.Upload`) without passing through the model; the answer names where the file
+  landed, never what is in it. The owning space authorizes the write as an Update by the person, so
+  a space they cannot edit refuses it, whatever a mail told the agent to do.
+- **Files only, bounded.** An attached mail, event or cloud link is not a file and is refused; so is
+  anything over 100 MB, decided from the listed size before a byte is downloaded.
+- Once saved, the file is read from the mesh like any other.
+
+Policy [`ea-saves-attachments-to-space-content`](/Doc/Architecture/PolicyNotProse); the tool lives in
 MeshWeaver.Plugins (`MeshWeaver.Mail.MicrosoftGraph`).
 
 ### Mailings — draft once, approve once, send to many

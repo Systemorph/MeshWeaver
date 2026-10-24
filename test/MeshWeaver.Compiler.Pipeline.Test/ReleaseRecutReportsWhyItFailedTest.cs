@@ -3,6 +3,7 @@ using System.Linq;
 using System.Reactive;
 using System.Reactive.Concurrency;
 using System.Reactive.Subjects;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using Xunit;
 
@@ -131,6 +132,44 @@ public class ReleaseRecutReportsWhyItFailedTest
         Assert.NotNull(outcome);
         Assert.False(outcome!.Succeeded);
         Assert.Contains("cross-hub write PARTIALLY refused", outcome.Failure!);
+    }
+
+    // ───────────── the CLASS travels with the reason (#7072) ─────────────
+
+    /// <summary>
+    /// 🚨 #7072 — a create answered <c>Unavailable</c> (the store could not be reached; nothing was
+    /// written) is classified as such AT THE ARM, from the typed reason the create surface stamps on
+    /// the exception. That class is the only one the activation holding the stamp re-issues.
+    /// </summary>
+    [Fact]
+    public void AnUnavailableAnswer_IsClassifiedUnavailable_ThroughTheRealChain()
+    {
+        var outcome = Run((create, _) => create.OnError(
+            CreateNodeResponse.Fail("the data store was unreachable", NodeCreationRejectionReason.Unavailable)
+                .ToException(ReleasePath)));
+
+        Assert.NotNull(outcome);
+        Assert.False(outcome!.Succeeded);
+        Assert.Equal(ReleaseFailureClass.Unavailable, outcome.FailureClass);
+        Assert.True(outcome.WasUnavailable);
+    }
+
+    /// <summary>The other side: a VERDICT is Refused, an expiry is Expired, and neither is re-issued.</summary>
+    [Fact]
+    public void AVerdictAndAnExpiry_AreNotUnavailable_ThroughTheRealChain()
+    {
+        var refused = Run((create, _) => create.OnError(
+            CreateNodeResponse.Fail("Access denied", NodeCreationRejectionReason.ValidationFailed)
+                .ToException(ReleasePath)));
+        Assert.Equal(ReleaseFailureClass.Refused, refused!.FailureClass);
+        Assert.False(refused.WasUnavailable);
+
+        var expired = Run((_, clock) => clock.AdvanceBy(NodeTypeBuildState.CreateBound.Add(TimeSpan.FromTicks(1))));
+        Assert.Equal(ReleaseFailureClass.Expired, expired!.FailureClass);
+        Assert.False(expired.WasUnavailable);
+
+        var faulted = Run((create, _) => create.OnError(new InvalidOperationException("something else")));
+        Assert.Equal(ReleaseFailureClass.Faulted, faulted!.FailureClass);
     }
 
     // ───────────────── the channel the incident names: a bound that expired ─────────────────

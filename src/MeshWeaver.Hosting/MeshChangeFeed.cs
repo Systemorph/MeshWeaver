@@ -23,6 +23,8 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     private readonly ISubject<MeshChangeEvent> _subject;
     private readonly ISubject<MeshChangeEvent> _invalidations;
     private readonly StorageChangeFeedRelay? _storageRelay;
+    private readonly Subject<MeshChangeEvent> _durableLifetime = new();
+    private readonly ISubject<MeshChangeEvent> _durable;
     private readonly Subject<ChangeFeedGap> _gapsLifetime = new();
     private readonly ISubject<ChangeFeedGap> _gaps;
     private readonly IDisposable? _gapRelay;
@@ -40,6 +42,7 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         _subject = Subject.Synchronize(_subjectLifetime);
         _invalidations = Subject.Synchronize(_invalidationLifetime);
         _gaps = Subject.Synchronize(_gapsLifetime);
+        _durable = Subject.Synchronize(_durableLifetime);
     }
 
     /// <summary>
@@ -139,9 +142,33 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
     /// </summary>
     internal void PublishInvalidation(MeshChangeEvent change)
     {
-        if (!_disposed)
-            _invalidations.OnNext(change);
+        if (_disposed)
+            return;
+        _invalidations.OnNext(change);
+        // Only this path is a commit the store announced; a direct Publish is not (DurableCommits).
+        _durable.OnNext(change);
     }
+
+    /// <inheritdoc />
+    /// <remarks>Each subscriber isolated, as <see cref="Gaps"/> is: one that throws must not keep the
+    /// next from seeing the commit.</remarks>
+    public IObservable<MeshChangeEvent> DurableCommits => Observable.Create<MeshChangeEvent>(observer =>
+        _durable.Subscribe(
+            change =>
+            {
+                try
+                {
+                    observer.OnNext(change);
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex,
+                        "Mesh durable-commit subscriber failed for {Kind} {Path}; continuing with the others",
+                        change.Kind, change.Path);
+                }
+            },
+            observer.OnError,
+            observer.OnCompleted));
 
     /// <summary>
     /// Subscribes a handler to mesh change events, optionally filtered by change kind.
@@ -199,6 +226,8 @@ public class InProcessMeshChangeFeed : IMeshChangeFeed, IMeshInvalidationFeed, I
         _gapRelay?.Dispose();
         _gaps.OnCompleted();
         _gapsLifetime.Dispose();
+        _durable.OnCompleted();
+        _durableLifetime.Dispose();
         _subject.OnCompleted();
         _invalidations.OnCompleted();
         _subjectLifetime.Dispose();
