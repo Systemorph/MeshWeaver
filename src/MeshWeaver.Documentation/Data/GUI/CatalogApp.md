@@ -108,13 +108,26 @@ gives the pack tab precedence, compared case-insensitively (MeshWeaver.Plugins#4
 | Where | Shape |
 |---|---|
 | CRM portfolio board (MeshWeaver.Crm) | Reply needed / Waiting on them (computed) · one category per counterparty kind · Deals (legend + pipeline). |
-| AI catalogs — `src/MeshWeaver.AI/AiCatalogLayoutAreas.cs` (Plugins) — **first Plugins migration** | Agents / Skills / Providers / Models / Tiers × This space · User · Global; a "+" per tab into that tab's namespace; "This space" conditional. Today on the superseded `WithMeshSearch`. |
-| Threads app — `AiThreadsApplication.cs`, `ThreadGroups.cs` (Plugins) | **Not yet.** Its groups partition ONE query in memory by content facts, not by query terms, and it needs lazy Count/Active badges. It adopts once groups are query-expressible (or a rows variant of `CatalogSearch` exists) and the menu carries counts. |
-| Mailbox — `Essentials/Mailbox/Source/MailboxAreas.cs` | Flat and grouped (`WithGroupBy(…).WithSectionCounts(true)` through `WithConfigure`). |
-| Playroom, Chess history, Store plugin sources | Per-module `Catalog(…)` factories with a conditional "+" (`WithCreate(…, when:)`). |
+| AI catalogs — `src/MeshWeaver.AI/AiCatalogLayoutAreas.cs` (Plugins) | Agents / Skills / Providers / Models / Tiers × This space · User · Global (or one category per source); a "+" per tab into that tab's namespace; "This space" conditional. |
+| AI Settings — `MyAi/Panel/Source/AiSettingsAreas.cs` (Plugins) | Per kind (Skill / Agent / Model) one category per ACTIVE source row, name order, four columns; one bar per kind (`QueryDataId` per kind, because the apps share the page's area). |
+| Submissions book — `ReinsuranceDemo/Book` (MeshWeaver.Reinsurance) | One category per tab of `BookQueries.Tabs` under the node's bound header; embedded with `Render(host)` inside a template. The last caller of `WithMeshSearch`. |
 | Examples start tab — `Developer/DeveloperApp` | Categories per extension slot, `sort:name`, 3 columns, **no bar**. |
 | AI onboarding wizard | Chapters as categories, one search each, a non-default per-viewer `itemArea`. |
-| Later | Store / Edu catalogs, Feedback inbox, Expenses, Approvals desk, DataModelling explorer. |
+
+### Surveyed and deliberately NOT on `CatalogApp`
+
+An inventory of every `Controls.MeshSearch` / `Controls.Catalog` / `WithMeshSearch` site on the five
+repos' main (2026-10-24) found most of them are not a catalog PAGE at all — a catalog app is a menu of
+several lists a reader perceives as different places, with one shared bar. These stay as they are:
+
+| Where | Why it stays |
+|---|---|
+| Threads app — `AiThreadsApplication.cs`, `ThreadGroups.cs` (Plugins) | Not on `WithMeshSearch` either: its groups partition ONE projected query IN MEMORY by content facts (declared group, legacy agent/path placement, "mine"), delegated work is folded into its root, the group list is whatever the readable threads declare, and the menu carries lazy Count/Active badges. It adopts when groups are query-expressible (or a rows variant of `CatalogSearch` exists) and the menu carries counts. |
+| Home catalog — `UserActivityLayoutAreas` (core) | ONE `MeshSearchControl` whose scope tabs (`MeshSearchScopeTab`) are its tabs, with a sort dropdown, view options, a create href, per-viewer privacy and a drag-and-drop apps band above it (`Architecture/AppsHome`). The search options themselves are reachable through `WithConfigure`; what it would change is the composition (scope tabs inside one control vs. categories of sections) and the sibling apps band, which is why it was not moved without a design of its own. |
+| Inbox (core `InboxLayoutArea`) and Mailbox (`Essentials/Mailbox`) | The Inbox is one selectable `DataGrid` list with bulk Delete/Undo that navigates to a reading view per message - the reason it is not a `MeshSearchControl` (`Architecture/CommunicationHub`, "why it is not `MeshSearchControl`"). Mailbox's pages (Inbox / Drafts / Sent) are routes with their own hints, not tabs of one app. |
+| Social feed — `SocialMedia/PostsHub` | One feed sliced by author (a `FeedCard` per row, one column, `MaxRows`), whose tab set is the live set of authors; it is a filter of one list rather than a menu of different places. Not evaluated beyond that. |
+| Underwriting Workbench, Claims Register (`WithReach` partition tabs) | A list inside a dashboard of KPIs and a board, scoped by partition. |
+| Playroom, Chess history, Store sources / extension shelf / exercise grids, Edu module, Expenses, Approvals, DataModelling, Fleet console, settings tabs of the connector apps | A single list embedded in a detail page, a settings tab or a dashboard section (often with a summary above it). There is no menu of categories to make. |
 
 `CatalogExtensions.WithMeshSearch` is superseded by this and will be marked `[Obsolete]` once its
 callers have moved (consumers build with TreatWarningsAsErrors, so the attribute would break them on
