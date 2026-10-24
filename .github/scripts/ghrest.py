@@ -155,7 +155,11 @@ def request(path: str, token: str | None = None, *, method: str | None = None,
     hdrs = {"Accept": accept, "X-GitHub-Api-Version": API_VERSION, "User-Agent": user_agent}
     hdrs.update(headers or {})
     req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-    if token:
+    # The token is attached ONLY when the resolved URL is on `api`'s origin. A full URL (a
+    # `Link: rel="next"`, an `archive_download_url`) that names another origin goes out without it:
+    # the redirect handler guards hops, and this guards the FIRST request — otherwise `paginate()`
+    # would re-attach the token to an off-origin next-page URL a redirect had just stripped it from.
+    if token and _origin(url) == _origin(api):
         req.add_header("Authorization", f"Bearer {token}")
     return urlopen(req, timeout=timeout)
 
@@ -258,6 +262,13 @@ def self_test() -> int:
 
         def do_GET(self):
             seen["B" + self.path] = self.headers.get("Authorization")
+            if self.path == "/list-off-2":
+                body = b"[2]"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             body = b"PK-zip-bytes"
             self.send_response(200)
             self.send_header("Content-Length", str(len(body)))
@@ -292,6 +303,9 @@ def self_test() -> int:
                 self._send(200, b'[1, 2]', {"Link": f'<http://127.0.0.1:{port}/list?page=2>; rel="next"'})
             elif self.path == "/list?page=2":
                 self._send(200, b'[3]')
+            elif self.path == "/list-off?page=1":
+                # the next page lives on ANOTHER origin (storage) — its Link must not carry the token
+                self._send(200, b'[1]', {"Link": f'<{b_url}/list-off-2>; rel="next"'})
             elif self.path == "/endless":
                 self._send(200, b'[0]', {"Link": f'<http://127.0.0.1:{port}/endless>; rel="next"'})
             else:
@@ -362,6 +376,16 @@ def self_test() -> int:
         check("urlopen applies the same rule to a hand-built non-GitHub request",
               seen.get("B/after-post", "absent") is None)
         check("paginate follows Link to the last page", paginate("/list?page=1", "secret", api=a_url) == [1, 2, 3])
+        seen.clear()
+        with request(f"{b_url}/signed/blob.zip?sig=1", "secret", api=a_url) as r:
+            r.read()
+        check("an absolute URL on ANOTHER origin gets NO token on its first request",
+              seen.get("B/signed/blob.zip?sig=1", "absent") is None)
+        seen.clear()
+        check("paginate follows a Link onto another origin",
+              paginate("/list-off?page=1", "secret", api=a_url) == [1, 2])
+        check("...the API page carried the token, the off-origin next page did NOT",
+              seen.get("A/list-off?page=1") == "Bearer secret" and seen.get("B/list-off-2", "absent") is None)
         try:
             paginate("/endless", "secret", api=a_url, max_pages=3)
             check("paginate refuses past max_pages", False)
