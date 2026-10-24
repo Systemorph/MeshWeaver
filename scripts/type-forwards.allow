@@ -49,3 +49,9 @@
 # module bundle or bake surface.
 MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.OrleansMeshChangeFeed  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)
 MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.PathCacheInvalidatorGrain  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)
+
+# #7118 — IModuleUpdatePolicy is DELETED, not moved: retired 2026-09-14, registered and consumed by
+# nothing since; no fleet repository names it (Systemorph org code search) and the per-partition
+# in-mesh sweep on systemorph and control found no Code/NodeType node naming it. A module compiled
+# against an earlier platform that still bound it is reported Unlinkable (ModulePlatformLink).
+MeshWeaver.PluginCatalog:MeshWeaver.PluginCatalog.IModuleUpdatePolicy  #7118 — deleted, not moved; no caller in the fleet or the live mesh
