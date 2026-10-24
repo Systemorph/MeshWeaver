@@ -125,7 +125,7 @@ public class InstalledAppNotificationPreferencesAreaTest(ITestOutputHelper outpu
     }
 
     /// <summary>A container's direct child controls (the <c>Views</c> property is non-public).</summary>
-    private static System.Collections.Generic.List<UiControl> Views(UiControl root)
+    private static System.Collections.Immutable.ImmutableList<UiControl> Views(UiControl root)
     {
         for (var type = root.GetType(); type is not null; type = type.BaseType)
         {
@@ -133,7 +133,7 @@ public class InstalledAppNotificationPreferencesAreaTest(ITestOutputHelper outpu
                 System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
                 | System.Reflection.BindingFlags.DeclaredOnly);
             if (property?.GetValue(root) is System.Collections.IEnumerable views)
-                return views.OfType<UiControl>().ToList();
+                return System.Collections.Immutable.ImmutableList.CreateRange(views.OfType<UiControl>());
         }
         return [];
     }
