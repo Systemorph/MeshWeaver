@@ -72,7 +72,7 @@ internal class TypeRegistry : ITypeRegistry
     /// <summary>The still-alive entries of the weak shadow, as name→definition pairs.</summary>
     private IEnumerable<KeyValuePair<string, ITypeDefinition>> LiveDemotedDefinitions()
     {
-        foreach (var (name, weak) in demotedTypeByName)
+        foreach (var (name, weak) in Volatile.Read(ref demotedTypeByName) ?? Enumerable.Empty<KeyValuePair<string, WeakReference<Type>>>())
             if (weak.TryGetTarget(out var type)
                 && demotedDefinitions.TryGetValue(type, out var definition))
                 yield return new KeyValuePair<string, ITypeDefinition>(name, definition);
@@ -123,8 +123,14 @@ internal class TypeRegistry : ITypeRegistry
     // the leak AND the freed-metadata walk stay fixed (dfac3366d), while a live hub keeps
     // working through its supersession window.
     private readonly ConditionalWeakTable<Type, TypeDefinition> demotedDefinitions = new();
-    private readonly ConcurrentDictionary<string, WeakReference<Type>> demotedTypeByName = new();
-    private readonly ConcurrentDictionary<string, WeakReference<Type>> demotedAliasByName = new();
+    // Created on the first demotion only: most registries never see an unload, and a hub-level
+    // registry is held once per hub, so two empty concurrent maps per hub were pure per-hub cost.
+    private ConcurrentDictionary<string, WeakReference<Type>>? demotedTypeByName;
+    private ConcurrentDictionary<string, WeakReference<Type>>? demotedAliasByName;
+
+    private ConcurrentDictionary<string, WeakReference<Type>> DemotedNames(bool alias) => alias
+        ? LazyInitializer.EnsureInitialized(ref demotedAliasByName, () => new())
+        : LazyInitializer.EnsureInitialized(ref demotedTypeByName, () => new());
     // Contexts whose Unloading has already fired. A LATE registration from such a context
     // (a serializer touching a superseded type) must go straight to the weak shadow: the
     // Unloading event will never fire again, so a strong entry would be an un-evictable
@@ -155,6 +161,8 @@ internal class TypeRegistry : ITypeRegistry
     public ITypeRegistry WithType(Type type, string typeName)
     {
         typeName ??= type.FullName!;
+        if (InheritsEquivalentDefinition(type, typeName))
+            return this;
         var typeDefinition = new TypeDefinition(type, typeName, keyFunctionBuilder, descriptions.For(type));
         // A type whose context has already BEGUN unloading registers into the weak shadow:
         // its Unloading event will never fire again, so a strong entry could never be
@@ -175,6 +183,44 @@ internal class TypeRegistry : ITypeRegistry
         return this;
     }
 
+    /// <summary>
+    /// Whether this registry can serve <paramref name="type"/> under <paramref name="typeName"/> from
+    /// its parent chain instead of holding a definition of its own — because the parent's definition is
+    /// exactly the one this registry would build.
+    ///
+    /// <para>🚨 Why. Every hub owns a registry chained to its parent's, and a hub's configuration
+    /// registers (<c>WithType</c>) most of the types the mesh registry already holds under the same
+    /// name — measured on a node hub with the standard data-source setup: 344 own definitions against
+    /// 427 resolvable, 391 of them on the mesh registry. Each copy is a definition plus its map nodes,
+    /// held once per hub, and a live portal holds ~100,000 hubs
+    /// (<c>Doc/Architecture/PortalHeapIsHubs</c> → "Per-hub DI and type metadata").</para>
+    ///
+    /// <para>Equivalent means every observable member is the same, so nothing a caller can read
+    /// changes: the same CLR type and collection name, no owning address, the description and icon
+    /// the type itself declares (no override), a display declaration that resolves no resources
+    /// (resource text is resolved per definition), and a key the CONVENTIONS decide
+    /// (<see cref="KeyFunctionBuilder.HasConventionalKey"/>) — the factories a registry adds to its
+    /// builder are consulted only after them, so both builders yield the same key. A type whose key
+    /// would come from this registry's own factories keeps its own definition, as before.</para>
+    /// </summary>
+    private bool InheritsEquivalentDefinition(Type type, string typeName)
+    {
+        if (parent is null || nameByType.ContainsKey(type) || typeByName.ContainsKey(typeName) || IsUnloadingContext(type))
+            return false;
+        return parent.GetTypeDefinition(type, create: false) is TypeDefinition inherited
+               && IsEquivalentPlainDefinition(inherited, type, typeName);
+    }
+
+    private static bool IsEquivalentPlainDefinition(TypeDefinition inherited, Type type, string typeName) =>
+        inherited.GetType() == typeof(TypeDefinition)
+        && inherited.Type == type
+        && inherited.CollectionName == typeName
+        && inherited.Address is null
+        && inherited.KeyFromBuilder
+        && inherited.DescribedByType
+        && inherited.DisplayMetadata.Display?.ResourceType is null
+        && inherited.DisplayMetadata.HasConventionalKey;
+
     /// <summary>Whether the type's collectible load context has already begun unloading.</summary>
     private bool IsUnloadingContext(Type type)
         => type.Assembly.IsCollectible
@@ -185,7 +231,7 @@ internal class TypeRegistry : ITypeRegistry
     private void Demote(string name, TypeDefinition definition, bool alias)
     {
         demotedDefinitions.AddOrUpdate(definition.Type, definition);
-        (alias ? demotedAliasByName : demotedTypeByName)[name] = new WeakReference<Type>(definition.Type);
+        DemotedNames(alias)[name] = new WeakReference<Type>(definition.Type);
     }
 
     /// <summary>
@@ -195,8 +241,8 @@ internal class TypeRegistry : ITypeRegistry
     /// </summary>
     private TypeDefinition? GetDemoted(string name, bool alias = false)
     {
-        var map = alias ? demotedAliasByName : demotedTypeByName;
-        if (!map.TryGetValue(name, out var weak))
+        var map = alias ? Volatile.Read(ref demotedAliasByName) : Volatile.Read(ref demotedTypeByName);
+        if (map is null || !map.TryGetValue(name, out var weak))
             return null;
         if (weak.TryGetTarget(out var type)
             && demotedDefinitions.TryGetValue(type, out var definition))
@@ -326,12 +372,11 @@ internal class TypeRegistry : ITypeRegistry
                 nameByType.TryRemove(type, out _);
         // Opportunistically prune weak entries whose assemblies have since been collected —
         // keeps the shadow's name maps bounded by LIVE demoted types, not by history.
-        foreach (var (name, weak) in demotedTypeByName)
-            if (!weak.TryGetTarget(out _))
-                demotedTypeByName.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
-        foreach (var (name, weak) in demotedAliasByName)
-            if (!weak.TryGetTarget(out _))
-                demotedAliasByName.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
+        foreach (var map in new[] { Volatile.Read(ref demotedTypeByName), Volatile.Read(ref demotedAliasByName) })
+            if (map is not null)
+                foreach (var (name, weak) in map)
+                    if (!weak.TryGetTarget(out _))
+                        map.TryRemove(new KeyValuePair<string, WeakReference<Type>>(name, weak));
         trackedContexts.Remove(context);
         context.Unloading -= EvictLoadContext;
     }
@@ -373,7 +418,15 @@ internal class TypeRegistry : ITypeRegistry
     }
 
     public KeyFunction? GetKeyFunction(string collection) =>
-        (typeByName.GetValueOrDefault(collection) ?? GetDemoted(collection))?.Key.Value;
+        (typeByName.GetValueOrDefault(collection) ?? GetDemoted(collection) ?? InheritedConventionalDefinition(collection))?.Key;
+
+    // A type served from the parent chain by InheritsEquivalentDefinition: its key is the parent
+    // definition's (the conventions decide it, so this registry's builder would yield the same one).
+    private TypeDefinition? InheritedConventionalDefinition(string collection) =>
+        parent?.GetTypeDefinition(collection) is TypeDefinition inherited
+        && IsEquivalentPlainDefinition(inherited, inherited.Type, collection)
+            ? inherited
+            : null;
 
     public KeyFunction? GetKeyFunction(Type type)
     {
@@ -594,7 +647,11 @@ internal class TypeRegistry : ITypeRegistry
         var typeDefinition = typeByName.GetValueOrDefault(collection) ?? (TypeDefinition?)parent?.GetTypeDefinition(collection);
         if (typeDefinition == null)
             throw new ArgumentException($"Type {collection} not found");
-        return typeByName[collection] = typeDefinition with { Key = new(() => keyFunction) };
+        var keyed = typeByName[collection] = typeDefinition.WithKey(keyFunction);
+        // Index the type too, so a lookup BY TYPE finds this registry's keyed definition rather than
+        // falling through to the parent's — it did not when the definition came from the parent.
+        nameByType[keyed.Type] = collection;
+        return keyed;
     }
 
     public ITypeRegistry WithTypesFromAssembly(Type type, Func<Type, bool> filter) =>

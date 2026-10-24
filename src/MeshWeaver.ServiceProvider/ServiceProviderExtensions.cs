@@ -46,14 +46,14 @@ public static class ServiceProviderExtensions
             // The parent's registry of module-owned instances (MeshWeaver#6588): a hub scope's own
             // registrations are watched against the same owners as the root's.
             var owners = parent.GetService<ModuleInstanceOwners>();
-            if (tag != null)
-                ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(tag, c => c.PopulateMeshWeaverWithOwners(services, owners))
-                );
-            else
-                ret = new AutofacServiceProvider(
-                    lifetimeScope.BeginLifetimeScope(c => c.PopulateMeshWeaverWithOwners(services, owners))
-                );
+            void Configure(ContainerBuilder c)
+            {
+                c.PopulateMeshWeaverWithOwners(services, owners);
+                HubScopeStartables.StartOnlyOwnComponents(c, services);
+            }
+            ret = new AutofacServiceProvider(tag != null
+                ? lifetimeScope.BeginLifetimeScope(tag, Configure)
+                : lifetimeScope.BeginLifetimeScope(Configure));
         }
         else
         {
