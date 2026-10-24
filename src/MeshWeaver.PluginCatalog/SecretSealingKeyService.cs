@@ -53,37 +53,62 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
     /// <summary>
     /// Opens an envelope sealed for <paramref name="context"/>. Null for anything that does not open: not an
     /// envelope, an unknown or expired key id, a different context, tampering. Cold; emits once.
+    ///
+    /// <para>🚨 <b>Authorized as the CALLER, executed as System.</b> This service is a mesh singleton, so any code
+    /// holding a hub can resolve it — in-mesh NodeType source included. The private key is read as System, which no
+    /// caller holds, so the caller's own right is checked FIRST: <see cref="Permission.Execute"/> on
+    /// <see cref="SecretSealingKeys.Path"/> (an Admin-partition node: a global admin, or the platform running as
+    /// System). A caller without it gets <see cref="UnauthorizedAccessException"/>; a check that could not be
+    /// decided fails closed with <see cref="InvalidOperationException"/>. Nothing is elevated before either.</para>
     /// </summary>
     public IObservable<string?> Unseal(string? envelopeJson, string context)
-    {
-        if (SecretEnvelope.TryParse(envelopeJson) is not { } envelope)
-            return Observable.Return<string?>(null);
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(Read).Select(stored =>
+        => AuthorizedThenAsSystem(Permission.Execute, "open a sealed secret", () =>
         {
-            if (stored is null) return null;
-            var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
-            var protectedPrivate = stored.ProtectedPrivateKeyFor(envelope.KeyId, DateTimeOffset.UtcNow);
-            if (protectedPrivate is null || Unprotect(protector, protectedPrivate) is not { } privateKey)
-                return null;
-            try { return envelope.Unseal(privateKey, context); }
-            finally { CryptographicOperations.ZeroMemory(privateKey); }
+            if (SecretEnvelope.TryParse(envelopeJson) is not { } envelope)
+                return Observable.Return<string?>(null);
+            return Read().Select(stored =>
+            {
+                if (stored is null) return null;
+                var protector = hub.ServiceProvider.GetService<IProviderKeyProtector>();
+                var protectedPrivate = stored.ProtectedPrivateKeyFor(envelope.KeyId, DateTimeOffset.UtcNow);
+                if (protectedPrivate is null || Unprotect(protector, protectedPrivate) is not { } privateKey)
+                    return null;
+                try { return envelope.Unseal(privateKey, context); }
+                finally { CryptographicOperations.ZeroMemory(privateKey); }
+            });
         });
-    }
 
     /// <summary>
     /// Rotates now (an operator's call; the schedule does it by itself). Every outgoing key stays accepted for
     /// <see cref="SecretSealingKeys.RotationGrace"/> from its own rotation. Cold; emits the new public key.
+    /// Authorized as the caller first — <see cref="Permission.Update"/> on <see cref="SecretSealingKeys.Path"/> —
+    /// exactly like <see cref="Unseal"/>.
     /// </summary>
     public IObservable<SealingPublicKey> Rotate(string rotatedBy)
-    {
-        var access = hub.ServiceProvider.GetService<AccessService>();
-        return access.RunAsSystem(() => Read().SelectMany(stored => stored is null
-                ? Create()
-                : Rotated(_ => true)))
+        => AuthorizedThenAsSystem(Permission.Update, "rotate the secret sealing key", () => Read()
+                .SelectMany(stored => stored is null
+                    ? Create()
+                    : Rotated(_ => true)))
             .Do(_ => logger.LogInformation("Secret sealing key rotated by {By}; the outgoing key stays accepted for {Grace}", rotatedBy, SecretSealingKeys.RotationGrace))
             .Select(stored => new SealingPublicKey(stored.CurrentId, stored.CurrentPublicKey));
-    }
+
+    /// <summary>
+    /// The control-plane shape (Doc/Architecture/AuthorizeAsCallerExecuteAsSystem): check the CALLER's
+    /// <paramref name="permission"/> on the key node, resolved at subscribe time from the caller's own context, and
+    /// only then run <paramref name="work"/> as System. Denied is <see cref="UnauthorizedAccessException"/>;
+    /// undetermined (a fold that faulted or produced no verdict) is <see cref="InvalidOperationException"/>, never
+    /// a grant.
+    /// </summary>
+    private IObservable<T> AuthorizedThenAsSystem<T>(Permission permission, string what, Func<IObservable<T>> work)
+        => hub.CheckPermissionOutcome(SecretSealingKeys.Path, permission)
+            .Take(1)
+            .SelectMany(outcome => outcome.IsGranted
+                ? hub.ServiceProvider.GetService<AccessService>().RunAsSystem(work)
+                : Observable.Throw<T>(outcome.IsUndetermined
+                    ? new InvalidOperationException(
+                        $"Could not check whether the caller may {what}: {outcome.UndeterminedReason}")
+                    : new UnauthorizedAccessException(
+                        $"The caller may not {what}: {permission} on {SecretSealingKeys.Path} is required.")));
 
     private IObservable<SecretSealingKey> Resolve()
     {

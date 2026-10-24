@@ -45,9 +45,20 @@ value sealed just before the rotation still opens; after that only the newer key
 window is kept (`SecretSealingKey.Retired`), so two rotations within one window never drop the first outgoing key
 early.
 
-The due-check and the rotation happen together inside the update at the node's owning hub, which serialises them:
-two requests that both read an overdue key cannot both rotate it. The second finds the first one's key current and
-adopts it, and every caller answers with the key as stored, never its own proposal.
+The due-check and the rotation happen together, inside ONE `GetMeshNodeStream(path).Update`. The lambda runs on the
+writer's mirror, and what reaches the owning hub is the merge patch of what it changed plus the writer's base values,
+which the owner merges three-way. A request whose mirror was behind is therefore refused on the current key's fields
+(they changed on the owner since its base), re-reads, finds the rotated key not due and adopts it; every caller
+answers with the key as stored, never its own proposal. `Retired` is never null, so it always carries a base and
+the owner merges it as a list: a rotation delayed behind two others appends to the retired keys and never replaces
+them.
+
+**Opening and rotating are authorized as the caller, then executed as System**
+([Authorize as the caller, execute as System](../AuthorizeAsCallerExecuteAsSystem)). The service is a mesh
+singleton, so any code holding a hub can resolve it, in-mesh NodeType source included. `Unseal` requires `Execute`
+and `Rotate` requires `Update` on `Admin/SecretSealingKey/current`, checked for the caller's own identity before
+anything is elevated. A caller without the right gets `UnauthorizedAccessException`. A check that could not be
+decided fails closed.
 
 ## Publishing the public key
 

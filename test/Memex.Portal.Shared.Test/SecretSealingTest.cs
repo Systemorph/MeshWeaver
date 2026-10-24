@@ -3,9 +3,12 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Memex.Portal.Shared.Api;
 using Memex.Portal.Shared.Authentication;
 using MeshWeaver.Data;
+using MeshWeaver.Data.Serialization;
 using MeshWeaver.Fixture;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -191,6 +194,46 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
         k3.Retired!.Select(r => r.Id).Should().Equal(["k1", "k2"], "a retired key past its deadline is dropped at the next rotation");
     }
 
+    /// <summary>
+    /// 🚨 A rotation's update lambda runs on the WRITER's mirror (<c>MeshNodeStreamHandle.UpdateRemote</c>), not at
+    /// the owner: what reaches the owner is the merge patch of what the lambda changed plus the writer's base values,
+    /// which the owner merges three-way (<see cref="MeshNodePatchMerge"/>). A rotation that read K0 and is delivered
+    /// after the owner already went K0 → KA → KC must not take KA out of the retired keys: everything sealed to KA
+    /// would stop opening before its deadline. Driven through the REAL diff and the REAL owner merge.
+    /// </summary>
+    [Fact]
+    public void ARotationDelayedBehindTwoOthers_KeepsEveryKeyRetiredSinceItsMirrorWasRead()
+    {
+        var options = Mesh.JsonSerializerOptions;
+        var now = DateTimeOffset.UtcNow;
+        var grace = SecretSealingKeys.RotationGrace;
+        SecretSealingKey Minted(string id) => new()
+        {
+            CurrentId = id, CurrentPublicKey = "pub-" + id, ProtectedCurrentPrivateKey = "enc:" + id,
+            CurrentIssuedAt = now, RotateAfter = now.AddDays(90),
+        };
+        JsonObject Json(SecretSealingKey key) => MeshNodeStreamHandle.ToJsonObject(
+            new MeshNode(SecretSealingKeys.Id, SecretSealingKeys.Namespace) { NodeType = SecretSealingKeys.NodeType, Content = key },
+            options);
+
+        // The delayed writer's mirror still holds the key as minted, and overdue.
+        var k0 = Minted("k0") with { RotateAfter = now.AddMinutes(-1) };
+        // Meanwhile the owner rotated twice.
+        var live = k0.RotatedTo(Minted("kA"), now, grace).RotatedTo(Minted("kC"), now, grace);
+        // The delayed writer's lambda, against its mirror.
+        var proposed = SecretSealingKeyService.RotateAtOwner(k0, Minted("kX"), k => SecretSealingKeyService.IsDue(k, now), now);
+
+        var mirror = Json(k0);
+        var patch = MeshNodeStreamHandle.ComputeMergePatchDiff(mirror, Json(proposed));
+        var owner = Json(live);
+        MeshNodePatchMerge.Apply(owner, patch, MeshNodePatchMerge.ExtractBaseValues(mirror, patch));
+
+        var merged = owner.Deserialize<MeshNode>(options)!.ContentAs<SecretSealingKey>(options)!;
+        merged.ProtectedPrivateKeyFor("kA", now).Should().Be("enc:kA",
+            "KA was retired at the owner after the delayed writer read its mirror, and is still inside its window");
+        merged.ProtectedPrivateKeyFor("k0", now).Should().Be("enc:k0");
+    }
+
     [Fact]
     public async Task ALookupThatFails_IsAnswered503_NotAnUnhandledFault()
     {
@@ -295,7 +338,7 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
             .Update(current => current with
             {
                 Content = current.ContentAs<SecretSealingKey>(Mesh.JsonSerializerOptions) is { } there
-                    ? there with { Retired = there.Retired?.Select(r => r with { ValidUntil = DateTimeOffset.UtcNow.AddMinutes(-1) }).ToImmutableList() }
+                    ? there with { Retired = there.Retired.Select(r => r with { ValidUntil = DateTimeOffset.UtcNow.AddMinutes(-1) }).ToImmutableList() }
                     : current.Content,
             })
             .Take(1).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);

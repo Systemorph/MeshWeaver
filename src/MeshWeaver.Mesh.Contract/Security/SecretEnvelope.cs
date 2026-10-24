@@ -208,9 +208,16 @@ public record SecretSealingKey
     /// <summary>
     /// The outgoing keys still inside their grace window, each with its own deadline. 🚨 EVERY unexpired one is
     /// kept: two rotations inside one window (K0 → K1 → K2) must not drop K0 before its deadline, or a value
-    /// sealed to it stops opening early. Null (the type default) when there are none.
+    /// sealed to it stops opening early.
+    ///
+    /// <para>🚨 <b>Never null — empty when there are none.</b> A rotation's update lambda runs on the WRITER's
+    /// mirror and reaches the owner as a merge patch carrying the writer's base values. The owner merges an array
+    /// field three-way by element identity (the writer's additions and removals onto the LIVE list), but a field
+    /// whose base is null carries no base at all, and the patch value then REPLACES the live one: a rotation
+    /// delayed behind two others (K0 → KA → KC) would overwrite <c>[K0, KA]</c> with <c>[K0]</c> and strand every
+    /// value sealed to KA. An empty list is a base, so that write appends instead.</para>
     /// </summary>
-    public ImmutableList<RetiredSealingKey>? Retired { get; init; }
+    public ImmutableList<RetiredSealingKey> Retired { get; init; } = [];
 
     /// <summary>When a new key is due.</summary>
     public DateTimeOffset? RotateAfter { get; init; }
