@@ -1123,6 +1123,18 @@ public sealed record HostingOperatorSpec
     public bool CustomerGoverned { get; init; }
 
     /// <summary>
+    /// The Key Vault objects this instance's OWN global administrators may write through the control lane
+    /// (<c>instance-secret-write</c>; core <c>Doc/Architecture/SecretSealing</c>): object names, nothing else. The
+    /// control plane refuses a write for any object not listed here, so an administrator of an installation can never
+    /// write an arbitrary vault object, only the ones its record has already made theirs. <b>Empty by default</b>:
+    /// until a record opts in, nothing changes for it. Read by the control plane from the record; never rendered
+    /// into the portal's configuration.
+    /// </summary>
+    [Description("Self-service secrets: the vault objects this instance's own administrators may write through the control lane")]
+    public System.Collections.Immutable.ImmutableList<string> SelfServiceSecrets { get; init; } =
+        System.Collections.Immutable.ImmutableList<string>.Empty;
+
+    /// <summary>
     /// THE executor rule, shared by <see cref="DeploymentRecordExtensions.WithOperatorExecutor"/>
     /// and <see cref="DeploymentPortalConfig.PortalConfig"/> (so by both renderers): trimmed and
     /// case-folded to <c>Job</c> or <c>Actions</c>; null for blank, which the portal and the chart
