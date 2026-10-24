@@ -33,6 +33,9 @@ import tempfile
 import zipfile
 from urllib.parse import quote
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
+
 # Beyond this many unsettled runs since the last success, attesting each one costs more than the
 # full build it would save — and that many reds in a row is itself worth a full rebuild.
 MAX_UNSETTLED = 30
@@ -172,9 +175,8 @@ def self_test():
     print(f"publication baseline: {passed} assertions passed")
 
 
-def gh_json(path):
-    out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=60, check=True)
-    return json.loads(out.stdout)
+# A module attribute, not an inline call: test_publication_artifact_store.py patches `gh_json`.
+gh_json = ghrest.gh_json
 
 
 def carries_marker(repo, run_id, name, artifact_store="", expected_store_id=None):
@@ -212,8 +214,7 @@ def attested_inputs(repo, run_id, artifact_store="", expected_store_id=None):
         if listing.get("total_count"):
             raise ValueError(f"run {run_id}'s publication-inputs artifact has expired")
         return None
-    blob = subprocess.run(["gh", "api", f"repos/{repo}/actions/artifacts/{live[0]['id']}/zip"],
-                          capture_output=True, timeout=60, check=True).stdout
+    blob = ghrest.gh_bytes(f"repos/{repo}/actions/artifacts/{live[0]['id']}/zip")
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
         return json.loads(archive.read("publication-inputs.json"))
 
