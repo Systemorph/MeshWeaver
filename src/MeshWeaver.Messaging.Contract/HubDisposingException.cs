@@ -125,8 +125,5 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// type — is what carries the fact.</para>
     /// </summary>
     public static bool IsDisposedContainer(Exception? exception)
-        => ExceptionChain.Contains(exception, static e =>
-            e is ObjectDisposedException
-            && ((e.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) ?? false)
-                || (e.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) ?? false)));
+        => FaultClassifier.IsDisposedContainer(exception);
 }
