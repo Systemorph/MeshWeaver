@@ -503,8 +503,9 @@ class EventSink:
 
     def __init__(self, api: Api, host: str, repo: str, sha: str, stage: str, channel: str,
                  log: Callable[[str], None], sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic) -> None:
+                 clock: Callable[[], float] = time.monotonic, claim_id: str = "") -> None:
         self.api, self.host, self.log, self.sleep, self.clock = api, host, log, sleep, clock
+        self.claim_id = claim_id   # the assignment every batch belongs to
         self.path = events_path(repo, sha, stage)
         self.query = {"channel": channel}
         self.buf: list[dict] = []
@@ -529,10 +530,14 @@ class EventSink:
                 self.beat()
 
     def _post(self, batch: list[dict]) -> int:
-        status, _ = self.api.call("POST", self.path, {"host": self.host, "seq": self.seq + 1, "events": batch},
-                                  self.query)
+        status, _ = self.api.call("POST", self.path, {"host": self.host, "claimId": self.claim_id,
+                                                      "seq": self.seq + 1, "events": batch}, self.query)
         if status == 409:
-            raise Lost(f"{self.path}: claimed by another host (409)")
+            # Not held by this host, or a batch of an EARLIER assignment (`stale-claim`): either way
+            # the run is no longer this host's — stop, kill the child, post nothing more.
+            raise Lost(f"{self.path}: the run is not this host's claim any more (409)")
+        # 503 = the instance cannot ingest right now (e.g. it states no redaction terms — ingestion
+        # fails closed): retryable, the SAME batch with the SAME seq, never a run failure.
         if 200 <= status < 300:
             self.seq += 1
             self.last = self.clock()
@@ -1160,6 +1165,7 @@ class Host:
         self.plugins_key: Optional[str] = None
         self.heartbeat: Optional[Heartbeat] = None
         self.run_sinks: dict[str, EventSink] = {}
+        self.claim_id = ""
 
     def preflight(self) -> None:
         missing = []
@@ -1285,6 +1291,7 @@ class Host:
         body = {"host": self.host, "channel": self.channel, "platformVersion": self.platform_version,
                 "frameworkIdentity": self.identity, "pluginsDigest": self.plugins_digest,
                 "pluginsKey": self.plugins_key, "claimId": str(uuid.uuid4())}
+        self.claim_id = body["claimId"]
         delay = 2.0
         for attempt in range(4):
             status, answer = self.api.call("POST", "/claim", body)
@@ -1330,7 +1337,9 @@ class Host:
         checkout_dir = os.path.join(workdir, "src")
         outputs_dir = os.path.join(workdir, "out")
         stages: list[dict] = []
-        self.run_sinks: dict[str, EventSink] = {}
+        self.run_sinks: dict[str, EventSink] = {}       # seq restarts at 1 for every assignment
+        if claim.get("claimId"):
+            self.claim_id = str(claim["claimId"])
         with Heartbeat() as hb:
             self.heartbeat = hb
             try:
@@ -1450,7 +1459,7 @@ class Host:
 
     def sink(self, repo: str, sha: str, stage: str) -> EventSink:
         return EventSink(self.api, self.host, repo, sha, stage, self.channel, self.log,
-                         sleep=self.sleep, clock=self.clock)
+                         sleep=self.sleep, clock=self.clock, claim_id=self.claim_id)
 
     def installation_token(self, claim: dict) -> Optional[str]:
         """A one-hour installation token for the CHECKOUT only (`POST /token`, Build service §1.3).
@@ -2244,7 +2253,7 @@ def self_test() -> int:
         check("lease/no heartbeat before the period", hbp == [], hbp)
         now["t"] = HEARTBEAT_SECONDS + 1
         hs.add([])
-        check("lease/an empty batch is the heartbeat", hbp == [{"host": "h", "seq": 1, "events": []}], hbp)
+        check("lease/an empty batch is the heartbeat", hbp == [{"host": "h", "claimId": "", "seq": 1, "events": []}], hbp)
         check("lease/the heartbeat period is under a minute", HEARTBEAT_SECONDS < 60)
         hbt = Heartbeat(period=0.05)
         hbt.target = hs
@@ -2265,6 +2274,30 @@ def self_test() -> int:
         hc.claim()
         check("claim/a new claim attempt carries a fresh claimId", len(ids) == 4 and ids[3] != ids[0], ids)
         check("claim/the claimId is a uuid", all(len(i) == 36 and i.count("-") == 4 for i in ids), ids)
+        # every batch carries the assignment's claimId; a stale-claim 409 ends the run; 503 is retried
+        bodies: list[dict] = []
+        hci = host(_FakeApi({("POST", "/claim"): [(200, dict(claim, stages=[]))], ("POST", "/token"): [(404, None)],
+                             ("POST", "/MeshWeaver.Plugins/"): lambda p_, b: (bodies.append(b), (202, None))[1]}), env=env_s,
+                   checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": "true"}]}))
+        got = hci.claim()
+        hci.run(got)
+        check("claimId/every batch carries the assignment's claimId",
+              bodies and all(b.get("claimId") == hci.claim_id and len(hci.claim_id) == 36 for b in bodies), bodies[:2])
+        stale = host(_FakeApi({("POST", "/token"): [(404, None)],
+                               ("POST", "/MeshWeaver.Plugins/"): [(409, {"error": "stale-claim"})]}), env=env_s,
+                     checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": f"sleep 30; echo ran > {tmp}/stale"}]}))
+        t1 = time.monotonic()
+        check("claimId/a stale-claim 409 abandons the run and kills the child",
+              stale.run(dict(claim, claimId="old")) == "lost" and time.monotonic() - t1 < 20
+              and not os.path.exists(os.path.join(tmp, "stale")), time.monotonic() - t1)
+        tries503: list[int] = []
+        ans503 = [503, 503, 202]
+        s503 = EventSink(_FakeApi({("POST", "/r/"): lambda p_, b: (tries503.append(b["seq"]) or ans503.pop(0), None)}),
+                         "h", "r", "a" * 40, "s", "latest", lambda m: None, sleep=lambda x: None, claim_id="c")
+        s503.add([{"kind": "line", "text": "x"}])
+        check("503/retried with the same batch and seq, never a failure", s503.flush(attempts=6) and tries503 == [1, 1, 1], tries503)
+        check("sandbox/TMPDIR is the stage's tmpfs scratch", sandbox_env({}, {}, "/cache")["TMPDIR"] == f"{SCRATCH}/tmp"
+              and f"--tmpfs {SCRATCH}" in " ".join(Sandbox("bwrap", []).argv("x", "/w/s", "/w/o", {"PATH": "/bin"})))
         plan_from_child = OutputParser("/w", "x").feed('::mw-event::{"kind":"plan","stages":["x"]}')
         check("plan/a child cannot emit the plan", plan_from_child and "refused" in plan_from_child[0]["text"], plan_from_child)
     finally:

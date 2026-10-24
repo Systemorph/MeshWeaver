@@ -101,8 +101,13 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    every planned stage reported success.
    **The lease.** The instance's lease on a claim lasts 10 minutes past the host's last batch, so
    the host posts at least every 45 s for the whole run (the checkout included): an empty batch
-   `{"host","seq":n,"events":[]}` is the heartbeat. Each stage route's batches are numbered 1, 2, …
-   (`seq`), and a retried batch keeps its number.
+   `{"host","claimId","seq":n,"events":[]}` is the heartbeat. Every batch carries the `claimId` of the
+   assignment it belongs to; each stage route's batches are numbered 1, 2, … (`seq`) within that
+   assignment, and a retried batch keeps its number. A 409 — not held by this host, or a
+   `stale-claim` batch of an earlier assignment — ends the run on this host: the stage is killed
+   and nothing more is posted. A 503 (the instance cannot ingest, e.g. it states no redaction
+   terms) is retried with backoff, same batch, same `seq` — never a run failure. Every stage's
+   `TMPDIR` (and `HOME`) is its sandbox's tmpfs scratch.
 3. **Check out** `repo@sha` — the HOST does it, through the shared git MIRROR
    `/cache/git/<repo>.git`: `git clone --mirror` on first use, `git fetch --prune` (plus the run's
    sha and refs) before every checkout, under an exclusive file lock shared by every replica, then
