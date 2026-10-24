@@ -94,10 +94,25 @@ public sealed class MailCopyEngine(
     /// <summary>
     /// Switches the copy ON (a no-op when it is on) and starts the backfill. Cold. The switch-on is judged as
     /// the identity ambient when this is CALLED — never as whoever later subscribes the result — while every
-    /// subscription still mints its own generation.
+    /// subscription still mints its own generation. The backfill runs as System on the owner's behalf, so the
+    /// CODE that calls this is judged by the in-mesh impersonation guard at the call, exactly as for
+    /// <see cref="Kick"/>.
     /// </summary>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource> Enable(string owner, int windowDays)
+        => EnableFrom(Assembly.GetCallingAssembly(), owner, windowDays, nameof(Enable));
+
+    /// <summary>
+    /// <see cref="Enable"/> on behalf of <paramref name="callerCode"/> — the assembly that called the PUBLIC
+    /// surface (<see cref="Enable"/>, <see cref="MailFeedAccountCopy.Enable"/> or <see cref="MailCopySwitch.Enable"/>).
+    /// 🚨 That assembly is checked HERE, at the call, and it is the one the backfill's kick is judged as —
+    /// never this platform assembly, which would pass any caller and run a caller-supplied store's callbacks
+    /// as System.
+    /// </summary>
+    internal IObservable<MailCopySource> EnableFrom(Assembly callerCode, string owner, int windowDays, string surface)
     {
+        CheckCaller(callerCode, surface, owner);
         // 🚨 Read HERE, at the call: the Defer below runs at subscribe, possibly after the caller's scope has
         // ended and under somebody else's identity (a System or admin subscriber must not launder the call).
         var caller = access is null ? null : access.Context ?? access.CircuitContext;
@@ -118,7 +133,7 @@ public sealed class MailCopyEngine(
                         WindowStart = now.AddDays(-days),
                     });
             })
-            .Do(_ => KickFrom(typeof(MailCopyEngine).Assembly, owner, force: true));
+            .Do(_ => KickFrom(callerCode, owner, force: true, surface));
     }
 
     /// <summary>Switches the copy OFF: the source, every copy, their attachment files and index go. Cold; true when something was removed.</summary>
@@ -441,24 +456,47 @@ public sealed class MailFeedAccountCopy(MailCopyEngine engine, IMailCopyFeed fee
     /// <inheritdoc />
     public IReadOnlyCollection<string> KnownOwners => engine.KnownOwners;
 
-    /// <inheritdoc />
-    public IObservable<ImmutableList<MailCopyAccount>> Accounts(string owner)
-        => feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Count == 0
-            ? Observable.Return(ImmutableList<MailCopyAccount>.Empty)
-            : engine.IsOn(owner).Select(on => accounts.Select(a => new MailCopyAccount(Provider, a.AccountId, a.Label, on)).ToImmutableList()));
+    // 🚨 Each wrapper COMPOSES its cold engine operations at entry, under the caller's identity, and only
+    // SUBSCRIBES them after its account check. The engine and the stores read the identity when they are
+    // CALLED; composed inside a SelectMany instead, they would read whatever identity the upstream emitted
+    // under — a privileged subscriber's, or none after a provider hop — and be judged as that.
 
     /// <inheritdoc />
+    public IObservable<ImmutableList<MailCopyAccount>> Accounts(string owner)
+    {
+        var isOn = engine.IsOn(owner);
+        return feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Count == 0
+            ? Observable.Return(ImmutableList<MailCopyAccount>.Empty)
+            : isOn.Select(on => accounts.Select(a => new MailCopyAccount(Provider, a.AccountId, a.Label, on)).ToImmutableList()));
+    }
+
+    /// <inheritdoc />
+    /// <remarks>Starts a System backfill on the owner's behalf, so the CODE that calls it is judged by the in-mesh
+    /// impersonation guard — this assembly calling <see cref="MailCopyEngine.Enable"/> would pass any caller.</remarks>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> Enable(string owner, string accountId, int windowDays)
-        => feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Any(a => a.AccountId == accountId)
-            ? engine.Enable(owner, windowDays).Select(_ => true)
+        => EnableFrom(Assembly.GetCallingAssembly(), owner, accountId, windowDays, nameof(Enable));
+
+    /// <summary><see cref="Enable"/> on behalf of <paramref name="callerCode"/>, the assembly that called the public surface.</summary>
+    internal IObservable<bool> EnableFrom(Assembly callerCode, string owner, string accountId, int windowDays, string surface)
+    {
+        var enable = engine.EnableFrom(callerCode, owner, windowDays, surface);
+        return feed.Accounts(owner).Take(1).SelectMany(accounts => accounts.Any(a => a.AccountId == accountId)
+            ? enable.Select(_ => true)
             : Observable.Return(false));
+    }
 
     /// <inheritdoc />
     public IObservable<bool> Disable(string owner, string accountId)
+    {
+        var source = engine.Source(owner);
+        var disable = engine.Disable(owner);
         // Only the copy OF THIS ACCOUNT: a different account id deletes nothing.
-        => engine.Source(owner).SelectMany(source => source is null || (source.MailboxId is { } bound && bound != accountId)
+        return source.SelectMany(found => found is null || (found.MailboxId is { } bound && bound != accountId)
             ? Observable.Return(false)
-            : engine.Disable(owner));
+            : disable);
+    }
 
     /// <inheritdoc />
     /// <remarks>Starts a System sync on the owner's behalf, so the CODE that calls it is judged by the in-mesh

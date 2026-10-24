@@ -192,6 +192,17 @@ public class InMeshImpersonationReferencesTest
         "MeshWeaver.Graph.MailCopy.IMailAccountCopy.KickAll")]
     [InlineData("public static void M(MailFeedAccountCopy a) => a.KickAll(\"owner\");",
         "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.KickAll")]
+    // Enable starts the System backfill: every public road to it.
+    [InlineData("public static IObservable<MailCopySource> M(MailCopyEngine e) => e.Enable(\"owner\", 30);",
+        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Enable")]
+    [InlineData("public static IObservable<bool> M(MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
+        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.Enable")]
+    [InlineData("public static Func<string, string, int, IObservable<bool>> M(IMailAccountCopy a) => a.Enable;",
+        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.Enable")]
+    [InlineData("public static IObservable<bool> M(IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Graph.MailCopy.IMailCopySwitch.Enable")]
+    [InlineData("public static IObservable<bool> M(MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Graph.MailCopy.MailCopySwitch.Enable")]
     public void AMailCopyStoreReference_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));

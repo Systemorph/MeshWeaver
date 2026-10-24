@@ -181,6 +181,66 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
     }
 
     /// <summary>
+    /// The per-account wrappers are judged as their CALLER too: composed under another person and subscribed
+    /// under the owner, <see cref="MailFeedAccountCopy.Enable"/> and <see cref="MailFeedAccountCopy.Accounts"/>
+    /// are refused — the engine call is composed at the wrapper's entry, not after the feed's account check
+    /// emits under the subscriber's identity. The owner, composing the same calls, is the control; and the
+    /// owner's <see cref="MailFeedAccountCopy.Disable"/>, subscribed under an anonymous identity, still
+    /// switches off what the owner asked to.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task TheAccountWrappers_AreJudgedAsTheirCaller_NotAsTheirSubscriber()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var feed = new OneMessageFeed();
+        var copy = new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access), feed);
+        var mallory = new AccessContext { ObjectId = "mallory", Name = "mallory" };
+        var theOwner = new AccessContext { ObjectId = owner, Name = owner };
+
+        IObservable<bool> enable;
+        IObservable<ImmutableList<MailCopyAccount>> accounts;
+        using (access.SwitchAccessContext(mallory))
+        {
+            enable = copy.Enable(owner, "acct", 30);
+            accounts = copy.Accounts(owner);
+        }
+        // Subscribed under the OWNER — an identity that may do both — so only the composition decides.
+        Task<bool> enabled;
+        Task<ImmutableList<MailCopyAccount>> listed;
+        using (access.SwitchAccessContext(theOwner))
+        {
+            enabled = enable.Timeout(Bound).Await(ct);
+            listed = accounts.Timeout(Bound).Await(ct);
+        }
+        (await Record.ExceptionAsync(() => enabled))
+            .Should().BeOfType<UnauthorizedAccessException>("the switch-on was asked for by mallory, whoever subscribes it later");
+        (await Record.ExceptionAsync(() => listed))
+            .Should().BeOfType<UnauthorizedAccessException>("the copy's state was asked for by mallory, whoever subscribes it later");
+        (await store.Source(owner, "outlook").Timeout(Bound).Await(ct))
+            .Should().BeNull("the refused switch-on created no copy");
+
+        using (access.SwitchAccessContext(theOwner))
+        {
+            enable = copy.Enable(owner, "acct", 30);
+            accounts = copy.Accounts(owner);
+        }
+        (await enable.Timeout(Bound).Await(ct)).Should().BeTrue("the control arm: the SAME composition by the owner switches the copy on");
+        (await accounts.Timeout(Bound).Await(ct)).Should().ContainSingle(a => a.AccountId == "acct" && a.IsOn);
+
+        IObservable<bool> disable;
+        using (access.SwitchAccessContext(theOwner))
+            disable = copy.Disable(owner, "acct");
+        Task<bool> disabled;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "", Name = "anonymous" }))
+            disabled = disable.Timeout(Bound).Await(ct);
+        (await disabled).Should().BeTrue("the owner's switch-off is judged as the owner, whoever subscribes it");
+        (await store.Source(owner, "outlook").Timeout(Bound).Await(ct)).Should().BeNull("the copy is gone");
+    }
+
+    /// <summary>
     /// One sync per owner per engine: a direct <see cref="MailCopyEngine.Sync"/> while another runs answers
     /// null at once instead of sharing the running sync's lease and cursor, and the gate is released when the
     /// running subscription is disposed — the next sync then runs to its commit.

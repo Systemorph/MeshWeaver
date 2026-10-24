@@ -1,6 +1,9 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using MeshWeaver.Mesh;
+using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging;
 
 namespace MeshWeaver.Graph.MailCopy;
@@ -92,8 +95,17 @@ public sealed class MailCopySwitch(IEnumerable<IMailAccountCopy> providers) : IM
             : Observable.Return(false);
 
     /// <inheritdoc />
+    /// <remarks>Starts a System backfill on the owner's behalf, so the CODE that calls it is judged by the in-mesh
+    /// impersonation guard: the engine-backed provider is handed THIS call's calling assembly, never this one.</remarks>
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<bool> Enable(string owner, string provider, string accountId, int windowDays = MailCopyNodeTypes.WindowDays)
-        => Find(provider) is { } p ? p.Enable(owner, accountId, windowDays) : Observable.Return(false);
+        => Find(provider) switch
+        {
+            MailFeedAccountCopy engineBacked => engineBacked.EnableFrom(Assembly.GetCallingAssembly(), owner, accountId, windowDays, nameof(Enable)),
+            { } other => other.Enable(owner, accountId, windowDays),
+            null => Observable.Return(false),
+        };
 
     /// <inheritdoc />
     public IObservable<bool> Disable(string owner, string provider, string accountId)

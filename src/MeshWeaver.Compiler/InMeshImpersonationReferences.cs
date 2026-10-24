@@ -97,9 +97,13 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Graph.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
             ["MeshWeaver.Graph.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
             ["MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
-            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync"],
-            ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll"],
-            ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll"],
+            // Enable starts the System backfill, so every public road to it is a surface: the engine, the
+            // per-account copy and the switch over the providers.
+            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.IMailCopySwitch"] = ["Enable"],
+            ["MeshWeaver.Graph.MailCopy.MailCopySwitch"] = ["Enable"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
     /// <summary>Members reported only when WRITTEN (an assignment, an object or <c>with</c> initializer).</summary>
