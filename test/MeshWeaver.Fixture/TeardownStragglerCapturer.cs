@@ -136,9 +136,7 @@ internal static class TeardownStragglerCapturer
         IsAutofacDisposedScope(ex) || IsDisposedMemoryCache(ex);
 
     private static bool IsAutofacDisposedScope(Exception? ex) =>
-        ex is ObjectDisposedException
-        && (ex.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) == true
-            || ex.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) == true);
+        MeshWeaver.Messaging.FaultClassifier.IsDisposedContainer(ex);
 
     private static bool IsDisposedMemoryCache(Exception? ex) =>
         ex is ObjectDisposedException ode

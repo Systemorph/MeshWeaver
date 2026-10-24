@@ -1,5 +1,5 @@
-using System.Collections.Frozen;
 using System.Data.Common;
+using MeshWeaver.Messaging;
 
 namespace MeshWeaver.Data;
 
@@ -35,26 +35,6 @@ namespace MeshWeaver.Data;
 public static class StorageFaults
 {
     /// <summary>
-    /// SQLSTATE classes meaning "the database could not be REACHED or is momentarily refusing
-    /// connections" — the transient connect class, deliberately WITHOUT the in-query races
-    /// (<c>40001</c>/<c>40P01</c>): those belong to the layer that owns the statement (the
-    /// adapters' own retry), not to the query fan-in and not to a render frame.
-    ///
-    /// <para>🚨 <c>FrozenSet</c>, not <c>HashSet</c>, and not an allowlist entry on
-    /// <c>NoStaticCollectionsTest</c>. The rule bans a static COLLECTION because it is
-    /// process-wide state that survives mesh disposal; this is a constant, so the fix is to say
-    /// so in the TYPE rather than to argue for it in a list. A mutable type here would also be a
-    /// standing invitation for someone to write to it later, which is the failure the ban exists
-    /// to prevent — and it read as an exception to a rule that has none.</para>
-    /// </summary>
-    private static readonly FrozenSet<string> TransientConnectSqlStates = new[]
-    {
-        "08000", "08001", "08003", "08004", "08006", // connection_exception family
-        "57P01", "57P02", "57P03",                   // admin/crash shutdown, cannot_connect_now
-        "53300", "53400",                            // too_many_connections, configuration_limit_exceeded
-    }.ToFrozenSet(StringComparer.Ordinal);
-
-    /// <summary>
     /// True when <paramref name="ex"/> is a TRANSIENT database connect/timeout fault: a
     /// <see cref="DbException"/> whose <see cref="DbException.SqlState"/> is in the connection
     /// class, or one wrapping a network-level <see cref="TimeoutException"/> /
@@ -63,29 +43,12 @@ public static class StorageFaults
     /// A timeout WITHOUT a database exception in the chain is NOT matched — hub/request timeouts
     /// have their own policy (<c>AreaErrorClassifier.IsTransientHubFailure</c>) and must not be
     /// double-retried, nor rendered as a storage outage.
+    ///
+    /// <para>A forwarder onto <see cref="FaultClassifier"/> — the SQLSTATE set and the driver-wraps-
+    /// network rule live there, once — asking for a TYPED <see cref="FaultLayer.Store"/> verdict on
+    /// EVERY branch: an aggregate that also carries a defect is not an outage.</para>
     /// </summary>
     /// <param name="ex">The exception to classify; may be null.</param>
     public static bool IsTransientConnectFault(Exception? ex)
-    {
-        var seenDbException = false;
-        for (var e = ex; e != null; e = e.InnerException)
-        {
-            switch (e)
-            {
-                case DbException db:
-                    var sqlState = db.SqlState;
-                    if (sqlState is not null && TransientConnectSqlStates.Contains(sqlState))
-                        return true;
-                    seenDbException = true;
-                    break;
-                // The network-level cause INSIDE a driver exception (drivers wrap the socket
-                // fault; the DbException is always the OUTER frame, so walking outer→inner
-                // seeing the DbException first is the invariant this flag encodes).
-                case TimeoutException or System.Net.Sockets.SocketException or IOException
-                    when seenDbException:
-                    return true;
-            }
-        }
-        return false;
-    }
+        => FaultClassifier.Classify(ex).EveryBranchTypedTransientIn(FaultLayer.Store);
 }
