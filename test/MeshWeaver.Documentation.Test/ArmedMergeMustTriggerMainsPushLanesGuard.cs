@@ -309,10 +309,9 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
     /// <para><b>Why that is the worse half.</b> A failing automated bump is read and fixed. A bump
     /// that opens a pull request nobody's CI touches looks like work in flight, so the pile grows
     /// while the pin it exists to move stays exactly where it was — automation whose only effect is
-    /// to make the lag harder to notice. <c>node-repo-platform-ref-bump.yml</c> shipped in that
-    /// shape and was never called by any satellite, so it was never observed; it is called now
-    /// (MeshWeaver.Plugins, MeshWeaver.SocialMedia), which is what makes this guard load-bearing
-    /// rather than theoretical.</para>
+    /// to make the lag harder to notice. The retired <c>node-repo-platform-ref-bump.yml</c> shipped
+    /// in that shape (see Doc/Architecture/PlatformRefBumpLane); this guard keeps any future
+    /// PR-opening lane from repeating it.</para>
     ///
     /// <para>Both spellings of the credential count. <c>${{ github.token }}</c> is the same token as
     /// <c>${{ secrets.GITHUB_TOKEN }}</c>, and the lane above used the first one.</para>
@@ -349,137 +348,6 @@ public class ArmedMergeMustTriggerMainsPushLanesGuard
             + "Mint a GitHub App installation token (actions/create-github-app-token, "
             + "permission-contents: write + permission-pull-requests: write), check out with it so "
             + "the push is the App's, and pass it as GH_TOKEN.");
-    }
-
-    /// <summary>
-    /// The bump lane must name its minted token explicitly, for the same reason the arm lane must:
-    /// deleting the <c>GH_TOKEN</c> line passes the check above while recreating the failure by
-    /// omission, because <c>gh</c> falls back to whatever credential the runner exposes.
-    /// </summary>
-    [Fact]
-    public void ThePlatformRefBumpLaneNamesAMintedInstallationTokenExplicitly()
-    {
-        var path = Path.Combine(WorkflowsDir(), "node-repo-platform-ref-bump.yml");
-        Assert.True(File.Exists(path), $"{path} is missing — the bump lane is the subject of this guard.");
-
-        var lines = ExecutableLines(File.ReadAllText(path));
-
-        Assert.True(
-            lines.Any(l => l.Contains("actions/create-github-app-token", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml no longer mints a GitHub App installation token. Its "
-            + "pull requests are then opened by whatever identity remains, and if that is the "
-            + "default token no CI runs on them at all.");
-
-        Assert.True(
-            lines.Any(l =>
-                l.Contains("GH_TOKEN", StringComparison.Ordinal) &&
-                l.Contains("steps.bump-token.outputs.token", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml's PR step does not pass the minted token as GH_TOKEN. "
-            + "Without it gh falls back to the runner's default credential — the same suppressed "
-            + "trigger, by omission rather than by choice.");
-
-        Assert.True(
-            lines.Any(l =>
-                l.Contains("token:", StringComparison.Ordinal) &&
-                l.Contains("steps.bump-token.outputs.token", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml checks out without the minted token, so the branch is "
-            + "pushed with the default credential. The pull request would then be the App's and the "
-            + "commit the default token's — and a push GITHUB_TOKEN made starts nothing either.");
-
-        foreach (var permission in new[]
-                 {
-                     "permission-contents: write",
-                     "permission-pull-requests: write",
-                     // 🚨 The third one is not decoration (#3568, MeshWeaver.Plugins#1464). The pin
-                     // this lane edits lives in the CALLER'S OWN WORKFLOW FILE, so every diff it
-                     // will ever produce is under `.github/workflows/**` — a path GitHub refuses an
-                     // App push to without `workflows`, by name, at the push, on the last step.
-                     // That is not a hypothetical: it is EVERY run this lane has ever had
-                     // (MeshWeaver.Plugins 34083504064, MeshWeaver.SocialMedia the same morning).
-                     // Requesting it here moves the refusal to the mint, where the step's own name
-                     // says what it wanted; dropping the line restores a push rejection that reads
-                     // as a token bug about a permission nobody asked for.
-                     "permission-workflows: write",
-                 })
-        {
-            Assert.True(
-                lines.Any(l => l.Contains(permission, StringComparison.Ordinal)),
-                $"node-repo-platform-ref-bump.yml's token mint no longer requests '{permission}'. "
-                + "Pushing the bump branch needs Contents: write, opening the pull request needs "
-                + "Pull requests: write, and touching a file under .github/workflows/ needs "
-                + "Workflows: write; requesting all three explicitly is what makes a missing grant "
-                + "fail at the mint instead of somewhere downstream.");
-        }
-
-        Assert.True(
-            lines.All(l => !l.Contains("continue-on-error", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml carries continue-on-error. Unlike auto-arm.yml — where "
-            + "a tolerated mint failure costs one PR its arm and the assertion lives on in "
-            + "arm-credential.yml — nothing else asserts this credential. A tolerated failure here "
-            + "means the pin silently stops being bumped, which is the state the lane exists to end.");
-    }
-
-    /// <summary>
-    /// A scheduled lane's honest red is red in an EMPTY ROOM, and that is the same defect as a gate
-    /// that cannot fail — the two are indistinguishable from outside, because both produce silence.
-    ///
-    /// <para><b>Measured, 2026-09-07.</b> The bump lane had every property the guards above assert:
-    /// a minted App token, an assert that fails naming what to provision, and no
-    /// <c>continue-on-error</c> anywhere. It ran once in MeshWeaver.Plugins (run 34083504064), once
-    /// in MeshWeaver.SocialMedia, failed both times at the push for want of the App's
-    /// <c>workflows</c> grant — and <b>nothing anywhere said so</b>. A scheduled run hangs off no
-    /// pull request, no reviewer and no check list. The pin then drifted 153 commits past the
-    /// 120-commit staleness bound, reddening all 16 open pull requests in that repo on a gate none
-    /// of their diffs could reach.</para>
-    ///
-    /// <para>So the lane must route its own failure onto an artefact a person reads. This guard
-    /// pins the three properties that make that true, because each one has an attractive-looking
-    /// removal: the reporting job must exist, it must branch on the bump's RESULT (an
-    /// <c>if: failure()</c>-only variant never clears a stale alert, and a standing alert that is no
-    /// longer true is how the next real one gets skimmed past), and it must write something durable
-    /// rather than another log line into the same empty room.</para>
-    /// </summary>
-    [Fact]
-    public void ThePlatformRefBumpLaneReportsItsOwnFailureSomewhereAPersonReads()
-    {
-        var path = Path.Combine(WorkflowsDir(), "node-repo-platform-ref-bump.yml");
-        Assert.True(File.Exists(path), $"{path} is missing — the bump lane is the subject of this guard.");
-
-        var lines = ExecutableLines(File.ReadAllText(path));
-
-        Assert.True(
-            lines.Any(l => l.Contains("needs.bump.result", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml no longer branches on `needs.bump.result`. Its reporting "
-            + "job must both FILE the alert when the bump failed and CLOSE it when the bump worked. A "
-            + "failure-only reporter leaves a stale issue standing after the lane recovers, and an "
-            + "alert that is no longer true is how the next real one gets skimmed past.");
-
-        Assert.True(
-            lines.Any(l => l.Contains("gh issue create", StringComparison.Ordinal))
-            && lines.Any(l => l.Contains("gh issue close", StringComparison.Ordinal)),
-            "node-repo-platform-ref-bump.yml no longer opens and closes a tracking issue. A scheduled "
-            + "lane that fails writes its red to a run nobody is looking at: measured 2026-09-07, this "
-            + "lane had failed on every run it had ever had, in two repositories, and the first symptom "
-            + "anyone saw was 16 unrelated pull requests going red on the staleness ratchet hours "
-            + "later. The failure needs an artefact that outlives the run.");
-
-        // The alert must not be tolerated either. `continue-on-error` is already refused file-wide by
-        // the guard above; what this adds is the OTHER shape of the same trapdoor — an `if:` that asks
-        // whether the reporter's own credential is present, which renders exactly like a lane with
-        // nothing to report (AGENTS.md, "a gate NEVER tests its own inputs").
-        var inputShapedIf = lines
-            .Where(l => l.StartsWith("if:", StringComparison.Ordinal) || l.Contains(" if:", StringComparison.Ordinal))
-            .Where(l => l.Contains("secrets.", StringComparison.Ordinal)
-                        || l.Contains("vars.", StringComparison.Ordinal))
-            .ToArray();
-
-        Assert.True(
-            inputShapedIf.Length == 0,
-            "node-repo-platform-ref-bump.yml carries an `if:` that asks whether a secret or variable is "
-            + $"set: {string.Join(" | ", inputShapedIf)}.\n"
-            + "GitHub paints a skipped job the same colour as a passed one, so 'the lane never ran' and "
-            + "'the lane had nothing to do' become indistinguishable — which is the exact state this "
-            + "lane spent its whole existence in. Assert the input and fail RED naming it instead.");
     }
 
     /// <summary>

@@ -32,23 +32,6 @@
 # The line this replaces read "DELETE the line once the change has shipped". Nobody did, once;
 # for ~40 minutes every C#-touching pull request in the fleet was red on somebody else's merge.
 # See Doc/Architecture/TransitionalAllowEntries.
-#
-# #2501 — the Orleans TEST machinery split (Hosting.Orleans.TestBase → AI-free base +
-# MeshWeaver.AI.Orleans.TestBase). No shipped module can hold these TypeRefs: the assembly first
-# shipped 2026-08-27 (#2479, hours before this move), is not part of any module bundle or bake
-# surface, and its only consumers are TEST projects that compile from source against
-# $(MeshWeaverRoot) (core, MeshWeaver.Plugins, MeshWeaver.SocialMedia — the latter pinned
-# pre-split). A forwarder is impossible here: the base would have to reference the AI assembly,
-# which references the base (the documented reference-cycle case).
-
-# #6561 — #4802 slice 1 DELETES the Orleans memory-stream change feed; nothing moved, so there is no
-# landing site to forward to. Swept every fleet repo's origin/main: MeshWeaver.Plugins holds only a
-# test-class NAME (OrleansMeshChangeFeedTest, which never references the type) and two <c> doc
-# comments; Education, Reinsurance, SocialMedia, Manufacturing and Memex hold nothing. In-mesh
-# NodeType source cannot reference MeshWeaver.Hosting.Orleans, and neither type is part of any
-# module bundle or bake surface.
-MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.OrleansMeshChangeFeed  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)
-MeshWeaver.Hosting.Orleans:MeshWeaver.Hosting.Orleans.PathCacheInvalidatorGrain  #6561 — deleted, not moved; no module binds it (fleet git grep, origin/main)
 
 # #7118 — IModuleUpdatePolicy is DELETED, not moved: retired 2026-09-14, registered and consumed by
 # nothing since; no fleet repository names it (Systemorph org code search) and the per-partition
