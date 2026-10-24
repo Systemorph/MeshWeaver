@@ -139,10 +139,12 @@ public sealed class GitWorkingTreeService(
 
     /// <summary>Reads a repo-relative file from the working tree (UTF-8).</summary>
     public IObservable<string> ReadFile(string userId, string repoSlug, string relativePath) =>
+        // atomic-blocking-leaf: one File.ReadAllText of one file; path resolution is string math
         FileSystem.InvokeBlocking(_ => File.ReadAllText(ResolveInTree(userId, repoSlug, relativePath)));
 
     /// <summary>Writes a repo-relative file in the working tree (UTF-8), creating directories as needed.</summary>
     public IObservable<Unit> WriteFile(string userId, string repoSlug, string relativePath, string content) =>
+        // atomic-blocking-leaf: one CreateDirectory plus one File.WriteAllText of one file
         FileSystem.InvokeBlocking<Unit>(_ =>
         {
             var full = ResolveInTree(userId, repoSlug, relativePath);

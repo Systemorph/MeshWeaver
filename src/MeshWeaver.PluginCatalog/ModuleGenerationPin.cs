@@ -56,6 +56,27 @@ public static class ModuleGenerationPin
         ModuleActivationEntry entry,
         string? pinRoot = null,
         Action<string>? onWarn = null)
+        => PinnedLoadPath(moduleRoot, entry, CancellationToken.None, pinRoot, onWarn);
+
+    /// <summary>
+    /// <see cref="PinnedLoadPath(string, ModuleActivationEntry, string?, Action{string}?)"/> from a
+    /// pooled leaf. The copy is one round trip per file of the generation, so
+    /// <paramref name="cancellationToken"/> (the pool's) is checked before each file. A cancel
+    /// surfaces as <see cref="OperationCanceledException"/> and is NOT folded into the
+    /// warn-and-fall-back path: the pin did not fail, the process is stopping. The half-copied
+    /// pin directory is unique to this call and never named by anything.
+    /// </summary>
+    /// <param name="moduleRoot">The deployment root the shared <c>modules/</c> tree lives under.</param>
+    /// <param name="entry">The activation entry naming the generation to pin.</param>
+    /// <param name="cancellationToken">The pool's token. Required.</param>
+    /// <param name="pinRoot">Test seam for the process-local root.</param>
+    /// <param name="onWarn">The loud channel for a failed pin.</param>
+    public static string PinnedLoadPath(
+        string moduleRoot,
+        ModuleActivationEntry entry,
+        CancellationToken cancellationToken,
+        string? pinRoot = null,
+        Action<string>? onWarn = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
         var sharedDirectory = ModuleLandingService.ModuleDirectoryFor(moduleRoot, entry.Name, entry);
@@ -70,7 +91,7 @@ public static class ModuleGenerationPin
                 pinRoot ?? DefaultPinRoot,
                 $"{Environment.ProcessId}-{Guid.NewGuid():N}"[..(Environment.ProcessId.ToString().Length + 9)],
                 leaf);
-            CopyTree(sharedDirectory, pinnedDirectory);
+            CopyTree(sharedDirectory, pinnedDirectory, cancellationToken);
             var pinnedDll = Path.Combine(pinnedDirectory, entry.Name + ".dll");
             if (!File.Exists(pinnedDll))
                 throw new FileNotFoundException(
@@ -78,7 +99,7 @@ public static class ModuleGenerationPin
                     + "directory is incomplete", pinnedDll);
             return pinnedDll;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             onWarn?.Invoke(
                 $"module '{entry.Name}': could not pin generation '{entry.Directory ?? entry.Name}' "
@@ -90,7 +111,7 @@ public static class ModuleGenerationPin
         }
     }
 
-    private static void CopyTree(string source, string destination)
+    private static void CopyTree(string source, string destination, CancellationToken cancellationToken)
     {
         // Reparse points (symlinks/junctions) are never followed: a landed generation is plain
         // files by construction, so a link inside one is corruption or crafting, and following it
@@ -104,6 +125,7 @@ public static class ModuleGenerationPin
         };
         foreach (var file in Directory.EnumerateFiles(source, "*", options))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var target = Path.Combine(destination, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
             File.Copy(file, target, overwrite: false);

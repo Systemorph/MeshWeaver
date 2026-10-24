@@ -322,7 +322,22 @@ public static class BundleReader
     /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
     public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(
         Stream bundle, IReadOnlySet<string>? nodePaths = null)
+        => Read(bundle, nodePaths, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read(Stream, IReadOnlySet{string})"/> from a pooled leaf: each selected assembly is
+    /// a decompressing read of its DLL (and its PDB) from the archive, so
+    /// <paramref name="cancellationToken"/> is checked before each one. A cancel throws
+    /// <see cref="OperationCanceledException"/>; nothing partial is returned.
+    /// </summary>
+    /// <param name="bundle">The archive, positioned at its start.</param>
+    /// <param name="nodePaths">Node paths to extract, or null for all of them.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) Read(
+        Stream bundle, IReadOnlySet<string>? nodePaths, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var archive = new ZipArchive(bundle, ZipArchiveMode.Read, leaveOpen: true);
 
         var manifest = ManifestOf(archive);
@@ -334,6 +349,7 @@ public static class BundleReader
         {
             if (nodePaths is not null && !nodePaths.Contains(reference.NodePath))
                 continue;
+            cancellationToken.ThrowIfCancellationRequested();
 
             var dll = archive.GetEntry($"{NuGetPackageWriter.AssemblyFolder}/{reference.Assembly}");
 
@@ -466,9 +482,22 @@ public static class BundleReader
     /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
     public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) ReadFile(
         string bundlePath, IReadOnlySet<string>? nodePaths = null)
+        => ReadFile(bundlePath, nodePaths, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="ReadFile(string, IReadOnlySet{string})"/> from a pooled leaf, checking
+    /// <paramref name="cancellationToken"/> before each assembly it extracts.
+    /// </summary>
+    /// <param name="bundlePath">Path to the bundle file.</param>
+    /// <param name="nodePaths">Node paths to extract, or null for all of them.</param>
+    /// <param name="cancellationToken">The pool's token.</param>
+    /// <returns>The manifest (null when the archive carries none) and the payloads found.</returns>
+    public static (Manifest? Manifest, IReadOnlyList<Payload> Assemblies) ReadFile(
+        string bundlePath, IReadOnlySet<string>? nodePaths, CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var file = File.OpenRead(bundlePath);
-        return Read(file, nodePaths);
+        return Read(file, nodePaths, cancellationToken);
     }
 
     private static Manifest? ManifestOf(ZipArchive archive)

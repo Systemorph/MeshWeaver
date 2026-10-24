@@ -300,7 +300,7 @@ public static partial class CatalogLayoutAreas
             // Switch, not SelectMany: two landings in quick succession must not race their reads
             // into the view out of order. The newest read wins and an in-flight stale one is
             // dropped — which is right for a view whose only job is to show the CURRENT state.
-            .Select(_ => pool.InvokeBlocking(ct => pending.Read())
+            .Select(_ => pool.InvokeBlocking(ct => pending.Read(ct))
                 .Catch((Exception ex) =>
                 {
                     // The reader already turns an unreadable record into an UNDETERMINED report; a

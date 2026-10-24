@@ -183,7 +183,7 @@ internal sealed class PublicationSealArrivalService(
         // see an empty config set and report "nothing to do" — a false clean, which is the one
         // shape #4063 must never grow more of.
         return access.RunAsSystem(() => pool
-                .InvokeBlocking(_ => SealedPublicationIndex.ReadFor(publishedRoot, identity, logger))
+                .InvokeBlocking(ct => SealedPublicationIndex.ReadFor(publishedRoot, identity, ct, logger))
                 .Do(sealedForThisIdentity => census?.RecordPublication(new SealedPublicationReading(
                     identity, publishedRoot, [.. sealedForThisIdentity], DateTimeOffset.UtcNow)))
                 .SelectMany(sealedForThisIdentity =>

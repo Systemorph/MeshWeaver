@@ -553,7 +553,19 @@ public static class ModuleActivationSidecar
     /// sees its internals.</summary>
     internal static ModuleActivationList ReadFor(
         string baseDirectory, Action<string>? onCorrupt, Func<string?> platform)
-        => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt), onCorrupt, platform);
+        => ReadFor(baseDirectory, onCorrupt, platform, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="ReadFor(string, Action{string}?, Func{string?})"/> from a pooled leaf. The read
+    /// WALKS the volume (one read per per-module entry file, then one record listing and log per
+    /// module), so <paramref name="cancellationToken"/> (the pool's) is checked before each. A cancel
+    /// surfaces as <see cref="OperationCanceledException"/>; it is never reported through
+    /// <paramref name="onCorrupt"/> and never drops a module as unreadable.
+    /// </summary>
+    internal static ModuleActivationList ReadFor(
+        string baseDirectory, Action<string>? onCorrupt, Func<string?> platform, CancellationToken cancellationToken)
+        => ApplyLandingRecords(baseDirectory, ReadStoredActivation(baseDirectory, onCorrupt, cancellationToken),
+            onCorrupt, platform, cancellationToken);
 
     /// <summary>The platform this process runs: the live framework identity — the same key a
     /// producer records beside its bytes. Resolved only when a verdict is actually consulted.</summary>
@@ -614,6 +626,12 @@ public static class ModuleActivationSidecar
     /// <summary><see cref="ReadStored"/> with each entry's paired write time and the unreadable
     /// per-module files.</summary>
     internal static StoredActivation ReadStoredActivation(string baseDirectory, Action<string>? onCorrupt)
+        => ReadStoredActivation(baseDirectory, onCorrupt, CancellationToken.None);
+
+    /// <summary><see cref="ReadStoredActivation(string, Action{string}?)"/>, checking
+    /// <paramref name="cancellationToken"/> before each per-module entry file it reads.</summary>
+    internal static StoredActivation ReadStoredActivation(
+        string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var (legacy, legacyWrittenAt, aggregateUnreadable) = ReadLegacy(baseDirectory, onCorrupt);
         var byName = ImmutableDictionary.Create<string, ModuleActivationEntry>(StringComparer.OrdinalIgnoreCase);
@@ -635,7 +653,7 @@ public static class ModuleActivationSidecar
         // Per-module files last: a record written by the landing lane WINS over whatever the
         // frozen aggregate still says about that name (an uninstall must beat a stale enabled row).
         // Sorted so the union is deterministic regardless of directory-enumeration order.
-        var files = ReadEntryFiles(baseDirectory, onCorrupt);
+        var files = ReadEntryFiles(baseDirectory, onCorrupt, cancellationToken);
         foreach (var (entry, at) in files.Entries)
             Accept(entry, at);
 
@@ -666,6 +684,13 @@ public static class ModuleActivationSidecar
     /// </summary>
     internal static ModuleActivationList ApplyLandingRecords(
         string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform)
+        => ApplyLandingRecords(baseDirectory, stored, onCorrupt, platform, CancellationToken.None);
+
+    /// <summary><see cref="ApplyLandingRecords(string, StoredActivation, Action{string}?, Func{string?})"/>,
+    /// checking <paramref name="cancellationToken"/> before each module's record log it reads.</summary>
+    internal static ModuleActivationList ApplyLandingRecords(
+        string baseDirectory, StoredActivation stored, Action<string>? onCorrupt, Func<string?> platform,
+        CancellationToken cancellationToken)
     {
         var byName = stored.List.Entries.ToImmutableDictionary(e => e.Name, StringComparer.OrdinalIgnoreCase);
         var order = stored.List.Entries.Select(e => e.Name).ToImmutableList();
@@ -691,7 +716,8 @@ public static class ModuleActivationSidecar
         var present = GenerationPresence(baseDirectory);
         foreach (var moduleName in names)
         {
-            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
+            cancellationToken.ThrowIfCancellationRequested();
+            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt, cancellationToken);
             if (!log.Whole)
             {
                 Drop(moduleName, $"{log.Faults} of its records could not be read");
@@ -781,7 +807,7 @@ public static class ModuleActivationSidecar
         var (names, _) = ListRecordDirectories(baseDirectory, onCorrupt);
         foreach (var moduleName in names)
         {
-            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
+            var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt, CancellationToken.None);
             if (!log.Whole || log.IsEmpty)
                 continue;
             var entry = stored.For(moduleName);
@@ -1011,7 +1037,7 @@ public static class ModuleActivationSidecar
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(platform);
         var faults = ImmutableList<string>.Empty;
-        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, fault => faults = faults.Add(fault));
+        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, fault => faults = faults.Add(fault), CancellationToken.None);
         if (!faults.IsEmpty)
             throw new InvalidOperationException(
                 $"Module '{moduleName}': the platform verdicts could not be read whole "
@@ -1085,32 +1111,32 @@ public static class ModuleActivationSidecar
     /// </summary>
     public static ImmutableList<ModuleLandingRecord> ReadLandings(
         string baseDirectory, string moduleName, Action<string>? onCorrupt = null) =>
-        [.. ReadLandingFiles(baseDirectory, moduleName, onCorrupt).Select(x => x.Record)];
+        [.. ReadLandingFiles(baseDirectory, moduleName, onCorrupt, CancellationToken.None).Select(x => x.Record)];
 
     private static ImmutableList<(string Path, ModuleLandingRecord Record)> ReadLandingFiles(
-        string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
-        ReadRecordFiles<ModuleLandingRecord>(baseDirectory, moduleName, "*.json", onCorrupt,
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken) =>
+        ReadRecordFiles<ModuleLandingRecord>(baseDirectory, moduleName, "*.json", onCorrupt, cancellationToken,
             (record, _) => LandingRecordFileName(record),
             (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModuleUninstallRecord Record)> ReadUninstallFiles(
-        string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
-        ReadRecordFiles<ModuleUninstallRecord>(baseDirectory, moduleName, "*" + UninstallSuffix, onCorrupt,
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken) =>
+        ReadRecordFiles<ModuleUninstallRecord>(baseDirectory, moduleName, "*" + UninstallSuffix, onCorrupt, cancellationToken,
             (record, _) => UninstallFileName(record),
             (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModulePlatformVerdict Record)> ReadVerdictFiles(
-        string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
-        ReadRecordFiles<ModulePlatformVerdict>(baseDirectory, moduleName, "*" + VerdictSuffix, onCorrupt,
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken) =>
+        ReadRecordFiles<ModulePlatformVerdict>(baseDirectory, moduleName, "*" + VerdictSuffix, onCorrupt, cancellationToken,
             (record, _) => record.Directory + "." + VerdictAddress(record) + VerdictSuffix,
             (record, at, _) => record with { RecordedAtUtc = at },
             record => record.Name);
 
     private static ImmutableList<(string Path, ModuleEntrySnapshot Record)> ReadSnapshotFiles(
-        string baseDirectory, string moduleName, Action<string>? onCorrupt) =>
-        ReadRecordFiles<ModuleEntrySnapshot>(baseDirectory, moduleName, "*" + SnapshotSuffix, onCorrupt,
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken) =>
+        ReadRecordFiles<ModuleEntrySnapshot>(baseDirectory, moduleName, "*" + SnapshotSuffix, onCorrupt, cancellationToken,
             (_, text) => "entry." + SnapshotAddress(text) + SnapshotSuffix,
             // A snapshot's arrival is the older image's write, carried in its content; its identity
             // is its own file name.
@@ -1119,6 +1145,7 @@ public static class ModuleActivationSidecar
 
     private static ImmutableList<(string Path, T Record)> ReadRecordFiles<T>(
         string baseDirectory, string moduleName, string pattern, Action<string>? onCorrupt,
+        CancellationToken cancellationToken,
         Func<T, string, string> expectedName, Func<T, DateTime, string, T> stamp, Func<T, string> nameOf)
         where T : class
     {
@@ -1128,10 +1155,17 @@ public static class ModuleActivationSidecar
         ImmutableList<FileInfo> files;
         try
         {
-            files = Directory.Exists(directory)
-                ? [.. new DirectoryInfo(directory).EnumerateFiles(pattern)
-                    .OrderBy(f => f.Name, StringComparer.Ordinal)]
-                : [];
+            // Materialized one entry at a time with the pool's token checked per entry, BEFORE the
+            // sort (review on #7121): a sort drains the whole listing before anything could look.
+            cancellationToken.ThrowIfCancellationRequested();
+            var listed = ImmutableList.CreateBuilder<FileInfo>();
+            if (Directory.Exists(directory))
+                foreach (var entry in new DirectoryInfo(directory).EnumerateFiles(pattern))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    listed.Add(entry);
+                }
+            files = [.. listed.OrderBy(f => f.Name, StringComparer.Ordinal)];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -1144,6 +1178,9 @@ public static class ModuleActivationSidecar
         var builder = ImmutableList.CreateBuilder<(string, T)>();
         foreach (var file in files)
         {
+            // Outside the try: its catch reports EVERY failure as a corrupt record, and the pool's
+            // cancel is not one.
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (TryReadWithWriteTime(file.FullName) is not { } read)
@@ -1244,7 +1281,8 @@ public static class ModuleActivationSidecar
             .ThenByDescending(VerdictAddress, StringComparer.Ordinal)
             .FirstOrDefault();
 
-    private static ModuleLog ReadModuleLog(string baseDirectory, string moduleName, Action<string>? onCorrupt)
+    private static ModuleLog ReadModuleLog(
+        string baseDirectory, string moduleName, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var faults = 0;
         void Fault(string message)
@@ -1253,10 +1291,10 @@ public static class ModuleActivationSidecar
             onCorrupt?.Invoke(message);
         }
         return new ModuleLog(
-            [.. ReadLandingFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
-            [.. ReadUninstallFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
-            [.. ReadVerdictFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
-            [.. ReadSnapshotFiles(baseDirectory, moduleName, Fault).Select(f => f.Record)],
+            [.. ReadLandingFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
+            [.. ReadUninstallFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
+            [.. ReadVerdictFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
+            [.. ReadSnapshotFiles(baseDirectory, moduleName, Fault, cancellationToken).Select(f => f.Record)],
             faults);
     }
 
@@ -1286,7 +1324,7 @@ public static class ModuleActivationSidecar
         var stored = storedActivation.For(moduleName);
         var name = stored?.Name ?? moduleName;
         var storedAt = storedActivation.WrittenAtOf(name);
-        var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt);
+        var log = ReadModuleLog(baseDirectory, moduleName, onCorrupt, CancellationToken.None);
         var present = GenerationPresence(baseDirectory);
         return new ModuleHeadState(stored, storedAt, storedActivation.Hides(name) is not null, log,
             log.Whole
@@ -1695,10 +1733,10 @@ public static class ModuleActivationSidecar
     {
         var faults = 0;
         void Fault(string _) => faults++;
-        var records = ReadLandingFiles(baseDirectory, moduleName, Fault);
-        var uninstalls = ReadUninstallFiles(baseDirectory, moduleName, Fault);
-        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, Fault);
-        var snapshots = ReadSnapshotFiles(baseDirectory, moduleName, Fault);
+        var records = ReadLandingFiles(baseDirectory, moduleName, Fault, CancellationToken.None);
+        var uninstalls = ReadUninstallFiles(baseDirectory, moduleName, Fault, CancellationToken.None);
+        var verdicts = ReadVerdictFiles(baseDirectory, moduleName, Fault, CancellationToken.None);
+        var snapshots = ReadSnapshotFiles(baseDirectory, moduleName, Fault, CancellationToken.None);
         if (faults > 0 || (records.IsEmpty && uninstalls.IsEmpty && verdicts.IsEmpty && snapshots.IsEmpty))
             return 0;
 
@@ -2308,15 +2346,24 @@ public static class ModuleActivationSidecar
     /// and the module names whose file exists but could not be read.
     /// </summary>
     private static (ImmutableList<(ModuleActivationEntry Entry, DateTime WrittenAtUtc)> Entries,
-        ImmutableHashSet<string> Unreadable, bool Listed) ReadEntryFiles(string baseDirectory, Action<string>? onCorrupt)
+        ImmutableHashSet<string> Unreadable, bool Listed) ReadEntryFiles(
+            string baseDirectory, Action<string>? onCorrupt, CancellationToken cancellationToken)
     {
         var directory = EntriesDirectory(baseDirectory);
         ImmutableList<string> files;
         try
         {
-            files = Directory.Exists(directory)
-                ? [.. Directory.EnumerateFiles(directory, "*.json").OrderBy(f => f, StringComparer.Ordinal)]
-                : [];
+            // Checked before the listing starts and per entry while it materializes, BEFORE the sort
+            // (review on #7121): a sort drains the whole listing before anything could look.
+            cancellationToken.ThrowIfCancellationRequested();
+            var listed = ImmutableList.CreateBuilder<string>();
+            if (Directory.Exists(directory))
+                foreach (var entry in Directory.EnumerateFiles(directory, "*.json"))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    listed.Add(entry);
+                }
+            files = [.. listed.OrderBy(f => f, StringComparer.Ordinal)];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -2331,6 +2378,8 @@ public static class ModuleActivationSidecar
         var unreadable = ImmutableHashSet.CreateBuilder<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in files)
         {
+            // Outside the try: a cancel is the pool ending the read, never an unreadable entry.
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 if (TryReadWithWriteTime(file) is not { } read)
