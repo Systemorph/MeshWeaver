@@ -93,6 +93,7 @@ public sealed class GitModuleReplica(
             var env = GitCredentials.AuthEnv(token);
             var auth = GitCredentials.AuthArgs(token);
 
+            // atomic-blocking-leaf: one Directory.Exists probe of the clone's .git directory
             return FileSystem.InvokeBlocking(_ => Directory.Exists(Path.Combine(dest, ".git")))
                 .SelectMany(exists =>
                 {
@@ -150,6 +151,7 @@ public sealed class GitModuleReplica(
             var slugDir = Path.Combine(Root, "worktrees", Sanitize(repoSlug));
             var keep = keepShas.Select(Sanitize).ToImmutableHashSet(StringComparer.Ordinal);
 
+            // atomic-blocking-leaf: one existence probe and one directory listing, no loop of round trips
             return FileSystem.InvokeBlocking(_ => Directory.Exists(slugDir)
                     ? Directory.GetDirectories(slugDir)
                     : [])
@@ -180,6 +182,7 @@ public sealed class GitModuleReplica(
 
     /// <summary>True when a worktree already sits at exactly this commit.</summary>
     private IObservable<bool> AlreadyAt(string worktree, string sha) =>
+        // atomic-blocking-leaf: one Directory.Exists probe of the worktree path
         FileSystem.InvokeBlocking(_ => Directory.Exists(worktree))
             .SelectMany(exists => exists
                 ? git.Run(worktree, ["rev-parse", "HEAD"])
