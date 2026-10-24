@@ -424,9 +424,20 @@ public class StampedFieldsTest(ITestOutputHelper output) : MonolithMeshTestBase(
         // Keep the address subscribed so it re-activates, and wait for the activation bound to the
         // new type: by then the retiring activation's settlement has run.
         using var keepAlive = Mesh.GetWorkspace().GetMeshNodeStream(path).Subscribe(_ => { }, ex => Output.WriteLine($"keep-alive stream for {path} faulted: {ex}"));
-        await ReboundTo(path, StampedProbeTypeProvider.NotDeclaringOther);
-        var node = await WaitFor(path, c => c.Title == "pre", "the node is readable under its new type");
-        node.NodeType.Should().Be(StampedProbeTypeProvider.NotDeclaringOther);
+        var hub = await ReboundTo(path, StampedProbeTypeProvider.NotDeclaringOther);
+
+        // 🚨 Read what the rule guarantees — the node the activation bound to the new type STARTS
+        // from (Doc/Architecture/StampedFields, "Clear on retype") — off that activation itself.
+        // The shared mesh-node handle is a mirror that converges on it, but a started activation is
+        // no happens-before for the mirror: the new activation's snapshot (or the retiring one's
+        // echo of the retype) can still be in flight, and the mirror then replays the PRE-retype
+        // node. A wait on the title alone admitted exactly that node and handed the assertion its
+        // old type (CI run 40069400189: "Expected UnstampedProbeB, but found UnstampedProbe").
+        var node = await hub.GetWorkspace().GetMeshNodeStream()
+            .Where(n => n is not null && string.Equals(n.NodeType, StampedProbeTypeProvider.NotDeclaringOther, StringComparison.Ordinal))
+            .Should().Within(60.Seconds()).Emit("the activation bound to the new type serves the node",
+                cancellationToken: ct);
+        ContentOf(node)!.Title.Should().Be("pre");
         ContentOf(node)!.ConfirmedBy.Should().Be("victim", "a type that declares nothing clears nothing");
     }
 

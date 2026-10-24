@@ -142,6 +142,13 @@
 #      428 s on each of the three green runs and 435 s on 37830774943; it now
 #      runs in two parts.
 #
+#      MeshWeaver.Compiler.Pipeline.Test was the one after that: listed at 227 s, it measured
+#      388 s solo on PR run 39964851393 (81% of the cap, already past the 288 s threshold) and was
+#      killed at 480 s exit=124 on PR run 39965744393 (#7087), still progressing through its
+#      classes, once #7072's regression class added three 36 s deliberate negative waits
+#      (`NotEmit(TestTimeouts.Quick)` is 36 s on CI). Measured total ~500 s; it runs in three
+#      parts since, so no every-Nth parity can stack its 36 s classes past the threshold.
+#
 # 🚨 The two triggers must BOTH be checked when re-measuring. A project that grows
 # past 288 s (60% of 480) needs splitting even while the LPT loop still reports
 # six balanced shards, which is precisely why the balance rule alone missed this.
@@ -193,7 +200,7 @@ WEIGHTS=$(cat <<'EOF'
 68 MeshWeaver.Layout.Test
 7 MeshWeaver.ContentCollections.Test
 37 MeshWeaver.Documentation.Test
-227 MeshWeaver.Compiler.Pipeline.Test
+500 MeshWeaver.Compiler.Pipeline.Test 3
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test
 2 MeshWeaver.Portal.E2E.Test

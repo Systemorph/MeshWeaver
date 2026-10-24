@@ -104,8 +104,16 @@ public static class NodeTypeBuildState
     /// stamp it on the node as <c>UnreleasedBuildPath</c>: the one place to look. <c>null</c> only
     /// for <see cref="NotAttempted"/> and for a failure that happened before any id existed.
     /// </param>
+    /// <param name="FailureClass">
+    /// 🚨 The <see cref="ReleaseFailureClass"/> of <see cref="Failure"/> (#7072), classified at the
+    /// arm that SAW the exception — never parsed back out of the sentence afterwards. It is what lets
+    /// the activation holding the stamp re-issue a create the store never saw
+    /// (<see cref="ReleaseFailureClass.Unavailable"/>) once the store answers again, while a refusal
+    /// stays a named failure. <c>null</c> exactly when <see cref="Failure"/> is.
+    /// </param>
     internal sealed record ReleaseCreateOutcome(
-        string? ReleasePath, string? Failure, bool Attempted = true, string? AttemptedPath = null)
+        string? ReleasePath, string? Failure, bool Attempted = true, string? AttemptedPath = null,
+        string? FailureClass = null)
     {
         /// <summary>No create was made — this compile was not asked to release anything.</summary>
         internal static readonly ReleaseCreateOutcome NotAttempted = new(null, null, Attempted: false);
@@ -118,7 +126,8 @@ public static class NodeTypeBuildState
         /// <summary>The create was attempted and did not land, for <paramref name="reason"/> —
         /// before any release id existed (the node could not be composed at all).</summary>
         /// <param name="reason">Why, in one line an operator can act on.</param>
-        internal static ReleaseCreateOutcome Failed(string reason) => new(null, reason);
+        internal static ReleaseCreateOutcome Failed(string reason) =>
+            new(null, reason, FailureClass: ReleaseFailureClass.Faulted);
 
         /// <summary>The create at <paramref name="attemptedPath"/> was attempted and did not
         /// confirmably land, for <paramref name="reason"/>. The path travels with the reason so a
@@ -126,7 +135,20 @@ public static class NodeTypeBuildState
         /// <param name="reason">Why, in one line an operator can act on.</param>
         /// <param name="attemptedPath">The release path the attempt was minting.</param>
         internal static ReleaseCreateOutcome Failed(string reason, string attemptedPath) =>
-            new(null, reason, AttemptedPath: attemptedPath);
+            new(null, reason, AttemptedPath: attemptedPath, FailureClass: ReleaseFailureClass.Faulted);
+
+        /// <summary>The create at <paramref name="attemptedPath"/> did not land, for
+        /// <paramref name="reason"/>, of <paramref name="failureClass"/> (#7072).</summary>
+        /// <param name="reason">Why, in one line an operator can act on.</param>
+        /// <param name="attemptedPath">The release path the attempt was minting.</param>
+        /// <param name="failureClass">A <see cref="ReleaseFailureClass"/> value.</param>
+        internal static ReleaseCreateOutcome Failed(string reason, string attemptedPath, string failureClass) =>
+            new(null, reason, AttemptedPath: attemptedPath, FailureClass: failureClass);
+
+        /// <summary>True when the create was never evaluated by the store — re-issuing it at the
+        /// same id is meaningful once the store answers again (#7072).</summary>
+        internal bool WasUnavailable =>
+            string.Equals(FailureClass, ReleaseFailureClass.Unavailable, StringComparison.Ordinal);
 
         /// <summary>True when a release exists for these bytes.</summary>
         internal bool Succeeded => ReleasePath is not null;
@@ -553,8 +575,40 @@ public static class NodeTypeBuildState
                 return Observable.Return(ReleaseCreateOutcome.Failed(
                     Describe(ex, releasePath,
                         ex is TimeoutException ? IoPoolQueueReport.Describe(pools, baseline) : null),
-                    releasePath));
+                    releasePath,
+                    Classify(ex)));
             });
+
+    /// <summary>
+    /// The <see cref="ReleaseFailureClass"/> of one create failure, read off the exception AT THE ARM
+    /// that received it (#7072) — the typed rejection reason <c>IMeshService.CreateNode</c> stamps on
+    /// <see cref="Exception.Data"/>, or the store-unreachable predicate for a driver fault that
+    /// reached here unwrapped. Pure.
+    ///
+    /// <para>🚨 Classified by the CONDITION, never by the sentence: <c>Unavailable</c> is the reason
+    /// value that means "not evaluated, nothing written, a retry with the same id is meaningful"
+    /// (#1446, #3050), and it is the one class the activation holding the stamp re-issues. The bound
+    /// expiring is <see cref="ReleaseFailureClass.Expired"/>, not Unavailable — the create may still
+    /// land, and the landing is adopted when it does.</para>
+    /// </summary>
+    /// <param name="ex">The exception the create failed with.</param>
+    internal static string Classify(Exception ex)
+    {
+        if (ex is TimeoutException)
+            return ReleaseFailureClass.Expired;
+        if (ex.Data[NodeCreationFailure.RejectionReasonKey] is NodeCreationRejectionReason reason)
+            return reason switch
+            {
+                NodeCreationRejectionReason.Unavailable => ReleaseFailureClass.Unavailable,
+                NodeCreationRejectionReason.Unknown => StoreReachability.IsStoreUnreachable(ex)
+                    ? ReleaseFailureClass.Unavailable
+                    : ReleaseFailureClass.Faulted,
+                _ => ReleaseFailureClass.Refused,
+            };
+        return StoreReachability.IsStoreUnreachable(ex)
+            ? ReleaseFailureClass.Unavailable
+            : ReleaseFailureClass.Faulted;
+    }
 
     /// <summary>
     /// One create failure as one operator-readable line. A <see cref="TimeoutException"/> is named

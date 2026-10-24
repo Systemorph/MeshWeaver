@@ -116,7 +116,13 @@ public sealed class PrebuiltBundleRetentionHostedService(
                 logger.LogWarning(ex,
                     "PrebuiltBundleRetention: pass outcome — FAULTED: the pass over {Root} faulted — nothing was collected; the next pass plans it again",
                     root);
-            }))
+            }, _ =>
+                // Not a fault and not "nothing was collected": the pool ended the pass (teardown).
+                // A pass cut short during collection has already logged its INTERRUPTED outcome with
+                // what it removed and written it to the ledger; this line adds no second verdict.
+                logger.LogInformation(
+                    "PrebuiltBundleRetention: the pass over {Root} was cancelled by the I/O pool (teardown) — "
+                    + "anything not yet reached is planned again by the next pass", root)))
             .Concat()
             .Subscribe(
                 _ => { },
@@ -156,20 +162,30 @@ public sealed class PrebuiltBundleRetentionHostedService(
     /// Bounds a pass's failure to THAT pass: a faulted pass is reported to <paramref name="fault"/>
     /// (surfaced — log + status — never swallowed) and completes, so the schedule's next tick
     /// re-reads everything from scratch instead of the subscription dying on the error.
+    ///
+    /// <para>🚨 A pass the I/O pool CANCELLED (an <see cref="OperationCanceledException"/> — the
+    /// drain at silo teardown, MeshWeaver#7049) goes to <paramref name="cancelled"/>, never to
+    /// <paramref name="fault"/>: it is not a fault, and the fault report's "nothing was collected"
+    /// would contradict an interrupted pass that had already removed something.</para>
     /// </summary>
     /// <typeparam name="TResult">The pass's result.</typeparam>
     /// <param name="pass">One pass.</param>
     /// <param name="record">Receives a completed pass's result.</param>
     /// <param name="fault">Receives a faulted pass's error.</param>
-    /// <returns>One <see cref="Unit"/> per pass, faulted or not.</returns>
+    /// <param name="cancelled">Receives the cancellation of a pass the pool ended.</param>
+    /// <returns>One <see cref="Unit"/> per pass, faulted, cancelled or not.</returns>
     internal static IObservable<Unit> GuardedPass<TResult>(
-        IObservable<TResult> pass, Action<TResult> record, Action<Exception> fault) =>
+        IObservable<TResult> pass, Action<TResult> record, Action<Exception> fault,
+        Action<OperationCanceledException> cancelled) =>
         pass
             .Do(record)
             .Select(_ => Unit.Default)
             .Catch<Unit, Exception>(ex =>
             {
-                fault(ex);
+                if (ex is OperationCanceledException oce)
+                    cancelled(oce);
+                else
+                    fault(ex);
                 return Observable.Return(Unit.Default);
             });
 

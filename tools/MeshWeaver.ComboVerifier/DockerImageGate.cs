@@ -44,7 +44,8 @@ namespace MeshWeaver.ComboVerifier;
 /// public surface is <see cref="IObservable{T}"/>.</para>
 /// </summary>
 public sealed class DockerImageGate(
-    IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform, string hostDir)
+    IoPoolRegistry pools, TimeSpan runBudget, TextWriter output, string platform, string hostDir,
+    ComboModuleComposition? modules = null)
 {
     /// <summary>How many trailing characters of the combined docker output the run keeps for
     /// diagnostics.</summary>
@@ -177,7 +178,8 @@ public sealed class DockerImageGate(
         output.WriteLine(
             $"running mw-plugin-test as {imageRef} ({Platform}), gate host "
             + $"'{Path.GetFullPath(hostDir)}', over '{fullRoot}' …");
-        var run = Docker(RunArgs(imageRef, fullRoot, Path.GetFullPath(hostDir), Platform), ct, runBudget);
+        var run = Docker(
+            RunArgs(imageRef, fullRoot, Path.GetFullPath(hostDir), Platform, modules), ct, runBudget);
         if (run.TimedOut)
             return new CandidateGateRun
             {
@@ -218,8 +220,17 @@ public sealed class DockerImageGate(
     /// dll <c>dotnet</c> starts). Move <c>--platform</c> (or any flag) past the image and docker stops
     /// seeing it — the run is no longer pinned to anything. Pinned by
     /// <c>DockerImageGateArgsTest</c>.</para>
+    ///
+    /// <para>🚨 <paramref name="modules"/> is the combo's MODULE half (MeshWeaver#4413): its root is
+    /// mounted read-only at <see cref="ModulesMount"/> and every landed module is passed as
+    /// <c>--module</c>, exactly as the node-repo gate lane passes its composed set. Without it the
+    /// tester registers no module NodeType at all (its image ships none), and every package whose
+    /// content declares a <c>Skill</c> or <c>Agent</c> fails at install for a reason that names
+    /// the content.</para>
     /// </summary>
-    internal static string[] RunArgs(string imageRef, string fullRoot, string fullHost, string platform) =>
+    internal static string[] RunArgs(
+        string imageRef, string fullRoot, string fullHost, string platform,
+        ComboModuleComposition? modules = null) =>
     [
         "run", "--rm",
         // --init reaps the tester's children and lets a crashed runtime's SIGABRT end the process
@@ -228,13 +239,20 @@ public sealed class DockerImageGate(
         "--platform", platform,
         "-v", $"{fullHost}:{HostMount}:ro",
         "-v", $"{fullRoot}:/work",
+        .. modules is { Modules.Length: > 0 }
+            ? new[] { "-v", $"{modules.Root}:{ModulesMount}:ro" }
+            : [],
         "--entrypoint", "dotnet",
         imageRef,
         $"{HostMount}/mw-plugin-test.dll",
         "/work",
         "--app", "/app",
         "--report", $"/work/{GateRunReport.FileName}",
+        .. modules is null ? [] : modules.TesterArgs(ModulesMount),
     ];
+
+    /// <summary>Where the combo's composed modules are mounted inside the candidate container.</summary>
+    internal const string ModulesMount = "/ext";
 
     /// <summary>Where the composed gate host is mounted inside the candidate container.</summary>
     internal const string HostMount = "/host";

@@ -53,6 +53,19 @@ public interface IMeshInvalidationFeed
     /// <para>Default: never emits — a feed with no cross-process source cannot have a gap.</para>
     /// </summary>
     IObservable<ChangeFeedGap> Gaps => System.Reactive.Linq.Observable.Never<ChangeFeedGap>();
+
+    /// <summary>
+    /// Only the commits the STORAGE BACKEND announced — each one already durably stored, whichever
+    /// process made it. A direct <see cref="IMeshChangeFeed.Publish"/> is NOT here: it reaches
+    /// <see cref="Subscribe"/> as an optimistic invalidation and may precede persistence (a compile
+    /// settle publishes its own-stream update before the persistence sampler stores it), so it is
+    /// no evidence that the store accepted anything (review on #7087).
+    ///
+    /// <para>Default: never emits — a feed that cannot tell a durable commit from an optimistic
+    /// notification offers no durable evidence at all, rather than passing the one off as the
+    /// other.</para>
+    /// </summary>
+    IObservable<MeshChangeEvent> DurableCommits => System.Reactive.Linq.Observable.Never<MeshChangeEvent>();
 }
 
 /// <summary>

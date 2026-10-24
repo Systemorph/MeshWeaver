@@ -2,7 +2,9 @@ using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Reactive.Disposables;
 using System.Reactive.Linq;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
+using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Mesh;
 using MeshWeaver.Messaging;
@@ -134,17 +136,29 @@ public record CatalogSearch
     /// they rendered within a quarter of a second (Crm Incidents, 2026-10-21). A computed filter that
     /// never answers now reads as loading, never as absent.</para>
     /// </summary>
-    /// <param name="typed">What the reader typed into the app's bar, RAW — <see cref="Render"/> narrows it against this search's own hidden query.</param>
+    /// <param name="typed">What the reader typed into the app's bar, RAW — <see cref="Render(string?, string, bool, string, Action{string}?)"/> narrows it against this search's own hidden query.</param>
     /// <param name="categoryLabel">The category label, the title fallback.</param>
-    /// <param name="refused">Told the details when a filter is refused (see <see cref="Render"/>).</param>
+    /// <param name="refused">Told the details when a filter is refused (see <see cref="Render(string?, string, bool, string, Action{string}?)"/>).</param>
     public IObservable<UiControl> Section(IObservable<string> typed, string categoryLabel, Action<string>? refused = null)
+        => Section(typed, categoryLabel, sole: false, refused);
+
+    /// <summary>
+    /// <see cref="Section(IObservable{string}, string, Action{string}?)"/> for a search that is, or is not,
+    /// the ONLY one in its category. A sole search whose title is absent or merely repeats the category
+    /// label shows no title of its own (<see cref="ShownTitle"/>) — the menu tab already says it.
+    /// </summary>
+    /// <param name="typed">What the reader typed into the app's bar, RAW.</param>
+    /// <param name="categoryLabel">The category label.</param>
+    /// <param name="sole">Whether this is the only search in its category.</param>
+    /// <param name="refused">Told the details when a filter is refused.</param>
+    public IObservable<UiControl> Section(IObservable<string> typed, string categoryLabel, bool sole, Action<string>? refused = null)
     {
         var section = Filters()
             .CombineLatest(typed.DistinctUntilChanged(),
                 // A silent condition hides the "+" — it never holds back the results.
                 (CreateWhen?.StartWith(false) ?? Observable.Return(true)).DistinctUntilChanged(),
                 (filter, text, create) => (filter, text, create))
-            .Select(t => Render(t.filter, t.text, t.create, categoryLabel, refused));
+            .Select(t => Render(t.filter, t.text, t.create, categoryLabel, sole, refused));
         return ComputedFilter is null ? section : section.StartWith(Loading());
     }
 
@@ -169,6 +183,33 @@ public record CatalogSearch
     /// <param name="categoryLabel">The category label, the title fallback.</param>
     /// <param name="refused">Told the section title and the hidden query when the filter is refused.</param>
     public UiControl Render(string? filter, string typed, bool showCreate, string categoryLabel, Action<string>? refused = null)
+        => Render(filter, typed, showCreate, categoryLabel, sole: false, refused);
+
+    /// <summary>
+    /// The title this search shows above its hits. A category's tab already names the category, so a
+    /// SOLE search whose <see cref="Title"/> is absent or equals the category label (ignoring case and
+    /// surrounding blanks) shows none — an empty string, which the MeshSearch view omits — instead of the
+    /// same word again under the tab. Otherwise the search's own title, else the category label. Pure.
+    /// </summary>
+    /// <param name="categoryLabel">The category label.</param>
+    /// <param name="sole">Whether this is the only search in its category.</param>
+    public string ShownTitle(string categoryLabel, bool sole)
+    {
+        if (!sole)
+            return Title ?? categoryLabel;
+        return string.IsNullOrWhiteSpace(Title) || string.Equals(Title.Trim(), categoryLabel?.Trim(), StringComparison.OrdinalIgnoreCase)
+            ? ""
+            : Title;
+    }
+
+    /// <summary><see cref="Render(string?, string, bool, string, Action{string}?)"/> with the sole-search title rule (<see cref="ShownTitle"/>).</summary>
+    /// <param name="filter">The current filter, or null for the empty state.</param>
+    /// <param name="typed">What the reader typed, raw.</param>
+    /// <param name="showCreate">Whether the "+" shows.</param>
+    /// <param name="categoryLabel">The category label.</param>
+    /// <param name="sole">Whether this is the only search in its category.</param>
+    /// <param name="refused">Told the section title and the hidden query when the filter is refused.</param>
+    public UiControl Render(string? filter, string typed, bool showCreate, string categoryLabel, bool sole, Action<string>? refused = null)
     {
         var title = Title ?? categoryLabel;
         if (filter is null)
@@ -182,7 +223,7 @@ public record CatalogSearch
             return Controls.Label(RefusedLabel);
         }
 
-        var control = Controls.Catalog(title, filter, ItemArea, sort, PageSize)
+        var control = Controls.Catalog(ShownTitle(categoryLabel, sole), filter, ItemArea, sort, PageSize)
             .WithShowSearchBox(false)
             .WithVisibleQuery(CatalogQuery.Narrowing(CatalogSort.Sorted(filter, sort.Sort), typed));
         if (MaxColumns is { } columns)
@@ -242,10 +283,15 @@ public record CatalogApp(string? Title = null)
     /// <summary>The query bar's placeholder; null derives one from the title (localise before passing).</summary>
     public string? Placeholder { get; init; }
 
-    /// <summary>The bar's placeholder when none is given: language-neutral (a glyph and the typed orders
-    /// by example), so no viewer meets English they did not ask for. Pass a localised one for words.</summary>
+    /// <summary>The bar's placeholder when none is given: language-neutral (the typed orders by example; the bar's own search icon is the affordance), so no viewer meets English they did not ask for. Pass a localised one for words.</summary>
     public static readonly string DefaultPlaceholder =
-        "🔍 " + string.Join(", ", CatalogSort.WellKnown.Where(s => s != CatalogSort.LastActivity).Select(s => s.Sort));
+        string.Join(", ", CatalogSort.WellKnown.Where(s => s != CatalogSort.LastActivity).Select(s => s.Sort));
+
+    /// <summary>The vertical gap between the title, the query bar and the menu.</summary>
+    public const string HeaderGap = "8px";
+
+    /// <summary>The widest the shared query bar grows (a readable measure, not the page width).</summary>
+    public const string QueryBarMaxWidth = "40rem";
 
     /// <summary>The layout-area data id the typed text is bound to. Change it only to host two apps in one area.</summary>
     public string QueryDataId { get; init; } = "catalogAppQuery";
@@ -347,7 +393,8 @@ public record CatalogApp(string? Title = null)
     /// <param name="refused">Told the details of a refused section.</param>
     public StackControl Compose(IObservable<string> typed, string? selected, Action<string>? refused = null)
     {
-        var stack = Controls.Stack.WithWidth("100%");
+        // Title, bar and tabs sit close together: one tight vertical rhythm for the whole header.
+        var stack = Controls.Stack.WithWidth("100%").WithVerticalGap(HeaderGap);
         if (!string.IsNullOrWhiteSpace(Title))
             stack = stack.WithView(Controls.PageTitle(Title!), "Title");
         if (ShowQueryBar)
@@ -371,7 +418,7 @@ public record CatalogApp(string? Title = null)
         if (category.Header is not null)
             body = body.WithView(category.Header, "Header");
         for (var i = 0; i < category.Searches.Count; i++)
-            body = body.WithView(category.Searches[i].Section(typed, category.Label, refused).Select(c => (UiControl?)c), $"Search{i}");
+            body = body.WithView(category.Searches[i].Section(typed, category.Label, category.Searches.Count == 1, refused).Select(c => (UiControl?)c), $"Search{i}");
         return body;
     }
 
@@ -388,7 +435,11 @@ public record CatalogApp(string? Title = null)
     public TextFieldControl QueryBar() =>
         new TextFieldControl(new JsonPointerReference(""))
             .WithPlaceholder(Placeholder ?? DefaultPlaceholder)
+            // A search affordance, and a readable measure: full width up to the platform's form width, so
+            // the bar does not stretch across a wide screen.
+            .WithIconStart(FluentIcons.Search(IconSize.Size20))
             .WithWidth("100%")
+            .WithStyle($"max-width: {QueryBarMaxWidth};")
             .WithImmediate(true)
             .WithImmediateDelay(300) with
         { DataContext = LayoutAreaReference.GetDataPointer(QueryDataId) };
