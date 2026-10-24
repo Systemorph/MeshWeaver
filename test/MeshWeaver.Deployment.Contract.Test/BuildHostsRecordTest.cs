@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Collections.Immutable;
 using System.Text.Json.Nodes;
 using MeshWeaver.Deployment;
@@ -97,6 +98,54 @@ public class BuildHostsRecordTest
         Assert.Equal("3.1.10500", reread.BuildHosts.Channels["latest"].PlatformVersion);
         Assert.Equal(3, reread.BuildHosts.Channels["latest"].MaxReplicas);
         Assert.Equal("3.1.10388", reread.BuildHosts.Channels["stable"].PlatformVersion);
+    }
+
+    private static DeploymentContent WithHosts(bool enabled, string? latest, string? stable) => new()
+    {
+        Host = "control.example.com",
+        BuildHosts = new BuildHostsBlock
+        {
+            Enabled = enabled,
+            Channels = ImmutableSortedDictionary<string, BuildHostChannel>.Empty
+                .Add(BuildHostsBlock.LatestChannel, new BuildHostChannel { PlatformVersion = latest, TesterDigest = Tester, PortalDigest = Portal, RunnerDigest = Runner })
+                .Add(BuildHostsBlock.StableChannel, new BuildHostChannel { PlatformVersion = stable }),
+        },
+    };
+
+    private static string[] BarrierKeys(IDictionary<string, string> config) =>
+        config.Keys.Where(k => k.StartsWith("Hosting__Builds__Channels__", StringComparison.Ordinal)).ToArray();
+
+    [Fact]
+    public void AnEnabledBlock_RendersTheClaimBarrierForEveryChannelWithAVersion()
+    {
+        foreach (var options in new[] { PortalConfigOptions.Helm, PortalConfigOptions.Aspire("http://localhost:8080") })
+        {
+            var config = DeploymentPortalConfig.PortalConfig(WithHosts(true, " 3.1.10412 ", "3.1.10388"), options);
+            Assert.Equal("3.1.10412", config["Hosting__Builds__Channels__latest__PlatformVersion"]);
+            Assert.Equal("3.1.10388", config["Hosting__Builds__Channels__stable__PlatformVersion"]);
+            Assert.Equal(2, BarrierKeys(config).Length);
+            Assert.Equal("Hosting__Builds__Channels__stable__PlatformVersion", DeploymentPortalConfig.BuildHostPlatformVersionKey("stable"));
+        }
+    }
+
+    [Fact]
+    public void ADisabledBlock_RendersNoBarrier()
+    {
+        Assert.Empty(BarrierKeys(DeploymentPortalConfig.PortalConfig(WithHosts(false, "3.1.10412", "3.1.10388"))));
+    }
+
+    [Fact]
+    public void ABlankVersion_RendersNoBarrierForThatChannel()
+    {
+        var config = DeploymentPortalConfig.PortalConfig(WithHosts(true, "3.1.10412", "  "));
+        Assert.Equal(["Hosting__Builds__Channels__latest__PlatformVersion"], BarrierKeys(config));
+        Assert.Empty(BarrierKeys(DeploymentPortalConfig.PortalConfig(WithHosts(true, null, null))));
+    }
+
+    [Fact]
+    public void ARecordWithoutTheBlock_RendersNothingNew()
+    {
+        Assert.Empty(BarrierKeys(DeploymentPortalConfig.PortalConfig(new DeploymentContent { Host = "portal.example.com" })));
     }
 
     [Theory]

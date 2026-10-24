@@ -252,7 +252,7 @@ still carry it:
 | `SuspendedAt` | the `Suspend` / `Reactivate` actions |
 | `SuspensionReason` | the `Suspend` action |
 | `WebhookInboxTargets` | legacy of `WebhookInbox` — read when the typed list is empty, never written |
-| `BuildHosts` | the operations record's author (`Enabled`, a channel's `MaxReplicas`) and core CD's signed `build-host-update-available` event through the operations instance (a channel's set — `PlatformVersion`, `TesterDigest`, `PortalDigest`, `RunnerDigest`); `Doc/Architecture/BuildHosts` |
+| `BuildHosts` | the operations record's author (`Enabled`, a channel's `MaxReplicas`) and core CD's signed `build-host-update-available` event through the operations instance (a channel's set — `PlatformVersion`, `TesterDigest`, `PortalDigest`, `RunnerDigest`); renders the claim barrier `Hosting__Builds__Channels__<channel>__PlatformVersion` for every channel with a version while `Enabled`; `Doc/Architecture/BuildHosts` |
 
 ## Retired: generating the Helm chart from Aspire
 
