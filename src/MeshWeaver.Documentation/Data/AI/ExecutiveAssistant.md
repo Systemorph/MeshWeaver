@@ -105,8 +105,8 @@ To **keep** a file, the agent saves it with `SaveAttachment(id, attachment, targ
   anything over 100 MB, decided from the listed size before a byte is downloaded.
 - Once saved, the file is read from the mesh like any other.
 
-Maintainer decision of 2026-10-24 ("an automated way to save attachments to content"); the tool
-lives in MeshWeaver.Plugins (`MeshWeaver.Mail.MicrosoftGraph`).
+Policy [`ea-saves-attachments-to-space-content`](../Architecture/PolicyNotProse); the tool lives in
+MeshWeaver.Plugins (`MeshWeaver.Mail.MicrosoftGraph`).
 
 ### Mailings — draft once, approve once, send to many
 
