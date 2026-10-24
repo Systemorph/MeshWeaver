@@ -18,23 +18,37 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public static class InMeshMailCopyCode
 {
+    // 🚨 No method here may END in the surface call: a call in tail position may be compiled by the JIT as a
+    // tail call, which REMOVES this frame, and the guard then sees whoever called this method (here, the test
+    // in the default context). That is the stack-based guard's documented residual (Doc/Architecture/
+    // InMeshImpersonation, "What the runtime guard cannot see"; the compile-time half covers it) — these methods
+    // model in-mesh code whose frame is present, as InMeshImpersonationGuardTest's stand-ins do.
+
     /// <summary>Through the engine.</summary>
     public static object ViaEngine(AccessService access, IMailCopyStore store)
-        => new MailCopyEngine(new OneAccountFeed(), store, access: access).Enable("owner", 30);
+    {
+        var composed = new MailCopyEngine(new OneAccountFeed(), store, access: access).Enable("owner", 30);
+        GC.KeepAlive(access);
+        return composed;
+    }
 
     /// <summary>Through the per-account copy.</summary>
     public static object ViaAccountCopy(AccessService access, IMailCopyStore store)
     {
         var feed = new OneAccountFeed();
-        return new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access), feed).Enable("owner", "acct", 30);
+        var composed = new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access), feed).Enable("owner", "acct", 30);
+        GC.KeepAlive(access);
+        return composed;
     }
 
     /// <summary>Through the switch over the providers.</summary>
     public static object ViaSwitch(AccessService access, IMailCopyStore store)
     {
         var feed = new OneAccountFeed();
-        return new MailCopySwitch([new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access), feed)])
+        var composed = new MailCopySwitch([new MailFeedAccountCopy(new MailCopyEngine(feed, store, access: access), feed)])
             .Enable("owner", "outlook", "acct", 30);
+        GC.KeepAlive(access);
+        return composed;
     }
 
     private sealed class OneAccountFeed : IMailCopyFeed

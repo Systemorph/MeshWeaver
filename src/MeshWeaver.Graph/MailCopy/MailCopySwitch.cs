@@ -78,9 +78,12 @@ public sealed class MailCopySwitch(IEnumerable<IMailAccountCopy> providers) : IM
     public IObservable<ImmutableList<MailCopyAccount>> Offer(string owner)
         => providers.Count == 0
             ? Observable.Return(ImmutableList<MailCopyAccount>.Empty)
+            // 🚨 Each provider is CALLED here, at entry, under the requester's identity — materialized, never a
+            // lazy Select that Merge would enumerate at subscribe under whoever subscribes.
             : providers.Select(p => p.Accounts(owner).Take(1)
                     // One provider that cannot be read must not hide the others' accounts.
                     .Catch((Exception _) => Observable.Return(ImmutableList<MailCopyAccount>.Empty)))
+                .ToImmutableList()
                 .Merge()
                 .ToList()
                 .Select(lists => lists.SelectMany(l => l)

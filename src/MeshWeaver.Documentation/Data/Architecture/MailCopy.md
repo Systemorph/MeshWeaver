@@ -77,14 +77,18 @@ can reach them, so they authorize the caller before they elevate
   never when the cold result is subscribed: a write composed by one person and subscribed after their
   scope ended is still theirs. The owner may act on their own copy; anybody else needs the permission the
   act needs (Read, Update or Delete) on `{owner}/_MailCopy`. System and hub principals pass. **No identity,
-  or an anonymous one, is refused**: a lost identity is never read as trusted background work.
+  or an anonymous one, is refused**: a lost identity is never read as trusted background work. **No mesh
+  at the call is refused too**: the work resolves the hub again when it runs, so a call composed before the
+  portal existed and subscribed after would otherwise run as System unchecked. A non-owner's permission
+  answer is taken off the evaluator's gate before any work starts (`TakeDecisionOutsideGate`).
 - **The background sync declares itself.** `MailCopyEngine` (given the host's `AccessService`) makes every
   store call of a sync as System on the owner's behalf, at the call — a sync runs after provider hops that
   keep no ambient identity. Switching on, off and reading go through the caller's own identity; `Enable`
   reads it when it is CALLED and re-establishes it when its cold result is subscribed, so a System or admin
   subscriber never launders another person's switch-on. The per-account wrappers compose their engine calls
   at entry for the same reason, and subscribe them only after their account check: composed after the feed's
-  answer, they would be judged as whatever identity that answer arrived under. One sync per owner runs per engine: a `Sync`
+  answer, they would be judged as whatever identity that answer arrived under. `MailCopySwitch.Offer` calls
+every provider at entry, never in a lazy enumeration its `Merge` would run at subscribe. One sync per owner runs per engine: a `Sync`
   subscribed while another runs emits null at once, and the gate opens again when the running one
   completes, fails or is disposed. An engine
   built without the `AccessService` on a host that has one gets its syncs refused, loudly.

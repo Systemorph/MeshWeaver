@@ -10,6 +10,7 @@ using MeshWeaver.Graph.MailCopy;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
+using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -306,6 +307,100 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
         var copy = MailCopyNodeTypes.CopyPath(owner, "outlook", "g1", "m1");
         MailAttachments.IsCopyTarget(owner, copy, "0123/b.txt").Should().BeTrue("the control: the owner's own copy node is a target");
         MailAttachments.IsCopyTarget(owner, copy, "../escape.txt").Should().BeFalse("a relative path never leaves the collection");
+    }
+
+    /// <summary>
+    /// 🚨 A store call composed while the host had no mesh yet, and subscribed once it has one, is refused:
+    /// the work resolves the hub again when it runs, so passing it through at the call would let a stranger's
+    /// write run as System with no caller check. Both stores. The owner's own write, composed once the mesh
+    /// exists, is the control arm.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task ACallComposedBeforeTheMeshExists_IsRefused_WhenSubscribedAfter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        IMessageHub? portal = null;
+        var store = new MeshMailCopyStore(() => portal);
+        var files = new MeshMailAttachmentStore(() => portal);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await new MeshMailCopyStore(() => Mesh).Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
+
+        IObservable<MailMessageCopy> write;
+        IObservable<string> save;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = "mallory", Name = "mallory" }))
+        {
+            write = store.Upsert(owner, Copy("Forged"));
+            save = files.Save(owner, MailCopyNodeTypes.CopyPath(owner, "outlook", "g1", "m1"), "a/b.txt", Encoding.UTF8.GetBytes("x"));
+        }
+        portal = Mesh;
+
+        (await Record.ExceptionAsync(() => write.Timeout(Bound).Await(ct)))
+            .Should().BeOfType<InvalidOperationException>("no mesh at the call is a refusal, whenever the result is subscribed");
+        (await Record.ExceptionAsync(() => save.Timeout(Bound).Await(ct)))
+            .Should().BeOfType<InvalidOperationException>("the attachment store fails closed the same way");
+        (await store.Read(owner, "outlook", "g1", "m1").Timeout(Bound).Await(ct))
+            .Should().BeNull("the refused write wrote nothing");
+
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            write = store.Upsert(owner, Copy("Mine"));
+        await write.Timeout(Bound).Await(ct);
+        (await store.Read(owner, "outlook", "g1", "m1").Timeout(Bound).Await(ct))!.Subject
+            .Should().Be("Mine", "the control arm: composed once the mesh exists, the owner's write lands");
+    }
+
+    /// <summary>
+    /// A person the owner granted access to may act on the copy — the permission check's continuation — and the
+    /// work runs OFF the thread the decision was emitted on: a warm permission fold emits synchronously under its
+    /// Rx gate, and mesh work inside it is the lock-order deadlock of #899.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AGrantedDelegate_MayActOnTheCopy_AndTheWorkRunsOffTheDecisionsGate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        const string delegateId = "delegate";
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(new MeshNode($"{delegateId}_Access", $"{owner}/_Access")
+        {
+            NodeType = AccessAssignmentNodeType.NodeType,
+            Name = $"{delegateId} Access",
+            MainNode = owner,
+            State = MeshNodeState.Active,
+            Content = new AccessAssignment
+            {
+                AccessObject = delegateId,
+                DisplayName = delegateId,
+                Roles = [new RoleAssignment { Role = Role.Editor.Id, Denied = false }],
+            },
+        }).Timeout(Bound).Await(ct);
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
+        var asDelegate = new AccessContext { ObjectId = delegateId, Name = delegateId };
+
+        Task<MailMessageCopy> write;
+        using (access.SwitchAccessContext(asDelegate))
+            write = store.Upsert(owner, Copy("Delegated")).Timeout(Bound).Await(ct);
+        await write;
+        Task<MailMessageCopy?> read;
+        using (access.SwitchAccessContext(asDelegate))
+            read = store.Read(owner, "outlook", "g1", "m1").Timeout(Bound).Await(ct);
+        (await read)!.Subject.Should().Be("Delegated", "the granted delegate's write landed and its read answers");
+
+        // The decision is warm now (the calls above folded it). Subscribed on THIS thread, a continuation that
+        // stayed on the emitting thread would run here, inside the fold's gate.
+        var subscriber = Environment.CurrentManagedThreadId;
+        var worker = -1;
+        IObservable<int> gated;
+        using (access.SwitchAccessContext(asDelegate))
+            gated = MailCopyAuthority.Gated(Mesh, typeof(MailCopyAuthorityTest).Assembly, "test", owner, Permission.Read,
+                () => Observable.Defer(() =>
+                {
+                    worker = Environment.CurrentManagedThreadId;
+                    return Observable.Return(1);
+                }));
+        (await gated.Timeout(Bound).Await(ct)).Should().Be(1);
+        worker.Should().NotBe(subscriber, "the work runs after the decision has left the evaluator's gate");
     }
 
     [Fact]

@@ -43,9 +43,12 @@ internal static class MailCopyAuthority
         var who = access is null ? null : access.Context ?? access.CircuitContext;
         return Observable.Defer(() =>
         {
-            // No mesh: the work itself reports that, and it can do nothing without one.
+            // 🚨 No mesh AT THE CALL fails closed. The work resolves the hub again when it runs, so letting it
+            // through here would let a write composed before the portal existed and subscribed after it ran as
+            // System with no caller check at all.
             if (hub is null)
-                return work();
+                return Observable.Throw<T>(new InvalidOperationException(
+                    "The mail copies cannot be reached: no mesh was available on this host when the call was made."));
             if (string.IsNullOrWhiteSpace(owner) || owner.Contains('/'))
                 return Observable.Throw<T>(new ArgumentException("The owner of a mail copy is one user id.", nameof(owner)));
             // A host without access control has nobody to authorize.
@@ -64,7 +67,9 @@ internal static class MailCopyAuthority
                 || string.Equals(who.ObjectId, owner, StringComparison.OrdinalIgnoreCase))
                 return work();
             var scope = MailCopyNodeTypes.NamespaceFor(owner);
-            return hub.CheckPermissionOutcome(scope, who.ObjectId, permission).Take(1)
+            // 🚨 Off the evaluator's gate before the work: a warm fold emits synchronously under its Rx lock,
+            // and the work is mesh I/O (HubPermissionExtensions.TakeDecisionOutsideGate, #899).
+            return hub.CheckPermissionOutcome(scope, who.ObjectId, permission).TakeDecisionOutsideGate()
                 .SelectMany(outcome => outcome.IsGranted
                     ? work()
                     : Observable.Throw<T>(outcome.IsUndetermined
