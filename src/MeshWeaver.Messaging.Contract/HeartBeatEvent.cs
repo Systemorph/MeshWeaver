@@ -39,6 +39,22 @@ public record GrainKeepAliveCallback(Action KeepAlive);
 public record GrainLongRunningOperationCallback(Func<IDisposable> BeginOperation);
 
 /// <summary>
+/// Registered on the hub configuration by the Orleans grain during activation. Every server-side
+/// stream a hub of that activation serves to a subscriber holds one lease, taken when the stream is
+/// registered and released when it is disposed, so the grain knows the moment its LAST subscriber
+/// has gone (issue #6623).
+/// <para>The grain uses that moment for an activation that has served nobody but the platform —
+/// a boot sweep's System read, an install pass, a seal-arrival pass: with its last subscriber gone
+/// nothing is left for it to do, so it asks Orleans to deactivate it instead of staying resident
+/// until idle collection. An activation a person has used is not affected.</para>
+/// <para>In monolith mode no callback is set and no lease is taken.</para>
+/// </summary>
+/// <param name="Acquire">Takes one subscriber lease; disposing the result releases it once. The
+/// argument says whether the subscribe carried a PERSON's identity, which keeps the activation on
+/// ordinary idle collection for the rest of its life.</param>
+public record GrainSubscriberLeases(Func<bool, IDisposable> Acquire);
+
+/// <summary>
 /// Registered on the hub configuration by the Orleans grain during activation
 /// (alongside <see cref="GrainKeepAliveCallback"/>). Requests IMMEDIATE grain
 /// deactivation (<c>Grain.DeactivateOnIdle</c>) as an OUT-OF-BAND escape hatch that

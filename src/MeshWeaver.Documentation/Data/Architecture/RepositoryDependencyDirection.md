@@ -14,7 +14,7 @@ release can be broken by a repository it should not know about.**
 
 Plugins depending on core is CORRECT and must not be "fixed": `$(MeshWeaverRoot)` project
 references, the digest-pinned platform image the in-mesh gates compile against, and a plugin repo
-*calling* core's reusable `node-repo-*.yml` / `plugin-build.yml` workflows are all the intended
+*calling* core's reusable `node-repo-*.yml` workflows are all the intended
 shape. This page is only about the other direction.
 
 Measured against `Systemorph/MeshWeaver@cea28557b`. Re-measure before acting on it; line numbers
@@ -150,10 +150,10 @@ It is ledgered all the same, in `ApiReadLedger`, so the inventory stays complete
 
 Checked and cleared — do not "fix" these:
 
-- **`plugin-build.yml`, `node-repo-{validate,compile-check,gate,tag-modules,publish-bake,module-pack}.yml`**
+- **`node-repo-{validate,compile-check,gate,tag-modules,publish-bake,module-pack}.yml`**
   — `workflow_call` only. A plugin repo calling core's reusable workflow is the intended shape.
-  `plugin-build.yml` carries an explicit note that its cross-repo checkout was REMOVED and must not
-  be re-added on the strength of a grep.
+  (`plugin-build.yml`, whose cross-repo checkout had already been removed, was deleted outright:
+  no satellite ever called it.)
 - **No RELEASE dispatcher.** Core sends no release event to any repository (the one ledgered
   dispatch is the candidate TEST request above). `notify-dependents.yml` was
   withdrawn on 2026-09-03 (maintainer: *"core publishes an event and finishes"*): the release wave is

@@ -156,8 +156,9 @@ the new pair's grant before either half merges. The marker is deliberately narro
 A reader should not leave this page believing it covers more than it does.
 
 - **It does not see a repository that is not in the roster.** Coverage is exactly the roster's rows.
-- **It does not see a lane with no recorded caller.** Three lanes / **5 of 22 lane jobs** are in
-  that state today (`node-repo-platform-canary`, `node-repo-platform-ref-bump`, `plugin-build`;
+- **It does not see a lane with no recorded caller.** The lanes in
+  that state are printed by every run (`node-repo-platform-canary` was one when this was written;
+  `node-repo-platform-ref-bump` and `plugin-build` were deleted as dead, and
   `node-repo-module-publish` left the list when MeshWeaver#3878 recorded its first caller). They are **printed as `NOT COVERED` on every run**
   rather than folded into the green, because a lane with zero known callers is a coverage gap, not a
   clean measurement.
