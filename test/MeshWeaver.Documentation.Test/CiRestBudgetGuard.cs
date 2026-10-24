@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -118,12 +119,12 @@ public class CiRestBudgetGuard
         return File.Exists(path) && ImportLine.IsMatch(File.ReadAllText(path));
     }
 
-    private static List<string> FetchesMissingTheSharedClient(string yaml, Func<string, bool> imports)
+    private static ImmutableList<string> FetchesMissingTheSharedClient(string yaml, Func<string, bool> imports)
     {
         var stream = new YamlStream();
         stream.Load(new StringReader(yaml));
         var root = (YamlMappingNode)stream.Documents[0].RootNode;
-        var problems = new List<string>();
+        var problems = ImmutableList<string>.Empty;
         if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode jobs)
             return problems;
         foreach (var (name, jobNode) in jobs.Children)
@@ -137,18 +138,18 @@ public class CiRestBudgetGuard
                 if (steps.Children[i] is not YamlMappingNode step) continue;
                 var run = Scalar(step, "run");
                 if (run is null || !run.Contains("mw-core-file", StringComparison.Ordinal)) continue;
-                var fetched = new HashSet<string>(StringComparer.Ordinal);
+                var fetched = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
                 foreach (var line in run.Split('\n').Where(l => l.Contains("mw-core-file", StringComparison.Ordinal)))
                     foreach (Match m in FetchedScript.Matches(line))
-                        fetched.Add(m.Groups[1].Value);
+                        fetched = fetched.Add(m.Groups[1].Value);
                 if (run.Contains(".github/scripts/${", StringComparison.Ordinal))
                     foreach (Match loop in FetchLoop.Matches(run))
                         foreach (var token in loop.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
                             if (token.EndsWith(".py", StringComparison.Ordinal))
-                                fetched.Add(token);
+                                fetched = fetched.Add(token);
                 if (fetched.Contains("ghrest.py")) continue;
                 foreach (var script in fetched.Where(imports).OrderBy(s => s, StringComparer.Ordinal))
-                    problems.Add($"job `{name}` step {i + 1} ({Scalar(step, "name") ?? "unnamed"}): {script}");
+                    problems = problems.Add($"job `{name}` step {i + 1} ({Scalar(step, "name") ?? "unnamed"}): {script}");
             }
         }
         return problems;
