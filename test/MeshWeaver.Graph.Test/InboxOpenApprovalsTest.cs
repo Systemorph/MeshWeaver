@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Text.Json;
+using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Graph.Configuration;
@@ -36,6 +37,15 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         /// <summary>Who approved it; absent while it awaits an approver.</summary>
         public string? ApprovedBy { get; init; }
 
+        /// <summary>The target's own lifecycle word (an instance action's <c>state</c>).</summary>
+        public string? State { get; init; }
+
+        /// <summary>When its life ended, when it did.</summary>
+        public DateTimeOffset? FinishedAt { get; init; }
+
+        /// <summary>Why it ended badly, when it did.</summary>
+        public string? Error { get; init; }
+
         /// <summary>The step-up receipts stamped by the decider (<see cref="StepUpPaths.StampProperty"/>).</summary>
         public ImmutableDictionary<string, string>? StepUpReceipts { get; init; }
     }
@@ -59,6 +69,10 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         Query = $"namespace:{InboxQueries.ViewerToken}/_Forgetful nodeType:{EmailNodeType.NodeType} sort:LastModified-desc {InboxQueries.RowProjection}",
     };
 
+    /// <summary>The default state choice: only the open group — what the person sees until they tick Done.</summary>
+    private static InboxPreferences OpenOnly(InboxPreferences p)
+        => p with { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, true).Add(InboxRows.DoneKey, false) };
+
     // ── 1 + 2: the approval is the row, and only while it awaits ───────────────────────────────
 
     /// <summary>
@@ -78,23 +92,29 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await CreateAsync(new MeshNode("record", "TestApprovals") { NodeType = InboxQueries.ApprovalNodeType, Name = "record",
             Content = new Approval { Approver = owner, Status = ApprovalStatus.Approved, ApprovalDate = DateTimeOffset.UtcNow } }, ct);
         var openRequest = await Notify(owner, "n-open", NotificationType.ApprovalRequired, "TestActions/open", ct);
-        await Notify(owner, "n-decided", NotificationType.ApprovalRequired, "TestActions/decided", ct);
-        await Notify(owner, "n-record", NotificationType.ApprovalRequired, "TestApprovals/record", ct);
+        var decidedRequest = await Notify(owner, "n-decided", NotificationType.ApprovalRequired, "TestActions/decided", ct);
+        var recordRequest = await Notify(owner, "n-record", NotificationType.ApprovalRequired, "TestApprovals/record", ct);
         await Notify(owner, "n-gone", NotificationType.ApprovalRequired, "TestActions/gone", ct);
-        // Every kind and state: this test is about which requests survive, not about the defaults.
+        // Every kind and state: this test is about how each request is filed, not about the defaults.
         await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
 
-        var rows = Open(owner).GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)));
-        var paths = await rows.Select(r => r.ValueKind == JsonValueKind.Array
-                ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x, StringComparer.Ordinal).ToArray() : [])
-            .Where(p => p.Length > 0)
-            .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
-        // The decided Approval RECORD is the ledger's own row (Recent): it is listed as the approval it is, once —
-        // and the notification that announced it is not.
-        paths.Should().Equal(new[] { openRequest, "TestApprovals/record" }.OrderBy(x => x, StringComparer.Ordinal),
-            "only the request whose approval still awaits is listed — not a decided one, not one whose approval is gone");
-        var row = await rows.Where(r => r.ValueKind == JsonValueKind.Array && r.EnumerateArray().Any(x => x.GetProperty("path").GetString() == openRequest))
-            .Select(r => r.EnumerateArray().First(x => x.GetProperty("path").GetString() == openRequest))
+        var stream = Open(owner);
+        var rows = RowStates(stream);
+        var all = await rows.Where(r => r.Count >= 4).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        // The decided Approval RECORD is the ledger's own row (Recent). A request whose approval was decided stays a CLOSED
+        // row (its outcome, listed under Done); one whose approval is gone has nothing left to decide and is not a row.
+        all.Keys.OrderBy(x => x, StringComparer.Ordinal).Should().Equal(
+            new[] { openRequest, decidedRequest, recordRequest, "TestApprovals/record" }.OrderBy(x => x, StringComparer.Ordinal));
+        all[openRequest].Should().Be(InboxState.Awaiting, "its approval still awaits");
+        all[decidedRequest].Should().Be(InboxState.Approved, "its approval was decided");
+        all[recordRequest].Should().Be(InboxState.Approved);
+
+        // The default (open only) view lists the request that still waits — nothing decided.
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
+        (await rows.Where(r => r.Count == 1).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Keys.Should().Equal([openRequest],
+            "only the request whose approval still awaits is open");
+        var row = await RowsOf(stream).Where(r => r.Any(x => x.GetProperty("path").GetString() == openRequest))
+            .Select(r => r.First(x => x.GetProperty("path").GetString() == openRequest))
             .FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
         row.GetProperty("target").GetString().Should().Be("TestActions/open", "the row knows the approval it announces");
     }
@@ -142,6 +162,124 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     {
         var node = new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() };
         InboxApprovalTargets.IsPending(node, null).Should().Be(awaits);
+    }
+
+    /// <summary>
+    /// A target is judged by its OWN lifecycle, never by the absence of an approver: one the system refused, retired as
+    /// stale, failed, cancelled or finished is not open — whether or not anybody ever approved it — and one that still
+    /// waits is. (A refused reconcile carries no <c>approvedBy</c> and used to read "Awaiting decision" for ever.)
+    /// </summary>
+    [Theory]
+    [InlineData("""{"state":"Refused","error":"stale — this reconcile waited for an approval longer than 24 h","finishedAt":"2026-10-23T17:46:17+00:00"}""", false, InboxState.Stale, InboxState.Refused)]
+    [InlineData("""{"state":"Refused","error":"⛔ Stale: planned against what moved"}""", false, InboxState.Stale, InboxState.Refused)]
+    [InlineData("""{"state":"Refused","error":"not allow-listed"}""", false, InboxState.Refused, InboxState.Refused)]
+    [InlineData("""{"state":"Superseded"}""", false, InboxState.Stale, InboxState.Stale)]
+    [InlineData("""{"state":"Failed","error":"boom"}""", false, InboxState.Failed, InboxState.Failed)]
+    [InlineData("""{"state":"Cancelled"}""", false, InboxState.Cancelled, InboxState.Cancelled)]
+    [InlineData("""{"state":"Done","approvedBy":"jane"}""", false, InboxState.Done, InboxState.Done)]
+    [InlineData("""{"state":"Running"}""", false, InboxState.Approved, InboxState.Running)]
+    [InlineData("""{"status":"Done","closedAt":"2026-10-12T19:09:51+00:00"}""", false, InboxState.Done, InboxState.Done)]
+    [InlineData("""{"title":"x","finishedAt":"2026-10-12T19:09:51+00:00"}""", false, InboxState.Done, InboxState.Done)]
+    [InlineData("""{"status":"Approved"}""", false, InboxState.Approved, InboxState.Approved)]
+    [InlineData("""{"status":"Rejected"}""", false, InboxState.Rejected, InboxState.Rejected)]
+    [InlineData("""{"state":"Approved"}""", false, InboxState.Approved, InboxState.Approved)]
+    [InlineData("""{"state":"Rejected"}""", false, InboxState.Rejected, InboxState.Rejected)]
+    [InlineData("""{"state":"AwaitingApproval"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
+    [InlineData("""{"state":"AwaitingApproval","parkedAt":"2026-10-20T17:28:53+00:00"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
+    [InlineData("""{"status":"New"}""", true, InboxState.Awaiting, InboxState.Awaiting)]
+    public void ATarget_IsFiledByItsOwnLifecycle(string content, bool open, string state, string word)
+    {
+        var reading = InboxApprovalTargets.Read(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null);
+        (reading.Open, reading.State, reading.Word).Should().Be((open, state, word));
+        InboxApprovalTargets.IsPending(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null).Should().Be(open);
+    }
+
+    /// <summary>The detailed status reads the outcome and what retired it: <c>Refused · stale</c>, <c>Done</c>, <c>Awaiting decision</c>.</summary>
+    [Fact]
+    public void TheStatusText_NamesTheOutcome_AndWhatRetiredIt()
+    {
+        var texts = InboxState.All.ToImmutableDictionary(st => st, st => InboxState.Mark(st) + st.ToUpperInvariant(), StringComparer.Ordinal);
+        InboxApprovalTargets.StatusText(new TargetReading(false, InboxState.Stale, InboxState.Refused), texts).Should().Be("REFUSED · stale");
+        InboxApprovalTargets.StatusText(new TargetReading(false, InboxState.Done, InboxState.Done), texts).Should().Be("DONE");
+        InboxApprovalTargets.StatusText(TargetReading.Awaiting, texts).Should().Be("AWAITING");
+        InboxApprovalTargets.StatusText(new TargetReading(false, InboxState.Stale, InboxState.Stale), texts).Should().Be("STALE", "a stale word needs no second mention");
+        var row = InboxApprovalTargets.WithOutcome(new InboxRow { Path = "n", Target = "t" }, new TargetReading(false, InboxState.Stale, InboxState.Refused), texts);
+        (row.State, row.StateText, row.Status).Should().Be((InboxState.Stale, "STALE", "REFUSED · stale"));
+        row.StateColor.Should().Be(InboxState.Color(InboxState.Stale));
+    }
+
+    /// <summary>An activity's status is its state and where it stands — the badge's text without the mark.</summary>
+    [Fact]
+    public void AnActivityStatus_IsItsStateAndStep()
+    {
+        var texts = InboxState.All.ToImmutableDictionary(st => st, st => InboxState.Mark(st) + st.ToUpperInvariant(), StringComparer.Ordinal);
+        InboxLayoutArea.WithStateText(new InboxRow { State = InboxState.Running, StepNumber = "3/7", StepMessage = "Build" }, texts, "step {0}")
+            .Status.Should().Be("RUNNING · step 3/7: Build");
+        InboxLayoutArea.WithStateText(new InboxRow { State = InboxState.Failed }, texts).Status.Should().Be("FAILED", "the mark belongs to the badge, not the status");
+        InboxLayoutArea.WithStateText(new InboxRow(), texts).Status.Should().BeEmpty("no state, no status");
+    }
+
+    /// <summary>
+    /// The whole path on a mesh: a refused-as-stale target and a failed, a done and a cancelled one are not open and read their
+    /// outcome (Stale / Failed / Done / Cancelled) with a Status text; a parked one is open. The open view lists only the
+    /// parked one; the Done view lists the others.
+    /// </summary>
+    [Fact(Timeout = 120000)]
+    public async Task ARefusedStaleTarget_IsNotOpen_AndReadsStale_WhileAParkedOneIsOpen()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-stale";
+        await CreateUserAsync(owner, ct);
+        var finished = DateTimeOffset.UtcNow;
+        async Task<string> Request(string id, TestActionContent content)
+        {
+            await CreateAsync(new MeshNode(id, "TestActions") { NodeType = ActionType, Name = id, Content = content }, ct);
+            return await Notify(owner, "n-" + id, NotificationType.ApprovalRequired, "TestActions/" + id, ct);
+        }
+        var parked = await Request("parked", new TestActionContent { State = "AwaitingApproval" });
+        var stale = await Request("stale", new TestActionContent { State = "Refused", FinishedAt = finished, Error = "stale — retired unrun after 24 h" });
+        var failed = await Request("failed", new TestActionContent { State = "Failed", Error = "boom" });
+        var done = await Request("done", new TestActionContent { State = "Done", ApprovedBy = "someone-else" });
+        var cancelled = await Request("cancelled", new TestActionContent { State = "Cancelled" });
+        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+
+        var stream = Open(owner);
+        var all = await RowsOf(stream).Where(r => r.Length >= 5).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct);
+        string Field(string path, string name) => all.First(x => x.GetProperty("path").GetString() == path).GetProperty(name).GetString()!;
+        Field(parked, "state").Should().Be(InboxState.Awaiting);
+        Field(parked, "status").Should().Be("Awaiting decision", "the status column carries the target's live text");
+        Field(stale, "state").Should().Be(InboxState.Stale, "retired as stale — not awaiting a decision");
+        Field(stale, "stateText").Should().Be("Stale");
+        Field(stale, "status").Should().Be("Refused · stale");
+        Field(failed, "state").Should().Be(InboxState.Failed);
+        Field(done, "state").Should().Be(InboxState.Done);
+        Field(cancelled, "state").Should().Be(InboxState.Cancelled);
+
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
+        (await RowPaths(stream).Where(p => p.Length == 1).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal([parked], "the default view lists only what still waits");
+        await InboxPrefs.SetAsync(Mesh, owner, p => p with { States = ImmutableDictionary<string, bool>.Empty.Add(InboxRows.OpenKey, false).Add(InboxRows.DoneKey, true) }, ct);
+        (await RowPaths(stream).Where(p => p.Length == 4).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
+            .Should().Equal(new[] { stale, failed, done, cancelled }.OrderBy(x => x, StringComparer.Ordinal), "ticking Done lists the closed ones");
+    }
+
+    /// <summary>All four toolbar buttons look the same — none is picked out in the accent colour.</summary>
+    [Fact(Timeout = 120000)]
+    public async Task TheToolbarButtons_ShareOneAppearance()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        const string owner = "inbox-open-toolbar";
+        await CreateUserAsync(owner, ct);
+        var stream = Open(owner);
+        var appearances = new List<object?>();
+        foreach (var name in new[] { "Delete", "Undo", "Approve", "Reject" })
+        {
+            var button = (ButtonControl)(await stream.GetControlStream($"{InboxLayoutArea.AreaName}/Main/Toolbar/{name}")
+                .Should().Within(TestTimeouts.Convergence).Match(c => c is ButtonControl, $"the {name} button", ct))!;
+            appearances.Add(button.Appearance);
+        }
+        appearances.Distinct().Should().HaveCount(1, "the same weight for every icon button");
+        appearances[0].Should().NotBe(Appearance.Accent);
     }
 
     // ── 1: opening it goes to the approval ────────────────────────────────────────────────────
@@ -195,7 +333,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await CreateUserAsync(owner, ct);
         await CreateAsync(new MeshNode("live", "TestActions") { NodeType = ActionType, Name = "live", Content = new TestActionContent() }, ct);
         var request = await Notify(owner, "n-live", NotificationType.ApprovalRequired, "TestActions/live", ct);
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
         var rows = RowPaths(Open(owner));
 
         (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct)).Should().Equal([request], "listed while it awaits");
@@ -221,7 +359,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await CreateUserAsync(owner, ct);
         await CreateAsync(new MeshNode("again", "TestActions") { NodeType = ActionType, Name = "again", Content = new TestActionContent() }, ct);
         var request = await Notify(owner, "n-again", NotificationType.ApprovalRequired, "TestActions/again", ct);
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
         var rows = RowPaths(Open(owner));
         var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
 
@@ -280,7 +418,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         await CreateAsync(new MeshNode("decided", "TestActions") { NodeType = ActionType, Name = "decided", Content = new TestActionContent { ApprovedBy = "someone-else" } }, ct);
         var open = await Notify(owner, "legacy-open", NotificationType.ApprovalRequired, "TestActions/open", ct, legacy: true);
         await Notify(owner, "legacy-decided", NotificationType.ApprovalRequired, "TestActions/decided", ct, legacy: true);
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
 
         (await RowPaths(Open(owner)).Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
             .Should().Equal([open], "the legacy request of a decided approval is dropped, the open one kept");
@@ -402,7 +540,7 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
         Mesh.ServiceProvider.GetRequiredService<IConfiguration>()[StepUpOptions.EnabledKey] = "true";
         await CreateAsync(new MeshNode("held", "TestActions") { NodeType = ActionType, Name = "held", Content = new TestActionContent { ApprovedBy = owner } }, ct);
         var request = await Notify(owner, "n-held", NotificationType.ApprovalRequired, "TestActions/held", ct);
-        await InboxPrefs.SetAsync(Mesh, owner, p => p, ct);
+        await InboxPrefs.SetAsync(Mesh, owner, OpenOnly, ct);
         var rows = RowPaths(Open(owner));
 
         (await rows.Where(p => p.Length > 0).FirstAsync().Timeout(TestTimeouts.Convergence).Await(ct))
@@ -425,6 +563,10 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     [InlineData("""{"status":"Approved"}""", true, true)]
     [InlineData("""{"status":"Expired"}""", true, false)]
     [InlineData("""{"status":"Expired"}""", false, false)]
+    [InlineData("""{"state":"Approved"}""", true, true)]
+    [InlineData("""{"state":"Approved"}""", false, false)]
+    [InlineData("""{"state":"Rejected","stepUpReceipts":{"jane":"r1"}}""", true, false)]
+    [InlineData("""{"state":"Rejected"}""", true, true)]
     [InlineData("""{}""", true, true)]
     public void ARecordedDecision_IsHeldUntilAReceiptIsStamped_WhenStepUpIsRequired(string content, bool stepUpRequired, bool awaits)
         => InboxApprovalTargets.IsPending(new MeshNode("x", "T") { Content = JsonDocument.Parse(content).RootElement.Clone() }, null, stepUpRequired)
@@ -745,6 +887,15 @@ public class InboxOpenApprovalsTest(ITestOutputHelper output) : MonolithMeshTest
     private static IObservable<string[]> RowPaths(ISynchronizationStream<JsonElement> stream)
         => stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
             .Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().Select(x => x.GetProperty("path").GetString()!).OrderBy(x => x, StringComparer.Ordinal).ToArray() : []);
+
+    private static IObservable<JsonElement[]> RowsOf(ISynchronizationStream<JsonElement> stream)
+        => stream.GetDataStream<JsonElement>(new JsonPointerReference(LayoutAreaReference.GetDataPointer(InboxRows.GridId)))
+            .Select(r => r.ValueKind == JsonValueKind.Array ? r.EnumerateArray().ToArray() : []);
+
+    /// <summary>The listed rows, by path: each one's state.</summary>
+    private static IObservable<ImmutableDictionary<string, string>> RowStates(ISynchronizationStream<JsonElement> stream)
+        => RowsOf(stream).Select(rows => rows.ToImmutableDictionary(x => x.GetProperty("path").GetString()!,
+            x => x.TryGetProperty("state", out var state) ? state.GetString() ?? string.Empty : string.Empty, StringComparer.Ordinal));
 
     private async Task<string> Notify(string owner, string id, NotificationType type, string? target, CancellationToken ct, string? feature = null, bool legacy = false)
     {

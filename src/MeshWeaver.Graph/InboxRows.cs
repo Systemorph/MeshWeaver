@@ -97,6 +97,12 @@ public sealed record InboxRow
     public string StateText { get; init; } = string.Empty;
 
     /// <summary>
+    /// The detailed status of the item, as text — <c>Refused · stale</c> for an approval whose target was retired, <c>Done</c>,
+    /// <c>Running · step 3/7: Build</c> for an activity; empty without a state. The State badge stays the short form. Filled by the page.
+    /// </summary>
+    public string Status { get; init; } = string.Empty;
+
+    /// <summary>
     /// For a running activity: where it stands, as <c>3/7</c> (the step it is on out of its sub-activities),
     /// or empty when it has no sub-activities. Read from the activity's content; shown in the State badge.
     /// </summary>
@@ -791,6 +797,15 @@ public static class InboxRows
     /// <param name="state">An <see cref="InboxState"/> constant, or empty.</param>
     public static string StateGroupOf(string state)
         => state is InboxState.Awaiting or InboxState.Requested or InboxState.Running or InboxState.Unread ? OpenKey : DoneKey;
+
+    /// <summary>
+    /// Whether <paramref name="row"/> is an approval request the viewer can still decide: from the Approvals source AND still
+    /// awaiting. A closed request (stale, refused, failed, already decided) stays viewable and deletable, never decidable. Pure.
+    /// </summary>
+    /// <param name="row">The row.</param>
+    internal static bool IsDecidable(InboxRow row)
+        => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
+           && string.Equals(row.State, InboxState.Awaiting, StringComparison.Ordinal);
 
     /// <summary>The state groups ticked (<see cref="OpenKey"/>, <see cref="DoneKey"/>); empty when none is (all are listed). Pure.</summary>
     /// <param name="filter">The filter.</param>

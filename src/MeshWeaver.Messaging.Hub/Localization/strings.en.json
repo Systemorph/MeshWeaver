@@ -2089,6 +2089,8 @@
   "inbox.state.failed": "Failed",
   "inbox.state.cancelled": "Cancelled",
   "inbox.state.unread": "Unread",
+  "inbox.state.refused": "Refused",
+  "inbox.state.stale": "Stale",
   "inbox.section.kind": "Kind",
   "inbox.section.tags": "Tags",
   "inbox.section.source": "Source",

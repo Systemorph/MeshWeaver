@@ -367,7 +367,7 @@ public static class InboxLayoutArea
         // decides (ToolbarOf): "reject" means nothing in a mailbox.
         var decideStyle = new JsonPointerReference(LayoutAreaReference.GetDataPointer(DecideStyleId));
         var toolbar = Controls.Stack.WithOrientation(Orientation.Horizontal).WithHorizontalGap(4)
-            .WithView(IconButton(host.Localize("inbox.delete"), FluentIcons.Delete(), Appearance.Accent)
+            .WithView(IconButton(host.Localize("inbox.delete"), FluentIcons.Delete(), Appearance.Stealth)
                 .WithShortcut(DeleteShortcut)
                 .WithReactiveClickAction(ctx => Delete(ctx, acts, owner, rows)), "Delete")
             .WithView(IconButton(host.Localize("inbox.undo"), FluentIcons.ArrowUndo(), Appearance.Stealth)
@@ -437,7 +437,7 @@ public static class InboxLayoutArea
     {
         var candidates = selected.Count > 0 ? InboxRows.Targets(listed, selected, owner) : listed;
         return new ToolbarState(needsYouRank is { } rank && candidates.Any(row =>
-            row.Rank == rank && string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)));
+            row.Rank == rank && InboxRows.IsDecidable(row)));
     }
 
     /// <summary>
@@ -464,8 +464,16 @@ public static class InboxLayoutArea
     /// <summary>The row with its state spelled for the viewer and its badge coloured; a row without a state keeps the badge hidden.</summary>
     internal static InboxRow WithStateText(InboxRow row, ImmutableDictionary<string, string> texts, string? stepFormat = null)
         => row.State.Length > 0 && texts.TryGetValue(row.State, out var text)
-            ? row with { StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State), StateStyle = string.Empty }
+            ? row with
+            {
+                StateText = text + StepSuffix(row, stepFormat), StateColor = InboxState.Color(row.State), StateStyle = string.Empty,
+                Status = text[InboxState.Mark(row.State).Length..] + StepSuffix(row, stepFormat),
+            }
             : row;
+
+    /// <summary>A state's label without its mark (<c>Stale</c>), from the texts resolved once on the render turn; the state itself when it has none.</summary>
+    internal static string LabelOf(ImmutableDictionary<string, string> texts, string state)
+        => texts.TryGetValue(state, out var text) ? text[InboxState.Mark(state).Length..] : state;
 
     /// <summary>
     /// What follows a running activity's state — <c> · step 3/7: Build</c>, <c> · step 3/7</c> or <c> · Build</c> —
@@ -815,7 +823,7 @@ public static class InboxLayoutArea
                 // always the latest batch: a newer notification snapshot is never replaced by an older read. What the
                 // leg FETCHED is carried beside the rows, so the "capped" notice still reads the window it asked of.
                 .Select(legRows => section.Ledger is null && string.Equals(section.Source, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
-                    ? InboxApprovalTargets.OnlyPending(hub, viewerContext, legRows, owner, hub.JsonSerializerOptions)
+                    ? InboxApprovalTargets.WithOutcomes(hub, viewerContext, legRows, owner, hub.JsonSerializerOptions, stateTexts)
                         .Select(kept => (kept, (string?)null, legRows.Count))
                     : Observable.Return((legRows, (string?)null, legRows.Count)))
                 .Switch()
@@ -1012,6 +1020,8 @@ public static class InboxLayoutArea
                  {
                      (nameof(InboxRow.Title), "inbox.column.item", "3fr"),
                      (nameof(InboxRow.StateText), "inbox.column.state", "150px"),
+                     // The detailed status — what the target (or the run) says, beyond the badge.
+                     (nameof(InboxRow.Status), "inbox.column.status", "1.5fr"),
                      (nameof(InboxRow.From), "inbox.column.source", "1.5fr"),
                      // Which of the viewer's accounts it reached — several mailboxes in one list.
                      (nameof(InboxRow.Account), "inbox.column.account", "1.5fr"),
@@ -1152,7 +1162,7 @@ public static class InboxLayoutArea
         var approve = decision == ApprovalDecisions.Approve;
         return acts.Exclusive(host.Localize("inbox.busy"), ctx.SelectedRowKeys(InboxRows.SelectionId)
             .Zip(rows.Take(1), (keys, current) => InboxRows.Targets(current, keys, owner)
-                .Where(row => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal))
+                .Where(InboxRows.IsDecidable)
                 .ToImmutableList())
             .SelectMany(targets => targets.Count == 0
                 ? Observable.Throw<Unit>(new InvalidOperationException(host.Localize("inbox.nothingToDecide")))
