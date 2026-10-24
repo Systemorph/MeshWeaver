@@ -97,4 +97,18 @@ public class FaultClassifierForwardersTest
     public void ABareSocketFault_IsNotAStoreOutage()
         => StorageFaults.IsTransientConnectFault(new SocketException()).Should().BeFalse(
             "no driver frame — the store was not the one asked");
+
+    /// <summary>
+    /// 🚨 A stall must be refused in ANY branch: beside a socket fault it combined to a layer-less
+    /// transient, and beside a timeout it lost on severity, so the combined verdict retried it.
+    /// </summary>
+    [Fact]
+    public void AProviderStall_BesideAnotherTransientBranch_IsStillNotRetriedByAView()
+    {
+        var stall = new QueryProviderStalledException("pg", TimeSpan.FromSeconds(5), "q", "u");
+        AreaErrorClassifier.IsTransientHubFailure(new AggregateException(stall, new SocketException()))
+            .Should().BeFalse("a socket sibling must not launder the stall");
+        AreaErrorClassifier.IsTransientHubFailure(new AggregateException(stall, new TimeoutException()))
+            .Should().BeFalse("a timeout sibling must not out-rank the stall");
+    }
 }

@@ -133,4 +133,72 @@ public class FaultClassifierTest
         FaultClassifier.IsDisposedContainer(new ObjectDisposedException("x", "nested lifetimes cannot be created"))
             .Should().BeTrue();
     }
+
+    /// <summary>
+    /// 🚨 A shared node reached from a second branch contributed nothing, so the answer depended on
+    /// branch ORDER: the wrapped branch's "this is a fault around a cancellation" was dropped once the
+    /// bare cancellation had been visited first.
+    /// </summary>
+    [Fact]
+    public void ASharedCancellation_IsJudgedPerBranch_WhateverTheOrder()
+    {
+        var cancelled = new OperationCanceledException();
+        var wrapped = new InvalidOperationException("wrapped", cancelled);
+        FaultClassifier.Classify(new AggregateException(cancelled, wrapped)).IsCancellation
+            .Should().BeFalse("the wrapped branch is a fault around the cancellation");
+        FaultClassifier.Classify(new AggregateException(wrapped, cancelled)).IsCancellation
+            .Should().BeFalse("order must not change the verdict");
+    }
+
+    /// <summary>
+    /// 🚨 An aggregate under a wrapping fault reset the head-ness of its branches, so a failure
+    /// wrapping a bridged task's cancellation read as a cooperative cancellation.
+    /// </summary>
+    [Fact]
+    public void AFaultWrappingAnAggregateOfCancellations_IsNotACancellation()
+        => FaultClassifier.Classify(new InvalidOperationException("failed",
+                new AggregateException(new OperationCanceledException())))
+            .IsCancellation.Should().BeFalse();
+
+    /// <summary>
+    /// 🚨 A non-transient driver exception was a store outage when ANY frame below it was a socket
+    /// fault, so a permanent defect beside it was retried as an unreachable store.
+    /// </summary>
+    [Fact]
+    public void ADriverException_OverADefectBesideASocketFault_IsNotAStoreOutage()
+    {
+        var verdict = FaultClassifier.Classify(new FakeDbException("db",
+            new AggregateException(new InvalidOperationException("bad configuration"), new SocketException())));
+        verdict.Kind.Should().Be(FaultKind.Fault);
+        StorageFaults_IsNot(verdict);
+    }
+
+    private static void StorageFaults_IsNot(FaultClassification verdict)
+        => verdict.EveryBranchTypedTransientIn(FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.Network)
+            .Should().BeFalse();
+
+    /// <summary>
+    /// 🚨 A message match on a wrapper hid the typed transient cause it wrapped: the verdict was
+    /// by-message, which every typed forwarder refuses.
+    /// </summary>
+    [Fact]
+    public void AMessageMatchOnAWrapper_YieldsToTheTypedCauseItWraps()
+    {
+        var verdict = FaultClassifier.Classify(new InvalidOperationException("Failed to connect",
+            new FakeDbException("db", sqlState: "08006")));
+        verdict.Kind.Should().Be(FaultKind.Transient);
+        verdict.Layer.Should().Be(FaultLayer.Store);
+        verdict.ByMessage.Should().BeFalse();
+        InfrastructureFault.IsTransient(new InvalidOperationException("Failed to connect",
+            new FakeDbException("db", transient: true))).Should().BeTrue();
+    }
+
+    /// <summary>A message match still stands when nothing below decides by type.</summary>
+    [Fact]
+    public void AMessageMatch_StillStands_WhenNothingBelowIsTyped()
+    {
+        var verdict = FaultClassifier.Classify(new InvalidOperationException("Failed to connect", new InvalidOperationException("x")));
+        verdict.Kind.Should().Be(FaultKind.Transient);
+        verdict.ByMessage.Should().BeTrue();
+    }
 }

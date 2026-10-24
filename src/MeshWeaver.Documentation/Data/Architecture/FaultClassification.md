@@ -35,15 +35,21 @@ Both `FaultKind` and `FaultLayer` are open string constants (policy
 `open-vocabulary-string-constants`). An exception type that lives above the contract assembly states
 its own verdict through `IClassifiedFault`, whose members have default implementations. Two types do
 this: `QueryProviderStalledException` is `Transient/StoreStall`, and `SyncStreamOwnerRefusedException`
-is `Transient/Transport`.
+is `Transient/Transport`. A third, `MeshNodeStreamException`, is `Transient/OwnerStore` when the
+OWNING hub classified the store fault before answering (`MeshNodeError.Transient`, #7066), and a
+`Fault` otherwise. `OwnerStore` is a layer of its own so that only a consumer that chose to trust an
+owner's verdict (a standing watch) acts on it.
 
 ## How it walks
 
 - **The graph, never the `InnerException` line.** `AggregateException.InnerException` is branch 0,
   so a walker built on it classifies by arrival order (see `ExceptionChain`). Each branch is classified
   on its own, from the outer frame inward, and the first frame that decides wins. A driver exception
-  wrapping a socket fault is therefore a store fault, not a network one. The walk is bounded at 256
-  nodes, deduplicated by reference, and safe against cycles.
+  wrapping a socket fault is therefore a store fault, not a network one. An aggregate's branches
+  inherit its place: under a wrapping fault they are not outermost, so a fault around a bridged
+  task's cancellation is not a cancellation. A node SHARED by two branches is judged in BOTH, from
+  each branch's own position, and the result does not depend on branch order. The walk is bounded at
+  256 expansions, memoized per node, and safe against cycles.
 - **A teardown anywhere wins.** A hub that is going away cannot serve whatever else went wrong at the
   same time, and the next activation meets any real defect again.
 - **Otherwise the worst branch wins.** The order is Fault > Timeout > Transient > CooperativeCancel. A
@@ -52,7 +58,11 @@ is `Transient/Transport`.
 - **Text is weaker evidence than a type.** A verdict reached by matching a message, which is what
   survives a routed failure being flattened to a string, carries `ByMessage`. The typed store and
   infrastructure rules refuse such a verdict. A genuine fault whose text merely mentions "Failed to
-  connect" is not an outage.
+  connect" is not an outage. A text match only STANDS IN: when the frame it matched wraps a typed
+  cause that decides, the typed verdict replaces it.
+- **A driver exception over a network cause needs it in EVERY branch.** A non-transient
+  `DbException` is a store outage only when every branch below it reaches a timeout, socket or IO
+  fault; a permanent defect beside a socket fault is a fault.
 
 ## What the caller knows: `TeardownContext`
 
@@ -68,11 +78,11 @@ is `Transient/Transport`.
 | Public name | Reads |
 |---|---|
 | `CancellationClassifier.IsCooperativeCancellation` | `IsCancellation` |
-| `AreaErrorClassifier.IsTransientHubFailure` | every kind except `Fault`, and except a stalled provider |
+| `AreaErrorClassifier.IsTransientHubFailure` | every kind except `Fault`, and never when ANY branch is a stalled provider |
 | `AreaErrorClassifier.IsStorageUnavailable` | every branch typed `Store` or `StoreStall` |
 | `StorageFaults.IsTransientConnectFault` | every branch typed `Store` |
 | `InfrastructureFault.IsTransient` | every branch typed `Store`, `StoreContention` or `Network` |
-| `StandingWatchRecovery.IsTransient` (so `ReopenOnTransientFault`) | every branch typed `Store`, `StoreContention`, `StoreStall` or `Network` |
+| `StandingWatchRecovery.IsTransient` (so `ReopenOnTransientFault`) | every branch typed `Store`, `StoreContention`, `StoreStall`, `OwnerStore` or `Network` |
 | `MeshNodeStreamCache.IsTransientOwnerFailure` | every kind except `Fault` and `CooperativeCancel` |
 | `ScopeTeardown.IsScopeTeardown` | `ScopeTeardown` with the caller's probe |
 | `HubDisposingException.IsDisposedContainer` | the Autofac fact, `FaultClassifier.IsDisposedContainer` |
@@ -119,3 +129,5 @@ Each decision is pinned by a test that fails on the copy that was wrong (`FaultC
 13. **The database's "is shutting down" is a store fault, never a hub teardown.**
 14. **The sync stream logs routed timeouts and transient store faults at Information,** like a
     timeout, rather than at Warning with a stack trace.
+15. **A stall is refused in any branch.** Beside a socket fault the stall combined to a layer-less
+    transient, and beside a timeout it lost on severity, so the combined verdict alone retried it.

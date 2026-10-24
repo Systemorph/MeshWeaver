@@ -63,6 +63,13 @@ public static class FaultLayer
     /// together on a GC or thread-pool stall).</summary>
     public const string StoreStall = nameof(StoreStall);
 
+    /// <summary>A store fault the OWNING hub met and classified as transient before answering
+    /// across the hub boundary (<c>MeshNodeError.Transient</c> on a <c>MeshNodeStreamException</c>):
+    /// the typed driver exception stayed on the owner, and its classification travelled as data.
+    /// Distinct from <see cref="Store"/> so that only a consumer that chose to trust an owner's
+    /// verdict (a standing watch) acts on it.</summary>
+    public const string OwnerStore = nameof(OwnerStore);
+
     /// <summary>The message transport / routing — an Orleans rejection mid-deactivation, an
     /// undeliverable or not-found target hub, another hub recycling.</summary>
     public const string Transport = nameof(Transport);
@@ -225,12 +232,10 @@ public static class FaultClassifier
         if (exception is null)
             return new(FaultKind.Fault, null, false, false, ImmutableArray<FaultClassification>.Empty);
 
-        var builder = ImmutableArray.CreateBuilder<FaultClassification>();
-        var seen = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
-        CollectBranches(exception, context, seen, builder);
-        if (builder.Count == 0)
-            builder.Add(Leaf(FaultKind.Fault));
-        var branches = builder.ToImmutable();
+        var walk = new Walk(context);
+        var branches = walk.Collect(exception, isHead: true, fallback: null);
+        if (branches.IsDefaultOrEmpty)
+            branches = [Leaf(FaultKind.Fault)];
         var isCancellation = branches.All(b => b.IsCancellation);
 
         if (IsScopeTeardown(exception, context))
@@ -302,45 +307,107 @@ public static class FaultClassifier
                && !message.Contains("database system is shutting down", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void CollectBranches(
-        Exception head, TeardownContext? context, HashSet<Exception> seen,
-        ImmutableArray<FaultClassification>.Builder branches)
+    /// <summary>
+    /// One classification's walk over the exception GRAPH. Each node is expanded once per
+    /// (head-ness, pending text verdict) and its verdicts are memoized, so a node SHARED by two
+    /// branches contributes its verdict to BOTH — whichever branch is visited first — while a graph of
+    /// nested aggregates sharing one child stays linear. A node already on the current path is a
+    /// cycle that never reached a verdict: a fault. The node budget (<see cref="MaxNodes"/>) bounds
+    /// the expansions; an exhausted budget is a fault.
+    /// </summary>
+    private sealed class Walk(TeardownContext? context)
     {
-        var path = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
-        var isHead = true;
-        for (var current = head; current is not null; current = current.InnerException, isHead = false)
-        {
-            if (seen.Count >= MaxNodes)
-            {
-                branches.Add(Leaf(FaultKind.Fault));
-                return;
-            }
-            if (!seen.Add(current))
-            {
-                // A cycle within this branch never reached a verdict: a fault. A node shared with a
-                // branch already classified adds nothing — that branch carries its verdict.
-                if (path.Contains(current))
-                    branches.Add(Leaf(FaultKind.Fault));
-                return;
-            }
-            path.Add(current);
+        private readonly Dictionary<(Exception Node, bool IsHead, FaultClassification? Fallback), ImmutableArray<FaultClassification>> memo = new();
+        private readonly HashSet<Exception> path = new(ReferenceEqualityComparer.Instance);
+        private int expansions;
 
-            if (current is AggregateException aggregate)
+        /// <summary>The distinct verdicts of the branches below <paramref name="node"/>.</summary>
+        /// <param name="node">The frame to start from.</param>
+        /// <param name="isHead">The frame is the OUTERMOST of its branch — an aggregate's children
+        /// inherit the aggregate's head-ness, so a fault wrapping an aggregate of cancellations is not
+        /// a cancellation.</param>
+        /// <param name="fallback">A verdict an OUTER frame reached by message text only; it stands
+        /// when nothing below decides by TYPE, and a typed verdict below replaces it.</param>
+        public ImmutableArray<FaultClassification> Collect(Exception node, bool isHead, FaultClassification? fallback)
+        {
+            var key = (node, isHead, fallback);
+            if (memo.TryGetValue(key, out var known))
+                return known;
+            if (path.Contains(node))
+                return [Leaf(FaultKind.Fault)];
+            if (++expansions > MaxNodes)
+                return [Leaf(FaultKind.Fault)];
+
+            path.Add(node);
+            var result = Expand(node, isHead, fallback);
+            path.Remove(node);
+            memo[key] = result;
+            return result;
+        }
+
+        private ImmutableArray<FaultClassification> Expand(Exception node, bool isHead, FaultClassification? fallback)
+        {
+            if (node is AggregateException aggregate)
             {
                 if (aggregate.InnerExceptions.Count == 0)
-                    branches.Add(Leaf(FaultKind.Fault));
+                    return [fallback ?? Leaf(FaultKind.Fault)];
+                var verdicts = ImmutableArray.CreateBuilder<FaultClassification>();
                 foreach (var inner in aggregate.InnerExceptions)
-                    CollectBranches(inner, context, seen, branches);
-                return;
+                    foreach (var verdict in Collect(inner, isHead, fallback))
+                        if (!verdicts.Contains(verdict))
+                            verdicts.Add(verdict);
+                return verdicts.ToImmutable();
             }
 
-            if (Decide(current, isHead, context) is { } verdict)
+            if (Decide(node, isHead, context) is { } decided)
             {
-                branches.Add(verdict);
-                return;
+                // A TYPE decides for the whole chain below it (a driver exception wrapping a socket
+                // fault is a store fault). A message match only stands in: the typed cause it wraps,
+                // if any, is the better witness.
+                if (!decided.ByMessage)
+                    return [decided];
+                fallback ??= decided;
+            }
+
+            return node.InnerException is { } next
+                ? Collect(next, isHead: false, fallback)
+                : [fallback ?? Leaf(FaultKind.Fault)];
+        }
+    }
+
+    /// <summary>
+    /// True when EVERY branch of <paramref name="exception"/>'s graph reaches a frame that
+    /// <paramref name="frame"/> accepts. An aggregate needs all of its branches; a chain that ends
+    /// without one, an empty aggregate, a cycle and an exhausted budget are all false.
+    /// </summary>
+    private static bool EveryBranchReaches(Exception? exception, Func<Exception, bool> frame)
+    {
+        var budget = MaxNodes;
+        var path = new HashSet<Exception>(ReferenceEqualityComparer.Instance);
+        return Reaches(exception);
+
+        bool Reaches(Exception? e)
+        {
+            if (e is null || --budget < 0 || !path.Add(e))
+                return false;
+            try
+            {
+                if (e is AggregateException aggregate)
+                {
+                    if (aggregate.InnerExceptions.Count == 0)
+                        return false;
+                    foreach (var inner in aggregate.InnerExceptions)
+                        if (!Reaches(inner))
+                            return false;
+                    return true;
+                }
+                return frame(e) || Reaches(e.InnerException);
+            }
+            finally
+            {
+                path.Remove(e);
             }
         }
-        branches.Add(Leaf(FaultKind.Fault));
     }
 
     /// <summary>The verdict of ONE frame, or null when the frame does not decide.</summary>
@@ -357,7 +424,9 @@ public static class FaultClassifier
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             // The network-level cause INSIDE a driver exception: drivers wrap the socket fault, so
             // the DbException is the OUTER frame and decides for the whole chain below it.
-            if (ExceptionChain.Contains(db.InnerException,
+            // EVERY branch below must be such a fault: a permanent defect beside a socket fault in the
+            // same graph is not an unreachable store.
+            if (EveryBranchReaches(db.InnerException,
                     static inner => inner is TimeoutException or SocketException or IOException))
                 return Leaf(FaultKind.Transient, FaultLayer.Store);
             if (db.IsTransient)

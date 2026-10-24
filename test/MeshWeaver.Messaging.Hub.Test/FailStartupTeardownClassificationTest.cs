@@ -110,7 +110,7 @@ public class FailStartupTeardownClassificationTest(ITestOutputHelper output) : H
     /// whose order nobody controls, so the same teardown cancelled startup or faulted it depending on
     /// arrival order. The teardown at index 1 must be seen exactly like the one at index 0.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [Fact]
     public void FailStartup_WithDisposalAtAggregateIndexOne_IsAlsoClassifiedAsCancellation()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();

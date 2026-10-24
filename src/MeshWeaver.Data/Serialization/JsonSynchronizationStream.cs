@@ -2146,7 +2146,8 @@ public static class JsonSynchronizationStream
         // stream that has no way to reach the subscriber. Unregisters itself on disposal.
         (workspace as Workspace)?.RegisterClientSubscription(
             request.Subscriber, request.StreamId, request.Reference, reduced,
-            request.AcceptsCoalescedStreamEnd, fullsPosted);
+            request.AcceptsCoalescedStreamEnd, fullsPosted,
+            byPerson: AccessService.ReaderOf(delivery.AccessContext) is not null);
 
         // 🚨 A FRESH stream acks IMMEDIATELY, and the asymmetry with the re-assert path above is
         // deliberate (#3058). This subscribe has no answer to overtake — the stream was just built

@@ -161,10 +161,10 @@ def _is_workflow_call(doc: dict) -> bool:
 def _lane_demands(lane: dict) -> dict[str, dict]:
     """Every `permissions:` block the lane imposes on its callers, keyed by where it is written.
 
-    🚨 The WORKFLOW-level block counts. #3989 read only job-level blocks, and core carries two lanes
+    🚨 The WORKFLOW-level block counts. #3989 read only job-level blocks, and core carries a lane
     whose demand is workflow-level — `auto-arm.yml` (`contents: write`, `pull-requests: write`,
-    called by all six satellites AND Memex) and `plugin-build.yml`. Moving a job-level demand up one
-    level is a one-line edit that made the guard go silent while the requirement stayed.
+    called by all six satellites AND Memex). Moving a job-level demand up one level is a one-line
+    edit that made the guard go silent while the requirement stayed.
     """
     demands: dict[str, dict] = {}
     wf = _perm_map(lane.get("permissions"))

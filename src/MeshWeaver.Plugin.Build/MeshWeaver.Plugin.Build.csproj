@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <!-- 🚨 NOT packed as a dotnet tool (2026-09-07 — Doc/Architecture/NuGetPackageRetirement).
-         plugin-build.yml already builds it FROM SOURCE at the pinned platform ref, deliberately:
+         Consumers build it FROM SOURCE at the platform ref they compile against, deliberately:
          "the tool is versioned in LOCKSTEP with the framework — it encodes how a given version
          compiles". A published tool would be a second, drifting copy of that answer. -->
   </PropertyGroup>

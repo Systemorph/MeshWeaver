@@ -28,7 +28,9 @@ namespace MeshWeaver.Hosting;
 /// <para><b>What makes it typed rather than a blanket retry.</b> Only <see cref="IsTransient"/>
 /// faults re-open: a database connect/IO fault (<see cref="StorageFaults.IsTransientConnectFault"/>,
 /// <see cref="InfrastructureFault.IsTransient"/>) or the fan-in's own availability terminal
-/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict). A query or
+/// (<see cref="QueryProviderStalledException"/>, "no answer in time", never a verdict), or a store
+/// fault an OWNER met and classified before answering across the hub boundary
+/// (<see cref="MeshNodeError.Transient"/> on a <see cref="MeshNodeStreamException"/>, #7066). A query or
 /// schema error, a deserialization defect, a disposed mesh — anything else — terminates the watch
 /// on the first occurrence exactly as before, because re-reading it would only repeat the same
 /// defect on a timer.</para>
@@ -69,10 +71,13 @@ public static class StandingWatchRecovery
     /// <param name="fault">The fault that terminated the watch; may be null.</param>
     public static bool IsTransient(Exception? fault)
         // A forwarder onto the ONE classifier: every branch a TYPED transient fault of the store
-        // (unreachable, contention, a stalled provider) or the network. An aggregate carrying a real
-        // defect alongside is not transient — re-opening on it would trade a latch for a loop.
+        // (unreachable, contention, a stalled provider, or a store fault the OWNER classified before
+        // answering across the hub boundary — MeshNodeError.Transient, #7066) or the network. An
+        // aggregate carrying a real defect alongside is not transient — re-opening on it would trade
+        // a latch for a loop.
         => FaultClassifier.Classify(fault).EveryBranchTypedTransientIn(
-            FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.StoreStall, FaultLayer.Network);
+            FaultLayer.Store, FaultLayer.StoreContention, FaultLayer.StoreStall, FaultLayer.OwnerStore,
+            FaultLayer.Network);
 
     /// <summary>
     /// Opens <paramref name="open"/>, and re-opens it after a <see cref="IsTransient"/> fault, at

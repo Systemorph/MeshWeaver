@@ -33,9 +33,12 @@ public static class AreaErrorClassifier
         // re-send a timed-out delivery" (a grain-layer rule about the SAME delivery) does not apply.
         //
         // The one exclusion is a stalled query PROVIDER (FaultLayer.StoreStall): it must be fixed,
-        // never resubscribed behind the caller's back — IsStorageUnavailable renders it instead.
+        // never resubscribed behind the caller's back — IsStorageUnavailable renders it instead. It
+        // is refused in ANY branch: a stall beside a socket fault combines to a layer-less transient,
+        // and a stall beside a timeout loses on severity, so the combined verdict alone would retry it.
         => FaultClassifier.Classify(ex) is { Kind: not FaultKind.Fault } verdict
-           && !(verdict.Kind == FaultKind.Transient && verdict.Layer == FaultLayer.StoreStall);
+           && !verdict.Branches.Any(static branch =>
+               branch.Kind == FaultKind.Transient && branch.Layer == FaultLayer.StoreStall);
 
     /// <summary>
     /// 🚨 True when the error is a DEADLINE MISS — the owner did not answer within the transport's
