@@ -15,7 +15,7 @@ namespace MeshWeaver.Documentation.Test;
 /// <para><c>Systemorph/MeshWeaver</c> is the platform; <c>MeshWeaver.Plugins</c> and the four
 /// satellites consume it. Plugins→core is CORRECT and is not measured here — <c>$(MeshWeaverRoot)</c>
 /// project references, the digest-pinned platform image the in-mesh gates compile against, and a
-/// plugin repo <i>calling</i> core's reusable <c>node-repo-*.yml</c> / <c>plugin-build.yml</c>
+/// plugin repo <i>calling</i> core's reusable <c>node-repo-*.yml</c>
 /// workflows are all the intended shape. Only the reverse direction is a defect, and this guard
 /// pins the edges that exist so a NEW one fails the pull request that adds it rather than being
 /// discovered later, from a red run in somebody else's repository.</para>
