@@ -137,18 +137,22 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
     internal static bool IsDue(SecretSealingKey key, DateTimeOffset now) => key.RotateAfter is { } due && now >= due;
 
     /// <summary>
-    /// What a rotation makes of the key as it is at the OWNING hub: when <paramref name="rotate"/> still holds for
-    /// it, <paramref name="candidate"/> becomes current and the outgoing key is retired; otherwise it is left exactly
-    /// as it is, so a request that read the same overdue key as another ADOPTS the rotation that landed first
-    /// instead of replacing it. Pure.
+    /// What a rotation makes of the key as the WRITER's mirror holds it (the update lambda runs there, not on the
+    /// owning hub): when <paramref name="rotate"/> still holds for it, <paramref name="candidate"/> becomes current
+    /// and the outgoing key is retired; otherwise it is left exactly as it is. A writer whose mirror already shows
+    /// another request's rotation therefore ADOPTS it; one whose mirror was behind proposes a patch the owner's
+    /// three-way merge refuses on the current key's fields, and it then reads back the key as stored. Pure.
     /// </summary>
     internal static SecretSealingKey RotateAtOwner(SecretSealingKey there, SecretSealingKey candidate,
         Func<SecretSealingKey, bool> rotate, DateTimeOffset now)
         => rotate(there) ? there.RotatedTo(candidate, now, SecretSealingKeys.RotationGrace) : there;
 
-    // 🚨 The due-check and the rotation happen together, inside the update at the owning hub, which serialises
-    // them: two requests that both read an overdue K0 can never publish KA and KB, both naming K0 — the second
-    // finds KA current (not due) and leaves it. The answer is the key as stored afterwards, never the proposal.
+    // 🚨 The due-check and the rotation happen together, inside ONE update. The lambda runs on the WRITER's mirror,
+    // not at the owning hub; what reaches the owner is the merge patch of what it changed plus the writer's base
+    // values, which the owner merges three-way (Doc/Architecture/SecretSealing). Two requests that both read an
+    // overdue K0 therefore cannot both publish a successor naming K0: the later patch's base no longer matches the
+    // current key's fields on the owner and is refused, or its mirror already shows KA, which is not due and is
+    // left alone. The answer is the key as stored afterwards (read back), never the proposal.
     private IObservable<SecretSealingKey> Rotated(Func<SecretSealingKey, bool> rotate)
     {
         var candidate = NewKey();

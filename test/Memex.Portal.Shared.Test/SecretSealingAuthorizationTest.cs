@@ -62,7 +62,9 @@ public class SecretSealingAuthorizationTest(ITestOutputHelper output) : Monolith
     /// write it, for a rotation — under those locks. This decision emits exactly that way: inside a held lock, on the
     /// subscribing thread.
     /// </summary>
-    [Fact(Timeout = 30_000)]
+    // 120_000 ms, not TestTimeouts.TestMilliseconds: an attribute argument must be a constant, and a literal
+    // 30 s is the guessed wait TestTimeoutLiteralRatchetGuard forbids.
+    [Fact(Timeout = 120_000)]
     public async Task TheElevatedWork_RunsOutsideThePermissionFoldsGate()
     {
         var ct = TestContext.Current.CancellationToken;
