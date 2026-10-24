@@ -134,8 +134,11 @@ question, so a declared member holding a value of the wrong shape (`"tags": "# t
 under `abstract`) stays **Unreadable** and is named, rather than reading as empty because its name
 is declared.
 
-`Content` is therefore no longer `required`. Its getter never returns null, so every writer emits
-`content` and a stored row heals on its next save. The refused kind is still a DATA defect. Raw, it
+`Content` is therefore no longer `required`. Its getter never returns null, but the record keeps a
+MISSING source apart from an EMPTY one (`HasSource`). A missing source is omitted again on
+write-back, and `MarkdownBody.Render` falls back to the node's cached `PreRenderedHtml` for it. The
+overview shows it as Unreadable when such a rendering exists, and as Absent otherwise. An explicit
+`"content": ""` is a deliberate clear: it renders empty and never revives the cached HTML. The refused kind is still a DATA defect. Raw, it
 reads as **Unreadable** and names the stray member (`MarkdownOverviewLayoutArea.ReadMarkdownContent`,
 which counts only undeclared members as unreadable). An update over it still logs
 `As<MarkdownContent> for <path> …` at Error, because the content claims the record and does not bind

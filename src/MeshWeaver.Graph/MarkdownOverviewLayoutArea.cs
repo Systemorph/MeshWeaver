@@ -581,13 +581,36 @@ public static class MarkdownOverviewLayoutArea
             return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);
 
         if (node.Content is MarkdownContent markdownContent)
+        {
+            // 🚨 A MISSING source over a cached rendering is a document that is there, not an empty
+            // one (review on #7097): inviting an edit over it is how the cached document is lost.
+            // An explicit "" (a deliberate clear) has a source and stays Absent.
+            if (!markdownContent.HasSource)
+            {
+                if (!string.IsNullOrWhiteSpace(node.PreRenderedHtml))
+                    return new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "preRenderedHtml");
+                if (!string.IsNullOrWhiteSpace(markdownContent.PrerenderedHtml))
+                    return new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "prerenderedHtml");
+            }
             return Text(markdownContent.Content);
+        }
 
         if (node.Content is string stringContent)
             return Text(stringContent);
 
         if (node.Content is JsonElement jsonElement)
-            return FromJson(jsonElement);
+        {
+            var fromJson = FromJson(jsonElement);
+            // The same missing-source rule for raw content: an object with no `content` member at
+            // all, over a cached rendering on the node, is not an empty document.
+            return fromJson.State == MarkdownContentState.Absent
+                   && jsonElement.ValueKind == JsonValueKind.Object
+                   && !jsonElement.EnumerateObject().Any(p =>
+                       string.Equals(p.Name, "content", StringComparison.OrdinalIgnoreCase))
+                   && !string.IsNullOrWhiteSpace(node.PreRenderedHtml)
+                ? new MarkdownRead(MarkdownContentState.Unreadable, string.Empty, "preRenderedHtml")
+                : fromJson;
+        }
 
         // Typed content of some other shape: there is no markdown here, and saying so is honest.
         return new MarkdownRead(MarkdownContentState.Absent, string.Empty, string.Empty);

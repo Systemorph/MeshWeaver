@@ -249,10 +249,46 @@ public class MarkdownUnreadableContentTest(ITestOutputHelper output) : HubTestBa
         Read(node).State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent,
             "a document with no body is EMPTY — the authoring invitation is the right answer");
 
-        // And it writes back WITH its body member, so the stored shape heals on the next save.
+        // A MISSING source stays missing when written back (review on #7097): writing `""` would
+        // turn it into a deliberate clear and hide a cached rendering of the node for good.
         JsonSerializer.SerializeToElement<object>(typed, options)
-            .TryGetProperty("content", out var written).Should().BeTrue();
-        written.GetString().Should().BeEmpty();
+            .TryGetProperty("content", out _).Should().BeFalse();
+    }
+
+    /// <summary>
+    /// 🚨 Review on #7097, thread four. A body-less <see cref="MarkdownContent"/> on a node that
+    /// carries its rendering on <see cref="MeshNode.PreRenderedHtml"/> has a MISSING source, not an
+    /// empty one. <see cref="MarkdownBody.Render"/> must reach that node-level fallback — through
+    /// the hub serializer AND after a write-back round trip — and the overview must not invite an
+    /// edit over it. An explicit empty source stays a deliberate clear: it renders empty.
+    /// </summary>
+    [Fact]
+    public void BodylessContentWithNodeLevelHtml_RendersTheStoredHtml_WhileAnExplicitClearStaysEmpty()
+    {
+        const string storedHtml = "<p>Existing document</p>";
+        var options = GetHost().JsonSerializerOptions;
+
+        var sourceless = JsonSerializer.Deserialize<MeshNode>(
+            $$$"""{"id":"Cached","namespace":"test/read","nodeType":"Markdown","preRenderedHtml":"{{{storedHtml}}}","content":{"$type":"MarkdownContent","tags":["draft"]}}""",
+            options)!;
+        sourceless.Content.Should().BeOfType<MarkdownContent>();
+        MarkdownBody.Render(sourceless).Should().Be(storedHtml,
+            "no source is available, so the node's cached rendering is the document");
+        var read = Read(sourceless);
+        read.State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Unreadable,
+            "the overview must not invite an edit over a document that is there");
+        read.Shape.Should().Be("preRenderedHtml");
+
+        var echoed = JsonSerializer.Deserialize<MeshNode>(JsonSerializer.Serialize(sourceless, options), options)!;
+        MarkdownBody.Render(echoed).Should().Be(storedHtml,
+            "a write-back must not turn the missing source into an explicit clear");
+
+        var cleared = JsonSerializer.Deserialize<MeshNode>(
+            $$$"""{"id":"Cleared","namespace":"test/read","nodeType":"Markdown","preRenderedHtml":"{{{storedHtml}}}","content":{"$type":"MarkdownContent","content":"","tags":["draft"]}}""",
+            options)!;
+        (MarkdownBody.Render(cleared) ?? string.Empty).Should().NotContain("Existing document",
+            "an explicit empty source is a deliberate clear — the stale HTML must not come back");
+        Read(cleared).State.Should().Be(MarkdownOverviewLayoutArea.MarkdownContentState.Absent);
     }
 
     /// <summary>

@@ -13,36 +13,63 @@ namespace MeshWeaver.Markdown;
 /// </summary>
 public record MarkdownContent : IJsonOnDeserialized
 {
-    // 🚨 Null ONLY while a JSON read has not met a `content` member — the one fact
-    // OnDeserialized needs to tell "the payload carries no body" from "the body is the empty
-    // string". Every reader sees Content, which is never null.
+    // 🚨 Null when the document has NO SOURCE — a payload that omitted `content` (or a record
+    // built without one). That is a different fact from an EMPTY source (a deliberate clear, "")
+    // and it is kept through binding, rendering and write-back (review on #7097): a missing
+    // source falls back to a cached rendering, a cleared one renders empty.
     private string? content;
 
     /// <summary>
-    /// The raw markdown content (without YAML front matter). Empty when the document has no body.
+    /// The raw markdown content (without YAML front matter). Empty when the document has no body
+    /// — <see cref="HasSource"/> says whether that is a missing source or a cleared one.
     ///
-    /// <para>🚨 <b>Not <c>required</c>, and absent means EMPTY — but only when nothing else could
-    /// be the body</b> (Systemorph/MeshWeaver#5736, #6639). A payload that omits <c>content</c> and
-    /// carries nothing but members this record declares (<c>{"$type":"MarkdownContent"}</c>,
-    /// <c>{"tags":[…]}</c>) is a document with no body yet, and it binds as one. When it was
-    /// <c>required</c> that payload THREW: the read seam degraded the node to raw JSON (the
-    /// <c>ObjectPolymorphicConverter</c> "could not be deserialized; preserving raw JSON" line),
-    /// the overview called it Unreadable, and every update of the node logged
-    /// <c>As&lt;MarkdownContent&gt; … could not recover value: JsonException</c> at Error.</para>
+    /// <para>🚨 <b>Not <c>required</c>, and absent means NO SOURCE — but only when nothing else
+    /// could be the body</b> (Systemorph/MeshWeaver#5736, #6639). A payload that omits
+    /// <c>content</c> and carries nothing but members this record declares
+    /// (<c>{"$type":"MarkdownContent"}</c>, <c>{"tags":[…]}</c>) binds, with
+    /// <see cref="HasSource"/> false. When it was <c>required</c> that payload THREW: the read seam
+    /// degraded the node to raw JSON (the <c>ObjectPolymorphicConverter</c> "could not be
+    /// deserialized; preserving raw JSON" line), the overview called it Unreadable, and every
+    /// update of the node logged <c>As&lt;MarkdownContent&gt; … could not recover value:
+    /// JsonException</c> at Error.</para>
     ///
     /// <para>🚨 A payload that omits <c>content</c> but carries a member this record does NOT
     /// declare (<c>{"markdown": …}</c>, <c>{"body": …}</c>, <c>{"text": …}</c>) still refuses to
-    /// bind — see <see cref="IJsonOnDeserialized.OnDeserialized"/>. Its text is in the store under another key, and an
-    /// empty document over it would render the "No content yet" invitation whose first save
-    /// overwrites that text (#4600). Every writer of this record emits <c>content</c> (the getter
-    /// never returns null), so an absent member is never this record's own output. A payload with
-    /// no <c>content</c> but a stored <c>prerenderedHtml</c> is refused the same way: its source
-    /// is MISSING, not empty, and the renderer must fall back to that HTML (review on #7097).</para>
+    /// bind — see <see cref="IJsonOnDeserialized.OnDeserialized"/>. Its text is in the store under
+    /// another key, and an empty document over it would render the "No content yet" invitation
+    /// whose first save overwrites that text (#4600). A payload with no <c>content</c> but a stored
+    /// <c>prerenderedHtml</c> is refused the same way: the renderer must fall back to that HTML.</para>
+    ///
+    /// <para>On the wire this is the <c>content</c> member of a private <c>Source</c> property, which is
+    /// omitted while there is no source, so a write-back never turns a missing source into a
+    /// clear.</para>
     /// </summary>
+    [JsonIgnore]
     public string Content
     {
         get => content ?? string.Empty;
         init => content = value ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Whether the document carries a markdown source at all. False only for a payload that
+    /// omitted <c>content</c>: a reader then falls back to a cached rendering
+    /// (<see cref="MeshWeaver.Mesh.MeshNode.PreRenderedHtml"/>) instead of rendering an empty
+    /// document over it. An explicit empty source (<c>""</c>) is a source, and renders empty.
+    /// </summary>
+    [JsonIgnore]
+    [System.ComponentModel.Browsable(false)]
+    public bool HasSource => content is not null;
+
+    // The wire form of Content: `content`, omitted while there is no source. Private, so the
+    // public surface keeps one non-null Content; JsonInclude makes it the serialised member.
+    [JsonInclude]
+    [JsonPropertyName("content")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    private string? Source
+    {
+        get => content;
+        init => content = value;
     }
 
     /// <summary>
@@ -159,7 +186,8 @@ public record MarkdownContent : IJsonOnDeserialized
             throw new JsonException(
                 $"{nameof(MarkdownContent)} has no 'content' member but carries 'prerenderedHtml' — a "
                 + "rendering whose source is missing, so it is not bound as an empty document.");
-        content = string.Empty;
+        // Otherwise it binds with NO source (HasSource false) — never normalised to "", which
+        // would make it indistinguishable from a deliberate clear.
     }
 
     /// <summary>
