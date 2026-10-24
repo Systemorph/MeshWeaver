@@ -17,6 +17,7 @@ using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Reactive.Assertions;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -53,7 +54,9 @@ public class AnActivationRecycleKnowsTypesFromTheStoreTest(ITestOutputHelper out
     private const string MarkdownPage = $"{Partition}/APage";
     private const string AbsentType = $"{Partition}/NoSuchType";
 
-    private readonly FaultingReadStorageAdapter store = new(new InMemoryStorageAdapter());
+    /// <summary>The real <see cref="InMemoryStorageAdapter"/> under the shared injector, whose READ
+    /// legs are made to throw only while a test arms them.</summary>
+    private readonly FaultInjectingStorageAdapter store = new(new InMemoryStorageAdapter());
 
     /// <inheritdoc />
     protected override IMeshBootstrap Bootstrap => new StoreBootstrap(store);
@@ -106,29 +109,25 @@ public class AnActivationRecycleKnowsTypesFromTheStoreTest(ITestOutputHelper out
         var ct = TestContext.Current.CancellationToken;
         await SeedType();
 
-        store.FaultOn = "StoredType";
-        try
-        {
-            var outcome = await Recycle(StoredType)
-                .Select(ticket => (Ticket: (ActivationRecycleTicket?)ticket, Error: (Exception?)null))
-                .Catch((Exception ex) => Observable.Return((Ticket: (ActivationRecycleTicket?)null, Error: (Exception?)ex)))
-                .Take(1)
-                .Should().Within(TestTimeouts.Convergence)
-                .Emit("the request answers — with a ticket or with the read's fault", ct);
+        // Read and ReadMany of every path containing the type's name throw the driver's timeout.
+        using var fault = store.FailOperations(p => p.Contains("StoredType", StringComparison.OrdinalIgnoreCase),
+            StorageLegs.Read, description: "paths containing StoredType");
 
-            store.Faults.Should().BeGreaterThan(0,
-                "the fault must actually have been INJECTED — without it this case exercises the healthy "
-                + "path and cannot fail");
-            outcome.Ticket?.Refusal.Should().NotContain("unknown NodeType",
-                "the type IS stored: a read that did not answer must never be reported as the type's absence");
-            outcome.Error.Should().NotBeNull(
-                "a store read that faulted is surfaced as the fault — the caller logs that nothing was "
-                + "recycled because the type could not be READ, which is what happened");
-        }
-        finally
-        {
-            store.FaultOn = null;
-        }
+        var outcome = await Recycle(StoredType)
+            .Select(ticket => (Ticket: (ActivationRecycleTicket?)ticket, Error: (Exception?)null))
+            .Catch((Exception ex) => Observable.Return((Ticket: (ActivationRecycleTicket?)null, Error: (Exception?)ex)))
+            .Take(1)
+            .Should().Within(TestTimeouts.Convergence)
+            .Emit("the request answers — with a ticket or with the read's fault", ct);
+
+        fault.ArrivalCount.Should().BeGreaterThan(0,
+            "the fault must actually have been INJECTED — without it this case exercises the healthy "
+            + "path and cannot fail");
+        outcome.Ticket?.Refusal.Should().NotContain("unknown NodeType",
+            "the type IS stored: a read that did not answer must never be reported as the type's absence");
+        outcome.Error.Should().NotBeNull(
+            "a store read that faulted is surfaced as the fault — the caller logs that nothing was "
+            + "recycled because the type could not be READ, which is what happened");
     }
 
     /// <summary>The healthy path: a stored NodeType is known, and the request is written.</summary>
@@ -143,7 +142,6 @@ public class AnActivationRecycleKnowsTypesFromTheStoreTest(ITestOutputHelper out
 
         ticket.Refusal.Should().BeNull("the type is stored and is a NodeType");
         ticket.Path.Should().StartWith(ActivationRecycleRequest.Namespace + "/");
-        store.Faults.Should().Be(0, "nothing was armed in the healthy case");
     }
 
     /// <summary>
@@ -166,81 +164,5 @@ public class AnActivationRecycleKnowsTypesFromTheStoreTest(ITestOutputHelper out
             .Emit("the request answers", ct);
         page.Path.Should().BeNull("a Markdown page is a node, not a NodeType");
         page.Refusal.Should().Contain("unknown NodeType").And.Contain(MarkdownPage);
-    }
-
-    /// <summary>
-    /// The real <see cref="InMemoryStorageAdapter"/> with its READ legs made to throw for paths
-    /// containing <see cref="FaultOn"/> — null (the default) injects nothing and forwards every member.
-    /// </summary>
-    private sealed class FaultingReadStorageAdapter(InMemoryStorageAdapter inner) : IStorageAdapter
-    {
-        private int faults;
-        private volatile string? faultOn;
-
-        /// <summary>The path fragment whose reads throw; null arms nothing.</summary>
-        public string? FaultOn { get => faultOn; set => faultOn = value; }
-
-        /// <summary>How many reads were faulted — asserted, so the faulted case cannot go vacuous.</summary>
-        public int Faults => Volatile.Read(ref faults);
-
-        private bool ShouldFault(string path) =>
-            faultOn is { } fragment && path.Contains(fragment, StringComparison.OrdinalIgnoreCase);
-
-        private IObservable<T> Fault<T>() => Observable.Defer(() =>
-        {
-            Interlocked.Increment(ref faults);
-            return Observable.Throw<T>(new TimeoutException("The operation has timed out."));
-        });
-
-        private IStorageAdapter Inner => inner;
-
-        public IObservable<DataChangeNotification> Changes => Inner.Changes;
-        public IObservable<ChangeFeedGap> ChangeFeedGaps => Inner.ChangeFeedGaps;
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => ShouldFault(path) ? Fault<MeshNode?>() : Inner.Read(path, options);
-
-        public IObservable<MeshNode> ReadMany(IReadOnlyCollection<string> paths, JsonSerializerOptions options)
-            => paths.Any(ShouldFault) ? Fault<MeshNode>() : Inner.ReadMany(paths, options);
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) => Inner.Write(node, options);
-
-        public IObservable<IReadOnlyList<MeshNode>> WriteMany(IReadOnlyCollection<MeshNode> nodes, JsonSerializerOptions options)
-            => Inner.WriteMany(nodes, options);
-
-        public IObservable<bool?> WriteIfVersion(MeshNode node, long expectedVersion, JsonSerializerOptions options)
-            => Inner.WriteIfVersion(node, expectedVersion, options);
-
-        public IObservable<string> Delete(string path) => Inner.Delete(path);
-        public IObservable<bool> DeleteIfExists(string path) => Inner.DeleteIfExists(path);
-        public IObservable<IReadOnlyList<string>> DeleteMany(IReadOnlyCollection<string> paths) => Inner.DeleteMany(paths);
-        public IObservable<string?> FindDeleteBlockingProvider(string path) => Inner.FindDeleteBlockingProvider(path);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)> ListChildPaths(string? parentPath)
-            => Inner.ListChildPaths(parentPath);
-
-        public IObservable<IReadOnlyCollection<string>> ListDescendantPaths(string rootPath) => Inner.ListDescendantPaths(rootPath);
-        public IObservable<bool> Exists(string path) => Inner.Exists(path);
-        public IObservable<bool> ExistsInWritableStorage(string path) => Inner.ExistsInWritableStorage(path);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> FindBestPrefixMatch(string fullPath, JsonSerializerOptions options)
-            => Inner.FindBestPrefixMatch(fullPath, options);
-
-        public IObservable<(MeshNode? Node, int MatchedSegments)> ResolvePath(string fullPath, JsonSerializerOptions options)
-            => Inner.ResolvePath(fullPath, options);
-
-        public IObservable<IEnumerable<string>> ListPartitionSubPaths(string nodePath) => Inner.ListPartitionSubPaths(nodePath);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => Inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<Unit> SavePartitionObjects(string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => Inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => Inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => Inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 }
