@@ -116,7 +116,7 @@ public class CiRestBudgetGuard
 
     private static bool ImportsSharedClient(string script)
     {
-        var path = Path.Combine(FindRepoRoot(), ".github", "scripts", script);
+        var path = Path.Combine(RepoPaths.Root, ".github", "scripts", script);
         return File.Exists(path) && ImportLine.IsMatch(File.ReadAllText(path));
     }
 
