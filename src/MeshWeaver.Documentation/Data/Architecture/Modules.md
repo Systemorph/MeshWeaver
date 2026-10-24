@@ -1187,8 +1187,11 @@ still works there), and an unreadable record reads as `Notify` — the absence o
 never reads as "land". A fresh install is `Auto`; an administrator opts one package out on its
 catalog card. So pinning the platform image, or choosing Stable on `Admin/UpdatePolicy`, does
 **not** hold a package's modules: to hold a module, set THAT package's policy. The content half of
-the same package follows the same policy (`PackageUpdateReconciler`), so a package never lands one
-half without the other. A **first landing** is deliberately policy-exempt: it completes an install
+the same package reads the same policy (`PackageUpdateReconciler`), but the two halves are
+reconciled INDEPENDENTLY: an `Auto` package whose partition is owned by a sync source has its
+content held until the sync lands it (`HoldForSync`), while its compatible module upgrade lands
+regardless (`RegistryUpdateReconciler.AdoptOne` no longer waits for the partition's sync). A
+**first landing** is deliberately policy-exempt: it completes an install
 the operator's own surfaces already sanctioned, and gating it would ship a package whose binary
 half never arrives. The former host-wide `IModuleUpdatePolicy` seam, which tied module upgrades to
 the image policy, was retired and has since been deleted.
