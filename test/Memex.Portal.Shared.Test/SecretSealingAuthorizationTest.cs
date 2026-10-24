@@ -56,6 +56,32 @@ public class SecretSealingAuthorizationTest(ITestOutputHelper output) : Monolith
             .Should().NotBe(key.KeyId, "the administrator's same call rotates it");
     }
 
+    /// <summary>
+    /// 🚨 The elevated work never runs inside the permission fold's gate. On a warm cache the fold emits during
+    /// <c>Subscribe</c> while holding its Rx gates (issue #899), so a bare <c>Take(1)</c> would read the key — and
+    /// write it, for a rotation — under those locks. This decision emits exactly that way: inside a held lock, on the
+    /// subscribing thread.
+    /// </summary>
+    [Fact(Timeout = 30_000)]
+    public async Task TheElevatedWork_RunsOutsideThePermissionFoldsGate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var foldGate = new object();
+        var decision = Observable.Create<PermissionCheckOutcome>(observer =>
+        {
+            lock (foldGate) observer.OnNext(PermissionCheckOutcome.Granted);
+            return () => { };
+        });
+
+        var ranInsideGate = await SecretSealingKeyService
+            .AuthorizedThen(decision, Permission.Execute, "open a sealed secret",
+                () => Observable.Return(Monitor.IsEntered(foldGate)))
+            .Timeout(TimeSpan.FromSeconds(10))
+            .Await(ct);
+
+        ranInsideGate.Should().BeFalse("the decision is taken inside the fold, the work it authorizes runs outside it");
+    }
+
     /// <summary>The identity the next call is made as: the host identity and the flow's context.</summary>
     private void ActAs(AccessContext identity)
     {

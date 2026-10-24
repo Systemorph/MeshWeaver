@@ -100,10 +100,22 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
     /// a grant.
     /// </summary>
     private IObservable<T> AuthorizedThenAsSystem<T>(Permission permission, string what, Func<IObservable<T>> work)
-        => hub.CheckPermissionOutcome(SecretSealingKeys.Path, permission)
-            .Take(1)
+        => AuthorizedThen(hub.CheckPermissionOutcome(SecretSealingKeys.Path, permission), permission, what,
+            () => hub.ServiceProvider.GetService<AccessService>().RunAsSystem(work));
+
+    /// <summary>
+    /// Takes ONE <paramref name="decision"/> and runs <paramref name="elevated"/> only when it grants.
+    /// 🚨 <c>TakeDecisionOutsideGate</c>, never a bare <c>Take(1)</c>: on a warm
+    /// cache the permission fold emits during <c>Subscribe</c> while holding its Rx gates, and what follows here is
+    /// real work (key reads, a rotation that writes the Admin-partition node) that must not run under those locks
+    /// (issue #899). Internal for <c>SecretSealingAuthorizationTest</c>.
+    /// </summary>
+    internal static IObservable<T> AuthorizedThen<T>(IObservable<PermissionCheckOutcome> decision,
+        Permission permission, string what, Func<IObservable<T>> elevated)
+        => decision
+            .TakeDecisionOutsideGate()
             .SelectMany(outcome => outcome.IsGranted
-                ? hub.ServiceProvider.GetService<AccessService>().RunAsSystem(work)
+                ? elevated()
                 : Observable.Throw<T>(outcome.IsUndetermined
                     ? new InvalidOperationException(
                         $"Could not check whether the caller may {what}: {outcome.UndeterminedReason}")
