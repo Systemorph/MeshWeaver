@@ -74,6 +74,7 @@ on:
       - '.github/workflows/pinned-digests.yml'
       - '.github/scripts/check-pinned-digests.py'
       - '.github/scripts/check-pin-set-consistency.py'
+      - '.github/scripts/ghrest.py'       # both scripts' GitHub client
       # The protection arm reads both of these, so a change to either must be re-asserted against
       # the live registry rather than waiting for 05:20.
       - '.github/workflows/lock-pinned-digests.yml'
