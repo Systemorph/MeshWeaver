@@ -2027,6 +2027,20 @@ jobs:
           case "$digest" in sha256:*) ;; *) echo "::error::mw-build-host:$VERSION was pushed but resolves to no digest ('$digest')"; exit 1 ;; esac
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "- mw-build-host \`$VERSION\` = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      # The same manifest to the fleet registry, digest verified — the registry contract every image of
+      # the set keeps, so a build-host record whose runnerRepository names the fleet registry can pull
+      # the digest it is handed. Still outside the fleet's delivery.
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror mw-build-host:<version> to the fleet registry — same manifest, digest verified
+        env:
+          VERSION: ${{ needs.migration-image.outputs.version }}
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/mw-build-host:${{ needs.migration-image.outputs.version }}"
+          "${{ env.REGISTRY }}/mw-build-host:${{ needs.migration-image.outputs.version }}"
 
   # The MeshWeaver.Plugins PR gate image: `mw-plugin-test` (tools/MeshWeaver.PluginTester)
   # imports a node-repo checkout into a fresh in-process mesh, asserts every NodeType compiles,

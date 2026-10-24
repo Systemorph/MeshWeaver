@@ -25,7 +25,11 @@ name: Build host — stage a host-executed run's modules for the publish lane
 # are a hard requirement on EVERY caller (check-workflow-permission-pairing.py). Adding it to the
 # publish lane would break every existing caller at startup; a caller opts in here instead.
 # 🛡️ No skip-trapdoor: a run with no receipts, a hash or size mismatch, or an unreadable endpoint
-# is RED (build-artifacts-fetch.py, whose --self-test runs first). The `file:` store spec is the
+# is RED (build-artifacts-fetch.py, whose --self-test runs first).
+# 🚨 NOT YET a replacement for node-repo-module-pack.yml: module-publication.py check-callers (run
+# by node-repo-validate.yml) requires the publisher's lane and selection outputs to come from the
+# pack lane, so a caller keeps that lane's `select` and adds this one beside it. A host-only graph
+# needs that output contract and the caller validator extended together (owed with H7). The `file:` store spec is the
 # one this lane can read without a cloud login (the runners' shared share); an `azblob:` store needs
 # an ambient `az` login the caller provides on the same runner.
 
@@ -45,10 +49,11 @@ on:
         required: true
         type: string
       artifact-store-id:
-        description: The store identity the run resolved (passed to every get as --expect-store-id).
-        required: false
+        description: >-
+          The store identity the run resolved (resolve-artifact-store's `store-id`). REQUIRED: every
+          get and the final upload are bound to it (--expect-store-id), so bytes never cross stores.
+        required: true
         type: string
-        default: ''
       sha:
         description: >-
           The commit the run is keyed by — the PR HEAD or the trunk commit. Empty means
@@ -115,6 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -n "${API_URL:-}" ] || { echo "::error::api-url is empty — there is no build API to read receipts from"; exit 1; }
+          [ -n "${STORE_ID:-}" ] || { echo "::error::artifact-store-id is empty — pass the store-id the run resolved (resolve-artifact-store); an unbound fetch could read another store"; exit 1; }
           [ "$CHANNEL" = latest ] || { echo "::error::only a run on the latest channel publishes (channel '$CHANNEL')"; exit 1; }
           python3 "$RUNNER_TEMP/s/build-artifacts-fetch.py" --api-url "$API_URL" --store "$STORE" \
             --expect-store-id "$STORE_ID" --sha "$SHA" --channel "$CHANNEL" --stage "$STAGE" \

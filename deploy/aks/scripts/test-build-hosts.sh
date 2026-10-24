@@ -111,6 +111,8 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
     build = next((c for c in pod["containers"] if c["name"] == "build"), {})
     if build.get("image") != "cr.example.com/mw-build-host@sha256:" + runner * 16:
         problems.append(f"{ch}: the runner image is not the channel's mw-build-host digest: {build.get('image')}")
+    if {e["name"]: e for e in build.get("env", [])}.get("MW_BUILD_RUNNER_DIGEST", {}).get("value") != "sha256:" + runner * 16:
+        problems.append(f"{ch}: MW_BUILD_RUNNER_DIGEST does not carry the channel's runner digest")
     sc = pod.get("securityContext", {})
     if not (sc.get("runAsNonRoot") is True and sc.get("runAsUser") == 1654 and sc.get("fsGroup") == 1654):
         problems.append(f"{ch}: the pod does not run as the runner image's unprivileged user 1654: {sc}")

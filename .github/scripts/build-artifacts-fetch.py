@@ -50,6 +50,17 @@ def _follow_module():
     return mod
 
 
+def bf_neutralise(text: str) -> list[str]:
+    """build-follow.py's neutraliser: no stage-chosen text may print as a workflow command."""
+    return _follow_module().neutralise(text)
+
+
+def _inert(text: str) -> str:
+    """A message inside an `::error::` command: one line, workflow-command data escaped."""
+    return (text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+            .replace("##[", "##\u200b[").replace("::", ":\u200b:"))
+
+
 class Red(Exception):
     """A refusal with its reason."""
 
@@ -80,13 +91,21 @@ def fetch_all(receipts: list[dict], out: str, store: str, get: Callable[[str, st
                   "missing publication, never an empty one")
     os.makedirs(out, exist_ok=True)
     written = []
+    seen: dict[str, tuple] = {}
     for r in receipts:
         name = r["unit"].rsplit("/", 1)[1]
-        if not name or name in (".", "..") or os.sep in name:
-            raise Red(f"receipt unit {r['unit']!r} names no file")
+        if not name or name in (".", "..") or os.sep in name or any(ch in name for ch in "\r\n\x00"):
+            raise Red(f"receipt unit {r['unit']!r} names no usable file")
+        ident = (r["unit"], r["sha256"], r["bytes"])
+        if name in seen:
+            # The host hands the run's artifacts over after EVERY successful stage, so a modules →
+            # tests run repeats the receipts of unchanged bundles: the SAME unit, hash and size is one
+            # artifact. Different content — or a different unit — under one file name is a conflict.
+            if seen[name] == ident:
+                continue
+            raise Red(f"two receipts name the file {name!r} with different units or content")
+        seen[name] = ident
         dest = os.path.join(out, name)
-        if os.path.exists(dest):
-            raise Red(f"two receipts name the same file {name!r}")
         rc, msg = get(r["key"], dest)
         if rc != 0 or not os.path.isfile(dest):
             raise Red(f"ci-artifact-store get {r['unit']} failed (exit {rc}): {msg.strip()[-200:]}")
@@ -149,10 +168,12 @@ def main(argv: list[str]) -> int:
             return r.returncode, (r.stdout or "") + (r.stderr or "")
         names = fetch_all(receipts_of(body, a.stage), a.out, a.store, get)
     except Red as r:
-        print(f"::error title=Host artifacts::{r}", flush=True)
+        # Receipt-derived text (a stage named the files) never reaches the runner as a command.
+        print(f"::error title=Host artifacts::{_inert(str(r))}", flush=True)
         return 1
     for n in names:
-        print(f"staged {n} (hash and size verified against its receipt)")
+        for line in bf_neutralise(f"staged {n} (hash and size verified against its receipt)"):
+            print(line, flush=True)
     return 0
 
 
@@ -182,7 +203,9 @@ def self_test() -> int:
             ("wrong hash", [dict(receipt("Store/S.zip", "k1", blobs["k1"]), sha256="0" * 64)], fake_get),
             ("wrong size", [dict(receipt("Store/S.zip", "k1", blobs["k1"]), bytes=1)], fake_get),
             ("store refused", [receipt("Store/S.zip", "k1", blobs["k1"])], lambda l, d: (1, "manifest unknown")),
-            ("duplicate name", [receipt("A/S.zip", "k1", blobs["k1"]), receipt("B/S.zip", "k1", blobs["k1"])], fake_get)):
+            ("duplicate name", [receipt("A/S.zip", "k1", blobs["k1"]), receipt("B/S.zip", "k1", blobs["k1"])], fake_get),
+            ("same name, other content", [receipt("A/S.zip", "k1", blobs["k1"]), receipt("A/S.zip", "k2", blobs["k2"])], fake_get),
+            ("a newline in a name", [receipt("A/x\n::stop-commands::m", "k1", blobs["k1"])], fake_get)):
         try:
             fetch_all(rows, os.path.join(tmp, why.replace(" ", "-")), "file:/x", getter)
             check(f"fetch/{why} is RED", False, "staged")
@@ -196,6 +219,11 @@ def self_test() -> int:
             check(f"receipts/refuses {bad}", False, "accepted")
         except Red:
             pass
+    rep = [receipt("Store/S.zip", "k1", blobs["k1"]), dict(receipt("Store/S.zip", "k1", blobs["k1"]), stage="tests")]
+    check("fetch/a receipt repeated by a later stage is ONE artifact", fetch_all(rep, os.path.join(tmp, "rep"), "file:/x", fake_get) == ["S.zip"])
+    printed = bf_neutralise("staged a\n::stop-commands::marker")
+    check("output/receipt-derived text cannot become a workflow command", all(not p.lstrip().startswith("::") for p in printed), printed)
+    check("output/an error message is one inert line", "\n" not in _inert("x\n::add-mask::y") and "::add-mask" not in _inert("x\n::add-mask::y"))
     check("receipts/a stage filter keeps that stage's receipts",
           len(receipts_of([receipt("A/x", "k", b"x"), dict(receipt("B/y", "k", b"y"), stage="gate")], "gate")) == 1)
     if failures:

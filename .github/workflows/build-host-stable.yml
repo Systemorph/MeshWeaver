@@ -183,7 +183,9 @@ jobs:
         run: |
           set -euo pipefail
           body="build-stable's daily roll failed: [run ${GITHUB_RUN_ID}](${RUN_URL}). The host keeps running its previous set; read the failed step's ::error:: line (Doc/Architecture/BuildHosts)."
-          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --label build-host --state open --limit 1 --json number --jq '.[0].number // empty')
+          # REST, not GraphQL (`gh issue list` is GraphQL): a spent secondary quota must never swallow
+          # the one durable alert this scheduled run exists to file.
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host&state=open&per_page=1" --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
           else

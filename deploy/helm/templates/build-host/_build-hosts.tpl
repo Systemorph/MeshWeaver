@@ -95,7 +95,7 @@ The refusals, and why each one exists:
 {{- $channels = append $channels (dict "name" $name "platformVersion" $pv "maxReplicas" $max
       "tester" (printf "%s@%s" $testerRepo $c.testerDigest) "portal" (printf "%s@%s" $portalRepo $c.portalDigest)
       "runner" (printf "%s@%s" $runnerRepo $c.runnerDigest)
-      "testerDigest" $c.testerDigest "portalDigest" $c.portalDigest) -}}
+      "testerDigest" $c.testerDigest "portalDigest" $c.portalDigest "runnerDigest" $c.runnerDigest) -}}
 {{- end -}}
 {{- end -}}
 {{- if not $channels -}}

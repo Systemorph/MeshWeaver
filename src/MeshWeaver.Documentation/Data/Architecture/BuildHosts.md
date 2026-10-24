@@ -402,5 +402,10 @@ unattended); `build-host-stable.yml` reports on its own `build-host` issue.
   protected the way other pinned digests are (`lock-pinned-digests.py`,
   [Pinned Image Retention](../PinnedImageRetention)) — not wired for `mw-build-host` or the
   build-host record's digests yet.
+- **A host-only publication graph.** `module-publication.py check-callers` (run by
+  `node-repo-validate.yml`) requires the publisher's lane and selection outputs to come from
+  `node-repo-module-pack.yml`, so an adopter keeps that lane's `select` beside
+  `build-host-publication.yml`. Replacing the pack job outright needs the host-publication output
+  contract and the caller validator extended together — owed with H7.
 - **Keying compile outputs** by (source hash, reference-set hash) is the stages' work: the runner
   promotes what a trunk stage writes under `$MW_BUILD_OUTPUTS/<key>/`, and reads nothing itself.
