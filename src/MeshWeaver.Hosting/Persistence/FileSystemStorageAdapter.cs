@@ -287,6 +287,8 @@ public class FileSystemStorageAdapter : IStorageAdapter
     /// <remarks>Routed through the FileSystem <see cref="IIoPool"/> like Read/Write — the delete
     /// is synchronous file I/O and must never run on a hub/query subscriber's thread.</remarks>
     public IObservable<string> Delete(string path)
+        // atomic-blocking-leaf: one node's delete, a fixed handful of unlinks and an upward empty-directory
+        // prune; stopping between them would leave a half-deleted node with no change notification
         => _ioPool.InvokeBlocking(_ =>
         {
             DeleteCore(path);

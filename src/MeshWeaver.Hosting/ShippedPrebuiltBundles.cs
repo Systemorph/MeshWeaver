@@ -1391,6 +1391,7 @@ public static class ShippedPrebuiltBundles
         Action<string>? onMatched = null,
         AdoptionContext? context = null)
         => pool
+            // atomic-blocking-leaf: one zip open and one manifest entry read from one bundle file
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
             {
@@ -1563,6 +1564,7 @@ public static class ShippedPrebuiltBundles
                         }
 
                         return pool
+                            // atomic-blocking-leaf: one archive open and a read of the entries it names, one bundle file
                             .InvokeBlocking(_ => Plugin.Packaging.BundleReader
                                 .ReadFile(bundlePath, deviating))
                             .SelectMany(payload => SeedPayloads(

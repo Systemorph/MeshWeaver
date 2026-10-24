@@ -3476,6 +3476,7 @@ public partial class MeshOperations
                 return pool.InvokeObservable(_ => store.TryGetBuildPath(node.Path, version, def.LatestAssemblyPath, def.LatestAssemblyMvid).Take(1))
                     .SelectMany(localPath => string.IsNullOrEmpty(localPath)
                         ? Observable.Return<NodeCompilationResult?>(null)
+                        // atomic-blocking-leaf: one assembly load of one local file, a single call
                         : pool.InvokeBlocking(_ => compilationService.GetConfigurationsFromExistingAssembly(localPath!, nodeType))
                             .SelectMany(load => load.Take(1)));
             })
@@ -3987,7 +3988,7 @@ public partial class MeshOperations
 
                 // No permitted nodes (no access, or nothing at the path) → a valid empty-manifest ZIP.
                 if (nodes.Count == 0)
-                    return pool.InvokeBlocking(_ => BuildExportZip(root, nodes, new List<ExportedFile>()));
+                    return pool.InvokeBlocking(ct => BuildExportZip(root, nodes, new List<ExportedFile>(), ct));
 
                 // 3. Discover each permitted node's content collections (tolerant, bounded, parallel).
                 return nodes
@@ -4011,7 +4012,7 @@ public partial class MeshOperations
                         //    5. build the ZIP on the pool (pure CPU/memory) — never on the action block.
                         return GatherContentFiles(targets)
                             .SelectMany(files =>
-                                pool.InvokeBlocking(_ => BuildExportZip(root, nodes, files)));
+                                pool.InvokeBlocking(ct => BuildExportZip(root, nodes, files, ct)));
                     });
             });
     }
@@ -4197,7 +4198,7 @@ public partial class MeshOperations
                    ?? IoPool.Unbounded;
 
         // 1. Parse the ZIP OFF the hub (pure CPU/memory on the IO pool).
-        return pool.InvokeBlocking(_ => ParseExportZip(zipBytes))
+        return pool.InvokeBlocking(ct => ParseExportZip(zipBytes, ct))
             .SelectMany(parsed =>
             {
                 var (manifest, fileBytes) = parsed;
@@ -4375,7 +4376,7 @@ public partial class MeshOperations
 
     /// <summary>Builds the export ZIP (manifest.json + files/ tree) from the gathered nodes and file
     /// bytes. Pure CPU/memory — runs on the <see cref="IIoPool"/> blocking scheduler.</summary>
-    private byte[] BuildExportZip(string root, List<MeshNode> nodes, List<ExportedFile> files)
+    private byte[] BuildExportZip(string root, List<MeshNode> nodes, List<ExportedFile> files, CancellationToken cancellationToken)
     {
         var manifest = new MeshExportManifest
         {
@@ -4396,6 +4397,8 @@ public partial class MeshOperations
 
             foreach (var f in files)
             {
+                // One compressed entry per exported file: the pool's token is checked between them.
+                cancellationToken.ThrowIfCancellationRequested();
                 var entry = zip.CreateEntry(
                     ExportFileEntryName(f.NodePath, f.Collection, f.RelPath), CompressionLevel.Optimal);
                 using var es = entry.Open();
@@ -4407,7 +4410,7 @@ public partial class MeshOperations
 
     /// <summary>Parses an export ZIP into its manifest + a map of <c>files/…</c> entry name → bytes.
     /// Pure CPU/memory — runs on the <see cref="IIoPool"/> blocking scheduler.</summary>
-    private (MeshExportManifest Manifest, Dictionary<string, byte[]> Files) ParseExportZip(byte[] zipBytes)
+    private (MeshExportManifest Manifest, Dictionary<string, byte[]> Files) ParseExportZip(byte[] zipBytes, CancellationToken cancellationToken)
     {
         using var ms = new MemoryStream(zipBytes);
         using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
@@ -4422,6 +4425,8 @@ public partial class MeshOperations
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var entry in zip.Entries)
         {
+            // One decompressed entry per file: the pool's token is checked between them.
+            cancellationToken.ThrowIfCancellationRequested();
             if (!entry.FullName.StartsWith("files/", StringComparison.Ordinal)
                 || entry.FullName.EndsWith('/'))
                 continue;

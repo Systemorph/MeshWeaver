@@ -99,12 +99,12 @@ public sealed record SealedPackage(string Package, string Bundle, string? Source
 
 /// <summary>
 /// A platform publication LINE: the framework identity a set of bundles was sealed under, and the
-/// newest platform version published on it. The unit <see cref="SealedPublicationIndex.ReleasesOf"/>
+/// newest platform version published on it. The unit <see cref="SealedPublicationIndex.ReleasesOf(string, ILogger)"/>
 /// answers in, named so a hold can state one.
 /// </summary>
 /// <param name="Identity">The framework identity the publication was sealed under.</param>
 /// <param name="Version">The newest platform version published under it, by sealed-publication
-/// lineage — never SemVer (see <see cref="SealedPublicationIndex.ReleasesOf"/>).</param>
+/// lineage — never SemVer (see <see cref="SealedPublicationIndex.ReleasesOf(string, ILogger)"/>).</param>
 public sealed record PublicationLine(string Identity, string Version);
 
 /// <summary>
@@ -211,6 +211,15 @@ public static class SealedPublicationIndex
     /// as empty).
     /// </summary>
     public static IReadOnlyDictionary<string, string> ReleasesOf(string? publishedRoot, ILogger? logger = null)
+        => ReleasesOf(publishedRoot, CancellationToken.None, logger);
+
+    /// <summary>
+    /// <see cref="ReleasesOf(string, ILogger)"/> for a pooled leaf: <paramref name="cancellationToken"/>
+    /// is checked before every marker read (one share round trip each), and a cancel propagates as
+    /// <see cref="OperationCanceledException"/> rather than reading as "no markers".
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ReleasesOf(
+        string? publishedRoot, CancellationToken cancellationToken, ILogger? logger = null)
     {
         var byIdentity = new Dictionary<string, string>(StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(publishedRoot))
@@ -222,6 +231,7 @@ public static class SealedPublicationIndex
                 return byIdentity;
             foreach (var file in Directory.EnumerateFiles(markers))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var version = Path.GetFileName(file);
                 var identity = ReadMarker(file);
                 if (string.IsNullOrEmpty(identity) || string.IsNullOrEmpty(version))
@@ -231,7 +241,7 @@ public static class SealedPublicationIndex
                     byIdentity[identity] = version;
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             logger?.LogWarning(ex,
                 "SealedPublicationIndex: could not read the release markers under {Directory} — "
@@ -261,7 +271,7 @@ public static class SealedPublicationIndex
     /// identity is on no line the markers place (a hold cannot be compared against an unknown), and
     /// when this identity is already the newest. Ordering is
     /// <see cref="Plugin.Packaging.PlatformReleaseOrder.Newest"/>, the sealed-publication lineage
-    /// <see cref="ReleasesOf"/> documents — never SemVer.</para>
+    /// <see cref="ReleasesOf(string, ILogger)"/> documents — never SemVer.</para>
     /// </summary>
     /// <param name="publishedRoot">The published bundle root.</param>
     /// <param name="identity">This instance's framework identity.</param>
@@ -269,10 +279,18 @@ public static class SealedPublicationIndex
     /// <returns>The newest line above this identity's, or null.</returns>
     public static PublicationLine? NewerLineThan(
         string? publishedRoot, string? identity, ILogger? logger = null)
+        => NewerLineThan(publishedRoot, identity, CancellationToken.None, logger);
+
+    /// <summary>
+    /// <see cref="NewerLineThan(string, string, ILogger)"/> for a pooled leaf: the marker walk checks
+    /// <paramref name="cancellationToken"/> before every read.
+    /// </summary>
+    public static PublicationLine? NewerLineThan(
+        string? publishedRoot, string? identity, CancellationToken cancellationToken, ILogger? logger = null)
     {
         if (string.IsNullOrWhiteSpace(identity))
             return null;
-        var releases = ReleasesOf(publishedRoot, logger);
+        var releases = ReleasesOf(publishedRoot, cancellationToken, logger);
         if (!releases.TryGetValue(identity, out var mine))
             return null;
 
@@ -299,7 +317,18 @@ public static class SealedPublicationIndex
         => ReadResolvedFor(publishedRoot, identity, logger).Select(r => r.Source).ToList();
 
     /// <summary>
-    /// 🚨 <see cref="ReadFor"/> plus the publication directory each reading was taken from — so a
+    /// <see cref="ReadFor(string, string, ILogger)"/> for a pooled leaf: the per-source walk checks
+    /// <paramref name="cancellationToken"/> before every source and between the round trips of one
+    /// source, and a cancel propagates as <see cref="OperationCanceledException"/>, never as an
+    /// unreadable or empty reading.
+    /// </summary>
+    public static IReadOnlyList<SealedSource> ReadFor(
+        string? publishedRoot, string? identity, CancellationToken cancellationToken, ILogger? logger = null)
+        => [.. ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger,
+            cancellationToken).Sources.Select(r => r.Source)];
+
+    /// <summary>
+    /// 🚨 <see cref="ReadFor(string, string, ILogger)"/> plus the publication directory each reading was taken from — so a
     /// caller that ALSO reads bytes can read them from the same publication instead of resolving
     /// the pointer a second time (#3461).
     ///
@@ -319,7 +348,7 @@ public static class SealedPublicationIndex
         string? publishedRoot, string? identity, ILogger? logger = null)
         => ResolvedReadingFor(publishedRoot, identity, logger).Sources;
 
-    /// <summary><see cref="ReadFor"/> through the share-walk IO seam — every source of the
+    /// <summary><see cref="ReadFor(string, string, ILogger)"/> through the share-walk IO seam — every source of the
     /// identity read in full. The cost the cross-identity walk no longer pays per identity.</summary>
     /// <param name="publishedRoot">The published bundle root.</param>
     /// <param name="identity">The framework identity whose directory to read.</param>
@@ -327,7 +356,8 @@ public static class SealedPublicationIndex
     /// <param name="io">The file operations to perform.</param>
     internal static IReadOnlyList<SealedSource> ReadAllSourcesFor(
         string? publishedRoot, string? identity, ILogger? logger, BundleShareIo io)
-        => [.. ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger, io)
+        => [.. ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger,
+                CancellationToken.None, io)
             .Sources.Select(r => r.Source)];
 
     /// <summary>
@@ -338,10 +368,11 @@ public static class SealedPublicationIndex
     internal static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
                      SealedReadOutcome Outcome) ResolvedReadingFor(
         string? publishedRoot, string? identity, ILogger? logger = null)
-        => ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger);
+        => ResolvedReadingFor(publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger,
+            CancellationToken.None);
 
     /// <summary>
-    /// <see cref="ReadingFor"/> against an EXPLICIT running platform build rather than this
+    /// <see cref="ReadingFor(string, string, ILogger)"/> against an EXPLICIT running platform build rather than this
     /// process's — the seam the ladder rule is pinned through (policy
     /// <c>platform-backwards-compatibility</c>): a publication sealed under this key by a platform
     /// build NEWER than <paramref name="runningPlatformVersion"/> reads as not sealed for this
@@ -357,7 +388,8 @@ public static class SealedPublicationIndex
     public static (IReadOnlyList<SealedSource> Sources, SealedReadOutcome Outcome) ReadingForRunning(
         string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger = null)
     {
-        var (sources, outcome) = ResolvedReadingFor(publishedRoot, identity, runningPlatformVersion, logger);
+        var (sources, outcome) = ResolvedReadingFor(publishedRoot, identity, runningPlatformVersion, logger,
+            CancellationToken.None);
         return ([.. sources.Select(r => r.Source)], outcome);
     }
 
@@ -395,7 +427,7 @@ public static class SealedPublicationIndex
     private static (IReadOnlyList<(SealedSource Source, string Directory)> Sources,
                      SealedReadOutcome Outcome) ResolvedReadingFor(
         string? publishedRoot, string? identity, string? runningPlatformVersion, ILogger? logger,
-        BundleShareIo? io = null)
+        CancellationToken cancellationToken, BundleShareIo? io = null)
     {
         io ??= BundleShareIo.Real;
         if (string.IsNullOrWhiteSpace(publishedRoot) || string.IsNullOrWhiteSpace(identity))
@@ -416,7 +448,13 @@ public static class SealedPublicationIndex
             // below as UNREADABLE.
             readings = [.. io.EnumerateDirectories(identityDirectory)
                 .OrderBy(d => d, StringComparer.Ordinal)
-                .Select(d => ReadSource(d, logger, io))];
+                .Select(d =>
+                {
+                    // Between sources: each is a pointer, two markers, a seal, a probe per bundle
+                    // and a manifest per bundle — the step boundary of this walk.
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return ReadSource(d, logger, io, resolved: null, cancellationToken);
+                })];
             // 🚨 A SOURCE WHOSE POINTER COULD NOT BE FOLLOWED MAKES THE WHOLE READING UNREADABLE
             // (#3461 phase 5). Until the flat compatibility copy was disposed of, that fall-back
             // landed on a sealed publication and the reading was merely a little stale; now it
@@ -452,7 +490,7 @@ public static class SealedPublicationIndex
                 ? SealedReadOutcome.Unreadable
                 : SealedReadOutcome.Read);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // 🚨 The list is EMPTY and that is not a verdict. It used to be indistinguishable from
             // "nothing sealed", and the gate read that as a licence to advance every repository.
@@ -469,18 +507,29 @@ public static class SealedPublicationIndex
 
     /// <summary>
     /// What is sealed for this identity, and whether the reading is a statement or a failure.
-    /// The pair <see cref="ReadFor"/> should have returned from the start.
+    /// The pair <see cref="ReadFor(string, string, ILogger)"/> should have returned from the start.
     /// </summary>
     public static (IReadOnlyList<SealedSource> Sources, SealedReadOutcome Outcome) ReadingFor(
         string? publishedRoot, string? identity, ILogger? logger = null)
+        => ReadingFor(publishedRoot, identity, CancellationToken.None, logger);
+
+    /// <summary>
+    /// <see cref="ReadingFor(string, string, ILogger)"/> for a pooled leaf: the per-source walk checks
+    /// <paramref name="cancellationToken"/> before every source and between the round trips of one
+    /// source. A cancel propagates as <see cref="OperationCanceledException"/>; it is never reported
+    /// as <see cref="SealedReadOutcome.Unreadable"/>, and never as an empty <see cref="SealedReadOutcome.Read"/>.
+    /// </summary>
+    public static (IReadOnlyList<SealedSource> Sources, SealedReadOutcome Outcome) ReadingFor(
+        string? publishedRoot, string? identity, CancellationToken cancellationToken, ILogger? logger = null)
     {
-        var (sources, outcome) = ResolvedReadingFor(publishedRoot, identity, logger);
+        var (sources, outcome) = ResolvedReadingFor(
+            publishedRoot, identity, PrebuiltAdoptionPolicy.RunningPlatformVersion, logger, cancellationToken);
         return ([.. sources.Select(r => r.Source)], outcome);
     }
 
     /// <summary>
-    /// ONE source's reading — <see cref="ReadFor"/> for a single, named source, with the ladder
-    /// applied exactly as <see cref="ReadFor"/> applies it. The cross-identity fallback walk asks
+    /// ONE source's reading — <see cref="ReadFor(string, string, ILogger)"/> for a single, named source, with the ladder
+    /// applied exactly as <see cref="ReadFor(string, string, ILogger)"/> applies it. The cross-identity fallback walk asks
     /// this only of the sources it still NEEDS, instead of reading every source of every identity
     /// (<c>Doc/Architecture/CiContentBake</c> → "The published-root walk").
     /// </summary>
@@ -496,7 +545,8 @@ public static class SealedPublicationIndex
         => ApplyLadder(ReadSource(sourceDirectory, logger, io, pointer).Source, runningPlatformVersion);
 
     private static (SealedSource Source, string Directory, bool Unreadable) ReadSource(
-        string sourceDirectory, ILogger? logger, BundleShareIo? io = null, PublicationPointer? resolved = null)
+        string sourceDirectory, ILogger? logger, BundleShareIo? io = null, PublicationPointer? resolved = null,
+        CancellationToken cancellationToken = default)
     {
         io ??= BundleShareIo.Real;
         // 🚨 The SOURCE name is the directory's own, taken BEFORE resolution — a generation is
@@ -509,7 +559,7 @@ public static class SealedPublicationIndex
         // seeder would read two different publications of one source.
         var pointer = resolved
                       ?? ShippedPrebuiltBundles.ResolvePublicationPointer(
-                          sourceDirectory, CancellationToken.None, logger, io);
+                          sourceDirectory, cancellationToken, logger, io);
         var publication = pointer.Directory;
         // 🚨 A MARKER THAT COULD NOT BE READ IS NOT AN ABSENT ONE (Copilot's review of #3461 phase
         // 5). `ReadMarker` used to answer null for both, and null means UNATTRIBUTABLE — which
@@ -518,6 +568,7 @@ public static class SealedPublicationIndex
         // torn publication is meant to hold. The reading says which, and a failure makes the whole
         // reading UNREADABLE below, exactly as a faulted pointer does.
         var repository = ReadMarker(Path.Combine(publication, RepositoryMarkerFileName), out var repositoryFault, io);
+        cancellationToken.ThrowIfCancellationRequested();
         var commit = ReadMarker(Path.Combine(publication, SourceCommitMarkerFileName), out var commitFault, io);
         if (string.Equals(commit, "unknown", StringComparison.OrdinalIgnoreCase))
             commit = null;
@@ -537,6 +588,7 @@ public static class SealedPublicationIndex
         var sentinel = Path.Combine(publication, ShippedPrebuiltBundles.CompletionSentinelFileName);
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             // 🚨 THE OPEN DECIDES ABSENCE, never a preceding `File.Exists` (#3876, and the same
             // false-for-errors class as the enumeration above): the publisher removes the seal
             // before it republishes, and an ACL or a share hiccup answers `File.Exists == false` as
@@ -567,7 +619,11 @@ public static class SealedPublicationIndex
                 .Select(l => l.Trim())
                 .Where(l => l.Length > 0)
                 .ToList();
-            var missing = listed.FirstOrDefault(name => !io.FileExists(Path.Combine(publication, name)));
+            var missing = listed.FirstOrDefault(name =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return !io.FileExists(Path.Combine(publication, name));
+            });
             if (missing is not null)
                 return (new SealedSource(source, repository, commit, false,
                     $"the seal lists '{missing}', which is not on disk"), publication, false);
@@ -575,7 +631,7 @@ public static class SealedPublicationIndex
             // rule for a producer that predates the field; a manifest that could not be READ may
             // belong to a newer publication, and treating it as older would let this instance
             // advance onto the forbidden rung. So it makes the reading UNREADABLE — the gate holds.
-            var (producer, manifestFault) = ProducerOf(publication, listed, logger, io);
+            var (producer, manifestFault) = ProducerOf(publication, listed, logger, io, cancellationToken);
             if (manifestFault is not null)
                 return (new SealedSource(source, repository, commit, false,
                     $"a bundle manifest could not be read ({manifestFault}) — its producing platform build "
@@ -585,6 +641,7 @@ public static class SealedPublicationIndex
             // build each package carries is then unknown, and reading the publication as the old
             // single-commit listing would attribute a carried package's bytes to a commit they were
             // not baked from. Unreadable, exactly as a faulted marker is.
+            cancellationToken.ThrowIfCancellationRequested();
             var (packages, listedPerPackage, packagesFault) = PackagesOf(publication, listed, commit, io);
             return packagesFault is null
                 ? (new SealedSource(source, repository, commit, true, null)
@@ -595,7 +652,7 @@ public static class SealedPublicationIndex
                     $"the per-package listing could not be read ({packagesFault}) — which build each "
                     + "package of this publication seals is unknown"), publication, true);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             logger?.LogWarning(ex, "SealedPublicationIndex: could not read the seal of {Directory}", publication);
             return (new SealedSource(source, repository, commit, false,
@@ -710,11 +767,13 @@ public static class SealedPublicationIndex
     /// manifest could not be read at all, which the caller turns into an unreadable reading.
     /// </summary>
     private static (string? Producer, string? Fault) ProducerOf(
-        string publication, IReadOnlyList<string> listed, ILogger? logger, BundleShareIo io)
+        string publication, IReadOnlyList<string> listed, ILogger? logger, BundleShareIo io,
+        CancellationToken cancellationToken)
     {
         string? newest = null;
         foreach (var name in listed.Where(n => n.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string? producer;
             try
             {

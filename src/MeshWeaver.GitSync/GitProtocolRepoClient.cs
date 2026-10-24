@@ -614,12 +614,14 @@ public sealed class GitProtocolRepoClient(
     /// classifying text vs binary exactly like the blob decode (<see cref="RepoFileCodec"/>).</summary>
     private IObservable<IReadOnlyList<RepoFile>> ReadWorktree(
         string tmp, string prefix, Func<string, bool> pathFilter)
-        => FileSystem.InvokeBlocking(_ =>
+        // The worktree walk is one read per file, so the pool's token is checked before each one.
+        => FileSystem.InvokeBlocking(ct =>
         {
             var root = Path.GetFullPath(tmp);
             var files = new List<RepoFile>();
             foreach (var full in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
+                ct.ThrowIfCancellationRequested();
                 var rel = Path.GetRelativePath(root, full).Replace('\\', '/');
                 if (rel.StartsWith(".git/", StringComparison.Ordinal))
                     continue;
@@ -645,6 +647,7 @@ public sealed class GitProtocolRepoClient(
         => Observable.Defer(() =>
         {
             var tmp = Path.Combine(Path.GetTempPath(), "mw-gitsync-" + Guid.NewGuid().ToString("N"));
+            // atomic-blocking-leaf: one Directory.CreateDirectory of a fresh temp path, no step boundary
             return FileSystem.InvokeBlocking(_ =>
                 {
                     Directory.CreateDirectory(tmp);

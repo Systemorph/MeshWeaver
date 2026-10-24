@@ -144,6 +144,9 @@ public static partial class MeshTestRunner
             var bodyReturned = 0;
             onStarted();
             var work = c.Synchronous is { } body
+                // atomic-blocking-leaf: one call into a user's synchronous test body, whose signature
+                // takes no token; NOT atomic in duration, so the bound fails it without stopping it
+                // and the verdict says the body still holds its slot (TimedOut below)
                 ? pool.InvokeBlocking(_ =>
                 {
                     try { body(output.Add); }
