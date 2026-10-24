@@ -116,9 +116,11 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     public void TheArmingIsNeverAPlatformDeliveryLeg()
     {
         var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
-        var start = text.IndexOf("\n  delivery-verdict:", StringComparison.Ordinal);
-        Assert.True(start >= 0, "delivery-verdict is gone from main-cd.yml");
-        var m = Regex.Match(text[start..], @"\n    needs:\s*\[(?<n>[^\]]*)\]");
+        // Bounded to the job: an unbounded search from the key would read the NEXT job's `needs:`
+        // the moment delivery-verdict lost its own.
+        var job = WorkflowJobText.Block(text, "delivery-verdict");
+        Assert.True(job is not null, "delivery-verdict is gone from main-cd.yml");
+        var m = Regex.Match(job!, @"\n    needs:\s*\[(?<n>[^\]]*)\]");
         Assert.True(m.Success, "delivery-verdict has no `needs: [...]` list");
         var needs = m.Groups["n"].Value.Split(',').Select(n => n.Trim()).ToArray();
         Assert.Contains("promote", needs);
