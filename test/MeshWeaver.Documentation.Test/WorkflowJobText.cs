@@ -59,6 +59,9 @@ internal static class WorkflowJobText
     /// </summary>
     internal static (string? Body, string? Refusal) Read(string text, string lane, string job)
     {
+        // A CRLF checkout (core.autocrlf on Windows) must read exactly as LF does: the header and
+        // body patterns below are written against `\n`.
+        text = text.Replace("\r\n", "\n", StringComparison.Ordinal);
         var header = Regex.Match(text, @"\n  " + Regex.Escape(job) + @":\n");
         if (!header.Success)
             return (null, $"{lane} must have a `{job}` job");
@@ -126,12 +129,15 @@ internal static class WorkflowJobText
     /// </summary>
     internal static ImmutableList<(string Key, int Start, int End)> Ranges(string[] lines)
     {
-        var jobsLine = Array.FindIndex(lines, l => Regex.IsMatch(l, @"\Ajobs:[ \t]*(?:#.*)?\z"));
+        // Detection reads each line WITHOUT a trailing `\r` (a CRLF file split on `\n` keeps one,
+        // and `\z` would then reject every bare `jobs:` / `  build:`); the ranges index the caller's
+        // lines, so a returned block keeps them verbatim.
+        var jobsLine = Array.FindIndex(lines, l => Regex.IsMatch(l.TrimEnd('\r'), @"\Ajobs:[ \t]*(?:#.*)?\z"));
         var result = ImmutableList.CreateBuilder<(string, int, int)>();
         (string Key, int Start)? open = null;
         for (var i = jobsLine + 1; i < lines.Length; i++)
         {
-            var key = JobKeyOf(lines[i]);
+            var key = JobKeyOf(lines[i].TrimEnd('\r'));
             var endsMap = EndsJobsMap(lines[i]);
             if (key is null && !endsMap)
                 continue;
@@ -332,6 +338,33 @@ jobs:
         Assert.DoesNotContain("echo COMPILE", WorkflowJobText.Block(PrefixLane, "build-image")!, StringComparison.Ordinal);
         Assert.Null(WorkflowJobText.Block(PrefixLane, "buil"));
         Assert.Equal(new[] { "build-image", "build", "verdict" }, WorkflowJobText.Ranges(PrefixLane.Split('\n')).Select(r => r.Key));
+    }
+
+    /// <summary>
+    /// A CRLF file (a Windows checkout read with <c>File.ReadAllText</c>) slices exactly as its LF
+    /// twin does. Negative control: before the reader trimmed the <c>\r</c> a split on <c>\n</c>
+    /// leaves, <c>jobs:</c> and every bare job key failed their <c>\z</c> anchor and
+    /// <see cref="WorkflowJobText.Block"/> answered <c>null</c> for a job that is there.
+    /// </summary>
+    [Fact]
+    public void ACrlfWorkflow_SlicesLikeItsLfTwin()
+    {
+        var crlf = PrefixLane.Replace("\n", "\r\n", StringComparison.Ordinal);
+        Assert.Contains("\r\n", crlf, StringComparison.Ordinal);
+
+        var block = WorkflowJobText.Block(crlf, "build");
+
+        Assert.NotNull(block);
+        Assert.Contains("\r\n", block, StringComparison.Ordinal); // verbatim: the caller's lines are returned as they were
+        Assert.Equal(WorkflowJobText.Block(PrefixLane, "build"), block.Replace("\r", "", StringComparison.Ordinal));
+        Assert.Equal(new[] { "build-image", "build", "verdict" }, WorkflowJobText.Ranges(crlf.Split('\n')).Select(r => r.Key));
+        Assert.Contains("echo LAST", WorkflowJobText.Step(crlf, "Last step of build")!, StringComparison.Ordinal);
+        Assert.DoesNotContain("verdict:", WorkflowJobText.Step(crlf, "Last step of build")!, StringComparison.Ordinal);
+
+        var (body, refusal) = WorkflowJobText.Read(("on: push\n" + Job).Replace("\n", "\r\n", StringComparison.Ordinal), Lane, "select");
+        Assert.Null(refusal);
+        Assert.Contains("- name: Something", body!, StringComparison.Ordinal);
+        Assert.DoesNotContain("next:", body!, StringComparison.Ordinal);
     }
 
     /// <summary>
