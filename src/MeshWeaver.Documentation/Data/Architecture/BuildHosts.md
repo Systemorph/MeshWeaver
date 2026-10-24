@@ -25,9 +25,9 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
-| the host runner | `.github/scripts/build-run.py` (shipped by the chart as `deploy/helm/files/build-run.py`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
+| the host runner | `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (`deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
-| the CD hand-over | `main-cd.yml` job `build-host-latest` + `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | in the run that arms a set, a signed event that moves `build-latest`'s record fields to that set |
+| the CD hand-over | `main-cd.yml` jobs `build-host-image`, `build-host-latest`; `.github/workflows/build-host-stable.yml`; `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | the runner image per set; in the run that arms a set, a signed event that moves `build-latest` to it; daily, `build-stable` to the main-passed ceiling |
 
 ## 1. The follow lane
 
@@ -84,10 +84,15 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
 2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest}`. 204 → sleep;
    200 → the run. The claim's `path` is authoritative (a non-latest run's node id is
    `<sha>-<channel>`).
-3. **Check out** `repo@sha` into a fresh work directory — the HOST does it, with the run's one-hour
-   installation token (`POST /token`), which never leaves the host process. Git credentials go
-   through the environment, never argv or a URL; the shared git mirror is used as
-   `--reference-if-able` when present.
+3. **Check out** `repo@sha` — the HOST does it, through the shared git MIRROR
+   `/cache/git/<repo>.git`: `git clone --mirror` on first use, `git fetch --prune` (plus the run's
+   sha and refs) before every checkout, under an exclusive file lock shared by every replica, then
+   a clone `--reference`-ing the mirror into the run's fresh directory. The mirror is written by
+   the host alone, only from GitHub, and bound read-only into every sandbox. The credential is the
+   run's token from `POST /token {host, path, repo, sha}` → `{token}`: the instance mints it with
+   `GitHubAppTokenService.GetScopedInstallationToken(owner, [repo], {"contents":"read"})` — ONE
+   repository, read-only, one hour — and only for the host that holds the run's claim. It never
+   leaves the host process; git receives it through the environment, never argv or a URL.
 4. **Run every stage** the repository declares in `.github/build-stages.json`:
 
    ```json
@@ -122,6 +127,12 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    - **No sandbox, no host.** At startup the host creates the namespaces once; if the node refuses
      them (seccomp, AppArmor, a kernel without unprivileged user namespaces) it exits non-zero
      naming why. It never runs a stage unsandboxed.
+   - **The hosts' ONE cloud credential is read-only**: Azure workload identity on the `build-host`
+     ServiceAccount, granted **AcrPull only**, to pull the plugins publication. Its projected token
+     (`AZURE_FEDERATED_TOKEN_FILE`) is mounted into the HOST container alone (the pod's
+     `azure.workload.identity/skip-containers` names every other container) and is bound into no
+     sandbox; the host exchanges it (Entra client assertion → ACR `/oauth2/exchange`) for a pull
+     credential written to a host-private file for the one ORAS pull, then deleted.
    - `MW_BUILD_PUBLISH=true|false` (from the claim) is **informational**: a host holds no
      publication credential and mounts no bake share. Publication stays in the publish lane, which
      consumes `build/verdict` — "only latest publishes" is that lane's property.
@@ -161,14 +172,19 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
 - a **Deployment** `build-host-<c>` with no `replicas` (KEDA owns it), surge-first rolling update,
   `terminationGracePeriodSeconds` = `buildHosts.runDeadlineSeconds` (default 3600, also the
   runner's run deadline) so a replaced or scaled-in replica finishes its run, the `cibuild`
-  nodeSelector and tolerations, and the composition of Build service §1.4 without a Docker daemon:
-  init containers copy the tester's `/app` and the portal's `/app` + `dotnet` out of the set's two
-  images **by digest** and ORAS out of its pinned image; the runner composes the gate host
-  (`compose-gate-host.sh`) and `exec`s `build-run.py --host`. Readiness is the staged marker the
-  runner writes once the plugins layer is in place — a new replica is Ready only when staged. The
-  worker token is the `workerTokenSecret` mounted as a FILE at `/run/build-worker/token`; the
-  container's seccomp / AppArmor profiles can be stated (`buildHosts.sandbox.*`) for what `bwrap`
-  needs on the pool's nodes — measured, not assumed;
+  nodeSelector and tolerations, run as the runner image's unprivileged user (1654, `fsGroup`
+  1654), and the composition of Build service §1.4 without a Docker daemon: init containers copy
+  the tester's `/app` and the portal's `/app` + `dotnet` out of the set's two images **by digest**
+  and ORAS out of its pinned image; the main container is the set's `mw-build-host` **by digest**
+  (`runnerRepository` + the channel's `runnerDigest`), which composes the gate host and `exec`s its
+  own `build-run.py --host` — the chart carries no copy of either script. Readiness is the staged
+  marker the runner writes once the plugins layer is in place — a new replica is Ready only when
+  staged. The worker token is the `workerTokenSecret` mounted as a FILE at
+  `/run/build-worker/token`; with `workloadIdentity.clientId` set, the ServiceAccount carries
+  `azure.workload.identity/client-id` and the pod `azure.workload.identity/use: "true"`, the
+  identity token restricted to the `build` container. The container's seccomp / AppArmor profiles
+  can be stated (`buildHosts.sandbox.*`) for what `bwrap` needs on the pool's nodes — measured, not
+  assumed;
 - a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
   ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
   (= claimable + running, so the metric never drops to zero while a host holds a run) and a
@@ -177,64 +193,110 @@ Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
 
 **A host holds no publication credential, no registry token and no bake share.** The gate refuses
 `buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
-pull and never enters the pod's filesystem. The plugins publication is pulled without a credential.
+pull and never enters the pod's filesystem. The plugins publication is pulled with the workload
+identity above (AcrPull, read-only) or anonymously.
 
 Shared: a ServiceAccount `build-host` with no token mounted and no rights, a NetworkPolicy with no
-ingress and egress only to DNS, the build API's pods and 80/443 outside the cluster-private ranges,
-and the `memex-build-host-scripts` ConfigMap. The cache is an **existing** RWX claim
+ingress and egress only to DNS, the build API's pods and 80/443 outside the excluded ranges — the
+cluster-private ranges, link-local `169.254.0.0/16` (the instance metadata service, where a node
+identity's tokens are minted) and `168.63.129.16/32` (WireServer). Stages share the pod's network
+namespace, so that policy — not the sandbox — is the network boundary. The optional Postgres for the
+substrate suites is a NATIVE sidecar (an init container with `restartPolicy: Always`), stopped only
+after the runner has exited, so a roll that lets the runner finish its run keeps the database too.
+The gate host is composed into `/host/app` (the composer replaces its output directory; the
+emptyDir's mount point cannot be removed). The chart carries
+no ConfigMap. The cache is an **existing** RWX claim
 (`buildHosts.cacheClaimName`, default `build-cache`); the chart never creates or deletes it.
 
-`deploy/aks/scripts/test-build-hosts.sh` (Chart Gate) asserts the shipped runner is
-`.github/scripts/build-run.py` byte for byte, the defaults render nothing, the fixture renders the
+`deploy/aks/scripts/test-build-hosts.sh` (Chart Gate) asserts the runner ships in ONE place (the
+Dockerfile copies `.github/scripts`' scripts, installs bubblewrap, runs the self-test, names no
+`:latest`; the chart has no copy), the defaults render nothing, the fixture renders the
 shape above for both channels, and the refusals hold; the fixture also runs through every portal
 invariant in `check-chart-invariants.sh`.
 
 ## 4. Core's CD deploys the host
 
-In the run that **arms** a set, `main-cd.yml` job `build-host-latest` hands `build-latest` that set
-(policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)): it resolves the set's
-`mw-plugin-test` and `memex-portal-ai` digests from the version tag (never a moving name), re-checks
-the set is still the newest armed one (never backwards), and POSTs a signed
-`build-host-update-available` event into the control plane's inbox `Hosting/PlatformBuilds` — the
-same supported record path `control-first` hands control its next image through:
+**The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
+(the .NET 10 SDK, bash, python3, git, bubblewrap, and THIS commit's `build-run.py` +
+`compose-gate-host.sh`, whose self-test runs in the build) for linux/amd64 and pushes
+`mw-build-host:<version>` — the version every image of the set carries — for every published
+platform build. It is outside the promotion (the set is complete without it) and under
+`alert-on-failure`. Nothing names it by a moving tag: the hosts get it BY DIGEST with the rest of the
+set.
+
+**`build-latest` follows the armed set.** In the run that **arms** a set, job `build-host-latest`
+hands `build-latest` that set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
+it resolves the set's `mw-plugin-test`, `memex-portal-ai` and `mw-build-host` digests from the
+version tag (never a moving name), re-checks the set is still the newest armed one (never
+backwards), and POSTs a signed `build-host-update-available` event into the control plane's inbox
+`Hosting/PlatformBuilds` — the same supported record path `control-first` hands control its next
+image through:
 
 ```json
 {"event":"build-host-update-available","deployment":"control","channel":"latest",
  "platformVersion":"3.1.10412","testerImage":"…/mw-plugin-test","testerDigest":"sha256:…",
- "portalImage":"…/memex-portal-ai","portalDigest":"sha256:…","coreSha":"…","pluginsSha":"…",
- "recordFields":{"buildHosts.latest.platformVersion":"3.1.10412",
-                 "buildHosts.latest.testerDigest":"sha256:…","buildHosts.latest.portalDigest":"sha256:…"},
+ "portalImage":"…/memex-portal-ai","portalDigest":"sha256:…",
+ "runnerImage":"…/mw-build-host","runnerDigest":"sha256:…","coreSha":"…","pluginsSha":"…",
+ "recordFields":{"buildHosts.latest.platformVersion":"3.1.10412","buildHosts.latest.testerDigest":"sha256:…",
+                 "buildHosts.latest.portalDigest":"sha256:…","buildHosts.latest.runnerDigest":"sha256:…"},
  "policy":"build-hosts-follow-latest","trigger":"build-host-latest", …}
 ```
 
-The receiver writes `recordFields` on the operations record (`deployment`, the record
-`.github/control-instance.json` names) and opens that record's Reconcile; the roll is then ordinary
-Deployment semantics. 🚨 **Never `kubectl set image`, never a hand-edited Deployment.**
+**`build-stable` follows the main-passed ceiling — daily.** Until core's `stable` promoter exists,
+`stable` IS the newest sealed set MeshWeaver.Plugins' own `main` has passed on. Its own workflow,
+`.github/workflows/build-host-stable.yml` (daily `schedule`, 05:41 UTC; `stable` is refused on any
+other trigger), resolves that ceiling with `resolve-platform.py --no-registry --passed-on-main
+Systemorph/MeshWeaver.Plugins` through a fleet-reader App token, resolves the same three digests by
+the set's version, and sends the same event for channel `stable`. 🚨 It is deliberately NOT a job of
+`main-cd.yml`: the platform deploy reads no MeshWeaver.Plugins verdict (policy
+`platform-module-deploy-separate`, held by `test-cd-steps.py`'s separation guard), and the
+main-passed ceiling is one; here it only decides which set a build host runs and gates no platform
+roll. The ceiling is read from MeshWeaver.Plugins' PRIVATE Actions runs and their annotations, so
+the token is requested with `permission-actions: read` and `permission-checks: read` — an App that
+does not hold them fails the token step, naming it. A red roll reports itself on the one open
+`build-host` issue.
+
+**The receiver** (the operations instance, MeshWeaver.Plugins) writes the event's set into
+`DeploymentContent.BuildHosts.Channels[<channel>]` (the typed record block,
+`MeshWeaver.Deployment.Contract` `BuildHostsBlock` / `BuildHostChannel`) — only when the record's
+`BuildHosts.Enabled` is already true, and never backwards — and the record change then applies
+itself (policy `record-change-applies-itself`); the roll is ordinary Deployment semantics.
+`recordFields` is informative. 🚨 **Never `kubectl set image`, never a hand-edited Deployment.**
 
 **A no-op until declared, twice.** `.github/build-hosts.json` `enabled: false` (the shipped value)
-makes the job write one summary line and send nothing, using no credential. The receiver guards the
-same fact on the record: it changes `buildHosts.*` only when the record's `buildHosts.enabled` is
-true, and refuses a `platformVersion` older than the one the record names. Turning the hosts on is
-two acts, in order: the record's `buildHosts` block through its approval path, then
+makes both jobs write one summary line and send nothing, using no credential; `stable` must also be
+listed in its `channels`. The receiver guards the same fact on the record. Turning the hosts on is
+two acts, in order: the record's `BuildHosts` block through its approval path, then
 `enabled: true` here.
 
-The job is outside `delivery-verdict` and `alert-on-failure`: the fleet's delivery does not depend on
-a build host, and a red names itself on the job.
+`build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
+not depend on a build host) and UNDER `alert-on-failure` (a host left on an old set is paged, not
+unattended); `build-host-stable.yml` reports on its own `build-host` issue.
 
 ## 5. Not done here
 
-- **The receiver of `build-host-update-available`** (the record write and its Reconcile) is the
-  operations instance's, in MeshWeaver.Plugins. Until it exists the event must stay unsent —
-  which `enabled: false` guarantees.
-- **`build-stable`'s roll** ("the daily full run does the same for build-stable") is not wired: the
-  stable pointer's mover does not exist yet.
-- **The runner image** (bash, python3, git, bubblewrap, the .NET SDK) is named by the record
-  (`buildHosts.runnerImage`); this repository does not build one yet.
-- **Whether the `cibuild` nodes allow `bwrap`'s namespaces** under the pod's seccomp/AppArmor
-  defaults is not measured; the host refuses to start where they are refused, so the first
-  enabled estate will say so.
-- **Pulling the plugins publication from a registry that requires a credential**: a host holds
-  none, so such a registry needs an anonymous (or node-identity) pull path — open.
+- **The receiver of `build-host-update-available`** (the record write) and the **`POST /token`
+  route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})` for the ONE
+  repository of the run, only for the host that holds its claim) are the operations instance's, in
+  MeshWeaver.Plugins. Until the receiver exists the event must stay unsent — which `enabled: false`
+  guarantees.
+- **The fleet-reader App's grant** is Contents / Metadata / Pull requests today; the stable roll
+  needs Actions: read and Checks: read on MeshWeaver.Plugins. Widening it is a maintainer act;
+  until then `stable` stays out of `.github/build-hosts.json` `channels`.
+- **Whether the `cibuild` nodes allow `bwrap`'s namespaces** is not measured on AKS. What WAS
+  measured (the `mw-build-host` image built from this tree, run under Docker on an Ubuntu 24.04
+  kernel 6.8): the startup probe REFUSED in every configuration — the default seccomp profile
+  ("No permissions to create new namespace"), and seccomp + AppArmor unconfined, as root, and even
+  privileged ("setting up uid map: Permission denied") — because that kernel sets
+  `kernel.apparmor_restrict_unprivileged_userns=1`, which strips an unconfined process's new user
+  namespace of the capabilities to write its uid map. So the host fails closed as designed, and a
+  node image on that kernel line needs either that sysctl at 0 on the build pool or an AppArmor
+  profile that grants `userns` to the build container (`buildHosts.sandbox.appArmorProfile`
+  `Localhost`) — a node-pool decision, not a chart default.
+- **Retention of pinned digests.** A host runs digests the record pins for as long as its channel
+  stays on a set; the ACR purge counts newer builds, so a quiet `stable` channel's images must be
+  protected the way other pinned digests are (`lock-pinned-digests.py`,
+  [Pinned Image Retention](../PinnedImageRetention)) — not wired for `mw-build-host` or the
+  build-host record's digests yet.
 - **Keying compile outputs** by (source hash, reference-set hash) is the stages' work: the runner
   promotes what a trunk stage writes under `$MW_BUILD_OUTPUTS/<key>/`, and reads nothing itself.
-- **The git mirror** is used read-only when present; nothing populates it yet.

@@ -20,8 +20,10 @@ THE LOOP, and the order that matters:
   2. `POST {api}/claim` with the host's channel, platform set, framework identity and plugins
      digest. 204 = nothing claimable → sleep. 200 = a run: `{path, repo, sha, refs, isTrunk,
      publish, stages}` — `path` is authoritative (a non-latest run's node id is `<sha>-<channel>`).
-  3. The HOST checks the run out at `sha` into a FRESH work directory (the installation token
-     stays in the host process), and every stage the repository declares in
+  3. The HOST checks the run out at `sha` into a FRESH work directory through the shared git
+     mirror `<cache>/git/<repo>.git` (cloned `--mirror` on first use, fetched before every
+     checkout; the run's one-repository, contents:read installation token stays in the host
+     process), and every stage the repository declares in
      `.github/build-stages.json` runs in an ENFORCED SANDBOX: `bwrap` with user, PID, mount, IPC
      and UTS namespaces, `--die-with-parent`, a fresh /proc, `--clearenv` + an explicit allow-list
      (the worker token is a mounted FILE read into the host process and never in any environment),
@@ -70,7 +72,9 @@ Environment (rendered by the chart from `buildHosts.*`):
   BWRAP                        the bubblewrap binary                       default bwrap
   MW_PLUGINS_REGISTRY          registry host the plugins publication is pulled from
   MW_PLUGINS_SOURCE            the publication's source name               default plugins
-  (no registry credential: a host holds none — the publication is pulled without one)
+  AZURE_FEDERATED_TOKEN_FILE   (projected by Azure workload identity) — the hosts' ONE credential,
+  AZURE_CLIENT_ID, _TENANT_ID   AcrPull only, read in the host and never bound into a sandbox;
+                               absent ⇒ the publication is pulled anonymously
   ORAS                         the oras binary                             default oras
 """
 from __future__ import annotations
@@ -128,7 +132,7 @@ XUNIT = re.compile(r"^\s*(?P<test>\S[^\[]*?)\s+\[(?P<o>FAIL|PASS|SKIP)\]\s*$")
 SUMMARY = re.compile(r"^\s*((Passed|Failed|Skipped)!\s+-|Total tests:|=== TEST EXECUTION SUMMARY ===|Test Run (Successful|Failed|Aborted))")
 TEST_RUN_FOR = re.compile(r"Test run for (?P<dll>\S+?\.dll)")
 STACK_FILE = re.compile(r"\bin (?P<file>\S+\.(?:cs|fs|vb|razor)):line (?P<line>\d+)")
-MW_EVENT = re.compile(r"^::mw-event::(?P<json>\{.*\})\s*$")
+MW_EVENT = re.compile(r"^::mw-event::(?P<json>.*)$")
 OUTCOME = {"Passed": "passed", "Failed": "failed", "Skipped": "skipped",
            "PASS": "passed", "FAIL": "failed", "SKIP": "skipped"}
 
@@ -222,8 +226,73 @@ class OutputParser:
             out.append(ev)
         return out
 
+    def _child_event(self, raw: str) -> list[dict]:
+        """A stage's own `::mw-event::{json}` — parsed TOTALLY: a malformed one is dropped with a
+        line saying so, never an exception. Only the kinds in CHILD_KINDS are accepted, each field
+        coerced to its type; `stage-finished` / `run-finished` are the HOST's alone (decided from
+        the sandbox's exit status), so a child naming them is dropped and said."""
+        def dropped(why: str) -> list[dict]:
+            return [{"kind": "line", "text": f"malformed ::mw-event:: dropped ({why})"}]
+        try:
+            ev = json.loads(raw)
+        except ValueError:
+            return dropped("not JSON")
+        if not isinstance(ev, dict):
+            return dropped("not an object")
+        kind = ev.get("kind")
+        if kind in ("stage-finished", "run-finished"):
+            return [{"kind": "line", "text": f"a stage tried to emit `{kind}` — refused: only the host decides a verdict"}]
+        if kind not in CHILD_KINDS:
+            return dropped(f"unknown kind {str(kind)[:40]!r}")
+
+        def text(k: str, limit: int = MAX_LINE) -> str:
+            v = ev.get(k)
+            return v[:limit] if isinstance(v, str) else ""
+
+        def num(k: str) -> int:
+            v = ev.get(k)
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0 or v > 2**31:
+                raise ValueError(k)
+            return int(v)
+
+        def opt_num(k: str) -> int:
+            return num(k) if ev.get(k) is not None else 0
+        try:
+            if kind == "diagnostic":
+                sev = text("severity") or "error"
+                if sev not in ("error", "warning"):
+                    return dropped(f"severity {sev!r}")
+                return self._diag(sev, self.rel(text("file")), opt_num("line"), text("code", 40), text("message"))
+            if kind == "test-finished":
+                outcome = text("outcome")
+                if outcome not in self.tests:
+                    return dropped(f"outcome {outcome!r}")
+                self.tests[outcome] += 1
+                return [{"kind": kind, "suite": text("suite", 300) or self.stage, "test": text("test", 500),
+                         "outcome": outcome, "durationMs": opt_num("durationMs"), "message": text("message"),
+                         "file": self.rel(text("file")), "line": opt_num("line")}]
+            if kind == "unit-started":
+                return [{"kind": kind, "unit": text("unit", 300)}] if text("unit") else dropped("no unit")
+            if kind == "unit-finished":
+                outcome = text("outcome")
+                if not text("unit") or outcome not in ("compiled", "cached", "failed"):
+                    return dropped("unit/outcome")
+                return [{"kind": kind, "unit": text("unit", 300), "outcome": outcome, "durationMs": opt_num("durationMs")}]
+            if kind == "count":
+                return [{"kind": kind, "unitsTotal": opt_num("unitsTotal"), "testsTotal": opt_num("testsTotal")}]
+            return [{"kind": "line", "text": text("text")}] if text("text") else dropped("no text")
+        except ValueError as e:
+            return dropped(f"field {e}")
+
     # -- the feed --------------------------------------------------------------------------
     def feed(self, raw: str) -> list[dict]:
+        """Never raises: a parser fault on one line is reported as a line, and the stage goes on."""
+        try:
+            return self._feed(raw)
+        except Exception as e:      # the parser is total by contract; this is its seatbelt
+            return [{"kind": "line", "text": f"output line not parsed ({type(e).__name__})"}]
+
+    def _feed(self, raw: str) -> list[dict]:
         line = raw.rstrip("\r\n")
         self.tail.append(line[:MAX_LINE])
         if len(self.tail) > TAIL_LINES:
@@ -231,19 +300,7 @@ class OutputParser:
 
         m = MW_EVENT.match(line)
         if m:
-            try:
-                ev = json.loads(m.group("json"))
-            except ValueError:
-                return []
-            if isinstance(ev, dict) and ev.get("kind") in CHILD_KINDS:
-                if ev["kind"] == "diagnostic":
-                    return self._diag(str(ev.get("severity") or "error"), self.rel(str(ev.get("file") or "")),
-                                      int(ev.get("line") or 0), str(ev.get("code") or ""),
-                                      str(ev.get("message") or ""))
-                if ev["kind"] == "test-finished" and ev.get("outcome") in self.tests:
-                    self.tests[ev["outcome"]] += 1
-                return [ev]
-            return []
+            return self._child_event(m.group("json"))
 
         m = TEST_RUN_FOR.search(line)
         if m:
@@ -447,6 +504,8 @@ class EventSink:
             self.flush(attempts=1)
 
     def flush(self, attempts: int = 4) -> bool:
+        """POST everything buffered. Only FAILED posts consume `attempts` — a long buffer that drains
+        in many successful batches never runs out of retries. Returns True when nothing is held."""
         if not self.buf:
             self.last = self.clock()
             return True
@@ -455,21 +514,20 @@ class EventSink:
                                                         f"while the build API was unreachable"})
             self.dropped = 0
         delay = 2.0
-        for i in range(attempts):
+        failures = 0
+        while self.buf and failures < attempts:
             batch = self.buf[:BATCH_EVENTS]
             status, _ = self.api.call("POST", self.path, {"host": self.host, "events": batch}, self.query)
             if status == 409:
                 raise Lost(f"{self.path}: claimed by another host (409)")
             if 200 <= status < 300:
                 del self.buf[:len(batch)]
-                self.last = self.clock()
-                if not self.buf:
-                    return True
                 continue
-            self.log(f"events POST {self.path} → {status}; {len(self.buf)} event(s) held (attempt {i + 1}/{attempts})")
-            if i + 1 < attempts:
+            failures += 1
+            self.log(f"events POST {self.path} → {status}; {len(self.buf)} event(s) held (failure {failures}/{attempts})")
+            if failures < attempts:
                 self.sleep(delay)
-                delay *= 2
+                delay = min(delay * 2, 60.0)
         self.last = self.clock()
         return not self.buf
 
@@ -477,7 +535,7 @@ class EventSink:
 # ───────────────────────────────── the plugins layer ──────────────────────────────────────
 
 def stage_plugins(plugins: dict, cache: str, env: dict,
-                  pull: Callable[[list[str]], int]) -> str:
+                  pull: Callable[[list[str]], int], post: Callable[[str, dict], dict] = None) -> str:
     """Stage the plugins publication named by `plugins.digest` into `<cache>/plugins/<hex>/`
     (content-addressed: an existing complete directory is reused, never re-pulled). Returns the
     staged directory; raises Refusal when it cannot be staged."""
@@ -496,7 +554,17 @@ def stage_plugins(plugins: dict, cache: str, env: dict,
     os.makedirs(root, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix=".staging-", dir=root)
     cmd = [env.get("ORAS", "oras"), "pull", f"{registry}/plugins/{source}@{digest}", "-o", tmp]
-    rc = pull(cmd)
+    auth_dir = tempfile.mkdtemp(prefix=".auth-", dir=root)
+    try:
+        config = acr_registry_config(registry, env, post or _post_form, auth_dir)
+        if config:
+            cmd += ["--registry-config", config]
+        rc = pull(cmd)
+    except Refusal:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    finally:
+        shutil.rmtree(auth_dir, ignore_errors=True)      # the refresh token never outlives the pull
     if rc != 0:
         shutil.rmtree(tmp, ignore_errors=True)
         raise Refusal(f"pulling the plugins publication {digest} failed (oras exit {rc})")
@@ -678,25 +746,122 @@ def git_auth_env(token: Optional[str]) -> dict:
 
 
 def default_checkout(repo: str, sha: str, refs: list, dest: str, token: Optional[str],
-                     env: dict, log: Callable[[str], None]) -> None:
-    """The HOST checks out (the stage never holds the installation token)."""
+                     env: dict, log: Callable[[str], None], git: Callable[..., None] = None,
+                     deadline: Optional[float] = None) -> None:
+    """The HOST checks out (the stage never holds the installation token), through the shared git
+    MIRROR `<cache>/git/<repo>.git`: `git clone --mirror` on first use, `git fetch` before every
+    checkout, then a clone `--reference`-ing the mirror into the run's directory, so a run fetches
+    only what the mirror lacks. The mirror is written by the host alone — it is bound READ-ONLY into
+    every sandbox — and only from GitHub. Several replicas share it: an exclusive file lock
+    serialises its updates."""
     base = env.get("MW_BUILD_GIT_BASE", "https://github.com/Systemorph").rstrip("/")
-    mirror = os.path.join(env.get("MW_BUILD_CACHE", "/cache"), "git", f"{repo}.git")
+    url = f"{base}/{repo}.git"
+    mirror_root = os.path.join(env.get("MW_BUILD_CACHE", "/cache"), "git")
+    mirror = os.path.join(mirror_root, f"{repo}.git")
     genv = {**{k: env[k] for k in ("PATH", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR") if env.get(k)},
             "HOME": os.path.dirname(dest), **git_auth_env(token)}
 
-    def git(*args: str) -> None:
-        r = subprocess.run(["git", *args], env=genv, capture_output=True, text=True)
+    def run_git(*args: str) -> None:
+        left = None if deadline is None else deadline - time.monotonic()
+        if left is not None and left <= 0:
+            raise Refusal("the run's deadline passed during the checkout")
+        try:
+            # subprocess.run kills and reaps the child when the timeout expires
+            r = subprocess.run(["git", *args], env=genv, capture_output=True, text=True, timeout=left)
+        except subprocess.TimeoutExpired:
+            raise Refusal(f"git {args[0] if args[0] != '-C' else args[2]} did not finish inside the run's deadline — killed")
         if r.returncode != 0:
-            raise Refusal(f"git {args[0]} failed (exit {r.returncode}): {(r.stderr or '').strip()[-400:]}")
-
-    clone = ["clone", "--no-checkout", "--quiet"]
-    if os.path.isdir(mirror):
-        clone += ["--reference-if-able", mirror]
-    git(*clone, f"{base}/{repo}.git", dest)
+            raise Refusal(f"git {args[0] if args[0] != '-C' else args[2]} failed (exit {r.returncode}): "
+                          f"{(r.stderr or '').strip()[-400:]}")
+    git = git or run_git
     wanted = [sha] + [r for r in (refs or []) if isinstance(r, str) and r]
+
+    os.makedirs(mirror_root, exist_ok=True)
+    with open(os.path.join(mirror_root, f".{repo}.lock"), "w") as lock:
+        _flock(lock)
+        if not os.path.isfile(os.path.join(mirror, "HEAD")):
+            tmp = tempfile.mkdtemp(prefix=f".{repo}-", dir=mirror_root)
+            try:
+                git("clone", "--mirror", "--quiet", url, os.path.join(tmp, "m"))
+                os.rename(os.path.join(tmp, "m"), mirror)
+                log(f"git mirror created: {mirror}")
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            git("-C", mirror, "fetch", "--quiet", "--prune", "origin")
+        # A PR head (refs/pull/N/head) or the exact sha may not be on a mirrored ref yet.
+        git("-C", mirror, "fetch", "--quiet", "origin", *wanted)
+    git("clone", "--no-checkout", "--quiet", "--reference", mirror, url, dest)
     git("-C", dest, "fetch", "--quiet", "origin", *wanted)
     git("-C", dest, "checkout", "--quiet", "--detach", sha)
+
+
+def _flock(fh) -> None:
+    try:
+        import fcntl
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+    except (ImportError, OSError):
+        pass
+
+
+# ───────────────────────────────── the one credential: AcrPull by workload identity ───────
+
+def acr_registry_config(registry: str, env: dict, post: Callable[[str, dict], dict], dest_dir: str) -> Optional[str]:
+    """A docker config.json authorising ORAS to PULL from `registry`, from the host's Azure
+    WORKLOAD IDENTITY (the ServiceAccount's federated token, AcrPull only) — the hosts' ONE
+    credential, read-only. Returns None when no workload identity is projected (an anonymous pull).
+
+    federated token (AZURE_FEDERATED_TOKEN_FILE) → Entra access token (client-credentials with a
+    client assertion) → ACR refresh token (`/oauth2/exchange`) → `identitytoken` in a config file
+    written into the HOST's private directory. The token file is mounted into the host container
+    only and is never bound into a sandbox; the config is deleted after the pull."""
+    token_file = env.get("AZURE_FEDERATED_TOKEN_FILE", "")
+    client = env.get("AZURE_CLIENT_ID", "")
+    tenant = env.get("AZURE_TENANT_ID", "")
+    if not token_file:
+        return None
+    if not client or not tenant:
+        raise Refusal("a workload-identity token is projected but AZURE_CLIENT_ID / AZURE_TENANT_ID are not — "
+                      "the ServiceAccount's azure.workload.identity/client-id annotation is missing")
+    try:
+        with open(token_file) as fh:
+            assertion = fh.read().strip()
+    except OSError as e:
+        raise Refusal(f"the workload-identity token {token_file} is unreadable: {e}")
+    authority = (env.get("AZURE_AUTHORITY_HOST") or "https://login.microsoftonline.com/").rstrip("/")
+    aad = post(f"{authority}/{tenant}/oauth2/v2.0/token", {
+        "grant_type": "client_credentials", "client_id": client,
+        "scope": "https://management.azure.com/.default",   # the audience ACR's /oauth2/exchange accepts
+        "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
+        "client_assertion": assertion})
+    access = aad.get("access_token") if isinstance(aad, dict) else None
+    if not access:
+        raise Refusal("Entra refused the workload-identity exchange (no access_token) — is the federated "
+                      "credential registered for this ServiceAccount?")
+    acr = post(f"https://{registry}/oauth2/exchange", {
+        "grant_type": "access_token", "service": registry, "tenant": tenant, "access_token": access})
+    refresh = acr.get("refresh_token") if isinstance(acr, dict) else None
+    if not refresh:
+        raise Refusal(f"{registry} refused the token exchange (no refresh_token) — does the identity hold AcrPull?")
+    os.makedirs(dest_dir, mode=0o700, exist_ok=True)
+    path = os.path.join(dest_dir, "config.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"auths": {registry: {"identitytoken": refresh}}}, fh)
+    return path
+
+
+def _post_form(url: str, form: dict) -> dict:
+    data = urllib.parse.urlencode(form).encode()
+    req = urllib.request.Request(url, data=data, method="POST",
+                                 headers={"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode() or "{}")
+    except urllib.error.HTTPError as e:
+        return {"error": f"HTTP {e.code}"}
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return {"error": str(e)}
 
 
 def _run_capture(argv: list[str]) -> tuple[int, str]:
@@ -742,6 +907,7 @@ class Host:
         self.plugins_digest: Optional[str] = None
         self.plugins_dir: Optional[str] = None
         self.plugins_known = False
+        self.held: list[EventSink] = []
 
     def preflight(self) -> None:
         missing = []
@@ -859,7 +1025,10 @@ class Host:
             self.log(f"claimed {path} ({repo}@{sha[:12]}, channel {self.channel}, trunk={trunk}, publish={publish})")
             token = self.installation_token(claim)
             try:
-                self.checkout(repo, sha, claim.get("refs") or [], checkout_dir, token, self.env, self.log)
+                # The checkout is bounded by the run's deadline: a stalled clone or fetch ends the run
+                # RED inside the pod's grace period, never holds the claim indefinitely.
+                self.checkout(repo, sha, claim.get("refs") or [], checkout_dir, token, self.env, self.log,
+                              deadline=time.monotonic() + max(1.0, self.run_deadline - (self.clock() - started)))
                 stages = select_stages(load_stages(os.path.join(checkout_dir, ".github", "build-stages.json")),
                                        claim.get("stages"))
             except Refusal as r:
@@ -867,8 +1036,7 @@ class Host:
                 sink.add([{"kind": "line", "text": f"run refused before any stage: {r}"},
                           {"kind": "stage-finished", "state": "failed", "summary": str(r)[:MAX_LINE]},
                           {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
-                sink.flush(attempts=6)
-                return "ran"
+                return "ran" if sink.flush(attempts=12) else "undelivered"
             os.makedirs(outputs_dir, exist_ok=True)
             # MW_BUILD_PUBLISH is INFORMATIONAL: a host holds no publication credential, so a stage
             # cannot publish whatever it says; publication is the publish lane's, on build/verdict.
@@ -893,8 +1061,9 @@ class Host:
                 if failed_at is not None:
                     sink.add([{"kind": "stage-finished", "state": "failed",
                                "summary": f"not run — {why or 'stage ' + failed_at + ' failed first'}"}])
-                    sink.flush(attempts=6)
+                    self.deliver(sink)
                     continue
+                self.drain_held(attempts=2)
                 ok = self.run_stage(dict(st, timeoutMinutes=min(st["timeoutMinutes"], remaining / 60)),
                                     checkout_dir, outputs_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]})
                 self.assert_clean()
@@ -906,11 +1075,24 @@ class Host:
                         sink.add([{"kind": "line", "text": f"cache: {promoted} output(s) promoted, {kept} already "
                                                            f"present" + (f", NOT promoted (not a content key): "
                                                                          f"{refused[:5]}" if refused else "")}])
-                        sink.flush(attempts=3)
+                        self.deliver(sink)
+            # run-finished is the LAST word: never before every stage-finished was acknowledged —
+            # a run verdict over a missing stage verdict is a contradiction the instance cannot heal.
+            for _ in range(10):
+                if self.drain_held(attempts=6):
+                    break
+                self.sleep(30.0)
+            if self.held:
+                self.log(f"{path}: {len(self.held)} stage verdict(s) could not be delivered — NOT posting run-finished; "
+                         f"the instance's adoption re-queues the run")
+                self.held = []
+                return "undelivered"
             sink = self.sink(repo, sha, last_stage)
             sink.add([{"kind": "run-finished", "succeeded": failed_at is None,
                        "error": None if failed_at is None else (why or f"stage {failed_at} failed")}])
-            sink.flush(attempts=6)
+            if not sink.flush(attempts=12):
+                self.log(f"{path}: run-finished could not be delivered — the instance's adoption re-queues the run")
+                return "undelivered"
             self.log(f"{path}: {'succeeded' if failed_at is None else 'failed at ' + failed_at} in "
                      f"{_hms(self.clock() - started)}")
             return "ran"
@@ -977,10 +1159,27 @@ class Host:
                 if self.clock() > deadline and not timed_out:
                     timed_out = True
                     _kill(proc)
-            rc = proc.wait()
+            # EOF is NOT exit: a stage can close its stdout and keep running. The deadline holds
+            # until the process tree is gone, and the events keep flowing meanwhile.
+            while True:
+                try:
+                    rc = proc.wait(timeout=1.0)
+                    break
+                except subprocess.TimeoutExpired:
+                    sink.add([])
+                    if self.clock() > deadline and not timed_out:
+                        timed_out = True
+                        _kill(proc)
         except Lost:
             _kill(proc)
             raise
+        except Exception as e:
+            # Nothing a stage does may take the host down without a verdict: kill, reap, report.
+            _kill(proc)
+            sink.add([{"kind": "stage-finished", "state": "failed",
+                       "summary": f"the host failed while running the stage ({type(e).__name__}: {str(e)[:200]})"}])
+            self.deliver(sink)
+            return False
         events = parser.finish()
         ok = rc == 0 and not timed_out
         if not ok and parser.errors == 0 and parser.tests["failed"] == 0:
@@ -990,8 +1189,25 @@ class Host:
         events.append({"kind": "stage-finished", "state": "succeeded" if ok else "failed",
                        "summary": parser.summary(rc, self.clock() - started, note)})
         sink.add(events)
-        sink.flush(attempts=6)
+        self.deliver(sink)
         return ok
+
+    # -- terminal events are never lost -----------------------------------------------------
+    def deliver(self, sink: EventSink) -> bool:
+        """Flush a sink; one that could not be emptied (the API is down) is HELD, with its
+        stage-finished, and retried before every later post — nothing is discarded with it."""
+        if sink.flush(attempts=6):
+            return True
+        self.held.append(sink)
+        return False
+
+    def drain_held(self, attempts: int = 6) -> bool:
+        still = []
+        for sink in self.held:
+            if not sink.flush(attempts=attempts):
+                still.append(sink)
+        self.held = still
+        return not still
 
     def loop(self) -> int:
         idle = float(self.env.get("MW_BUILD_IDLE_SECONDS", "15") or 15)
@@ -1141,9 +1357,20 @@ def self_test() -> int:
     s = OutputParser("/w", "modules")
     check("mw-event/unit", s.feed('::mw-event::{"kind":"unit-finished","unit":"Store","outcome":"cached","durationMs":3}')
           == [{"kind": "unit-finished", "unit": "Store", "outcome": "cached", "durationMs": 3}])
+    refused = s.feed('::mw-event::{"kind":"stage-finished","state":"succeeded"}')
     check("mw-event/a child cannot declare its stage green",
-          s.feed('::mw-event::{"kind":"stage-finished","state":"succeeded"}') == [])
-    check("mw-event/garbage ignored", s.feed("::mw-event::{not json}") == [])
+          [e["kind"] for e in refused] == ["line"] and "only the host decides" in refused[0]["text"], refused)
+    refused = s.feed('::mw-event::{"kind":"run-finished","succeeded":true}')
+    check("mw-event/a child cannot declare the run green", [e["kind"] for e in refused] == ["line"], refused)
+    for bad in ('{not json}', '[1]', '{"kind":"diagnostic","line":"oops"}', '{"kind":"diagnostic","line":-1}',
+                '{"kind":"diagnostic","severity":"fatal"}', '{"kind":"test-finished","outcome":"maybe"}',
+                '{"kind":"count","unitsTotal":true}', '{"kind":"unit-finished","unit":"A","outcome":"won"}',
+                '{"kind":"nope"}', '{"kind":"line"}'):
+        got = s.feed("::mw-event::" + bad)
+        check(f"mw-event/malformed {bad} is dropped and said, never raised",
+              len(got) == 1 and got[0]["kind"] == "line" and "dropped" in got[0]["text"], got)
+    ok_diag = s.feed('::mw-event::{"kind":"diagnostic","severity":"warning","file":"/w/a.cs","line":3,"code":"CS1","message":"m"}')
+    check("mw-event/a well-formed diagnostic passes, typed", ok_diag and ok_diag[0]["line"] == 3 and ok_diag[0]["file"] == "a.cs", ok_diag)
 
     # ── 3. stage declaration ───────────────────────────────────────────────────────────────
     good = {"stages": [{"name": "compile-check", "kind": "build", "command": "true"},
@@ -1248,6 +1475,74 @@ def self_test() -> int:
         pr2, kp2, _ = promote_outputs(outd, cache, lambda s: None)
         check("promote/same key kept", pr2 == 0 and kp2 == 1, (pr2, kp2))
 
+        # ── 5b. the git mirror: clone --mirror on first use, fetch before every checkout ───
+        calls: list[tuple] = []
+
+        def fake_git(*args):
+            calls.append(args)
+            if args[0] == "clone" and args[1] == "--mirror":
+                os.makedirs(args[-1])
+                open(os.path.join(args[-1], "HEAD"), "w").close()
+        genv = {"MW_BUILD_CACHE": os.path.join(tmp, "gitcache"), "PATH": "/usr/bin:/bin"}
+        default_checkout("MeshWeaver.Plugins", "d" * 40, ["refs/pull/7/head"], os.path.join(tmp, "r1", "src"),
+                         None, genv, lambda s: None, git=fake_git)
+        mirror = os.path.join(tmp, "gitcache", "git", "MeshWeaver.Plugins.git")
+        first = [c[:2] for c in calls]
+        check("mirror/first use clones --mirror, then fetches the wanted refs, then a --reference clone",
+              first[0] == ("clone", "--mirror") and ("-C", mirror) in first
+              and any(c[0] == "clone" and "--reference" in c and mirror in c for c in calls), calls)
+        check("mirror/the PR ref and the sha are fetched into the mirror",
+              any(c[:3] == ("-C", mirror, "fetch") and "refs/pull/7/head" in c and "d" * 40 in c for c in calls), calls)
+        calls.clear()
+        default_checkout("MeshWeaver.Plugins", "d" * 40, [], os.path.join(tmp, "r2", "src"),
+                         None, genv, lambda s: None, git=fake_git)
+        check("mirror/later use fetches --prune, never re-clones the mirror",
+              not any(c[:2] == ("clone", "--mirror") for c in calls)
+              and any(c[:4] == ("-C", mirror, "fetch", "--quiet") and "--prune" in c for c in calls), calls)
+        check("mirror/the checkout is detached at the sha", calls[-1][-2:] == ("--detach", "d" * 40), calls[-1])
+
+        # ── 5c. the ONE credential: AcrPull by workload identity, host-only ──────────────
+        fed = os.path.join(tmp, "azure-identity-token")
+        with open(fed, "w") as fh:
+            fh.write("federated-jwt")
+        posts: list[tuple] = []
+
+        def fake_post(url, form):
+            posts.append((url, dict(form)))
+            if "login.microsoftonline.com" in url:
+                return {"access_token": "aad-token"}
+            return {"refresh_token": "acr-refresh"}
+        wi = {"AZURE_FEDERATED_TOKEN_FILE": fed, "AZURE_CLIENT_ID": "cid", "AZURE_TENANT_ID": "tid"}
+        cfg = acr_registry_config("cr.example.com", wi, fake_post, os.path.join(tmp, "auth"))
+        check("wi/the federated token is the client assertion",
+              posts[0][1].get("client_assertion") == "federated-jwt" and posts[0][0].endswith("/tid/oauth2/v2.0/token"), posts)
+        check("wi/the Entra token is exchanged at the registry",
+              posts[1][0] == "https://cr.example.com/oauth2/exchange" and posts[1][1]["access_token"] == "aad-token", posts)
+        check("wi/the config carries the refresh token, mode 0600",
+              json.load(open(cfg)) == {"auths": {"cr.example.com": {"identitytoken": "acr-refresh"}}}
+              and (os.stat(cfg).st_mode & 0o777) == 0o600, cfg)
+        check("wi/no projected token ⇒ anonymous", acr_registry_config("cr.example.com", {}, fake_post, tmp) is None)
+        try:
+            acr_registry_config("cr.example.com", wi, lambda u, f: {}, os.path.join(tmp, "auth2"))
+            check("wi/a refused exchange is a Refusal", False, "accepted")
+        except Refusal:
+            pass
+        check("wi/the federated token never reaches a sandbox",
+              "AZURE_FEDERATED_TOKEN_FILE" not in sandbox_env(dict(wi, PATH="/bin"), {}, "/cache")
+              and "AZURE_CLIENT_ID" not in sandbox_env(dict(wi, PATH="/bin"), {}, "/cache"))
+        seen_cfg: list[str] = []
+
+        def pull_with_cfg(cmd):
+            if "--registry-config" in cmd:
+                p_ = cmd[cmd.index("--registry-config") + 1]
+                seen_cfg.append(p_)
+                check("wi/the config exists during the pull", os.path.isfile(p_), p_)
+            os.makedirs(cmd[4], exist_ok=True)
+            return 0
+        stage_plugins({"digest": "sha256:" + "9" * 64}, os.path.join(tmp, "wicache"),
+                      dict(wi, MW_PLUGINS_REGISTRY="cr.example.com"), pull_with_cfg, fake_post)
+        check("wi/the pull carries the config, and it is deleted after", seen_cfg and not os.path.exists(seen_cfg[0]), seen_cfg)
+
         # ── 6. the plugins layer is refreshed BEFORE the claim ─────────────────────────────
         order: list[str] = []
         d1 = "sha256:" + "1" * 64
@@ -1310,7 +1605,7 @@ def self_test() -> int:
             return 202, None
 
         def checkout_with(stages_doc):
-            def co(repo, sha, refs, dest, token, env_, log):
+            def co(repo, sha, refs, dest, token, env_, log, **_):
                 os.makedirs(os.path.join(dest, ".github"))
                 with open(os.path.join(dest, ".github", "build-stages.json"), "w") as fh:
                     json.dump(stages_doc, fh)
@@ -1376,7 +1671,7 @@ def self_test() -> int:
         check("run/409 posts nothing after it", sum(1 for c in a7.calls if c[1].endswith("/events")) == 1, a7.calls)
         posted.clear()
 
-        def empty_checkout(repo, sha, refs, dest, token, env_, log):
+        def empty_checkout(repo, sha, refs, dest, token, env_, log, **_):
             os.makedirs(dest)
         host(api_ev(), env=env_s, checkout=empty_checkout).run(dict(claim, stages=["build/modules"]))
         rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
@@ -1395,6 +1690,52 @@ def self_test() -> int:
             {"name": "a", "kind": "build", "command": "true"}]})).run(claim)
         rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
         check("run/past the run deadline is red", rf_ and rf_[0]["succeeded"] is False and "deadline" in rf_[0]["error"], rf_)
+        # a stage that CLOSES its output and keeps running is still bound by its timeout
+        posted.clear()
+        t0 = time.monotonic()
+        host(api_ev(), env=env_s, checkout=checkout_with({"stages": [
+            {"name": "quiet", "kind": "test", "command": "exec >/dev/null 2>&1; sleep 30", "timeoutMinutes": 0.02}]})).run(claim)
+        fin = [e for _, evs in posted for e in evs if e["kind"] == "stage-finished"]
+        check("run/EOF is not exit: a silent stage past its timeout is killed and red",
+              fin and fin[0]["state"] == "failed" and "timed out" in fin[0]["summary"] and time.monotonic() - t0 < 20,
+              (fin, time.monotonic() - t0))
+
+        # an API outage across stage-finished: held, retried, delivered BEFORE run-finished
+        order_ev: list[str] = []
+        outage = {"left": 9}
+
+        def flaky(path, body):
+            kinds = [e["kind"] for e in body["events"]]
+            if "stage-finished" in kinds and outage["left"] > 0:
+                outage["left"] -= 1
+                return 503, None
+            order_ev.extend(k for k in kinds if k in ("stage-finished", "run-finished"))
+            return 202, None
+        hf = host(_FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): flaky}), env=env_s,
+                  checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": "true"}]}))
+        check("events/an outage over stage-finished is ridden out", hf.run(claim) == "ran", order_ev)
+        check("events/stage-finished is delivered before run-finished", order_ev == ["stage-finished", "run-finished"], order_ev)
+        down = host(_FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): [(503, None)]}), env=env_s,
+                    checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": "true"}]}))
+        outcome = down.run(claim)
+        sent_kinds = {e.get("kind") for c in down.api.calls if c[1].endswith("/events") for e in c[2]["events"]}
+        check("events/a lasting outage posts NO run-finished over a missing stage verdict",
+              outcome == "undelivered" and "stage-finished" in sent_kinds and "run-finished" not in sent_kinds,
+              (outcome, sent_kinds))
+        # successful batches never consume the failure budget: 1,000 events drain through 5 batches
+        big = EventSink(_FakeApi({("POST", "/r/"): [(202, None)]}), "h", "r", "a" * 40, "s", "latest", lambda m: None,
+                        sleep=lambda x: None)
+        big.buf = [{"kind": "line", "text": str(i)} for i in range(1000)]
+        check("events/many successful batches drain with a budget of one", big.flush(attempts=1) and not big.buf)
+
+        # the checkout is bounded by the run's deadline
+        try:
+            default_checkout("R", "e" * 40, [], os.path.join(tmp, "late", "src"), None,
+                             {"MW_BUILD_CACHE": os.path.join(tmp, "late-cache"), "PATH": "/usr/bin:/bin"},
+                             lambda m: None, deadline=time.monotonic() - 1)
+            check("checkout/a passed deadline is a Refusal", False, "checked out")
+        except Refusal as e:
+            check("checkout/names the deadline", "deadline" in str(e), e)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1404,7 +1745,7 @@ def self_test() -> int:
         return 1
     print("build-run self-test: all cases passed (diagnostics, dedup, vstest + xunit results, structured events, "
           "stage declaration, the bwrap argv, the env allow-list, the token file, the startup sandbox probe, "
-          "pid-namespace leftovers, trunk-only cache promotion, plugins refresh BEFORE claim, fresh process per "
+          "pid-namespace leftovers, trunk-only cache promotion, the git mirror, the workload-identity pull, plugins refresh BEFORE claim, fresh process per "
           "stage, fail-fast, channel + publish, 409, undeclared stages, stage timeout, run deadline)")
     return 0
 

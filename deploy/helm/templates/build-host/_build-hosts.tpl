@@ -10,7 +10,7 @@ With `buildHosts.enabled` false (the default) it answers `enabled: false` and NO
 every estate that has not opted in renders byte-identically.
 
 The refusals, and why each one exists:
-  * a channel's tester/portal must be a sha256 DIGEST — a run records the set that compiled it,
+  * a channel's tester/portal/runner must be a sha256 DIGEST — a run records the set that compiled it,
     and a tag can name different bytes tomorrow;
   * a channel needs its platformVersion — `claim` stamps it on the run as the host's set;
   * the API URL must be https, or http to a cluster-local host (no dot, or *.svc / *.cluster.local)
@@ -29,12 +29,12 @@ The refusals, and why each one exists:
 {{- if not (or (hasPrefix "https://" $api) (and (hasPrefix "http://" $api) $local)) -}}
 {{- fail (printf "buildHosts.apiUrl %q must be https, or http to a cluster-local host — the worker token rides on it" $api) -}}
 {{- end -}}
-{{- $runner := required "buildHosts.runnerImage is required when buildHosts.enabled — the container with bash, python3, git and the .NET SDK the stages run in" $b.runnerImage -}}
+{{- $runnerRepo := required "buildHosts.runnerRepository is required when buildHosts.enabled — the mw-build-host image (bash, python3, git, bubblewrap, the .NET SDK, build-run.py); each channel names its digest" $b.runnerRepository -}}
 {{- $testerRepo := required "buildHosts.testerRepository is required when buildHosts.enabled (e.g. cr.example.com/mw-plugin-test)" $b.testerRepository -}}
 {{- $portalRepo := required "buildHosts.portalRepository is required when buildHosts.enabled (e.g. cr.example.com/memex-portal-ai)" $b.portalRepository -}}
-{{- range (list $testerRepo $portalRepo) -}}
+{{- range (list $testerRepo $portalRepo $runnerRepo) -}}
 {{- if or (contains "@" .) (regexMatch ":[^/]*$" .) -}}
-{{- fail (printf "buildHosts.testerRepository / portalRepository %q must be a repository without a tag or digest — each channel names its digest" .) -}}
+{{- fail (printf "buildHosts.testerRepository / portalRepository / runnerRepository %q must be a repository without a tag or digest — each channel names its digest" .) -}}
 {{- end -}}
 {{- end -}}
 {{- $tok := ($b.workerTokenSecret | default dict) -}}
@@ -55,7 +55,7 @@ The refusals, and why each one exists:
 {{- range $name := (list "latest" "stable") -}}
 {{- $c := (index $b $name | default dict) -}}
 {{- if $c.enabled -}}
-{{- range $k := (list "testerDigest" "portalDigest") -}}
+{{- range $k := (list "testerDigest" "portalDigest" "runnerDigest") -}}
 {{- $d := (index $c $k | default "") -}}
 {{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $d) -}}
 {{- fail (printf "buildHosts.%s.%s %q must be a sha256:<64 hex> digest — a host runs ONE immutable set; core's CD writes it into the record" $name $k $d) -}}
@@ -68,6 +68,7 @@ The refusals, and why each one exists:
 {{- end -}}
 {{- $channels = append $channels (dict "name" $name "platformVersion" $pv "maxReplicas" $max
       "tester" (printf "%s@%s" $testerRepo $c.testerDigest) "portal" (printf "%s@%s" $portalRepo $c.portalDigest)
+      "runner" (printf "%s@%s" $runnerRepo $c.runnerDigest)
       "testerDigest" $c.testerDigest "portalDigest" $c.portalDigest) -}}
 {{- end -}}
 {{- end -}}
@@ -75,7 +76,9 @@ The refusals, and why each one exists:
 {{- fail "buildHosts.enabled is true but no channel is enabled (buildHosts.latest.enabled / buildHosts.stable.enabled)" -}}
 {{- end -}}
 {{- $np := ($b.networkPolicy | default dict) -}}
-{{- toYaml (dict "enabled" true "apiUrl" $api "runnerImage" $runner "tokenSecret" $tokName "tokenKey" $tokKey
+{{- $wi := ($b.workloadIdentity | default dict) -}}
+{{- toYaml (dict "enabled" true "apiUrl" $api "tokenSecret" $tokName "tokenKey" $tokKey
+      "workloadIdentityClientId" (trim ($wi.clientId | default ""))
       "cacheClaim" $cache "imagePullSecret" ($b.imagePullSecret | default "")
       "pluginsRegistry" ($b.pluginsRegistry | default "") "pluginsSource" ($b.pluginsSource | default "plugins")
       "orasImage" (required "buildHosts.orasImage is required" $b.orasImage)

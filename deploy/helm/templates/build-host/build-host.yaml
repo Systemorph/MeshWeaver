@@ -1,27 +1,15 @@
 {{- $b := include "memex.buildHosts" . | fromYaml }}
 {{- if $b.enabled }}
 # The standing build hosts (Doc/Architecture/BuildHosts; MeshWeaver.Plugins Hosting/StandingBuildHosts):
-# the runner script and the gate-host composer (verbatim from deploy/helm/files, which
-# deploy/aks/scripts/test-build-hosts.sh pins byte-identical to .github/scripts), one ServiceAccount
-# and NetworkPolicy shared by every channel, and per channel a Deployment + ScaledObject.
+# one ServiceAccount and NetworkPolicy shared by every channel, and per channel a Deployment +
+# ScaledObject. The runner and the gate-host composer ship INSIDE the set's mw-build-host image
+# (deploy/build-host/Dockerfile), so the chart carries no copy of either.
 ---
-apiVersion: "v1"
-kind: "ConfigMap"
-metadata:
-  name: "memex-build-host-scripts"
-  labels:
-    app.kubernetes.io/name: "{{ .Chart.Name }}"
-    app.kubernetes.io/component: "build-host"
-    app.kubernetes.io/instance: "{{ .Release.Name }}"
-data:
-  build-run.py: |
-{{ .Files.Get "files/build-run.py" | indent 4 }}
-  compose-gate-host.sh: |
-{{ .Files.Get "files/compose-gate-host.sh" | indent 4 }}
----
-# NO Kubernetes right, NO cluster or subscription credential, and no token mounted at all: the host
-# reaches the build API with its worker token (a mounted file) and GitHub with the run's one-hour
-# installation token (checkout only) — nothing else. No publication credential, no bake share.
+# NO Kubernetes right and no Kubernetes token mounted: the host reaches the build API with its worker
+# token (a mounted file) and GitHub with the run's one-hour, one-repository, contents:read token
+# (checkout only). Its ONE cloud credential is Azure workload identity bound to this ServiceAccount,
+# granted AcrPull only — read-only, to pull the plugins publication — and projected into the HOST
+# container alone; no sandbox binds it. No publication credential, no bake share.
 apiVersion: "v1"
 kind: "ServiceAccount"
 metadata:
@@ -30,6 +18,10 @@ metadata:
     app.kubernetes.io/name: "{{ .Chart.Name }}"
     app.kubernetes.io/component: "build-host"
     app.kubernetes.io/instance: "{{ .Release.Name }}"
+  {{- if $b.workloadIdentityClientId }}
+  annotations:
+    azure.workload.identity/client-id: {{ $b.workloadIdentityClientId | quote }}
+  {{- end }}
 automountServiceAccountToken: false
 {{- if $b.networkPolicy.enabled }}
 ---
@@ -105,11 +97,24 @@ spec:
         app.kubernetes.io/component: "build-host"
         app.kubernetes.io/instance: "{{ $.Release.Name }}"
         hosting.meshweaver.io/channel: "{{ $c.name }}"
+        {{- if $b.workloadIdentityClientId }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+      {{- if $b.workloadIdentityClientId }}
       annotations:
-        checksum/scripts: {{ printf "%s%s" ($.Files.Get "files/build-run.py") ($.Files.Get "files/compose-gate-host.sh") | sha256sum | quote }}
+        # The projected identity token reaches the HOST container alone — never the init containers
+        # or the Postgres sidecar, and no sandbox binds it (build-run.py).
+        azure.workload.identity/skip-containers: "tester;portal;oras;postgres"
+      {{- end }}
     spec:
       serviceAccountName: "build-host"
       automountServiceAccountToken: false
+      # The runner image's unprivileged user; the shared cache and the emptyDirs are group-writable.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        fsGroup: 1654
       # = the run deadline: on SIGTERM (a roll or a scale-in) the runner stops claiming and finishes
       # the run it holds, so a busy replica is never killed mid-run.
       terminationGracePeriodSeconds: {{ $b.runDeadline }}
@@ -150,13 +155,30 @@ spec:
           volumeMounts:
             - { name: "tools", mountPath: "/tools" }
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+        {{- if $b.postgres.enabled }}
+        # A NATIVE SIDECAR (an init container with restartPolicy Always): Kubernetes starts it before
+        # the build container and stops it only AFTER the build container has exited — so a roll or a
+        # scale-in that lets the runner finish its run does not take the substrate suites' database
+        # away mid-run (an ordinary container is signalled at the same moment as the runner).
+        - name: "postgres"
+          image: {{ $b.postgres.image | quote }}
+          imagePullPolicy: "IfNotPresent"
+          restartPolicy: "Always"
+          env:
+            - { name: POSTGRES_PASSWORD, value: "build" }
+          resources:
+            requests: { cpu: "1", memory: 2Gi }
+            limits: { memory: 4Gi }
+        {{- end }}
       containers:
         - name: "build"
-          image: {{ $b.runnerImage | quote }}
+          image: {{ $c.runner | quote }}
           imagePullPolicy: "IfNotPresent"
-          # exec: build-run.py is PID 1's direct child replacement, so SIGTERM reaches it and the
-          # replica stops claiming and finishes the run in hand.
-          command: ["/bin/bash", "-c", "set -euo pipefail; bash /scripts/compose-gate-host.sh /portal/app /tester /host; exec python3 /scripts/build-run.py --host"]
+          # exec: build-run.py replaces the shell as PID 1, so SIGTERM reaches it and the replica
+          # stops claiming and finishes the run in hand. Both scripts are the image's own.
+          # The composer REPLACES its output directory (rm -rf), so it writes a SUBDIRECTORY of the
+          # emptyDir — the mount point itself cannot be removed.
+          command: ["/bin/bash", "-c", "set -euo pipefail; bash /opt/build-host/compose-gate-host.sh /portal/app /tester /host/app; exec python3 /opt/build-host/build-run.py --host"]
           env:
             - { name: BUILD_API, value: {{ $b.apiUrl | quote }} }
             # The worker token is a FILE read into the host process — never an environment variable
@@ -167,13 +189,14 @@ spec:
             - { name: MW_BUILD_PLATFORM_VERSION, value: {{ $c.platformVersion | quote }} }
             - { name: MW_BUILD_TESTER_DIGEST, value: {{ $c.testerDigest | quote }} }
             - { name: MW_BUILD_PORTAL_DIGEST, value: {{ $c.portalDigest | quote }} }
+            - { name: MW_BUILD_RUNNER_DIGEST, value: {{ $c.runnerDigest | quote }} }
             - { name: MW_BUILD_IDENTITY_FILE, value: "/portal/app/meshweaver-framework.identity" }
             - name: MW_BUILD_HOST
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - { name: MW_BUILD_CACHE, value: "/cache" }
             - { name: MW_BUILD_WORK, value: "/work" }
             - { name: MW_BUILD_READY_FILE, value: "/tmp/build-host-ready" }
-            - { name: MW_BUILD_GATE_HOST, value: "/host" }
+            - { name: MW_BUILD_GATE_HOST, value: "/host/app" }
             - { name: MW_BUILD_PORTAL_DOTNET, value: "/portal/dotnet/dotnet" }
             - { name: MeshWeaverRefs, value: "/portal/app" }
             - { name: NUGET_PACKAGES, value: "/cache/nuget" }
@@ -202,7 +225,6 @@ spec:
             appArmorProfile: { type: {{ . | quote }} }
             {{- end }}
           volumeMounts:
-            - { name: "scripts", mountPath: "/scripts", readOnly: true }
             - { name: "tester", mountPath: "/tester", readOnly: true }
             - { name: "portal", mountPath: "/portal", readOnly: true }
             - { name: "host", mountPath: "/host" }
@@ -210,19 +232,7 @@ spec:
             - { name: "work", mountPath: "/work" }
             - { name: "cache", mountPath: "/cache" }
             - { name: "worker-token", mountPath: "/run/build-worker", readOnly: true }
-        {{- if $b.postgres.enabled }}
-        - name: "postgres"
-          image: {{ $b.postgres.image | quote }}
-          imagePullPolicy: "IfNotPresent"
-          env:
-            - { name: POSTGRES_PASSWORD, value: "build" }
-          resources:
-            requests: { cpu: "1", memory: 2Gi }
-            limits: { memory: 4Gi }
-        {{- end }}
       volumes:
-        - name: "scripts"
-          configMap: { name: "memex-build-host-scripts", defaultMode: 0555 }
         - { name: "tester", emptyDir: {} }
         - { name: "portal", emptyDir: {} }
         - { name: "host", emptyDir: {} }

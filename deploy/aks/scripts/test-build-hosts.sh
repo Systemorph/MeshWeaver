@@ -3,9 +3,9 @@
 # The standing build hosts' chart half (templates/build-host/, Doc/Architecture/BuildHosts), checked
 # the only ways that can fail without a cluster:
 #
-#   1. the runner the chart ships (deploy/helm/files/build-run.py) IS the platform's
-#      (.github/scripts/build-run.py), byte for byte — one implementation, and its self-test passes
-#      from the chart's copy;
+#   1. the runner ships in ONE place — the mw-build-host image, which copies .github/scripts'
+#      build-run.py and compose-gate-host.sh (deploy/build-host/Dockerfile); the chart carries no
+#      copy, and the runner's self-test passes;
 #   2. the chart defaults render NO build-host object at all (buildHosts.enabled: false), so no
 #      estate changes until its record turns the hosts on;
 #   3. the fixture renders, per enabled channel, a Deployment with no `replicas` (KEDA owns it),
@@ -33,16 +33,25 @@ ok() { echo "✅ $1"; }
 command -v helm >/dev/null 2>&1 || { echo "::error::helm is not on PATH"; exit 1; }
 python3 -c "import yaml" >/dev/null 2>&1 || { echo "::error::python3 with PyYAML is required (pip install pyyaml)"; exit 1; }
 
-# 1. one implementation
-if cmp -s "$CHART/files/build-run.py" "$REPO/.github/scripts/build-run.py"; then
-  ok "deploy/helm/files/build-run.py is the platform's .github/scripts/build-run.py"
-else
-  report "deploy/helm/files/build-run.py differs from .github/scripts/build-run.py — copy it byte for byte (cp .github/scripts/build-run.py deploy/helm/files/)"
+# 1. one implementation: the runner and the composer ship INSIDE the mw-build-host image, copied
+#    from .github/scripts by deploy/build-host/Dockerfile — the chart carries no copy of either.
+DOCKERFILE="$REPO/deploy/build-host/Dockerfile"
+if [ -f "$CHART/files/build-run.py" ]; then
+  report "deploy/helm/files/build-run.py exists — the chart must not carry a second copy of the runner; it ships in the mw-build-host image"
 fi
-if python3 "$CHART/files/build-run.py" --self-test; then
-  ok "the chart's build-run.py passes its self-test"
+if [ -f "$DOCKERFILE" ] \
+   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh /opt/build-host/$' "$DOCKERFILE" \
+   && grep -q 'bubblewrap' "$DOCKERFILE" \
+   && grep -q 'build-run.py --self-test' "$DOCKERFILE" \
+   && ! grep -Eq '^FROM [^ ]*:latest' "$DOCKERFILE"; then
+  ok "deploy/build-host/Dockerfile ships .github/scripts' runner + composer, installs bubblewrap, runs the runner's self-test, and pins no :latest"
 else
-  report "the chart's build-run.py fails its self-test"
+  report "deploy/build-host/Dockerfile must COPY .github/scripts/build-run.py and compose-gate-host.sh to /opt/build-host/, install bubblewrap, run build-run.py --self-test, and name no :latest base"
+fi
+if python3 "$REPO/.github/scripts/build-run.py" --self-test; then
+  ok "build-run.py passes its self-test"
+else
+  report "build-run.py fails its self-test"
 fi
 
 WORK="$(mktemp -d)"
@@ -74,8 +83,8 @@ mine = [d for d in docs if (d.get("metadata", {}).get("labels") or {}).get("app.
 problems = []
 def find(kind, name):
     return next((d for d in mine if d["kind"] == kind and d["metadata"]["name"] == name), None)
-want = {"latest": ("1111", "2222", 2, "3.1.10412"), "stable": ("3333", "4444", 1, "3.1.10388")}
-for ch, (tester, portal, mx, pv) in want.items():
+want = {"latest": ("1111", "2222", "5555", 2, "3.1.10412"), "stable": ("3333", "4444", "6666", 1, "3.1.10388")}
+for ch, (tester, portal, runner, mx, pv) in want.items():
     dep = find("Deployment", f"build-host-{ch}")
     so = find("ScaledObject", f"build-host-{ch}-scaler")
     if not dep or not so:
@@ -96,6 +105,16 @@ for ch, (tester, portal, mx, pv) in want.items():
     if pod.get("serviceAccountName") != "build-host" or pod.get("automountServiceAccountToken") is not False:
         problems.append(f"{ch}: not the build-host ServiceAccount without a mounted token")
     build = next((c for c in pod["containers"] if c["name"] == "build"), {})
+    if build.get("image") != "cr.example.com/mw-build-host@sha256:" + runner * 16:
+        problems.append(f"{ch}: the runner image is not the channel's mw-build-host digest: {build.get('image')}")
+    sc = pod.get("securityContext", {})
+    if not (sc.get("runAsNonRoot") is True and sc.get("runAsUser") == 1654 and sc.get("fsGroup") == 1654):
+        problems.append(f"{ch}: the pod does not run as the runner image's unprivileged user 1654: {sc}")
+    if spec["template"]["metadata"].get("labels", {}).get("azure.workload.identity/use") != "true":
+        problems.append(f"{ch}: the pod does not opt into Azure workload identity (label azure.workload.identity/use)")
+    skip = set((spec["template"]["metadata"].get("annotations") or {}).get("azure.workload.identity/skip-containers", "").split(";"))
+    if skip != {"tester", "portal", "oras", "postgres"}:
+        problems.append(f"{ch}: the identity token is not restricted to the build container (skip-containers {sorted(skip)})")
     env = {e["name"]: e for e in build.get("env", [])}
     if "BUILD_TOKEN" in env:
         problems.append(f"{ch}: BUILD_TOKEN is an environment variable — the worker token must be a mounted file")
@@ -109,10 +128,16 @@ for ch, (tester, portal, mx, pv) in want.items():
         problems.append(f"{ch}: channel/platformVersion env wrong")
     if env.get("BUILD_API", {}).get("value") != "http://memex-portal-service:8080/api/builds":
         problems.append(f"{ch}: BUILD_API not the trimmed apiUrl: {env.get('BUILD_API')}")
-    if "exec python3 /scripts/build-run.py --host" not in " ".join(build.get("command", [])):
+    if "exec python3 /opt/build-host/build-run.py --host" not in " ".join(build.get("command", [])):
         problems.append(f"{ch}: the runner is not exec'd (SIGTERM would not reach it)")
     if "test -f /tmp/build-host-ready" not in " ".join(build.get("readinessProbe", {}).get("exec", {}).get("command", [])):
         problems.append(f"{ch}: readiness is not the staged marker")
+    cmd = " ".join(build.get("command", []))
+    if "compose-gate-host.sh /portal/app /tester /host/app" not in cmd or env.get("MW_BUILD_GATE_HOST", {}).get("value") != "/host/app":
+        problems.append(f"{ch}: the gate host must be composed into /host/app (the composer removes its output; /host is a mount point)")
+    pg = next((c for c in pod.get("initContainers", []) if c["name"] == "postgres"), None)
+    if not pg or pg.get("restartPolicy") != "Always" or any(c["name"] == "postgres" for c in pod["containers"]):
+        problems.append(f"{ch}: Postgres is not a native sidecar (init container, restartPolicy Always) — it would stop with the runner mid-run")
     vols = {v["name"]: v for v in pod.get("volumes", [])}
     if vols.get("cache", {}).get("persistentVolumeClaim", {}).get("claimName") != "build-cache":
         problems.append(f"{ch}: the cache is not the build-cache claim")
@@ -139,13 +164,22 @@ for ch, (tester, portal, mx, pv) in want.items():
 sa = find("ServiceAccount", "build-host")
 if not sa or sa.get("automountServiceAccountToken") is not False:
     problems.append("ServiceAccount build-host missing or mounts a token")
+elif (sa["metadata"].get("annotations") or {}).get("azure.workload.identity/client-id") != "00000000-0000-0000-0000-000000000001":
+    problems.append("ServiceAccount build-host does not carry the workload identity's client id")
+if find("ConfigMap", "memex-build-host-scripts"):
+    problems.append("the chart renders a scripts ConfigMap — the runner ships in the image")
 np = find("NetworkPolicy", "build-host")
+if np:
+    excepts = [e for rule in np["spec"].get("egress", []) for to in rule.get("to", []) for e in (to.get("ipBlock") or {}).get("except", [])]
+    for blocked in ("169.254.0.0/16", "168.63.129.16/32"):
+        if blocked not in excepts:
+            problems.append(f"NetworkPolicy build-host leaves {blocked} reachable (instance metadata / WireServer)")
 if not np or np["spec"].get("ingress") != [] or "Ingress" not in np["spec"].get("policyTypes", []):
     problems.append("NetworkPolicy build-host missing or admits ingress")
 if problems:
     print("\n".join(problems)); sys.exit(1)
 PY
-  then ok "the fixture renders both channels' hosts: digests, pool, token as a file, grace = run deadline, cache, readiness, KEDA 0..max on demand with a scale-down window, no other credential, no bake share, no SA token, no ingress"
+  then ok "the fixture renders both channels' hosts: tester/portal/runner digests, non-root, workload identity (AcrPull, host only), pool, token as a file, grace = run deadline, cache, readiness, KEDA 0..max on demand with a scale-down window, no other credential, no bake share, no SA token, no ingress"
   else report "the build-host fixture renders a wrong shape (see above)"
   fi
 else

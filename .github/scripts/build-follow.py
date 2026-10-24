@@ -36,9 +36,11 @@ THE RULES, each of which is a way this step could otherwise read green on no evi
   * the verdict is read only after the log is DRAINED: a terminal state is acted on once a poll
     returns no further lines, so the last error lines are printed before the exit.
   * workflow commands from the log are passed through ONLY for `::error`, `::warning` and
-    `::notice` (an annotation on the PR's Files tab). Every other `::` line — `::add-mask::`,
-    `::stop-commands::`, `::group::`, `::set-output` … — is NEUTRALISED by a leading space: the log
-    is text a build wrote, and a build must not be able to steer the runner that prints it.
+    `::notice` (an annotation on the PR's Files tab), RE-COMPOSED from validated parts. Every other
+    command-shaped physical line — `::add-mask::`, `::stop-commands::`, `::group::`, `##[…]`, after
+    any leading whitespace — is made inert by a visible `› ` marker (the runner trims whitespace
+    before it reads a command, so a space would defuse nothing): the log is text a build wrote, and
+    a build must not be able to steer the runner that prints it.
 """
 from __future__ import annotations
 
@@ -67,7 +69,13 @@ MAX_TIMEOUT_MINUTES = 43
 GREEN = "succeeded"
 # States that mean "not decided yet". Anything else is terminal — and only GREEN is a pass.
 PENDING = {"", "queued", "pending", "claimed", "running", "waiting", "staging", "requested"}
-PASSTHROUGH = re.compile(r"^::(error|warning|notice)( [^:]*)?::")
+# An annotation as the LOG may carry it: `::error|warning|notice[ k=v,…]::message`.
+ANNOTATION = re.compile(r"^::(?P<sev>error|warning|notice)(?:\s+(?P<props>[^:]*))?::(?P<msg>.*)$")
+ANNOTATION_PROPS = ("file", "line", "col", "endLine", "endColumn", "title")
+# The marker that makes any other command-shaped line inert. The runner trims leading WHITESPACE
+# before it looks for `::` (and for the legacy `##[…]` syntax), so a space defuses nothing; a
+# visible, non-whitespace first character does.
+INERT = "› "
 SHA = re.compile(r"^[0-9a-f]{40}$")
 
 
@@ -107,12 +115,39 @@ class Failure(Exception):
     """A RED with a reason. Never caught into a pass."""
 
 
-def neutralise(text: str) -> str:
-    """A log line as it may be printed: annotations pass, every other workflow command is defused."""
-    text = text.replace("\r", "")
-    if text.startswith("::") and not PASSTHROUGH.match(text):
-        return " " + text
-    return text
+def _escape_data(v: str) -> str:
+    return v.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _escape_prop(v: str) -> str:
+    return _escape_data(v).replace(":", "%3A").replace(",", "%2C")
+
+
+def neutralise(text: str) -> list[str]:
+    """The physical lines a log entry may be printed as. An annotation is RE-COMPOSED from its
+    validated parts (severity, the known properties, the message) — never echoed — and every other
+    line that the runner could read as a command (`::…`, `##[…]`, after any leading whitespace) is
+    made inert by a visible marker. A build must not be able to steer the runner that prints its log
+    (`::add-mask::`, `::stop-commands::`, `::set-output`, `##[group]`, …)."""
+    out: list[str] = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        stripped = line.lstrip()
+        m = ANNOTATION.match(stripped)
+        if m:
+            props = []
+            for part in (m.group("props") or "").split(","):
+                k, sep, v = part.strip().partition("=")
+                if sep and k in ANNOTATION_PROPS and v:
+                    if k in ("line", "col", "endLine", "endColumn") and not v.isdigit():
+                        continue
+                    props.append(f"{k}={_escape_prop(v)}")
+            head = f"::{m.group('sev')}" + (" " + ",".join(props) if props else "")
+            out.append(f"{head}::{_escape_data(m.group('msg'))}")
+        elif stripped.startswith("::") or stripped.startswith("##["):
+            out.append(INERT + stripped)
+        else:
+            out.append(line)
+    return out
 
 
 def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeout_minutes: float,
@@ -196,7 +231,8 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
             lines = body.get("lines") or []
             for line in lines:
                 if isinstance(line, dict):
-                    out(neutralise(str(line.get("text", ""))))
+                    for printable in neutralise(str(line.get("text", ""))):
+                        out(printable)
             nxt = body.get("next")
             if isinstance(nxt, int):
                 cursor = nxt
@@ -229,8 +265,12 @@ def resolve_args(a: argparse.Namespace, env: dict) -> argparse.Namespace:
     a.repo = (a.repo or env.get("GITHUB_REPOSITORY", "").split("/", 1)[-1]).strip()
     a.sha = (a.sha or env.get("GITHUB_SHA", "")).strip().lower()
     a.channel = (a.channel or "latest").strip()
-    if not a.api_url.startswith("https://") and not a.api_url.startswith("http://localhost"):
-        raise Failure(f"--api-url {a.api_url!r} is not an https URL — refusing to send an OIDC token there")
+    parsed = urllib.parse.urlparse(a.api_url)
+    host = (parsed.hostname or "").lower()
+    local = parsed.scheme == "http" and host in ("localhost", "127.0.0.1", "::1") and "@" not in parsed.netloc
+    if not ((parsed.scheme == "https" and host) or local):
+        raise Failure(f"--api-url {a.api_url!r} is not an https URL (plain http only to localhost) — "
+                      f"refusing to send an OIDC token there")
     if not a.repo or "/" in a.repo:
         raise Failure(f"--repo {a.repo!r} must be the bare repository name (the API path is /{{repo}}/…)")
     if not SHA.match(a.sha):
@@ -416,12 +456,20 @@ def self_test() -> int:
     code, err, _, _ = _run([(404, None)] * 40, timeout=40)
     check("404/red after grace", code == 1 and err and "404" in err, (code, err))
 
-    # 9. A build cannot steer the runner: only annotations pass; other workflow commands are defused.
-    check("neutralise/add-mask", neutralise("::add-mask::x") == " ::add-mask::x")
-    check("neutralise/stop-commands", neutralise("::stop-commands::tok").startswith(" "))
-    check("neutralise/endgroup", neutralise("::endgroup::").startswith(" "))
-    check("neutralise/warning passes", neutralise("::warning::w") == "::warning::w")
-    check("neutralise/plain text", neutralise("compiled 3/4") == "compiled 3/4")
+    # 9. A build cannot steer the runner: annotations are re-composed, every other command is inert —
+    #    a leading SPACE defuses nothing (the runner trims whitespace before it reads `::`).
+    for evil in ("::add-mask::x", "  ::add-mask::x", "\t::stop-commands::tok", "::endgroup::", "##[group]x",
+                 "   ##[error]x", "::set-output name=a::b"):
+        printed = neutralise(evil)
+        check(f"neutralise/inert: {evil!r}", all(not p.lstrip().startswith(("::", "##[")) for p in printed), printed)
+    check("neutralise/a second physical line cannot carry a command",
+          all(not p.lstrip().startswith("::") for p in neutralise("ok\n::add-mask::secret")[1:]), neutralise("ok\n::add-mask::secret"))
+    check("neutralise/annotation re-composed", neutralise("::error file=a/B.cs,line=41::CS0246 X") ==
+          ["::error file=a/B.cs,line=41::CS0246 X"], neutralise("::error file=a/B.cs,line=41::CS0246 X"))
+    check("neutralise/unknown annotation properties dropped",
+          neutralise("::warning file=a.cs,line=x,evil=1::w") == ["::warning file=a.cs::w"], neutralise("::warning file=a.cs,line=x,evil=1::w"))
+    check("neutralise/indented annotation still an annotation", neutralise("  ::notice::n") == ["::notice::n"])
+    check("neutralise/plain text", neutralise("compiled 3/4") == ["compiled 3/4"])
 
     # 10. No OIDC grant is a named red, never a silent anonymous read.
     try:
@@ -441,7 +489,9 @@ def self_test() -> int:
         return ns
     check("args/audience derived", resolve_args(args(), {}).audience == "https://control.example.com")
     check("args/build/ prefix normalised", resolve_args(args(stage="build/modules"), {}).stage == "modules")
-    for bad in (dict(api_url="http://evil.example/api"), dict(sha="abc"), dict(timeout_minutes=50),
+    check("args/http to localhost allowed", resolve_args(args(api_url="http://localhost:8080/api/builds"), {}).api_url.startswith("http://localhost"))
+    for bad in (dict(api_url="http://evil.example/api"), dict(api_url="http://localhost.example.com/api/builds"),
+                dict(api_url="http://localhost@remote.example.com/api/builds"), dict(sha="abc"), dict(timeout_minutes=50),
                 dict(repo="Systemorph/R"), dict(channel="Bad Channel"), dict(stage="a/b")):
         try:
             resolve_args(args(**bad), {})
