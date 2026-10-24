@@ -512,7 +512,7 @@ public static class AssemblyCacheGenerations
             ledger.Interrupt(cancellationToken);
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
             // 🚨 FAIL CLOSED. Every other coordination path around the bake fails OPEN because the
             // cost of being wrong is duplicated work; here the cost of being wrong is deleting an

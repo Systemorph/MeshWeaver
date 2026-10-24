@@ -251,6 +251,21 @@ A global admin `create`s it; `requestedAction: Revoke` ends it. `search nodeType
 lists every repo the mesh trusts and exactly what each may do. There is no key to lose because
 there is no key.
 
+> 🚨 **A revoke holds from the moment it commits, on every replica.** The registry reads the
+> principal from its OWNER on every request, never from the process-wide mirror the instance-key
+> leg uses ([Instance Key Resolution](../InstanceKeyResolution)). The mirror advances on the owner's
+> commit ECHO, and the revoke's acknowledgement does not wait for that echo, so a mirror read between
+> the two authenticated the revoked build — seen once as an intermittent failure of
+> `BuildPrincipalAuthenticationTest.ARevokedPrincipal_StopsAuthenticatingAtOnce`, and on another
+> replica the window is as long as the cross-process feed is late. The owner has applied the revoke
+> before it acknowledges it, so its answer carries it. Existence still comes from the parent's
+> listing, so a token from a repository nobody trusts never opens a point read; but for a repository
+> the deployment DECLARES, where "no node" would admit, the owner is asked directly — a revoking node
+> created over a declaration therefore also holds at once. An owner that does not answer within the
+> budget is a retryable `503`, never an admission. Pinned by
+> `ARevokedPrincipal_IsRefused_WhileThisProcesssMirrorStillCarriesTheGrant`, which holds the owner's
+> echo at its outbound pipeline while the revoke is acknowledged.
+
 > 🚨 **It is a CORE node type, `BuildPrincipal`, at `Admin/_BuildPrincipal/{owner}--{repo}` — not a
 > `Store/…` one.** The issue drafted it under `Store/` beside the other control nodes, but the
 > verifier that reads it is the registry's own `InstanceRegistryAuthenticator`, which is platform C#
