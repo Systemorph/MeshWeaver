@@ -129,7 +129,11 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    `stale-claim` batch of an earlier assignment — ends the run on this host: the stage is killed
    and nothing more is posted. A 503 (the instance cannot ingest, e.g. it states no redaction
    terms) is retried with backoff, same batch, same `seq` — never a run failure. Every stage's
-   `TMPDIR` (and `HOME`) is its sandbox's tmpfs scratch.
+   `TMPDIR` (and `HOME`) is its sandbox's tmpfs scratch. A PROBE run's claim carries its id (`probe`, beside `isProbe`): it
+   rides as `&probe=<id>` on every events POST and on the token request, and the follower and the
+   artifact fetch take it as `--probe` for their reads. A `409 stale-claim-id` on the claim means the
+   id is spent and nothing was handed out — the host claims again ONCE with a fresh id; a `409
+   stale-set` means the host's set is no longer its channel's — it DRAINS (no further claims).
 3. **Check out** `repo@sha` — the HOST does it, through the shared git MIRROR
    `/cache/git/<repo>.git`: `git clone --mirror` on first use, `git fetch --prune` (plus the run's
    sha and refs) before every checkout, under an exclusive file lock shared by every replica, then

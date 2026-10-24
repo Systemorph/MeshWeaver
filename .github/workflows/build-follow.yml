@@ -78,6 +78,11 @@ on:
         required: false
         type: string
         default: ''
+      probe:
+        description: A probe run's id (the claim's `probe`); empty for an ordinary run.
+        required: false
+        type: string
+        default: ''
       scripts-ref:
         description: The Systemorph/MeshWeaver ref build-follow.py is fetched at (the lane's own vintage).
         required: false
@@ -118,8 +123,9 @@ jobs:
           CHANNEL: ${{ inputs.channel }}
           TIMEOUT: ${{ inputs.timeout-minutes }}
           AUDIENCE: ${{ inputs.audience }}
+          PROBE: ${{ inputs.probe }}
         run: |
           set -euo pipefail
           [ -n "${API_URL:-}" ] || { echo "::error::api-url is empty — set the caller's build API variable (e.g. vars.MW_BUILD_API); there is no host to follow"; exit 1; }
           python3 "$RUNNER_TEMP/build-follow.py" --api-url "$API_URL" --stage "$STAGE" \
-            --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" --timeout-minutes "$TIMEOUT" --audience "$AUDIENCE"
+            --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" --timeout-minutes "$TIMEOUT" --audience "$AUDIENCE" --probe "$PROBE"

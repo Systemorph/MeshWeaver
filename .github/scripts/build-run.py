@@ -524,11 +524,12 @@ class EventSink:
 
     def __init__(self, api: Api, host: str, repo: str, sha: str, stage: str, channel: str,
                  log: Callable[[str], None], sleep: Callable[[float], None] = time.sleep,
-                 clock: Callable[[], float] = time.monotonic, claim_id: str = "") -> None:
+                 clock: Callable[[], float] = time.monotonic, claim_id: str = "", probe: Optional[str] = None) -> None:
         self.api, self.host, self.log, self.sleep, self.clock = api, host, log, sleep, clock
         self.claim_id = claim_id   # the assignment every batch belongs to
         self.path = events_path(repo, sha, stage)
-        self.query = {"channel": channel}
+        # A probe run's identity is (repo, sha, channel, probe): its id rides on every callback.
+        self.query = {"channel": channel, **({"probe": probe} if probe else {})}
         self.buf: list[dict] = []
         self.last = clock()
         self.dropped = 0
@@ -1336,6 +1337,7 @@ class Host:
         self.heartbeat: Optional[Heartbeat] = None
         self.run_sinks: dict[str, EventSink] = {}
         self.claim_id = ""
+        self.probe: Optional[str] = None
 
     def preflight(self) -> None:
         missing = []
@@ -1532,6 +1534,8 @@ class Host:
         self.artifacts_dir = os.path.join(workdir, "artifacts")
         stages: list[dict] = []
         self.run_sinks: dict[str, EventSink] = {}       # seq restarts at 1 for every assignment
+        probe_id = claim.get("probe")
+        self.probe = str(probe_id) if isinstance(probe_id, str) and probe_id.strip() else None
         if claim.get("claimId"):
             self.claim_id = str(claim["claimId"])
         with Heartbeat() as hb:
@@ -1684,14 +1688,14 @@ class Host:
 
     def sink(self, repo: str, sha: str, stage: str) -> EventSink:
         return EventSink(self.api, self.host, repo, sha, stage, self.channel, self.log,
-                         sleep=self.sleep, clock=self.clock, claim_id=self.claim_id)
+                         sleep=self.sleep, clock=self.clock, claim_id=self.claim_id, probe=self.probe)
 
     def installation_token(self, claim: dict) -> Optional[str]:
         """A one-hour installation token for the CHECKOUT only (`POST /token`, Build service §1.3).
         It stays in the host process; no stage ever sees it. None ⇒ clone anonymously."""
         status, body = self.api.call("POST", "/token", {"host": self.host, "path": claim.get("path"),
                                                         "repo": claim.get("repo"), "sha": claim.get("sha")},
-                                     {"channel": self.channel})
+                                     {"channel": self.channel, **({"probe": self.probe} if self.probe else {})})
         if status == 200 and isinstance(body, dict) and body.get("token"):
             return str(body["token"])
         self.log(f"no installation token for {claim.get('repo')} (HTTP {status}) — cloning anonymously")
@@ -2859,6 +2863,19 @@ def self_test() -> int:
         gl = []
         merge_host(gl).run(dict(claim, isTrunk=False, isProbe=True, mergeBaseSha=None))
         check("merge/isProbe: no merge, no mergeBase", gl == [] and "mergeBase" not in plans()[0], (gl, plans()))
+        # a probe run's id rides on every events POST (and the token request); a normal run's never
+        pq: list = []
+        hpq = host(_FakeApi({("POST", "/token"): lambda p_, b: (pq.append(("token", None)), (404, None))[1],
+                             ("POST", "/MeshWeaver.Plugins/"): lambda p_, b: (202, None)}), env=env_s,
+                   checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": "true"}]}))
+        hpq.run(dict(claim, isTrunk=False, isProbe=True, probe="p-123"))
+        evq = [c[3] for c in hpq.api.calls if c[1].endswith("/events")]
+        check("probe/every events POST carries &probe=<id>", evq and all(q.get("probe") == "p-123" and q.get("channel") == "stable" for q in evq), evq)
+        check("probe/the token request carries it too", any(c[1] == "/token" and c[3].get("probe") == "p-123" for c in hpq.api.calls), hpq.api.calls[:2])
+        hnq = host(_FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): [(202, None)]}), env=env_s,
+                   checkout=checkout_with({"stages": [{"name": "a", "kind": "build", "command": "true"}]}))
+        hnq.run(dict(claim, probe=None))
+        check("probe/a normal run carries no probe", all("probe" not in c[3] for c in hnq.api.calls if c[1].endswith("/events")), hnq.api.calls[:3])
         gl = []
         merge_host(gl, merge_rc=1).run(dict(claim, isTrunk=False, mergeBaseSha=None))
         rf = [e for _, es in posted for e in es if e["kind"] == "run-finished"]

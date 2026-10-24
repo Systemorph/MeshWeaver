@@ -113,6 +113,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--store", default="")
     ap.add_argument("--expect-store-id", default="")
     ap.add_argument("--out", default="")
+    ap.add_argument("--probe", default="", help="a probe run's id (the claim's `probe`)")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
@@ -133,7 +134,7 @@ def main(argv: list[str]) -> int:
         except bf.Failure as f:
             raise Red(str(f))
         url = f"{a.api_url.rstrip('/')}/{urllib.parse.quote(repo, safe='')}/{sha}/artifacts?" \
-              + urllib.parse.urlencode({"channel": a.channel})
+              + urllib.parse.urlencode({"channel": a.channel, **({"probe": a.probe} if a.probe.strip() else {})})
         status, body = http.get(url, {"Authorization": f"Bearer {token}", "Accept": "application/json"})
         if status != 200:
             raise Red(f"the build API answered HTTP {status} for {repo}@{sha[:12]}'s artifacts (403: the token's run "

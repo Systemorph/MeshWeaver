@@ -189,14 +189,14 @@ def neutralise(text: str) -> list[str]:
 
 
 def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeout_minutes: float,
-           audience: str, http: Http, env: dict, out: Callable[[str], None],
+           audience: str, http: Http, env: dict, out: Callable[[str], None], probe: str = "",
            clock: Callable[[], float] = time.monotonic,
            sleep: Callable[[float], None] = time.sleep,
            poll_seconds: float = POLL_SECONDS) -> int:
     """Follow one stage to its verdict. Returns the exit code (0 only for `succeeded`)."""
     base = api_url.rstrip("/")
     stage_path = urllib.parse.quote(stage, safe="")
-    query = {"channel": channel or "latest"}
+    query = {"channel": channel or "latest", **({"probe": probe} if probe else {})}
     started = clock()
     deadline = started + timeout_minutes * 60
     cursor: Optional[int] = None
@@ -356,6 +356,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--channel", default="latest")
     ap.add_argument("--timeout-minutes", type=float, default=40)
     ap.add_argument("--audience", default="")
+    ap.add_argument("--probe", default="", help="a probe run's id (the claim's `probe`); rides on every log read")
     a = ap.parse_args(argv)
     if a.self_test:
         return self_test()
@@ -363,7 +364,7 @@ def main(argv: list[str]) -> int:
     try:
         a = resolve_args(a, env)
         code = follow(api_url=a.api_url, repo=a.repo, sha=a.sha, stage=a.stage, channel=a.channel,
-                      timeout_minutes=a.timeout_minutes, audience=a.audience, http=Http(), env=env,
+                      timeout_minutes=a.timeout_minutes, audience=a.audience, http=Http(), env=env, probe=a.probe.strip(),
                       out=lambda s: print(s, flush=True))
     except Failure as f:
         print(f"::error title=Build follow::{f}", flush=True)
@@ -457,6 +458,14 @@ def self_test() -> int:
     check("cursor/second read after=2", "after=2" in http.urls[1], http.urls[1])
     check("cursor/third read after=3", "after=3" in http.urls[2], http.urls[2])
     check("cursor/channel on every read", all("channel=latest" in u for u in http.urls), http.urls)
+    check("cursor/no probe on a normal run", all("probe=" not in u for u in http.urls), http.urls)
+    clock_p = _Clock()
+    http_p = _FakeHttp([_page([], 0, "succeeded")], clock_p)
+    follow(api_url="https://control.example.com/api/builds", repo="R", sha="a" * 40, stage="modules", channel="latest",
+           timeout_minutes=5, audience="https://control.example.com", http=http_p, out=lambda o: None, probe="p-123",
+           env={"ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example/t?x=1", "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "r"},
+           clock=clock_p.now, sleep=clock_p.sleep)
+    check("probe/a probe run's log reads carry &probe=<id>", http_p.urls and all("probe=p-123" in u for u in http_p.urls), http_p.urls)
     check("cursor/each line once", sum("Store cache hit" in o for o in out) == 1, out)
     check("cursor/stage is one path segment", "/stages/modules/log?" in http.urls[0], http.urls[0])
     check("cursor/grouped", out[0].startswith("::group::build/modules") and "::endgroup::" in out, out)
