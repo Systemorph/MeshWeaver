@@ -116,7 +116,7 @@ public class BrowserProvisioningGateGuard
     [Fact]
     public void TheTestShardsNeverReachAPackageMirror()
     {
-        var dir = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var dir = Path.Combine(RepoPaths.Root, ".github", "workflows");
         var lines = File.ReadAllLines(Path.Combine(dir, "dotnet-test.yml"));
         var start = Array.FindIndex(lines, l => l == "  test:");
         Assert.True(start >= 0, "could not find the `test:` job in dotnet-test.yml — the guard measured nothing");
