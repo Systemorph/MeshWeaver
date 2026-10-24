@@ -76,6 +76,23 @@ public class FaultClassifierHostingForwardersTest
             .Should().BeTrue("a flagged driver over transport faults alone is still a store fault");
     }
 
+    /// <summary>
+    /// 🚨 A standing watch re-opens on a timeout over a socket fault — the outage is recoverable —
+    /// and on two flagged drivers over all-transient branches, but never on two flagged drivers over
+    /// a content defect.
+    /// </summary>
+    [Fact]
+    public void AStandingWatch_ReadsTheEvidenceBeneathTimeoutsAndNestedDrivers()
+    {
+        StandingWatchRecovery.IsTransient(new TimeoutException("read failed", new SocketException((int)SocketError.ConnectionReset)))
+            .Should().BeTrue("the socket fault beneath the time-box is recoverable");
+        StandingWatchRecovery.IsTransient(new TimeoutException("hung")).Should().BeFalse("a cause-free timeout is not");
+        StandingWatchRecovery.IsTransient(new FlaggedDbException("outer", new FlaggedDbException("inner",
+                new AggregateException(new SocketException((int)SocketError.ConnectionReset),
+                    new System.Text.Json.JsonException("bad content")))))
+            .Should().BeFalse("the inner driver's flag does not stand in for the defect it encloses");
+    }
+
     private sealed class FakeDbException(string message, Exception? inner = null)
         : System.Data.Common.DbException(message, inner);
 

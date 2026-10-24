@@ -137,6 +137,46 @@ public class FaultClassifierTest
             .Should().BeTrue();
 
     /// <summary>
+    /// 🚨 A typed timeout over typed store or network evidence is that evidence, not a plain timeout:
+    /// the connect retry must still see a socket fault or a connection-class SQLSTATE beneath the
+    /// time-box. A cause-free timeout, and a timeout over nothing typed, stay non-transient.
+    /// </summary>
+    [Fact]
+    public void ATimeoutOverTypedStoreOrNetworkEvidence_IsTransientInfrastructure()
+    {
+        InfrastructureFault.IsTransient(new TimeoutException("read failed", new SocketException()))
+            .Should().BeTrue("the socket fault is why it timed out");
+        InfrastructureFault.IsTransient(new TimeoutException("connect timed out",
+                new FakeDbException("the database system is starting up", sqlState: "57P03")))
+            .Should().BeTrue("a connection-class SQLSTATE beneath the time-box is still an unreachable store");
+        InfrastructureFault.IsTransient(new TimeoutException("hung"))
+            .Should().BeFalse("a cause-free timeout is a hang, not a transient dependency fault");
+        InfrastructureFault.IsTransient(new TimeoutException("hung", new InvalidOperationException("defect")))
+            .Should().BeFalse("nothing typed beneath it: the timeout stands");
+    }
+
+    /// <summary>
+    /// 🚨 Two flagged driver frames over <c>Aggregate(socket, JsonException)</c> carry the content
+    /// defect, exactly as one flagged driver over it does: the inner driver's flag does not stand in
+    /// for the branches it encloses.
+    /// </summary>
+    [Fact]
+    public void TwoFlaggedDriversOverAMixedAggregate_AreNotTransient()
+    {
+        var mixed = new AggregateException(new SocketException(), new System.Text.Json.JsonException("bad content"));
+        var one = new FakeDbException("outer", mixed, transient: true);
+        var two = new FakeDbException("outer", new FakeDbException("inner", mixed, transient: true), transient: true);
+
+        InfrastructureFault.IsTransient(one).Should().BeFalse("the single-driver shape carries the defect");
+        InfrastructureFault.IsTransient(two).Should().BeFalse("so does the double-driver shape");
+        FaultClassifier.Classify(two).Kind.Should().Be(FaultKind.Fault);
+        InfrastructureFault.IsTransient(new FakeDbException("outer",
+                new FakeDbException("inner", new AggregateException(new SocketException(), new SocketException()), transient: true),
+                transient: true))
+            .Should().BeTrue("a double driver over an all-transient aggregate is still transient");
+    }
+
+    /// <summary>
     /// 🚨 Disagreement: two test-side copies accepted the Autofac "nested lifetimes cannot be
     /// created" text on ANY exception type; the product's copy required an
     /// <see cref="ObjectDisposedException"/>. Autofac raises it as one, so the text on anything else

@@ -397,9 +397,12 @@ public static class FaultClassifier
             {
                 // A TYPE decides for the whole chain below it (a driver exception wrapping a socket
                 // fault is a store fault). A message match only stands in: the typed cause it wraps,
-                // if any, is the better witness. So does a typed TIMEOUT over a stalled provider: the
-                // stall is WHY it timed out, and read as a plain timeout a view would retry it.
-                if (!decided.ByMessage && !(decided.Kind == FaultKind.Timeout && WrapsStall(node.InnerException)))
+                // if any, is the better witness. So does a typed TIMEOUT over typed store or network
+                // evidence: a stalled provider, a socket fault or a driver exception is WHY it timed
+                // out — read as a plain timeout, a view would retry a stall and the connect retry and
+                // standing-watch recovery would give up on a recoverable outage. A cause-free timeout,
+                // or one over nothing typed, still stands as a timeout.
+                if (!decided.ByMessage && !(decided.Kind == FaultKind.Timeout && WrapsTypedStoreOrNetworkCause(node.InnerException)))
                     return [decided];
                 fallback = decided.ByMessage ? fallback ?? decided : decided;
             }
@@ -413,11 +416,15 @@ public static class FaultClassifier
     /// <summary>The verdict of a chain nothing in which decided — what an unresolved branch is.</summary>
     private static readonly FaultClassification Undecided = Leaf(FaultKind.Fault);
 
-    /// <summary>True when <paramref name="exception"/>'s graph carries a stalled query provider
-    /// (a typed <see cref="FaultLayer.StoreStall"/>).</summary>
-    private static bool WrapsStall(Exception? exception)
+    /// <summary>True when <paramref name="exception"/>'s graph carries typed store or network evidence:
+    /// a stalled query provider (a typed <see cref="FaultLayer.StoreStall"/>), a socket fault, or a
+    /// driver exception. The frames below then decide, by the same walk; a defect beside that evidence
+    /// still wins as the worst branch.</summary>
+    private static bool WrapsTypedStoreOrNetworkCause(Exception? exception)
         => ExceptionChain.Contains(exception, static e =>
-            e is IClassifiedFault { ClassifiedKind: FaultKind.Transient, ClassifiedLayer: FaultLayer.StoreStall });
+            e is IClassifiedFault { ClassifiedKind: FaultKind.Transient, ClassifiedLayer: FaultLayer.StoreStall }
+            || e is DbException
+            || IsNetworkFault(e));
 
     /// <summary>Compares a memo key's exception by REFERENCE and the rest by value.</summary>
     private sealed class MemoKeyComparer : IEqualityComparer<(Exception Node, bool IsHead, FaultClassification? Fallback)>
@@ -469,10 +476,15 @@ public static class FaultClassifier
         }
     }
 
+    // 🚨 A flagged NESTED driver frame is accepted only when it encloses no aggregate: over one, its
+    // flag is not the evidence — its branches are, and EveryBranchReaches walks into them because this
+    // frame then does not accept. Two flagged drivers over Aggregate(socket, JsonException) carry the
+    // defect, exactly as one flagged driver over it does.
     private static bool IsTransientDriverCause(Exception inner)
         => inner is TimeoutException or SocketException or IOException
            || IsUnreachableSqlState(inner)
-           || inner is DbException { IsTransient: true };
+           || (inner is DbException { IsTransient: true } flagged
+               && !ExceptionChain.Contains<AggregateException>(flagged.InnerException));
 
     private static bool IsUnreachableSqlState(Exception e)
         => e is DbException { SqlState: { } sqlState } && StoreUnreachableSqlStates.Contains(sqlState);
