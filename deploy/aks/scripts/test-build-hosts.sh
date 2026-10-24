@@ -12,8 +12,11 @@
 #      images by DIGEST, the cibuild toleration + nodeSelector, the worker token from a Secret, the
 #      build-cache claim, readiness on the staged marker, and a ScaledObject with minReplicaCount 0,
 #      the channel's maxReplicaCount and a metrics-api trigger on <apiUrl>/queue?channel=<c> with
-#      valueLocation claimable — plus a ServiceAccount with no token and a NetworkPolicy with no ingress;
-#   4. the refusals hold: a tag instead of a digest, and plain http to a public host, fail
+#      valueLocation demand and a scale-down stabilization window, the worker token as a mounted
+#      FILE (never env), grace = the run deadline, no credential volume but that one and no bake
+#      share — plus a ServiceAccount with no token and a NetworkPolicy with no ingress;
+#   4. the refusals hold: a tag instead of a digest, plain http to a public host, and a registry
+#      credential for the host, fail
 #      `helm template` naming why.
 #
 # NO SKIP-TRAPDOOR: helm, python3 and PyYAML are asserted; a render that yields nothing is RED.
@@ -94,8 +97,14 @@ for ch, (tester, portal, mx, pv) in want.items():
         problems.append(f"{ch}: not the build-host ServiceAccount without a mounted token")
     build = next((c for c in pod["containers"] if c["name"] == "build"), {})
     env = {e["name"]: e for e in build.get("env", [])}
-    if env.get("BUILD_TOKEN", {}).get("valueFrom", {}).get("secretKeyRef", {}).get("name") != "build-worker":
-        problems.append(f"{ch}: BUILD_TOKEN is not read from the build-worker Secret")
+    if "BUILD_TOKEN" in env:
+        problems.append(f"{ch}: BUILD_TOKEN is an environment variable — the worker token must be a mounted file")
+    if env.get("BUILD_TOKEN_FILE", {}).get("value") != "/run/build-worker/token":
+        problems.append(f"{ch}: BUILD_TOKEN_FILE is not /run/build-worker/token")
+    if pod.get("terminationGracePeriodSeconds") != 3600 or env.get("MW_BUILD_RUN_DEADLINE_SECONDS", {}).get("value") != "3600":
+        problems.append(f"{ch}: terminationGracePeriodSeconds / the run deadline are not the same 3600 s")
+    if build.get("securityContext", {}).get("seccompProfile", {}).get("type") != "Unconfined":
+        problems.append(f"{ch}: the stated sandbox seccomp profile did not render")
     if env.get("MW_BUILD_CHANNEL", {}).get("value") != ch or env.get("MW_BUILD_PLATFORM_VERSION", {}).get("value") != pv:
         problems.append(f"{ch}: channel/platformVersion env wrong")
     if env.get("BUILD_API", {}).get("value") != "http://memex-portal-service:8080/api/builds":
@@ -107,6 +116,14 @@ for ch, (tester, portal, mx, pv) in want.items():
     vols = {v["name"]: v for v in pod.get("volumes", [])}
     if vols.get("cache", {}).get("persistentVolumeClaim", {}).get("claimName") != "build-cache":
         problems.append(f"{ch}: the cache is not the build-cache claim")
+    wt = vols.get("worker-token", {}).get("secret", {})
+    if wt.get("secretName") != "build-worker" or wt.get("items") != [{"key": "token", "path": "token"}]:
+        problems.append(f"{ch}: the worker token is not the build-worker Secret mounted as a file: {wt}")
+    secret_vols = sorted(v["name"] for v in pod.get("volumes", []) if "secret" in v)
+    if secret_vols != ["worker-token"]:
+        problems.append(f"{ch}: a host mounts no credential but the worker token; secret volumes: {secret_vols}")
+    if any("bake" in v["name"] for v in pod.get("volumes", [])):
+        problems.append(f"{ch}: a bake share is mounted")
     s = so["spec"]
     if s.get("minReplicaCount") != 0 or s.get("maxReplicaCount") != mx:
         problems.append(f"{ch}: ScaledObject min/max {s.get('minReplicaCount')}/{s.get('maxReplicaCount')} != 0/{mx}")
@@ -114,8 +131,11 @@ for ch, (tester, portal, mx, pv) in want.items():
         problems.append(f"{ch}: ScaledObject targets {s.get('scaleTargetRef')}")
     trig = [t for t in s.get("triggers", []) if t.get("type") == "metrics-api"]
     url = f"http://memex-portal-service:8080/api/builds/queue?channel={ch}"
-    if not any(t["metadata"].get("url") == url and t["metadata"].get("valueLocation") == "claimable" for t in trig):
-        problems.append(f"{ch}: no metrics-api trigger on {url} valueLocation claimable: {trig}")
+    if len(trig) != 1 or trig[0]["metadata"].get("url") != url or trig[0]["metadata"].get("valueLocation") != "demand":
+        problems.append(f"{ch}: not ONE metrics-api trigger on {url} valueLocation demand: {trig}")
+    win = s.get("advanced", {}).get("horizontalPodAutoscalerConfig", {}).get("behavior", {}).get("scaleDown", {}).get("stabilizationWindowSeconds")
+    if win != 300:
+        problems.append(f"{ch}: scale-down stabilization window {win} != 300")
 sa = find("ServiceAccount", "build-host")
 if not sa or sa.get("automountServiceAccountToken") is not False:
     problems.append("ServiceAccount build-host missing or mounts a token")
@@ -125,7 +145,7 @@ if not np or np["spec"].get("ingress") != [] or "Ingress" not in np["spec"].get(
 if problems:
     print("\n".join(problems)); sys.exit(1)
 PY
-  then ok "the fixture renders both channels' hosts: digests, pool, token Secret, cache, readiness, KEDA 0..max on the channel's queue, no SA token, no ingress"
+  then ok "the fixture renders both channels' hosts: digests, pool, token as a file, grace = run deadline, cache, readiness, KEDA 0..max on demand with a scale-down window, no other credential, no bake share, no SA token, no ingress"
   else report "the build-host fixture renders a wrong shape (see above)"
   fi
 else
@@ -135,7 +155,8 @@ fi
 # 4. refusals
 for entry in \
   "values.build-hosts-tag-not-digest.yaml|must be a sha256:<64 hex> digest" \
-  "values.build-hosts-public-http.yaml|must be https, or http to a cluster-local host"; do
+  "values.build-hosts-public-http.yaml|must be https, or http to a cluster-local host" \
+  "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"

@@ -20,20 +20,27 @@ THE LOOP, and the order that matters:
   2. `POST {api}/claim` with the host's channel, platform set, framework identity and plugins
      digest. 204 = nothing claimable → sleep. 200 = a run: `{path, repo, sha, refs, isTrunk,
      publish, stages}` — `path` is authoritative (a non-latest run's node id is `<sha>-<channel>`).
-  3. The run is checked out at `sha` into a FRESH work directory, and every stage the repository
-     declares in `.github/build-stages.json` runs in its own FRESH child process — never a process
-     reused across stages or runs, so one PR's test cannot poison the next PR's verdict. The child
-     gets the checkout, the read-only caches, the run's short-lived installation token and
-     `MW_BUILD_PUBLISH=true|false` (from the claim — a `stable` run never hands anything to the
-     registry), and NOTHING else: the worker token and every *TOKEN/*SECRET/*PASSWORD variable of
-     the host are scrubbed from its environment.
+  3. The HOST checks the run out at `sha` into a FRESH work directory (the installation token
+     stays in the host process), and every stage the repository declares in
+     `.github/build-stages.json` runs in an ENFORCED SANDBOX: `bwrap` with user, PID, mount, IPC
+     and UTS namespaces, `--die-with-parent`, a fresh /proc, `--clearenv` + an explicit allow-list
+     (the worker token is a mounted FILE read into the host process and never in any environment),
+     the system and every cache bound READ-ONLY, and only the run's checkout, its outputs directory
+     and a tmpfs scratch writable. When the stage ends its whole process tree ends with it; the host
+     checks no process survives in another pid namespace before it claims again, and EXITS if one
+     does. If the node cannot create the namespaces, the host refuses to START, naming why — it
+     never runs a stage unsandboxed. `MW_BUILD_PUBLISH=true|false` (from the claim) is
+     informational: a host holds no publication credential and mounts no bake share; publication
+     is the publish lane's, on `build/verdict`.
   4. The child's output is translated into PROGRESS EVENTS (§7a) and POSTed in batches to
      `{api}/{repo}/{sha}/stages/{stage}/events?channel=<c>`: compiler `file(line,col): error CODE:
      message` → `diagnostic`; test results (vstest `Passed/Failed/Skipped` and xunit `[FAIL]`) →
      `test-finished`; a structured `::mw-event::{json}` line → that event; plus the host's own
      `line`, `stage-finished` and `run-finished`. Everything else the child prints stays in a local
      tail and is forwarded ONLY when the stage failed with nothing else to explain it ("CI logs
-     warn/error + verdicts only").
+     warn/error + verdicts only"). A stage writes outputs to `$MW_BUILD_OUTPUTS/<content key>/`;
+     the HOST promotes them into the shared cache (`<cache>/outputs/<key>/`) ONLY for a trunk run
+     (`isTrunk`) — a pull request's outputs never enter the shared cache.
   5. 409 on an event POST = the run is claimed by another host: the child is killed, nothing more
      is posted for that run.
 
@@ -48,7 +55,8 @@ THE LOOP, and the order that matters:
 
 Environment (rendered by the chart from `buildHosts.*`):
   BUILD_API                    https://<operations instance>/api/builds              required
-  BUILD_TOKEN                  the worker token (Hosting:Builds:WorkerToken), bearer  required
+  BUILD_TOKEN_FILE             the mounted worker token (Hosting:Builds:WorkerToken)  default /run/build-worker/token
+                               (BUILD_TOKEN in the environment is REFUSED)
   MW_BUILD_CHANNEL             latest | stable                                        required
   MW_BUILD_PLATFORM_VERSION    the set this host runs (3.x.y-ci.N / 3.x.N)            required
   MW_BUILD_FRAMEWORK_IDENTITY  or MW_BUILD_IDENTITY_FILE (first token of the file)    required
@@ -58,9 +66,11 @@ Environment (rendered by the chart from `buildHosts.*`):
   MW_BUILD_READY_FILE          written once the host is staged (readiness) default /tmp/build-host-ready
   MW_BUILD_GIT_BASE            clone base                                  default https://github.com/Systemorph
   MW_BUILD_IDLE_SECONDS        sleep after a 204                           default 15
+  MW_BUILD_RUN_DEADLINE_SECONDS  the whole run's deadline (= the pod's grace) default 3600
+  BWRAP                        the bubblewrap binary                       default bwrap
   MW_PLUGINS_REGISTRY          registry host the plugins publication is pulled from
   MW_PLUGINS_SOURCE            the publication's source name               default plugins
-  MW_PLUGINS_REGISTRY_CONFIG   a docker config.json with the pull credential (optional)
+  (no registry credential: a host holds none — the publication is pulled without one)
   ORAS                         the oras binary                             default oras
 """
 from __future__ import annotations
@@ -486,8 +496,6 @@ def stage_plugins(plugins: dict, cache: str, env: dict,
     os.makedirs(root, exist_ok=True)
     tmp = tempfile.mkdtemp(prefix=".staging-", dir=root)
     cmd = [env.get("ORAS", "oras"), "pull", f"{registry}/plugins/{source}@{digest}", "-o", tmp]
-    if env.get("MW_PLUGINS_REGISTRY_CONFIG"):
-        cmd += ["--registry-config", env["MW_PLUGINS_REGISTRY_CONFIG"]]
     rc = pull(cmd)
     if rc != 0:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -506,6 +514,11 @@ def stage_plugins(plugins: dict, cache: str, env: dict,
 
 # ───────────────────────────────── the host ───────────────────────────────────────────────
 
+class Fatal(Exception):
+    """The HOST is no longer fit to claim (no sandbox, a namespace that will not empty). Exit
+    non-zero; Kubernetes replaces the container. Never caught into another claim."""
+
+
 def api_url_acceptable(url: str) -> bool:
     """https anywhere; plain http only to a cluster-local host (no dot, *.svc, *.cluster.local,
     localhost) — the same rule the chart's `memex.buildHosts` gate applies."""
@@ -517,11 +530,141 @@ def api_url_acceptable(url: str) -> bool:
         "." not in host or host.endswith(".svc") or host.endswith(".cluster.local"))
 
 
-def child_env(base: dict, extra: dict) -> dict:
-    """The environment a stage process gets: the host's, minus every credential, plus the run's."""
-    env = {k: v for k, v in base.items() if not SECRET_ENV.search(k) and k != "BUILD_API"}
+def read_worker_token(env: dict) -> str:
+    """The worker token, from the mounted Secret FILE (`BUILD_TOKEN_FILE`). Never from the
+    environment: an env var is inherited by anything the host starts, and a file is not."""
+    if env.get("BUILD_TOKEN"):
+        raise Refusal("BUILD_TOKEN is set in the host's environment — the worker token must be a mounted "
+                      "file (BUILD_TOKEN_FILE), never an environment variable a process could inherit")
+    path = env.get("BUILD_TOKEN_FILE", "/run/build-worker/token")
+    try:
+        with open(path) as fh:
+            tok = fh.read().strip()
+    except OSError as e:
+        raise Refusal(f"the worker token file {path} is unreadable: {e}")
+    if not tok:
+        raise Refusal(f"the worker token file {path} is empty")
+    return tok
+
+
+# What a stage process may see of the host's environment. EVERYTHING else is cleared
+# (`bwrap --clearenv`); the run's own facts are added explicitly by the host.
+ENV_ALLOW = ("PATH", "LANG", "LC_ALL", "TZ", "DOTNET_ROOT", "DOTNET_CLI_TELEMETRY_OPTOUT", "DOTNET_NOLOGO",
+             "DOTNET_SKIP_FIRST_TIME_EXPERIENCE", "SSL_CERT_FILE", "SSL_CERT_DIR", "MeshWeaverRefs",
+             "MW_BUILD_GATE_HOST", "MW_BUILD_PORTAL_DOTNET", "MW_BUILD_POSTGRES")
+SCRATCH = "/scratch"
+
+
+def sandbox_env(host_env: dict, extra: dict, cache: str) -> dict:
+    """The explicit allow-list a stage gets. A key that looks like a credential is refused even when
+    the host itself adds it — the worker token can never reach a child, by construction."""
+    env = {k: host_env[k] for k in ENV_ALLOW if host_env.get(k)}
+    env.update({"HOME": f"{SCRATCH}/home", "TMPDIR": f"{SCRATCH}/tmp",
+                # NuGet writes its package folder; the shared cache is READ-ONLY, so it is the
+                # fallback folder and the writable folder is the stage's own scratch.
+                "NUGET_PACKAGES": f"{SCRATCH}/nuget", "NUGET_FALLBACK_PACKAGES": os.path.join(cache, "nuget")})
     env.update(extra)
+    leaked = [k for k in env if SECRET_ENV.search(k)]
+    if leaked:
+        raise Refusal(f"refusing to hand a stage credential-shaped variables: {sorted(leaked)}")
     return env
+
+
+class Sandbox:
+    """`bwrap` per stage: user, PID, mount, IPC and UTS namespaces; `--die-with-parent`; a fresh
+    /proc; `--clearenv` + the allow-list; the system and the caches bound READ-ONLY; writable only
+    the run's checkout, its outputs directory and a tmpfs scratch. No network namespace — a build
+    restores packages and fetches sources; the NetworkPolicy bounds where it can go."""
+
+    SYSTEM_RO = ("/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt")
+
+    def __init__(self, bwrap: str, readonly: Iterable[str]) -> None:
+        self.bwrap = bwrap
+        self.readonly = tuple(readonly)
+
+    def argv(self, command: str, checkout: str, outputs: str, env: dict) -> list[str]:
+        a = [self.bwrap, "--die-with-parent", "--new-session",
+             "--unshare-user", "--unshare-pid", "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try",
+             "--clearenv"]
+        for k in sorted(env):
+            a += ["--setenv", k, env[k]]
+        for p in self.SYSTEM_RO + self.readonly:
+            a += ["--ro-bind-try", p, p]
+        a += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
+              "--tmpfs", SCRATCH, "--dir", f"{SCRATCH}/home", "--dir", f"{SCRATCH}/tmp", "--dir", f"{SCRATCH}/nuget",
+              "--bind", checkout, checkout, "--bind", outputs, outputs, "--chdir", checkout,
+              "--", "/bin/bash", "-c", command]
+        return a
+
+    def probe(self, run: Callable[[list[str]], tuple[int, str]]) -> None:
+        """Create the namespaces once at startup. If the node does not allow them, the host REFUSES
+        to start, naming why — it never runs a stage unsandboxed."""
+        d = tempfile.mkdtemp(prefix="bwrap-probe-")
+        try:
+            rc, err = run(self.argv("test \"$$\" -le 3 && test ! -e /run/build-worker", d, d, {"PATH": "/usr/bin:/bin"}))
+        except OSError as e:
+            rc, err = 127, str(e)
+        finally:
+            shutil.rmtree(d, ignore_errors=True)
+        if rc != 0:
+            raise Fatal(f"the sandbox cannot be created on this node (bwrap exit {rc}: {err.strip()[-300:]}) — "
+                        f"user/PID/mount namespaces are required; the host refuses to run any stage unsandboxed")
+
+
+def pid_namespace_leftovers(proc_root: str = "/proc") -> list[int]:
+    """Processes visible to the host that live in ANOTHER pid namespace than the host's — what a
+    finished stage left behind. The host runs one run at a time and starts nothing else in a
+    namespace, so after a stage this must be empty."""
+    try:
+        mine = os.readlink(os.path.join(proc_root, "self", "ns", "pid"))
+    except OSError:
+        return []
+    out = []
+    for name in os.listdir(proc_root):
+        if not name.isdigit():
+            continue
+        try:
+            ns = os.readlink(os.path.join(proc_root, name, "ns", "pid"))
+        except OSError:
+            continue
+        if ns != mine:
+            out.append(int(name))
+    return sorted(out)
+
+
+CONTENT_KEY = re.compile(r"^[0-9a-f]{16,128}$")
+
+
+def promote_outputs(outputs: str, cache: str, log: Callable[[str], None]) -> tuple[int, int, list[str]]:
+    """Copy a TRUNK stage's content-addressed outputs (`<outputs>/<key>/…`) into the shared cache
+    (`<cache>/outputs/<key>/`). A key already present is kept (same key ⇒ same content); a name
+    that is not a content key is not promoted. Symlinks are copied as links, never followed.
+    Returns (promoted, kept, refused names)."""
+    root = os.path.join(cache, "outputs")
+    promoted = kept = 0
+    refused: list[str] = []
+    if not os.path.isdir(outputs):
+        return 0, 0, []
+    for name in sorted(os.listdir(outputs)):
+        src = os.path.join(outputs, name)
+        if not CONTENT_KEY.match(name) or os.path.islink(src) or not os.path.isdir(src):
+            refused.append(name)
+            continue
+        dst = os.path.join(root, name)
+        if os.path.isdir(dst):
+            kept += 1
+            continue
+        os.makedirs(root, exist_ok=True)
+        tmp = tempfile.mkdtemp(prefix=f".promote-{name[:12]}-", dir=root)
+        shutil.copytree(src, os.path.join(tmp, "c"), symlinks=True)
+        try:
+            os.rename(os.path.join(tmp, "c"), dst)
+            promoted += 1
+        except OSError:
+            kept += 1          # another host promoted the same key first
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return promoted, kept, refused
 
 
 def git_auth_env(token: Optional[str]) -> dict:
@@ -536,9 +679,11 @@ def git_auth_env(token: Optional[str]) -> dict:
 
 def default_checkout(repo: str, sha: str, refs: list, dest: str, token: Optional[str],
                      env: dict, log: Callable[[str], None]) -> None:
+    """The HOST checks out (the stage never holds the installation token)."""
     base = env.get("MW_BUILD_GIT_BASE", "https://github.com/Systemorph").rstrip("/")
     mirror = os.path.join(env.get("MW_BUILD_CACHE", "/cache"), "git", f"{repo}.git")
-    genv = {**{k: v for k, v in env.items() if not SECRET_ENV.search(k)}, **git_auth_env(token)}
+    genv = {**{k: env[k] for k in ("PATH", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR") if env.get(k)},
+            "HOME": os.path.dirname(dest), **git_auth_env(token)}
 
     def git(*args: str) -> None:
         r = subprocess.run(["git", *args], env=genv, capture_output=True, text=True)
@@ -554,9 +699,15 @@ def default_checkout(repo: str, sha: str, refs: list, dest: str, token: Optional
     git("-C", dest, "checkout", "--quiet", "--detach", sha)
 
 
+def _run_capture(argv: list[str]) -> tuple[int, str]:
+    r = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ.get("PATH", "/usr/bin:/bin")})
+    return r.returncode, (r.stderr or "") + (r.stdout or "")
+
+
 class Host:
     def __init__(self, env: dict, api: Api, *, log: Callable[[str], None] = None,
                  pull: Callable[[list[str]], int] = None, checkout: Callable = None,
+                 sandbox=None, leftovers: Callable[[], list[int]] = None,
                  sleep: Callable[[float], None] = time.sleep,
                  clock: Callable[[], float] = time.monotonic) -> None:
         self.env = env
@@ -564,6 +715,12 @@ class Host:
         self.log = log or (lambda s: print(f"build-run: {s}", flush=True))
         self.pull = pull or (lambda cmd: subprocess.run(cmd).returncode)
         self.checkout = checkout or default_checkout
+        self.cache = env.get("MW_BUILD_CACHE", "/cache")
+        self.work = env.get("MW_BUILD_WORK", "/work")
+        self.sandbox = sandbox or Sandbox(env.get("BWRAP", "bwrap"), [
+            self.cache, *[p for p in (env.get("MW_BUILD_GATE_HOST"), env.get("MeshWeaverRefs"),
+                                      "/portal", "/tester", "/tools") if p]])
+        self.leftovers = leftovers or pid_namespace_leftovers
         self.sleep = sleep
         self.clock = clock
         self.stopping = False
@@ -577,12 +734,14 @@ class Host:
                     self.identity = (fh.read().split() or [""])[0]
             except OSError:
                 self.identity = ""
-        self.cache = env.get("MW_BUILD_CACHE", "/cache")
-        self.work = env.get("MW_BUILD_WORK", "/work")
         self.ready_file = env.get("MW_BUILD_READY_FILE", "/tmp/build-host-ready")
+        try:
+            self.run_deadline = float(env.get("MW_BUILD_RUN_DEADLINE_SECONDS", "3600") or 3600)
+        except ValueError:
+            self.run_deadline = 3600.0
         self.plugins_digest: Optional[str] = None
         self.plugins_dir: Optional[str] = None
-        self.plugins_known = False          # True once an `inputs` read succeeded and was staged
+        self.plugins_known = False
 
     def preflight(self) -> None:
         missing = []
@@ -590,7 +749,7 @@ class Host:
             missing.append("BUILD_API (the operations instance's /api/builds: https, or http to a "
                            "cluster-local host — the worker token rides on it)")
         if not self.api.token:
-            missing.append("BUILD_TOKEN (the worker token, Hosting:Builds:WorkerToken)")
+            missing.append("the worker token (BUILD_TOKEN_FILE, the mounted Hosting:Builds:WorkerToken)")
         if not CHANNEL.match(self.channel):
             missing.append("MW_BUILD_CHANNEL (latest | stable)")
         if not self.platform_version:
@@ -599,6 +758,22 @@ class Host:
             missing.append("MW_BUILD_FRAMEWORK_IDENTITY or a readable MW_BUILD_IDENTITY_FILE")
         if missing:
             raise Refusal("the host cannot start — provide: " + "; ".join(missing))
+
+    # -- the namespace must be empty before anything is claimed -----------------------------
+    def assert_clean(self) -> None:
+        left = self.leftovers()
+        if not left:
+            return
+        for pid in left:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+        self.sleep(1.0)
+        left = self.leftovers()
+        if left:
+            raise Fatal(f"processes of a finished stage survive in another pid namespace ({left[:10]}) — "
+                        f"the host will not claim again; the container is replaced")
 
     # -- step 1: the plugins layer, refreshed BEFORE any claim -------------------------------
     def refresh_inputs(self) -> bool:
@@ -648,9 +823,10 @@ class Host:
         return None
 
     def cycle(self) -> str:
-        """One loop turn. Returns what happened: 'stopping', 'no-inputs', 'idle', 'ran', 'lost'."""
+        """One loop turn: 'stopping', 'no-inputs', 'idle', 'ran' or 'lost'. Raises Fatal."""
         if self.stopping:
             return "stopping"
+        self.assert_clean()
         if not self.refresh_inputs():
             return "no-inputs"
         self.mark_ready()
@@ -667,19 +843,20 @@ class Host:
         sha = str(claim.get("sha") or "").lower()
         path = str(claim.get("path") or "")
         publish = claim.get("publish") is True
+        trunk = claim.get("isTrunk") is True
         if not REPO.match(repo) or not SHA.match(sha):
             self.log(f"claim {path!r} carries an unusable repo/sha ({repo!r}, {sha!r}) — not running it")
             return "idle"
         started = self.clock()
         workdir = tempfile.mkdtemp(prefix=f"{repo}-{sha[:12]}-", dir=self.work)
         checkout_dir = os.path.join(workdir, "src")
-        last_stage = None
+        outputs_dir = os.path.join(workdir, "out")
         stages: list[dict] = []
         try:
             fallback = [c.get("name") if isinstance(c, dict) else c for c in (claim.get("stages") or [])]
             last_stage = next((s[len("build/"):] if s.startswith("build/") else s
                                for s in fallback if isinstance(s, str) and s), "verdict")
-            self.log(f"claimed {path} ({repo}@{sha[:12]}, channel {self.channel}, publish={publish})")
+            self.log(f"claimed {path} ({repo}@{sha[:12]}, channel {self.channel}, trunk={trunk}, publish={publish})")
             token = self.installation_token(claim)
             try:
                 self.checkout(repo, sha, claim.get("refs") or [], checkout_dir, token, self.env, self.log)
@@ -692,33 +869,47 @@ class Host:
                           {"kind": "run-finished", "succeeded": False, "error": str(r)[:MAX_LINE]}])
                 sink.flush(attempts=6)
                 return "ran"
+            os.makedirs(outputs_dir, exist_ok=True)
+            # MW_BUILD_PUBLISH is INFORMATIONAL: a host holds no publication credential, so a stage
+            # cannot publish whatever it says; publication is the publish lane's, on build/verdict.
             extra = {
                 "MW_BUILD_PUBLISH": "true" if publish else "false",
                 "MW_BUILD_CHANNEL": self.channel, "MW_BUILD_REPO": repo, "MW_BUILD_SHA": sha,
-                "MW_BUILD_RUN_PATH": path, "MW_BUILD_IS_TRUNK": "true" if claim.get("isTrunk") is True else "false",
+                "MW_BUILD_RUN_PATH": path, "MW_BUILD_IS_TRUNK": "true" if trunk else "false",
                 "MW_BUILD_PLATFORM_VERSION": self.platform_version,
                 "MW_BUILD_FRAMEWORK_IDENTITY": self.identity,
                 "MW_PLUGINS_DIR": self.plugins_dir or "", "MW_PLUGINS_DIGEST": self.plugins_digest or "",
-                "MW_BUILD_CACHE": self.cache, "HOME": os.path.join(workdir, "home"),
+                "MW_BUILD_CACHE": self.cache, "MW_BUILD_CACHE_OUTPUTS": os.path.join(self.cache, "outputs"),
+                "MW_BUILD_OUTPUTS": outputs_dir,
             }
-            if token:
-                extra["GITHUB_TOKEN"] = token
-            os.makedirs(extra["HOME"], exist_ok=True)
             failed_at = None
+            why = ""
             for st in stages:
                 last_stage = st["name"]
                 sink = self.sink(repo, sha, st["name"])
+                remaining = self.run_deadline - (self.clock() - started)
+                if failed_at is None and remaining <= 0:
+                    failed_at, why = st["name"], f"the run deadline ({self.run_deadline:g} s) passed"
                 if failed_at is not None:
                     sink.add([{"kind": "stage-finished", "state": "failed",
-                               "summary": f"not run — stage {failed_at} failed first"}])
+                               "summary": f"not run — {why or 'stage ' + failed_at + ' failed first'}"}])
                     sink.flush(attempts=6)
                     continue
-                ok = self.run_stage(st, checkout_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]})
+                ok = self.run_stage(dict(st, timeoutMinutes=min(st["timeoutMinutes"], remaining / 60)),
+                                    checkout_dir, outputs_dir, sink, {**extra, "MW_BUILD_STAGE": st["name"]})
+                self.assert_clean()
                 if not ok:
                     failed_at = st["name"]
+                elif trunk:
+                    promoted, kept, refused = promote_outputs(outputs_dir, self.cache, self.log)
+                    if promoted or kept or refused:
+                        sink.add([{"kind": "line", "text": f"cache: {promoted} output(s) promoted, {kept} already "
+                                                           f"present" + (f", NOT promoted (not a content key): "
+                                                                         f"{refused[:5]}" if refused else "")}])
+                        sink.flush(attempts=3)
             sink = self.sink(repo, sha, last_stage)
             sink.add([{"kind": "run-finished", "succeeded": failed_at is None,
-                       "error": None if failed_at is None else f"stage {failed_at} failed"}])
+                       "error": None if failed_at is None else (why or f"stage {failed_at} failed")}])
             sink.flush(attempts=6)
             self.log(f"{path}: {'succeeded' if failed_at is None else 'failed at ' + failed_at} in "
                      f"{_hms(self.clock() - started)}")
@@ -734,8 +925,8 @@ class Host:
                          sleep=self.sleep, clock=self.clock)
 
     def installation_token(self, claim: dict) -> Optional[str]:
-        """A one-hour installation token scoped to the run's repository (`POST /token`, Build
-        service §1.3). None when the instance hands none out — a public repository still clones."""
+        """A one-hour installation token for the CHECKOUT only (`POST /token`, Build service §1.3).
+        It stays in the host process; no stage ever sees it. None ⇒ clone anonymously."""
         status, body = self.api.call("POST", "/token", {"host": self.host, "path": claim.get("path"),
                                                         "repo": claim.get("repo"), "sha": claim.get("sha")},
                                      {"channel": self.channel})
@@ -744,18 +935,18 @@ class Host:
         self.log(f"no installation token for {claim.get('repo')} (HTTP {status}) — cloning anonymously")
         return None
 
-    def run_stage(self, st: dict, cwd: str, sink: EventSink, extra: dict) -> bool:
-        """Run ONE stage in a fresh child process; post its events; return whether it succeeded."""
+    def run_stage(self, st: dict, checkout: str, outputs: str, sink: EventSink, extra: dict) -> bool:
+        """Run ONE stage in a fresh sandboxed process tree; post its events; return success."""
         name, started = st["name"], self.clock()
-        parser = OutputParser(cwd, name)
+        parser = OutputParser(checkout, name)
         sink.add([{"kind": "line", "text": f"[00:00:00] {st['kind']}/{name} on build-{self.channel} "
                                            f"({self.platform_version}, plugins {(self.plugins_digest or '-')[:19]})"}])
         try:
-            proc = subprocess.Popen(["/bin/bash", "-c", st["command"]], cwd=cwd,
-                                    env=child_env(self.env, extra), stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+            argv = self.sandbox.argv(st["command"], checkout, outputs, sandbox_env(self.env, extra, self.cache))
+            proc = subprocess.Popen(argv, cwd=checkout, env={"PATH": self.env.get("PATH", "/usr/bin:/bin")},
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                     start_new_session=True, text=True, errors="replace", bufsize=1)
-        except OSError as e:
+        except (OSError, Refusal) as e:
             sink.add([{"kind": "stage-finished", "state": "failed", "summary": f"could not start: {e}"}])
             sink.flush(attempts=6)
             return False
@@ -775,7 +966,6 @@ class Host:
                 try:
                     ln = lines.get(timeout=1.0)
                 except queue.Empty:
-                    ln = ""
                     if self.clock() > deadline and not timed_out:
                         timed_out = True
                         _kill(proc)
@@ -814,6 +1004,8 @@ class Host:
 
 
 def _kill(proc: subprocess.Popen) -> None:
+    """End the stage's whole tree: bwrap is the session leader, and --die-with-parent plus the PID
+    namespace take everything under it down with it."""
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except (OSError, ProcessLookupError):
@@ -838,22 +1030,27 @@ def main(argv: list[str]) -> int:
     if a.self_test:
         return self_test()
     env = dict(os.environ)
-    host = Host(env, Api(env.get("BUILD_API", ""), env.get("BUILD_TOKEN", "")))
     try:
+        host = Host(env, Api(env.get("BUILD_API", ""), read_worker_token(env)))
         host.preflight()
-    except Refusal as r:
+        host.sandbox.probe(_run_capture)
+    except (Refusal, Fatal) as r:
         print(f"build-run: {r}", file=sys.stderr, flush=True)
         return 1
 
     def stop(_sig, _frm) -> None:
-        # The old replica of a roll: stop claiming, finish the run in hand, exit.
+        # The old replica of a roll (or a scale-in): stop claiming, finish the run in hand, exit.
         host.stopping = True
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
-    if a.once:
-        print(f"build-run: {host.cycle()}", flush=True)
-        return 0
-    return host.loop()
+    try:
+        if a.once:
+            print(f"build-run: {host.cycle()}", flush=True)
+            return 0
+        return host.loop()
+    except Fatal as f:
+        print(f"build-run: {f}", file=sys.stderr, flush=True)
+        return 2
 
 
 # ───────────────────────────────── self-test ──────────────────────────────────────────────
@@ -861,7 +1058,7 @@ def main(argv: list[str]) -> int:
 class _FakeApi(Api):
     def __init__(self, script: dict) -> None:
         super().__init__("https://control.example.com/api/builds", "worker")
-        self.script = script          # (method, path-prefix) → list of (status, body) or callable
+        self.script = script
         self.calls: list[tuple] = []
 
     def call(self, method, path, body=None, query=None):
@@ -873,6 +1070,14 @@ class _FakeApi(Api):
                     return answers(path, body)
                 return answers.pop(0) if len(answers) > 1 else answers[0]
         return 404, None
+
+
+class _EnvSandbox:
+    """The self-test's stand-in for bwrap on a machine without it: `env -i` gives the same
+    clear-env + allow-list semantics, so what a stage SEES is still what the host chose."""
+
+    def argv(self, command, checkout, outputs, env):
+        return ["/usr/bin/env", "-i", *[f"{k}={v}" for k, v in sorted(env.items())], "/bin/bash", "-c", command]
 
 
 def self_test() -> int:
@@ -903,7 +1108,7 @@ def self_test() -> int:
     check("summary/counts", "2 error(s)" in p.summary(1, 75) and "1 warning(s)" in p.summary(1, 75)
           and "1m15s" in p.summary(1, 75), p.summary(1, 75))
 
-    # ── 2. test results (vstest shape, with message and source line) ────────────────────────
+    # ── 2. test results ─────────────────────────────────────────────────────────────────────
     t = OutputParser("/work/run2/src", "portal-hosts")
     out: list[dict] = []
     for ln in [
@@ -929,14 +1134,10 @@ def self_test() -> int:
           f.get("file") == "test/QueueTest.cs" and f.get("line") == 42, f)
     check("vstest/duration", tests[0]["durationMs"] == 12 and f.get("durationMs") == 1000, tests)
     check("vstest/summary not a result", t.tests == {"passed": 1, "failed": 1, "skipped": 1}, t.tests)
-
-    # xunit console shape
     x = OutputParser("/w", "tests")
     xo = x.feed("    MeshWeaver.Store.Test.GateTest.Refuses [FAIL]") + x.feed("      Expected refusal, got grant") + x.finish()
     check("xunit/fail with message", xo and xo[0]["outcome"] == "failed"
           and xo[0]["message"] == "Expected refusal, got grant" and xo[0]["suite"] == "MeshWeaver.Store.Test.GateTest", xo)
-
-    # structured events: passed through for unit/count, REFUSED for a child's own verdict
     s = OutputParser("/w", "modules")
     check("mw-event/unit", s.feed('::mw-event::{"kind":"unit-finished","unit":"Store","outcome":"cached","durationMs":3}')
           == [{"kind": "unit-finished", "unit": "Store", "outcome": "cached", "durationMs": 3}])
@@ -966,23 +1167,88 @@ def self_test() -> int:
     except Refusal:
         pass
 
-    check("url/in-cluster http", api_url_acceptable("http://memex-portal-service:8080/api/builds"))
-    check("url/svc http", api_url_acceptable("http://memex-portal-service.memex-ops.svc:8080/api/builds"))
-    check("url/https", api_url_acceptable("https://control.example.com/api/builds"))
-    check("url/public http refused", not api_url_acceptable("http://control.example.com/api/builds"))
-    check("url/empty refused", not api_url_acceptable(""))
+    # ── 4. the sandbox: the bwrap argv, the env allow-list, the token file ─────────────────
+    sb = Sandbox("/usr/bin/bwrap", ["/cache", "/host"])
+    av = sb.argv("make test", "/work/r/src", "/work/r/out", {"PATH": "/usr/bin", "MW_BUILD_PUBLISH": "false"})
+    joined = " ".join(av)
+    for flag in ("--die-with-parent", "--unshare-user", "--unshare-pid", "--unshare-ipc", "--clearenv",
+                 "--new-session"):
+        check(f"bwrap/{flag}", flag in av, av)
+    check("bwrap/fresh /proc", "--proc /proc" in joined, joined)
+    check("bwrap/caches READ-ONLY", "--ro-bind-try /cache /cache" in joined and "--bind /cache" not in joined, joined)
+    check("bwrap/writable: only checkout, outputs, scratch",
+          [av[i + 1] for i, a in enumerate(av) if a == "--bind"] == ["/work/r/src", "/work/r/out"]
+          and "--tmpfs /scratch" in joined, joined)
+    check("bwrap/env only via --setenv", av.count("--setenv") == 2 and av.index("--clearenv") < av.index("--setenv"), av)
+    check("bwrap/command last", av[-4:] == ["--", "/bin/bash", "-c", "make test"], av[-4:])
+    check("bwrap/no network namespace (builds fetch packages)", "--unshare-net" not in av and "--unshare-all" not in av)
+    se = sandbox_env({"PATH": "/bin", "BUILD_TOKEN_FILE": "/run/build-worker/token", "AZURE_CLIENT_SECRET": "s",
+                      "BUILD_API": "https://x", "KUBERNETES_SERVICE_HOST": "10.0.0.1", "MeshWeaverRefs": "/portal/app"},
+                     {"MW_BUILD_PUBLISH": "false"}, "/cache")
+    check("env/allow-list only", set(se) == {"PATH", "MeshWeaverRefs", "HOME", "TMPDIR", "NUGET_PACKAGES",
+                                             "NUGET_FALLBACK_PACKAGES", "MW_BUILD_PUBLISH"}, sorted(se))
+    try:
+        sandbox_env({}, {"GITHUB_TOKEN": "t"}, "/cache")
+        check("env/credential-shaped extra refused", False, "accepted")
+    except Refusal:
+        pass
+    probe_calls: list[list[str]] = []
 
-    # ── 4. env: credentials scrubbed, publish passed through ───────────────────────────────
-    ce = child_env({"PATH": "/bin", "BUILD_TOKEN": "w", "MW_REGISTRY_PASSWORD": "p", "AZURE_CLIENT_SECRET": "s",
-                    "BUILD_API": "https://x"}, {"MW_BUILD_PUBLISH": "false", "GITHUB_TOKEN": "run-token"})
-    check("env/scrubbed", "BUILD_TOKEN" not in ce and "MW_REGISTRY_PASSWORD" not in ce
-          and "AZURE_CLIENT_SECRET" not in ce and "BUILD_API" not in ce, ce)
-    check("env/run token and publish", ce.get("GITHUB_TOKEN") == "run-token" and ce.get("MW_BUILD_PUBLISH") == "false", ce)
-    check("env/git credential never in argv", "x-access-token" not in json.dumps(sorted(git_auth_env("t"))), git_auth_env("t"))
+    def probe_fails(argv):
+        probe_calls.append(argv)
+        return 1, "bwrap: No permissions to creating new namespace, likely because the kernel does not allow non-privileged user namespaces"
+    try:
+        sb.probe(probe_fails)
+        check("probe/no namespaces is FATAL at startup", False, "accepted")
+    except Fatal as e:
+        check("probe/names why", "No permissions" in str(e) and "unsandboxed" in str(e), e)
+    check("probe/uses the same sandbox argv", probe_calls and probe_calls[0][0] == "/usr/bin/bwrap"
+          and "--unshare-pid" in probe_calls[0], probe_calls)
+    sb.probe(lambda argv: (0, ""))      # a node that allows them starts
 
-    # ── 5. the plugins layer is refreshed BEFORE the claim ─────────────────────────────────
     tmp = tempfile.mkdtemp(prefix="build-run-selftest-")
     try:
+        tf = os.path.join(tmp, "token")
+        with open(tf, "w") as fh:
+            fh.write("worker-secret\n")
+        check("token/from the file", read_worker_token({"BUILD_TOKEN_FILE": tf}) == "worker-secret")
+        for bad_env in ({"BUILD_TOKEN": "x", "BUILD_TOKEN_FILE": tf}, {"BUILD_TOKEN_FILE": os.path.join(tmp, "absent")}):
+            try:
+                read_worker_token(bad_env)
+                check(f"token/refuses {sorted(bad_env)}", False, "accepted")
+            except Refusal:
+                pass
+
+        # namespace leftovers: a fake /proc with one process in a foreign pid namespace
+        fake = os.path.join(tmp, "proc")
+        for pid, ns in (("self", "pid:[1]"), ("10", "pid:[1]"), ("11", "pid:[2]")):
+            os.makedirs(os.path.join(fake, pid, "ns"))
+            os.symlink(ns, os.path.join(fake, pid, "ns", "pid"))
+        check("leftovers/foreign namespace found", pid_namespace_leftovers(fake) == [11], pid_namespace_leftovers(fake))
+        hl = Host({"MW_BUILD_CHANNEL": "latest"}, _FakeApi({}), log=lambda s: None, sandbox=_EnvSandbox(),
+                  leftovers=lambda: [999999999], sleep=lambda s: None)
+        try:
+            hl.cycle()
+            check("leftovers/host refuses to claim", False, "claimed")
+        except Fatal:
+            check("leftovers/no claim was attempted", not any(c[1] == "/claim" for c in hl.api.calls), hl.api.calls)
+
+        # ── 5. cache promotion: trunk only, content keys only, links not followed ──────────
+        outd = os.path.join(tmp, "o")
+        key = "ab" * 16
+        os.makedirs(os.path.join(outd, key))
+        with open(os.path.join(outd, key, "X.dll"), "w") as fh:
+            fh.write("x")
+        os.makedirs(os.path.join(outd, "not-a-key"))
+        os.symlink("/etc", os.path.join(outd, "cd" * 16))
+        cache = os.path.join(tmp, "cache")
+        pr, kp, rf = promote_outputs(outd, cache, lambda s: None)
+        check("promote/one promoted", pr == 1 and os.path.isfile(os.path.join(cache, "outputs", key, "X.dll")), (pr, kp, rf))
+        check("promote/non-key and symlink refused", sorted(rf) == sorted(["not-a-key", "cd" * 16]), rf)
+        pr2, kp2, _ = promote_outputs(outd, cache, lambda s: None)
+        check("promote/same key kept", pr2 == 0 and kp2 == 1, (pr2, kp2))
+
+        # ── 6. the plugins layer is refreshed BEFORE the claim ─────────────────────────────
         order: list[str] = []
         d1 = "sha256:" + "1" * 64
         d2 = "sha256:" + "2" * 64
@@ -1005,64 +1271,68 @@ def self_test() -> int:
                 fh.write("x")
             return 0
 
-        env = {"MW_BUILD_CHANNEL": "latest", "MW_BUILD_PLATFORM_VERSION": "3.1.10412",
-               "MW_BUILD_FRAMEWORK_IDENTITY": "c3e1", "MW_BUILD_CACHE": tmp, "MW_BUILD_WORK": tmp,
+        env = {"MW_BUILD_CHANNEL": "latest", "MW_BUILD_PLATFORM_VERSION": "3.1.10412", "PATH": "/usr/bin:/bin",
+               "MW_BUILD_FRAMEWORK_IDENTITY": "c3e1", "MW_BUILD_CACHE": cache, "MW_BUILD_WORK": tmp,
                "MW_BUILD_READY_FILE": os.path.join(tmp, "ready"), "MW_PLUGINS_REGISTRY": "cr.example.com",
                "MW_BUILD_HOST": "build-latest-0"}
-        api = _FakeApi({("GET", "/hosts/inputs"): on_inputs, ("POST", "/claim"): on_claim})
-        h = Host(env, api, log=lambda s: None, pull=pull, sleep=lambda s: None)
+
+        def host(api, **kw):
+            kw.setdefault("pull", pull)
+            return Host(env if "env" not in kw else kw.pop("env"), api, log=lambda s: None, sandbox=_EnvSandbox(),
+                        leftovers=lambda: [], sleep=lambda s: None, **kw)
+
+        h = host(_FakeApi({("GET", "/hosts/inputs"): on_inputs, ("POST", "/claim"): on_claim}))
         h.preflight()
-        check("order/first cycle idle", h.cycle() == "idle")
-        check("order/second cycle idle", h.cycle() == "idle")
-        check("order/third cycle idle", h.cycle() == "idle")
+        for i in range(3):
+            check(f"order/cycle {i} idle", h.cycle() == "idle")
         check("order/refresh before claim, pull only on a new digest", order == [
             "inputs", f"pull:{d1}", f"claim:{d1}",
             "inputs", f"claim:{d1}",
             "inputs", f"pull:{d2}", f"claim:{d2}"], order)
-        check("order/content-addressed", os.path.isfile(os.path.join(tmp, "plugins", "2" * 64, ".complete")))
+        check("order/content-addressed", os.path.isfile(os.path.join(cache, "plugins", "2" * 64, ".complete")))
         check("order/readiness written once staged", os.path.isfile(os.path.join(tmp, "ready")))
-
-        # an unreadable inputs, or a failed pull, means NO claim
-        order.clear()
         api2 = _FakeApi({("GET", "/hosts/inputs"): [(503, None)], ("POST", "/claim"): on_claim})
-        h2 = Host(env, api2, log=lambda s: None, pull=pull, sleep=lambda s: None)
-        check("order/unreadable inputs → no claim", h2.cycle() == "no-inputs" and not any(
-            c[1] == "/claim" for c in api2.calls), api2.calls)
-        d3 = "sha256:" + "3" * 64
-        api3 = _FakeApi({("GET", "/hosts/inputs"): [(200, {"plugins": {"digest": d3}})], ("POST", "/claim"): on_claim})
-        h3 = Host(env, api3, log=lambda s: None, pull=lambda cmd: 1, sleep=lambda s: None)
-        check("order/failed pull → no claim", h3.cycle() == "no-inputs" and not any(
-            c[1] == "/claim" for c in api3.calls), api3.calls)
+        check("order/unreadable inputs → no claim", host(api2).cycle() == "no-inputs"
+              and not any(c[1] == "/claim" for c in api2.calls), api2.calls)
+        api3 = _FakeApi({("GET", "/hosts/inputs"): [(200, {"plugins": {"digest": "sha256:" + "3" * 64}})],
+                         ("POST", "/claim"): on_claim})
+        check("order/failed pull → no claim", host(api3, pull=lambda cmd: 1).cycle() == "no-inputs"
+              and not any(c[1] == "/claim" for c in api3.calls), api3.calls)
         api4 = _FakeApi({("GET", "/hosts/inputs"): [(200, {"plugins": None})], ("POST", "/claim"): on_claim})
-        h4 = Host(env, api4, log=lambda s: None, pull=pull, sleep=lambda s: None)
-        check("order/no publication registered → claim with null", h4.cycle() == "idle"
+        check("order/no publication registered → claim with null", host(api4).cycle() == "idle"
               and api4.calls[-1][2]["pluginsDigest"] is None, api4.calls)
 
-        # ── 6. a whole run: fresh processes, fail-fast, channel on every POST, publish env ──
+        # ── 7. whole runs ─────────────────────────────────────────────────────────────────
         posted: list[tuple] = []
 
         def on_events(path, body):
             posted.append((path, body["events"]))
             return 202, None
 
-        def fake_checkout(repo, sha, refs, dest, token, env_, log):
-            os.makedirs(os.path.join(dest, ".github"))
-            with open(os.path.join(dest, ".github", "build-stages.json"), "w") as fh:
-                json.dump({"stages": [
-                    {"name": "compile-check", "kind": "build",
-                     "command": "echo pid=$$ publish=$MW_BUILD_PUBLISH token=${BUILD_TOKEN:-none} > ../pid1; "
-                                "echo \"$PWD/Hosting/A.cs(3,1): error CS0246: missing X\"; exit 1"},
-                    {"name": "gate", "kind": "test", "command": "echo should-not-run > ../ran2"}]}, fh)
+        def checkout_with(stages_doc):
+            def co(repo, sha, refs, dest, token, env_, log):
+                os.makedirs(os.path.join(dest, ".github"))
+                with open(os.path.join(dest, ".github", "build-stages.json"), "w") as fh:
+                    json.dump(stages_doc, fh)
+            return co
 
         claim = {"path": "Hosting/Builds/MeshWeaver.Plugins/" + "c" * 40 + "-stable",
-                 "repo": "MeshWeaver.Plugins", "sha": "c" * 40, "refs": [], "isTrunk": True,
+                 "repo": "MeshWeaver.Plugins", "sha": "c" * 40, "refs": [], "isTrunk": False,
                  "publish": False, "stages": []}
-        env_s = dict(env, MW_BUILD_CHANNEL="stable", BUILD_TOKEN="worker-secret")
-        api5 = _FakeApi({("POST", "/token"): [(200, {"token": "run-token"})],
-                         ("POST", "/MeshWeaver.Plugins/"): on_events})
-        h5 = Host(env_s, api5, log=lambda s: None, pull=pull, checkout=fake_checkout, sleep=lambda s: None)
+        env_s = dict(env, MW_BUILD_CHANNEL="stable", BUILD_TOKEN_FILE=tf, AZURE_CLIENT_SECRET="leak")
+
+        def api_ev(*extra):
+            return _FakeApi({("POST", "/token"): [(200, {"token": "run-token"})],
+                             ("POST", "/MeshWeaver.Plugins/"): on_events, **dict(extra)})
+
+        # fail-fast + diagnostics + channel on every POST
+        a5 = api_ev()
+        h5 = host(a5, env=env_s, checkout=checkout_with({"stages": [
+            {"name": "compile-check", "kind": "build",
+             "command": "echo \"$PWD/Hosting/A.cs(3,1): error CS0246: missing X\"; exit 1"},
+            {"name": "gate", "kind": "test", "command": f"echo ran > {tmp}/ran2"}]}))
         check("run/ran", h5.run(claim) == "ran")
-        evpaths = [c for c in api5.calls if c[1].endswith("/events")]
+        evpaths = [c for c in a5.calls if c[1].endswith("/events")]
         check("run/channel on every event POST", evpaths and all(c[3].get("channel") == "stable" for c in evpaths), evpaths)
         check("run/host named", all(c[2]["host"] == "build-latest-0" for c in evpaths), evpaths)
         allev = [(pth, e) for pth, evs in posted for e in evs]
@@ -1073,67 +1343,58 @@ def self_test() -> int:
         check("run/compile-check failed", any("/compile-check/" in pth and e["state"] == "failed" for pth, e in fin), fin)
         check("run/gate not run and said so", any("/gate/" in pth and e["state"] == "failed"
                                                   and "not run" in e["summary"] for pth, e in fin), fin)
-        check("run/fail-fast: the second process never started", not os.path.exists(os.path.join(tmp, "ran2")))
-        rf = [e for _, e in allev if e["kind"] == "run-finished"]
-        check("run/run-finished false, once", len(rf) == 1 and rf[0]["succeeded"] is False, rf)
-        # the child's own record: publish=false from the claim, and the worker token NOT visible
-        pid_files = [os.path.join(r, f) for r, _, fs in os.walk(tmp) for f in fs if f == "pid1"]
-        check("run/work dir removed", not pid_files, pid_files)
+        check("run/fail-fast: the second stage never started", not os.path.exists(os.path.join(tmp, "ran2")))
+        rf_ = [e for _, e in allev if e["kind"] == "run-finished"]
+        check("run/run-finished false, once", len(rf_) == 1 and rf_[0]["succeeded"] is False, rf_)
 
-        # same run, but the child writes OUTSIDE the work dir so we can read what it saw
+        # what a stage SEES: fresh process per stage, publish from the claim, nothing credential-shaped
         seen = os.path.join(tmp, "seen")
-
-        def fake_checkout2(repo, sha, refs, dest, token, env_, log):
-            os.makedirs(os.path.join(dest, ".github"))
-            with open(os.path.join(dest, ".github", "build-stages.json"), "w") as fh:
-                json.dump({"stages": [
-                    {"name": "a", "kind": "build", "command": f"echo $$ ${{MW_BUILD_PUBLISH}} ${{BUILD_TOKEN:-none}} >> {seen}"},
-                    {"name": "b", "kind": "test", "command": f"echo $$ ${{MW_BUILD_PUBLISH}} ${{BUILD_TOKEN:-none}} >> {seen}"}]}, fh)
-
+        dump = f"echo $$ ${{MW_BUILD_PUBLISH}} ${{AZURE_CLIENT_SECRET:-none}} ${{BUILD_TOKEN_FILE:-none}} ${{GITHUB_TOKEN:-none}} >> {seen}"
         posted.clear()
-        api6 = _FakeApi({("POST", "/token"): [(200, {"token": "run-token"})],
-                         ("POST", "/MeshWeaver.Plugins/"): on_events})
-        h6 = Host(env_s, api6, log=lambda s: None, pull=pull, checkout=fake_checkout2, sleep=lambda s: None)
+        key2 = "ef" * 16
+        h6 = host(api_ev(), env=env_s, checkout=checkout_with({"stages": [
+            {"name": "a", "kind": "build", "command": dump + f"; mkdir -p $MW_BUILD_OUTPUTS/{key2} && echo y > $MW_BUILD_OUTPUTS/{key2}/Y.dll"},
+            {"name": "b", "kind": "test", "command": dump}]}))
         h6.run(dict(claim, publish=True))
         rows = [r.split() for r in open(seen).read().splitlines()]
         check("run/a fresh process per stage", len(rows) == 2 and rows[0][0] != rows[1][0], rows)
         check("run/publish from the claim", all(r[1] == "true" for r in rows), rows)
-        check("run/worker token scrubbed", all(r[2] == "none" for r in rows), rows)
-        rf = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
-        check("run/green run-finished", rf == [{"kind": "run-finished", "succeeded": True, "error": None}], rf)
+        check("run/no credential reaches a stage", all(r[2:] == ["none", "none", "none"] for r in rows), rows)
+        rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
+        check("run/green run-finished", rf_ == [{"kind": "run-finished", "succeeded": True, "error": None}], rf_)
+        check("run/a PR run's outputs never enter the shared cache",
+              not os.path.exists(os.path.join(cache, "outputs", key2)))
+        h6t = host(api_ev(), env=env_s, checkout=checkout_with({"stages": [
+            {"name": "a", "kind": "build", "command": f"mkdir -p $MW_BUILD_OUTPUTS/{key2} && echo y > $MW_BUILD_OUTPUTS/{key2}/Y.dll"}]}))
+        h6t.run(dict(claim, isTrunk=True))
+        check("run/a trunk run's outputs are promoted", os.path.isfile(os.path.join(cache, "outputs", key2, "Y.dll")))
 
-        # 409: the run is someone else's — stop posting
-        api7 = _FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): [(409, None)]})
-        h7 = Host(env_s, api7, log=lambda s: None, pull=pull, checkout=fake_checkout2, sleep=lambda s: None)
-        check("run/409 abandons the run", h7.run(claim) == "lost")
-        check("run/409 posts nothing after it", sum(1 for c in api7.calls if c[1].endswith("/events")) == 1, api7.calls)
-
-        # no stages declared → a named red, never a green with nothing run
+        # 409 abandons; no stages declared is red; a stage past its timeout is killed and red
+        a7 = _FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): [(409, None)]})
+        check("run/409 abandons the run", host(a7, env=env_s, checkout=checkout_with(
+            {"stages": [{"name": "a", "kind": "build", "command": "true"}]})).run(claim) == "lost")
+        check("run/409 posts nothing after it", sum(1 for c in a7.calls if c[1].endswith("/events")) == 1, a7.calls)
         posted.clear()
 
         def empty_checkout(repo, sha, refs, dest, token, env_, log):
             os.makedirs(dest)
-
-        api8 = _FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): on_events})
-        Host(env_s, api8, log=lambda s: None, pull=pull, checkout=empty_checkout, sleep=lambda s: None).run(
-            dict(claim, stages=["build/modules"]))
-        rf = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
-        check("run/undeclared stages are red", rf and rf[0]["succeeded"] is False and "declares no build stages" in rf[0]["error"], rf)
+        host(api_ev(), env=env_s, checkout=empty_checkout).run(dict(claim, stages=["build/modules"]))
+        rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
+        check("run/undeclared stages are red", rf_ and rf_[0]["succeeded"] is False
+              and "declares no build stages" in rf_[0]["error"], rf_)
         check("run/refusal posted to the claimed stage", posted and "/stages/modules/events" in posted[0][0], posted)
-
-        # a stage that outlives its timeout is killed and red
-        def slow_checkout(repo, sha, refs, dest, token, env_, log):
-            os.makedirs(os.path.join(dest, ".github"))
-            with open(os.path.join(dest, ".github", "build-stages.json"), "w") as fh:
-                json.dump({"stages": [{"name": "slow", "kind": "test", "command": "sleep 30", "timeoutMinutes": 0.02}]}, fh)
-
         posted.clear()
-        api9 = _FakeApi({("POST", "/token"): [(404, None)], ("POST", "/MeshWeaver.Plugins/"): on_events})
         t0 = time.monotonic()
-        Host(env_s, api9, log=lambda s: None, pull=pull, checkout=slow_checkout, sleep=lambda s: None).run(claim)
+        host(api_ev(), env=env_s, checkout=checkout_with({"stages": [
+            {"name": "slow", "kind": "test", "command": "sleep 30", "timeoutMinutes": 0.02}]})).run(claim)
         fin = [e for _, evs in posted for e in evs if e["kind"] == "stage-finished"]
         check("run/timeout kills and reds", fin and fin[0]["state"] == "failed" and "timed out" in fin[0]["summary"]
               and time.monotonic() - t0 < 20, (fin, time.monotonic() - t0))
+        posted.clear()
+        host(api_ev(), env=dict(env_s, MW_BUILD_RUN_DEADLINE_SECONDS="0"), checkout=checkout_with({"stages": [
+            {"name": "a", "kind": "build", "command": "true"}]})).run(claim)
+        rf_ = [e for _, evs in posted for e in evs if e["kind"] == "run-finished"]
+        check("run/past the run deadline is red", rf_ and rf_[0]["succeeded"] is False and "deadline" in rf_[0]["error"], rf_)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -1141,10 +1402,10 @@ def self_test() -> int:
         for f in failures:
             print(f"SELF-TEST FAILED: {f}")
         return 1
-    print("build-run self-test: all cases passed (compiler + workflow-command diagnostics, dedup, vstest + "
-          "xunit results with message and source line, structured events, stage declaration, credential "
-          "scrubbing, plugins refresh BEFORE claim, fresh process per stage, fail-fast, channel + publish, "
-          "409, undeclared stages, stage timeout)")
+    print("build-run self-test: all cases passed (diagnostics, dedup, vstest + xunit results, structured events, "
+          "stage declaration, the bwrap argv, the env allow-list, the token file, the startup sandbox probe, "
+          "pid-namespace leftovers, trunk-only cache promotion, plugins refresh BEFORE claim, fresh process per "
+          "stage, fail-fast, channel + publish, 409, undeclared stages, stage timeout, run deadline)")
     return 0
 
 

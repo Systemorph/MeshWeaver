@@ -14,6 +14,7 @@ name: Build follow — stream a standing build host's stage log
 #     with:
 #       api-url: ${{ vars.MW_BUILD_API }}        # https://<operations instance>/api/builds
 #       stage: modules
+#       sha: ${{ github.event.pull_request.head.sha || github.sha }}
 #
 # 🚨 The CALLER must grant `id-token: write` (a reusable workflow can only narrow its caller's
 # grant; check-workflow-permission-pairing.py holds callers to it). The OIDC token IS the
@@ -42,8 +43,10 @@ on:
         default: ''
       sha:
         description: >-
-          The commit the run is keyed by. Empty = GITHUB_SHA, which is what the OIDC token's `sha`
-          claim names (on pull_request: the merge commit) — the endpoint answers 403 for any other.
+          The commit the run is keyed by — the PR HEAD, never the merge commit. Callers pass
+          github.event.pull_request.head.sha, falling back to github.sha; empty means exactly that
+          (read from the caller's event). The endpoint binds the OIDC token to the run by its `run_id`, so the
+          token's own `sha` claim (on pull_request: the merge commit) does not have to match.
         required: false
         type: string
         default: ''
@@ -99,7 +102,8 @@ jobs:
           API_URL: ${{ inputs.api-url }}
           STAGE: ${{ inputs.stage }}
           REPO: ${{ inputs.repo }}
-          SHA: ${{ inputs.sha }}
+          # The PR HEAD (on pull_request github.sha is the merge commit); the caller's event.
+          SHA: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
           CHANNEL: ${{ inputs.channel }}
           TIMEOUT: ${{ inputs.timeout-minutes }}
           AUDIENCE: ${{ inputs.audience }}

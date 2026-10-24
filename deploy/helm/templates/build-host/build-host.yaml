@@ -20,8 +20,8 @@ data:
 {{ .Files.Get "files/compose-gate-host.sh" | indent 4 }}
 ---
 # NO Kubernetes right, NO cluster or subscription credential, and no token mounted at all: the host
-# reaches the build API with its worker token, GitHub with the run's one-hour installation token,
-# and the registries with the pull secret — nothing else.
+# reaches the build API with its worker token (a mounted file) and GitHub with the run's one-hour
+# installation token (checkout only) — nothing else. No publication credential, no bake share.
 apiVersion: "v1"
 kind: "ServiceAccount"
 metadata:
@@ -110,7 +110,9 @@ spec:
     spec:
       serviceAccountName: "build-host"
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: {{ $b.grace }}
+      # = the run deadline: on SIGTERM (a roll or a scale-in) the runner stops claiming and finishes
+      # the run it holds, so a busy replica is never killed mid-run.
+      terminationGracePeriodSeconds: {{ $b.runDeadline }}
       {{- with $b.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -157,8 +159,10 @@ spec:
           command: ["/bin/bash", "-c", "set -euo pipefail; bash /scripts/compose-gate-host.sh /portal/app /tester /host; exec python3 /scripts/build-run.py --host"]
           env:
             - { name: BUILD_API, value: {{ $b.apiUrl | quote }} }
-            - name: BUILD_TOKEN
-              valueFrom: { secretKeyRef: { name: {{ $b.tokenSecret | quote }}, key: {{ $b.tokenKey | quote }} } }
+            # The worker token is a FILE read into the host process — never an environment variable
+            # a process could inherit; no stage's sandbox binds /run/build-worker.
+            - { name: BUILD_TOKEN_FILE, value: "/run/build-worker/token" }
+            - { name: MW_BUILD_RUN_DEADLINE_SECONDS, value: {{ $b.runDeadline | quote }} }
             - { name: MW_BUILD_CHANNEL, value: {{ $c.name | quote }} }
             - { name: MW_BUILD_PLATFORM_VERSION, value: {{ $c.platformVersion | quote }} }
             - { name: MW_BUILD_TESTER_DIGEST, value: {{ $c.testerDigest | quote }} }
@@ -176,9 +180,6 @@ spec:
             - { name: ORAS, value: "/tools/oras" }
             - { name: MW_PLUGINS_REGISTRY, value: {{ $b.pluginsRegistry | quote }} }
             - { name: MW_PLUGINS_SOURCE, value: {{ $b.pluginsSource | quote }} }
-            {{- if $b.pluginsPullSecret }}
-            - { name: MW_PLUGINS_REGISTRY_CONFIG, value: "/run/registry/config.json" }
-            {{- end }}
             {{- if $b.postgres.enabled }}
             - { name: MW_BUILD_POSTGRES, value: "Host=localhost;Username=postgres;Password=build" }
             {{- end }}
@@ -188,7 +189,18 @@ spec:
             failureThreshold: 3
           resources:
             {{- toYaml $b.resources | nindent 12 }}
-          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } }
+          # bwrap creates user/PID/mount/IPC namespaces unprivileged. Whether the node's seccomp and
+          # AppArmor defaults allow that is MEASURED (H4); the record may state the profiles, and a
+          # node that refuses the namespaces makes the runner exit at startup, naming why.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            {{- with $b.sandbox.seccompProfile }}
+            seccompProfile: { type: {{ . | quote }} }
+            {{- end }}
+            {{- with $b.sandbox.appArmorProfile }}
+            appArmorProfile: { type: {{ . | quote }} }
+            {{- end }}
           volumeMounts:
             - { name: "scripts", mountPath: "/scripts", readOnly: true }
             - { name: "tester", mountPath: "/tester", readOnly: true }
@@ -197,9 +209,7 @@ spec:
             - { name: "tools", mountPath: "/tools", readOnly: true }
             - { name: "work", mountPath: "/work" }
             - { name: "cache", mountPath: "/cache" }
-            {{- if $b.pluginsPullSecret }}
-            - { name: "registry-config", mountPath: "/run/registry", readOnly: true }
-            {{- end }}
+            - { name: "worker-token", mountPath: "/run/build-worker", readOnly: true }
         {{- if $b.postgres.enabled }}
         - name: "postgres"
           image: {{ $b.postgres.image | quote }}
@@ -221,18 +231,17 @@ spec:
           emptyDir: { sizeLimit: {{ $b.workSizeLimit | quote }} }
         - name: "cache"
           persistentVolumeClaim: { claimName: {{ $b.cacheClaim | quote }} }
-        {{- if $b.pluginsPullSecret }}
-        - name: "registry-config"
+        - name: "worker-token"
           secret:
-            secretName: {{ $b.pluginsPullSecret | quote }}
-            items: [{ key: ".dockerconfigjson", path: "config.json" }]
-        {{- end }}
+            secretName: {{ $b.tokenSecret | quote }}
+            defaultMode: 0400
+            items: [{ key: {{ $b.tokenKey | quote }}, path: "token" }]
 ---
-# Queue depth → replicas. Two metrics-api triggers on the build API's anonymous per-channel count
-# (`GET /queue?channel=<c>` → {channel, claimable, running}), combined as claimable + running
-# (KEDA scaling modifiers, KEDA ≥ 2.12): one replica per run in hand plus one per run waiting, so a
-# host is never scaled away while it holds a run and a waiting run never queues behind it. A 503
-# (queue unreadable) leaves the replica count where it is.
+# Queue depth → replicas: ONE metrics-api trigger on the build API's anonymous per-channel count,
+# `valueLocation: demand` (= claimable + running), so the metric never drops to zero while a host
+# still holds a run. The scale-down stabilization window is longer than a claim's round trip, so a
+# replica is not removed between two runs it was about to take. A 503 (queue unreadable) leaves the
+# replica count where it is.
 apiVersion: "keda.sh/v1alpha1"
 kind: "ScaledObject"
 metadata:
@@ -250,25 +259,18 @@ spec:
   pollingInterval: {{ $b.pollingInterval }}
   cooldownPeriod: {{ $b.cooldownPeriod }}
   advanced:
-    scalingModifiers:
-      formula: "claimable + running"
-      target: "1"
-      activationTarget: "0"
-      metricType: "AverageValue"
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: {{ $b.scaleDownStabilizationSeconds }}
+          policies:
+            - { type: Pods, value: 1, periodSeconds: 60 }
   triggers:
     - type: metrics-api
-      name: "claimable"
       metricType: AverageValue
       metadata:
         url: "{{ $b.apiUrl }}/queue?channel={{ $c.name }}"
-        valueLocation: "claimable"
-        targetValue: "1"
-    - type: metrics-api
-      name: "running"
-      metricType: AverageValue
-      metadata:
-        url: "{{ $b.apiUrl }}/queue?channel={{ $c.name }}"
-        valueLocation: "running"
+        valueLocation: "demand"
         targetValue: "1"
 {{- end }}
 {{- end }}

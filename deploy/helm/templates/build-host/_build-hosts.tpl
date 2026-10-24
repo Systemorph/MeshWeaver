@@ -40,6 +40,12 @@ The refusals, and why each one exists:
 {{- $tok := ($b.workerTokenSecret | default dict) -}}
 {{- $tokName := required "buildHosts.workerTokenSecret.name is required — the Secret holding the worker token (Hosting:Builds:WorkerToken)" $tok.name -}}
 {{- $tokKey := required "buildHosts.workerTokenSecret.key is required" $tok.key -}}
+{{- if $b.pluginsPullSecret -}}
+{{- fail "buildHosts.pluginsPullSecret is not supported — a build host holds NO registry credential (Hosting/StandingBuildHosts §2); the plugins publication is pulled without one" -}}
+{{- end -}}
+{{- if $b.bakeShares -}}
+{{- fail "buildHosts.bakeShares is not supported — a build host mounts NO bake share; publication is the publish lane's, on build/verdict" -}}
+{{- end -}}
 {{- $cache := required "buildHosts.cacheClaimName is required — the shared RWX build-cache claim" $b.cacheClaimName -}}
 {{- $pg := ($b.postgres | default dict) -}}
 {{- if and $pg.enabled (not $pg.image) -}}
@@ -72,10 +78,12 @@ The refusals, and why each one exists:
 {{- toYaml (dict "enabled" true "apiUrl" $api "runnerImage" $runner "tokenSecret" $tokName "tokenKey" $tokKey
       "cacheClaim" $cache "imagePullSecret" ($b.imagePullSecret | default "")
       "pluginsRegistry" ($b.pluginsRegistry | default "") "pluginsSource" ($b.pluginsSource | default "plugins")
-      "pluginsPullSecret" ($b.pluginsPullSecret | default "") "orasImage" (required "buildHosts.orasImage is required" $b.orasImage)
+      "orasImage" (required "buildHosts.orasImage is required" $b.orasImage)
       "nodeSelector" ($b.nodeSelector | default dict) "tolerations" ($b.tolerations | default list)
       "resources" ($b.resources | default dict) "workSizeLimit" ($b.workSizeLimit | default "60Gi")
-      "grace" (int ($b.terminationGracePeriodSeconds | default 3600))
+      "runDeadline" (int ($b.runDeadlineSeconds | default 3600))
+      "scaleDownStabilizationSeconds" (int ($b.scaleDownStabilizationSeconds | default 300))
+      "sandbox" (dict "seccompProfile" (($b.sandbox | default dict).seccompProfile | default "") "appArmorProfile" (($b.sandbox | default dict).appArmorProfile | default ""))
       "pollingInterval" (int ($b.pollingInterval | default 15)) "cooldownPeriod" (int ($b.cooldownPeriod | default 600))
       "networkPolicy" (dict "enabled" ($np.enabled | default false) "apiPodSelector" ($np.apiPodSelector | default dict)
                             "apiPort" (int ($np.apiPort | default 8080)) "privateCidrs" ($np.privateCidrs | default list))

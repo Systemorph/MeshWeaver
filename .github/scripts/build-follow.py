@@ -17,8 +17,10 @@ THE WIRE (§7a): `GET {api}/{repo}/{sha}/stages/{stage}/log?after=<seq>&channel=
 GitHub OIDC token as the bearer, answering
     {"lines":[{"seq":N,"text":"…"}], "next":N, "skipped":N, "state":"running|succeeded|failed|…",
      "summary":"…"}
-The endpoint answers ONLY for the `repository` and `sha` the token's claims name (403 otherwise),
-so no secret is stored in any repository and the log is readable by exactly the run that asked.
+The endpoint answers ONLY for the token's `repository` and the Actions run recorded on the build
+(`run_id`; 403 otherwise), so no secret is stored in any repository and the log is readable by
+exactly the run that asked. `--sha` is the commit the build is keyed by — the PR HEAD, never the
+merge commit (the lane passes `github.event.pull_request.head.sha || github.sha`).
 
 THE RULES, each of which is a way this step could otherwise read green on no evidence:
   * exit 0 ONLY on state `succeeded`. Every other terminal state — failed, cancelled, skipped,
@@ -152,10 +154,11 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
                                           "Accept": "application/json"})
             if status == 403:
                 raise Failure(
-                    f"the build API refused this run's OIDC token (HTTP 403): it answers only for the "
-                    f"repository and sha the token's claims name — Systemorph/{repo} at {sha}. A "
-                    f"different sha (a PR head instead of the merge commit the token names) or a "
-                    f"wrong audience ({audience}) reads exactly like this")
+                    f"the build API refused this run's OIDC token (HTTP 403): it answers only for "
+                    f"Systemorph/{repo} and the Actions run recorded on the build ({repo}@{sha[:12]}, "
+                    f"channel {query['channel']}). A build-request this workflow run did not post, a "
+                    f"merge-commit sha where the PR head was meant, or a wrong audience ({audience}) "
+                    f"reads exactly like this")
             if status == 401:
                 if refreshed_after_401:
                     raise Failure(f"the build API refused a FRESH OIDC token too (HTTP 401) — the "

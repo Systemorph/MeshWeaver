@@ -25,7 +25,7 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
-| the host runner | `.github/scripts/build-run.py` (shipped by the chart as `deploy/helm/files/build-run.py`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh process → post progress events |
+| the host runner | `.github/scripts/build-run.py` (shipped by the chart as `deploy/helm/files/build-run.py`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
 | the CD hand-over | `main-cd.yml` job `build-host-latest` + `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | in the run that arms a set, a signed event that moves `build-latest`'s record fields to that set |
 
@@ -41,6 +41,7 @@ modules:
   with:
     api-url: ${{ vars.MW_BUILD_API }}   # https://<operations instance>/api/builds
     stage: modules
+    sha: ${{ github.event.pull_request.head.sha || github.sha }}
 ```
 
 It reads `GET {api}/{repo}/{sha}/stages/{stage}/log?after=<seq>&channel=<c>` every 10 s with the
@@ -52,8 +53,8 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   know are RED, named. A skipped stage is not a passed one.
 - **a timeout is RED** (`timeout-minutes`, at most 43 — the job is hard-cut at 45). No verdict in
   time means the run is not judged.
-- **an unreadable endpoint is RED, naming why**: 403 at once (the token's claims do not name this
-  run), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
+- **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
+  match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
 - **a `skipped` gap is a warning with the count** — the host keeps the newest 2,000 lines.
 - **the log is drained before the verdict**, so the last error lines print first.
@@ -61,10 +62,11 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
   the Files tab). Every other `::` line is defused with a leading space: a build must not be able to
   steer the runner that prints its log (`::add-mask::`, `::stop-commands::`, …).
 
-🚨 **The `sha` is the token's.** The endpoint answers only for the repository and sha the OIDC
-claims name, and on `pull_request` the token's `sha` is the MERGE commit (`GITHUB_SHA`), not the PR
-head. The lane therefore defaults `sha` to `GITHUB_SHA`; the instance must key a PR's run the same
-way, or every follow reads 403.
+🚨 **The `sha` is the PR HEAD, never the merge commit.** On `pull_request` GitHub's `github.sha`
+is the merge commit, while the build is keyed by the commit the PR's workflow requested — its head.
+So callers pass `sha: ${{ github.event.pull_request.head.sha || github.sha }}` (and an empty `sha`
+means exactly that). The endpoint binds the OIDC token to the build by the token's `run_id` (the
+Actions run recorded on the run node), not by its `sha` claim, so the two never have to agree.
 
 A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is `build/<name>`.
 `build/<name>` is accepted as input and normalised.
@@ -82,8 +84,10 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
 2. **Claim** with `{host, channel, platformVersion, frameworkIdentity, pluginsDigest}`. 204 → sleep;
    200 → the run. The claim's `path` is authoritative (a non-latest run's node id is
    `<sha>-<channel>`).
-3. **Check out** `repo@sha` into a fresh work directory (git credentials through the environment,
-   never argv or a URL; the shared git mirror as `--reference-if-able` when present).
+3. **Check out** `repo@sha` into a fresh work directory — the HOST does it, with the run's one-hour
+   installation token (`POST /token`), which never leaves the host process. Git credentials go
+   through the environment, never argv or a URL; the shared git mirror is used as
+   `--reference-if-able` when present.
 4. **Run every stage** the repository declares in `.github/build-stages.json`:
 
    ```json
@@ -91,17 +95,43 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
                {"name": "modules", "kind": "test", "command": "…"}]}
    ```
 
-   in a **fresh child process** (its own session, killed as a group on timeout). Stages run in
-   declaration order, fail-fast: after a failed stage the rest are finished `failed` with "not run".
-   When the claim names `stages`, only those run, and a claimed stage the repository does not declare
-   is RED; so is a repository that declares none.
-5. **The child's environment** is the host's minus every `*TOKEN*`/`*SECRET*`/`*PASSWORD*`/
-   `*CREDENTIAL*` variable and the worker token, plus the run's installation token (`GITHUB_TOKEN`),
-   `MW_BUILD_PUBLISH=true|false` (from the claim — a `stable` run never hands anything to a
-   registry), `MW_PLUGINS_DIR`, `MW_BUILD_{REPO,SHA,CHANNEL,STAGE,RUN_PATH,IS_TRUNK}`,
-   `MW_BUILD_PLATFORM_VERSION`, `MW_BUILD_FRAMEWORK_IDENTITY`, `MeshWeaverRefs` and the composed gate
-   host (`MW_BUILD_GATE_HOST`, `MW_BUILD_PORTAL_DOTNET`).
-6. **Progress events**, batched (≤ 200 per POST, every 2 s) to
+   Stages run in declaration order, fail-fast: after a failed stage the rest are finished `failed`
+   with "not run". When the claim names `stages`, only those run, and a claimed stage the repository
+   does not declare is RED; so is a repository that declares none. A run past
+   `MW_BUILD_RUN_DEADLINE_SECONDS` finishes its remaining stages `failed`.
+5. **Every stage runs in an ENFORCED SANDBOX — a child process is not one.** PR code is untrusted
+   and the host is long-lived, so each stage is `bwrap --die-with-parent --new-session
+   --unshare-user --unshare-pid --unshare-ipc --unshare-uts --clearenv` with a fresh `/proc`, the
+   system directories and every cache (`/cache`, the composed host, the portal and tester trees)
+   bound **read-only**, and only three writable places: the run's checkout, its outputs directory
+   (`MW_BUILD_OUTPUTS`) and a `tmpfs` scratch (`HOME`, `TMPDIR`, the writable NuGet folder; the
+   shared NuGet cache is the read-only fallback folder). There is no network namespace — a build
+   restores packages — and the NetworkPolicy bounds where it can go.
+   - **The environment is an allow-list**, set with `--setenv` after `--clearenv`: `PATH`, locale,
+     the .NET switches, `MeshWeaverRefs`, the composed gate host (`MW_BUILD_GATE_HOST`,
+     `MW_BUILD_PORTAL_DOTNET`), and the run's facts (`MW_BUILD_{REPO,SHA,CHANNEL,STAGE,RUN_PATH,
+     IS_TRUNK,PUBLISH,PLATFORM_VERSION,FRAMEWORK_IDENTITY}`, `MW_PLUGINS_{DIR,DIGEST}`,
+     `MW_BUILD_CACHE`, `MW_BUILD_CACHE_OUTPUTS`, `MW_BUILD_OUTPUTS`). A credential-shaped key is
+     refused even if the host itself adds it.
+   - **The worker token is a FILE** (`BUILD_TOKEN_FILE`, the mounted Secret) read into the host
+     process; `BUILD_TOKEN` in the environment makes the host refuse to start. No sandbox binds the
+     file, and the pod mounts no Kubernetes token.
+   - **Nothing survives a stage.** `--die-with-parent` and the PID namespace end the whole tree with
+     the stage; the host then checks no process remains in another pid namespace, kills any it
+     finds, and **exits** (the container is replaced) if one still survives — before it claims again.
+   - **No sandbox, no host.** At startup the host creates the namespaces once; if the node refuses
+     them (seccomp, AppArmor, a kernel without unprivileged user namespaces) it exits non-zero
+     naming why. It never runs a stage unsandboxed.
+   - `MW_BUILD_PUBLISH=true|false` (from the claim) is **informational**: a host holds no
+     publication credential and mounts no bake share. Publication stays in the publish lane, which
+     consumes `build/verdict` — "only latest publishes" is that lane's property.
+6. **Cache promotion is the host's, and trunk-only.** A stage writes reusable outputs to
+   `$MW_BUILD_OUTPUTS/<content key>/` (16–128 lower-case hex). After a stage SUCCEEDS on a trunk run
+   (`isTrunk: true`) the host copies each key into the shared cache `<cache>/outputs/<key>/` (an
+   existing key is kept; a name that is not a key, or a symlink, is not promoted; links inside are
+   copied as links, never followed). A pull request's outputs **never** enter the shared cache, so
+   PR code cannot poison a later trunk build.
+7. **Progress events**, batched (≤ 200 per POST, every 2 s) to
    `POST {api}/{repo}/{sha}/stages/{stage}/events?channel=<c>` with the worker token:
    compiler `file(line,col): error|warning CODE: message` and `::error file=…,line=…::` lines become
    `diagnostic` (deduplicated — MSBuild repeats each in its summary — paths made repository-relative,
@@ -109,10 +139,11 @@ A **stage name is one path segment** (`[a-z0-9][a-z0-9._-]*`); its Check Run is 
    `test-finished` (a failure carries its first message line and the first repository source line of
    its stack); a `::mw-event::{json}` line is passed through for `unit-started`, `unit-finished`,
    `diagnostic`, `test-finished`, `count` and `line` — **never** `stage-finished` or `run-finished`,
-   which only the host decides. Everything else the child prints stays in a 60-line local tail,
+   which only the host decides. Everything else the stage prints stays in a 60-line local tail,
    forwarded only when a stage failed with no diagnostic or failed test to explain it. 409 = the run
-   is claimed by another host: the child is killed and nothing more is posted.
-7. **SIGTERM** (the old replica of a roll) stops claiming; the run in hand finishes.
+   is claimed by another host: the stage is killed and nothing more is posted.
+8. **SIGTERM** (a roll or a scale-in) stops claiming; the run in hand finishes within the pod's
+   grace period, which equals the run deadline.
 
 `run-finished` is posted on the route of the last stage that ran (the route is per stage); a run
 refused before any stage posts its refusal on the first stage the claim named.
@@ -128,16 +159,25 @@ tag, no enabled channel.
 Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
 
 - a **Deployment** `build-host-<c>` with no `replicas` (KEDA owns it), surge-first rolling update,
-  `terminationGracePeriodSeconds` 3600 so a replaced replica finishes its run, the `cibuild`
+  `terminationGracePeriodSeconds` = `buildHosts.runDeadlineSeconds` (default 3600, also the
+  runner's run deadline) so a replaced or scaled-in replica finishes its run, the `cibuild`
   nodeSelector and tolerations, and the composition of Build service §1.4 without a Docker daemon:
   init containers copy the tester's `/app` and the portal's `/app` + `dotnet` out of the set's two
   images **by digest** and ORAS out of its pinned image; the runner composes the gate host
   (`compose-gate-host.sh`) and `exec`s `build-run.py --host`. Readiness is the staged marker the
-  runner writes once the plugins layer is in place — a new replica is Ready only when staged;
+  runner writes once the plugins layer is in place — a new replica is Ready only when staged. The
+  worker token is the `workerTokenSecret` mounted as a FILE at `/run/build-worker/token`; the
+  container's seccomp / AppArmor profiles can be stated (`buildHosts.sandbox.*`) for what `bwrap`
+  needs on the pool's nodes — measured, not assumed;
 - a **ScaledObject** `build-host-<c>-scaler`, `minReplicaCount` 0, `maxReplicaCount` per channel,
-  two `metrics-api` triggers on `<apiUrl>/queue?channel=<c>` (`claimable` and `running`) combined
-  as `claimable + running` (KEDA scaling modifiers, KEDA ≥ 2.12) — a host is never scaled away
-  while it holds a run, and a waiting run does not queue behind a running one.
+  ONE `metrics-api` trigger on `<apiUrl>/queue?channel=<c>` with `valueLocation: demand`
+  (= claimable + running, so the metric never drops to zero while a host holds a run) and a
+  scale-down stabilization window (`scaleDownStabilizationSeconds`, default 300) longer than a
+  claim's round trip.
+
+**A host holds no publication credential, no registry token and no bake share.** The gate refuses
+`buildHosts.pluginsPullSecret` and `buildHosts.bakeShares`; `imagePullSecret` is the kubelet's image
+pull and never enters the pod's filesystem. The plugins publication is pulled without a credential.
 
 Shared: a ServiceAccount `build-host` with no token mounted and no rights, a NetworkPolicy with no
 ingress and egress only to DNS, the build API's pods and 80/443 outside the cluster-private ranges,
@@ -188,8 +228,13 @@ a build host, and a red names itself on the job.
   which `enabled: false` guarantees.
 - **`build-stable`'s roll** ("the daily full run does the same for build-stable") is not wired: the
   stable pointer's mover does not exist yet.
-- **The runner image** (bash, python3, git, the .NET SDK) is named by the record
+- **The runner image** (bash, python3, git, bubblewrap, the .NET SDK) is named by the record
   (`buildHosts.runnerImage`); this repository does not build one yet.
-- **The cross-run compile cache** beyond the plugins layer: the runner hands the stages
-  `MW_BUILD_CACHE`; keying compile outputs by (source hash, reference-set hash) is the stages' work.
+- **Whether the `cibuild` nodes allow `bwrap`'s namespaces** under the pod's seccomp/AppArmor
+  defaults is not measured; the host refuses to start where they are refused, so the first
+  enabled estate will say so.
+- **Pulling the plugins publication from a registry that requires a credential**: a host holds
+  none, so such a registry needs an anonymous (or node-identity) pull path — open.
+- **Keying compile outputs** by (source hash, reference-set hash) is the stages' work: the runner
+  promotes what a trunk stage writes under `$MW_BUILD_OUTPUTS/<key>/`, and reads nothing itself.
 - **The git mirror** is used read-only when present; nothing populates it yet.

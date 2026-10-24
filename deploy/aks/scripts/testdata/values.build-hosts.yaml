@@ -1,5 +1,5 @@
 # The standing build hosts ON (Doc/Architecture/BuildHosts): the only combination that renders
-# templates/build-host/. Both channels, the plugins pull secret and the Postgres sidecar, so every
+# templates/build-host/. Both channels, a stated seccomp profile and the Postgres sidecar, so every
 # branch of the template renders somewhere. Neutral sample names; no credential.
 buildHosts:
   enabled: true
@@ -9,7 +9,8 @@ buildHosts:
   portalRepository: "cr.example.com/memex-portal-ai"
   imagePullSecret: "registry-pull"
   pluginsRegistry: "cr.example.com"
-  pluginsPullSecret: "registry-pull"
+  sandbox:
+    seccompProfile: "Unconfined"
   postgres:
     enabled: true
     image: "ghcr.io/example/postgres:16"
