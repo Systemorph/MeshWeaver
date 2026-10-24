@@ -16,6 +16,7 @@ using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Plugin.Packaging;
 using MeshWeaver.PluginCatalog;
+using MeshWeaver.Testing.FaultInjection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -316,8 +317,10 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
         var ct = TestContext.Current.CancellationToken;
         await InstallV1(PackageUpdatePolicy.Auto);
         loaded.Set(Dependency, DependencyModule, "1.11.26");
-        var store = new FaultingRecordReads(Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>(),
-            $"{PackageInstaller.InstalledPartition}/{FloorHoldFixture.Package}");
+        // The real store with the READ of the install record made to throw the driver's timeout.
+        var store = new FaultInjectingStorageAdapter(Mesh.ServiceProvider.GetRequiredService<IStorageAdapter>());
+        using var recordReadFault = store.FailOperations(
+            $"{PackageInstaller.InstalledPartition}/{FloorHoldFixture.Package}", StorageLegs.Read);
         var proceeded = 0;
 
         var outcome = await CatalogLayoutAreas
@@ -332,51 +335,10 @@ public class PackageDependencyFloorHoldTest(ITestOutputHelper output) : Monolith
             .Catch((Exception ex) => Observable.Return<Exception?>(ex))
             .Timeout(60.Seconds()).Await(ct);
 
-        store.Faults.Should().BeGreaterThan(0, "the premise: the record read was taken and faulted");
+        recordReadFault.ArrivalCount.Should().BeGreaterThan(0, "the premise: the record read was taken and faulted");
         outcome.Should().BeOfType<TimeoutException>("the read's fault is the attempt's outcome");
         Volatile.Read(ref proceeded).Should().Be(0, "an unknown record is not a fresh install");
         (await FloorHoldFixture.AwaitRecord(Mesh, _ => true, ct)).ModuleVersion.Should().Be(FloorHoldFixture.V1Hash);
-    }
-
-    /// <summary>The real store with the read of one path made to throw.</summary>
-    private sealed class FaultingRecordReads(IStorageAdapter inner, string faultOnPath) : IStorageAdapter
-    {
-        private int faults;
-
-        public int Faults => Volatile.Read(ref faults);
-
-        public IObservable<MeshNode?> Read(string path, JsonSerializerOptions options)
-            => string.Equals(path, faultOnPath, StringComparison.OrdinalIgnoreCase)
-                ? Observable.Defer(() =>
-                {
-                    Interlocked.Increment(ref faults);
-                    return Observable.Throw<MeshNode?>(new TimeoutException("The operation has timed out."));
-                })
-                : inner.Read(path, options);
-
-        public IObservable<(IEnumerable<string> NodePaths, IEnumerable<string> DirectoryPaths)>
-            ListChildPaths(string? parentPath) => inner.ListChildPaths(parentPath);
-
-        public IObservable<DataChangeNotification> Changes => inner.Changes;
-
-        public IObservable<MeshNode?> Write(MeshNode node, JsonSerializerOptions options) => inner.Write(node, options);
-
-        public IObservable<string> Delete(string path) => inner.Delete(path);
-
-        public IObservable<bool> Exists(string path) => inner.Exists(path);
-
-        public IObservable<object> GetPartitionObjects(string nodePath, string? subPath, JsonSerializerOptions options)
-            => inner.GetPartitionObjects(nodePath, subPath, options);
-
-        public IObservable<Unit> SavePartitionObjects(
-            string nodePath, string? subPath, IReadOnlyCollection<object> objects, JsonSerializerOptions options)
-            => inner.SavePartitionObjects(nodePath, subPath, objects, options);
-
-        public IObservable<Unit> DeletePartitionObjects(string nodePath, string? subPath = null)
-            => inner.DeletePartitionObjects(nodePath, subPath);
-
-        public IObservable<DateTimeOffset?> GetPartitionMaxTimestamp(string nodePath, string? subPath = null)
-            => inner.GetPartitionMaxTimestamp(nodePath, subPath);
     }
 
     [Fact(Timeout = 300_000)]
