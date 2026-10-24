@@ -11,13 +11,15 @@ using Microsoft.Extensions.Logging;
 namespace Memex.Portal.Shared.Api;
 
 /// <summary>
-/// <c>GET /api/instances/seal-key</c> — a registered installation fetches the PUBLIC key it seals a secret to
-/// before handing it to this control instance (<see cref="SecretEnvelope"/>). Authenticated by the installation's
-/// instance key or its short-lived token, exactly like the token exchange.
+/// <c>GET /api/instances/seal-key</c> — the PUBLIC key an installation seals a secret to before handing it to this
+/// control instance (<see cref="SecretEnvelope"/>). Anonymous on purpose: it is a public key, and an installation
+/// that holds only its announcement key (the control-inbox credential) must be able to fetch it.
 ///
-/// <para>🚨 Authentication comes BEFORE anything is read or minted: the key pair is created on first use, and an
-/// anonymous request must not be able to provoke that write. Only the public half is ever returned; the private
-/// half stays <c>enc:</c>-protected in the Admin partition and never leaves <see cref="SecretSealingKeyService"/>.</para>
+/// <para>🚨 <b>It is read-only.</b> The key pair is minted by the control plane itself (<see cref="SecretSealingKeyService.PublicKey"/>),
+/// never by a request, so an anonymous caller cannot provoke a write. Until the pair exists the answer is 404.
+/// Only the public half is ever returned; the private half stays <c>enc:</c>-protected in the Admin partition and
+/// never leaves <see cref="SecretSealingKeyService"/>. What the key is FOR is gated elsewhere: a value sealed to it is
+/// accepted only inside an event signed with the deployment's own key.</para>
 /// </summary>
 public static class SealKeyEndpoints
 {
@@ -31,23 +33,14 @@ public static class SealKeyEndpoints
     private static Task<IResult> Get(HttpContext http, IMessageHub rootHub, CancellationToken ct)
     {
         var logger = http.RequestServices.GetService<ILoggerFactory>()?.CreateLogger(typeof(SealKeyEndpoints));
-        var authenticator = http.RequestServices.GetRequiredService<InstanceRegistryAuthenticator>();
         var keys = rootHub.ServiceProvider.GetRequiredService<SecretSealingKeyService>();
-        return authenticator.AuthenticateOutcome(http.Request.Headers.Authorization.ToString())
-            .SelectMany(outcome =>
-            {
-                if (outcome.IsUnavailable)
-                    return Observable.Return(InstanceAuthResponses.Unavailable(http, outcome.UnavailableReason, logger));
-                if (outcome.Instance is null)
-                    return Observable.Return(Results.Json(
-                        new { error = "A registered instance key is required (Authorization: Bearer mwi_…)." },
-                        statusCode: StatusCodes.Status401Unauthorized));
-                return keys.PublicKey().Select(key => Results.Json(
+        return keys.Existing()
+            .Select(key => key is null
+                ? Results.Json(new { error = "no sealing key has been minted on this instance" }, statusCode: StatusCodes.Status404NotFound)
+                : Results.Json(
                     new SealKeyPayloads.Response(key.KeyId, key.PublicKey, SealKeyPayloads.Algorithm, SecretEnvelope.CurrentVersion),
-                    SealKeyPayloads.Json));
-            })
-            .ObserveCompletion(
-                ex => logger?.LogWarning(ex, "Seal-key request faulted after answering"), ct)
+                    SealKeyPayloads.Json))
+            .ObserveCompletion(ex => logger?.LogWarning(ex, "Seal-key request faulted after answering"), ct)
             .ContinueWith(t => t.Result ?? Results.Json(new { error = "unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable),
                 TaskContinuationOptions.ExecuteSynchronously);
     }

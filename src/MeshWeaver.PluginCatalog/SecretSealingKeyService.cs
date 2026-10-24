@@ -38,6 +38,18 @@ public sealed class SecretSealingKeyService(IMessageHub hub, ILogger<SecretSeali
         => Resolve().Select(stored => new SealingPublicKey(stored.CurrentId, stored.CurrentPublicKey));
 
     /// <summary>
+    /// The current public key if one exists; null otherwise. <b>Never mints and never rotates</b>: this is what the
+    /// anonymous publication endpoint reads, so a request from nobody cannot provoke a write. The pair is minted by
+    /// <see cref="PublicKey"/>, which the control instance calls itself.
+    /// </summary>
+    public IObservable<SealingPublicKey?> Existing()
+    {
+        var access = hub.ServiceProvider.GetService<AccessService>();
+        return access.RunAsSystem(Read).Select(stored =>
+            stored is null ? null : new SealingPublicKey(stored.CurrentId, stored.CurrentPublicKey));
+    }
+
+    /// <summary>
     /// Opens an envelope sealed for <paramref name="context"/>. Null for anything that does not open: not an
     /// envelope, an unknown or expired key id, a different context, tampering. Cold; emits once.
     /// </summary>

@@ -29,9 +29,8 @@ Wire form: `{ "v":1, "kid":"…", "epk":"…", "salt":"…", "nonce":"…", "ct"
 
 ## The control instance's key
 
-`SecretSealingKeyService` (`MeshWeaver.PluginCatalog`) owns one node, `Admin/SecretSealingKey/current`, minted on
-first use after an installation authenticates (an anonymous request cannot provoke the write) and read back so
-replicas agree. It holds the **public key in the clear** and the **private key only as `enc:` ciphertext of the
+`SecretSealingKeyService` (`MeshWeaver.PluginCatalog`) owns one node, `Admin/SecretSealingKey/current`, minted by the
+control plane itself (never by a request) and read back so replicas agree. It holds the **public key in the clear** and the **private key only as `enc:` ciphertext of the
 platform key protector**, refused when no master key exists.
 
 **Rotation:** every 90 days, or on demand. The outgoing key stays accepted for 7 days, so a value sealed just before
@@ -39,8 +38,11 @@ the rotation still opens; after that only the new key does.
 
 ## Publishing the public key
 
-`GET /api/instances/seal-key`, authenticated by the installation's instance key (or its short-lived token), answers
-`{ keyId, publicKey, algorithm, version }`. Nothing else leaves the control instance.
+`GET /api/instances/seal-key` is anonymous and read-only: it is a public key, and an installation that holds only its
+announcement key (the control-inbox credential) must be able to fetch it. It answers `{ keyId, publicKey, algorithm,
+version }`, or 404 until the control plane has minted the pair. A request can never provoke the mint, and nothing else
+leaves the control instance. What the key is *for* is gated elsewhere: a value sealed to it is accepted only inside an
+event signed with the deployment's own key.
 
 ## Who uses it
 

@@ -116,29 +116,30 @@ public class SecretSealingTest(ITestOutputHelper output) : MonolithMeshTestBase(
     }
 
     [Fact(Timeout = 180_000)]
-    public async Task TheSealKey_IsServedToARegisteredInstance_AndToNobodyElse_AndMintsNothingForAnAnonymousCaller()
+    public async Task TheSealKey_IsPublicAndReadOnly_ARequestNeverMintsIt()
     {
         await using var app = await Start();
         var client = app.GetTestClient();
 
-        using (var anonymous = await client.GetAsync(SealKeyPayloads.Route, TestContext.Current.CancellationToken))
-            anonymous.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-        var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+        using (var before = await client.GetAsync(SealKeyPayloads.Route, TestContext.Current.CancellationToken))
+            before.StatusCode.Should().Be(HttpStatusCode.NotFound, "until the control plane mints the pair there is nothing to publish");
         (await Mesh.GetMeshNode(SecretSealingKeys.Path, TimeSpan.FromSeconds(10)).Take(1).Timeout(TimeSpan.FromSeconds(30)).Await(TestContext.Current.CancellationToken))
             .Should().BeNull("an anonymous request must not provoke the mint");
 
-        var registered = await Register("sealer");
-        using var request = new HttpRequestMessage(HttpMethod.Get, SealKeyPayloads.Route);
-        request.Headers.TryAddWithoutValidation("Authorization", InstanceKeys.AuthorizationHeader(registered.RawKey));
-        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        var service = Mesh.ServiceProvider.GetRequiredService<SecretSealingKeyService>();
+        var minted = await service.PublicKey().Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken);
+
+        using var response = await client.GetAsync(SealKeyPayloads.Route, TestContext.Current.CancellationToken);
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var key = (await response.Content.ReadFromJsonAsync<SealKeyPayloads.Response>(SealKeyPayloads.Json, TestContext.Current.CancellationToken))!;
+        key.KeyId.Should().Be(minted.KeyId);
+        key.PublicKey.Should().Be(minted.PublicKey);
         key.Algorithm.Should().Be(SealKeyPayloads.Algorithm);
         key.Version.Should().Be(SecretEnvelope.CurrentVersion);
+        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)).Should().NotContain("rivate", "only the public half is ever served");
 
         // Seal to the served key; only the control instance opens it.
         var envelope = SecretEnvelope.Seal(Secret, Convert.FromBase64String(key.PublicKey), key.KeyId, Context);
-        var service = Mesh.ServiceProvider.GetRequiredService<SecretSealingKeyService>();
         (await service.Unseal(envelope.ToJson(), Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().Be(Secret);
         (await service.Unseal(envelope.ToJson(), "other|Object").Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().BeNull();
         (await service.Unseal("garbage", Context).Timeout(TimeSpan.FromSeconds(60)).Await(TestContext.Current.CancellationToken)).Should().BeNull();
