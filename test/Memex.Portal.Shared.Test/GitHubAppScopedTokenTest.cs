@@ -117,6 +117,32 @@ public class GitHubAppScopedTokenTest : IAsyncDisposable
     }
 
     [Fact]
+    public async Task TheSameRepository_WriteThenRead_AndARepeatedScope_EachMintFreshWithTheirOwnPermissions()
+    {
+        // A cache keyed by repository alone would hand the read-only request the earlier WRITE token;
+        // a cache keyed by the full scope would answer the repeated request without an exchange.
+        using var key = RSA.Create(2048);
+        var handler = new RecordingHandler();
+        var service = Service(key, handler);
+        var write = new Dictionary<string, string> { ["contents"] = "write" };
+
+        var first = await service.GetScopedInstallationToken(null, ["Repo"], write).FirstAsync().Timeout(Budget).Await();
+        var second = await service.GetScopedInstallationToken(null, ["Repo"], ContentsRead).FirstAsync().Timeout(Budget).Await();
+        var third = await service.GetScopedInstallationToken(null, ["Repo"], ContentsRead).FirstAsync().Timeout(Budget).Await();
+
+        Assert.Equal(["ghs_1", "ghs_2", "ghs_3"], new[] { first, second, third });
+        var levels = handler.ExchangeBodies.Select(b =>
+        {
+            using var doc = JsonDocument.Parse(b!);
+            Assert.Equal(["Repo"], doc.RootElement.GetProperty("repositories").EnumerateArray().Select(e => e.GetString()));
+            var permissions = doc.RootElement.GetProperty("permissions");
+            Assert.Single(permissions.EnumerateObject());
+            return permissions.GetProperty("contents").GetString();
+        }).ToArray();
+        Assert.Equal(["write", "read", "read"], levels);
+    }
+
+    [Fact]
     public async Task GitHubRefusingTheScope_IsATypedMintFailure_NeverAWiderToken()
     {
         using var key = RSA.Create(2048);
