@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -54,7 +55,7 @@ public class MainRunsAreNeverCancelledGuard
     [Fact]
     public void BuildAndTest_CancelsOnPrBranches_ButNeverOnMain()
     {
-        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
         var cancel = Regex.Match(body, @"^\s*cancel-in-progress:\s*(?<value>.+?)\s*$", RegexOptions.Multiline);
 
@@ -111,7 +112,7 @@ public class MainRunsAreNeverCancelledGuard
     [Fact]
     public void BuildAndTest_GivesEveryMainCommitItsOwnGroup_SoNoneCanBeEvicted()
     {
-        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
         var group = Regex.Match(body, @"^\s*group:\s*(?<value>.+?)\s*$", RegexOptions.Multiline);
         Assert.True(group.Success,
@@ -177,7 +178,7 @@ public class MainRunsAreNeverCancelledGuard
     [Fact]
     public void Delivery_NeverKillsTheRunInFlight_AndKeepsTheReconcileInItsOwnLane()
     {
-        var body = File.ReadAllText(Path.Combine(FindRepoRoot(), DeliveryWorkflow));
+        var body = File.ReadAllText(Path.Combine(RepoPaths.Root, DeliveryWorkflow));
 
         var problems = DeliveryConcurrencyProblems(
             ExtractConcurrencyValue(body, "cancel-in-progress"),
@@ -529,13 +530,4 @@ public class MainRunsAreNeverCancelledGuard
         _ => value.ToString() ?? string.Empty,
     };
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

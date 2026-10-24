@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -116,7 +117,7 @@ public class BrowserProvisioningGateGuard
     /// </summary>
     private static List<(string file, string[] lines)> ProvisioningWorkflows()
     {
-        var dir = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var dir = Path.Combine(RepoPaths.Root, ".github", "workflows");
         var found = Directory
             .EnumerateFiles(dir, "*.yml", SearchOption.TopDirectoryOnly)
             .Select(f => (
@@ -127,15 +128,5 @@ public class BrowserProvisioningGateGuard
 
         Assert.NotEmpty(found);   // no provisioner found ⇒ the discovery broke, not the repo
         return found;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

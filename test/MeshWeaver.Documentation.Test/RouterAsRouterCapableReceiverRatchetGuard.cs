@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -139,7 +140,7 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoTargetedPostStaysOnAReceiverItsOwnFileDeclaredRouterCapable()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var sites = Scan(root);
 
@@ -229,7 +230,7 @@ public class RouterAsRouterCapableReceiverRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheDerivationIsSourcedTheClassifierReachesEveryVerdictAndSeesTheProductionTree()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // --- 1. the derivation ---------------------------------------------------------------
         var declared = DeclaringFiles(root);

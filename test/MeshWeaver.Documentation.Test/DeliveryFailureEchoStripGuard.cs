@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -194,7 +195,7 @@ public class DeliveryFailureEchoStripGuard(ITestOutputHelper output)
     [Fact]
     public void ThePackagingSeamHasExactlyOneImplementation()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var declaring = SourceScan.SourceFiles(root, ScannedRoots)
             .Where(f => PackagingSeamDeclaration.IsMatch(SourceScan.MaskCommentsAndStrings(Read(f))))
             .Select(f => SourceScan.Relative(root, f))
@@ -229,7 +230,7 @@ public class DeliveryFailureEchoStripGuard(ITestOutputHelper output)
     [Fact]
     public void TheGuardStillHasSubjectsToProtect()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var sites = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (File: SourceScan.Relative(root, f), Count: CountConstructionSitesIn(Read(f))))
             .Where(x => x.Count > 0)
@@ -367,7 +368,7 @@ public class DeliveryFailureEchoStripGuard(ITestOutputHelper output)
     /// </summary>
     private static string Masked(string relative)
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), relative);
+        var path = Path.Combine(RepoPaths.Root, relative);
         Assert.True(File.Exists(path),
             $"{relative} is missing — this guard's subject moved; follow it in the same change. An "
             + "assertion about a file that is not there passes having checked nothing.");

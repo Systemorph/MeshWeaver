@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -52,7 +53,7 @@ public class ShardWeightHeadroomGuard
     public void NoScheduledUnitRunsCloseToThePerProjectCap()
     {
         TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var capSeconds = ReadPerProjectCapSeconds(File.ReadAllText(Path.Combine(root, WorkflowPath)));
         var budget = capSeconds * MaxCapFraction;
 

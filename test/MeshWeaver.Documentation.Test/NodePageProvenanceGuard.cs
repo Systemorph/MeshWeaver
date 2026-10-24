@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -82,7 +83,7 @@ public class NodePageProvenanceGuard
     [Fact]
     public void EveryLandingPageInSrc_DeclaresWhatItDoesAboutProvenance()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // 🚨 A guard must never pass on no evidence — SourceScan.SourceFiles throws on an empty
         // scan, but a root that quietly stopped existing would still narrow the population.

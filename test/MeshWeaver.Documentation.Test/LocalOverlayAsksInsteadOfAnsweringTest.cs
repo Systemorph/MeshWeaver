@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -31,15 +32,8 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class LocalOverlayAsksInsteadOfAnsweringTest
 {
-    private static string Overlay()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(
-            dir!.FullName, "deploy", "homebrew", "share", "values.local.yaml"));
-    }
+    private static string Overlay() =>
+        File.ReadAllText(RepoPaths.Combine("deploy", "homebrew", "share", "values.local.yaml"));
 
     /// <summary>
     /// The value a key is SET to, or null when it is absent or only named in a comment.

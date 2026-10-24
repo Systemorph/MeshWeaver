@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -43,7 +44,7 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class WorkflowRunTriggerBranchFilterGuard
 {
-    private static string WorkflowsDir() => Path.Combine(FindRepoRoot(), ".github", "workflows");
+    private static string WorkflowsDir() => Path.Combine(RepoPaths.Root, ".github", "workflows");
 
     /// <summary>
     /// 🚨 BOTH extensions. GitHub Actions accepts <c>.yml</c> and <c>.yaml</c> equally, so a guard
@@ -161,15 +162,5 @@ public class WorkflowRunTriggerBranchFilterGuard
             + "indistinguishable from a real one in the run list (head_branch is the workflow file's "
             + "ref, always the default branch).\n"
             + "Add `branches: [main]` to the workflow_run trigger.");
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github", "workflows")))
-            dir = dir.Parent;
-
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

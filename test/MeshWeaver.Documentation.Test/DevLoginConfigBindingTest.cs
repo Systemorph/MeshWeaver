@@ -4,6 +4,7 @@ using System;
 using System.IO;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -29,15 +30,8 @@ namespace MeshWeaver.Documentation.Test;
 /// </summary>
 public class DevLoginConfigBindingTest
 {
-    private static string ConfigMap()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return File.ReadAllText(Path.Combine(dir!.FullName,
-            "deploy", "helm", "templates", "memex-portal", "config.yaml"));
-    }
+    private static string ConfigMap() =>
+        File.ReadAllText(RepoPaths.Combine("deploy", "helm", "templates", "memex-portal", "config.yaml"));
 
     /// <summary>The template with its comments removed — a key named only in prose is not bound.</summary>
     private static string ExecutableTemplate(string template)

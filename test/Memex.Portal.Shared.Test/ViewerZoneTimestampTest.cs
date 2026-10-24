@@ -6,6 +6,7 @@ using System.Text.Json;
 using Memex.Portal.Shared.Settings;
 using Memex.Portal.Shared.SelfUpdate;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace Memex.Portal.Shared.Test;
 
@@ -77,7 +78,7 @@ public class ViewerZoneTimestampTest
         foreach (var lang in new[] { "en", "de" })
         {
             var path = Path.Combine(
-                RepoRoot(), "src", "MeshWeaver.Messaging.Hub", "Localization", $"strings.{lang}.json");
+                RepoPaths.Root, "src", "MeshWeaver.Messaging.Hub", "Localization", $"strings.{lang}.json");
             using var doc = JsonDocument.Parse(File.ReadAllText(path));
             Assert.True(doc.RootElement.TryGetProperty(key, out var v), $"{key} missing from {lang}");
             Assert.False(
@@ -85,14 +86,5 @@ public class ViewerZoneTimestampTest
                 $"strings.{lang}.json[{key}] still claims UTC while the value is rendered in the "
                 + "viewer's zone — the label would assert a timezone the number is not in.");
         }
-    }
-
-    private static string RepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

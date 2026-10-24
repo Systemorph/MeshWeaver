@@ -8,4 +8,9 @@
          skipped on CI, and a skipped gate renders the same green tick as a passing one. -->
     <ProjectReference Include="..\..\src\MeshWeaver.Cli\MeshWeaver.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The one repo-root lookup (MeshWeaver.Fixture/RepoPaths.cs), compiled in rather than referenced:
+         this project stays free of the test fixture's framework dependencies. -->
+    <Compile Include="..\MeshWeaver.Fixture\RepoPaths.cs" Link="RepoPaths.cs" />
+  </ItemGroup>
 </Project>

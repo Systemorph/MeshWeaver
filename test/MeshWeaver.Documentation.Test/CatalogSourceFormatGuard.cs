@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using MeshWeaver.PluginCatalog;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -68,7 +69,7 @@ public class CatalogSourceFormatGuard
     [Fact]
     public void EveryFromRepoCallSite_ResolvesTheFormatThroughTheSharedRule()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var dir = Path.Combine(root, Subject.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(Directory.Exists(dir),
             $"{Subject} is gone — this guard now checks nothing. Point it at the code's new home.");
