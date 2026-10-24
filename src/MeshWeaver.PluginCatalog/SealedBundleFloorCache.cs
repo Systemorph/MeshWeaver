@@ -43,9 +43,29 @@ namespace MeshWeaver.PluginCatalog;
 /// of the source directory; in the flat layout it removes and rewrites <c>_complete</c> in the source
 /// directory itself.</para>
 ///
-/// <para>🚨 <b>And the argument closes in the direction that matters.</b> The stamp detects any change
-/// to the source directory's ENTRY SET, and a republication that ADDS a package necessarily adds an
-/// entry — a bundle file, or a whole generation directory. The only change it cannot see is a rewrite
+/// <para>🚨 <b>And the argument closes in the direction that matters — across stamp granules.</b> A
+/// change to the source directory's ENTRY SET moves its stamp, and a republication that ADDS a
+/// package necessarily adds an entry — a bundle file, or a whole generation directory. But "moves"
+/// means "moves to the time of the change", and a directory stamp is COARSE: on Linux it comes from
+/// the kernel's coarse clock (one tick is milliseconds), on an SMB share from the server, on FAT in
+/// two-second steps. A republication that lands inside the same granule as an earlier READ leaves
+/// the stamp EQUAL, and recalling on equality would then serve the pre-republication declaration
+/// until the directory happened to change again — a package exempted from the gate, the one
+/// direction that must never happen. Measured: <c>SealedBundleFloorCacheTest</c> on a Linux CI leg
+/// read <c>Set: [Documentation]</c> four milliseconds after adding Northwind.</para>
+///
+/// <para>🚨 <b>So equality is trusted only for a SETTLED stamp</b> — git's racy-clean rule. An
+/// observation is remembered only when its stamp is older than the read's start by at least
+/// <see cref="SettleWindow"/>: a later change then lands in a LATER granule and moves the stamp, so a
+/// recall on an equal stamp is sound. A source stamped more recently than that is read in full this
+/// tick and not remembered, so the cost is a re-read of the handful of sources published in the last
+/// window — never the whole store. The window also covers the two things a stamp comparison across
+/// machines cannot rule out: skew between this process's clock and the file server's, and an SMB
+/// client's attribute cache serving a stamp a few seconds stale. A stamp in the FUTURE by this
+/// process's clock is never settled, so it too is re-read until it is — the fail-closed
+/// direction.</para>
+///
+/// <para>The only change the stamp cannot see at all is a rewrite
 /// of <c>_complete</c> in place with no entry added (writing an existing file does not move its
 /// parent's stamp), and that can only re-word or SHRINK a declaration, which can only make the gate
 /// HOLD. A generation directory is immutable by construction, so the publisher does not do this at
@@ -94,9 +114,19 @@ public sealed class SealedBundleFloorCache
     /// selector each take one). Keyed by the source directory's full path.</summary>
     private readonly ConcurrentDictionary<string, Observed> observed = new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// How much older than the read's start a source directory's stamp must be before an equal stamp
+    /// may later stand in for its contents. Far wider than any stamp granule a supported file system
+    /// has (FAT's two seconds is the coarsest), and wide enough to absorb ordinary clock skew against
+    /// a file server and an SMB attribute cache. Its cost is bounded by how many sources were
+    /// published inside it, which is a handful, not the store.
+    /// </summary>
+    public static readonly TimeSpan SettleWindow = TimeSpan.FromMinutes(1);
+
     private long sourcesRead;
     private long sourcesRecalled;
     private long sourcesForgotten;
+    private long sourcesUnsettled;
 
     /// <summary>How many source publications this cache has actually opened on the share,
     /// cumulatively. The claim of #4742 IS this number: it must grow with NEW or CHANGED sources and
@@ -113,6 +143,11 @@ public sealed class SealedBundleFloorCache
     /// longer found them, cumulatively — what retention prunes, and the reason memory tracks the
     /// LIVE store rather than every publication ever seen.</summary>
     public long SourcesForgotten => Interlocked.Read(ref sourcesForgotten);
+
+    /// <summary>How many source publications this cache has read but declined to remember,
+    /// cumulatively, because their stamp was too recent to stand in for their contents — see
+    /// <see cref="SettleWindow"/>.</summary>
+    public long SourcesUnsettled => Interlocked.Read(ref sourcesUnsettled);
 
     /// <summary>How many source publications this cache is currently holding. Bounded by the store,
     /// not by the process's age.</summary>
@@ -156,11 +191,15 @@ public sealed class SealedBundleFloorCache
         if (rootRefusal is not null)
             return SealedBundleFloor.Unreadable(rootRefusal);
 
+        // Taken BEFORE the first stamp is read, so every stamp this walk sees is compared against
+        // an instant no later than the moment it was read.
+        var settledBefore = DateTime.UtcNow - SettleWindow;
         var bundles = new List<string>();
         var visited = new HashSet<string>(StringComparer.Ordinal);
         var identities = 0;
         var read = 0;
         var recalled = 0;
+        var unsettled = 0;
         string rootKey;
         try
         {
@@ -205,8 +244,17 @@ public sealed class SealedBundleFloorCache
                         continue;
 
                     var declared = declaration.Declared.ToImmutableArray();
-                    observed[sourceDirectory.FullName] = new Observed(rootKey, stamp, declared);
                     declaredHere.AddRange(declared);
+                    if (stamp < settledBefore)
+                        observed[sourceDirectory.FullName] = new Observed(rootKey, stamp, declared);
+                    else
+                    {
+                        // 🚨 NOT remembered: a change landing in this stamp's granule after the read
+                        // would leave the stamp equal. Read in full again next tick, until settled.
+                        // An older reading under the same key is dropped too — it is stale.
+                        unsettled++;
+                        observed.TryRemove(sourceDirectory.FullName, out _);
+                    }
                 }
 
                 if (declaredHere.Count == 0)
@@ -251,6 +299,7 @@ public sealed class SealedBundleFloorCache
         Interlocked.Add(ref sourcesRead, read);
         Interlocked.Add(ref sourcesRecalled, recalled);
         Interlocked.Add(ref sourcesForgotten, forgotten);
+        Interlocked.Add(ref sourcesUnsettled, unsettled);
         var floor = new SealedBundleFloor(ReleaseArtifacts.Of(bundles).SealedBundles, identities);
         // Information, and deliberately: this line is the operator's evidence that the read #4742
         // froze the fleet on is bounded now. It costs one line per availability check — the poller is
@@ -260,10 +309,11 @@ public sealed class SealedBundleFloorCache
         // and would read as a store far larger than the denominator actually is.
         logger?.LogInformation(
             "ReleaseAvailability: denominator over {Root} — {Read} source publications opened on the "
-            + "share, {Recalled} answered from this process's earlier reading of them, {Forgotten} "
-            + "forgotten as no longer present, {Identities} identities carrying a sealed publication, "
-            + "{Bundles} distinct bundle ids",
-            publishedRoot, read, recalled, forgotten, identities, floor.Bundles.Count);
+            + "share, {Recalled} answered from this process's earlier reading of them, {Unsettled} "
+            + "not remembered because their stamp is too recent to trust, {Forgotten} forgotten as no "
+            + "longer present, {Identities} identities carrying a sealed publication, {Bundles} "
+            + "distinct bundle ids",
+            publishedRoot, read, recalled, unsettled, forgotten, identities, floor.Bundles.Count);
         return floor;
     }
 
