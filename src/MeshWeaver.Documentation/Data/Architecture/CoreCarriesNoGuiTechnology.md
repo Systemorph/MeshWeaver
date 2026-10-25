@@ -80,7 +80,7 @@ build does (`MEMEX_PLUGINS_REPO`, default beside the core checkout).
 ### 3. `Memex.Portal.Shared` (Razor SDK, `SupportedPlatform browser`, `Microsoft.Identity.Web.UI`)
 
 Already handled by the core-slimming source move: Plugins carries `src/Memex.Portal.Shared`
-(MeshWeaver.Plugins#4146) and core's copy is deleted by its own delete half. It is not changed here.
+(MeshWeaver.Plugins#4146) and core's copy is deleted (MeshWeaver#7125). It is not changed here.
 
 ### Landing order
 
@@ -95,6 +95,13 @@ The Plugins half is an ADDITION and lands first; the core half DELETES and lands
    `HandWovenGateRatchetGuard`, and `BlazorMonacoPinGuard`. Its body carries
    `Pairs-with: Systemorph/MeshWeaver.Plugins#4202`.
 
+🚨 **No gate enforces this order for a pin removal.** The cross-repo pair gate reads `Pairs-with:`
+only when a public type or member leaves `src/` (it passes before reading the declaration
+otherwise), and the satellite-pins gate checks that each removed id is DECLARED, not that a
+counterpart has merged. So the core half is armed by hand, and only once the Plugins counterpart is
+merged into Plugins `main`; landing it first leaves every Plugins Blazor project without a version
+(NU1010) at its next platform move.
+
 No satellite other than Plugins references any of the moved packages (measured on `origin/main` of
 Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
 `Directory.Packages.props` and is unaffected.
@@ -104,7 +111,7 @@ Education, Reinsurance, SocialMedia, Manufacturing and Crm). Memex has its own
 | Where | What | Status |
 |---|---|---|
 | `Directory.Packages.props` | `Radzen.Blazor` | **stays for now** — the module-library shelf stages it (below) |
-| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **stays for now** — its last core consumer is `memex/Memex.Portal.Shared`, deleted by the core-slimming delete half. It exact-pins `Microsoft.Identity.Web`, so the two move to Plugins **together**, after that delete lands |
+| `Directory.Packages.props` | `Microsoft.Identity.Web.Ui` (Razor sign-in UI) | **stays for now** — no core project references it since `memex/Memex.Portal.Shared` left (#7125), but it exact-pins `Microsoft.Identity.Web`, so the two move to Plugins **together**: Plugins pins both first (fill-in), then core drops both under `Satellite-pins:` |
 | `tools/MeshWeaver.ModuleLibraries` | references `Radzen.Blazor` for the Plugins module `MeshWeaver.Blazor.Radzen` | build tooling — proposal below |
 | `tools/MeshWeaver.PluginTester`, `.github/scripts/stage-razor-generators.py`, `main-cd.yml` (tester leg), `test/MeshWeaver.PluginTester.Test` (`RazorBuildTest`) | the tester image carries the SDK's Razor source generator so `build-project` compiles `.razor` modules | build tooling — proposal below |
 | `.github/scripts/check-bundle-static-assets.py`, `test-module-asset-landing.py`, `node-repo-module-pack.yml` | the shared module lane asserts a bundle carries its Razor static web assets (`*.razor.js`, scoped `*.razor.css`, `_content/<pack>/`) | build tooling — moves with the Razor staging (below) |

@@ -70,8 +70,10 @@ exports `E2E_BASE_URL=https://e2e.memex.localhost:8444` and `E2E_USER=Roland` fo
 by hand:
 
 ```bash
+# from the MeshWeaver checkout: only it has the global.json that selects Microsoft.Testing.Platform
 E2E_BASE_URL=https://e2e.memex.localhost:8444 E2E_USER=Roland \
-  dotnet test ../MeshWeaver.Plugins/src/MeshWeaver.Portal.E2E.Test --filter "FullyQualifiedName~<TestName>"
+  dotnet test ../MeshWeaver.Plugins/src/MeshWeaver.Portal.E2E.Test -p:MeshWeaverRoot="$PWD/" \
+    --filter "FullyQualifiedName~<TestName>"
 ```
 
 When writing a new browser test, follow the existing ones:
