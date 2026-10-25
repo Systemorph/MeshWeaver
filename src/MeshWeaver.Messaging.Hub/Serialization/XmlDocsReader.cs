@@ -63,15 +63,7 @@ public sealed class XmlDocsReader
     /// <param name="member">The member.</param>
     /// <returns>The rendered summary text.</returns>
     public string Summary(MemberInfo member)
-    {
-        var summary = FindSummary(member, 0);
-        if (string.IsNullOrEmpty(summary)
-            && member is PropertyInfo { DeclaringType: { } declaringType } property
-            && Lookup(declaringType) is { } typeDoc
-            && typeDoc.Params.TryGetValue(property.Name, out var recordParam))
-            return recordParam;
-        return summary ?? string.Empty;
-    }
+        => FindSummary(member, 0) ?? string.Empty;
 
     private XmlDocFile File(Assembly assembly)
         => files.GetValue(assembly, static a => XmlDocFile.Load(a));
@@ -81,15 +73,35 @@ public sealed class XmlDocsReader
     private XmlMemberDoc? Lookup(MemberInfo member)
         => DocCommentId.For(member) is { } id ? File(AssemblyOf(member)).Members.GetValueOrDefault(id) : null;
 
+    /// <summary>
+    /// The summary of <paramref name="member"/>: its own, else what its <c>&lt;inheritdoc/&gt;</c>
+    /// resolves to, else (a property) its declaring type's <c>&lt;param&gt;</c> of the same name.
+    /// Every path, crefs and inheritance included, re-enters here, so the depth bound and the
+    /// record fallback apply at every hop.
+    /// </summary>
     private string? FindSummary(MemberInfo member, int depth)
     {
-        if (depth > MaxInheritDepth || Lookup(member) is not { } doc)
+        if (depth > MaxInheritDepth)
             return null;
-        if (doc.Summary is not null || !doc.InheritDoc)
-            return doc.Summary;
-        return doc.InheritDocCref is { } cref
-            ? FindByCref(member, cref, depth + 1)
-            : FindInherited(member, depth + 1);
+        // A constructed generic method is documented, implements and overrides as its generic
+        // definition: interface maps and base signatures name the definition.
+        if (member is MethodInfo { IsConstructedGenericMethod: true } constructed)
+            member = constructed.GetGenericMethodDefinition();
+
+        var summary = Lookup(member) switch
+        {
+            null => null,
+            { Summary: { } own } => own,
+            { InheritDoc: false } => null,
+            { InheritDocCref: { } cref } => FindByCref(member, cref, depth + 1),
+            _ => FindInherited(member, depth + 1),
+        };
+        if (string.IsNullOrEmpty(summary)
+            && member is PropertyInfo { DeclaringType: { } declaringType } property
+            && Lookup(declaringType) is { } typeDoc
+            && typeDoc.Params.TryGetValue(property.Name, out var recordParam))
+            return recordParam;
+        return summary;
     }
 
     /// <summary>An <c>&lt;inheritdoc/&gt;</c> with no <c>cref</c>: the base class first, then interfaces.</summary>
@@ -122,16 +134,17 @@ public sealed class XmlDocsReader
 
         foreach (var i in declaring.GetInterfaces())
         {
-            // Through the interface map when there is one: it names the member actually IMPLEMENTED,
-            // which a name match cannot when two interfaces declare the same name.
+            // Through the interface map when there is one (open generic definitions included): it
+            // names the member actually IMPLEMENTED, which a name match cannot when two interfaces
+            // declare the same name.
             if (!declaring.IsInterface && InterfaceMapOrNull(declaring, i) is { } map)
             {
                 foreach (var implemented in MappedInterfaceMembers(member, map))
                     yield return implemented;
                 continue;
             }
-            // No map (an open generic declaring type): match by name and signature, restricted to the
-            // interface an explicit implementation names.
+            // No map (a runtime-special type): match by name and signature, restricted to the
+            // interface an explicit implementation names exactly.
             if (!ExplicitQualifierMatches(member.Name, i))
                 continue;
             foreach (var m in i.GetMember(InterfaceMemberName(member.Name), member.MemberType, Declared))
@@ -179,10 +192,8 @@ public sealed class XmlDocsReader
 
     private static InterfaceMapping? InterfaceMapOrNull(Type type, Type iface)
     {
-        // GetInterfaceMap refuses an open generic type and a few runtime-special types; for those the
-        // qualified name match is used instead.
-        if (type.ContainsGenericParameters)
-            return null;
+        // GetInterfaceMap answers for open generic definitions too; it refuses a few runtime-special
+        // types, and for those the exact qualified name match is used instead.
         try
         {
             return type.GetInterfaceMap(iface);
@@ -201,22 +212,55 @@ public sealed class XmlDocsReader
     }
 
     /// <summary>
-    /// For an explicit implementation (<c>Ns.IFoo&lt;T&gt;.Bar</c>), whether <paramref name="iface"/> is
-    /// the interface it names (generic arguments ignored). An implicit one matches any interface.
+    /// For an explicit implementation, whether <paramref name="iface"/> is EXACTLY the interface its
+    /// name qualifies. The compiler names the member <c>{interface}.{member}</c> with the interface
+    /// in C# form (<c>Ns.IFoo&lt;System.Int32&gt;</c>, <c>Ns.Outer&lt;T&gt;.IA</c>,
+    /// <c>Ns.IPair&lt;T,System.String&gt;</c>), so the full identity (nesting, arity, arguments)
+    /// is compared. An implicit implementation (no qualifier) matches any interface.
     /// </summary>
     private static bool ExplicitQualifierMatches(string memberName, Type iface)
     {
         var dot = memberName.LastIndexOf('.');
-        if (dot < 0)
-            return true;
-        var qualifier = memberName[..dot];
-        var angle = qualifier.IndexOf('<');
-        if (angle >= 0)
-            qualifier = qualifier[..angle];
-        var definition = iface.IsGenericType ? iface.GetGenericTypeDefinition() : iface;
-        var name = (definition.FullName ?? definition.Name).Replace('+', '.');
-        var tick = name.IndexOf('`');
-        return string.Equals(tick < 0 ? name : name[..tick], qualifier, StringComparison.Ordinal);
+        return dot < 0 || string.Equals(memberName[..dot], CSharpName(iface), StringComparison.Ordinal);
+    }
+
+    /// <summary>A type as the C# compiler spells it in an explicit implementation's metadata name.</summary>
+    internal static string CSharpName(Type type)
+    {
+        if (type.IsGenericParameter)
+            return type.Name;
+        if (type.IsArray)
+            return CSharpName(type.GetElementType()!) + "[" + new string(',', type.GetArrayRank() - 1) + "]";
+        if (type.IsPointer)
+            return CSharpName(type.GetElementType()!) + "*";
+        var arguments = type.IsGenericType ? type.GetGenericArguments() : Type.EmptyTypes;
+        var chain = ImmutableStack<Type>.Empty;
+        for (var t = type.IsConstructedGenericType ? type.GetGenericTypeDefinition() : type; t is not null; t = t.DeclaringType)
+            chain = chain.Push(t);
+        var name = new System.Text.StringBuilder();
+        var consumed = 0;
+        var first = true;
+        while (!chain.IsEmpty)
+        {
+            chain = chain.Pop(out var level);
+            if (first)
+            {
+                if (!string.IsNullOrEmpty(level.Namespace))
+                    name.Append(level.Namespace).Append('.');
+                first = false;
+            }
+            else
+                name.Append('.');
+            var tick = level.Name.IndexOf('`');
+            name.Append(tick < 0 ? level.Name : level.Name[..tick]);
+            var total = level.IsGenericType ? level.GetGenericArguments().Length : 0;
+            if (total > consumed)
+            {
+                name.Append('<').Append(string.Join(",", arguments[consumed..total].Select(CSharpName))).Append('>');
+                consumed = total;
+            }
+        }
+        return name.ToString();
     }
 
     private static bool SameSignature(MemberInfo a, MemberInfo b)

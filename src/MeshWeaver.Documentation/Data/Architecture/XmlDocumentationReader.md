@@ -45,9 +45,11 @@ exactly one capability, `GetXmlDocsSummary`.
 
 ## How it works
 
-**Locating the file.** `{AssemblyName}.xml` beside `Assembly.Location`; for an assembly with no
-location (loaded from a stream, or a single-file host) the application base directory and the
-current directory, each also under `bin/`. A compiled NodeType is emitted as `{node}.dll` with
+**Locating the file.** `{AssemblyName}.xml` beside `Assembly.Location`, and nowhere else: a
+located assembly whose sidecar is missing reads as undocumented, because probing elsewhere could hand
+a collectible generation another generation's same-named file. Only an assembly with NO location
+(loaded from a stream, or a single-file host) probes the application base directory and the current
+directory, each also under `bin/`. A compiled NodeType is emitted as `{node}.dll` with
 assembly name `DynamicNode_{node}`, and `EmitPipeline` writes `DynamicNode_{node}.xml` beside it,
 so the first probe finds it. Dynamic assemblies have no docs. Namotion additionally probed the NuGet
 cache and the SDK's reference packs on a developer machine; that is deliberately NOT carried over —
@@ -85,7 +87,9 @@ means making the description a data-bound value rather than a string read during
 `<para>`, `<b>`, `<list>`, …) as its own rendered content, trimmed; `<typeparamref>` renders as
 nothing. The first line's indentation is removed from every line.
 
-**Documentation IDs** follow the compiler — nested types joined with `.`, a generic type's arity,
+**Documentation IDs** follow the compiler, and `XmlDocsCompilerParityTest` proves it against the
+compiler itself: it compiles a fixture covering every member shape with XML documentation and
+requires every ID Roslyn wrote to be produced by reflection over the same assembly. They follow the compiler — nested types joined with `.`, a generic type's arity,
 a method's arity, type and method generic parameters, constructed generics in braces, arrays,
 by-ref, `#ctor`/`#cctor`, `~ReturnType` on conversion operators, `#` for an explicit
 implementation's dots, index parameters for an indexer:
@@ -102,17 +106,20 @@ P:Ns.T.Item(System.String,System.Int32)
 A constructed generic type or a member of one reads the generic definition's docs.
 
 **Fallbacks.** A property with no summary of its own reads the `<param>` of the same name on its
-declaring type (a positional record). An `<inheritdoc/>` without `cref` resolves from the base class
+declaring type (a positional record) — at every hop, so a cref to such a property reads it too. A
+constructed generic method reads, implements and overrides as its generic definition. An `<inheritdoc/>` without `cref` resolves from the base class
 chain, then the interfaces (by interface map for a method); with `cref` it resolves the referenced
 ID in the member's assembly, its type hierarchy's assemblies, or the assembly that defines the
 referenced type, then reads the referenced MEMBER like any other — so its own `<inheritdoc/>`
 continues in its declaring type's context. Through an interface map when the declaring type has one
 (methods directly, properties and events through their accessors), so an explicit `IB.Name` reads
-`IB`'s summary even when `IA` also declares `Name`; an open generic type has no map and matches by
-name, restricted to the interface an explicit implementation names. Signatures compare generic arity
+`IB`'s summary even when `IA` also declares `Name` — open generic definitions included, which
+`GetInterfaceMap` answers too. Only a type the runtime refuses a map for falls back to a name match,
+restricted to EXACTLY the interface an explicit implementation's qualifier names (`IFoo` is not
+`IFoo<int>`, `Outer<T>.IA` is not `Outer<T>.IB`). Signatures compare generic arity
 as well as parameters (`M()` is not `M<T>()`), and every hop — crefs included — counts against one
 depth bound, so a cref cycle reads empty instead of overflowing the stack
-(`XmlDocsInheritDocTest`). Namotion only handled the immediate base and matched by name alone, so an
+(`XmlDocsInheritDocTest`, `XmlDocsCompilerParityTest`). Namotion only handled the immediate base and matched by name alone, so an
 overloaded base member made it read nothing.
 
 ## Parity evidence

@@ -50,9 +50,9 @@ internal sealed class XmlDocFile
 
     /// <summary>
     /// The documentation file of <paramref name="assembly"/>: <c>{AssemblyName}.xml</c> beside
-    /// <see cref="Assembly.Location"/>, then — for a stream-loaded or single-file assembly with no
-    /// location — the application base directory and the current directory, each also under
-    /// <c>bin/</c>. The NuGet-cache and SDK-pack probing the previous third-party reader did on a
+    /// <see cref="Assembly.Location"/> and nowhere else; ONLY for a stream-loaded or single-file
+    /// assembly with no location, the application base directory and the current directory, each
+    /// also under <c>bin/</c>. The NuGet-cache and SDK-pack probing the previous third-party reader did on a
     /// developer machine is deliberately not carried over: no deployed image has those directories,
     /// so it only made a summary appear locally that production never showed.
     /// </summary>
@@ -63,10 +63,14 @@ internal sealed class XmlDocFile
         if (assembly.IsDynamic || assembly.GetName().Name is not { Length: > 0 } name)
             return null;
         var file = name + ".xml";
-        if (assembly.Location is { Length: > 0 } location
-            && System.IO.Path.GetDirectoryName(location) is { } directory
-            && Existing(System.IO.Path.Combine(directory, file)) is { } beside)
-            return beside;
+        if (assembly.Location is { Length: > 0 } location)
+        {
+            // A LOCATED assembly reads only its own sidecar. Probing elsewhere could hand a
+            // collectible generation another generation's same-named file.
+            return System.IO.Path.GetDirectoryName(location) is { } directory
+                ? Existing(System.IO.Path.Combine(directory, file))
+                : null;
+        }
 
         foreach (var root in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
         {
