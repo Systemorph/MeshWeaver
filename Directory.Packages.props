@@ -84,7 +84,6 @@
     <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
     <PackageVersion Include="DocSharp.Markdown" Version="0.21.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.1" />
-    <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
     <!-- ExcelDataReader (MIT, no dependencies on net8.0+) reads .xls (BIFF2-8), .xlsx and .xlsm row by
@@ -95,8 +94,8 @@
     <PackageVersion Include="Grpc.AspNetCore.Web" Version="2.80.0" />
     <PackageVersion Include="Grpc.Net.Client" Version="2.80.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
-    <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Graph and
-         MeshWeaver.AI. It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
+    <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Plugins
+         (MeshWeaver.AI, and MeshWeaver.Graph.Views through core's MeshWeaver.Graph reference). It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
          which is the single reason those `using Humanizer;` lines compiled; Roslyn's own
          Humanizer.Core 2.14.1 tops out at net6.0 and contributes NO compile assets on net10.0.
          Removing json-everything (#1231) exposed that, so the dependency is now declared where
@@ -351,7 +350,6 @@
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
-    <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="xunit.v3.assert" Version="4.0.2" />
     <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.2" />
