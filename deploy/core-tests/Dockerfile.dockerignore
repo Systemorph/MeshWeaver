@@ -1,0 +1,5 @@
+# The mw-core-tests image's context is exactly the packed tree (BuildKit reads this file in place of
+# the root .dockerignore, which excludes artifacts/ and every bin/).
+*
+!artifacts/core-tests/
+!artifacts/core-tests/**

@@ -2178,7 +2178,8 @@ def classify_tags(plan: Plan, registry: Registry) -> None:
                 plan.tags_to_lock.append(entry)
 
 
-OFFICIAL_RELEASE_REPOSITORIES = frozenset({"memex-migration", "mw-plugin-test", "memex-portal-ai"})
+OFFICIAL_RELEASE_REPOSITORIES = frozenset({"memex-migration", "mw-plugin-test", "memex-portal-ai",
+                                          "mw-core-tests"})
 
 
 INDEX_MEDIA_TYPES = frozenset({
@@ -6617,8 +6618,8 @@ ingress:
           "that parses nothing reports exactly like a fleet that publishes nothing — which is the "
           "sentence #4323 is made of")
     check(_targets.get("ghcr.io") == {"systemorph/memex-portal-ai", "systemorph/memex-migration",
-                                      "systemorph/mw-plugin-test"},
-          f"ARM 34: the three repositories this fleet pushes to ghcr.io were not derived: "
+                                      "systemorph/mw-plugin-test", "systemorph/mw-core-tests"},
+          f"ARM 34: the four repositories this fleet pushes to ghcr.io were not derived: "
           f"{sorted(_targets.get('ghcr.io', []))}. That set is the fact #4323 turns on")
     check(LANE_REGISTRY in _targets,
           f"ARM 34: the registry this lane LOCKS was not among the derived push targets: "
@@ -6642,11 +6643,13 @@ ingress:
     # destinations sit on CONTINUATION lines, so it is a second repository the join must not drop.
     # `mw-build-host` is the standing build hosts' runner image (Doc/Architecture/BuildHosts):
     # `build-host-image` mirrors each versioned build here inside a FOLDED scalar, so it is a fifth
-    # repository the derivation must see.
+    # repository the derivation must see. `mw-core-tests` is core's own test image (the set's fifth
+    # digest, Doc/Architecture/BuildHosts): CD mirrors it beside the portal and migration images.
     check(_targets.get("cr.meshweaver.cloud") == {"memex-portal-ai", "memex-migration",
-                                                  "mw-plugin-test", "memex-control", "mw-build-host"},
+                                                  "mw-plugin-test", "memex-control", "mw-build-host",
+                                                  "mw-core-tests"},
           f"ARM 34: the fleet's own registry was derived with "
-          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all five repositories. "
+          f"{sorted(_targets.get('cr.meshweaver.cloud', []))} rather than all six repositories. "
           f"`mw-plugin-test` and `memex-control` reach it through mirror calls whose destinations "
           f"are on the CONTINUATION line, and they are the repositories that vanish when the join "
           f"stops")

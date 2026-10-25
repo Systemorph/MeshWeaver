@@ -265,6 +265,7 @@
         "repositories": [
           "systemorph/memex-portal-ai",
           "systemorph/memex-migration",
+          "systemorph/mw-core-tests",
           "systemorph/mw-plugin-test"
         ],
         "producedBy": [
