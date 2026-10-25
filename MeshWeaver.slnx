@@ -71,6 +71,7 @@
     <Project Path="src/MeshWeaver.ServiceProvider/MeshWeaver.ServiceProvider.csproj" />
     <Project Path="src/MeshWeaver.ShortGuid/MeshWeaver.ShortGuid.csproj" />
     <Project Path="src/MeshWeaver.Utils/MeshWeaver.Utils.csproj" />
+    <Project Path="src/MeshWeaver.Yaml/MeshWeaver.Yaml.csproj" />
   </Folder>
   <Folder Name="/test/">
     <File Path="test/appsettings.json" />

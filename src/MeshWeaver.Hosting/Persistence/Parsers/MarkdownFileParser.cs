@@ -8,7 +8,7 @@ using MeshWeaver.ContentCollections;
 using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Markdown;
 using MeshWeaver.Mesh;
-using YamlDotNet.Serialization;
+using MeshWeaver.Yaml;
 
 namespace MeshWeaver.Hosting.Persistence.Parsers;
 
@@ -24,29 +24,32 @@ public partial class MarkdownFileParser : IFileFormatParser
         .Build();
 
     /// <summary>
-    /// 🚨 CASE-INSENSITIVE on purpose (#1984). Two parsers claim <c>.md</c> and configured YAML
+    /// The binding options for front matter: the platform's TOLERANT YAML set
+    /// (<see cref="TolerantYaml.CreateSerializerOptions"/>, <c>Doc/Architecture/TolerantYaml</c>) —
+    /// YAML syntax, JSON semantics: unknown keys ignored, a number accepted for a string and a
+    /// quoted number for a number. Built once; System.Text.Json freezes it on first use.
+    ///
+    /// <para>🚨 CASE-INSENSITIVE on purpose (#1984). Two parsers claim <c>.md</c> and configured YAML
     /// differently: <c>AgentFileParser</c> binds camelCase but claims only <c>nodeType: Agent</c>,
     /// so everything else falls through here — where a PascalCase-only deserializer never bound
-    /// <c>nodeType:</c>, <see cref="DeserializerBuilder.IgnoreUnmatchedProperties"/> swallowed the
+    /// <c>nodeType:</c>, ignoring unmatched properties swallowed the
     /// miss, and the node defaulted to <c>Markdown</c>. Eleven skills authored exactly as this
     /// repo's own guidance says imported as plain Markdown pages, silently, and so never reached
-    /// the slash-command list.
+    /// the slash-command list.</para>
     ///
     /// <para>Adding a camelCase CONVENTION would have been the wrong fix: it swaps which casing
     /// binds rather than accepting both, and 1146 files in the plugin repos author the same keys
     /// PascalCase (<c>NodeType: Edu/Lesson</c>). Case-insensitive matching binds BOTH, which is
     /// why the regression test pins the two spellings of the same key.</para>
     /// </summary>
-    private static readonly IDeserializer YamlDeserializer = new DeserializerBuilder()
-        .WithCaseInsensitivePropertyMatching()
-        .IgnoreUnmatchedProperties()
-        .Build();
+    private static readonly System.Text.Json.JsonSerializerOptions FrontMatterReadOptions =
+        TolerantYaml.CreateSerializerOptions();
 
     /// <summary>
     /// The front-matter keys this parser BINDS — every property declared on
     /// <see cref="MarkdownFrontMatter"/>, read from the type itself so the set cannot drift the
     /// day a property is added. Case-insensitive, exactly like
-    /// <see cref="YamlDeserializer"/>'s own matching.
+    /// <see cref="FrontMatterReadOptions"/>' own matching.
     ///
     /// <para><c>static readonly</c> is the sanctioned shape here: an immutable lookup computed
     /// once from a compiled type and never written at runtime.</para>
@@ -62,7 +65,7 @@ public partial class MarkdownFileParser : IFileFormatParser
     ///
     /// <para>🚨 This grammar is NARROWER than YAML's and is the FALLBACK only, never the primary
     /// reader: it matches an unquoted ASCII identifier, so a quoted key (<c>"displayName":</c>) or
-    /// one carrying a dot is a key YamlDotNet binds, this pattern misses, and the record would then
+    /// one carrying a dot is a key the YAML reader binds, this pattern misses, and the record would then
     /// omit — a detector seeing less than the loss it exists to name. The primary reader is
     /// <see cref="TopLevelYamlKeys"/>, which asks the same parser that did the discarding.</para>
     /// </summary>
@@ -70,26 +73,28 @@ public partial class MarkdownFileParser : IFileFormatParser
     private static partial Regex TopLevelFrontMatterKey();
 
     /// <summary>
-    /// The root mapping's keys, read with the SAME deserializer that bound
+    /// The root mapping's keys, read with the SAME YAML reader that bound
     /// <see cref="MarkdownFrontMatter"/> — so a key it accepted and discarded is a key this sees,
     /// whatever its spelling (quoted, dotted, non-ASCII). Quotes are resolved by the parser, so the
     /// reported name is the key as YAML means it rather than as the file spells it.
     ///
-    /// <para>Returns <c>null</c> when this text is not a YAML mapping the parser can read — a
-    /// duplicate key, an unresolvable alias, a block the defensive extractor recovered from
+    /// <para>Returns <c>null</c> when this text is not a YAML mapping the parser can read — an
+    /// unresolvable alias, an unterminated quote, a block the defensive extractor recovered from
     /// malformed input. That is NOT swallowing a fault: the front matter has already been bound (or
     /// regex-recovered) by the time this runs, so the parse state is known; the caller falls back
     /// to the narrower <see cref="TopLevelFrontMatterKey"/> pattern, exactly as
-    /// <c>Parse</c> already falls back when YamlDotNet throws on the same text.</para>
+    /// <c>Parse</c> already falls back when the YAML reader throws on the same text.</para>
     /// </summary>
     /// <param name="yaml">The raw front-matter block.</param>
     private static IEnumerable<string>? TopLevelYamlKeys(string yaml)
     {
         try
         {
-            return YamlDeserializer.Deserialize<Dictionary<string, object?>>(yaml)?.Keys;
+            return (TolerantYaml.Parse(yaml) as System.Text.Json.Nodes.JsonObject)?
+                .Select(entry => entry.Key)
+                .ToImmutableList();
         }
-        catch (YamlDotNet.Core.YamlException)
+        catch (YamlParseException)
         {
             return null;
         }
@@ -132,9 +137,15 @@ public partial class MarkdownFileParser : IFileFormatParser
         return unbound.Count == 0 ? null : unbound;
     }
 
-    private static readonly ISerializer YamlSerializer = new SerializerBuilder()
-        .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull | DefaultValuesHandling.OmitDefaults)
-        .Build();
+    /// <summary>
+    /// The options that WRITE front matter: keys exactly as <see cref="MarkdownFrontMatter"/>
+    /// declares them (PascalCase, declaration order — the shape every mirrored file already has)
+    /// and null values omitted. Immutable after first use, so a constant rather than state.
+    /// </summary>
+    private static readonly System.Text.Json.JsonSerializerOptions FrontMatterWriteOptions = new()
+    {
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
 
     /// <summary>
     /// Options for reading a node's own content as <see cref="MarkdownContent"/> in
@@ -167,24 +178,24 @@ public partial class MarkdownFileParser : IFileFormatParser
             rawYaml = yamlBlock.Lines.ToString();
             try
             {
-                frontMatter = YamlDeserializer.Deserialize<MarkdownFrontMatter>(rawYaml);
+                frontMatter = TolerantYaml.Deserialize<MarkdownFrontMatter>(rawYaml, FrontMatterReadOptions);
                 frontMatter?.NormalizeAliases();
             }
             catch
             {
                 yamlDeserializerThrew = true;
                 // If YAML parsing fails, fall through to the regex-based extractor
-                // below — defensive against environment-specific YamlDotNet quirks
-                // (line endings, encoding, type-coercion edge cases) that would
-                // otherwise silently downgrade NodeType to "Markdown".
+                // below — the reader is tolerant, but a value that cannot bind
+                // (`Order: first`, a mapping where a string belongs) or text with no
+                // single reading must not silently downgrade NodeType to "Markdown".
             }
         }
 
         // Defensive frontmatter extractor: fires when (a) Markdig failed to
         // detect the YamlFrontMatterBlock (rawYaml is null) — the CI-Linux
         // case where Markdig silently misses a valid `---\nName: …\n---`
-        // block — OR (b) Markdig found the block but YamlDotNet threw on
-        // it (encoding / line-ending quirks). In both cases we fall back to
+        // block — OR (b) Markdig found the block but reading or binding it
+        // threw (a value that does not bind, text with no single reading). In both cases we fall back to
         // a regex over the raw `---…---` region, but with a value-shape
         // gate that rejects YAML sequence/mapping starters (`[`, `{`) so
         // the <c>Parse_WithMalformedYaml_UsesDefaults</c> repro
@@ -205,7 +216,7 @@ public partial class MarkdownFileParser : IFileFormatParser
                 if (!match.Success) return null;
                 var raw = match.Groups["value"].Value.Trim();
                 // Reject YAML sequence/mapping starters — these indicate the
-                // value is structured (and probably malformed since YamlDotNet
+                // value is structured (and probably malformed since the reader
                 // either threw or skipped the field). Single scalar values
                 // never legitimately start with `[` or `{` in our frontmatter.
                 if (raw.Length > 0 && (raw[0] == '[' || raw[0] == '{')) return null;
@@ -269,7 +280,7 @@ public partial class MarkdownFileParser : IFileFormatParser
             // Notes/Background are deliberately NOT regex-recovered: Notes is
             // typically a multi-line block scalar and Background CSS contains
             // ` #rrggbb` — both shapes the single-line extractor would mangle.
-            // The primary YamlDotNet path handles them (quoted/block scalars).
+            // The primary YAML path handles them (quoted/block scalars).
         }
 
         // Extract markdown content (without YAML block)
@@ -440,7 +451,9 @@ public partial class MarkdownFileParser : IFileFormatParser
         if (hasYamlContent)
         {
             sb.AppendLine("---");
-            var yaml = YamlSerializer.Serialize(frontMatter).TrimEnd();
+            // Line endings as the surrounding AppendLine writes them, so the block and its
+            // fences agree on every platform (the emitter itself writes '\n').
+            var yaml = TolerantYaml.Serialize(frontMatter, FrontMatterWriteOptions).TrimEnd().ReplaceLineEndings();
             sb.AppendLine(yaml);
             sb.AppendLine("---");
             sb.AppendLine();
@@ -719,7 +732,7 @@ public partial class MarkdownFileParser : IFileFormatParser
         // reason as the keys above.
         public long? Version { get; set; }
 
-        // Legacy aliases. YamlDotNet doesn't follow C# property hierarchy, so we
+        // Legacy aliases. The binder doesn't follow C# property hierarchy, so we
         // expose them as plain settable properties and fold them in below
         // (NormalizeAliases) once deserialization completes. Pre-rename files
         // (Title / Description) keep working without a one-shot migration script.

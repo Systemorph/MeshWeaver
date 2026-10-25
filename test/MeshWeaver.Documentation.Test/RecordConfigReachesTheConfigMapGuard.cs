@@ -2,7 +2,6 @@ using System;
 using System.Collections.Immutable;
 using System.Linq;
 using Xunit;
-using YamlDotNet.Core;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -51,7 +50,7 @@ public class RecordConfigReachesTheConfigMapGuard
                 $"a record that sets {key} must reach the pod even though no template line names it — "
                 + "otherwise the record states a value nobody receives (Memex#689 → Memex#693)");
             data[key].Value.Should().Be(expected, $"{key} must carry the record's value verbatim");
-            data[key].Style.Should().Be(ScalarStyle.DoubleQuoted, $"{key} must render as a quoted string");
+            data[key].IsString.Should().BeTrue($"{key} must render as a quoted string");
         }
         data["Pass__Through__Count"].Value.Should().Be("3", "a whole number renders as written");
         data["Pass__Through__Big"].Value.Should().Be("1000000", "a large whole number must not render as 1e+06");
