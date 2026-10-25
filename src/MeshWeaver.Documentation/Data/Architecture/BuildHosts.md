@@ -22,13 +22,18 @@ instance's MCP), which builds on `Hosting/BuildService` there. The instance side
 MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChannels),
 [Module Build Architecture](../ModuleBuildArchitecture) and [Build Server](../BuildServer).
 
+> **Target shape:** [Deploy, Test the Deploy, Switch Latest](../DeployTestSwitchLatest) (DECIDED
+> DESIGN, not wired; policy `deploy-test-switch-latest`, decided and `proposed` until its wiring lands) generalises the channels on this page into one
+> versioned deployment per platform set plus a `latest` alias that moves only after the set passed
+> its tests ON its deployment. Until that wiring lands, this page describes what runs.
+
 | piece | file | what it does |
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
 | the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, staged for the unchanged module publish lane |
 | the host runner | MeshWeaver.Deploy `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (MeshWeaver.Deploy `deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
-| the CD hand-over | `main-cd.yml` job `deploy-handover` (a `platform-set-sealed` dispatch); MeshWeaver.Deploy `build-host.yml` (jobs `image`, `handover`, `report`), `build-host-stable.yml`, `build-host-announcement.py`, declared by its `.github/build-hosts.json` | the runner image per set; on every hand-over, a signed event that moves `build-latest` to the newest armed set; daily, `build-stable` to the main-passed ceiling |
+| the hand-over | MeshWeaver.Deploy `build-host.yml` (a 15-minute `schedule` that reads the sets `main-cd.yml` sealed from the registry; jobs `image`, `handover`, `report`), `build-host-stable.yml`, `build-host-announcement.py`, declared by its `.github/build-hosts.json` | the runner image per set; on every hand-over, a signed event that moves `build-latest` to the newest armed set; daily, `build-stable` to the main-passed ceiling |
 
 ## 1. The follow lane
 
@@ -343,18 +348,42 @@ chart has no copy; the image and its self-tests are MeshWeaver.Deploy's `build-h
 shape above for both channels, and the refusals hold; the fixture also runs through every portal
 invariant in `check-chart-invariants.sh`.
 
-## 4. MeshWeaver.Deploy deploys the host, on the platform's hand-over
+### Versioned build servers (contract and chart)
+
+Besides the channel hosts, the chart renders one **versioned build server** per entry in
+`buildHosts.versions` (the chart half lands in MeshWeaver.Deploy). The entries come from the record's mesh-owned `buildHostSets`, never typed by
+hand. The design is Deploy, Test the Deploy, Switch Latest (the design page in core PR #7182; linked once it lands) §3.
+
+- **Keys.** `v/<version>` holds that version's set token. `alias/<name>` holds the VERSION an alias
+  names (`latest`, `candidate`, `previous`; one scalar leaf). `BuildHostSetKeys` parses both;
+  `DeploymentContent.BuildHostAliasSet` / `BuildHostVersionSet` resolve them.
+- **Token.** The token gains an optional fifth part, the `mw-core-tests` digest. A four-part token
+  reads back byte-identically.
+- **Chart** (the build-host chart lives in Systemorph/MeshWeaver.Deploy; core's is frozen). Each entry renders Deployment `build-<v>` (dots as dashes, a DNS label) and ScaledObject
+  `build-<v>-scaler`, with demand from `/queue?version=<v>`. Its runner (which moves to MeshWeaver.Deploy
+  along with the chart) claims, reports and requests its token by `MW_BUILD_VERSION`, never by channel. The selector and pod labels carry the version
+  ONLY; the aliases label the Deployment, so a switch moves a label and restarts nothing. An alias
+  that names two versions, a repeated version, or a malformed version is refused.
+- **Retention.** `BuildHostRetention.Keep` holds every alias target (`previous` while
+  `KeepPreviousLatest`), every attempt's recorded version, and every capped package's version;
+  `Teardown` is the rest.
+
+## 4. MeshWeaver.Deploy deploys the host, from the platform's sealed sets
 
 Core's CD BUILDS and SEALS the product image set and nothing else (core slimming). The build-host
-deployment lives in [MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) and is triggered by the platform: every
-`main-cd.yml` run ends with job `deploy-handover`, ONE `repository_dispatch` of type
-`platform-set-sealed` to MeshWeaver.Deploy carrying the set that run published and what `arm`
-decided (schema 1, defined and validated by Deploy's `.github/scripts/platform-set-dispatch.py`).
-The token is the meshweaver-cloud App's, minted for MeshWeaver.Deploy ALONE — the platform deploy
-holds no credential that reaches MeshWeaver.Plugins (`test-cd-steps.py`). The payload is a claim:
-Deploy proves every commit is on core's `main` and resolves every version in the registry before it
-builds or signs anything. A refused dispatch is red in core and paged by `alert-on-failure`;
-what Deploy then does reports on Deploy's own `build-host-latest` issue.
+deployment lives in [MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy), and the platform does not
+trigger it: core dispatches to NO repository (policy `dependents-verify-on-their-side`, held by
+`PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository`). Deploy PULLS. Every 15 minutes its
+`build-host.yml` (`schedule`) reads the sets `main-cd.yml` sealed from the registry they were sealed
+into — a set is PROMOTED when `mw-plugin-test` carries its version tag and ARMED when
+`memex-portal-ai` does, and both tags sit on the manifest whose `staging-<core7>-<run id>` tag names
+the commit and the CD run (`platform-set-dispatch.py discover`). The newest armed, then the newest
+promoted, set that still has no `mw-build-host:<version>` becomes the hand-over (schema 1, the same
+contract a `workflow_dispatch` re-run reads). Deploy resolves the commit in core's public history,
+proves it is on `main`, and resolves every version in the registry before it builds or signs
+anything; a red reports on Deploy's own `build-host-latest` issue. The cost of the pull is one tick:
+an armed set reaches `build-latest` within about 15 minutes, and no platform roll waits on it — the
+build host is outside the platform's delivery.
 
 **The runner image.** Deploy's `build-host.yml` job `image` builds its `deploy/build-host/Dockerfile`
 (the .NET 10 SDK, bash, python3, git, bubblewrap, Deploy's `build-run.py`, and the platform's
@@ -366,7 +395,7 @@ carries — once per version, mirrored to the fleet registry. It is outside the 
 the rest of the set. Every pull request there builds the image against core's `main` and runs every
 self-test (job `test`).
 
-**`build-latest` follows the armed set.** On every hand-over, Deploy's job `handover` (after
+**`build-latest` follows the armed set.** On every tick, Deploy's job `handover` (after
 `image`) hands `build-latest` the newest armed set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
 it resolves the set's `mw-plugin-test`, `memex-portal-ai` and `mw-build-host` digests from the
 version tag (never a moving name), re-checks the set is still the newest armed one (never
@@ -500,8 +529,33 @@ declaration claims it yet: MeshWeaver.Plugins owes the seven items in its `Hosti
 (H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
 until its heavy legs can be stated as stages: they build the platform from source and test it
 (`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
-runs a repository's checks against it — a different workload, not a missing switch. Core declares
-no `.github/build-stages.json`, so `build-executor.py` would answer `actions` for it regardless.
+runs a repository's checks against it — a different workload, not a missing switch.
+
+**Core's stages run on a DEPLOYMENT, not on its pull requests.** Core declares
+`.github/build-stages.json` for the deploy-test-switch shape (the design page in core PR #7182, P4):
+`test-shard-0` … `test-shard-<N-1>`, one per shard of `dotnet-test.yml`'s suite (N =
+`CI_SHARD_TOTAL`), and `doc-gate`. Each runs from the set's **`mw-core-tests`** image, the set's
+fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image-arch` builds core's
+tests with CI's flags once PER ARCHITECTURE, on a runner of that architecture — a test bin carries
+the build machine's native `mw-plugin-test` apphost and its SDK's ReadyToRun Razor generator, so an
+x64 tree cannot serve the arm64 image — `deploy/core-tests/core-tests.py pack` stores every shard's
+bins content-addressed with a manifest, `core-tests-image` joins the two platform images into the
+set's index, and `promote` tags it with the set. A stage runs
+`python3 /core-tests/core-tests.py run --shard <i> --total <N>`, which copies that shard's bins out
+of the read-only image tree into the run's checkout and runs them as CI's shard loop does — each
+unit in its own process group, ended whole at the wall clock, and judged on a trx written by THAT
+invocation; `doc-gate` runs the doc and samples gates with the image's plugin tester against the
+checkout, followed by `check-tests-area-verdicts.py` on each tree exactly as CI's doc-gate job.
+- **The list is GENERATED**: `.github/scripts/core-build-stages.py --write` derives it from
+  `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
+  reds any drift. The runner also refuses a `--total` the image was not packed for.
+- **No `ciEquivalent`.** Core's pull-request CI stays on runners, so `build-executor.py` still
+  answers `actions` for it; `--check` refuses the claim.
+- **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
+  `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
+  and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
+  suites run inside a host's sandbox — the shards' Testcontainers projects need a Docker daemon a
+  host does not have, and the shards' browser tests need the font set CI stages.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`
@@ -516,11 +570,14 @@ whole workflow (the admission queues a new attempt).
 
 ## 6. Not done here
 
-- **The receiver of `build-host-update-available`** (the record write) and the **`POST /token`
-  route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})` for the ONE
-  repository of the run, only for the host that holds its claim) are the operations instance's, in
-  MeshWeaver.Plugins. Until the receiver exists the event must stay unsent — which `enabled: false`
-  guarantees.
+- **The receiver of `build-host-update-available`** (the record write) EXISTS: MeshWeaver.Plugins
+  #4166 shipped it (`Hosting/Deployment/Source/BuildHostUpdates.cs`), and it changes a record only
+  when that record's `BuildHosts.Enabled` is already true. The event still stays unsent while
+  `enabled: false` here, and no record enables build hosts yet (the control record carries no
+  `buildHosts` block), so turning the hosts on remains the two declared acts of §4. The
+  **`POST /token` route** (minting `GetScopedInstallationToken(owner, [repo], {"contents":"read"})`
+  for the ONE repository of the run, only for the host that holds its claim) is the operations
+  instance's, in MeshWeaver.Plugins.
 - **The fleet-reader App's grant** is Contents / Metadata / Pull requests today; the stable roll
   needs Actions: read and Checks: read on MeshWeaver.Plugins. Widening it is a maintainer act;
   until then `stable` stays out of `.github/build-hosts.json` `channels`.

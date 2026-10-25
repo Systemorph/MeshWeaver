@@ -65,7 +65,10 @@ jobs:
   request:
     name: Request review on real change
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    # 15 = the reads and the one request + the predicate's 5-minute API outage budget (MeshWeaver#7187):
+    # an outage is retried, then reported as INFRA (exit 3) — never a silent no-request — and the
+    # 15-minute `schedule` sweep requests what the failed run did not.
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write   # the one GraphQL requestReviews mutation

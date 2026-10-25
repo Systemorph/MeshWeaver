@@ -210,6 +210,9 @@ public sealed class NodeRepoPackageSource : IPackageSource
                         // its declared platform floor, the module lane's landing gate.
                         Module = peeked.Module,
                         MinMeshVersion = peeked.MinMeshVersion,
+                        MaxMeshVersion = peeked.MaxMeshVersion,
+                        CapReason = peeked.CapReason,
+                        CapTracking = peeked.CapTracking,
                         // What this package needs its ENVIRONMENT to supply. Read here for the same
                         // dead-metadata reason as everything above: the install funnel's parameter
                         // gate keys on the manifest, so a field the listing drops is a gate that
@@ -326,12 +329,20 @@ public sealed class NodeRepoPackageSource : IPackageSource
         bool PreInstalled, bool DefaultApp, ImmutableList<string> Requires, ImmutableList<string> PublicSegments,
         ImmutableList<string> ProtectedSegments,
         string? License, string? ContactEmail, string? Module, string? MinMeshVersion,
-        ImmutableList<PackageParameter> Parameters, string? Tier);
+        ImmutableList<PackageParameter> Parameters, string? Tier,
+        string? MaxMeshVersion = null, string? CapReason = null, string? CapTracking = null);
 
     // Reads the node's type/name/description — plus the storefront card fields (category/icon on
     // the node, price/currency/poster inside the content) — straight from the JSON: no MeshNode
     // deserialization, so the source needs no hub serializer options and unregistered content
     // types (PluginManifest / PluginContent) don't matter for listing.
+    // A non-blank string member of a root's content, trimmed; null for absent, blank or non-string.
+    private static string? NonBlank(JsonElement content, string name) =>
+        content.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+        && value.GetString() is { } text && !string.IsNullOrWhiteSpace(text)
+            ? text.Trim()
+            : null;
+
     private PeekedRoot Peek(string json, string path)
     {
         try
@@ -350,6 +361,7 @@ public sealed class NodeRepoPackageSource : IPackageSource
             var protectedSegments = ImmutableList<string>.Empty;
             string? module = null;
             string? minMeshVersion = null;
+            string? maxMeshVersion = null, capReason = null, capTracking = null;
             var parameters = ImmutableList<PackageParameter>.Empty;
             string? tier = null;
             if (r.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.Object)
@@ -428,6 +440,12 @@ public sealed class NodeRepoPackageSource : IPackageSource
                     && floor.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(floor.GetString()))
                     minMeshVersion = floor.GetString();
+                // The authored upper platform CAP and its two companions (policy
+                // `package-mesh-version-cap`): build-and-test meaning only — the version a capped
+                // package's modules build against — read so it is carried, not dropped.
+                maxMeshVersion = NonBlank(content, "maxMeshVersion");
+                capReason = NonBlank(content, "capReason");
+                capTracking = NonBlank(content, "capTracking");
                 // What the package needs its ENVIRONMENT to supply ("parameters": [{name, kind,
                 // service, description, optional}]). Deserialized with the same web-style options
                 // the package.json sources use, so one authored shape reads identically in both
@@ -449,7 +467,8 @@ public sealed class NodeRepoPackageSource : IPackageSource
                 r.TryGetProperty("category", out var cat) ? cat.GetString() : null,
                 r.TryGetProperty("icon", out var ic) ? ic.GetString() : null,
                 price, currency, poster, preInstalled, defaultApp, requires, publicSegments, protectedSegments,
-                license, contactEmail, module, minMeshVersion, parameters, tier);
+                license, contactEmail, module, minMeshVersion, parameters, tier,
+                maxMeshVersion, capReason, capTracking);
         }
         catch (JsonException ex)
         {

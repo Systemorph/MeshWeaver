@@ -39,16 +39,16 @@ The template contains the complete Memex portal solution (Blazor Server monolith
 
 ### Local Kubernetes stack (macOS)
 
-A prod-like stack on Colima k3s. The default (local-build) path needs a checkout,
-so the CLI runs straight from it:
+A prod-like stack on Colima k3s, run by `memex-local` — which lives with the Helm chart in the
+public [MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) repository. Check it out
+beside this one (the local-build path finds `../MeshWeaver` on its own) and run:
 
 ```bash
-./deploy/homebrew/bin/memex-local up
-# …or symlink it onto your PATH: ln -s "$PWD/deploy/homebrew/bin/memex-local" ~/.local/bin/memex-local
+../MeshWeaver.Deploy/deploy/homebrew/bin/memex-local up
+# …or install it: brew tap systemorph/memex && brew install memex-local
 ```
 
-Opens at `https://memex.localhost:8443`. A Homebrew install (via a local tap) is
-also supported — see [`deploy/homebrew`](deploy/homebrew) for details.
+Opens at `https://memex.localhost:8443`.
 
 ### Deploy to production
 
@@ -60,7 +60,8 @@ Production deployment recipes live under [`deploy/`](deploy/):
 - [`deploy/compose`](deploy/compose) · [`deploy/compose-ha`](deploy/compose-ha) — Docker Compose (single-node / HA)
 
 **These are recipes, not the configuration of any running service.** Point them at your own
-infrastructure: copy [`deploy/aks/envs/example`](deploy/aks/envs/example) to your own environment
+infrastructure: copy the example environment (`deployments/aks/example/` in the private Systemorph/Memex
+deployments repository; it left this repository with the core-slimming carve) to your own environment
 folder and fill in your values. The files that carry real per-environment values —
 `values.<env>.yaml`, `secretproviderclass.yaml` — are git-ignored and never committed here.
 

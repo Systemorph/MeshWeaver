@@ -23,6 +23,14 @@ name: Node repo review answered (reusable)
 # review-answered-on-degradation.yml re-runs the gate instead, and a caller that needs the same adds
 # that listener naming its own caller workflow.
 #
+# 🚨 AN API OUTAGE IS NOT A VERDICT (MeshWeaver#7187). A rate-limit 403/429, a secondary limit or a
+# 5xx is retried inside the job (MW_API_OUTAGE_WAIT_MINUTES) and, past that, the job fails the marker
+# step "API outage: no verdict was taken (retried automatically)" instead of reading as an
+# unanswered review. What re-runs such a run LATER is a separate listener the caller adds beside this
+# one — node-repo-review-answered-retry.yml (its header carries the thin caller). WITHOUT it, an
+# outage red in that repository still needs a person's re-run, exactly as before — but it now says
+# so, by name, rather than reading as an unanswered thread.
+#
 # 🚦 THE ROLLOUT ORDER IS NOT OPTIONAL, and this lane is only its first step:
 #   1. this lane lands in core (observe-only by construction — it changes no protection);
 #   2. a repository adds the thin caller below — OBSERVE-ONLY, i.e. NOT a required context yet —
@@ -135,8 +143,9 @@ jobs:
   answered:
     name: Automatic review answered
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    # 20 = the 15-minute bounded wait for the review + headroom for the fetch and the reads.
-    timeout-minutes: 20
+    # 30 = the 15-minute bounded wait for the review + the 3-minute settle cap + the 5-minute API outage
+    # budget (MW_API_OUTAGE_WAIT_MINUTES, MeshWeaver#7187) + headroom for the fetch and the reads.
+    timeout-minutes: 30
     # Reads only, and only what the predicate needs: the pull request, its reviews and review
     # comments (pull-requests), the label events that attribute a waiver (issues). The
     # collaborator-permission read that verifies a waiver needs `metadata: read`, which every
@@ -180,7 +189,11 @@ jobs:
       - name: "Prove the predicate can say no (self-test)"
         run: python3 "$RUNNER_TEMP/check-review-answered.py" --self-test
 
+      # 🚨 An API outage (rate limit, 5xx) is retried inside the run for up to MW_API_OUTAGE_WAIT_MINUTES
+      # and, past that, exits 3 with `outcome=api-outage` — INFRA, never the verdict "unanswered"
+      # (MeshWeaver#7187). The marker step below names it, and the retry listener re-runs it.
       - name: Judge the pull request's automatic review
+        id: judge
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -189,6 +202,7 @@ jobs:
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
           WAIT_MINUTES: ${{ inputs.wait-for-review-minutes }}
           SETTLE_SECONDS: ${{ inputs.settle-replies-seconds }}
+          MW_API_OUTAGE_WAIT_MINUTES: "5"
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
@@ -202,6 +216,19 @@ jobs:
             exit 1
           fi
 
+      # 🚨 THE OUTAGE MARKER (MeshWeaver#7187). Runs only after the verdict step FAILED with
+      # `outcome=api-outage`, and is itself RED — so the job is red either way and this condition can
+      # never turn anything green. Its NAME is the contract: the retry listener
+      # (node-repo-review-answered-retry.yml) re-runs a run only when a step of this exact name failed
+      # (check-review-answered.py OUTAGE_STEP_NAME, asserted by its self-test in core's tree).
+      - name: "API outage: no verdict was taken (retried automatically)"
+        if: failure() && steps.judge.outputs.outcome == 'api-outage'
+        env:
+          OUTAGE_KIND: ${{ steps.judge.outputs.outage-kind }}
+        run: |
+          echo "::error::GitHub's API refused this run for capacity (${OUTAGE_KIND}) past its retry budget. NO verdict was taken: this is not an unanswered thread and not a missing review. The retry listener re-runs this run once the limit has reset."
+          exit 1
+
       # Reached only on GREEN (the step above exits 1 on RED).
       - name: Stamp when the verdict was taken
         id: verdict-time
@@ -209,15 +236,19 @@ jobs:
 
   # ♻️ THE SELF-REFRESH — see the header. Runs only after a GREEN verdict (`needs` success); on a
   # RED one there is nothing to refresh, and a later reply's own GREEN run refreshes then. The script
-  # decides and PRINTS every no-op (this run is the `pull_request` one; the read run is in flight,
-  # already green, or newer than this verdict; a fork) — so the job never skips silently on an event
+  # decides and PRINTS every no-op (this run is the `pull_request` one; the read run is already
+  # green, or newer than this verdict; a fork) and WAITS for a read run still in flight (#7187 — it
+  # may already have published its red) — so the job never skips silently on an event
   # it was started for. Not a required context: it can turn nothing green by itself, only make the
   # run branch protection reads judge the live state again.
   refresh:
     name: Refresh the verdict branch protection reads
     needs: answered
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    # 45 = up to 30 minutes letting an in-flight read run finish (REFRESH_WAIT_SECONDS — a run still in
+    # flight may already have published a red its gate job read before this verdict, #7187) + the
+    # 5-minute API outage budget + headroom. Typically seconds: the read run is past its review wait.
+    timeout-minutes: 45
     permissions:
       contents: read
       pull-requests: read
@@ -242,6 +273,7 @@ jobs:
           python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
 
       - name: Re-run the newest pull_request run iff it still carries an older red
+        id: judge
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -249,7 +281,18 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           RUN_ID: ${{ github.run_id }}
           EVALUATED_AT: ${{ needs.answered.outputs.evaluated-at }}
+          MW_API_OUTAGE_WAIT_MINUTES: "5"
         run: |
           set -euo pipefail
           python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --refresh-read-run \
             --event "$EVENT_NAME" --pr "${PR:-}" --run-id "$RUN_ID" --evaluated-at "$EVALUATED_AT"
+
+      # The same marker as the verdict job's: an outage here left the read run un-refreshed, and the
+      # retry listener re-runs this whole run (its verdict, then this refresh) once the limit resets.
+      - name: "API outage: no verdict was taken (retried automatically)"
+        if: failure() && steps.judge.outputs.outcome == 'api-outage'
+        env:
+          OUTAGE_KIND: ${{ steps.judge.outputs.outage-kind }}
+        run: |
+          echo "::error::GitHub's API refused the refresh for capacity (${OUTAGE_KIND}) past its retry budget — the read run was NOT refreshed. The retry listener re-runs this run once the limit has reset."
+          exit 1

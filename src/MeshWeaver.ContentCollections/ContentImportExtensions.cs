@@ -266,6 +266,10 @@ public static class ContentImportExtensions
     /// carries only a handle), then — when <c>Mirror</c> — deletes any file already under
     /// <c>TargetPath</c> that the incoming set does not carry, so the folder mirrors the supplied set
     /// exactly. Returns the number of files written.
+    ///
+    /// <para>One delivery is not the whole sync — the producer may split it — so the delivery does not
+    /// announce what it wrote: <see cref="SyncContentFilesBuilder.Post"/> announces the WHOLE sync once,
+    /// after its last delivery answered.</para>
     /// </summary>
     private static IObservable<int> SyncFiles(
         IContentService contentService, SyncContentFilesRequest request, ILogger? logger)
@@ -515,7 +519,7 @@ public static class ContentImportExtensions
 
         // The hub action block only subscribes + returns; every I/O leaf runs on the
         // collections' own pools — this layer is pure reactive composition.
-        Copy(contentService, request)
+        Copy(contentService, request, hub.ServiceProvider.GetService<AccessService>()?.Context)
             .Subscribe(
                 count => hub.Post(ImportContentResponse.Ok(count), o => o.ResponseFor(delivery)),
                 ex => hub.Post(ImportContentResponse.Fail(ex.Message), o => o.ResponseFor(delivery)));
@@ -523,7 +527,13 @@ public static class ContentImportExtensions
         return delivery.Processed();
     }
 
-    private static IObservable<int> Copy(IContentService contentService, ImportContentRequest request)
+    /// <summary>
+    /// Copies the files of the source folder into the target folder, one at a time, and once every
+    /// copy has committed announces the import to the content observers ONCE
+    /// (<see cref="IContentUploadObserver.OnFilesWritten"/>) with every file it wrote — the import used
+    /// to announce nothing, so imported content was never indexed.
+    /// </summary>
+    private static IObservable<int> Copy(IContentService contentService, ImportContentRequest request, AccessContext? caller)
         => contentService.GetCollection(request.SourceCollection!)
             .Select(source => source
                 ?? throw new InvalidOperationException($"Source content collection '{request.SourceCollection}' not found"))
@@ -540,12 +550,14 @@ public static class ContentImportExtensions
                 return pair.source.GetFiles(request.SourcePath)
                     .Select(file => pair.source.GetContent(file.Path)
                         .SelectMany(stream => stream is null
-                            ? Observable.Return(0)
+                            ? Observable.Empty<string>()
                             : pair.target.SaveFile(targetDir, file.Name, stream)
-                                .Select(_ => 1)
+                                .Select(_ => targetDir.Length == 0 ? file.Name : $"{targetDir}/{file.Name}")
                                 .Finally(stream.Dispose)))
                     .Concat()
-                    .Sum();
+                    .ToList()
+                    .Do(written => pair.target.AnnounceWritten(written, caller))
+                    .Select(written => written.Count);
             });
 }
 
@@ -939,7 +951,33 @@ public sealed class SyncContentFilesBuilder
             : Observable.Defer(() => Stage(address, captured, oversized))
                 .SelectMany(plan => Reclaiming(PostPlanned(address, captured, plan), plan));
 
-        return ContentImportExtensions.CarryPostIdentity(pipeline, _hub, _identity);
+        return ContentImportExtensions.CarryPostIdentity(Announcing(pipeline, captured), _hub, _identity);
+    }
+
+    /// <summary>
+    /// Announces the WHOLE sync to the content observers ONCE (<see cref="IContentUploadObserver.OnFilesWritten"/>)
+    /// when it answered success — every file it carried, under the identity that made it, keyed
+    /// <c>{node}/{collection}</c> exactly as an upload of the same file is (<c>MeshOperations.Upload</c>
+    /// raises on the caller's side after the owner answered, too). Once per sync however many deliveries
+    /// the producer split it into, never once per file and never once per delivery: a boot re-import
+    /// re-sends every content file of a repository, and the content index opens one activity per
+    /// announcement (<c>Doc/Architecture/ContentRoute503</c>, Cause B). The paths travel nowhere — the
+    /// producer already holds them — so announcing costs no delivery budget. A refused sync announces
+    /// nothing.
+    /// </summary>
+    private IObservable<ImportContentResponse> Announcing(
+        IObservable<ImportContentResponse> sync, AccessContext? writer)
+    {
+        var collectionPath = $"{_nodePath.Trim('/')}/{_targetCollection}";
+        var written = ContentCollection.AnnouncedPaths(_files.Select(f => CombineTargetPath(f.Path)));
+        var access = _hub.ServiceProvider.GetService<AccessService>();
+        return sync.Do(answer =>
+        {
+            if (!answer.Success)
+                return;
+            using var _ = writer is null ? null : access?.SwitchAccessContext(writer);
+            _hub.RaiseContentFilesWritten(collectionPath, written);
+        });
     }
 
     /// <summary>

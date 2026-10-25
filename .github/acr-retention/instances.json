@@ -187,7 +187,7 @@
     },
     "Systemorph/MeshWeaver": {
       "role": "chart",
-      "reason": "This repository. Its `deploy/` tree carries the platform CHART's own values files (measured 2026-09-15: 14 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
+      "reason": "This repository. Its `deploy/` tree carries chart values files of its own (measured at the chart's move to MeshWeaver.Deploy: 2 files that match the overlay path filter — the s1-extract and whisper charts), not an installation; the platform chart and memex-local left for Systemorph/MeshWeaver.Deploy (core slimming) — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. It is named here because the unit of this table is a repository whose tree carries overlay FILES: a repository that contributes pins and is absent from the table would be exactly the silent one this table exists to refuse.",
       "declaredAt": "2026-09-15",
       "issue": "MeshWeaver#3438"
     },
@@ -212,6 +212,7 @@
         "design": "Doc/Architecture/FleetRegistryRetention",
         "reason": "Measured 2026-09-14 over core origin/main 192bb073b8, read-only: NOTHING deletes a manifest, a tag or a referenced blob from cr.meshweaver.cloud, and nothing collects its garbage — so the registry grows without bound. That is the safe direction to be wrong in; the hazard is the FIX. 🚨 `distribution` HAS NO LOCK: ACR's `changeableAttributes.deleteEnabled` is an ACR feature, so there is no object here that a protected set can be written INTO ahead of a deleter. A cleanup's own derivation would therefore be the entire safety margin, with nothing behind it — where on the ACR an incomplete run merely writes fewer locks and last night's still hold. Until a cleanup can derive a protected set over what this registry HOLDS (and nothing enumerates that as data today — MeshWeaver#4066), none may be added.",
         "chart": "deploy/helm/templates/registry",
+        "chartRepository": "Systemorph/MeshWeaver.Deploy",
         "deleteGrantedTo": "publisherUsername",
         "maintenance": {
           "uploadpurging": "168h"
@@ -264,6 +265,7 @@
         "repositories": [
           "systemorph/memex-portal-ai",
           "systemorph/memex-migration",
+          "systemorph/mw-core-tests",
           "systemorph/mw-plugin-test"
         ],
         "producedBy": [

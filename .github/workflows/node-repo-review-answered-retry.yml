@@ -1,0 +1,113 @@
+name: Node repo review answered — outage retry (reusable)
+
+# ♻️ REUSABLE (workflow_call) — re-run a `Review answered` run whose red was an API OUTAGE, never one
+# whose red was a verdict (MeshWeaver#7187).
+#
+# 🚨 WHY. A run of the review-answered lane that GitHub refused for capacity (the installation's REST
+# limit — "API rate limit exceeded for installation (HTTP 403)" — a secondary limit, a 5xx) took NO
+# verdict. Until #7187 it published the same red as an unanswered thread, and NOTHING re-evaluated it:
+# the lane's `refresh` follows only a GREEN verdict, and the degradation listener only the internal
+# reviewer's check run. Measured 2026-10-25: core #7173 (run 40187547005), #7180 and #7178 had every
+# thread answered and sat blocked from 11:07Z until a person re-ran them at 11:47Z; #7182 (run
+# 40197206860) went red the same way at 13:21Z. Sessions papered over it with hand re-runs and a
+# 30-minute polling script.
+#
+# Now the predicate retries an outage inside the run (MW_API_OUTAGE_WAIT_MINUTES) and, past that,
+# exits 3 with `outcome=api-outage`; the lane job then fails a step named exactly
+# "API outage: no verdict was taken (retried automatically)" (check-review-answered.py
+# OUTAGE_STEP_NAME). THIS lane hears the run complete, finds that step failed in the completed
+# attempt, waits for the primary limit to reset (GET /rate_limit — free of the limit it reports),
+# and re-runs the WHOLE run — and so every other outage-failed run of this check on the pull request's
+# current head, from any event (branch protection reads a failed `pull_request_review` /
+# `pull_request_review_comment` run of it too, and a newer success does not clear it). A run red for
+# any other step — a verdict — is never touched; a head that
+# moved or a closed pull request is left alone; an outage that survives MAX_OUTAGE_ATTEMPTS (3)
+# attempts is RED here, named. The decision is `retry_outage_action` (pure, self-tested with a fake
+# adapter).
+#
+# Why a listener and not the lane itself: a run cannot re-run itself while any of its jobs is still
+# running, and the primary limit resets up to an hour away — beyond any job's 45-minute cap. The
+# in-run budget (5 min) plus this lane's wait (up to 35 min) plus the re-run's own budget cover the
+# hour.
+#
+# Caller contract — a SEPARATE workflow file in the repository that runs the review-answered caller:
+#
+#   # .github/workflows/review-answered-retry.yml
+#   name: Review answered (outage retry)
+#   on:
+#     workflow_run:
+#       workflows: ["Review answered"]      # the review-answered caller's `name:`
+#       types: [completed]
+#   permissions:
+#     actions: write
+#     contents: read
+#     pull-requests: read
+#   jobs:
+#     retry:
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-review-answered-retry.yml@main
+#       permissions:
+#         actions: write     # read the completed attempt's jobs; POST …/runs/{id}/rerun
+#         contents: read
+#         pull-requests: read   # GET pulls/{n}: is the pull request still open, on the same head?
+#
+# Never a required context: it judges a run AFTER it completed. The job-level `if:` below only drops
+# runs that did not FAIL (cancelled, `action_required`, green) — none of which can carry an outage —
+# so it skips nothing the lane would act on.
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: >-
+          The Systemorph/MeshWeaver ref check-review-answered.py is fetched at. `main` by default.
+        required: false
+        type: string
+        default: main
+
+jobs:
+  retry:
+    name: Re-run a review-answered run that took no verdict (API outage)
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'failure'
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    # 45 = up to 35 minutes waiting for the primary limit to reset (RETRY_WAIT_SECONDS) + the 5-minute
+    # outage budget of its own reads + headroom.
+    timeout-minutes: 45
+    permissions:
+      actions: write
+      contents: read
+      # GET pulls/{n} (still open, same head?). Without it a PRIVATE repository answers that read with a
+      # permission refusal — an explicit `permissions:` leaves `pull-requests` at `none` — and the
+      # listener never re-runs anything. A called workflow cannot widen its caller's grant, so every
+      # caller grants it too (the contract above; check-review-answered.py --self-test asserts it).
+      pull-requests: read
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the platform's review-answered predicate at the lane's scripts ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          [ "$EVENT" = "workflow_run" ] || { echo "::error::this lane judges a COMPLETED run, so it must be called from a workflow_run trigger — this call came from '$EVENT'"; exit 1; }
+          [ -n "${SCRIPTS_REF:-}" ] || { echo "::error::scripts-ref is empty — the review-answered predicate has no ref to be fetched at"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/check-review-answered.py" > "$RUNNER_TEMP/check-review-answered.py" \
+            || { echo "::error::could not fetch check-review-answered.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver — never fall back to a local copy"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/check-review-answered.py" | grep -q "check-review-answered" \
+            || { echo "::error::the fetched check-review-answered.py at ${SCRIPTS_REF} does not look like the predicate"; exit 1; }
+          python3 "$RUNNER_TEMP/check-review-answered.py" --self-test > "$RUNNER_TEMP/self-test.log" || { cat "$RUNNER_TEMP/self-test.log"; exit 1; }
+
+      - name: Re-run the completed run iff its red was an API outage
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          MW_API_OUTAGE_WAIT_MINUTES: "5"
+        run: |
+          set -euo pipefail
+          python3 "$RUNNER_TEMP/check-review-answered.py" --repo "$GH_REPO" --retry-outage --run-id "$RUN_ID" --attempt "$ATTEMPT"

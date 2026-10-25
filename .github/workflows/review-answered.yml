@@ -127,15 +127,20 @@ jobs:
   answered:
     name: Automatic review answered
     runs-on: ubuntu-latest
-    # 20 = the 15-minute bounded wait below + headroom for the checkout and the reads. The wait is
-    # not slack: it is the measured consequence of the reviewer's own event being unable to start a
-    # run here (see the `--wait-for-review` note on the step).
-    timeout-minutes: 20
+    # 30 = the 15-minute bounded wait below + the 3-minute settle cap + the 5-minute API outage budget
+    # (MW_API_OUTAGE_WAIT_MINUTES, MeshWeaver#7187) + headroom for the checkout and the reads. The
+    # review wait is not slack: it is the measured consequence of the reviewer's own event being
+    # unable to start a run here (see the `--wait-for-review` note on the step).
+    timeout-minutes: 30
     steps:
+      # `.github/workflows` too: the self-test asserts the outage marker step below is present by the
+      # exact name the retry listener matches (check-review-answered.py OUTAGE_STEP_NAME).
       - uses: actions/checkout@v7
         with:
           fetch-depth: 1
-          sparse-checkout: .github/scripts
+          sparse-checkout: |
+            .github/scripts
+            .github/workflows
           persist-credentials: false
 
       - name: "Prove the predicate can say no (self-test)"
@@ -186,13 +191,21 @@ jobs:
       # "Reviewer unavailable" check run re-evaluates it through review-answered-on-degradation.yml.
       # A 30-minute wait would buy nothing those two events do not already deliver, and would hold
       # TWO runners (this job and `lane`) for half an hour on every pull request opened.
+      #
+      # 🚨 An API OUTAGE is not a verdict (MeshWeaver#7187): a rate-limit 403/429, a secondary limit or
+      # a 5xx is retried inside the run for up to MW_API_OUTAGE_WAIT_MINUTES, then the step exits 3 with
+      # `outcome=api-outage` and the marker step below names it; review-answered-retry.yml re-runs the
+      # run once the limit has reset. Measured: #7173 and #7182 went red on "API rate limit exceeded
+      # for installation" with every thread answered, and stayed red until a person re-ran them.
       - name: Judge the pull request's automatic review
+        id: judge
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           EVENT_NAME: ${{ github.event_name }}
           PR: ${{ github.event.pull_request.number }}
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          MW_API_OUTAGE_WAIT_MINUTES: "5"
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" = "merge_group" ]; then
@@ -200,6 +213,16 @@ jobs:
           else
             python3 .github/scripts/check-review-answered.py --repo "$GH_REPO" --pr "$PR" --wait-for-review 15 --settle-replies 60
           fi
+
+      # The marker the retry listener keys on — RED itself, so it can never turn the job green; it runs
+      # only after the verdict step failed on an outage. See node-repo-review-answered.yml.
+      - name: "API outage: no verdict was taken (retried automatically)"
+        if: failure() && steps.judge.outputs.outcome == 'api-outage'
+        env:
+          OUTAGE_KIND: ${{ steps.judge.outputs.outage-kind }}
+        run: |
+          echo "::error::GitHub's API refused this run for capacity (${OUTAGE_KIND}) past its retry budget. NO verdict was taken: this is not an unanswered thread and not a missing review. review-answered-retry.yml re-runs this run once the limit has reset."
+          exit 1
 
   # ♻️ THE SAME VERDICT THROUGH THE FLEET LANE (MeshWeaver#4776). node-repo-review-answered.yml is
   # the ONE copy every other repository will call; this job calls it from core on every event above,

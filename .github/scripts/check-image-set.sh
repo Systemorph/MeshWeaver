@@ -26,7 +26,8 @@
 #   1. its own build job (push ONLY the staging tag),
 #   2. the `promote` job (identity tags in phase A, pointers in phase B),
 #   3. the `REPOS` list below — otherwise nothing ever asserts it shipped. That list IS the count;
-#      it currently holds three repositories, and every assertion in this file iterates it.
+#      every assertion in this file iterates it. `mw-core-tests` (core's built test assemblies, the
+#      set's fifth digest — Doc/Architecture/DeployTestSwitchLatest, D3) is its newest member.
 #
 # 🚨 ADDING A POINTER touches TWO: the `promote` phase that writes it, and the pointer list
 # under `--pointers` below. A tag whose only producer is a lane nobody asserts is not a contract, it
@@ -116,7 +117,7 @@ summary "### Images for main \`$SHA\`"
 
 # THE REPOSITORIES OF THE SET. Every assertion below iterates THIS list — a repository added here
 # is asserted for its sha tag and for every set-wide pointer, in one edit.
-REPOS="memex-portal-ai memex-migration mw-plugin-test"
+REPOS="memex-portal-ai memex-migration mw-plugin-test mw-core-tests"
 
 # The three multi-arch .NET legs publish an OCI/Docker image INDEX over both linux architectures.
 # Asserting the architectures — not just the tag — is what makes this more than a restatement of
@@ -148,7 +149,7 @@ assert_index() {
 }
 
 for repo in $REPOS; do
-  assert_index "$repo" "$SHA" "Commit $SHA requires all three images." || true
+  assert_index "$repo" "$SHA" "Commit $SHA requires every image of the set." || true
 done
 
 # 🚂 memex-portal-next is NOT a repository of the set — and no longer an image at all. /next rides
@@ -195,9 +196,9 @@ if [ "$CHECK_POINTERS" -eq 1 ]; then
     # ARMING write — what SelfUpdateHostedService rolls to — and main-cd's `arm` job makes it only
     # once MeshWeaver.Plugins' dependent suites passed against this set's pair, often in a LATER
     # run. Asserting it here would red every promoted set that is still waiting for its verdict.
-    for repo in memex-migration mw-plugin-test; do
+    for repo in memex-migration mw-plugin-test mw-core-tests; do
       assert_index "$repo" "$POINTER_VERSION" \
-        "Version $POINTER_VERSION must resolve on the migration and the tester (promote's phase A). The portal's is the arming write (main-cd \`arm\`), asserted nowhere here." || true
+        "Version $POINTER_VERSION must resolve on the migration, the tester and the core test image (promote's phase A). The portal's is the arming write (main-cd \`arm\`), asserted nowhere here." || true
     done
   fi
 fi

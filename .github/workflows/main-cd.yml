@@ -361,15 +361,13 @@ jobs:
           MW_REGISTRY_PUBLISHER_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
           FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
           FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
-          MESHWEAVER_APP_ID: ${{ secrets.MESHWEAVER_APP_ID }}
-          MESHWEAVER_APP_PRIVATE_KEY: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
         run: |
           missing=()
           [ -n "$AZURE_CLIENT_ID" ]       || missing+=("secrets.AZURE_CLIENT_ID           OIDC app registration for azure/login")
           [ -n "$AZURE_TENANT_ID" ]       || missing+=("secrets.AZURE_TENANT_ID           the Systemorph AAD tenant")
           [ -n "$AZURE_SUBSCRIPTION_ID" ] || missing+=("secrets.AZURE_SUBSCRIPTION_ID     the subscription holding ACR meshweaver")
           [ -n "$PLATFORM_WEBHOOK_URL" ]  || missing+=("vars.PLATFORM_WEBHOOK_URL         the control instance's inbox, e.g. https://<instance>/api/hooks/Hosting/PlatformBuilds — WITHOUT it no release event ever reaches the mesh — and that POST is the ONE event core emits: memex fans it out to the node repos, so without it every satellite falls back to its schedule poll")
-          [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see deploy/aks/envs/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
+          [ -n "$PLATFORM_WEBHOOK_SECRET" ] || missing+=("secrets.PLATFORM_WEBHOOK_SECRET  the shared HMAC the inbox watcher verifies X-Hub-Signature-256 against. It must be BYTE-IDENTICAL to the control instance's Hosting:PlatformWebhookSecret (Key Vault -> Hosting-PlatformWebhookSecret, see Systemorph/Memex deployments/aks/example/secretproviderclass.yaml); a mismatch is INVISIBLE from here — the POST still answers 2xx and the watcher silently drops every delivery as unverifiable")
           # `control-first` hands every accepted build to control's roll lane with these two: the
           # control PLANE's inbox (the instance holding the Deployments records and Ops/Actions) and
           # the HMAC it verifies. Without them control is tagged a build nothing ever rolls it to.
@@ -390,11 +388,6 @@ jobs:
           # is installed org-wide (repository_selection: all), MeshWeaver.Crm included.
           [ -n "$FLEET_READER_APP_ID" ]          || missing+=("secrets.FLEET_READER_APP_ID          app id of the org's READ-ONLY fleet-reader GitHub App (Contents, Metadata, Pull requests: read), whose installation token checks out each satellite's main for satellite-compat — set it in BOTH the Actions and the Dependabot secret stores (gh secret set NAME --repo Systemorph/MeshWeaver, then again with --app dependabot)")
           [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY  that App's private key (PEM), in BOTH stores like the id. NOT meshweaver-cloud's key: that App holds write")
-          # `deploy-handover` hands every run's set to MeshWeaver.Deploy with a token of the org's
-          # meshweaver-cloud App minted for THAT repository alone (Contents: write — the grant a
-          # `/dispatches` POST requires). Never a token that reaches MeshWeaver.Plugins (test-cd-steps.py).
-          [ -n "$MESHWEAVER_APP_ID" ]          || missing+=("secrets.MESHWEAVER_APP_ID          app id of the org's meshweaver-cloud GitHub App (installed on every repo, Contents: write); deploy-handover mints a token for MeshWeaver.Deploy alone to send platform-set-sealed")
-          [ -n "$MESHWEAVER_APP_PRIVATE_KEY" ] || missing+=("secrets.MESHWEAVER_APP_PRIVATE_KEY  that App's private key")
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error::CD cannot deliver a release event — provision the following, then re-run:"
             for m in "${missing[@]}"; do echo "  • $m"; done
@@ -2603,6 +2596,196 @@ jobs:
           "${{ env.ACR }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
           "${{ env.REGISTRY }}/mw-plugin-test:${{ needs.gate.outputs.staging_tag }}"
 
+  # 🧪 THE SET'S CORE TEST IMAGE — `mw-core-tests`, the FIFTH digest of the image set
+  # (Doc/Architecture/DeployTestSwitchLatest, decision D3; `BuildHostChannel.CoreTestsDigest`).
+  # Core's test assemblies, built ONCE here from the set's commit with CI's own flags, packed per
+  # `shard-assign.sh` (the assignment dotnet-test.yml's build and shards use) by
+  # deploy/core-tests/core-tests.py, content-addressed so the self-contained bins' shared assemblies
+  # are stored once. A build-server deployment runs core's suites FROM it — one stage per shard,
+  # `.github/build-stages.json`, generated from CI_SHARD_TOTAL — and never builds them from source.
+  # Part of the set like the other legs: staging tag only here, identity tags and `main` in
+  # `promote`, asserted by check-image-set.sh. Linux amd64 + arm64 like every image of the set.
+  # 🚨 ONE BUILD PER ARCHITECTURE, ON A RUNNER OF THAT ARCHITECTURE. The bins are NOT only portable
+  # IL: each carries the native `mw-plugin-test` apphost of the machine that built it
+  # (StartupFailureProcessTest executes it) and the Razor generator ReadyToRun-compiled for the
+  # build SDK's own RID (RazorBuildTest loads it, and the other architecture's copy throws
+  # BadImageFormatException). An x64 tree copied into the arm64 image ships an x64 apphost and no
+  # arm64 generator, so each leg builds natively, packs its own tree and pushes its platform image
+  # BY DIGEST; `core-tests-image` joins the two into the set's index.
+  core-tests-image-arch:
+    name: "Build + push mw-core-tests for linux/${{ matrix.arch }} (by digest)"
+    needs: gate
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    outputs:
+      # Identical in both legs by construction (the same computation on the same commit and run).
+      version: ${{ steps.vars.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+      # The SAME $(Version) computation as mw-plugin-test's leg, on the same project, so the two
+      # carry one version by construction (promote asserts it).
+      - name: Compute image version
+        id: vars
+        run: |
+          set -euo pipefail
+          VERSION=$(dotnet msbuild tools/MeshWeaver.PluginTester/MeshWeaver.PluginTester.csproj \
+            -getProperty:Version -p:CIRun=true -p:PlatformBuildNumber="$GITHUB_RUN_NUMBER" -nologo | tr -d '[:space:]')
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.${GITHUB_RUN_NUMBER}$ || "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-ci\.${GITHUB_RUN_NUMBER}$ ]]; then
+            echo "::error::computed Version is '$VERSION', not <major>.<minor>.$GITHUB_RUN_NUMBER (or <line>-ci.$GITHUB_RUN_NUMBER) — refusing to publish it (policy platform-semver-versioning)."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Restore
+        run: dotnet restore
+      # dotnet-test.yml's build step, flag for flag: the image carries the compilation CI tests.
+      - name: Build (CI's flags)
+        run: dotnet build --no-restore -c Release -p:CIRun=true -warnaserror
+      - name: Pack every shard's test bins (content-addressed)
+        env:
+          TEST_SELECTION: all
+          SHA: ${{ needs.gate.outputs.sha }}
+          VERSION: ${{ steps.vars.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 deploy/core-tests/core-tests.py --self-test > /dev/null
+          python3 .github/scripts/core-build-stages.py --check
+          python3 deploy/core-tests/core-tests.py pack --repo . --out artifacts/core-tests --sha "$SHA" --version "$VERSION"
+          echo "- mw-core-tests \`$VERSION\`: $(du -sh artifacts/core-tests | cut -f1) packed for $(jq .shardTotal artifacts/core-tests/manifest.json) shards" >> "$GITHUB_STEP_SUMMARY"
+          # The image needs the packed tree, not the build's intermediates: give the disk back
+          # before the image layers are written.
+          find . -name obj -type d -prune -exec rm -rf {} +
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - uses: docker/setup-buildx-action@v4
+      # No QEMU: this runner IS the platform, so the image's own RUN steps (the packed runner's
+      # self-test) execute natively, on the architecture the tree was built for.
+      - name: "Build + push mw-core-tests for linux/${{ matrix.arch }} (by digest, ACR)"
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          docker buildx build --platform "linux/$ARCH" -f deploy/core-tests/Dockerfile \
+            --output "type=image,name=${{ env.ACR }}/mw-core-tests,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file "$RUNNER_TEMP/core-tests-$ARCH.json" .
+          digest=$(jq -r '."containerimage.digest" // empty' "$RUNNER_TEMP/core-tests-$ARCH.json")
+          case "$digest" in sha256:*) ;; *) echo "::error::mw-core-tests linux/$ARCH was pushed but reported no digest ('$digest')"; exit 1 ;; esac
+          mkdir -p "$RUNNER_TEMP/core-tests-digest"
+          echo "$digest" > "$RUNNER_TEMP/core-tests-digest/$ARCH"
+          echo "- mw-core-tests linux/$ARCH = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: core-tests-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/core-tests-digest/${{ matrix.arch }}
+          if-no-files-found: error
+          retention-days: 1
+
+  # The two platform images joined into the set's index under the staging tag — the digest the set
+  # names. Each architecture must be present: an index missing one would be a set its build hosts on
+  # that architecture cannot run.
+  core-tests-image:
+    name: "Build + push mw-core-tests (core's suites, the set's fifth digest)"
+    needs: [gate, core-tests-image-arch]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      version: ${{ needs.core-tests-image-arch.outputs.version }}
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: core-tests-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/core-tests-digest
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - uses: docker/setup-buildx-action@v4
+      - name: "Join mw-core-tests' platform images (staging tag, ACR), and read its digest"
+        id: push
+        env:
+          TAG: ${{ needs.gate.outputs.staging_tag }}
+        run: |
+          set -euo pipefail
+          sources=()
+          for arch in amd64 arm64; do
+            f="$RUNNER_TEMP/core-tests-digest/$arch"
+            [ -s "$f" ] || { echo "::error::no linux/$arch digest was handed over ($f is missing or empty) — refusing to publish an index without it"; exit 1; }
+            d=$(<"$f")
+            case "$d" in sha256:*) ;; *) echo "::error::no linux/$arch digest was handed over ('$d') — refusing to publish an index without it"; exit 1 ;; esac
+            sources+=("${{ env.ACR }}/mw-core-tests@$d")
+          done
+          docker buildx imagetools create --tag "${{ env.ACR }}/mw-core-tests:$TAG" "${sources[@]}"
+          digest=$(docker buildx imagetools inspect "${{ env.ACR }}/mw-core-tests:$TAG" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          case "$digest" in sha256:*) ;; *) echo "::error::mw-core-tests:$TAG was pushed but resolves to no digest ('$digest')"; exit 1 ;; esac
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "- mw-core-tests \`$TAG\` = \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
+
+  # The test image is the set's largest after the portal, so its copy to the fleet registry gets its
+  # own job and budget (the portal leg's lesson, #4526): two jobs, two budgets, never one bigger number.
+  core-tests-image-mirror:
+    name: "Mirror mw-core-tests to the fleet registry"
+    needs: [gate, core-tests-image]
+    if: needs.gate.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/scripts
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Log in to the fleet registry (publisher)
+        env:
+          REGISTRY_PASSWORD: ${{ secrets.MW_REGISTRY_PUBLISHER_PASSWORD }}
+        run: bash .github/scripts/registry-login.sh "${{ env.REGISTRY }}" "${{ env.REGISTRY_PUBLISHER }}"
+      - name: Mirror mw-core-tests (staging tag) to the fleet registry — same manifest, digest verified
+        run: >
+          .github/scripts/mirror-image-to-registry.sh
+          "${{ env.ACR }}/mw-core-tests:${{ needs.gate.outputs.staging_tag }}"
+          "${{ env.REGISTRY }}/mw-core-tests:${{ needs.gate.outputs.staging_tag }}"
+
   # 🚂 portal-next is no longer an image of its own: /next is built by `portal-image` above and
   # published INSIDE memex-portal-ai (policy `portal-next-in-platform-image`). It therefore shares the portal's staging tag,
   # its all-or-nothing promotion below and its `3-latest` pointer — nothing here promotes it
@@ -2611,7 +2794,7 @@ jobs:
 
   promote:
     name: "Promote: tag the full set (all-or-nothing)"
-    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, core-tests-image, core-tests-image-mirror]
     if: needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -2621,6 +2804,7 @@ jobs:
       V_PORTAL: ${{ needs.portal-image.outputs.version }}
       V_MIGRATION: ${{ needs.migration-image.outputs.version }}
       V_PLUGIN: ${{ needs.plugin-test-image.outputs.version }}
+      V_CORE_TESTS: ${{ needs.core-tests-image.outputs.version }}
       # The plugins sha `gate` resolved, threaded — NOT re-resolved here. Provenance only: it goes
       # into the promotion record (`plugins_sha`/`plugins_short`), never into a tag.
       PLUGINS_SHORT: ${{ needs.gate.outputs.plugins_short }}
@@ -2676,6 +2860,11 @@ jobs:
           }
           promote memex-migration   "$V_MIGRATION" "$SHA"
           promote mw-plugin-test    "$V_PLUGIN"    "$SHA"
+          # The set's fifth digest (D3). Same version computation as the tester, so one version
+          # names the whole set; a difference is a set that does not agree with itself.
+          [ "$V_CORE_TESTS" = "$V_PLUGIN" ] \
+            || { echo "::error::mw-core-tests carries version '$V_CORE_TESTS' but mw-plugin-test '$V_PLUGIN' — refusing to promote a set whose images disagree on its version"; exit 1; }
+          promote mw-core-tests     "$V_CORE_TESTS" "$SHA"
           # 🚨 NO PAIR TAG (policy `platform-module-deploy-separate`). The portal used to carry
           # `<core7>-p<plugins7>` as well (MeshWeaver#2622), naming the MeshWeaver.Plugins commit its
           # HOST was built from. No delivery decision joins on that any more, and the one thing it
@@ -2716,7 +2905,7 @@ jobs:
             docker buildx imagetools create --tag "ghcr.io/$NS/mw-plugin-test:$V_PLUGIN" "${{ env.ACR }}/mw-plugin-test:$STAGING"
             exit 0
           fi
-          for repo in memex-migration memex-portal-ai; do
+          for repo in memex-migration memex-portal-ai mw-core-tests; do
             echo "→ $repo: main"
             docker buildx imagetools create --tag "${{ env.ACR }}/$repo:main" "${{ env.ACR }}/$repo:$STAGING"
             .github/scripts/mirror-image-to-registry.sh "${{ env.ACR }}/$repo:$STAGING" "${{ env.REGISTRY }}/$repo:main"
@@ -2767,6 +2956,8 @@ jobs:
           CORE_SHA: ${{ needs.gate.outputs.sha }}
           PLUGINS_SHA: ${{ needs.gate.outputs.plugins_sha }}
           RUN_NUMBER: ${{ github.run_number }}
+          # The set's fifth digest (D3), carried in the record every later reader of the set uses.
+          CORE_TESTS_DIGEST: ${{ needs.core-tests-image.outputs.digest }}
         run: |
           set -euo pipefail
           parent=$(gh api "repos/$GITHUB_REPOSITORY/commits/$CORE_SHA" --jq '.parents[0].sha')
@@ -2798,8 +2989,10 @@ jobs:
           jq -n --argjson n "$RUN_NUMBER" --arg c "$CORE_SHA" --arg b "$base" --arg bk "$kind" --arg p "$PLUGINS_SHA" \
                 --arg s "$SHA" --arg ps "$PLUGINS_SHORT" --arg st "$STAGING" \
                 --arg vp "$V_PORTAL" --arg vm "$V_MIGRATION" --arg vt "$V_PLUGIN" \
+                --arg vct "$V_CORE_TESTS" --arg dct "$CORE_TESTS_DIGEST" \
             '{run_number: $n, core_sha: $c, base: $b, base_kind: $bk, plugins_sha: $p, short: $s, plugins_short: $ps,
-              staging: $st, v_portal: $vp, v_migration: $vm, v_plugin: $vt, key: ("pair-" + $s + "-p" + $ps)}' \
+              staging: $st, v_portal: $vp, v_migration: $vm, v_plugin: $vt,
+              v_core_tests: $vct, core_tests_digest: $dct, key: ("pair-" + $s + "-p" + $ps)}' \
             > "$RUNNER_TEMP/promotion-record/promotion-record.json"
           cat "$RUNNER_TEMP/promotion-record/promotion-record.json"
           echo "### Promoted \`$SHA\` for CI → $V_PORTAL (NOT armed for the fleet yet — see \`arm\`)" >> "$GITHUB_STEP_SUMMARY"
@@ -3867,7 +4060,7 @@ jobs:
               exit 1
               ;;
             404)
-              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
+              echo "::error::the platform-update inbox answered 404. It is FAIL-CLOSED and answers 404 for BOTH an unlisted target and a wrong URL — check vars.PLATFORM_WEBHOOK_URL against the instance's WebhookInbox:Targets (MeshWeaver.Deploy deploy/aks/values.aks.yaml sets WebhookInbox__Targets__0=Hosting/PlatformBuilds). No release event was delivered."
               exit 1
               ;;
             401)
@@ -3875,7 +4068,7 @@ jobs:
               exit 1
               ;;
             500)
-              echo "::error::the platform-update inbox declares a SecretConfigKey that is empty on the instance (HTTP 500), so it can verify nothing and refuses every delivery. Provision the key WebhookInbox__Targets__N__SecretConfigKey names (deploy/aks/values.aks.yaml: Hosting:PlatformWebhookSecret) on the target instance. No release event was delivered."
+              echo "::error::the platform-update inbox declares a SecretConfigKey that is empty on the instance (HTTP 500), so it can verify nothing and refuses every delivery. Provision the key WebhookInbox__Targets__N__SecretConfigKey names (MeshWeaver.Deploy deploy/aks/values.aks.yaml: Hosting:PlatformWebhookSecret) on the target instance. No release event was delivered."
               exit 1
               ;;
             *)
@@ -3958,76 +4151,13 @@ jobs:
           docker buildx imagetools create --tag "meshweaver.azurecr.io/memex-portal-ai:arm-complete-$V_SELF" \
             "meshweaver.azurecr.io/memex-portal-ai:$V_SELF"
           echo "- arming of $V_SELF COMPLETE (pointers + release event); marker \`arm-complete-$V_SELF\`" >> "$GITHUB_STEP_SUMMARY"
-  # 📦 THE HAND-OVER: THIS WORKFLOW BUILDS AND SEALS; DEPLOYMENT IS MeshWeaver.Deploy's (core slimming).
-  # Every CD run ends by handing its result to Systemorph/MeshWeaver.Deploy with ONE
-  # `repository_dispatch` of type `platform-set-sealed`: the set THIS run published (its version and
-  # commit, both empty when it published none) and what `arm` decided. Deploy owns what follows — the
-  # standing build host's runner image `mw-build-host:<version>` and the hand-over of the newest armed
-  # set to `build-latest` (its `build-host.yml`; formerly this workflow's `build-host-image`,
-  # `build-host-latest` and `build-host-report`). The contract (schema 1) is Deploy's
-  # `.github/scripts/platform-set-dispatch.py`, which validates every field, proves every commit is
-  # on this repository's main and resolves every version against the registry before acting — the
-  # payload is a claim, never the truth.
-  #
-  # Sent on EVERY run (not only an arming one), exactly as the former build-host-latest ran on every
-  # run, so a hand-over missed once is recovered by the next. The credential is a meshweaver-cloud
-  # App token (`MESHWEAVER_APP_*`, Contents: write — the grant a `/dispatches` POST requires) minted
-  # for `repositories: MeshWeaver.Deploy` ALONE, so the platform deploy still holds no credential
-  # that reaches MeshWeaver.Plugins (policy `platform-module-deploy-separate`, test-cd-steps.py);
-  # asserted by `preflight`; a refused or unreachable POST is RED and paged by `alert-on-failure`.
-  deploy-handover:
-    name: "Hand the sealed set to MeshWeaver.Deploy (platform-set-sealed)"
-    needs: [preflight, gate, migration-image, arm]
-    if: always() && needs.preflight.result == 'success' && needs.arm.result != 'cancelled'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - name: A dispatch token for MeshWeaver.Deploy alone (meshweaver-cloud App)
-        id: app
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.MESHWEAVER_APP_ID }}
-          private-key: ${{ secrets.MESHWEAVER_APP_PRIVATE_KEY }}
-          owner: Systemorph
-          repositories: MeshWeaver.Deploy
-      - name: "POST platform-set-sealed to MeshWeaver.Deploy"
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          RUN_SHA: ${{ github.sha }}
-          SET_LEG: ${{ needs.migration-image.result }}
-          SET_VERSION: ${{ needs.migration-image.outputs.version }}
-          SET_SHA: ${{ needs.gate.outputs.sha }}
-          ARMED: ${{ needs.arm.outputs.armed }}
-          ARMED_VERSION: ${{ needs.arm.outputs.version }}
-          ARMED_CORE: ${{ needs.arm.outputs.core_sha }}
-          ARMED_PLUGINS: ${{ needs.arm.outputs.plugins_sha }}
-        run: |
-          set -euo pipefail
-          # The set this run PUBLISHED: only a migration image that succeeded carries its version.
-          if [ "$SET_LEG" = success ]; then
-            [ -n "$SET_VERSION" ] && [ -n "$SET_SHA" ] \
-              || { echo "::error::migration-image succeeded but named no version/commit (version '$SET_VERSION', commit '$SET_SHA') — refusing to hand over a set with no name"; exit 1; }
-          else
-            SET_VERSION=""; SET_SHA=""
-          fi
-          # What `arm` decided — named only when it armed a set.
-          if [ "$ARMED" != true ]; then ARMED=false; ARMED_VERSION=""; ARMED_CORE=""; ARMED_PLUGINS=""; fi
-          body=$(jq -cn --arg url "$RUN_URL" --arg run "$RUN_SHA" --arg sv "$SET_VERSION" --arg ss "$SET_SHA" \
-            --argjson armed "$ARMED" --arg av "$ARMED_VERSION" --arg ac "$ARMED_CORE" --arg ap "$ARMED_PLUGINS" \
-            '{event_type: "platform-set-sealed", client_payload: {schema: 1,
-               run: {url: $url, coreSha: $run}, set: {version: $sv, coreSha: $ss},
-               armed: {armed: $armed, version: $av, coreSha: $ac, pluginsSha: $ap}}}')
-          printf '%s\n' "$body" | jq .
-          # /dispatches answers 204 No Content on acceptance; anything else is a hand-over not made.
-          if ! printf '%s' "$body" | gh api -X POST repos/Systemorph/MeshWeaver.Deploy/dispatches --input - > "$RUNNER_TEMP/dispatch.out" 2>&1; then
-            cat "$RUNNER_TEMP/dispatch.out"
-            echo "::error::MeshWeaver.Deploy refused the platform-set-sealed dispatch — its build host was NOT handed this run's set; the next CD run re-sends"
-            exit 1
-          fi
-          echo "- handed to MeshWeaver.Deploy: set \`${SET_VERSION:-none}\`, armed \`${ARMED_VERSION:-none}\` (platform-set-sealed, accepted). What Deploy did with it is its \`build-host.yml\` run, never this acceptance." >> "$GITHUB_STEP_SUMMARY"
+  # 📦 THIS WORKFLOW BUILDS AND SEALS; DEPLOYMENT IS MeshWeaver.Deploy's (core slimming). There is
+  # NO hand-over job: core dispatches to no repository (policy `dependents-verify-on-their-side`,
+  # PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository). MeshWeaver.Deploy PULLS — its
+  # `build-host.yml` reads the sets this workflow sealed from the registry on its own schedule
+  # (the version tags `promote` and `arm` write, on the manifest their staging tag names), and
+  # owns the build host's runner image `mw-build-host:<version>` and the hand-over to `build-latest`
+  # (formerly this workflow's `build-host-image`, `build-host-latest` and `build-host-report`).
 
   # ────────── THE PUBLISHED MODULE SET — READ, NEVER BUILT HERE (policy `platform-module-deploy-separate`) ──────────
   # "we separate platform deploy 100% from module deploy". This run does NOT pack, bake or seal any
@@ -4558,7 +4688,7 @@ jobs:
 
   verify-images:
     name: "Verify every image shipped"
-    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, promote]
+    needs: [gate, portal-image, portal-image-mirror, migration-image, plugin-test-image, core-tests-image, core-tests-image-mirror, promote]
     if: always() && needs.gate.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -5236,13 +5366,12 @@ jobs:
     # per-build compatibility measurement that replaced the per-build satellite wave, it does not
     # block the publish, and a red nobody is paged for is the 03:00 discovery it exists to prevent.
     # Its verdict artifacts are read below so the alert names the satellite and the types.
-    # `deploy-handover` is in this list ON PURPOSE: a dispatch MeshWeaver.Deploy never received is a
-    # build host nobody hands a set to, and that repository cannot page for an event it never saw.
-    # What Deploy does AFTER a received hand-over reports on Deploy's own `build-host-latest` issue.
+    # No build-host job is in this list: the build host's lane lives in MeshWeaver.Deploy, which
+    # reads the sealed sets itself and reports on its own `build-host-latest` issue.
     # `image-closure-record` is in this list ON PURPOSE (#4066): it is outside `delivery-verdict` so a
     # control-side outage cannot stop an image shipping, and main CD has no PR observer — so without a
     # direct need here its red would be an unattended job and never a durable alert.
-    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, deploy-handover, delivery-verdict, satellite-compat-image, satellite-compat]
+    needs: [preflight, gate, portal-image, portal-image-mirror, image-closure-record, migration-image, plugin-test-image, promote, verify-images, publish-bake, arm, notify-platform-update, delivery-verdict, satellite-compat-image, satellite-compat]
     # 🚨 A DIRECT need failed — never `failure()`, which is true when ANY ANCESTOR failed. The
     # compatibility legs need `published-modules`, so under `failure()` a missing module
     # publication filed THIS issue ("no deployable image was published") over a platform set that

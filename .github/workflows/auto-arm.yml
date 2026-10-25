@@ -175,7 +175,8 @@ jobs:
     concurrency:
       group: auto-arm-generated-${{ github.repository }}-${{ github.event.pull_request.number }}
       cancel-in-progress: true
-    timeout-minutes: 10
+    # 15 = the reads + the predicate's 5-minute API outage budget (MeshWeaver#7187).
+    timeout-minutes: 15
     if: ${{ !cancelled() && needs.arm.result != 'failure' && github.event.pull_request.user.login == 'meshweaver-cloud[bot]' }}
     steps:
       - name: The App credential, or a red run naming what to provision

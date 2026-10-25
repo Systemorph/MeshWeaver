@@ -325,6 +325,33 @@ So the conversion, not a copy:
    one. And any `Add<Name>()` helper in `SampleDataExtensions` leaves with the content — the moved
    suites call `IncludePartition("<Name>")`, the primitive it wrapped.
 
+## Deployment material: each piece goes where its consumer is
+
+The deployment material under `memex/aspire`, `deploy/aspire` and `deploy/aks` is not one thing. Each
+piece is decided by **who reads it**. The guard that pinned a piece moves with it, and nothing is
+deleted in core until the receiving half has merged.
+
+| Piece | Went to | Why there |
+|---|---|---|
+| `memex/aspire/Memex.Aspire.Hosting` (packed as `MeshWeaver.Aspire.Hosting.Memex`) | MeshWeaver.Plugins `src/Memex.Aspire.Hosting` | Its only in-fleet consumer, `Memex.AppHost`, already lived there and pinned core's copy through `$(MeshWeaverRoot)`; nothing in core read it. The package is published from there now (`publish-aspire-package.yml`). The guard `TheAspireHostStatesTheStorageType` became Plugins' `Memex.Hosts.Test/AspireHostStatesTheStorageTypeTest`, beside its image-side counterpart. |
+| `deploy/aspire/Memex.Deploy.AppHost` | MeshWeaver.Plugins `src/Memex.Deploy.AppHost` | It builds only against the integration, so it goes where the integration goes. |
+| `deploy/aks/envs/example` | Systemorph/Memex `deployments/aks/example/` | It is the template for the environment folders, and every real one already lives in `deployments/aks/<env>/` there. The secret-template guard became Memex's `scripts/check-example-secret-template.py`, in its required Build (Release). |
+| `deploy/aks/infra` (AKS platform Bicep) | Systemorph/Memex `infra/platform/` | Estate provisioning already lives there (`infra/estate.bicep`, the client-estate Bicep and bootstrap). |
+| `deploy/helm`, `deploy/aks/manifests`, `deploy/aks/scripts`, `deploy/aks/values.aks.yaml` | **not moved by this change** — the chart is frozen in core and moves to Systemorph/MeshWeaver.Deploy in its own change | The operator image already takes the chart from MeshWeaver.Deploy (see the hosting-operator section below). For the trade-offs, see [Chart Ownership and the Runner Pool](../ChartOwnershipAndRunnerPool), "Moving the chart into a private repository". |
+
+🚨 **Survivors packed in another repository must be DECLARED to the retirement sweep.**
+`scripts/orphaned-nuget-packages.py` derives "orphaned" as *published minus packed in this tree*.
+After the Aspire integration left core, that derivation reads `MeshWeaver.Aspire.Hosting.Memex` (and
+`MeshWeaver.MemexTemplate`) as orphaned, and an apply would unlist a package we still publish. Both
+are therefore in `PACKED_ELSEWHERE`, which the self-test pins. A stale entry errs toward sparing a
+package, which is the safe direction.
+
+🚨 **Moving a packed project moves its publishing credential.** nuget.org Trusted Publishing
+policies name a repository **and a workflow file**. The policy for core's `publish-packages.yml` does
+not cover MeshWeaver.Plugins' `publish-aspire-package.yml`. The package owner has to add the new
+policy, and set `vars.NUGET_TRUSTED_USER` there, before the next Aspire package release. Until then
+that lane's `preflight` is red by name.
+
 ## The product demo samples
 
 ACME, FutuRe, Northwind and PensionFund were product demos sitting in the framework's
@@ -417,17 +444,23 @@ repositories (`"repo"` on a binding in `.github/release-channels.json`), which k
 ## Deployment material
 
 Core's CD keeps **BUILD + SEAL** of the product image set (portal, migration, plugin-test, control)
-and hands the sealed set over; **deploying** it is the public
+and publishes the sealed set into the registry; **deploying** it is the public
 [MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) repository's, and the hosting
 operator's image is MeshWeaver.Plugins' (the section above). The test for each item: *does it
 produce or seal an image of the set, or prove the set is sound?* (stays) — or *does it put a sealed
 set somewhere, or watch where it runs?* (moves). Measured on `main` at `16b9902f03`.
 
-The hand-over is ONE `repository_dispatch` of type `platform-set-sealed` per CD run (`main-cd.yml`
-job `deploy-handover`), schema 1, defined and validated by MeshWeaver.Deploy's
-`.github/scripts/platform-set-dispatch.py`. It is sent with a meshweaver-cloud App token minted for
-MeshWeaver.Deploy alone. The platform deploy holds no credential that reaches MeshWeaver.Plugins,
-and `test-cd-steps.py` refuses an App token with no `repositories` or one that names Plugins.
+**There is no hand-over job: MeshWeaver.Deploy pulls.** Core dispatches to no repository (policy
+`dependents-verify-on-their-side`, held by `PlatformReleaseNotifyGuard.CoreDispatchesToNoRepository`
+— Deploy consumes the platform's sets like any other dependent and gets no ledgered exception).
+Deploy's `build-host.yml` reads the sealed sets on its own 15-minute `schedule` from the registry
+tags `promote` and `arm` write, and turns the newest one lacking a runner into a hand-over (schema 1,
+MeshWeaver.Deploy's `.github/scripts/platform-set-dispatch.py` `discover` + `claim`). A dispatch
+from core was weighed and refused: it would make core name its consumer, hold a credential that
+writes to it, and page for its outage — the coupling the guard forbids. The price is one schedule
+tick of latency on the build host, which is outside the platform's delivery. A deploy where that
+latency matters (a portal roll) takes the sanctioned event route instead: core's signed build fact
+into the control instance's inbox, and memex's fan-out.
 
 ### `main-cd.yml`, job by job
 
@@ -439,8 +472,8 @@ and `test-cd-steps.py` refuses an App token with no `repositories` or one that n
 | `promote`, `published-modules`, `compat-images`, `satellite-compat-image`, `satellite-compat`, `platform-ladder-compat`, `arm` | seal (the set, its evidence, the arming) | stays |
 | `publish-bake`, `verify-images`, `delivery-verdict`, `alert-on-failure` | seal + its verdict | stays |
 | `notify-platform-update` | hand-over (the release event the mesh fans out) | stays: it is the platform's announcement, not a deployment |
-| `build-host-image`, `build-host-latest`, `build-host-report` | **deploy** | **moved** to MeshWeaver.Deploy `build-host.yml` (`image`, `handover`, `report`); replaced here by `deploy-handover` |
-| `control-first`, `control-lane-report` | **deploy** (rolls the control instance onto each accepted build) | **owed**: not moved yet. It is the next candidate for the same hand-over |
+| `build-host-image`, `build-host-latest`, `build-host-report` | **deploy** | **moved** to MeshWeaver.Deploy `build-host.yml` (`image`, `handover`, `report`), which reads the sealed sets itself; nothing replaces them here |
+| `control-first`, `control-lane-report` | **deploy** (rolls the control instance onto each accepted build) | **owed**: not moved yet. It is the next candidate, read by Deploy from the registry (or the inbox event) the same way — never dispatched to it |
 
 ### Files
 

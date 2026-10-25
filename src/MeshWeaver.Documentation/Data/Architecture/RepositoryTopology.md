@@ -13,16 +13,21 @@ on a rebuild, and who needs a credential to consume it.
 
 | Repository | Visibility | Owns | Never holds |
 |---|---|---|---|
-| **`Systemorph/MeshWeaver`** | **public** | The framework, and the **Helm chart** (`deploy/helm`). | — |
-| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog *and* shared scripts (CI gates, generators). | Deployment config. |
+| **`Systemorph/MeshWeaver`** | **public** | The framework. | Deployment material. |
+| **`Systemorph/MeshWeaver.Deploy`** | **public** | The deployment **reference**: the **Helm chart** (`deploy/helm`, `deploy/helm-db`), the example AKS overlay and manifests, the chart tooling, and `memex-local`. | An installation's own values. |
+| **`Systemorph/MeshWeaver.Plugins`** | **private** | **All common, reusable code** — the plugin catalog, shared scripts (CI gates, generators), the hosting operator. | Deployment config. |
 | **`Systemorph/Memex`** | **private** | **Config only** — the deployment overlays and thin CI glue. | Reusable code or logic. |
 
-## The framework repo is public, and the chart is read at deploy time
+## The chart is public, and it is read at deploy time
 
-`MeshWeaver` is public. One consequence is easy to miss and load-bearing: the deploy
-(`helm-release.yml`, which lives in the `Memex` repo) checks the chart out of `MeshWeaver` with **no
-credential and no pinned `ref:`** — it takes the default branch **at deploy time**. The ConfigMap and
-every rendered resource come from **helm reading the repo**, never from the running portal image.
+The reference chart left this repository for its own PUBLIC repository, `MeshWeaver.Deploy`, so the
+platform stays framework only while every reader stays **credential-free** (core slimming;
+[Chart Ownership](../ChartOwnershipAndRunnerPool) for the analysis). The break-glass deploy
+(`helm-release.yml`, in the `Memex` repo) checks the chart out of `MeshWeaver.Deploy` with **no
+credential and no pinned `ref:`** — it takes the default branch **at deploy time**. The governed path
+(the operator image, and the estate's aks-ops lane) uses the chart at the commit the operator image's
+tag names. Either way the ConfigMap and every rendered resource come from **helm reading the repo**,
+never from the running portal image.
 
 So **a chart-only change is effective the moment it merges.** There is no image rebuild, no roll, no
 release cycle standing between a merged chart fix and the next `helm upgrade`. This was proven the

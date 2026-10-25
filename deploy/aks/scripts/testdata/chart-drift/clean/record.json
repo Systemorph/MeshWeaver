@@ -1,7 +1,0 @@
-{
-  "record": "Deployments/example",
-  "imageRepository": "cr.example.test/portal-fixture",
-  "updatePolicy": "Continuous",
-  "updatePattern": "3.*",
-  "pinnedImageTag": null
-}

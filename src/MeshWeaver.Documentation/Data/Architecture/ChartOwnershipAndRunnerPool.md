@@ -1,7 +1,7 @@
 ---
 Name: Chart Ownership and the Runner Pool
 Category: Architecture
-Description: Why the helm chart still lives in the platform repo although the application it deploys does not, everything a relocation must carry in one change set, why the cheap path-filter interim is unsafe here, and the self-hosted runner shape with an honest account of what it buys.
+Description: The chart lives in Systemorph/MeshWeaver.Deploy and the platform copy is frozen (deletions only); why it lived here, everything the relocation had to carry in one change set, why the cheap path-filter interim is unsafe here, and the self-hosted runner shape with an honest account of what it buys.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"/><path d="M12 11v10"/><path d="M3 7l9 4 9-4"/><circle cx="12" cy="7" r="1.6"/></svg>
 ---
 
@@ -9,6 +9,30 @@ Two questions were raised during the 2026-08-31 CI overhaul and tracked as issue
 chart gate on core?"*, and *"can we mount a drive where git is checked out"*. Both are real, both
 are larger than they look, and neither should have stayed in an issue thread. This page is the
 state of record for both, measured against the code on 2026-09-01.
+
+## The chart lives in MeshWeaver.Deploy
+
+The relocation this page planned has happened (policy `chart-lives-in-deploy`). Systemorph/MeshWeaver.Deploy,
+a public repository, was seeded with the chart material (Deploy#1) and is now its only home. The
+sections below record why the chart was here and what a relocation had to carry; read them as
+history.
+
+Both copies stayed editable after the seed, and both moved. Two pipelines then baked
+`hosting-operator:main`, one from each copy, so the moving tag flapped between two charts. The
+platform's copy is therefore FROZEN: `scripts/check-chart-freeze.py`, run by the
+`Chart frozen (lives in MeshWeaver.Deploy)` job and hung off the required check, refuses any pull
+request that adds, modifies, retypes or renames into these paths:
+
+- `deploy/helm/`, `deploy/helm-db/`, `deploy/aks/values.aks.yaml`, `deploy/aks/manifests/`,
+  `deploy/aks/scripts/`, `deploy/homebrew/`;
+- `.github/workflows/chart-gate.yml`, `.github/workflows/homebrew.yml`,
+  `scripts/check-config-key-coverage.py`, `.github/scripts/test-bundle-registry.py`.
+
+A **deletion** is allowed, because that is how the copy leaves (#7127). Two neighbours stay
+editable here: `.github/scripts/build-run.py` and `deploy/build-host/`. main-cd builds the
+build-host runner image from them, and the Deploy chart gate reads them from a declared checkout of
+this repository. A chart change belongs in MeshWeaver.Deploy. The gate's message says so, and its
+self-test proves it refuses a modification and an addition and lets a pure deletion through.
 
 ## The chart lives here; the application it deploys does not
 
@@ -37,8 +61,8 @@ references, each of which breaks silently if it is left behind:
 | `main-cd.yml` | renders `WebhookInbox__Targets__N` from `deploy/helm/templates/memex-portal/config.yaml` (the `FrameworkBroadcast__Subscribers__N` slots were retired 2026-09-03 — the subscriber set is the `Hosting/Deployment` records') |
 | `homebrew.yml` | **path filters on `deploy/helm/**`** — a chart change is what triggers a tap rebuild |
 | `deploy/aks/scripts/check-chart-invariants.sh`, `check-values-are-read.py` | the gate's own implementation |
-| `deploy/aks/envs/example/deploy.sh`, `secretproviderclass.yaml` | first-time environment setup |
-| `deploy/aks/infra/modules/portal-identity.bicep` | infrastructure that must agree with the chart's service account |
+| Systemorph/Memex `deployments/aks/example/deploy.sh`, `secretproviderclass.yaml` (moved there from `deploy/aks/envs/example/`) | first-time environment setup |
+| Systemorph/Memex `infra/platform/modules/portal-identity.bicep` (moved there from `deploy/aks/infra/`) | infrastructure that must agree with the chart's service account |
 | the hosting operator | `CHART="${HOSTING_CHART:-/opt/hosting/chart}"` — the operator carries its **own baked copy** at a pinned path inside its image |
 | the self-updater | documented against `deploy/helm/templates/memex-portal/` for the SA, Role and RoleBinding |
 
@@ -69,6 +93,38 @@ values file, which is precisely the class the filter would stop watching.
 
 If the per-PR cost must come down, the sound options are to make the gate cheaper, or to move it
 with its subject — not to make its absence indistinguishable from its success.
+
+## 🚨 Moving the chart into a PRIVATE repository: what it converts, measured
+
+The core-slimming carve moved the Aspire integration, the example environment and the AKS platform
+Bicep out of this repository ([Carving Projects Out Of Core](../CarvingProjectsOutOfCore)). The chart,
+`deploy/aks/manifests`, `deploy/aks/scripts` and `values.aks.yaml` were deliberately **not** moved with
+them. Measured against `Systemorph/MeshWeaver@b85e51b4c4`, `Systemorph/MeshWeaver.Plugins@cecd1fc25` and
+`Systemorph/Memex@e5fdf2f`, these consumers read them **without a credential**, because this
+repository is public and both candidate homes are private:
+
+| Consumer | What it reads, and how |
+|---|---|
+| the operator image (`deploy/aks/operator/Dockerfile`, build context `deploy/`) | `COPY helm/`, `COPY helm-db/` and the four drift scripts. *The operator image version IS the chart version it deploys*, so the chart has to sit in the same tree as the operator at the same commit. |
+| Memex `node-repo-aks-ops.yml` | sparse-checks out `deploy/aks/operator/bin`, `deploy/aks/manifests` and `deploy/helm` from this repository at the record's operator pin, with no token. `hosting-manifest-apply` refuses a manifest that is not beside `bin/`, and `hosting-chart-drift` finds its scripts at `bin/../../scripts`. |
+| Memex `config-key-coverage.yml` | a **required** context of Memex's ruleset. It checks this repository out for `deploy/helm` and `scripts/check-config-key-coverage.py` (its comment reads "Public repo — no token"). The `vendored-charts` job does the same. |
+| `deploy/homebrew` (memex-local) | vendors `deploy/helm/*` into the PUBLIC tap tarball (Systemorph/homebrew-memex). `homebrew.yml` triggers on `deploy/helm/**`. |
+| the guard tests here that read the chart (`MeshWeaver.Documentation.Test`, `Memex.Portal.Shared.Test`, `MeshWeaver.Hosting.Test`, `MeshWeaver.Deployment.Contract.Test`) | read the chart to keep **core code** consistent with it: probe paths against `ProbeEndpoints`, config keys against their readers, the drain deadline against `ServiceDefaults`. |
+| `chart-gate.yml`, `.github/scripts/test-bundle-registry.py` | render and execute the chart (the second one together with this repository's `push-bundle-publication.sh`). |
+
+Moving the chart into MeshWeaver.Plugins (beside the operator, which is moving there) or into Memex
+turns every row into a credentialed cross-repository read. That means a read token provisioned in
+**both** secret stores for each private lane that reads it, Memex's required one included. It also
+means re-homing the public homebrew tarball and porting every chart-reading guard into a test project that can see
+both trees. Choosing among the shapes below is an owner decision, not an implementation detail:
+
+1. **Keep it here** as the public deployment contract. Nothing changes, but every chart edit is a
+   core change.
+2. **A separate PUBLIC repository** for the deployment mechanism (chart, manifests, AKS scripts).
+   Every reader stays tokenless and core stops changing for chart edits. The guards that compare
+   the chart with core code have to move to a repository that can see both, or run against a
+   checkout of it.
+3. **A private repository**, with the provisioning listed above.
 
 ## The self-hosted runner pool
 
@@ -105,6 +161,28 @@ a stateful mirror (a corrupted or diverged mirror fails every job at once, where
 fails none). It is worth doing when CI volume makes the per-job seconds dominate — and it is worth
 saying out loud that until then, the caching already in place is most of the benefit for none of the
 standing cost.
+
+## Outcome: the chart moved to a public repository of its own
+
+The chart, the database chart, `deploy/aks/manifests`, `deploy/aks/scripts`, `values.aks.yaml`,
+`scripts/check-config-key-coverage.py`, the bundle-registry harness, `chart-gate.yml` and memex-local
+(`deploy/homebrew`, `homebrew.yml`) moved to the PUBLIC
+[`Systemorph/MeshWeaver.Deploy`](https://github.com/Systemorph/MeshWeaver.Deploy) at the same paths —
+shape 2 above, a separate public repository — so every reader stayed
+credential-free:
+
+- the hosting operator's image (MeshWeaver.Plugins) checks it out at a declared ref and tags the image
+  `<plugins sha7>-<core sha7>-<deploy sha7>`, so the estate's aks-ops lane reads the chart, the
+  manifests and the drift scripts at the commit the image was built from;
+- the estate's `config-key-coverage` and `helm-release` read it as they read this repository before;
+- the chart-reading guard tests (and memex-local's own) moved with it into
+  `test/MeshWeaver.Deploy.ChartGuards`, built against a checkout of this repository;
+- this repository's registry retention gate names the chart's new home (`chartRepository`) and leaves
+  its re-derivation to MeshWeaver.Deploy's `Registry retention` job, which reads this repository's
+  record with no credential.
+
+Nothing estate-specific was in the moved material — this repository is public — so the estate's
+private repository received nothing: its real values were already there.
 
 ## See also
 
