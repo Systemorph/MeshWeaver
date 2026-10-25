@@ -508,8 +508,28 @@ declaration claims it yet: MeshWeaver.Plugins owes the seven items in its `Hosti
 (H7), and the satellites declare no stages. **This repository's own CI is NOT wired**, and must not be
 until its heavy legs can be stated as stages: they build the platform from source and test it
 (`dotnet-test.yml`'s build and shards), while a host composes an already-built platform image and
-runs a repository's checks against it — a different workload, not a missing switch. Core declares
-no `.github/build-stages.json`, so `build-executor.py` would answer `actions` for it regardless.
+runs a repository's checks against it — a different workload, not a missing switch.
+
+**Core's stages run on a DEPLOYMENT, not on its pull requests.** Core declares
+`.github/build-stages.json` for the deploy-test-switch shape (the design page in core PR #7182, P4):
+`test-shard-0` … `test-shard-<N-1>`, one per shard of `dotnet-test.yml`'s suite (N =
+`CI_SHARD_TOTAL`), and `doc-gate`. Each runs from the set's **`mw-core-tests`** image, the set's
+fifth digest (`BuildHostChannel.CoreTestsDigest`): main-cd's `core-tests-image` builds core's
+tests once with CI's flags, `deploy/core-tests/core-tests.py pack` stores every shard's bins
+content-addressed with a manifest, and `promote` tags it with the set. A stage runs
+`python3 /core-tests/core-tests.py run --shard <i> --total <N>`, which copies that shard's bins out
+of the read-only image tree into the run's checkout and runs them as CI's shard loop does; `doc-gate`
+runs the doc and samples gates with the image's plugin tester against the checkout.
+- **The list is GENERATED**: `.github/scripts/core-build-stages.py --write` derives it from
+  `CI_SHARD_TOTAL`, and `--check` (dotnet-test.yml's lint job, and the image leg before it packs)
+  reds any drift. The runner also refuses a `--total` the image was not packed for.
+- **No `ciEquivalent`.** Core's pull-request CI stays on runners, so `build-executor.py` still
+  answers `actions` for it; `--check` refuses the claim.
+- **Owed outside core:** the build host must stage the `mw-core-tests` tree read-only at
+  `/core-tests` (by digest, beside `/portal/app` and `/host` — MeshWeaver.Deploy's chart and runner),
+  and P4's `build-host-test` job submits one pinned run per stage. Not established: which of core's
+  suites run inside a host's sandbox — the shards' Testcontainers projects need a Docker daemon a
+  host does not have, and the shards' browser tests need the font set CI stages.
 
 **The caller grants.** `build-follow.yml` demands `id-token: write` (the OIDC token is the follower's
 credential), so each follow job grants `{contents: read, id-token: write}`; `node-repo-build-executor.yml`

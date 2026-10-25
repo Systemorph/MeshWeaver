@@ -1269,8 +1269,8 @@ def run_image_version_step(body: str, version: str) -> tuple[int, str, str]:
 def run_image_version_cases(root, case) -> None:
     steps = image_version_steps(root)
     jobs = sorted(name for name, _ in steps)
-    case("every image leg carries the version step (portal, migration, control, tester)",
-         len(steps) == 4, f"found {jobs}")
+    case("every image leg carries the version step (portal, migration, control, tester, core tests)",
+         len(steps) == 5, f"found {jobs}")
     accepted = [f"3.1.{IMAGE_VERSION_RUN}", f"3.0.0-ci.{IMAGE_VERSION_RUN}"]
     refused = ["3.1.0-dev", "", f"3.0.0-ci.{int(IMAGE_VERSION_RUN) - 1}", f"3.1.{int(IMAGE_VERSION_RUN) - 1}",
                f"3.1.{IMAGE_VERSION_RUN}-dev", "3.1.0"]
