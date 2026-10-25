@@ -5,7 +5,8 @@ Description: >-
   A pull request into main reads RED until the automatic review has landed and every thread it opened
   has a reply from a person. Why review was advisory, the reviewer as measured (two logins, one
   account, and a quota refusal posted as if it were a review), what counts as "reviewed, nothing
-  found" (only a Copilot review of the current head), the maintainer waiver, the retired
+  found" (only a Copilot review that covers the head: its own, or an earlier one across merges of main
+  alone), the review requested on every real change, the maintainer waiver, the retired
   reviewer-unavailable degradation, the controls replayed on real merges, and what the check still
   cannot see.
 Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><polyline points="8 10 11 13 16 8"/></svg>
@@ -17,7 +18,8 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 request and every inline thread that review opened has a reply from a person.** It never skips, it
 never passes on no evidence, and a pull request the reviewer could not review is released only by a
 maintainer's visible waiver. With no finding on the pull request, the only evidence of a review is a
-Copilot review of the CURRENT head — see
+Copilot review that COVERS the head — of the head itself, or of an earlier head when only `main` was
+merged in since (policy `review-on-real-change`) — see
 [Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts). It is the build of option B on #4299, decided by the maintainer on
 2026-09-17.
 
@@ -101,6 +103,10 @@ All three hold, or the check is RED:
    releases this condition — and only this one — without a review: a maintainer's
    [waiver](#the-waiver). (A generated-only App pull request is *not owed* a review; that is a
    provenance rule, not a claim that it was reviewed.)
+   **And the review must COVER the head** (policy [`review-on-real-change`](../PolicyNotProse)): a
+   Copilot review of an earlier head counts only when every commit since it is a merge of the default
+   branch that left the pull request's own diff unchanged. A head whose own diff changed owes its own
+   review — see [A review on every real change, none for a merge of main](#a-review-on-every-real-change-none-for-a-merge-of-main).
 2. **Every thread the reviewer started has a person's reply** — for every comment by the reviewer
    with no `in_reply_to_id`, at least one comment in that thread by an account of `type: User`
    (following `in_reply_to_id` to the root, so a reply to a reply counts).
@@ -127,7 +133,8 @@ merge of `main` — stays reviewed.
 | on file, with no finding on the pull request | reading |
 |---|---|
 | a clean Copilot review of the current head | **reviewed, nothing found** — green |
-| a clean Copilot review of an EARLIER head, then more pushes | **reviewed, nothing found** — green; the note names the earlier head |
+| a clean Copilot review of an EARLIER head, then only merges of `main` (own diff unchanged) | **reviewed, nothing found** — green; the notes name the earlier head and the patch-id evidence |
+| a clean Copilot review of an EARLIER head, then a push that changed the pull request's own diff | RED — **this head owes a review** (`Verdict.stale`, policy `review-on-real-change`) until the requested review lands |
 | no Copilot review object at all | RED — never reviewed |
 | a Copilot refusal only (any head) | RED — a refusal is not a review |
 | the internal reviewer's clean review only | RED — **no Copilot review** (`Verdict.not_copilot`) |
@@ -135,9 +142,9 @@ merge of `main` — stays reviewed.
 | nothing for N minutes | RED — elapsed time is never evidence; there is no timeout-based acceptance |
 | any red row above plus a maintainer's `review-waived` label | green, credited to the person who waived |
 
-**With findings, nothing changes.** The threads themselves prove a review happened, so a pull
-request whose reviewer opened threads on an earlier head is judged by condition 2 alone — every
-thread answered — exactly as [One review per pull request](#one-review-per-pull-request) says.
+**With findings, the threads prove a review happened** — but since policy `review-on-real-change`
+they no longer stand in for a review of a head whose own diff changed after them: such a head is red
+until its own review lands, and that review's threads are answered like any other.
 
 **Why not the current head only.** For one day the gate required a Copilot review of the CURRENT
 head (policy `review-evidence-current-head`, now superseded). The rulesets then reviewed once per pull
@@ -187,14 +194,79 @@ Policy [`review-once-per-pull-request`](../PolicyNotProse) narrowed `copilot-cod
 - **Drafts.** With `review_draft_pull_requests: false` a draft is not reviewed while it is a draft; the one review must then come when it is marked ready. Whether `review_on_push: false` still requests that review on ready-for-review was not measured when the policy was set. Check it on the first pull request opened as a draft after the flip. If no review arrives, the stage gate's fallback and the `review-waived` label are the existing exits, and `review_draft_pull_requests: true` is the remedy — the one review then lands while the pull request is still a draft.
 - **The self-test.** The `ONCE` cases pin it: an older-head review with every thread answered is green on all three gates, an older-head review with an unanswered thread is red, an older-head refusal is red, and no review at all is red. With `copilot_review_of_pull_request` cut back to the head alone, every stage- and arm-gate `ONCE` case that reaches the thread condition turns red.
 
+### A review on every real change, none for a merge of main
+
+Policy [`review-on-real-change`](../PolicyNotProse) replaces [Every push is reviewed again](#every-push-is-reviewed-again).
+With `review_on_push: true`, a push that only merged `main` (which the merge-before-push rule
+requires) bought a full Copilot round on code the pull request did not change: new threads, and
+`Automatic review answered` red until a person answered them. The rule now is:
+
+- **A push that only merges the default branch owes no review.** "Only" is computed from the
+  repository, never from a commit message: every commit on the pull request since the reviewed head
+  is a merge commit, and the pull request's own diff (`merge-base..head`, GitHub's compare) has the
+  same patch-id as the reviewed head's (hunk line numbers ignored, every other byte kept). That is
+  `merge_only_same_diff` in `check-review-answered.py` — the same function the internal-review
+  carry-over uses — so a conflict resolution that changed what the pull request does is a real change.
+- **A push that changes the pull request's own diff gets a review.** The review-on-change lane
+  (`.github/workflows/node-repo-request-review.yml`, core's caller `request-review-on-change.yml`)
+  runs on every `pull_request` `synchronize` and requests ONE Copilot review with a single GraphQL
+  `requestReviews` call (`botIds: [<the Copilot bot's node id>]`, `union: true`; REST
+  `requested_reviewers` refuses a bot). It compares the head against **Copilot's newest landed
+  review**, not just the previous head, so a real change whose review never landed is not forgotten
+  under a later merge of `main`; with no landed review yet it compares against the push's previous
+  head (`github.event.before`). Its success signal is the mutation's own answer listing Copilot as
+  requested. It requests nothing for a draft (the ruleset decides drafts), for an App's own pull
+  request (Copilot does not review those), when a Copilot review is already pending (read off the
+  REST timeline), when the head is already reviewed, or when Copilot already answered this head
+  with a refusal (a maintainer re-requests that one) — so it is idempotent, and since a review
+  request pushes nothing it cannot loop. A fork pull request is printed as a `::warning::` naming
+  the manual request; every failed read or request is red, named.
+- **The sweep.** A push that finds a review already pending requests nothing, and that pending
+  review can then land on the PREVIOUS head — with no event to follow, because Copilot's own review
+  event starts no run here. So the caller also runs on `schedule` (every 15 minutes) and the lane
+  re-judges every open non-draft pull request (`--request-review-sweep`): it requests a review only
+  where a landed review does not cover the head and nothing is pending, and never for a pull request
+  with no landed review at all (that is the opening review's business).
+- **The merge gate enforces the same line.** `Automatic review answered` takes an earlier head's
+  Copilot review only when `copilot_carry_over` proves it covers the head (`copilot_currency`).
+  Otherwise the verdict is `RED — THIS HEAD OWES A REVIEW`, waited for (up to the check's
+  `--wait-for-review` window) exactly like a review that has not landed, and released by the review
+  landing, or by a maintainer's `review-waived` label. Unanswered threads stay red either way. An
+  unreadable compare is a real change: the gate fails closed.
+- **The ruleset.** The `copilot_code_review` rule runs with `review_on_push: false` (Copilot still
+  reviews a pull request when it opens); `review_draft_pull_requests` keeps its value.
+  `.github/scripts/set-copilot-review-on-push.py` carries `REVIEW_ON_PUSH = False` and is applied
+  **per repository, only once that repository calls the review-on-change lane** (`--repo NAME
+  --apply`). `--out DIR` writes, before any PUT, `<repo>.<id>.before.json` — the ruleset's fields
+  as read, the restore body — and `<repo>.<id>.put.json`, the body it PUTs; restoring is a PUT of
+  the `.before.json` file. A repository flipped without the lane would leave
+  every real change after the opening review unreviewed, so the script enforces both halves:
+  `--apply` without `--repo` is a usage error (never the whole `FLEET`), `--apply` refuses a
+  repository whose default branch carries no `.github/workflows/request-review-on-change.yml`,
+  and `--out` refuses to overwrite a `.before.json` already there — a retry into the same
+  directory after the change would otherwise record the changed value as the restore point.
+- **The order.** The gate half and the lane land in core first (the gate change is safe under
+  `review_on_push: true`, where every head is reviewed anyway); each repository then adds its thin
+  caller; only then is that repository's ruleset flipped.
+- **The self-test.** The `REAL CHANGE` and `real-change` cases pin it: a main-only merge after a
+  review is green (and its negative control, the same merge with a changed diff, is red); a real
+  change after a review is red until its own review lands; an unanswered thread is red over a
+  covered head (control: answered → green); the lane requests exactly once for a real change and
+  never for a main-only merge, a pending request or a reviewed head. Restoring the any-head reading
+  (`copilot_currency` returning the latest review whatever changed) turns the `REAL CHANGE NEG`
+  cases green and fails them.
+
 ### Every push is reviewed again
+
+> **Being replaced** by [A review on every real change, none for a merge of main](#a-review-on-every-real-change-none-for-a-merge-of-main)
+> (policy `review-on-real-change`), repository by repository as each adopts the review-on-change lane.
 
 Policy [`copilot-code-review`](../PolicyNotProse), as amended, puts `review_on_push: true` back on the `copilot_code_review` rule in all eight repositories' rulesets (`review_draft_pull_requests` stays `false`). Copilot re-reviews automatically after every code change.
 
 - **Every push to a non-draft pull request triggers a fresh Copilot review**, so every push opens a new review round, and that round's new threads hold the merge until a person answers each one ON the thread. That is why AGENTS.md says to push only for a real defect: a nit or a question is answered on its thread, not with a commit.
 - **Nobody hand-requests a review.** The ruleset requests one on every push, so an author never asks for a review or a re-review, and never withdraws one. The one exception is a review the reviewer REFUSED (below, *A refusal is posted as a review*): once the reviewer can review again, a maintainer's re-request or the `review-waived` label clears it.
 - **The gates do not change.** A landed review of any head still counts as "reviewed" (`review-once-per-pull-request`, gate half; `review-evidence-any-head`). A push therefore never goes red just because its own review has not landed yet. Threads the new round opens still need replies.
-- **The ruleset is reconciled, not hand-edited.** `.github/scripts/set-copilot-review-on-push.py` holds the in-force value in one constant (`REVIEW_ON_PUSH = True`) and applies it to the nine repositories in its `FLEET` idempotently: dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed. Changing the policy means changing that constant in the same pull request. **The ninth repository is not reconciled yet:** the policy names eight rulesets, while the script's `FLEET` also holds `MeshWeaver.FundReporting`, whose ruleset `23730648` (*Copilot review for default branch*) measured `review_on_push: false` on 2026-10-10 — a dry run names it as `would PUT`. Applying it (`--repo MeshWeaver.FundReporting --apply`) is a maintainer's act; until then a default-fleet `--apply` run changes that ruleset too, so run it only once that is decided.
+- **The ruleset is reconciled, not hand-edited.** `.github/scripts/set-copilot-review-on-push.py` holds the in-force value in one constant (now `REVIEW_ON_PUSH = False`, policy `review-on-real-change`; it was `True` under this section) and applies it to the nine repositories in its `FLEET` idempotently: dry-run by default; `--apply` PUTs the ruleset with every other field as read, then reads it back and fails unless only that one parameter changed. Changing the policy means changing that constant in the same pull request. **The ninth repository is not reconciled yet:** the policy names eight rulesets, while the script's `FLEET` also holds `MeshWeaver.FundReporting`, whose ruleset `23730648` (*Copilot review for default branch*) measured `review_on_push: false` on 2026-10-10 — a dry run names it as `would PUT`. Applying it (`--repo MeshWeaver.FundReporting --apply`) is a maintainer's act; until then a default-fleet `--apply` run changes that ruleset too, so run it only once that is decided.
 - **Drafts** are not reviewed while they are drafts. The review comes on the first push after the pull request is marked ready (or when it is opened ready).
 
 **One account, two logins.** A predicate keyed on either login alone sees half of the reviewer. The
