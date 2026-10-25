@@ -185,19 +185,58 @@ public sealed class XmlDocsReader
         }
     }
 
-    /// <summary>The nearest base type, or the nearest base-class member with the same name and signature.</summary>
+    /// <summary>
+    /// The nearest base type, or the nearest base-class member this member overrides or hides.
+    /// An OVERRIDE (a method, or a property's / event's accessor) is matched by the identity of its
+    /// root virtual slot (<see cref="MethodInfo.GetBaseDefinition"/>): constructing a generic base can
+    /// give two distinct overloads identical parameter types (<c>Base&lt;int&gt;.M(T)</c> and
+    /// <c>M(int)</c>), and only the slot says which one is overridden. A member that overrides nothing
+    /// (a field, a non-virtual or <c>new</c> member) falls back to name and signature.
+    /// </summary>
     private static MemberInfo? NearestBase(MemberInfo member)
     {
         if (member is Type type)
             return type.BaseType;
         if (member.DeclaringType is not { } declaring)
             return null;
+
+        if (OverriddenSlot(member) is { } slot)
+        {
+            for (var b = declaring.BaseType; b is not null; b = b.BaseType)
+                foreach (var m in b.GetMember(member.Name, member.MemberType, Declared))
+                    if (RootSlot(m) == slot)
+                        return m;
+            return null;
+        }
+
         for (var b = declaring.BaseType; b is not null; b = b.BaseType)
             foreach (var m in b.GetMember(member.Name, member.MemberType, Declared))
                 if (SameSignature(m, member))
                     return m;
         return null;
     }
+
+    /// <summary>The accessor (or method) that carries a member's virtual slot.</summary>
+    private static MethodInfo? SlotMethod(MemberInfo member) => member switch
+    {
+        MethodInfo method => method,
+        PropertyInfo property => property.GetMethod ?? property.SetMethod,
+        EventInfo @event => @event.AddMethod,
+        _ => null,
+    };
+
+    /// <summary>The identity of the root virtual slot a member's method or accessor occupies.</summary>
+    private static (Module Module, int Token)? RootSlot(MemberInfo member)
+        => SlotMethod(member) is { IsVirtual: true } method ? Identity(method.GetBaseDefinition()) : null;
+
+    /// <summary>
+    /// The root slot of a member that OVERRIDES an inherited virtual (its slot's root lies in a base
+    /// type), or <c>null</c> for a member that introduces its own slot or is not virtual.
+    /// </summary>
+    private static (Module Module, int Token)? OverriddenSlot(MemberInfo member)
+        => SlotMethod(member) is { IsVirtual: true } method && RootSlot(member) is { } root && root != Identity(method)
+            ? root
+            : null;
 
     private static IEnumerable<MemberInfo> InterfaceCandidates(MemberInfo member)
     {

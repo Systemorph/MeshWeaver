@@ -264,7 +264,11 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
 
     /// <summary>Every inheritance path: constructed vs definition, open vs closed, explicit vs implicit, cref, record params.</summary>
     private const string Inheritance = """
-        namespace Inheritance;
+        /// <summary>The global subject.</summary>
+        public sealed class GlobalSubject { }
+
+        namespace Inheritance
+        {
 
         public interface IConvert
         {
@@ -401,6 +405,26 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
             /// <inheritdoc cref="Manual.Label"/>
             public string ManualAlias => "";
         }
+
+        public abstract class Overloads<T>
+        {
+            /// <summary>M of T.</summary>
+            public virtual void M(T value) { }
+            /// <summary>M of int.</summary>
+            public virtual void M(int value) { }
+        }
+
+        public class IntOverrides<U> : Overloads<U>
+        {
+            /// <inheritdoc/>
+            public override void M(int value) { }
+        }
+
+        public sealed class Closed2 : IntOverrides<int> { }
+
+        /// <summary>Refers to <see cref="GlobalSubject"/> and <see cref="Inheritance.Tagged"/>.</summary>
+        public sealed class Refers { }
+        }
         """;
 
     private readonly string root = Path.Combine(Path.GetTempPath(), "xmldocs-parity-" + Guid.NewGuid().ToString("N"));
@@ -445,6 +469,37 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
         docs.Summary(type.GetEvent("Changed")!).Should().Be("IShape changed.");
         if (own is not null)
             docs.Summary(type.GetProperty("Own")!).Should().Be(own);
+    }
+
+    /// <summary>
+    /// <b>Should fail if</b> base-overload lookup compares CONSTRUCTED parameter types: read through
+    /// <c>IntOverrides&lt;int&gt;</c> (or a subclass of it) the base <c>Overloads&lt;int&gt;</c> has
+    /// <c>M(T)</c> and <c>M(int)</c> both as <c>M(int)</c>, and a first match picks <c>M(T)</c>. The
+    /// override's virtual slot names <c>M(int)</c>.
+    /// </summary>
+    [Fact]
+    public void AnOverride_InheritsFromTheSlotItOverrides_EvenWhenConstructionMakesOverloadsCollide()
+    {
+        var assembly = Compile("Inheritance", Inheritance, out _);
+        var open = assembly.GetType("Inheritance.IntOverrides`1")!;
+        foreach (var type in new[] { open, open.MakeGenericType(typeof(int)), assembly.GetType("Inheritance.Closed2")! })
+        {
+            var overrides = type.GetMethods(BindingFlags.Public | BindingFlags.Instance)
+                .Single(m => m.Name == "M" && m.DeclaringType!.Name.StartsWith("IntOverrides", StringComparison.Ordinal));
+            docs.Summary(overrides).Should().Be("M of int.", $"read through {type}");
+        }
+    }
+
+    /// <summary>
+    /// <b>Should fail if</b> a cref's kind prefix is trimmed as characters rather than parsed: a
+    /// global-namespace type (<c>T:GlobalSubject</c>, no dot) renders as <c>T:GlobalSubject</c>.
+    /// </summary>
+    [Fact]
+    public void ASeeCrefToAGlobalNamespaceType_RendersItsName()
+    {
+        var assembly = Compile("Inheritance", Inheritance, out var documented);
+        documented.Should().Contain("T:GlobalSubject", "CONTROL — the compiler documents the global type");
+        docs.Summary(assembly.GetType("Inheritance.Refers")!).Should().Be("Refers to GlobalSubject and Tagged.");
     }
 
     /// <summary>

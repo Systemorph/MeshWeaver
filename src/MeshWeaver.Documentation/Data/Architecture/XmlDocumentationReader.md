@@ -83,7 +83,8 @@ means making the description a data-bound value rather than a string read during
 
 **Rendering** matches what the platform has always shown (Namotion's formatting-free mode):
 `<see>`/`<seealso>` render as their text, else the `langword`, else the cref's last name segment
-(`T:Ns.Type` → `Type`), else the `href`; `<paramref>` as its name; every other element (`<c>`,
+(`T:Ns.Type` → `Type`; the `X:` kind prefix is parsed, so a global-namespace `T:GlobalType` renders
+`GlobalType` where Namotion rendered `T:GlobalType`), else the `href`; `<paramref>` as its name; every other element (`<c>`,
 `<para>`, `<b>`, `<list>`, …) as its own rendered content, trimmed; `<typeparamref>` renders as
 nothing. The first line's indentation is removed from every line.
 
@@ -117,7 +118,9 @@ continues in its declaring type's context. Through an interface map when the dec
 `GetInterfaceMap` answers too. Only a type the runtime refuses a map for falls back to a name match,
 restricted to EXACTLY the interface an explicit implementation's qualifier names (`IFoo` is not
 `IFoo<int>`, `Outer<T>.IA` is not `Outer<T>.IB`). Signatures compare generic arity
-as well as parameters (`M()` is not `M<T>()`). Members are compared by METADATA identity (module and
+as well as parameters (`M()` is not `M<T>()`). An override finds the base member it overrides by its virtual SLOT (`GetBaseDefinition`), not by
+parameter types: constructing a generic base can make two overloads look identical (`Base<int>.M(T)`
+and `M(int)`). Members are compared by METADATA identity (module and
 token, a constructed generic method as its definition), never by reference: the same member reached
 through a subclass, a constructed type or an interface map is a different `MemberInfo` object. Each
 lookup memoizes every member and base-chain walk it resolves, so a chain of undocumented

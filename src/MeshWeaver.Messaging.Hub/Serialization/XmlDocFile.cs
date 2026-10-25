@@ -137,7 +137,7 @@ internal sealed class XmlDocFile
     /// Renders a documentation element to plain text, byte-compatible with the formatting-free
     /// rendering the platform has always shown: <c>&lt;see&gt;</c>/<c>&lt;seealso&gt;</c> become their
     /// text, else the <c>langword</c>, else the cref's last name segment (<c>T:Ns.Type</c> →
-    /// <c>Type</c>, <c>M:Ns.T.M(System.Int32)</c> → <c>M</c>), else the <c>href</c>;
+    /// <c>Type</c>, <c>M:Ns.T.M(System.Int32)</c> → <c>M</c>, <c>T:GlobalType</c> → <c>GlobalType</c>), else the <c>href</c>;
     /// <c>&lt;paramref&gt;</c> becomes its name; every other element
     /// (<c>&lt;c&gt;</c>, <c>&lt;para&gt;</c>, <c>&lt;b&gt;</c>, <c>&lt;list&gt;</c>, …) its own rendered
     /// content, trimmed. The common leading indentation of the source lines is removed.
@@ -179,7 +179,7 @@ internal sealed class XmlDocFile
             return langword.Value;
         if (see.Attribute("cref") is { } cref)
         {
-            var value = cref.Value.Trim('!', ':').Trim();
+            var value = CrefTarget(cref.Value);
             var paren = value.IndexOf('(');
             if (paren >= 0)
                 value = value[..paren];
@@ -187,6 +187,18 @@ internal sealed class XmlDocFile
             return dot < 0 ? value : value[(dot + 1)..];
         }
         return see.Attribute("href")?.Value ?? string.Empty;
+    }
+
+    /// <summary>
+    /// The member a cref names, without its kind prefix: <c>T:Ns.Type</c> → <c>Ns.Type</c>,
+    /// <c>T:GlobalType</c> → <c>GlobalType</c>, an unresolved <c>!:Name</c> → <c>Name</c>.
+    /// </summary>
+    private static string CrefTarget(string cref)
+    {
+        var value = cref.Trim();
+        return value.Length >= 2 && value[1] == ':' && (char.IsAsciiLetterUpper(value[0]) || value[0] == '!')
+            ? value[2..].Trim()
+            : value;
     }
 
     /// <summary>
