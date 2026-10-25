@@ -402,8 +402,12 @@ def deploy_requests(resolver, rows: list[dict], deployment: str, resolve) -> lis
 def retention_lines(rows: list[dict], deployed: list) -> list[str]:
     """What `GET /hosts` says about each deployed cap's retention, read BEFORE today's publication
     (so it reflects the previous one): the names with the worker token, the count without. A
-    mismatch is a WARNING — the intake applies a publication asynchronously — never the verdict. Pure."""
+    mismatch is a WARNING — the intake applies a publication asynchronously — never the verdict.
+    `cappedBy` is worker-only because it names packages of EVERY repository, private ones included,
+    and this log is public on a public repository: only THIS repository's own packages are named,
+    the others only counted. Pure."""
     by_version = {d.version: d for d in deployed}
+    own = {row["package"] for row in rows}
     lines = []
     for row in rows:
         d = by_version.get(row["version"]) if row["deployed"] else None
@@ -411,8 +415,11 @@ def retention_lines(rows: list[dict], deployed: list) -> list[str]:
             continue
         if d.capped_by is not None:
             held = row["package"] in d.capped_by
+            ours = sorted(p for p in d.capped_by if p in own)
+            others = len(d.capped_by) - len(ours)
             lines.append(("" if held else "::warning::")
-                         + f"retention: build-{d.version} cappedBy {list(d.capped_by)} — "
+                         + f"retention: build-{d.version} cappedBy {ours}"
+                         + (f" (+{others} other package(s), names withheld)" if others else "") + " — "
                          + ("holds " if held else "does NOT name ") + row["package"]
                          + ("" if held else " yet (the intake applies today's publication asynchronously)"))
         else:
@@ -825,6 +832,14 @@ def self_test() -> int:
             red = go(fake, root, worker_token="worker-tok")
             check("with the worker token, `cappedBy` is read and names the package holding its version",
                   red == "" and any("cappedBy ['Capped'] — holds Capped" in line for line in logs), logs)
+        with _FakeControl(caps={"3.1.10398": (2, ["Capped", "Private.Elsewhere"])}) as fake:
+            logs.clear()
+            red = go(fake, root, worker_token="worker-tok")
+            check("NEGATIVE: the worker-only names of OTHER repositories' packages never reach the (public) log — "
+                  "only this repository's own packages are named, the rest counted",
+                  red == "" and not any("Private.Elsewhere" in line for line in logs)
+                  and any("cappedBy ['Capped'] (+1 other package(s), names withheld) — holds Capped" in line
+                          for line in logs), logs)
         with _FakeControl(caps={"3.1.10398": (1, ["Capped"])}) as fake:
             logs.clear()
             red = go(fake, root)
