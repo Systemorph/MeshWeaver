@@ -52,9 +52,21 @@ public static class ContentSchemaFacts
     /// </summary>
     /// <param name="contentType">The content type.</param>
     /// <param name="options">The serializer options its instances are written with.</param>
+    /// <param name="docs">The mesh's XML-docs reader (<c>hub.XmlDocs()</c>).</param>
     /// <returns>The properties.</returns>
+    public static IReadOnlyList<ContentPropertyFact> FromType(Type contentType, JsonSerializerOptions options, MeshWeaver.Messaging.Serialization.XmlDocsReader docs)
+        => Parse(MeshWeaver.Data.ContentJsonSchema.Generate(contentType, options, docs).ToJsonString());
+
+    /// <summary>
+    /// Retired form of <see cref="FromType(Type, JsonSerializerOptions, MeshWeaver.Messaging.Serialization.XmlDocsReader)"/>
+    /// without the mesh's reader: it parses the documentation files again on every call.
+    /// </summary>
+    /// <param name="contentType">The content type.</param>
+    /// <param name="options">The serializer options its instances are written with.</param>
+    /// <returns>The properties.</returns>
+    [Obsolete("Pass the mesh's reader: FromType(type, options, hub.XmlDocs()).")]
     public static IReadOnlyList<ContentPropertyFact> FromType(Type contentType, JsonSerializerOptions options)
-        => Parse(MeshWeaver.Data.ContentJsonSchema.Generate(contentType, options).ToJsonString());
+        => FromType(contentType, options, new MeshWeaver.Messaging.Serialization.XmlDocsReader());
 
     /// <summary>
     /// The content properties declared by <paramref name="jsonSchema"/>, in declaration order, first
