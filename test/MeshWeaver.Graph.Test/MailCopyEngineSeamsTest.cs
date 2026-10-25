@@ -280,7 +280,7 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
     }
 
     [Fact(Timeout = 180_000)]
-    public async Task TheSource_IsReadFromItsStream_SoALaggingIndexNeverHidesThePendingGeneration()
+    public async Task TheSource_ShowsThePendingGeneration_RightAfterTheRebuildCommit()
     {
         var ct = TestContext.Current.CancellationToken;
         var rig = await Rig(ct);
@@ -289,7 +289,8 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
         await Enable(rig, ct);
         await InterruptedRebuild(rig, ct);
 
-        // The committed pending generation is visible immediately after the commit, with no wait for the index to catch up.
+        // A smoke test of the stream-read path. It does NOT prove the index lag is covered: the monolith mesh indexes synchronously,
+        // so a stale index cannot be staged here (see SourceCore for the stream read this relies on).
         var read = await rig.Store.Source(rig.Owner, "outlook").Timeout(Bound).Await(ct);
         read!.PendingGeneration.Should().NotBeNullOrEmpty();
         read.PendingCursor.Should().Be("p1");
