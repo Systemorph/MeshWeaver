@@ -1138,7 +1138,7 @@ buildHosts:
   orasImage: "ghcr.io/oras-project/oras:v1.3.4@sha256:f7bc056d54d97baa399414ed5048ecc67c3371b750d4bbce1d871827a5758179"
   # The tainted build pool (Build service §1.4): one build = one node.
   nodeSelector:
-    workload: cibuild
+    workload: ci-build              # the CI node pools (cibuildv6, cidind) carry workload=ci-build — the same label the ARC runners select
   tolerations:
     - { key: ci, operator: Equal, value: build, effect: NoSchedule }
     - { key: kubernetes.azure.com/scalesetpriority, operator: Equal, value: spot, effect: NoSchedule }
