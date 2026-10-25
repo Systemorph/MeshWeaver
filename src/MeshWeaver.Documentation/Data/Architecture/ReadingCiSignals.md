@@ -1506,9 +1506,11 @@ CS0121  The call is ambiguous between
         'System.Linq.EnumerableEx.TakeLast<T>(IEnumerable<T>, int)'
 ```
 
-Two extension methods, same signature, same namespace — one from the BCL, one from Ix.NET, which is
-a legitimate pinned platform dependency that in-mesh source uses deliberately. Core never sees it;
-the container lane always does.
+Two extension methods, same signature, same namespace — one from the BCL, one from Ix.NET
+(System.Interactive, which the platform then shipped for `MeshWeaver.Reflection`). Core never saw it;
+the container lane always did. That particular collision is gone — the package was removed from the
+platform (see [NuGet Runtime Assets](../NuGetRuntimeAssets)) — but the width difference that produced
+it is structural, and the next transitive package with BCL-shaped extensions reproduces it.
 
 **The rule:** a green local build is not evidence about the container lane, and "it compiles in core"
 is not an argument that a module will compile. When a compile error appears only in that lane,
