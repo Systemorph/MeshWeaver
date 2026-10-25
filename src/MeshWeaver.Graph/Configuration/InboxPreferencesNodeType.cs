@@ -95,9 +95,11 @@ public static class InboxPreferencesNodeType
             InboxStateKind.Mail => stored.MailStates,
             _ => stored.ChatStates,
         };
-        return own.Count > 0 ? own
-            : kind == InboxStateKind.Activity && stored.States.Count > 0 ? stored.States
-            : InboxStateKind.Defaults(kind);
+        // The legacy global choice belongs to the activities filter. A key the person edited since (Done ticked before
+        // the migration was written) wins; a legacy key they did not touch is kept, so an edit never drops "open".
+        if (kind == InboxStateKind.Activity && stored.States.Count > 0)
+            return own.Count > 0 ? stored.States.SetItems(own) : stored.States;
+        return own.Count > 0 ? own : InboxStateKind.Defaults(kind);
     }
 
     /// <summary>

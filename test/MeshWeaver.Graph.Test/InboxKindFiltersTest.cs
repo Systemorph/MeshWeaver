@@ -113,6 +113,19 @@ public class InboxKindFiltersTest
             .ActivityStates["done"].Should().BeTrue();
     }
 
+    /// <summary>Done ticked before the migration was written must not drop the legacy "open": the edited key wins, the untouched legacy key stays.</summary>
+    [Fact]
+    public void AnEditBeforeTheMigration_KeepsTheLegacyOpen()
+    {
+        var edited = new InboxPreferences
+        {
+            States = ImmutableDictionary<string, bool>.Empty.Add("open", true).Add("done", false),
+            ActivityStates = ImmutableDictionary<string, bool>.Empty.Add("done", true),
+        };
+        Flat(InboxPreferencesNodeType.Effective(edited).ActivityStates).Should().Equal("done=True", "open=True");
+        Flat(InboxPreferencesNodeType.Completed(edited, InboxPreferencesNodeType.SeedForExisting(Sections()))!.ActivityStates).Should().Equal("done=True", "open=True");
+    }
+
     /// <summary>The stored node is migrated once: the legacy choice moves to the activities field, the other kinds get their defaults, and a second pass finds nothing to do.</summary>
     [Fact]
     public void TheStoredNode_IsMigratedOnce_AndConverges()

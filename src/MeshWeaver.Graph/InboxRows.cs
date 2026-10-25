@@ -857,8 +857,10 @@ public static class InboxRows
     /// approval, <c>unread</c> / <c>read</c> for mail and chats; empty for a kind with no state filter. Pure.
     /// </summary>
     /// <param name="row">The row.</param>
-    internal static string StateGroupOfRow(InboxRow row)
-        => row.StateKind switch
+    internal static string StateGroupOfRow(InboxRow row) => StateGroupOf(row.StateKind, row);
+
+    private static string StateGroupOf(string stateKind, InboxRow row)
+        => stateKind switch
         {
             InboxStateKind.Activity => StateGroupOf(row.State),
             InboxStateKind.Mail or InboxStateKind.Chat
@@ -869,15 +871,27 @@ public static class InboxRows
     /// <summary>
     /// Whether the filter of <paramref name="row"/>'s OWN kind lets it through. The other kinds' filters are
     /// not consulted: a read mail is not hidden by an activities filter that shows open items only. A row with
-    /// no kind (built by hand) is judged as an activity. Pure.
+    /// no kind (built by hand) is judged as an activity; a group nobody ticked narrows nothing. Allocation-free:
+    /// it reads the filter's dictionary directly. Pure.
     /// </summary>
     /// <param name="row">The row.</param>
     /// <param name="filter">The filter.</param>
     internal static bool StateShown(InboxRow row, InboxFilter filter)
     {
         var kind = row.StateKind.Length > 0 ? row.StateKind : InboxStateKind.Activity;
-        var ticked = TickedStates(filter, kind);
-        return ticked.Count == 0 || ticked.Contains(StateGroupOfRow(row with { StateKind = kind }));
+        var states = kind switch
+        {
+            InboxStateKind.Activity => filter.ActivityStates,
+            InboxStateKind.Mail => filter.MailStates,
+            InboxStateKind.Chat => filter.ChatStates,
+            _ => null,
+        };
+        if (states is null || states.Count == 0)
+            return true;
+        var anyTicked = false;
+        foreach (var state in states)
+            anyTicked |= state.Value;
+        return !anyTicked || (states.TryGetValue(StateGroupOf(kind, row), out var on) && on);
     }
 
     /// <summary>The tags asked for: the ticked ones, plus the legacy single <see cref="InboxFilter.Tag"/>; empty for all. Pure.</summary>
