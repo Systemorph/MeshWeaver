@@ -5,7 +5,7 @@ name: Node repo cap debt (reusable)
 # Doc/Architecture/DeployTestSwitchLatest §5-§6).
 #
 # A package may author `maxMeshVersion` next to `minMeshVersion` in `<Package>/index.json` (with
-# `capReason` and `capTracking`); its modules then build against the highest READY build-server
+# `capReason` and `capTracking`); its modules then build against the highest COMPLETE build-server
 # deployment inside its floor and cap instead of `latest`. Once a day this lane does two things, both
 # in `.github/scripts/cap-debt-triage.py` (self-tested at the start of every run):
 #
@@ -13,7 +13,7 @@ name: Node repo cap debt (reusable)
 #      (`{event, repo, sha, caps:[{package, floor, cap, version, deployed, reason}]}`). The control
 #      plane's intake keeps one `Hosting/BuildCaps/<package>` node per cap, written as System; the
 #      build hosts' retention reads them, fail-closed, so a capped package's deployment is never torn
-#      down under it. `version` is the highest READY deployed version in [floor, cap] (from
+#      down under it. `version` is the highest COMPLETE deployed version in [floor, cap] (from
 #      `GET <build API>/hosts`); when none is deployed it is the version that must be, and the intake
 #      asks for that deployment. A package absent from the set is a REMOVED cap: its node is deleted,
 #      so its version can be torn down. That is why the set is sent even when it is empty.
