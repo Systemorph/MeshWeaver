@@ -160,6 +160,12 @@ public static class NodeImageUpload
                     .SelectMany(_ => Observable.Throw<string?>(ex)))
                 .SelectMany(previousIcon => AsCaller(hub, caller,
                         () => DeletePrevious(collection, previousIcon, newIcon, nodePath, logger))
+                    // The new picture is announced to the content observers ONCE, when the node
+                    // points at it — every upload is a NEW file (a fresh generated name), so this is
+                    // once per picture. The content index describes it when an image describer is
+                    // configured and records why not when none is; the deleted previous picture is
+                    // de-indexed by its own delete notification.
+                    .Do(_ => collection.AnnounceWritten([storedPath], caller))
                     .Select(_ => newIcon)));
     }
 

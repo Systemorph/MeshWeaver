@@ -3,7 +3,7 @@
 
 The HOST half of the standing build hosts (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §2 and
 §4.3; platform reference Doc/Architecture/BuildHosts). One warm Deployment per release channel
-(`build-latest`, `build-stable`, chart `deploy/helm/templates/build-host/`) runs this as its main
+(`build-latest`, `build-stable`, chart `deploy/helm/templates/build-host/` in Systemorph/MeshWeaver.Deploy) runs this as its main
 process:
 
     build-run.py --host          the loop: refresh the plugins layer → claim → run → repeat
