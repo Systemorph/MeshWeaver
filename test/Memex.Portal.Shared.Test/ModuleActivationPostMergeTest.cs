@@ -104,7 +104,29 @@ public class ModuleActivationPostMergeTest : IDisposable
             PreviousFrameworkMvid = displaced?.FrameworkMvid,
             Enabled = true,
         });
+        OrderBehindTheOlderImagesWrite();
         return generation;
+    }
+
+    /// <summary>
+    /// 🚨 States the order every scenario here means — the older image writes AFTER every event
+    /// already on the volume — instead of leaving it to the clock. Arrivals are FILE write times,
+    /// and Linux stamps files from a coarse clock (one scheduler tick), so a write issued right
+    /// after a landing routinely carries that landing's exact stamp. At a tie the derivation counts
+    /// the landing as AFTER an older image's uninstall (that image states no watermark), which is
+    /// the documented rule and not what these scenarios describe: the precondition of
+    /// <see cref="AnOlderImagesUninstall_SurvivesTheNextCurrentLanding"/> failed on a CI runner
+    /// exactly that way. The events already recorded are moved one millisecond BEHIND the entry
+    /// rather than the entry ahead of them, so a later landing still arrives at or after it.
+    /// </summary>
+    private void OrderBehindTheOlderImagesWrite()
+    {
+        var writtenAt = File.GetLastWriteTimeUtc(ModuleActivationSidecar.EntryPath(root, Module));
+        var records = ModuleActivationSidecar.LandingRecordsDirectory(root, Module);
+        if (!Directory.Exists(records))
+            return;
+        foreach (var file in Directory.GetFiles(records).Where(f => File.GetLastWriteTimeUtc(f) >= writtenAt))
+            File.SetLastWriteTimeUtc(file, writtenAt.AddMilliseconds(-1));
     }
 
     /// <summary>What an image that predates the landing records writes to uninstall: its disabled
@@ -120,6 +142,7 @@ public class ModuleActivationPostMergeTest : IDisposable
             PreviousVersion = null,
             PreviousFrameworkMvid = null,
         });
+        OrderBehindTheOlderImagesWrite();
     }
 
     // ── 1. an older image's event outlives the next current-image write of its file ──────────
