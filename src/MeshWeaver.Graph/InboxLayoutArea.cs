@@ -225,6 +225,38 @@ public static class InboxLayoutArea
 
     internal static string KindStylePointer(string key) => LayoutAreaReference.GetDataPointer(KindStylesId) + "/" + key;
 
+    /// <summary>The data id of the per-state-kind visibility styles.</summary>
+    public const string StateStylesId = "inboxStateStyles";
+
+    /// <summary>The state kinds that own a filter in the side panel, in the order it lists them.</summary>
+    internal static readonly ImmutableArray<string> StateKinds = [InboxStateKind.Activity, InboxStateKind.Mail, InboxStateKind.Chat];
+
+    /// <summary>The pointer to a state kind's visibility style.</summary>
+    internal static string StateStylePointer(string stateKind) => LayoutAreaReference.GetDataPointer(StateStylesId) + "/" + stateKind;
+
+    /// <summary>The <see cref="InboxPreferences"/> field a state kind's filter is stored in (camelCase, as serialized).</summary>
+    internal static string StateField(string stateKind)
+        => stateKind switch { InboxStateKind.Activity => "activityStates", InboxStateKind.Mail => "mailStates", _ => "chatStates" };
+
+    /// <summary>The localization key of a state kind's group title.</summary>
+    internal static string StateTitleKey(string stateKind) => "inbox.section.state." + stateKind;
+
+    /// <summary>
+    /// Each state kind's style: shown when a connected section of that kind exists AND its kind (side-menu category)
+    /// is enabled — ticked, or no kind ticked at all. A state filter for a kind that is not listed would only mislead. Pure.
+    /// </summary>
+    /// <param name="connected">The connected sections.</param>
+    /// <param name="kinds">The kind ticks (<see cref="InboxPreferences.Kinds"/>).</param>
+    internal static ImmutableDictionary<string, string> StateStyles(ImmutableArray<InboxSection> connected, ImmutableDictionary<string, bool> kinds)
+    {
+        var anyTicked = kinds.Any(kind => kind.Value);
+        return StateKinds.ToImmutableDictionary(stateKind => stateKind,
+            stateKind => connected.Any(section => InboxRows.StateKindOf(section) == stateKind
+                    && (!anyTicked || (kinds.TryGetValue(InboxRows.SourceKey(section.Category), out var on) && on)))
+                ? string.Empty : HiddenStyle,
+            StringComparer.Ordinal);
+    }
+
     /// <summary>Each kind's style, keyed by <see cref="InboxRows.SourceKey"/> of the category: shown when any source filed under it is in <paramref name="connected"/>. Pure.</summary>
     internal static ImmutableDictionary<string, string> KindStyles(ImmutableArray<InboxSection> sections, ImmutableHashSet<string> connected)
         => sections.GroupBy(s => s.Category, StringComparer.Ordinal)
@@ -264,6 +296,7 @@ public static class InboxLayoutArea
                     .Select(source => (Key: InboxRows.SourceKey(source.Id), source.Label, source.Icon))));
             host.UpdateData(SourceStylesId, SourceStyles(sections, unprobed));
             host.UpdateData(KindStylesId, KindStyles(sections, unprobed));
+            host.UpdateData(StateStylesId, StateStyles([.. sections.Where(s => unprobed.Contains(s.Source))], ImmutableDictionary<string, bool>.Empty));
         }
         host.SeedRowSelection(InboxRows.SelectionId);
         // One per page, created on the render turn; the buttons share it.
@@ -305,14 +338,22 @@ public static class InboxLayoutArea
                         Label = new JsonPointerReference(LayoutAreaReference.GetDataPointer(KindLabelsId) + "/" + key),
                     }, "Kind" + key), "Row" + key);
         }
-        // State: Open (awaiting a decision, requested, running, unread) and Done (decided, finished,
-        // failed, cancelled, or nothing left to do). The union of the ticked groups is listed; none ticked lists all.
-        var stateGroups = Controls.Stack.WithVerticalGap(4);
-        foreach (var (key, labelKey) in new[] { (InboxRows.OpenKey, "inbox.filter.open"), (InboxRows.DoneKey, "inbox.filter.done") })
-            stateGroups = stateGroups.WithView(Controls.CheckBox(new JsonPointerReference($"states/{key}")) with
-            {
-                DataContext = preferences, Label = host.Localize(labelKey),
-            }, "State" + key);
+        // State: ONE filter per kind, each with its own vocabulary, its own stored field and its own default —
+        // activities Open / Done, mail Unread / Read, chats Unread / Read. A group is shown only while its kind is
+        // enabled (connected and ticked); the union of a kind's ticked groups is listed, none ticked lists all of it.
+        var stateFilters = Controls.Stack.WithVerticalGap(12);
+        foreach (var stateKind in StateKinds)
+        {
+            var group = Controls.Stack.WithVerticalGap(4)
+                .WithView(Controls.H6(host.Localize(StateTitleKey(stateKind))).WithStyle("margin: 0;"), "Title" + stateKind);
+            foreach (var state in InboxStateKind.Vocabulary(stateKind))
+                group = group.WithView(Controls.CheckBox(new JsonPointerReference($"{StateField(stateKind)}/{state}")) with
+                {
+                    DataContext = preferences, Label = host.Localize("inbox.filter." + state),
+                }, "State" + stateKind + state);
+            stateFilters = stateFilters.WithView(
+                group with { Style = new JsonPointerReference(StateStylePointer(stateKind)) }, "States" + stateKind);
+        }
         // Tags: one checkbox per tag the triage gave — Important first, then each by use. They are
         // known only once the rows are, so the list is a bound collection, one checkbox per item.
         // A row matching ANY ticked tag is listed; none ticked lists all.
@@ -350,7 +391,7 @@ public static class InboxLayoutArea
                 Placeholder = host.Localize("inbox.search.placeholder"),
             }, "Search")
             .WithView(Section(host.Localize("inbox.section.kind"), kind), "Kind")
-            .WithView(Section(host.Localize("inbox.section.state"), stateGroups), "States")
+            .WithView(Section(host.Localize("inbox.section.state"), stateFilters), "States")
             .WithView(Section(host.Localize("inbox.section.tags"), tags), "Tags")
             .WithView(Section(host.Localize("inbox.section.source"), sourceList), "Source")
             // Spam, promotions and noise stay out of the list until the viewer asks for them.
@@ -643,11 +684,16 @@ public static class InboxLayoutArea
     /// <param name="view">The view's own filter (search, Only, tags).</param>
     /// <param name="stored">The person's preferences, or the defaults while none are stored.</param>
     internal static InboxFilter WithPreferences(InboxFilter view, InboxPreferences stored)
-        => view with
+    {
+        // Resolved per kind: a node written before the filters were per kind still lists its mail.
+        var effective = InboxPreferencesNodeType.Effective(stored);
+        return view with
         {
-            Kinds = stored.Kinds, Sources = stored.Sources, States = stored.States,
+            Kinds = stored.Kinds, Sources = stored.Sources,
+            ActivityStates = effective.ActivityStates, MailStates = effective.MailStates, ChatStates = effective.ChatStates,
             Account = stored.Account, ShowIgnorable = stored.ShowIgnorable,
         };
+    }
 
     /// <summary>The keys already seeded into the preferences node by this page — so a pass that rewrites them is loud, not a storm.</summary>
     private sealed class SeededKeys
@@ -677,6 +723,7 @@ public static class InboxLayoutArea
             return;
         var missing = completed.Kinds.Keys.Except(stored.Kinds.Keys).Select(k => "k:" + k)
             .Concat(completed.Sources.Keys.Except(stored.Sources.Keys).Select(k => "s:" + k))
+            .Concat(InboxPreferencesNodeType.MissingStates(stored).Select(k => "st:" + k))
             .Order(StringComparer.Ordinal).ToArray();
         if (!seeded.Add(string.Join(',', missing)))
         {
@@ -867,6 +914,7 @@ public static class InboxLayoutArea
                 if (stored is not null)
                     SeedMissing(hub, viewerAccess, viewerContext, logger, preferencesPath, stored, seedFor, seeded);
                 host.UpdateData(AccountOptionsId, AccountOptions(host.Localize("inbox.account.all"), AccountsOf(rows)));
+                host.UpdateData(StateStylesId, StateStyles(sections, asked.Kinds));
                 // The tag checkboxes follow the rows; a box the viewer ticked stays ticked while its tag exists.
                 var ticked = items.Where(item => item.Checked).Select(item => item.Key).ToImmutableHashSet(StringComparer.Ordinal);
                 var wanted = TagItems(InboxRows.TagCounts(rows), importantLabel, ticked);
@@ -1338,6 +1386,7 @@ public static class InboxLayoutArea
                     CategoryLabelKey = string.IsNullOrWhiteSpace(leg.CategoryLabelKey) ? leg.SourceLabelKey : leg.CategoryLabelKey,
                     ConnectedWhen = string.IsNullOrWhiteSpace(leg.ConnectedWhen) ? null : leg.ConnectedWhen,
                     AlwaysOn = leg.AlwaysOn, DefaultKind = leg.DefaultKind,
+                    StateKind = InboxStateKind.Resolve(leg.StateKind, string.IsNullOrWhiteSpace(leg.Category) ? leg.Source : leg.Category),
                     Ledger = InboxQueries.LedgerKindOf(leg.Query),
                 })
         ];
