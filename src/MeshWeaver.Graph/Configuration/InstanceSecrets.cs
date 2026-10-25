@@ -715,7 +715,13 @@ public sealed class InstanceSecretCatalog : IDisposable
         ImmutableDictionary<string, CatalogEntry>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase), Faulted: false);
     // Whether the query's first listing has arrived. Kept beside the state, not folded into it, so
     // "nothing is set" and "not read yet" stay two different facts.
-    private readonly System.Reactive.Subjects.BehaviorSubject<bool> loaded = new(false);
+    // 🚨 A lock-free flag plus an AsyncSubject, never a BehaviorSubject<bool>
+    // (Doc/Architecture/CatalogLoadedSignal): a BehaviorSubject replays to a new WhenLoaded subscriber
+    // WHILE HOLDING ITS GATE, and OnChange read `.Value` — the same gate — on every full listing, so a
+    // subscriber still in its callback froze this feed. It is also half of the lock-order deadlock in
+    // InstanceGitHubApp.WhenReadable, which zips this signal with the App catalog's.
+    private readonly System.Reactive.Subjects.AsyncSubject<Unit> loaded = new();
+    private int isLoaded;
     private readonly object gate = new();
     private IDisposable? subscription;
     // Test seams: the catalog query and how a re-open is scheduled. Null in production: the query is
@@ -762,7 +768,7 @@ public sealed class InstanceSecretCatalog : IDisposable
         get
         {
             EnsureSubscribed();
-            return loaded.Where(l => l).Take(1).Select(_ => Unit.Default);
+            return loaded.AsObservable();
         }
     }
 
@@ -819,7 +825,7 @@ public sealed class InstanceSecretCatalog : IDisposable
             if (meshService is null)
             {
                 subscription = System.Reactive.Disposables.Disposable.Empty;
-                loaded.OnNext(true);
+                MarkLoaded();
                 return;
             }
             // RunAsSystem, not a `using` scope around Subscribe: the subscription outlives this
@@ -872,7 +878,7 @@ public sealed class InstanceSecretCatalog : IDisposable
         Volatile.Write(ref snapshot, faulted);
         logger?.LogWarning(ex,
             "[InstanceSecrets] catalog query FAULTED; per-sender keys are refused until the re-opened query lists the set again");
-        loaded.OnNext(true);
+        MarkLoaded();
         state.OnNext(faulted.Entries);
     }
 
@@ -905,8 +911,17 @@ public sealed class InstanceSecretCatalog : IDisposable
         var full = change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset;
         Volatile.Write(ref snapshot, new Snapshot(current, full ? false : prior.Faulted));
         state.OnNext(current);
-        if (change.ChangeType is QueryChangeType.Initial or QueryChangeType.Reset && !loaded.Value)
-            loaded.OnNext(true);
+        if (full)
+            MarkLoaded();
+    }
+
+    /// <summary>Publishes "listed" once — the flag first, then the signal, with no lock held.</summary>
+    private void MarkLoaded()
+    {
+        if (Interlocked.Exchange(ref isLoaded, 1) != 0)
+            return;
+        loaded.OnNext(Unit.Default);
+        loaded.OnCompleted();
     }
 
     private ImmutableDictionary<string, CatalogEntry> Fold(ImmutableDictionary<string, CatalogEntry> current, MeshNode? node)
