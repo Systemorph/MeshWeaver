@@ -472,13 +472,22 @@ public class AccessService
         private readonly object? previousMarker;
         private readonly int openedOnThreadId;
 
+        // 🚨 The flow marker is an OPAQUE token, never the scope itself. The marker is an AsyncLocal
+        // value, so every ExecutionContext captured while this scope is open carries it — each
+        // timer, thread-pool item and Rx scheduled action started under the scope, some of which
+        // outlive the mesh by minutes. The scope holds the service, the service holds the mesh's
+        // logger, and through it the mesh: a scope used as the marker kept every disposed mesh
+        // reachable from any pending timer started inside an impersonation
+        // (AccessScopeDoesNotRootTheServiceTest).
+        private readonly object marker = new();
+
         public AccessContextScope(AccessService service, AccessContext? newContext)
         {
             this.service = service;
             previousAsyncLocal = service.context.Value;
             previousMarker = service.scopeMarker.Value;
             openedOnThreadId = Environment.CurrentManagedThreadId;
-            service.scopeMarker.Value = this;
+            service.scopeMarker.Value = marker;
             service.SetContextCore(newContext);
         }
 
@@ -487,7 +496,7 @@ public class AccessService
             // Ours to undo? Either the flow still carries our marker, or we are back on the thread
             // that opened it (a nested undisposed scope overwrote the marker — restoring is still
             // correct there, and is what keeps the per-callback clamp honest).
-            if (!ReferenceEquals(service.scopeMarker.Value, this)
+            if (!ReferenceEquals(service.scopeMarker.Value, marker)
                 && openedOnThreadId != Environment.CurrentManagedThreadId)
                 return;
 
