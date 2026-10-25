@@ -333,6 +333,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
 - [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
+- [Deploy, Test the Deploy, Switch Latest](DeployTestSwitchLatest) — DESIGN, the target build shape: each platform set is deployed as its own versioned build-server deployment `build-<version>`, the suites run ON that deployment, and only a green one becomes `latest`, the switch that makes a set available to modules; packages build against `latest` unless an authored upper cap forbids it, and a cap is debt tracked daily
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
 - [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica
