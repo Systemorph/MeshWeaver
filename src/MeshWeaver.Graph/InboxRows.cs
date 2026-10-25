@@ -299,6 +299,14 @@ public sealed record InboxFilter
     /// </summary>
     public ImmutableDictionary<string, bool> ActivityStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
 
+    /// <summary>
+    /// The retired global state filter. Kept as a forwarder so code compiled against it keeps working: it IS the
+    /// activities filter (<see cref="ActivityStates"/>) and never narrows mail or chats.
+    /// </summary>
+    [Obsolete("The state filter is per kind: use ActivityStates, MailStates or ChatStates. This forwards to ActivityStates.")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ImmutableDictionary<string, bool> States { get => ActivityStates; init => ActivityStates = value; }
+
     /// <summary>The mail filter — <c>unread</c> / <c>read</c> ticked; none ticked means all.</summary>
     public ImmutableDictionary<string, bool> MailStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
 

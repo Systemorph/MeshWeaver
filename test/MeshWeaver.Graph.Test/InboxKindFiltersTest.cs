@@ -57,8 +57,19 @@ public class InboxKindFiltersTest
         InboxStateKind.Resolve(null, "Conversations").Should().Be(InboxStateKind.Chat);
         InboxStateKind.Resolve(null, "Approvals").Should().Be(InboxStateKind.Activity);
         InboxStateKind.Resolve("chat", "Whatever").Should().Be(InboxStateKind.Chat, "a leg's own declaration wins");
+        InboxStateKind.Resolve("nonsense", "Mail").Should().Be(InboxStateKind.Mail, "an unknown kind falls back to the category's, never to an empty filter");
         InboxRows.StateKindOf(Sections()[1]).Should().Be(InboxStateKind.Mail);
     }
+
+    [Fact]
+#pragma warning disable CS0618 // the retired forwarder
+    public void TheRetiredStatesProperty_ForwardsToTheActivityFilter()
+    {
+        var filter = new InboxFilter { States = ImmutableDictionary<string, bool>.Empty.Add("open", true) };
+        filter.ActivityStates.Should().ContainKey("open");
+        filter.MailStates.Should().BeEmpty("it never touches mail");
+    }
+#pragma warning restore CS0618
 
     [Fact]
     public void TheDefaults_HoldOneFieldPerKind()

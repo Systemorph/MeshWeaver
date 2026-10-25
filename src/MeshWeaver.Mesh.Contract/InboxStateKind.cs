@@ -12,7 +12,8 @@ namespace MeshWeaver.Mesh;
 /// <para>A leg declares its kind with <see cref="InboxQueryLeg.StateKind"/>; a leg that says nothing gets
 /// the kind its <see cref="InboxQueryLeg.Category"/> implies (<see cref="Resolve"/>), so a provider
 /// filing under <c>Mail</c> or <c>Conversations</c> is already right and names it only to be explicit.
-/// 🚨 Open vocabulary (policy <c>open-vocabulary-string-constants</c>): never validate against these members.</para>
+/// A provider cannot invent a kind of its own: the filters are stored one field per kind on
+/// <see cref="InboxPreferences"/>, so the set is closed (<see cref="Known"/>) and an unknown declaration falls back to the category's.</para>
 /// </summary>
 public static class InboxStateKind
 {
@@ -28,15 +29,19 @@ public static class InboxStateKind
     /// <summary>Notifications: no state filter — the important / ignorable switch is theirs.</summary>
     public const string Notification = "notification";
 
+    /// <summary>The kinds that own a filter. A CLOSED set owned by the inbox page (the side panel needs a stored field per kind).</summary>
+    public static readonly ImmutableArray<string> Known = [Activity, Mail, Chat, Notification];
+
     /// <summary>
-    /// The state kind of a leg: the <paramref name="declared"/> one when it names one, else the one the
+    /// The state kind of a leg: the <paramref name="declared"/> one when it names a <see cref="Known"/> kind (an unknown
+    /// word is ignored, never an empty filter), else the one the
     /// <paramref name="category"/> implies (<c>Mail</c> → mail, <c>Conversations</c> → chat, <c>Notifications</c> → notification),
     /// else <see cref="Activity"/>. Pure.
     /// </summary>
     /// <param name="declared">The leg's <see cref="InboxQueryLeg.StateKind"/>, or null.</param>
     /// <param name="category">The leg's side-menu category.</param>
     public static string Resolve(string? declared, string? category)
-        => !string.IsNullOrWhiteSpace(declared)
+        => !string.IsNullOrWhiteSpace(declared) && Known.Contains(declared.Trim().ToLowerInvariant())
             ? declared.Trim().ToLowerInvariant()
             : category?.Trim().ToLowerInvariant() switch
             {
