@@ -408,6 +408,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reliability & wedges
 
 - **Start here:** [Error Propagation & Wedges](ErrorPropagationAndWedges) — drive wedges to 0
+- [Fault Classification](FaultClassification) — one classifier answers why work ended in an exception (cooperative cancel, timeout, scope or hub teardown, a transient fault of the transport, store or network, or a real fault); every older predicate is a forwarder onto it
 - [Which Kind of Silence](WhichKindOfSilence) — a quiet log has four causes with four owners; the liveness heartbeat that separates them, and the CPU sample and page snapshot that agreed with the wrong one
 - [Action-Block Wedge Prevention](ActionBlockWedgePrevention)
 - [Riding Out a ShuttingDown Address](RidingOutAShuttingDownAddress) — the one transient NACK, and the two axes a ride-out must bound separately
