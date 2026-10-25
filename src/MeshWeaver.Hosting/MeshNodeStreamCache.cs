@@ -3343,7 +3343,7 @@ internal sealed class MeshNodeStreamCache : IMeshNodeStreamCache, IDisposable
     // `DisposalCompleted` covers the action blocks, `IoPoolRegistry.DrainAll` covers IIoPool leaves,
     // the AsyncDisposeQueue covers enqueued cleanup — so it ran whenever the pool got to it, and
     // when that was after the cache hub's scope had closed, the Defer resolved
-    // `cacheHub.GetWorkspace()` from a disposed Autofac scope. Measured on Plugins run 34222933802
+    // `cacheHub.GetWorkspace()` from a disposed service scope. Measured on Plugins run 34222933802
     // (2026-09-08): 11 of the 11 disposed-scope stragglers captured across three suites are this one
     // Defer (`GetQueryRaw` → `GetWorkspace` / `SyncedQueryMeshNodes.BuildReadStreamCore`), the FutuRe
     // pair landing 4 ms after the mesh had reported `DISPOSE_DONE … teardown clean`.

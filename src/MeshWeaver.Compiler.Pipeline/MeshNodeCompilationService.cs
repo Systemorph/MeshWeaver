@@ -865,7 +865,7 @@ internal class MeshNodeCompilationService(
                     // 🚨 Defer per LEG — this lambda runs inside CombineLatest's SUBSCRIPTION, and
                     // the probe's subscription is SCHEDULED (DelaySubscription → a ThreadPool tick).
                     // When the mesh is disposed between scheduling and firing, mesh.Query →
-                    // CaptureContext → GetService throws SYNCHRONOUSLY on the disposed Autofac
+                    // CaptureContext → GetService throws SYNCHRONOUSLY on the disposed DI container
                     // scope — and Rx routes a synchronous throw during a Producer's subscribe to
                     // the SUBSCRIBE CALLER, not to OnError, so neither this leg's .Catch nor the
                     // probe's outer .Catch ever sees it. The caller is the scheduler → unhandled on

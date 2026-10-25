@@ -1,33 +1,32 @@
 ﻿#nullable enable
 using System.Reflection;
-using Autofac;
-using Autofac.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace MeshWeaver.ServiceProvider;
 
 /// <summary>
-/// Extension methods that build and use an Autofac-backed <see cref="IServiceProvider"/> for
-/// MeshWeaver, including child-scope creation and attribute-driven property/field injection.
+/// Extension methods that build and use MeshWeaver's <see cref="MeshServiceProvider"/>: the mesh's root
+/// container, a hub's level under its parent, and attribute-driven property/field injection.
 /// </summary>
 public static class ServiceProviderExtensions
 {
     /// <summary>
-    /// Builds a root MeshWeaver service provider from the given service collection, backed by Autofac.
+    /// Builds a root MeshWeaver service provider from the given service collection.
     /// </summary>
     /// <param name="services">The service collection to populate the container with.</param>
-    /// <returns>A new Autofac-backed <see cref="IServiceProvider"/> with no parent scope.</returns>
+    /// <returns>A new <see cref="MeshServiceProvider"/> with no parent scope.</returns>
     public static IServiceProvider CreateMeshWeaverServiceProvider(this IServiceCollection services) =>
         SetupModules(services, null);
 
     /// <summary>
-    /// Creates an Autofac-backed service provider for <paramref name="services"/>. When
-    /// <paramref name="parent"/> is supplied, a child lifetime scope of the parent's Autofac
-    /// container is begun (optionally tagged); otherwise a new root container is built.
+    /// Creates a service provider for <paramref name="services"/>. When <paramref name="parent"/> is
+    /// supplied, a LEVEL of the parent's container is begun — a scope holding <paramref name="services"/>
+    /// as its own registrations (frozen now, nothing copied from the parent), optionally tagged; otherwise
+    /// a new root container is built.
     /// </summary>
     /// <param name="services">The service collection to populate; a new empty collection is used when null.</param>
-    /// <param name="parent">The parent provider whose Autofac lifetime scope to nest under, or null for a new root container.</param>
-    /// <param name="tag">An optional tag identifying the new child lifetime scope; ignored when <paramref name="parent"/> is null.</param>
+    /// <param name="parent">The parent provider to nest under, or null for a new root container.</param>
+    /// <param name="tag">An optional tag naming the new level; ignored when <paramref name="parent"/> is null.</param>
     /// <returns>The resulting <see cref="IServiceProvider"/>.</returns>
     public static IServiceProvider SetupModules(
         this IServiceCollection services,
@@ -37,65 +36,56 @@ public static class ServiceProviderExtensions
     {
         services ??= new ServiceCollection();
 
-        IServiceProvider ret;
         if (parent != null)
         {
-            var lifetimeScope = parent.GetService<ILifetimeScope>();
-            if (lifetimeScope == null)
-                throw new NotSupportedException("Mesh Weaver has not been properly configured.");
-            // The parent's registry of module-owned instances (MeshWeaver#6588): a hub scope's own
+            var scope = MeshServiceProvider.From(parent)
+                        ?? throw new NotSupportedException("Mesh Weaver has not been properly configured.");
+            // The parent's registry of module-owned instances (MeshWeaver#6588): a hub level's own
             // registrations are watched against the same owners as the root's.
-            var owners = parent.GetService<ModuleInstanceOwners>();
-            void Configure(ContainerBuilder c)
-            {
-                c.PopulateMeshWeaverWithOwners(services, owners);
-                HubScopeStartables.StartOnlyOwnComponents(c, services);
-            }
-            ret = new AutofacServiceProvider(tag != null
-                ? lifetimeScope.BeginLifetimeScope(tag, Configure)
-                : lifetimeScope.BeginLifetimeScope(Configure));
+            var owners = scope.GetService<ModuleInstanceOwners>();
+            return scope.BeginScope(services.ToArray(), tag,
+                owners is null ? null : [new OwnershipTransferObserver(owners)]);
         }
-        else
-        {
-            var containerBuilder = new ContainerBuilder();
-            containerBuilder.PopulateMeshWeaver(services);
-            // A ROOT container also takes every registration SOURCE registered as an instance — how a
-            // mesh's module registry answers the types its modules declare (MeshWeaver.Mesh's
-            // ModuleOwnedRootSource). Only the root: every hub's scope asks its way up to it.
-            foreach (var source in services
-                         .Where(d => d.ServiceType == typeof(Autofac.Core.IRegistrationSource) && !d.IsKeyedService)
-                         .Select(d => d.ImplementationInstance)
-                         .OfType<Autofac.Core.IRegistrationSource>()
-                         .ToArray())
-                containerBuilder.RegisterSource(source);
 
-            var root = new AutofacServiceProvider(containerBuilder.Build());
-            // The ownership diagnostics write through the root's own logging (MeshWeaver#6584, #6588).
-            if (root.GetService<ModuleInstanceOwners>() is { } owners)
-                owners.UseLoggerFactory(root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>());
-            // Then every build callback registered as an instance, on THIS thread, before the provider
-            // is handed to anyone — how a mesh's module registry builds its modules' shared instances
-            // before they can be reached (MeshWeaver#6542). Not an Autofac build callback on purpose:
-            // those run inside Build(), before the provider exists.
-            try
-            {
-                foreach (var callback in services
-                             .Where(d => d.ServiceType == typeof(IRootContainerBuilt) && !d.IsKeyedService)
-                             .Select(d => d.ImplementationInstance)
-                             .OfType<IRootContainerBuilt>()
-                             .ToArray())
-                    callback.Built(root);
-            }
-            catch
-            {
-                // Nobody else holds this root: a callback that throws leaves no caller who could dispose
-                // it, or the shared instances the callbacks before it already built.
-                root.Dispose();
-                throw;
-            }
-            ret = root;
+        var descriptors = services.ToArray();
+        var rootOwners = descriptors.Select(d => d.IsKeyedService ? null : d.ImplementationInstance)
+            .OfType<ModuleInstanceOwners>().LastOrDefault();
+        // A ROOT container also takes every registration SOURCE registered as an instance — how a mesh's
+        // module registry answers the types its modules declare (MeshWeaver.Mesh's ModuleOwnedRootSource).
+        // Only the root: every hub's level asks its way up to it.
+        var sources = descriptors
+            .Where(d => d.ServiceType == typeof(IServiceRegistrationSource) && !d.IsKeyedService)
+            .Select(d => d.ImplementationInstance)
+            .OfType<IServiceRegistrationSource>()
+            .ToArray();
+        var root = MeshServiceProvider.Build(descriptors, sources,
+            rootOwners is null ? null : [new OwnershipTransferObserver(rootOwners)]);
+        // The ownership diagnostics and the late-disposal faults write through the root's own logging
+        // (MeshWeaver#6584, #6588).
+        var loggerFactory = root.GetService<Microsoft.Extensions.Logging.ILoggerFactory>();
+        rootOwners?.UseLoggerFactory(loggerFactory);
+        root.UseFaultLogger(loggerFactory is null ? null
+            : loggerFactory.CreateLogger(typeof(MeshServiceProvider).FullName!));
+        // Then every build callback registered as an instance, on THIS thread, before the provider is
+        // handed to anyone — how a mesh's module registry builds its modules' shared instances before
+        // they can be reached (MeshWeaver#6542).
+        try
+        {
+            foreach (var callback in descriptors
+                         .Where(d => d.ServiceType == typeof(IRootContainerBuilt) && !d.IsKeyedService)
+                         .Select(d => d.ImplementationInstance)
+                         .OfType<IRootContainerBuilt>()
+                         .ToArray())
+                callback.Built(root);
         }
-        return ret;
+        catch
+        {
+            // Nobody else holds this root: a callback that throws leaves no caller who could dispose
+            // it, or the shared instances the callbacks before it already built.
+            root.Dispose();
+            throw;
+        }
+        return root;
     }
 
     /// <summary>

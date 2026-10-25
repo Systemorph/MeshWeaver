@@ -15,6 +15,12 @@ Tags:
 
 # Disposed Scopes and Dying Hubs — one symptom, five roots
 
+> **History note (MeshWeaver#7145).** The DI container in the incidents on this page was Autofac (its
+> top frame `LifetimeScope.ThrowDisposedException`); it has since been removed and replaced by
+> MeshWeaver's own [MeshServiceProvider](../HubServiceLayers), whose closed scope throws an
+> `ObjectDisposedException` named `MeshWeaver.ServiceScope`. The five roots and their discriminators
+> are unchanged; only the frame on top is.
+
 > **The rule.** `ObjectDisposedException: Instances cannot be resolved … from this LifetimeScope`
 > with `Autofac.Core.Lifetime.LifetimeScope.ThrowDisposedException()` on top is a **symptom, not a
 > diagnosis**. Five unrelated roots produce a byte-identical top frame, and the fix for one is a

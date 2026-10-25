@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MeshWeaver.Fixture;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Messaging.Hub.Test;
 
@@ -87,9 +88,8 @@ public class HandlerFaultPastDisposeHostedHubsTest(ITestOutputHelper output) : H
                 {
                     Fault.HubDisposing => new HubDisposingException(h.Address, "stream"),
                     Fault.DisposedContainer => new ObjectDisposedException(
-                        "LifetimeScope",
-                        "Instances cannot be resolved and nested lifetimes cannot be created from this "
-                        + "LifetimeScope as it (or one of its parent scopes) has already been disposed."),
+                        MeshServiceProvider.DisposedObjectName,
+                        MeshServiceProvider.DisposedMessage),
                     _ => new InvalidOperationException("the handler itself is broken"),
                 };
                 throw new TargetInvocationException(inner);

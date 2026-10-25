@@ -1968,9 +1968,9 @@ internal class RoutingGrain(
     /// <summary>
     /// 🚨 <b>The routing turn is executing after the process's DI container was disposed — issue
     /// #2638.</b> Orleans builds a grain proxy by resolving its codec provider from the container
-    /// (<c>OrleansGeneratedCodeHelper.GetService</c> → <c>AutofacServiceProvider.GetService</c>), so
+    /// (<c>OrleansGeneratedCodeHelper.GetService</c> → <c>the hub's service provider's GetService</c>), so
     /// once the silo host has disposed its root <c>LifetimeScope</c> every remaining delivery — and
-    /// every NACK about one — faults with Autofac's <c>ObjectDisposedException</c> before it reaches
+    /// every NACK about one — faults with the container's <c>ObjectDisposedException</c> before it reaches
     /// a transport at all.
     ///
     /// <para><b>Why this must not stay terminal.</b> It is a lifecycle transition by construction —

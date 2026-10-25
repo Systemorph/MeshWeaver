@@ -161,7 +161,7 @@ public class AutocompleteSettlesOnConvergenceTest(ITestOutputHelper output) : Hu
     /// <summary>
     /// 🚨 A provider that settles AFTER the answering hub has been disposed must not crash the
     /// process. The answer callback used to resolve its logger from <c>hub.ServiceProvider</c> at
-    /// ANSWER time; by then the hub's Autofac scope was gone, the resolve threw
+    /// ANSWER time; by then the hub's service scope was gone, the resolve threw
     /// <see cref="ObjectDisposedException"/> inside a single-argument <c>Subscribe(onNext)</c> body,
     /// Rx rethrew it on whatever thread completed the provider, and the test host died with exit 134
     /// and no failing test (MeshWeaver.Plugins core-candidate run 36163381618,

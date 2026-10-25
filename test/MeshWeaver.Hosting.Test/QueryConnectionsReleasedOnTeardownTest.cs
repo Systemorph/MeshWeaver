@@ -27,7 +27,7 @@ namespace MeshWeaver.Hosting.Test;
 /// <c>IIoPool</c> leaves, the <c>AsyncDisposeQueue</c> covers enqueued cleanup. The item therefore
 /// ran whenever the pool reached it, and when that was after the mesh had reported
 /// <c>DISPOSE_DONE … teardown clean</c> and closed its scopes, the Defer resolved
-/// <c>cacheHub.GetWorkspace()</c> from a disposed Autofac scope.</para>
+/// <c>cacheHub.GetWorkspace()</c> from a disposed service scope.</para>
 ///
 /// <para><b>Measured</b> on Plugins run 34222933802 (2026-09-08, shard 1): every one of the 11
 /// disposed-scope stragglers captured across <c>MeshWeaver.FutuRe.Test</c>,

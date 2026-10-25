@@ -5,17 +5,18 @@ using System.Threading.Tasks;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
 /// <summary>
-/// 🚨 <b>Issue #2638 — routing work that executes after the process's Autofac root scope is
+/// 🚨 <b>Issue #2638 — routing work that executes after the process's root service container is
 /// disposed must fail as the LIFECYCLE TRANSITION it is, not as a terminal defect.</b>
 ///
 /// <para><b>The mechanism.</b> Orleans builds a grain proxy by resolving its codec provider out of
-/// the DI container (<c>OrleansGeneratedCodeHelper.GetService</c> →
-/// <c>AutofacServiceProvider.GetService</c>). Once the silo host has disposed its root
-/// <c>LifetimeScope</c>, every remaining delivery — and every NACK about one — faults with Autofac's
+/// The DI container (<c>OrleansGeneratedCodeHelper.GetService</c> →
+/// <c>the hub's service provider's GetService</c>). Once the silo host has disposed its root
+/// <c>LifetimeScope</c>, every remaining delivery — and every NACK about one — faults with the container's
 /// <see cref="ObjectDisposedException"/> before it reaches a transport at all. Prod (memex,
 /// 2026-08-29) carried that exception TWICE in one <see cref="AggregateException"/>: the directed
 /// pod-hub call and the stream publish, both dying on the same dead container, reported at Error for
@@ -48,12 +49,11 @@ public class RoutingAfterScopeTeardownTest
     private static readonly Func<int, TimeSpan> NoBackoff = _ => TimeSpan.Zero;
 
     /// <summary>
-    /// Verbatim from Autofac's <c>LifetimeScope.ThrowDisposedException()</c>, as it reached
+    /// Verbatim from the container's <c>LifetimeScope.ThrowDisposedException()</c>, as it reached
     /// <c>RoutingGrain.PostFailure</c> in the #2638 incident.
     /// </summary>
     private const string ScopeDisposedText =
-        "Instances cannot be resolved and nested lifetimes cannot be created from this LifetimeScope "
-        + "as it (or one of its parent scopes) has already been disposed.";
+        MeshServiceProvider.DisposedMessage;
 
     private static Exception ScopeDisposed() => new ObjectDisposedException(ScopeDisposedText, (Exception?)null);
 

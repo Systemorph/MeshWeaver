@@ -23,7 +23,7 @@ HandleDispose
  ├─ CascadeRecycle(request)     ← the seam. Returns as soon as the pipeline is SUBSCRIBED.
  └─ Dispose()                   ← RunLevel walks down to Dead
        └─ DisposalCompleted
-             └─ HostedHubsCollection.CloseScopeWhenDisposed → the hub's Autofac scope is CLOSED
+             └─ HostedHubsCollection.CloseScopeWhenDisposed → the hub's service scope is CLOSED
 ```
 
 The comment at the seam says the network is derived "while this hub is still whole enough to compute
@@ -40,7 +40,7 @@ What they reach for is ordinary and invisible:
 | `IoPoolRegistry` | `MeshQuery.QueryPool`, which the query's `Subscribe` runs on |
 | `JsonSerializerOptions` | `hub.JsonSerializerOptions`, used to type the payloads |
 
-Each of those is an `AutofacServiceProvider.GetService` on a closed `LifetimeScope`, which throws
+Each of those is a `GetService` on the hub's closed service scope, which throws
 `ObjectDisposedException: Instances cannot be resolved and nested lifetimes cannot be created from
 this LifetimeScope as it (or one of its parent scopes) has already been disposed.`
 

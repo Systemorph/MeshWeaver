@@ -11,7 +11,7 @@
 # the hosted hubs tear down, the sync streams unregister and the registrants run afterwards, on
 # other threads. A harness that proceeds past that is running concurrently with it — and the next
 # thing a harness always does is one of the three that live teardown cannot survive: dispose the
-# service scope (a continuation resolves from a dead Autofac scope), unload a collectible node ALC
+# service scope (a continuation resolves from a dead service scope), unload a collectible node ALC
 # (a live thread dereferences freed metadata), or return to xUnit so the next test class starts on
 # top of the previous one's teardown.
 #

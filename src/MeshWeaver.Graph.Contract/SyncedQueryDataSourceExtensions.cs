@@ -226,7 +226,7 @@ public static class SyncedQueryDataSourceExtensions
     /// callers are infrastructure and need the full snapshot.
     ///
     /// <para>🚨 Service resolution is DEFERRED to Subscribe time. Resolving
-    /// <c>SecurityService</c> at wrap time recurses through Autofac
+    /// <c>SecurityService</c> at wrap time recurses through the DI container
     /// when SecurityService's own constructor calls
     /// <c>workspace.GetQuery("Security:_Access", ...)</c> — the GetService
     /// call back into the half-constructed SecurityService spins the resolve
@@ -248,7 +248,7 @@ public static class SyncedQueryDataSourceExtensions
         // user-path resolution happens at Subscribe time (after SecurityService
         // is fully constructed). Resolving it at wrap time would recurse:
         // SecurityService.ctor → ObserveScopeAssignments → workspace.GetQuery →
-        // WrapWithPerUserRls → GetService<SecurityService> → Autofac tries to
+        // WrapWithPerUserRls → GetService<SecurityService> → the DI container tries to
         // create SecurityService again → ~200 deep stack overflow (2026-05-22).
         var sp = workspace.Hub.ServiceProvider;
         var accessService = sp.GetService<AccessService>();

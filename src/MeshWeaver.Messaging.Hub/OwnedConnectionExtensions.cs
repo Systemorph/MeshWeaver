@@ -25,7 +25,7 @@ namespace MeshWeaver.Messaging;
 /// <c>IoPoolRegistry.DrainAll</c> covers <c>IIoPool</c> leaves, the <c>AsyncDisposeQueue</c> covers
 /// enqueued cleanup). The item then ran whenever the pool reached it — measured on
 /// MeshWeaver.Plugins run 34222933802 (2026-09-08) as 11 <c>ObjectDisposedException</c> stragglers
-/// across three suites, every one a <c>Defer</c> resolving a workspace from an Autofac scope the
+/// across three suites, every one a <c>Defer</c> resolving a workspace from a service scope the
 /// mesh had already closed. See <c>Doc/Architecture/HubDisposalModel</c> → "Rooted Rx connections".</para>
 ///
 /// <para><b>What registration buys, by construction.</b> The owner is a

@@ -4163,7 +4163,7 @@ public static class MeshExtensions
         // 🚨 RESOLVED HERE, NOT IN THE COMMIT STAGE'S CONTINUATION (#5064). The commit stage runs
         // inside a `SelectMany` several `Timeout`-bounded stages deep, and by then this delete has
         // begun disposing the per-node hubs of the paths it removed — `hub.ServiceProvider` is an
-        // Autofac child LifetimeScope that can be closed under it, and Autofac then throws
+        // child service scope that can be closed under it, and the DI container then throws
         // `ObjectDisposedException` at RESOLUTION, outside every `.Catch` in the pipeline, failing
         // the whole delete with `partial-deleted=0`. The registry is a mesh-lifetime singleton, so
         // only the lookup path was short-lived; the SNAPSHOT still has to be taken where the stage
@@ -4401,7 +4401,7 @@ public static class MeshExtensions
 
                 // 🚨 Resolve step 5's post-deletion handlers HERE, while this hub's scope is
                 //    still alive. Resolving them after the cascade reads hub.ServiceProvider once
-                //    the root's own hub is gone and its scope closed, and Autofac then answers
+                //    the root's own hub is gone and its scope closed, and the DI container then answers
                 //    ObjectDisposedException at RESOLUTION — outside the per-handler .Catch, so it
                 //    escapes as "Delete failed" even though step 5's contract is that a handler
                 //    failure cannot un-delete anything. Resolving early keeps them RUNNING; a
@@ -5833,7 +5833,7 @@ public static class MeshExtensions
         // 🚨 RESOLVE THE MESH SINGLETONS HERE, ONCE, WHILE THE SCOPE IS ALIVE — never inside the
         // per-path continuations below (Systemorph/MeshWeaver#5064).
         //
-        // `meshHub.ServiceProvider` is an Autofac child LifetimeScope, and these continuations run
+        // `meshHub.ServiceProvider` is a child service scope, and these continuations run
         // as each leaf's delete COMMITS — by which point this delete has already disposed the
         // per-node hubs of the paths it removed (`hostedHub?.Dispose()` below is this pipeline's
         // own act). A resolution against a closed scope throws
@@ -7993,7 +7993,7 @@ public static class MeshExtensions
     /// deleted, and hands the list to <see cref="RunPostDeletionHandlersObs"/> to invoke AFTER.
     ///
     /// <para>Resolving them afterwards reads <c>hub.ServiceProvider</c> when the hub is the one
-    /// that owned the node just deleted — its scope is closed by then, and Autofac answers
+    /// that owned the node just deleted — its scope is closed by then, and the DI container answers
     /// <c>ObjectDisposedException: … this LifetimeScope … has already been disposed</c>. That
     /// throw lands at RESOLUTION, outside the per-handler <c>.Catch</c> below, so it escapes as
     /// <c>Delete failed for '&lt;path&gt;'</c> even though step 5's whole contract is that a

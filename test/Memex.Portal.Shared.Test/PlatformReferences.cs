@@ -17,7 +17,7 @@ namespace Memex.Portal.Shared.Test;
 /// <c>ModuleLinkVersionTest</c> ran (11 emits) and <c>+3.9 GB</c> in the four seconds
 /// <c>ModulePlatformLinkTest</c> ran (19 emits), with no <c>MonolithMeshTestBase</c> class active
 /// and every mesh class before and after them flat — and the watchdog then <c>FailFast</c>ed the
-/// host blaming a cumulative Autofac leak its own trace refutes. <see cref="CompileReferences.Default"/>
+/// host blaming a cumulative the DI container leak its own trace refutes. <see cref="CompileReferences.Default"/>
 /// is what a NodeType compile uses in production: built once, and Roslyn caches each reference's
 /// metadata and symbol table against the instance, so the platform is read once per process.</para>
 /// </summary>

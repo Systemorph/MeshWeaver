@@ -73,7 +73,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     public StorageAdapterMeshQueryProvider(
         IStorageAdapter persistence,
-        // 🚨 NO SecurityService here — that parameter created the Autofac
+        // 🚨 NO SecurityService here — that parameter created the DI container
         // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
         // StorageAdapterMeshQueryProvider → SecurityService. Per-node read
         // filtering on the secured IMeshQueryProvider surface goes through

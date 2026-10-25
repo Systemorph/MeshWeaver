@@ -8,7 +8,7 @@ namespace MeshWeaver.Messaging;
 /// view generator that queries in-render cannot wedge the hub turn. Historically that hop used
 /// <c>SubscribeOn(TaskPoolScheduler.Default)</c> — a bare ThreadPool schedule that mesh teardown
 /// cannot see. During teardown that render subscribe keeps executing on a ThreadPool thread AFTER
-/// the hub's Autofac <c>LifetimeScope</c> is disposed (→ <see cref="System.ObjectDisposedException"/>
+/// the hub's service scope is disposed (→ <see cref="System.ObjectDisposedException"/>
 /// from <c>GetService</c>) and, for a node whose render touches types compiled into a collectible
 /// <c>AssemblyLoadContext</c>, AFTER that ALC is unloaded (→ native use-after-unload SIGSEGV — the
 /// endemic teardown crash <c>MeshWeaver.FutuRe.Test</c> reproduced as exit=139).</para>

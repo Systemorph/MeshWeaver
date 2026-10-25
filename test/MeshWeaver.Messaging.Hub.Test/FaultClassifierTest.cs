@@ -55,7 +55,7 @@ public class FaultClassifierTest
             Failure("Delivery to 'Store' failed: Response did not arrive on time in 00:00:30", ErrorType.Failed), FaultKind.Timeout, null },
         { "a hub announcing its disposal", new HubDisposingException(new Address("node", "a"), "stream"), FaultKind.HubTeardown, null },
         { "a ShuttingDown delivery failure", Failure("Hub node/a is shutting down", ErrorType.ShuttingDown), FaultKind.HubTeardown, null },
-        { "the Autofac disposed-scope fault", new ObjectDisposedException("LifetimeScope", "Instances cannot be resolved and nested lifetimes cannot be created from this LifetimeScope"),
+        { "the DI container's disposed-scope fault", new ObjectDisposedException(HubDisposingException.DisposedContainerObjectName, "Instances cannot be resolved and nested scopes cannot be begun from this service scope as it (or one of its parent scopes) has already been disposed."),
             FaultKind.ScopeTeardown, null },
         { "a bare disposed object with no context — not provably a teardown", new ObjectDisposedException("MemoryStream"), FaultKind.Fault, null },
         { "a bare socket fault", new SocketException((int)SocketError.HostNotFound), FaultKind.Transient, FaultLayer.Network },
@@ -101,8 +101,8 @@ public class FaultClassifierTest
     [Fact]
     public void ScopeProbe_DecidesWhoseScope()
     {
-        var autofac = new ObjectDisposedException("LifetimeScope", "nested lifetimes cannot be created from this LifetimeScope");
-        FaultClassifier.Classify(autofac, new TeardownContext(() => false)).Kind.Should().NotBe(FaultKind.ScopeTeardown,
+        var disposedScope = DisposedScope();
+        FaultClassifier.Classify(disposedScope, new TeardownContext(() => false)).Kind.Should().NotBe(FaultKind.ScopeTeardown,
             "the caller's own scope is alive: another scope's disposal is not this caller's teardown");
         FaultClassifier.Classify(new ObjectDisposedException("x"), new TeardownContext(() => true)).Kind.Should().Be(FaultKind.ScopeTeardown);
     }
@@ -206,17 +206,16 @@ public class FaultClassifierTest
     }
 
     /// <summary>
-    /// 🚨 Disagreement: two test-side copies accepted the Autofac "nested lifetimes cannot be
-    /// created" text on ANY exception type; the product's copy required an
-    /// <see cref="ObjectDisposedException"/>. Autofac raises it as one, so the text on anything else
-    /// is a coincidence, not a disposed scope.
+    /// 🚨 Disagreement: two test-side copies accepted the disposed-container text on ANY exception
+    /// type; the product's copy required an <see cref="ObjectDisposedException"/>. The container
+    /// raises it as one, so the text on anything else is a coincidence, not a disposed scope.
     /// </summary>
     [Fact]
-    public void TheAutofacText_OnANonDisposedException_IsNotADisposedContainer()
+    public void TheDisposedContainerText_OnANonDisposedException_IsNotADisposedContainer()
     {
-        FaultClassifier.IsDisposedContainer(new InvalidOperationException("nested lifetimes cannot be created"))
+        FaultClassifier.IsDisposedContainer(new InvalidOperationException(HubDisposingException.DisposedContainerPhrase))
             .Should().BeFalse();
-        FaultClassifier.IsDisposedContainer(new ObjectDisposedException("x", "nested lifetimes cannot be created"))
+        FaultClassifier.IsDisposedContainer(new ObjectDisposedException("x", HubDisposingException.DisposedContainerPhrase))
             .Should().BeTrue();
     }
 
@@ -454,8 +453,8 @@ public class FaultClassifierTest
             .EveryBranchTypedTransientIn(FaultLayer.Transport).Should().BeTrue();
     }
 
-    private static ObjectDisposedException DisposedScope() => new("LifetimeScope",
-        "Instances cannot be resolved and nested lifetimes cannot be created from this LifetimeScope");
+    private static ObjectDisposedException DisposedScope() => new(HubDisposingException.DisposedContainerObjectName,
+        "Instances cannot be resolved and nested scopes cannot be begun from this service scope as it (or one of its parent scopes) has already been disposed.");
 
     /// <summary>
     /// 🚨 The teardown suppressors observe an unobserved fault only when EVERY branch is the

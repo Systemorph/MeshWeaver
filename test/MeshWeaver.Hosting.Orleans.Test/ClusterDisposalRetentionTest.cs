@@ -16,7 +16,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <c>Replay(1)</c>, in a bag nothing ever removed from. A connected <c>Replay</c> holds its source;
 /// the source is a <c>SelectMany</c> chain whose lambdas close over the <c>TestCluster</c> and the
 /// Orleans client <c>IHost</c>. So every silo this assembly ever built — ~90 of them, each with its
-/// own Autofac container, grain catalog, serializer codecs, mesh hubs, workspaces, seeded MeshNodes
+/// own service container, grain catalog, serializer codecs, mesh hubs, workspaces, seeded MeshNodes
 /// and collectible NodeType load contexts — stayed reachable until the process exited, even though
 /// its disposal had long since completed.</para>
 ///

@@ -180,7 +180,7 @@ equality**. Two `new ContentCollectionReference(["content"])` are therefore neve
 share a hash. `Workspace._localStreamCache` is a
 `ConcurrentDictionary<(WorkspaceReference, bool), Lazy<ISynchronizationStream>>`, so `GetOrAdd`
 misses on every call — and every miss constructs a `SynchronizationStream`, hence a hosted
-`sync/{id}` sub-hub with its own Autofac scope, `TypeRegistry` and `JsonSerializerOptions` (~390 KB),
+`sync/{id}` sub-hub with its own service scope, `TypeRegistry` and `JsonSerializerOptions` (~390 KB),
 registered for disposal on the **hub-lifetime** node hub.
 
 This is [#3952](../ReadPathStreamMinting)'s defect reached by the other door. There the cache was

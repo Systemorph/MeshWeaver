@@ -291,8 +291,8 @@ internal class TypeRegistry : ITypeRegistry
     /// <summary>
     /// A registry entry for a type from a COLLECTIBLE assembly (a dynamically compiled node — every
     /// recompile mints a new assembly with a new CLR identity) strongly roots that assembly's
-    /// <see cref="AssemblyLoadContext"/>. Two consequences, exactly as for Autofac's shared
-    /// reflection cache (<c>ReflectionCacheEviction</c>, which mirrors this for its own store):
+    /// <see cref="AssemblyLoadContext"/>. Two consequences, exactly as for any process-wide cache keyed
+    /// by a collectible type:
     /// <list type="number">
     /// <item>the context can never be collected — an unbounded leak; and</item>
     /// <item>after the context IS unloaded, anything walking this registry dereferences <b>freed

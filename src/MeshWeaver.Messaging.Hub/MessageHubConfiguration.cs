@@ -72,7 +72,7 @@ public record MessageHubConfiguration
     public MessageHubConfiguration WithInitializationGate(string name, Predicate<IMessageDelivery>? allowDuringInit = null)
         => this with { InitializationGates = InitializationGates.SetItem(name, allowDuringInit ?? (_ => false)) };
 
-    // Cache the resolved parent hub. Without this, every access went through an Autofac
+    // Cache the resolved parent hub. Without this, every access went through a DI container
     // `GetService<IMessageHub>()` resolve — and DataExtensions.RouteStreamMessage reads
     // ParentHub on EVERY routed stream message, so under a stream-message storm the
     // per-message DI resolve dominated CPU (the 155%-CPU routing hot frame in the
@@ -430,7 +430,7 @@ public record MessageHubConfiguration
             // line in the codebase that knows whether the hub got a scope of its own. Every other
             // place that wants to know has to infer it, and every available proxy is wrong:
             // `parentAddress is not null` misses a hub whose parent is a provider rather than a
-            // hub, and "is it an AutofacServiceProvider" is true for the container the HOST owns
+            // hub, and "is it an service provider" is true for the container the HOST owns
             // as well. See HostedHubsCollection.CloseScopeWhenDisposed for who acts on it.
             OwnsServiceProvider = ParentServiceProvider is not null;
 

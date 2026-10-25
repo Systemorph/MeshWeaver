@@ -40,7 +40,7 @@ namespace MeshWeaver.Graph.Test;
 ///
 /// <para>🚨 What these do NOT pin, measured: the fixture releasing its disposed service provider before
 /// the drain (#4046 per-test, #4048 shared). With the provider disposed cleanly, holding it roots
-/// nothing this harness can build: Autofac clears the singletons it built when it is disposed (a
+/// nothing this harness can build: the DI container clears the singletons it built when it is disposed (a
 /// container-built holder, resolved from the root provider or from the mesh hub, was collected with
 /// the release reverted), and anything REGISTERED — a provided instance, a factory's captures — is
 /// rooted by the fixture's own <c>Services</c> collection whether the provider is kept or not. The

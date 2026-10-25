@@ -354,7 +354,7 @@ public record LayoutAreaHost : IDisposable
             // ScheduleRenderSubscribe hops the subscribe onto the mesh's DRAINABLE Layout pool (was a
             // bare .SubscribeOn(TaskPoolScheduler.Default)): teardown's DrainAll() cancel+joins this
             // synchronous render (menu renderers resolve services + touch collectible NodeType ALC
-            // types) BEFORE the Autofac scope disposes / the ALC unloads — killing the endemic
+            // types) BEFORE the service scope disposes / the ALC unloads — killing the endemic
             // teardown ObjectDisposedException-then-SIGSEGV straggler. See ScheduleRenderSubscribe.
             //
             // 🚨 Observable.Defer is LOAD-BEARING: LayoutDefinition.Render is EAGER — for a single
@@ -1009,7 +1009,7 @@ public record LayoutAreaHost : IDisposable
         // arrives WRAPPED past every text-matching predicate below (the reflective
         // SynchronizationStream.Reduce hop mints a TargetInvocationException whose own message is
         // "Exception has been thrown by the target of an invocation"). See the Debug level below.
-        // The probe-gated overload also recognises the DI-scope shape of the same race: Autofac's
+        // The probe-gated overload also recognises the DI-scope shape of the same race: the container's
         // own ObjectDisposedException from a service resolved on this host's disposed scope (the
         // permission fold's next emission, #2679) — the type-only test looked straight past it and
         // filed an incident for a routine teardown.
@@ -1526,7 +1526,7 @@ public record LayoutAreaHost : IDisposable
     ///
     /// <para>🚨 This is the fix for the endemic teardown SIGSEGV (FutuRe.Test exit=139). A bare
     /// <c>SubscribeOn(TaskPoolScheduler.Default)</c> hop is invisible to mesh teardown: during
-    /// disposal the render subscribe keeps executing on a ThreadPool thread AFTER the hub's Autofac
+    /// disposal the render subscribe keeps executing on a ThreadPool thread AFTER the hub's DI container
     /// <c>LifetimeScope</c> is disposed (→ <c>ObjectDisposedException</c> from a menu renderer's
     /// <c>GetService</c>) and, for a node whose render touches types compiled into a collectible
     /// <c>AssemblyLoadContext</c>, AFTER that ALC is unloaded (→ native use-after-unload crash).

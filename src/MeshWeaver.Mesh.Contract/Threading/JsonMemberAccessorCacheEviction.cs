@@ -7,7 +7,8 @@ namespace MeshWeaver.Mesh.Threading;
 
 /// <summary>
 /// Empties System.Text.Json's PROCESS-STATIC member-accessor cache when a collectible node or module context
-/// starts unloading — the System.Text.Json twin of <c>ReflectionCacheEviction</c> (Autofac).
+/// starts unloading. (The DI container needs no such eviction: <c>MeshServiceProvider</c> keeps every
+/// activation plan on the registration it belongs to, never in a process-static cache.)
 ///
 /// <para><b>Why (Plugins#1605, measured).</b> On CoreCLR, STJ builds property getters/setters and
 /// constructors as <see cref="System.Reflection.Emit.DynamicMethod"/>s and keeps them in a static
@@ -31,7 +32,7 @@ namespace MeshWeaver.Mesh.Threading;
 /// time a NEW options instance resolves a type — live options keep the accessors they already hold.</para>
 ///
 /// <para>Runs inside <c>Unloading</c>, i.e. synchronously within <c>Unload()</c>, before the context
-/// is released — the same moment Autofac's cache is purged. Holds no state: the resolved method is an
+/// is released. Holds no state: the resolved method is an
 /// immutable lookup computed once (NoStaticState allows <c>static readonly</c> constants).</para>
 /// </summary>
 public static class JsonMemberAccessorCacheEviction

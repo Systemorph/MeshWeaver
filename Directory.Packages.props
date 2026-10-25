@@ -72,9 +72,6 @@
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.6" />
     <PackageVersion Include="Aspire.Npgsql" Version="13.4.6" />
-    <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
-    <PackageVersion Include="Autofac" Version="9.3.4" />
-    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="11.0.2" />
     <PackageVersion Include="Azure.Core" Version="1.60.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
