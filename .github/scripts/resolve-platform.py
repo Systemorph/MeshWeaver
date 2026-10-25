@@ -2850,9 +2850,32 @@ def build_hosts_rows(rows: dict[str, str], latest: str, hosts: "HttpBuildHosts",
     out = dict(rows)
     out["latest-deployment"] = latest
     if bounds is not None:
-        out["partitions"] = json.dumps(partition_packages(bounds, hosts, rows["set"]),
-                                       sort_keys=True, separators=(",", ":"))
+        partitions = partition_packages(bounds, hosts, rows["set"])
+        require_complete_deployment(partitions, rows["set"], latest, hosts)
+        out["partitions"] = json.dumps(partitions, sort_keys=True, separators=(",", ":"))
     return out
+
+
+def require_complete_deployment(partitions: dict[str, list[str]], taken: str, latest: str,
+                                hosts: "HttpBuildHosts") -> None:
+    """RED unless every package put on the set the run TOOK has a retained COMPLETE build-server
+    deployment to build against. `latest` is already verified complete by `HttpBuildHosts.latest()`
+    and a capped package's fit is chosen among complete deployments, so only a set that differs
+    from `latest` — an incident freeze — needs this read: `choose()` proves the freeze's seal and
+    images, never that the build hosts carry it (#7199 review)."""
+    packages = partitions.get(taken)
+    if not packages or set_run(taken) == set_run(latest):
+        return
+    row = next((d for d in hosts.deployed() if d.run == set_run(taken)), None)
+    if row is not None and row.complete:
+        return
+    why = ("no retained deployment carries it" if row is None
+           else "its deployment is not complete in the record")
+    raise ResolutionError(
+        f"the set this run took ({taken}) has no build-server deployment to build "
+        f"{', '.join(packages)} against — {why} (retained: {retained_text(hosts.deployed())}). "
+        "A freeze names ONE set and may not substitute `latest` for it: request and test the "
+        "BuildHostDeploy of that sealed set first, then re-run.")
 
 
 def baseline_for_mode(baseline: dict[str, str] | None, build_hosts: bool,
@@ -3130,6 +3153,25 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
               json.loads(unfrozen["partitions"]) == {"3.1.10412": ["Free"]}, unfrozen)
         check("no --packages-root: no `partitions` key, `latest-deployment` still written",
               "partitions" not in build_hosts_rows({"set": "3.1.10412"}, "3.1.10412", built, None))
+
+    # ── a freeze must name a retained COMPLETE deployment before packages build on it (#7199 review) ──
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10398", False))}) as api:
+        built = HttpBuildHosts(api.url)
+        free = [B("Free", None, None, None, None)]
+        text = red(lambda: build_hosts_rows({"set": "3.1.10398", "run-number": "10398"},
+                                            built.latest(), built, free))
+        check("under a freeze to a set whose deployment is NOT complete, the partition is RED naming it",
+              "3.1.10398" in text and "not complete" in text and "Free" in text, text)
+        text = red(lambda: build_hosts_rows({"set": "3.1.10390", "run-number": "10390"},
+                                            built.latest(), built, free))
+        check("under a freeze to a set no retained deployment carries, the partition is RED naming it",
+              "3.1.10390" in text and "no retained deployment" in text and "Free" in text, text)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10398", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        frozen = build_hosts_rows({"set": "3.1.10398", "run-number": "10398"}, built.latest(), built,
+                                  [B("Free", None, None, None, None)])
+        check("NEGATIVE CONTROL: a freeze to a retained COMPLETE deployment still partitions onto it",
+              json.loads(frozen["partitions"]) == {"3.1.10398": ["Free"]}, frozen)
 
     # ── build-host mode keeps NO baseline (#7192 review, P1) ──
     base = {"set": "3.1.10412", "run-number": "10412"}
