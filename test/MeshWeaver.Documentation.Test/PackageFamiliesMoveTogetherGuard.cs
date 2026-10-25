@@ -7,6 +7,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
 using MeshWeaver.Fixture;
+using MeshWeaver.Plugin.Packaging;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -84,6 +85,16 @@ public class PackageFamiliesMoveTogetherGuard
             + "only in the projects that reference the testing package. A split therefore restores "
             + "cleanly and silently runs the TEST SUITE on a different Rx major from the one src/ "
             + "compiles and the portals ship"),
+        ("ModelContextProtocol",
+            ["ModelContextProtocol", "ModelContextProtocol.AspNetCore", "ModelContextProtocol.Core"],
+            "the MCP SDK: ModelContextProtocol pins .Core EXACTLY and .AspNetCore pins "
+            + "ModelContextProtocol EXACTLY — a split is NU1107 in every project that references "
+            + "the SDK beside core's MeshWeaver.Hosting (#7206 moved .Core alone)"),
+        ("Microsoft.Extensions.AI",
+            ["Microsoft.Extensions.AI", "Microsoft.Extensions.AI.Abstractions", "Microsoft.Extensions.AI.OpenAI"],
+            "Microsoft.Extensions.AI: every member requires .Abstractions at its OWN version, so a "
+            + "member ahead of .Abstractions is NU1605 in every project that references both. "
+            + "(.AzureAIInference is deliberately not listed: it ships preview-only on its own line)"),
     ];
 
     private static string PropsPath() =>
@@ -222,6 +233,144 @@ public class PackageFamiliesMoveTogetherGuard
         // EveryPinnedFamilyAgreesOnOneBaseVersion's job, and duplicating it would make one real
         // split report as two failures — noise that obscures which check actually found it.
         // (Verified: re-splitting the live pin reds exactly one check, not two.)
+    }
+
+    /// <summary>
+    /// 🚨 No pin may sit BELOW the version core's own restore graph resolves for that package.
+    ///
+    /// <para>With <c>CentralPackageTransitivePinningEnabled</c> unset, a <c>PackageVersion</c> only
+    /// governs projects that reference the package DIRECTLY; everywhere else the highest floor in
+    /// the graph wins. So when a pinned package (here <c>ModelContextProtocol.Core 2.3.0</c>,
+    /// referenced by <c>MeshWeaver.Hosting</c>) requires a NEWER version of another pinned package
+    /// (<c>Microsoft.Extensions.AI.Abstractions &gt;= 10.11.0</c>, pinned at 10.8.3), core builds
+    /// green — it never references the lifted package directly — while every satellite project
+    /// that does reference it fails restore with <c>NU1605</c> (a downgrade). Measured 2026-10-25
+    /// after #7206: MeshWeaver.Plugins <c>MeshWeaver.AI</c> and <c>MeshWeaver.Mcp</c> no longer
+    /// restored against core main. The family guard above cannot see this, because the floor
+    /// crosses families.</para>
+    ///
+    /// <para>The evidence is this test assembly's own <c>.deps.json</c>: the RESOLVED graph of a
+    /// closure that includes <c>MeshWeaver.Hosting</c>. A pin below a resolved version is a
+    /// downgrade waiting for the first direct referencer.</para>
+    /// </summary>
+    [Fact]
+    public void NoPinSitsBelowWhatThePlatformGraphResolves()
+    {
+        var resolved = ResolvedPackages();
+        var pins = Pins();
+
+        // Denominator: the closure must actually contain BOTH ends of the edge this check exists
+        // for — the lifting package (ModelContextProtocol.Core, via MeshWeaver.Hosting) and the
+        // lifted one (Microsoft.Extensions.AI.Abstractions). Otherwise the check reads a graph that
+        // cannot show the incident, and passes vacuously.
+        //
+        // Deliberately NOT a count of pins found in the graph: the SDK's conflict resolution drops
+        // a package from .deps.json when the shared framework carries that assembly at an equal or
+        // higher version, so the same commit shows 47 pins on a host whose runtime predates
+        // 10.0.13 and 28 on CI's newer SDK (every Microsoft.Extensions.* 10.0.13 pin is then
+        // framework-supplied). A floor of 30 was therefore a statement about the runner's SDK, not
+        // about the graph — and a pin the framework outranks can never be the NU1605 shape anyway.
+        foreach (var end in IncidentEdge)
+            Assert.True(resolved.ContainsKey(end),
+                $"this test assembly's resolved graph no longer contains {end} — the check would "
+                + "read a graph that cannot show the incident it exists for. Re-point it at a "
+                + "closure that includes MeshWeaver.Hosting and the AI abstractions.");
+        var checkedPins = pins.Count(p => resolved.ContainsKey(p.Id));
+
+        var offenders = PinsBelowResolved(pins, resolved);
+        Assert.True(offenders.Count == 0,
+            $"a pin sits BELOW the version core's own graph resolves ({checkedPins} pins checked). "
+            + "Core builds green, but every project that references the package directly gets that "
+            + "pin, and restore fails NU1605 (downgrade) — in the satellites, after the merge. Move "
+            + "the pin up to the resolved version (and its family with it):\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The negative control: the exact pairing live on core main after #7206.</summary>
+    [Fact]
+    public void APinBelowTheResolvedGraphIsDetected()
+    {
+        var pins = new List<(string Id, string Version)>
+        {
+            ("Microsoft.Extensions.AI.Abstractions", "10.8.3"),
+            ("ModelContextProtocol.Core", "2.3.0"),
+        };
+        var lifted = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["Microsoft.Extensions.AI.Abstractions"] = "10.11.0",
+            ["ModelContextProtocol.Core"] = "2.3.0",
+        };
+        var offenders = PinsBelowResolved(pins, lifted);
+        Assert.Single(offenders);
+        Assert.Contains("Microsoft.Extensions.AI.Abstractions", offenders[0]);
+        Assert.Contains("10.8.3", offenders[0]);
+        Assert.Contains("10.11.0", offenders[0]);
+
+        // Numeric, not lexical: 10.11.0 > 10.8.3 although "10.11.0" < "10.8.3" as strings.
+        // And silent when the graph agrees with the pins.
+        lifted["Microsoft.Extensions.AI.Abstractions"] = "10.8.3";
+        Assert.Empty(PinsBelowResolved(pins, lifted));
+
+        // A pre-release pin that the graph resolves to exactly is NOT a lift.
+        Assert.Empty(PinsBelowResolved([("Aspire.Hosting.Kubernetes", "13.4.6-preview.1")],
+            new Dictionary<string, string> { ["Aspire.Hosting.Kubernetes"] = "13.4.6-preview.1" }));
+
+        // But a SAME-BASE upgrade IS a lift, in both shapes: NuGet orders 1.0.0-preview.1 below
+        // 1.0.0 and below 1.0.0-preview.2, and a direct referencer pinned at preview.1 fails
+        // NU1605 exactly as a numeric downgrade does. Comparing base versions alone hid both.
+        var toRelease = PinsBelowResolved([("Some.Package", "1.0.0-preview.1")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0" });
+        Assert.Single(toRelease);
+        Assert.Contains("1.0.0-preview.1", toRelease[0]);
+        var toNextPreview = PinsBelowResolved([("Some.Package", "1.0.0-preview.1")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.2" });
+        Assert.Single(toNextPreview);
+        Assert.Contains("1.0.0-preview.2", toNextPreview[0]);
+
+        // Numeric pre-release fields compare numerically: preview.10 is above preview.9.
+        Assert.Single(PinsBelowResolved([("Some.Package", "1.0.0-preview.9")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.10" }));
+        // …and a pin ABOVE the resolved pre-release is not a lift.
+        Assert.Empty(PinsBelowResolved([("Some.Package", "1.0.0")],
+            new Dictionary<string, string> { ["Some.Package"] = "1.0.0-preview.2" }));
+    }
+
+    /// <summary>
+    /// Both ends of the incident edge: <c>ModelContextProtocol.Core</c> lifted
+    /// <c>Microsoft.Extensions.AI.Abstractions</c> above its pin. The live check refuses a graph
+    /// that does not contain both.
+    /// </summary>
+    private static readonly string[] IncidentEdge =
+        ["ModelContextProtocol.Core", "Microsoft.Extensions.AI.Abstractions"];
+
+    /// <summary>
+    /// The ONE comparison routine — the live check and the negative control both call it. Full
+    /// NuGet ordering (pre-release included), never the base version: family ALIGNMENT is about
+    /// bases, but a downgrade is about the exact version restore compares.
+    /// </summary>
+    private static List<string> PinsBelowResolved(
+        IEnumerable<(string Id, string Version)> pins, IReadOnlyDictionary<string, string> resolved) =>
+        pins
+            .Where(p => resolved.TryGetValue(p.Id, out var r)
+                        && NuGetVersionComparer.Instance.Compare(r, p.Version) > 0)
+            .Select(p => $"{p.Id}: pinned {p.Version}, resolved {resolved[p.Id]}")
+            .ToList();
+
+    /// <summary>Every PACKAGE in this test assembly's resolved graph, as id → version.</summary>
+    private static Dictionary<string, string> ResolvedPackages()
+    {
+        var depsPath = Path.Combine(AppContext.BaseDirectory,
+            typeof(PackageFamiliesMoveTogetherGuard).Assembly.GetName().Name + ".deps.json");
+        Assert.True(File.Exists(depsPath), $"no deps.json at {depsPath} — the resolved graph is unreadable");
+        using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(depsPath));
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var lib in doc.RootElement.GetProperty("libraries").EnumerateObject())
+        {
+            if (lib.Value.GetProperty("type").GetString() != "package") continue;
+            var slash = lib.Name.IndexOf('/');
+            result[lib.Name[..slash]] = lib.Name[(slash + 1)..];
+        }
+        return result;
     }
 
     /// <summary>The pre-release trim is the whole reason a legitimate preview-only member passes.</summary>
