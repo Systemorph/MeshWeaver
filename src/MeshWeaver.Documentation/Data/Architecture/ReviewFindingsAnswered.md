@@ -494,10 +494,12 @@ review-on-change request, the stage gate and the stage advance, the arm gates):
 
 **The wait no longer spends the budget it then runs out of.** The review wait (above) re-ran the
 whole read every 30 s — 7–10 calls a poll, ~30 polls, in two jobs per event in core — up to ~600 calls
-of the shared hourly budget for one push whose review was slow. It now probes the only two inputs that
-can end it — the reviews and the head's `internal-review` check runs (`review_wait_fingerprint`, two
-calls) — and takes the full read again only when one changed, and once more at the deadline, so the
-verdict is still taken on a fresh, complete read. How much of the 2026-10-25 exhaustion this lane
+of the shared hourly budget for one push whose review was slow. It now probes the only three inputs that
+can end it — the reviews, the head's `internal-review` check runs and whether the `review-waived` label
+is on (`review_wait_fingerprint`, three calls) — and takes the full read again only when one changed, and once more at the deadline, so the
+verdict is still taken on a fresh, complete read. The label is probed because a waiver's own `labeled`
+run cannot judge sooner in core: it queues in this run's non-cancelling `…-gate` group, so an unprobed
+waiver was honoured only at the final read, ~15 minutes later. How much of the 2026-10-25 exhaustion this lane
 caused was **not** measured; the arithmetic bounds its share, it does not prove it.
 
 Every half has a negative control in the self-test, run against a fake `gh`: revert the
@@ -1275,7 +1277,9 @@ now polls the run (every 30 s, up to 30 minutes — the job's cap is 45) and jud
 that has NOT STARTED (`requested`, `pending`, `queued`, `waiting`) is NOT waited for: it read nothing
 yet, so its verdict reads live state after this one — and in core it is very often `pending` in this
 very run's `…-gate` concurrency group, where a wait would hold it back for the whole 30 minutes and
-then fail. That makes it idempotent
+then fail. Before it POSTs a re-run it reads the pull request AGAIN and judges once more: a push or a
+closure during the wait makes the candidate an obsolete evaluation, and re-running it would queue it in
+the `…-gate` group, where it can displace the current head's pending run. That makes it idempotent
 per (head sha, answered state), with no loop and no polling: the re-run is itself a `pull_request`
 run, which never refreshes, and a re-run made with the workflow token raises no new event. Covered
 the same way: a pull request that went RED because answers were missing goes green when a later

@@ -2216,6 +2216,15 @@ def run_refresh(repo: str, number: int, event: str, run_id: str, evaluated_at: s
                 break
             print(f"  #{number}: {why}", flush=True)
             sleep(REFRESH_POLL_SECONDS)
+        if action == "rerun":
+            # 🚨 Re-read the pull request and judge again immediately before the POST (MeshWeaver#7203
+            # review): the snapshot above can be 30 minutes old, and a push or a closure since then
+            # makes the candidate an OBSOLETE evaluation — re-running it would queue it in the
+            # pull request's `…-gate` group, where it can displace the current head's pending run.
+            pr = gh.api(f"pulls/{number}")
+            if not isinstance(pr, dict) or pr.get("number") != number:
+                raise ReadError(f"pulls/{number} did not return pull request #{number}")
+            action, why = refresh_action(event, run_id, evaluated_at, repo, pr, candidate)
         if action == "rerun" and not post_rerun(gh, candidate["id"], RERUN_WHOLE_RUN):
             action, why = "none", f"run {candidate['id']} was already re-run by another invocation"
     except (ReadError, KeyError, TypeError) as e:
@@ -2621,9 +2630,14 @@ SETTLE_POLL_SECONDS = 10
 SETTLE_ROUNDS = 3
 
 
-def review_wait_fingerprint(reviews, check_runs) -> tuple:
+def review_wait_fingerprint(reviews, check_runs, labels=()) -> tuple:
     """What can END the review wait, and nothing else: the pull request's reviews (one landing, or a
-    refusal) and the head's `internal-review` check runs (the degradation). Pure.
+    refusal), the head's `internal-review` check runs (the degradation) and whether the WAIVER_LABEL is
+    on the pull request (a maintainer's waiver). Pure. `labels` are label objects (`{"name": …}`).
+
+    🚨 The waiver is probed too (MeshWeaver#7203 review): its own `labeled` run cannot judge sooner in
+    core, because it queues in this run's non-cancelling `…-gate` concurrency group, so without it a
+    valid waiver applied during the wait was honoured only at the final read, ~15 minutes later.
 
     🚨 WHY THE WAIT PROBES INSTEAD OF RE-READING (MeshWeaver#7187). The wait used to re-run the WHOLE
     read every POLL_SECONDS — the pull request, reviews, review comments, issue events, collaborator
@@ -2631,23 +2645,26 @@ def review_wait_fingerprint(reviews, check_runs) -> tuple:
     compares: 7–10 calls a poll, 30 polls in a 15-minute wait, and core runs the evaluation TWICE per
     event (the gate job and the lane) — up to ~600 calls of the repository's shared 5,000/hour
     installation budget for ONE push whose review is slow, while its answer can change in only the
-    two inputs fingerprinted here (a waiver label, a push or a reply each start a run of their own).
-    The probe reads those two (2 calls) and the full read runs again only when one changed, and once
+    inputs fingerprinted here (a push or a reply each start a run of their own). The probe reads those
+    three (3 calls) and the full read runs again only when one changed, and once
     more at the deadline — so the final verdict is still taken on a fresh, complete read."""
     rv = tuple(sorted((r.get("id"), r.get("state"), r.get("submitted_at"), r.get("commit_id"))
                       for r in reviews if isinstance(r, dict)))
     cr = tuple(sorted((c.get("id"), c.get("status"), c.get("conclusion")) for c in check_runs if isinstance(c, dict)))
-    return rv, cr
+    waived = any(isinstance(l, dict) and l.get("name") == WAIVER_LABEL for l in labels or ())
+    return rv, cr, waived
 
 
 def probe_review_wait(gh, number: int, head_sha: str) -> tuple:
-    """The two reads `review_wait_fingerprint` needs — the SAME endpoints `read_inputs` reads them from."""
+    """The three reads `review_wait_fingerprint` needs — reviews and check runs from the SAME endpoints
+    `read_inputs` reads them from, and the pull request's labels (the issue's label listing, one call)."""
     reviews = gh.api(f"pulls/{number}/reviews?per_page=100", paginate=True)
     listing = gh.api(f"commits/{head_sha}/check-runs?check_name={DEGRADATION_CHECK_NAME}&filter=all&per_page=100")
     check_runs = (listing or {}).get("check_runs") if isinstance(listing, dict) else None
-    if not isinstance(reviews, list) or not isinstance(check_runs, list):
-        raise ReadError(f"the review-wait probe of #{number} did not return its two listings")
-    return review_wait_fingerprint(reviews, check_runs)
+    labels = gh.api(f"issues/{number}/labels?per_page=100")
+    if not isinstance(reviews, list) or not isinstance(check_runs, list) or not isinstance(labels, list):
+        raise ReadError(f"the review-wait probe of #{number} did not return its three listings")
+    return review_wait_fingerprint(reviews, check_runs, labels)
 
 
 def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
@@ -2673,7 +2690,7 @@ def run(repo: str, number: int, as_of: str | None, wait_minutes: int = 0,
             print(f"  the automatic review has not landed yet; waiting up to {int(left)}s more for it "
                   f"(its own event cannot start a run here — see waiting_would_help); probing reviews and "
                   f"the degradation only, the full read runs again when either changes", flush=True)
-            seen = review_wait_fingerprint(reviews, check_runs)
+            seen = review_wait_fingerprint(reviews, check_runs, pr.get("labels"))
             head_sha = str((pr.get("head") or {}).get("sha") or "")
             while deadline - clock() > POLL_SECONDS:
                 sleep(POLL_SECONDS)
@@ -4057,9 +4074,13 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
           and "cannot say it was answered" not in text, f"rc={rc} output={written.strip()!r}")
 
     # ── the review wait PROBES (2 calls) and re-reads in full only when the review lands
+    MAINTAINER = {"login": "maintainer-x", "type": "User", "id": 7}
     class _WaitGh:
-        def __init__(self, land_after_probes):
+        def __init__(self, land_after_probes, waive_after_probes=10_000):
             self.clock, self.calls, self.probes, self.land = _Clock(), [], 0, land_after_probes
+            self.waive = waive_after_probes
+        def waived(self):
+            return self.probes >= self.waive
         def sleep(self, s):
             self.clock.sleep(s)
         def now(self):
@@ -4072,23 +4093,27 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
         def api(self, path, paginate=False):
             self.calls.append(path)
             if path == "pulls/7":
-                return dict(_pr(0), number=7, base={"ref": "main"})
+                return dict(_pr(0, [WAIVER_LABEL] if self.waived() else []), number=7, base={"ref": "main"})
             if path.startswith("pulls/7/reviews"):
                 if self.calls[-2:-1] != ["pulls/7"]:   # a probe, not the full read (which reads pulls/7 first)
                     self.probes += 1
                 return self.reviews()
-            if path.startswith(("pulls/7/comments", "issues/7/events")):
+            if path.startswith("pulls/7/comments"):
                 return []
+            if path.startswith("issues/7/events"):
+                return [_labeled(MAINTAINER)] if self.waived() else []
             if path.startswith("collaborators/"):
-                return {"role_name": "write"}
+                return {"role_name": "admin" if path.startswith(f"collaborators/{MAINTAINER['login']}/") else "write"}
             if path.startswith(f"commits/{HEAD}/check-runs"):
                 return {"total_count": 0, "check_runs": []}
+            if path.startswith("issues/7/labels"):
+                return [{"name": WAIVER_LABEL}] if self.waived() else []
             raise ReadError(f"unexpected GET {path}")
     wg = _WaitGh(land_after_probes=3)
     with contextlib.redirect_stdout(io.StringIO()):
         rc = run("o/r", 7, None, 15, 0, gh=wg)
     full_reads = wg.calls.count("pulls/7")
-    check("review wait: probes 2 calls a poll, re-reads in full when it lands -> GREEN",
+    check("review wait: probes 3 calls a poll, re-reads in full when it lands -> GREEN",
           rc == 0 and full_reads == 2 and wg.probes == 3, f"rc={rc} full reads={full_reads} probes={wg.probes} calls={len(wg.calls)}")
     wg = _WaitGh(land_after_probes=10_000)
     with contextlib.redirect_stdout(io.StringIO()):
@@ -4096,20 +4121,28 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
     full_reads = wg.calls.count("pulls/7")
     check("review wait NEG: no review in 15 min -> RED after ONE final full read",
           rc == 1 and full_reads == 2, f"rc={rc} full reads={full_reads} calls={len(wg.calls)}")
+    wg = _WaitGh(land_after_probes=10_000, waive_after_probes=2)
+    with contextlib.redirect_stdout(io.StringIO()):
+        rc = run("o/r", 7, None, 15, 0, gh=wg)
+    check("#7203: a maintainer's waiver during the wait ends it at the next probe -> GREEN",
+          rc == 0 and wg.probes == 2 and wg.clock.t - 1000.0 <= 2 * POLL_SECONDS,
+          f"rc={rc} probes={wg.probes} waited={wg.clock.t - 1000.0}s")
 
     # ── the refresh WAITS for an in-flight read run, then re-runs the red it left
     class _FlightGh:
-        def __init__(self, states):
+        def __init__(self, states, pr_after_wait=None):
             self.states, self.posted, self.clock = list(states), [], _Clock()
+            self.pr, self.pr_after_wait = ref_pr, pr_after_wait
         def sleep(self, s):
             self.clock.sleep(s)
+            self.pr = self.pr_after_wait or self.pr
         def now(self):
             return self.clock.now()
         def api(self, path):
             if path == "actions/runs/99":
                 return {"id": 99, "workflow_id": 5}
             if path == "pulls/4649":
-                return ref_pr
+                return self.pr
             if path.startswith("actions/workflows/5/runs?"):
                 state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
                 return {"workflow_runs": [state]}
@@ -4117,12 +4150,16 @@ def outage_self_test(HEAD: str, ref_pr: dict, red_read: dict) -> int:
         def post(self, path):
             self.posted.append(path)
     flying = dict(red_read, status="in_progress", conclusion=None)
-    for name, states, wait_s, expect_rc, expect_posted in [
-        ("#7198: in flight, then RED -> waits, then re-runs it", [flying, flying, red_read], 600, 0, ["actions/runs/7/rerun"]),
-        ("in flight, then GREEN -> waits, posts nothing", [flying, dict(red_read, conclusion="success")], 600, 0, []),
-        ("NEG: never finishes within the wait -> RED, named, nothing posted", [flying], 90, 1, []),
+    for name, states, wait_s, expect_rc, expect_posted, pr_after in [
+        ("#7203: in flight, a PUSH during the wait, then RED -> the obsolete run is NOT re-run",
+         [flying, flying, red_read], 600, 0, [], dict(ref_pr, head=dict(ref_pr["head"], sha="c" * 40))),
+        ("#7203: in flight, PR CLOSED during the wait, then RED -> not re-run",
+         [flying, red_read], 600, 0, [], dict(ref_pr, state="closed")),
+        ("#7198: in flight, then RED -> waits, then re-runs it", [flying, flying, red_read], 600, 0, ["actions/runs/7/rerun"], None),
+        ("in flight, then GREEN -> waits, posts nothing", [flying, dict(red_read, conclusion="success")], 600, 0, [], None),
+        ("NEG: never finishes within the wait -> RED, named, nothing posted", [flying], 90, 1, [], None),
     ]:
-        stub = _FlightGh(states)
+        stub = _FlightGh(states, pr_after)
         with contextlib.redirect_stdout(io.StringIO()):
             rc = run_refresh("Systemorph/MeshWeaver", 4649, "pull_request_review_comment", "99", "2026-10-07T10:00:00Z",
                              gh=stub, wait_s=wait_s)
