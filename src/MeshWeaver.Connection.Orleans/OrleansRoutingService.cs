@@ -823,15 +823,17 @@ public class OrleansRoutingService : IRoutingService, IDisposable
     /// </summary>
     /// <param name="ex">The exception a cluster call faulted with.</param>
     /// <returns><c>true</c> when re-attempting is worthwhile.</returns>
-    internal static bool IsTransientFailure(Exception ex)
-    {
-        return ex is SocketException
-            or HttpRequestException
-            or TimeoutException
-            or global::Orleans.Runtime.OrleansMessageRejectionException
-            || IsDirectoryUnstable(ex)
-            || (ex.InnerException != null && IsTransientFailure(ex.InnerException));
-    }
+    internal static bool IsTransientFailure(Exception ex) =>
+        // ONE definition for both routers (RoutingGrain.IsTransientFailure forwards here), walking
+        // the exception GRAPH: a transport timeout, an Orleans rejection, a bare network fault
+        // (FaultClassifier.IsNetworkFault — the platform's one rule for it), an HTTP transport fault,
+        // or the grain directory mid-handoff.
+        ExceptionChain.Contains(ex, static e =>
+            e is TimeoutException
+                or HttpRequestException
+                or global::Orleans.Runtime.OrleansMessageRejectionException
+            || FaultClassifier.IsNetworkFault(e))
+        || IsDirectoryUnstable(ex);
 
     /// <summary>
     /// 🚨 <b>The CALLER gave up waiting; the CALLEE may still hold the request — issue #1172.</b>

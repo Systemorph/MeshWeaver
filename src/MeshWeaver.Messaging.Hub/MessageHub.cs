@@ -430,12 +430,10 @@ public sealed class MessageHub : IMessageHub
     /// <c>SynchronizationStream.IsObjectDisposed</c>.
     /// </summary>
     private static bool IsTeardownDisposal(Exception? error)
-    {
-        for (var e = error; e != null; e = e.InnerException)
-            if (e is ObjectDisposedException)
-                return true;
-        return false;
-    }
+        // FaultClassifier with DisposedIsOwnTeardown: the only disposed-object fault that reaches a
+        // sync hub's startup gate is its own teardown (CancelCallbacks), so any one of them, at any
+        // depth and through any aggregate branch, is that teardown.
+        => FaultClassifier.Classify(error, TeardownContext.DisposedIsOwnTeardown).Kind == FaultKind.ScopeTeardown;
 
     /// <summary>
     /// Cancels the currently-executing handler's cancellation token and rolls a fresh one for
