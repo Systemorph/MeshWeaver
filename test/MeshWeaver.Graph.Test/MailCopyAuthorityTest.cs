@@ -334,9 +334,10 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
         foreach (var target in new[]
                  {
                      $"{owner}/Notes",                                   // the owner's, but not a copy
-                     "someoneelse/_MailCopy/outlook/0123456789abcdef0123456789abcdef", // another person's copy
-                     $"{owner}/_MailCopy/outlook",                       // the source, not a copy
-                     $"{owner}/_MailCopy/outlook/../../Notes",
+                     "someoneelse_MailCopy/outlook/0123456789abcdef0123456789abcdef", // another person's copy
+                     $"{owner}_MailCopy/outlook",                        // the source, not a copy
+                     $"{owner}_MailCopy/outlook/../../Notes",
+                     $"{owner}/_MailCopy/outlook/0123456789abcdef0123456789abcdef", // the legacy place in the home partition
                  })
         {
             var save = await Record.ExceptionAsync(() => files.Save(owner, target, "a/b.txt", bytes).Timeout(Bound).Await(ct));
@@ -401,11 +402,17 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
         var ct = TestContext.Current.CancellationToken;
         var owner = await SeedOwner(ct);
         const string delegateId = "delegate";
-        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(new MeshNode($"{delegateId}_Access", $"{owner}/_Access")
+        var store = new MeshMailCopyStore(() => Mesh);
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        await store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
+        // 🚨 The grant is on the owner's COPY partition, which exists once the copy is on: a grant on the
+        // person's home partition no longer reaches their mail (MailCopyPartitionTest).
+        var partition = MailCopyNodeTypes.NamespaceFor(owner);
+        await Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(new MeshNode($"{delegateId}_Access", $"{partition}/_Access")
         {
             NodeType = AccessAssignmentNodeType.NodeType,
             Name = $"{delegateId} Access",
-            MainNode = owner,
+            MainNode = partition,
             State = MeshNodeState.Active,
             Content = new AccessAssignment
             {
@@ -414,9 +421,6 @@ public class MailCopyAuthorityTest(ITestOutputHelper output) : MonolithMeshTestB
                 Roles = [new RoleAssignment { Role = Role.Editor.Id, Denied = false }],
             },
         }).Timeout(Bound).Await(ct);
-        var store = new MeshMailCopyStore(() => Mesh);
-        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
-        await store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "g1" }).Timeout(Bound).Await(ct);
         var asDelegate = new AccessContext { ObjectId = delegateId, Name = delegateId };
 
         Task<MailMessageCopy> write;

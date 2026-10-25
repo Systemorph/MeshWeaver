@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using MeshWeaver.Graph.Configuration;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
@@ -117,6 +118,15 @@ public interface IMailCopyStore
     /// </summary>
     IObservable<ImmutableList<MailMessageCopy>> ReadPage(
         string owner, string provider, string generation, long? from, int size, bool oldestFirst = false);
+
+    /// <summary>
+    /// Moves a copy still filed at the LEGACY place, <c>{owner}/_MailCopy/{provider}</c> in the owner's home
+    /// partition, into the owner's copy partition (<see cref="MailCopyNodeTypes.NamespaceFor"/>): the source
+    /// with its generation and cursor (so nothing is downloaded again), every copy, and every attachment file,
+    /// each copy's stored paths rewritten — and then removes the legacy one, files first. Emits how many copies
+    /// it moved; 0 when there was nothing to move. A store without a legacy place moves nothing.
+    /// </summary>
+    IObservable<int> MoveLegacy(string owner, string provider) => Observable.Return(0);
 }
 
 /// <summary>
@@ -168,7 +178,8 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     [ImpersonationSurface]
     [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource> Create(string owner, MailCopySource source)
-        => Gated(Assembly.GetCallingAssembly(), nameof(Create), owner, Permission.Update, () => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source)))
+        => Gated(Assembly.GetCallingAssembly(), nameof(Create), owner, Permission.Update, () => EnsurePartition(owner)
+            .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source))))
             .Select(_ => source)
             // Already there — switched on by another click or another replica: keep the first.
             .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex)
@@ -227,9 +238,133 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         // The copies' attachment files go first, one pass at a time (each pass deletes what it read, files
         // before node), so "stop and delete the copies" leaves no file and no index behind; the source then
         // takes whatever is left with it.
-        => Gated(Assembly.GetCallingAssembly(), nameof(Disable), owner, Permission.Delete, () =>
-            (attachments is null ? Observable.Return(0) : Observable.Defer(() => RotatedThenCleaned(owner, provider)))
+        // 🚨 A copy still at the legacy place is MOVED first and then switched off like any other: left behind,
+        // the next sync's move would bring a copy the person switched off back to life.
+        => Gated(Assembly.GetCallingAssembly(), nameof(Disable), owner, Permission.Delete, () => MoveLegacyCore(owner, provider)
+            .SelectMany(_ => attachments is null ? Observable.Return(0) : Observable.Defer(() => RotatedThenCleaned(owner, provider)))
             .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider)))));
+
+    /// <inheritdoc />
+    [ImpersonationSurface]
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public IObservable<int> MoveLegacy(string owner, string provider)
+        => Gated(Assembly.GetCallingAssembly(), nameof(MoveLegacy), owner, Permission.Update, () => MoveLegacyCore(owner, provider));
+
+    private IObservable<int> MoveLegacyCore(string owner, string provider)
+        => LegacySource(owner, provider).SelectMany(legacy => legacy is null
+            ? Observable.Return(0)
+            : EnsurePartition(owner)
+                // The source first, as it was — generation, cursor, window — so the moved copies stay current and
+                // the next sync resumes where the legacy one stopped. A lease it held is dropped: its holder was
+                // syncing the legacy place. Already there (an earlier, interrupted move): kept as it is.
+                .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, legacy with { LeaseHolder = null, LeaseUntil = null })))
+                    .Select(_ => 0)
+                    .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex) ? Observable.Return(0) : Observable.Throw<int>(ex)))
+                .SelectMany(_ => MovePasses(owner, provider, 1, 0))
+                .SelectMany(moved => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.LegacySourcePath(owner, provider))).Select(_ => moved))
+                .Do(moved => logger?.LogInformation(
+                    "Mail copy: moved {Count} {Provider} copies of {Owner} into their own partition {Partition}",
+                    moved, provider, owner, MailCopyNodeTypes.NamespaceFor(owner))));
+
+    // The legacy source, read as System: the person's home partition is theirs, but the move runs in the
+    // background with no viewer left (the same arrangement as every other write here).
+    private IObservable<MailCopySource?> LegacySource(string owner, string provider)
+        => Mesh().SelectMany(m => m.Access
+            .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.LegacySourcePath(owner, provider)}", owner) with { Limit = 1 })
+                .Take(1))
+            .Take(1)
+            .Select(change => change.Items
+                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                               && string.Equals(node.Path, MailCopyNodeTypes.LegacySourcePath(owner, provider), StringComparison.Ordinal))
+                .Select(node => node.ContentAs<MailCopySource>(m.Options, logger))
+                .FirstOrDefault(source => source is not null)));
+
+    private IObservable<int> MovePasses(string owner, string provider, int pass, int moved)
+        => Mesh().SelectMany(m => m.Access
+            .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
+                .Query<MeshNode>(MeshQueryRequest.FromQuery(
+                    $"namespace:{MailCopyNodeTypes.LegacySourcePath(owner, provider)} nodeType:{MailCopyNodeTypes.MessageNodeType} limit:{RemovePass}", owner) with { Limit = RemovePass })
+                .Take(1))
+            .Take(1)
+            .Select(change => change.Items
+                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal)
+                               && string.Equals(node.Namespace, MailCopyNodeTypes.LegacySourcePath(owner, provider), StringComparison.Ordinal))
+                .ToImmutableList())
+            .SelectMany(nodes => nodes.Count == 0
+                ? Observable.Return(moved)
+                : nodes.Select(node => MoveCopy(owner, provider, node, m.Options)).MergeBounded(4).Count()
+                    // 🚨 At the pass limit with copies left the move FAILS and the legacy source stays, so the next
+                    // sync repeats it — it never deletes the legacy source over copies it did not move.
+                    .SelectMany(count => pass < MaxRemovePasses
+                        ? MovePasses(owner, provider, pass + 1, moved + count)
+                        : Observable.Throw<int>(new InvalidOperationException(
+                            "The legacy copies were not all moved within the pass limit; the legacy source is kept so the move can be repeated.")))));
+
+    /// <summary>
+    /// One legacy copy: written at its new path FIRST (its attachments need the node they belong to), its files
+    /// copied, and only then its legacy files and node deleted. 🚨 Every step is a no-op or an overwrite when
+    /// repeated, so a move interrupted anywhere finishes on the next sync; a failure stops before the legacy
+    /// files go, and the legacy node keeps the only handle on them.
+    /// </summary>
+    private IObservable<bool> MoveCopy(string owner, string provider, MeshNode node, System.Text.Json.JsonSerializerOptions options)
+        => Live(owner, node.Path).SelectMany(live =>
+        {
+            if (live.ContentAs<MailMessageCopy>(options, logger) is not { } copy)
+                return Observable.Throw<bool>(new InvalidOperationException($"The legacy copy '{node.Path}' could not be read; it is left where it is."));
+            var target = $"{MailCopyNodeTypes.SourcePath(owner, provider)}/{node.Id}";
+            var moved = MailCopyNodeTypes.Relocated(copy, node.Path, target);
+            var withFiles = MailAttachments.MayHoldFiles(copy);
+            if (withFiles && attachments is null)
+                return Observable.Throw<bool>(new InvalidOperationException($"The legacy copy '{node.Path}' may hold files, and this host cannot move them."));
+            return Write(owner, m => m.Mesh.CreateNode(new MeshNode(node.Id, MailCopyNodeTypes.SourcePath(owner, provider))
+                    {
+                        Name = live.Name,
+                        NodeType = MailCopyNodeTypes.MessageNodeType,
+                        Icon = MailCopyNodeTypes.Icon,
+                        State = MeshNodeState.Active,
+                        Content = moved,
+                    }).Select(_ => true))
+                .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex) ? Observable.Return(true) : Observable.Throw<bool>(ex))
+                .SelectMany(_ => withFiles
+                    ? Mesh().SelectMany(m => m.Access.RunAsSystemFor(governedBy: null, onBehalfOf: owner,
+                            () => attachments!.CopyLegacy(owner, node.Path, target)))
+                        .SelectMany(_ => Mesh().SelectMany(m => m.Access.RunAsSystemFor(governedBy: null, onBehalfOf: owner,
+                            () => attachments!.DeleteLegacy(owner, node.Path))))
+                        .Select(_ => true)
+                    : Observable.Return(true))
+                .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(node.Path)))
+                .Select(_ => true);
+        });
+
+    /// <summary>
+    /// Makes the owner's copy partition exist — the storage schema, the <c>Admin/Partition</c> definition that
+    /// routes it, its root node and the owner's Viewer grant — as System, each step create-if-absent, so a repeat
+    /// (another click, another replica) changes nothing. 🚨 "No partition, no write": the store refuses a write
+    /// to a partition nobody provisioned, so this runs before the first one.
+    /// </summary>
+    private IObservable<System.Reactive.Unit> EnsurePartition(string owner)
+        => Mesh().SelectMany(m =>
+        {
+            var partition = MailCopyNodeTypes.NamespaceFor(owner);
+            var root = MailCopyNodeTypes.BuildPartitionRoot(owner);
+            var providers = m.Hub.ServiceProvider.GetServices<IPartitionStorageProvider>().ToArray();
+            var provisioned = providers.Length == 0
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : providers.Select(p => p.EnsurePartitionProvisioned(partition)).Merge()
+                    .DefaultIfEmpty(System.Reactive.Unit.Default).LastAsync();
+            return provisioned
+                .SelectMany(_ => CreateIfAbsent(owner, PartitionOwnership.PartitionDefinitionNode(root, $"Mail copies of {owner}")))
+                .SelectMany(_ => CreateIfAbsent(owner, root))
+                .SelectMany(_ => CreateIfAbsent(owner, MailCopyNodeTypes.OwnerViewerGrant(owner)));
+        });
+
+    private IObservable<System.Reactive.Unit> CreateIfAbsent(string owner, MeshNode node)
+        => Write(owner, m => m.Mesh.CreateNode(node))
+            .Select(_ => System.Reactive.Unit.Default)
+            .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex)
+                ? Observable.Return(System.Reactive.Unit.Default)
+                : Observable.Throw<System.Reactive.Unit>(ex));
 
     // 🚨 The source's generation is rotated FIRST: a sync still running holds the old one, so its commits
     // are refused from now on (and it removes what it wrote by that generation), instead of racing the

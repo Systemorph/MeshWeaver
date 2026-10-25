@@ -12,9 +12,9 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 # The Opt-In Mail Copy
 
 Mail is read **live** from the provider by default. A person can switch a **copy** on for an account, on one
-installation, and that installation then keeps the last 90 days of the account's inbox as nodes in the
-person's own partition: searchable, instant to open, and — for real file attachments up to 25 MB — with the
-files stored and indexed.
+installation, and that installation then keeps the last 90 days of the account's inbox as nodes in a
+partition of the person's OWN for their mail, `{owner}_MailCopy`: searchable, instant to open, and — for real
+file attachments up to 25 MB — with the files stored and indexed.
 
 ## Where it lives
 
@@ -25,7 +25,7 @@ Microsoft Graph code:
 | Piece | What it is |
 |---|---|
 | `MailCopySource`, `MailMessageCopy`, `MailAttachmentCopy` | The stored shapes. The type names ARE the `$type` discriminators (`MailCopySource`, `MailMessageCopy`) and the property spellings are the stored ones — **do not rename**; every stored copy and the Executive Assistant read them. |
-| `MailCopyNodeTypes` | Paths (`{owner}/_MailCopy/{key}/{digest}`), ids, generations, the two node types (`KeepsHistory = false`: a switch-off must leave nothing behind) and `AddMailCopyTypes()`. |
+| `MailCopyNodeTypes` | Paths (`{owner}_MailCopy/{key}/{digest}`), ids, generations, the partition root and the owner's grant, the node types (`KeepsHistory = false`: a switch-off must leave nothing behind) and `AddMailCopyTypes()`. |
 | `IMailCopyStore` / `MeshMailCopyStore` | The copies as mesh nodes, written as System on the owner's behalf; generation-checked commits; deletes files and index before nodes. |
 | `MailAttachments`, `IMailAttachmentSource`, `IMailAttachmentStore` | The attachment rules (files only, up to 25 MB, not inline) and the seam a provider implements to list and fetch. |
 | `MailCopyEngine`, `IMailCopyFeed` | The generic sync: generations, the lease, the window, tombstones, attachments, the switch-off. A provider supplies a feed (its incremental change source). |
@@ -52,10 +52,44 @@ says otherwise) — the call onboarding makes to ask "Keep a copy on this instal
 `Disable` / `IsOn` act per `(provider, accountId)`. The caller must have established that the viewer is the
 owner.
 
+## The copy partition, `{owner}_MailCopy`
+
+🚨 **The copies never live in the person's home partition** (owner, 2026-10-25: *"i don't feel good downloading
+all this stuff to user space. let's see that we create a dedicated partition just for the inbox for every
+user"*). Each owner's copies are their own top-level partition, named by the owner's id with `_MailCopy`
+appended — the old `{owner}/_MailCopy` with the slash replaced (`MailCopyNodeTypes.NamespaceFor`).
+
+- **Made on switch-on, as System.** `MeshMailCopyStore.Create` first makes the partition exist — the storage
+  schema (`EnsurePartitionProvisioned`: no partition, no write), the `Admin/Partition/{owner}_MailCopy`
+  definition that routes it, the root node (type `MailCopyPartition`) and the grant — each create-if-absent,
+  so a second click or a second replica changes nothing.
+- **ONE grant: the owner's Viewer grant**, `{owner}_MailCopy/_Access/{owner}_Access`. Reads run as the owner;
+  every write runs as System, so Viewer is all the owner needs. Nobody else is granted anything — a global
+  administrator included — and **a grant on the person's home partition does not reach their mail**: a
+  delegate needs a grant on the copy partition itself.
+- **An owner id that ends in `_MailCopy` is refused** (`MailCopyNodeTypes.IsValidOwner`): the home partition
+  of a user called `jane_MailCopy` would be the copy partition of `jane`.
+- **Attachment files follow the node**: the `attachments` collection of `{owner}_MailCopy/{key}/{id}` is
+  stored under `attachments/{owner}_MailCopy/…` on the content store, never under the person's home folder.
+
+### Copies filed before 2026-10-25 are moved, not downloaded again
+
+Before the change the copies lived at `{owner}/_MailCopy/…`. Every sync first runs
+`IMailCopyStore.MoveLegacy(owner, key)`, which moves what is still there into the copy partition: the source
+with its generation, cursor and window (so the next sync resumes, and nothing is fetched again), then each
+copy — written at its new path, its attachment files copied (`IMailAttachmentStore.CopyLegacy`), its stored
+paths re-rooted (`MailCopyNodeTypes.Relocated`), and only then its legacy files (`DeleteLegacy`) and node
+deleted — and the legacy source last. Every step is an overwrite or a no-op when repeated, so a move that
+stops anywhere finishes on the next sync; a failure stops before the legacy files go. `Disable` moves first
+too, so a copy switched off while still at the legacy place cannot come back on the next sync.
+
+It is the portal, not the database migration Job, that moves them: the Job does not mount the content store,
+so it could move the rows but never the files.
+
 ## Layout of an account's copy
 
-The default account of a provider keeps `{owner}/_MailCopy/{provider}`; every other connected account is its
-own copy at `{owner}/_MailCopy/{provider}.{accountId}` (`MailCopyNodeTypes.KeyFor`).
+The default account of a provider keeps `{owner}_MailCopy/{provider}`; every other connected account is its
+own copy at `{owner}_MailCopy/{provider}.{accountId}` (`MailCopyNodeTypes.KeyFor`).
 
 ## Who may call the stores
 
@@ -76,7 +110,7 @@ can reach them, so they authorize the caller before they elevate
 - **The identity** the store was CALLED under — the request context, else the circuit's — read at the call,
   never when the cold result is subscribed: a write composed by one person and subscribed after their
   scope ended is still theirs. The owner may act on their own copy; anybody else needs the permission the
-  act needs (Read, Update or Delete) on `{owner}/_MailCopy`. System and hub principals pass. **No identity,
+  act needs (Read, Update or Delete) on `{owner}_MailCopy`. System and hub principals pass. **No identity,
   or an anonymous one, is refused**: a lost identity is never read as trusted background work. **No mesh
   at the call is refused too**: the work resolves the hub again when it runs, so a call composed before the
   portal existed and subscribed after would otherwise run as System unchecked. A non-owner's permission
@@ -92,7 +126,7 @@ every provider at entry, never in a lazy enumeration its `Merge` would run at su
   subscribed while another runs emits null at once, and the gate opens again when the running one
   completes, fails or is disposed. An engine
   built without the `AccessService` on a host that has one gets its syncs refused, loudly.
-- **The target**: the attachment store writes to and empties only `{owner}/_MailCopy/{key}/{id}` — a copy
+- **The target**: the attachment store writes to and empties only `{owner}_MailCopy/{key}/{id}` — a copy
   node of the owner — and never a relative path that leaves its `attachments` collection.
 
 ## Reads that decide writes

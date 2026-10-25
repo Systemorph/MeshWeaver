@@ -16,7 +16,7 @@ namespace MeshWeaver.Graph.MailCopy;
 /// One source's OPT-IN copy of the person's mail in memex (owner, 2026-10-16: "can you also optionally
 /// offer that data is replicated?"): whether it is on, the window it backfilled, and where the next
 /// sync resumes. Live reading stays the DEFAULT — a source without this node is read live, nothing is
-/// stored. Stored at <c>{owner}/_MailCopy/{provider}</c>; the copies are its children, so switching the
+/// stored. Stored at <c>{owner}_MailCopy/{provider}</c>; the copies are its children, so switching the
 /// source off deletes the node and every copy under it in one call.
 /// </summary>
 public sealed record MailCopySource
@@ -101,7 +101,7 @@ public sealed record MailCopySource
 /// <summary>
 /// One message copied into memex — what the inbox row and the reading view need, the full body
 /// included, and its real file attachments (<see cref="Attachments"/>, each up to <see cref="MailAttachments.MaxBytes"/>).
-/// Stored at <c>{owner}/_MailCopy/{provider}/{digest}</c> (<see cref="MailCopyNodeTypes.IdFor"/>).
+/// Stored at <c>{owner}_MailCopy/{provider}/{digest}</c> (<see cref="MailCopyNodeTypes.IdFor"/>).
 /// </summary>
 public sealed record MailMessageCopy
 {
@@ -274,9 +274,11 @@ public static class MailAttachmentSkips
 }
 
 /// <summary>
-/// The two node types of the copy, their paths, and their registration. Both live in the OWNER's
-/// partition — a copy is personal mail, and a person's own partition is the one structurally private
-/// place; nothing grants anyone else a read.
+/// The node types of the copy, their paths, and their registration. The copies live in a partition of
+/// their OWN per owner, <c>{owner}_MailCopy</c> (owner, 2026-10-25: "a dedicated partition just for the
+/// inbox for every user" — downloaded mail and attachments do not belong in the person's home partition).
+/// It is created as System when the person first switches a copy on, and its one grant is the owner's
+/// Viewer grant: nobody else, a global administrator included, can read it.
 /// </summary>
 public static class MailCopyNodeTypes
 {
@@ -286,8 +288,15 @@ public static class MailCopyNodeTypes
     /// <summary>One copied message's type.</summary>
     public const string MessageNodeType = nameof(MailMessageCopy);
 
-    /// <summary>The per-user segment the copies are filed under — NOT the reserved virtual <c>_Mailbox</c>.</summary>
+    /// <summary>
+    /// The suffix that names an owner's copy partition, <c>{owner}_MailCopy</c> — NOT the reserved virtual
+    /// <c>_Mailbox</c>. Before 2026-10-25 the same word was a SEGMENT inside the owner's home partition
+    /// (<see cref="LegacyNamespaceFor"/>); <see cref="MeshMailCopyStore.MoveLegacy"/> moves what is still there.
+    /// </summary>
     public const string Segment = "_MailCopy";
+
+    /// <summary>The type of the copy partition's root node, <c>{owner}_MailCopy</c>.</summary>
+    public const string PartitionNodeType = "MailCopyPartition";
 
     /// <summary>How far back a newly switched-on source copies (owner, 2026-10-16: the last 90 days).</summary>
     public const int WindowDays = 90;
@@ -298,11 +307,28 @@ public static class MailCopyNodeTypes
     /// <summary>The type's icon.</summary>
     public const string Icon = "🗄️";
 
-    /// <summary><c>{owner}/_MailCopy</c>.</summary>
-    public static string NamespaceFor(string owner) => $"{owner}/{Segment}";
+    /// <summary>The owner's copy partition, <c>{owner}_MailCopy</c> — the path of its root node. Pure.</summary>
+    public static string NamespaceFor(string owner) => $"{owner}{Segment}";
 
-    /// <summary>The source node: <c>{owner}/_MailCopy/{provider}</c>.</summary>
+    /// <summary>
+    /// Where the copies were filed before they had a partition of their own: <c>{owner}/_MailCopy</c>, in the
+    /// owner's home partition. Read only to move what is still there (<see cref="MeshMailCopyStore.MoveLegacy"/>). Pure.
+    /// </summary>
+    public static string LegacyNamespaceFor(string owner) => $"{owner}/{Segment}";
+
+    /// <summary>The source node: <c>{owner}_MailCopy/{provider}</c>.</summary>
     public static string SourcePath(string owner, string provider) => $"{NamespaceFor(owner)}/{provider}";
+
+    /// <summary>The legacy source node: <c>{owner}/_MailCopy/{provider}</c>. Pure.</summary>
+    public static string LegacySourcePath(string owner, string provider) => $"{LegacyNamespaceFor(owner)}/{provider}";
+
+    /// <summary>
+    /// Whether <paramref name="owner"/> can own a copy: one user id — not empty, no <c>/</c>, and not itself
+    /// ending in <see cref="Segment"/>, whose copy partition would be named like another owner's. Pure.
+    /// </summary>
+    public static bool IsValidOwner(string? owner)
+        => !string.IsNullOrWhiteSpace(owner) && !owner.Contains('/')
+           && !owner.EndsWith(Segment, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// A copy's id: 128 bits of SHA-256 over the generation and the provider's message id, as 32
@@ -320,7 +346,7 @@ public static class MailCopyNodeTypes
     /// <summary>
     /// The copy key of one connected account: the provider itself for the DEFAULT account (the path the
     /// copy always had — nothing to migrate), <c>{provider}.{accountId}</c> for every other one, so each
-    /// account is its own copy beside the others at <c>{owner}/_MailCopy/{key}</c>. The account id ends up in
+    /// account is its own copy beside the others at <c>{owner}_MailCopy/{key}</c>. The account id ends up in
     /// a node path, so only a plain id (letters, digits, <c>-</c>, <c>_</c>) is accepted. Pure.
     /// </summary>
     public static string KeyFor(string provider, string? accountId)
@@ -330,7 +356,7 @@ public static class MailCopyNodeTypes
                 ? $"{provider}.{accountId}"
                 : throw new ArgumentException("The account id is not a plain id; it is never used in a path.", nameof(accountId));
 
-    /// <summary>A copy's path: <c>{owner}/_MailCopy/{provider}/{digest}</c>. Pure.</summary>
+    /// <summary>A copy's path: <c>{owner}_MailCopy/{provider}/{digest}</c>. Pure.</summary>
     public static string CopyPath(string owner, string provider, string generation, string messageId)
         => $"{SourcePath(owner, provider)}/{IdFor(provider, generation, messageId)}";
 
@@ -368,6 +394,50 @@ public static class MailCopyNodeTypes
 
     /// <summary>A fresh generation id.</summary>
     public static string NewGeneration() => Guid.NewGuid().ToString("N");
+
+    /// <summary>The root node of the owner's copy partition, <c>{owner}_MailCopy</c>. Pure.</summary>
+    public static MeshNode BuildPartitionRoot(string owner) =>
+        new(NamespaceFor(owner))
+        {
+            Name = $"Mail copies of {owner}",
+            NodeType = PartitionNodeType,
+            Icon = Icon,
+            State = MeshNodeState.Active,
+            MainNode = NamespaceFor(owner),
+        };
+
+    /// <summary>
+    /// The owner's ONE grant on the copy partition: <c>{owner}_MailCopy/_Access/{owner}_Access</c>, role
+    /// Viewer. Reads run as the owner; every write runs as System, so Viewer is all the owner needs. Pure.
+    /// </summary>
+    public static MeshNode OwnerViewerGrant(string owner) =>
+        new($"{owner}_Access", $"{NamespaceFor(owner)}/_Access")
+        {
+            NodeType = "AccessAssignment",
+            Name = $"{owner} Access",
+            MainNode = NamespaceFor(owner),
+            Content = new MeshWeaver.Mesh.Security.AccessAssignment
+            {
+                AccessObject = owner,
+                DisplayName = owner,
+                Roles = [new MeshWeaver.Mesh.Security.RoleAssignment { Role = MeshWeaver.Mesh.Security.Role.Viewer.Id, Denied = false }],
+            },
+        };
+
+    /// <summary>
+    /// <paramref name="copy"/> as it reads once moved from the copy node <paramref name="from"/> to
+    /// <paramref name="to"/>: every stored attachment path under <c>{from}/</c> re-rooted at <c>{to}/</c>, nothing
+    /// else changed. A path that is not under <paramref name="from"/> is left as it is. Pure.
+    /// </summary>
+    public static MailMessageCopy Relocated(MailMessageCopy copy, string from, string to)
+        => copy.Attachments is not { Count: > 0 } list
+            ? copy
+            : copy with
+            {
+                Attachments = list.Select(a => a.StoredPath is { } stored && stored.StartsWith(from + "/", StringComparison.Ordinal)
+                    ? a with { StoredPath = to + stored[from.Length..] }
+                    : a).ToImmutableList(),
+            };
 
     /// <summary>The source node. Pure.</summary>
     public static MeshNode BuildSource(string owner, MailCopySource source) =>
@@ -410,13 +480,23 @@ public static class MailCopyNodeTypes
     public static TBuilder AddMailCopyTypes<TBuilder>(this TBuilder builder) where TBuilder : MeshBuilder
     {
         // IfAbsent: the Mail module and every other provider module call this, and any one of them may be the only one installed.
-        builder.AddMeshNodesIfAbsent(SourceTypeNode(), MessageTypeNode());
-        builder.AddAutocompleteExcludedTypes(SourceNodeType, MessageNodeType);
+        builder.AddMeshNodesIfAbsent(PartitionTypeNode(), SourceTypeNode(), MessageTypeNode());
+        builder.AddAutocompleteExcludedTypes(PartitionNodeType, SourceNodeType, MessageNodeType);
         builder.ConfigureHub(config => config
             .WithType<MailCopySource>(nameof(MailCopySource))
             .WithType<MailMessageCopy>(nameof(MailMessageCopy)));
         return builder;
     }
+
+    private static MeshNode PartitionTypeNode() => new(PartitionNodeType)
+    {
+        NodeType = MeshNode.NodeTypePath,
+        Content = new NodeTypeDefinition { KeepsHistory = false },
+        Name = "Mail copies",
+        Icon = Icon,
+        ExcludeFromContext = new HashSet<string> { "create" },
+        HubConfiguration = config => config.AddDefaultLayoutAreas(),
+    };
 
     private static MeshNode SourceTypeNode() => new(SourceNodeType)
     {

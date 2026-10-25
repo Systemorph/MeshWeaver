@@ -231,7 +231,19 @@ public sealed partial class MailCopyEngine(
             OnBehalfOf = owner,
         });
 
+    // 🚨 A copy still filed at the legacy place in the owner's home partition is moved into the owner's copy
+    // partition FIRST (MeshMailCopyStore.MoveLegacy). A move that fails is logged and left for the next sync,
+    // which repeats it: every step of it is an overwrite or a no-op when repeated.
     private IObservable<MailCopySource?> SyncCore(string owner)
+        => copies.MoveLegacy(owner, Provider)
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "{Provider} copy: moving the legacy copy of {Owner} into its own partition failed; the next sync repeats it", Provider, owner);
+                return Observable.Return(0);
+            })
+            .SelectMany(_ => SyncSource(owner));
+
+    private IObservable<MailCopySource?> SyncSource(string owner)
         => copies.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null
             ? Sweep(owner).Select(_ => (MailCopySource?)null)
             : Acquire(owner, source).SelectMany(leased => leased is null

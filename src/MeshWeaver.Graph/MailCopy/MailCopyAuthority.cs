@@ -21,7 +21,7 @@ namespace MeshWeaver.Graph.MailCopy;
 ///   <item><description>The IDENTITY the call was made under, read when the store is CALLED — the
 ///   request context, else the circuit's — never when the cold result is later subscribed (a scope
 ///   that ended in between must not decide). A person may act on their own copy, and on anybody
-///   else's only with the permission on <c>{owner}/_MailCopy</c> that the act needs. System and hub
+///   else's only with the permission on <c>{owner}_MailCopy</c> that the act needs. System and hub
 ///   principals pass: the background sync DECLARES itself System (<see cref="MailCopyEngine.Kick"/>).
 ///   No identity at all, an empty id, the Anonymous id or a virtual (logged-out) visitor is refused —
 ///   a lost identity is never read as trusted background work, nor a visitor as the owner.</description></item>
@@ -49,8 +49,11 @@ internal static class MailCopyAuthority
             if (hub is null)
                 return Observable.Throw<T>(new InvalidOperationException(
                     "The mail copies cannot be reached: no mesh was available on this host when the call was made."));
-            if (string.IsNullOrWhiteSpace(owner) || owner.Contains('/'))
-                return Observable.Throw<T>(new ArgumentException("The owner of a mail copy is one user id.", nameof(owner)));
+            // 🚨 An id that itself ends in the partition suffix is refused rather than assumed impossible: the
+            // HOME partition of a user called "jane_MailCopy" would be the copy partition of "jane".
+            if (!MailCopyNodeTypes.IsValidOwner(owner))
+                return Observable.Throw<T>(new ArgumentException(
+                    $"The owner of a mail copy is one user id that does not end in '{MailCopyNodeTypes.Segment}'.", nameof(owner)));
             // A host without access control has nobody to authorize.
             if (access is null)
                 return work();
