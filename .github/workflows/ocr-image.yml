@@ -1,0 +1,170 @@
+name: ocr image
+
+# Builds deploy/ocr (Tesseract 5.5 with the eng, deu, fra, ita, ind packs + osd baked in, behind a
+# stdlib HTTP server) and, on main, pushes it to ACR — the ONE channel the cluster pulls it from, built
+# exactly as s1-extract-image.yml builds s1-extract. Nothing is ever pushed by hand.
+#
+# 🚨 THE TAGS, and which one an overlay names.
+#   tesseract-5.5-<short sha>  immutable — what an estate's values file names. The chart values an
+#                              approved ApplyChart binds carry this tag, so the approval binds the bytes
+#                              that run (Systemorph/Memex docs/aks-ops.md → ApplyChart).
+#   tesseract-5.5              moving — the line, for a laptop `docker pull`. Never name it in an
+#                              overlay: IfNotPresent + a moving tag is two nodes running two builds.
+# The line names the ENGINE release; a Tesseract minor bump is a new line (.github/release-channels.json
+# declares it so retention never prunes it).
+#
+# 🚨 NOT A GATE, so the path filter is correct here. A PR that does not touch deploy/ocr has nothing
+# to build. The Dockerfile runs the offline tests and the REAL-engine smoke test (app/smoke.py on the
+# committed fixtures, with its own negative controls) in the stage that ships, so a green build IS the
+# test; the steps below add what a build cannot show — that the smoke can go RED, that the image's own
+# CMD serves the contract as uid 10001 on a read-only root, and that the chart renders nothing by default.
+#
+# Auth is the OIDC federated credential main-cd.yml and s1-extract-image.yml use, scoped to this
+# repository's main branch — which is the only ref the push job runs on.
+
+on:
+  pull_request:
+    paths:
+      - deploy/ocr/**
+      - .github/workflows/ocr-image.yml
+  push:
+    branches: [main]
+    paths:
+      - deploy/ocr/**
+      - .github/workflows/ocr-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a PR branch supersedes its build; a main run is never cancelled (each main push is
+# its own group, keyed on the commit — check-main-runs-not-cancelled.py).
+concurrency:
+  group: ocr-image-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  ACR: meshweaver.azurecr.io
+  LINE: tesseract-5.5
+
+jobs:
+  # Pull requests: build and prove — nothing from a PR reaches ACR, and this job holds no secret
+  # (check-pr-secret-preflight.py: a PR-reachable job consuming a secret needs a preflight).
+  build:
+    name: Build ocr (offline tests + real-engine smoke in the image)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build
+        run: docker build --progress=plain -t ocr:ci deploy/ocr
+      # The same smoke with German taken out of the default set MUST fail — a smoke that cannot go
+      # red proves nothing. --network none: the service needs no network at all.
+      # Actions runs this with `bash -e`, so the expected non-zero exit is captured through `||` (a bare
+      # command would abort the step before `$?` is read). The red must be the ASSERTION going red — the
+      # smoke's exit code is its failure count, and the German check's FAIL line must be printed — never
+      # a container that did not start (docker's own 125/126/127) or a smoke that crashed.
+      - name: Negative control — the smoke goes RED without the German pack in the default set
+        run: |
+          set -euo pipefail
+          code=0
+          docker run --rm --network none --read-only --tmpfs /tmp -e OCR_DEFAULT_LANGUAGES=en,id ocr:ci python3 smoke.py \
+            > negative.log 2>&1 || code=$?
+          cat negative.log
+          [ "$code" -ne 0 ] || { echo "::error::smoke.py PASSED with German removed — its assertions cannot fail"; exit 1; }
+          [ "$code" -lt 125 ] || { echo "::error::the negative-control container failed to run (exit $code), not the assertion"; exit 1; }
+          grep -q '^FAIL German+Indonesian page: text and both languages detected (no hints)' negative.log \
+            || { echo "::error::smoke.py exited $code, but not on the German assertion — the control proves nothing"; exit 1; }
+          grep -q "^$code failure(s)$" negative.log \
+            || { echo "::error::smoke.py exited $code without reporting that many assertion failures — it crashed"; exit 1; }
+          echo "negative control: smoke.py exited $code (assertion failures) with German removed, as it must"
+      # The image's OWN CMD (server.py as uid 10001, read-only root), called over the network from a
+      # sibling container exactly as the portal calls the Service.
+      - name: Smoke the running service over HTTP
+        run: |
+          set -euo pipefail
+          docker network create ocr-ci
+          docker run -d --name ocr-svc --network ocr-ci --read-only --tmpfs /tmp ocr:ci
+          trap 'docker logs ocr-svc; docker rm -f ocr-svc >/dev/null; docker network rm ocr-ci >/dev/null' EXIT
+          docker run --rm --network ocr-ci ocr:ci python3 smoke.py http://ocr-svc:8080
+      - name: Image size
+        run: |
+          set -euo pipefail
+          bytes=$(docker image inspect ocr:ci --format '{{.Size}}')
+          echo "ocr:ci is $((bytes / 1024 / 1024)) MiB uncompressed"
+          echo "### ocr image: $((bytes / 1024 / 1024)) MiB uncompressed" >> "$GITHUB_STEP_SUMMARY"
+      - name: Install helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.3
+      # Disabled by default: the chart renders NOTHING. Enabled: Deployment + Service + NetworkPolicy,
+      # with all egress denied; and enabling it without an immutable tag is refused.
+      - name: Chart renders nothing by default, the three objects when enabled
+        run: |
+          set -euo pipefail
+          off=$(helm template ocr deploy/ocr/helm)
+          [ -z "$(printf '%s' "$off" | grep -E '^kind:' || true)" ] \
+            || { echo "::error::the chart rendered objects with enabled: false"; printf '%s\n' "$off"; exit 1; }
+          on=$(helm template ocr deploy/ocr/helm --set enabled=true --set image.repository=$ACR/ocr \
+                 --set image.tag=$LINE-0000000 --set 'networkPolicy.allowedNamespaces[0]=memex')
+          kinds=$(printf '%s\n' "$on" | grep -E '^kind:' | sort | tr '\n' ' ')
+          [ "$kinds" = "kind: Deployment kind: NetworkPolicy kind: Service " ] \
+            || { echo "::error::enabled chart rendered [$kinds]"; exit 1; }
+          printf '%s\n' "$on" | grep -q '^  egress: \[\]' || { echo "::error::the NetworkPolicy does not deny egress"; exit 1; }
+          if helm template ocr deploy/ocr/helm --set enabled=true --set image.repository=$ACR/ocr >/dev/null 2>&1; then
+            echo "::error::enabled without image.tag rendered — the immutable-tag refusal is gone"; exit 1
+          fi
+          # A MOVING tag is refused too: under IfNotPresent it lets two nodes run two cached builds.
+          for moving in "$LINE" latest "$LINE-main" "$LINE-0a8189"; do
+            if helm template ocr deploy/ocr/helm --set enabled=true --set image.repository=$ACR/ocr \
+                 --set "image.tag=$moving" >/dev/null 2>&1; then
+              echo "::error::enabled with the moving tag '$moving' rendered — the immutable-tag refusal is gone"; exit 1
+            fi
+          done
+          echo "chart: nothing by default; enabled → $kinds; egress denied; no tag or a moving tag → refused"
+
+  # main (push or dispatch): build the same way, push both tags, read them back.
+  publish:
+    name: Build and push ocr to ACR
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write   # OIDC to Azure (the federated credential is scoped to main)
+    steps:
+      - uses: actions/checkout@v7
+      # The build runs the offline tests and the real-engine smoke (deploy/ocr/Dockerfile).
+      - name: Build
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker build -t "$ACR/ocr:${LINE}-${short}" -t "$ACR/ocr:${LINE}" deploy/ocr
+      - name: Ensure Azure CLI
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: ACR login
+        run: bash .github/scripts/acr-login.sh
+      - name: Push ocr:<line>-<sha> and :<line>
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          docker push "$ACR/ocr:${LINE}-${short}"
+          docker push "$ACR/ocr:${LINE}"
+      - name: Verify the tags exist in the registry (read back, never the green tick)
+        run: |
+          set -euo pipefail
+          short="${GITHUB_SHA::7}"
+          immutable=$(az acr manifest show-metadata --registry meshweaver --name "ocr:${LINE}-${short}" --query digest -o tsv)
+          moving=$(az acr manifest show-metadata --registry meshweaver --name "ocr:${LINE}" --query digest -o tsv)
+          [ -n "$immutable" ] && [ "$immutable" = "$moving" ] \
+            || { echo "::error::ocr:${LINE}-${short} (${immutable:-absent}) and :${LINE} (${moving:-absent}) do not name one pushed manifest"; exit 1; }
+          echo "published $ACR/ocr:${LINE}-${short} = ${immutable} (+ :${LINE})"
+          echo "### ocr published" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$ACR/ocr:${LINE}-${short}\` — \`${immutable}\`. An estate overlay names this immutable tag." >> "$GITHUB_STEP_SUMMARY"
