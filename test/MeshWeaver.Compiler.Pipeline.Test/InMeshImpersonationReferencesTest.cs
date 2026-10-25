@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using MeshWeaver.Compiler;
 using MeshWeaver.ContentCollections;
+using MeshWeaver.Graph.MailCopy;
 using MeshWeaver.Mesh.Security;
 using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
@@ -31,6 +32,7 @@ public class InMeshImpersonationReferencesTest
         using MeshWeaver.Mesh.Security;
         using MeshWeaver.Mesh.Services;
         using MeshWeaver.ContentCollections;
+        using MeshWeaver.Graph.MailCopy;
         """;
 
     private static Compilation Compile(string body) =>
@@ -42,7 +44,8 @@ public class InMeshImpersonationReferencesTest
         _ = new[] { typeof(AccessService), typeof(WellKnownUsers), typeof(MeshQueryRequest),
                     typeof(ContentImportBuilder), typeof(System.Reactive.Linq.Observable),
                     typeof(System.Text.Json.JsonSerializerOptions), typeof(MessageDelivery<>),
-                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>) };
+                    typeof(MeshWeaver.Data.Serialization.SynchronizationStream<>),
+                    typeof(MeshWeaver.Graph.MailCopy.MeshMailCopyStore) };
         // 🚨 Only assemblies whose file is STILL on disk. Other classes of this project compile
         // node assemblies into temp folders, load them and delete the folder when they finish; such
         // an assembly stays in the AppDomain with a Location that no longer exists, and referencing
@@ -159,6 +162,80 @@ public class InMeshImpersonationReferencesTest
     public void AForgedSenderEnvelope_IsFound(string body, string expected)
     {
         Assert.Contains(expected, Found(body));
+    }
+
+    /// <summary>
+    /// The mail copy's stores (and the engine's background sync) run as System on the owner's behalf. Their
+    /// runtime check judges the immediate caller, which a method group handed to a later platform callback
+    /// replaces — so every reference, a DEFERRED method group included, is reported at compile time, on the
+    /// interface as on the concrete store.
+    /// </summary>
+    [Theory]
+    [InlineData("public static IObservable<MailMessageCopy> M(IMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
+        "MeshWeaver.Graph.MailCopy.IMailCopyStore.Upsert")]
+    [InlineData("public static IObservable<MailMessageCopy> M(MeshMailCopyStore s, MailMessageCopy c) => s.Upsert(\"owner\", c);",
+        "MeshWeaver.Graph.MailCopy.MeshMailCopyStore.Upsert")]
+    // DEFERRED: a method group handed on, invoked later by whoever holds it.
+    [InlineData("public static Func<string, MailMessageCopy, IObservable<MailMessageCopy>> M(IMailCopyStore s) => s.Upsert;",
+        "MeshWeaver.Graph.MailCopy.IMailCopyStore.Upsert")]
+    [InlineData("public static Func<string, IObservable<MailMessageCopy?>> M(MeshMailCopyStore s) => o => s.Read(o, \"outlook\", \"g1\", \"m1\");",
+        "MeshWeaver.Graph.MailCopy.MeshMailCopyStore.Read")]
+    [InlineData("public static Func<string, string, IObservable<System.Reactive.Unit>> M(IMailAttachmentStore s) => s.DeleteAll;",
+        "MeshWeaver.Graph.MailCopy.IMailAttachmentStore.DeleteAll")]
+    [InlineData("public static IObservable<string> M(MeshMailAttachmentStore s, byte[] b) => s.Save(\"owner\", \"p\", \"r\", b);",
+        "MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore.Save")]
+    [InlineData("public static Action<string, bool> M(MailCopyEngine e) => e.Kick;",
+        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Kick")]
+    [InlineData("public static Func<string, IObservable<MailCopySource?>> M(MailCopyEngine e) => e.Sync;",
+        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Sync")]
+    [InlineData("public static Action<string> M(IMailAccountCopy a) => a.KickAll;",
+        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.KickAll")]
+    [InlineData("public static void M(MailFeedAccountCopy a) => a.KickAll(\"owner\");",
+        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.KickAll")]
+    // Enable starts the System backfill: every public road to it.
+    [InlineData("public static IObservable<MailCopySource> M(MailCopyEngine e) => e.Enable(\"owner\", 30);",
+        "MeshWeaver.Graph.MailCopy.MailCopyEngine.Enable")]
+    [InlineData("public static IObservable<bool> M(MailFeedAccountCopy a) => a.Enable(\"owner\", \"acct\", 30);",
+        "MeshWeaver.Graph.MailCopy.MailFeedAccountCopy.Enable")]
+    [InlineData("public static Func<string, string, int, IObservable<bool>> M(IMailAccountCopy a) => a.Enable;",
+        "MeshWeaver.Graph.MailCopy.IMailAccountCopy.Enable")]
+    [InlineData("public static IObservable<bool> M(IMailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Graph.MailCopy.IMailCopySwitch.Enable")]
+    [InlineData("public static IObservable<bool> M(MailCopySwitch s) => s.Enable(\"owner\", \"outlook\", \"acct\");",
+        "MeshWeaver.Graph.MailCopy.MailCopySwitch.Enable")]
+    public void AMailCopyStoreReference_IsFound(string body, string expected)
+    {
+        Assert.Contains(expected, Found(body));
+    }
+
+    /// <summary>
+    /// The registration above is a list, and a list drifts: every <c>[ImpersonationSurface]</c> of the mail
+    /// copy's types — and the interface member each one implements — must be in it, or a new System entry
+    /// point would be reachable from in-mesh code unreported.
+    /// </summary>
+    [Fact]
+    public void EveryMailCopySurface_IsRegistered()
+    {
+        var types = typeof(MeshMailCopyStore).Assembly.GetTypes()
+            .Where(t => t.Namespace == "MeshWeaver.Graph.MailCopy" && t.IsPublic && !t.IsInterface)
+            .ToArray();
+        var surfaces = types.SelectMany(t => t
+                .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.DeclaredOnly)
+                .Where(m => m.IsDefined(typeof(ImpersonationSurfaceAttribute), inherit: false))
+                .SelectMany(m => new[] { $"{t.Namespace}.{t.Name}.{m.Name}" }
+                    .Concat(t.GetInterfaces()
+                        .Where(i => i.Namespace == t.Namespace)
+                        .Where(i => t.GetInterfaceMap(i).TargetMethods.Contains(m))
+                        .Select(i => $"{i.Namespace}.{i.Name}.{m.Name}"))))
+            .Distinct()
+            .ToArray();
+        Assert.NotEmpty(surfaces);
+        var missing = surfaces.Where(s =>
+        {
+            var cut = s.LastIndexOf('.');
+            return !(InMeshImpersonationReferences.Members.TryGetValue(s[..cut], out var members) && members.Contains(s[(cut + 1)..]));
+        }).ToArray();
+        Assert.True(missing.Length == 0, "unregistered System surfaces: " + string.Join(", ", missing));
     }
 
     [Fact]
