@@ -9,7 +9,7 @@
 #   2. the chart defaults render NO build-host object at all (buildHosts.enabled: false), so no
 #      estate changes until its record turns the hosts on;
 #   3. the fixture renders, per enabled channel, a Deployment with no `replicas` (KEDA owns it),
-#      images by DIGEST, the cibuild toleration + nodeSelector, the worker token from a Secret, the
+#      images by DIGEST, the ci-build toleration + nodeSelector, the worker token from a Secret, the
 #      build-cache claim, readiness on the staged marker, and a ScaledObject with minReplicaCount 0,
 #      the channel's maxReplicaCount and a metrics-api trigger on <apiUrl>/queue?channel=<c> with
 #      valueLocation demand and a scale-down stabilization window, the worker token as a mounted
@@ -102,8 +102,8 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
         problems.append(f"{ch}: tester init image is not the channel's digest: {inits.get('tester', {}).get('image')}")
     if not inits.get("portal", {}).get("image", "").endswith("@sha256:" + portal * 16):
         problems.append(f"{ch}: portal init image is not the channel's digest: {inits.get('portal', {}).get('image')}")
-    if pod.get("nodeSelector") != {"workload": "cibuild"}:
-        problems.append(f"{ch}: nodeSelector is not workload=cibuild: {pod.get('nodeSelector')}")
+    if pod.get("nodeSelector") != {"workload": "ci-build"}:
+        problems.append(f"{ch}: nodeSelector is not workload=ci-build: {pod.get('nodeSelector')}")
     if not any(t.get("key") == "ci" and t.get("value") == "build" for t in pod.get("tolerations", [])):
         problems.append(f"{ch}: no ci=build toleration")
     if pod.get("serviceAccountName") != "build-host" or pod.get("automountServiceAccountToken") is not False:
