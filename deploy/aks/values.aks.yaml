@@ -47,7 +47,7 @@ secrets:
     # Never commit a real key. The chart emits each secret key ONLY when non-empty, so leaving
     # these empty means "don't manage / preserve whatever is set out-of-band". Inject the real
     # AzureFoundry key (your Foundry account's key1) at deploy via Key Vault CSI
-    # (envs/<env>/secretproviderclass.yaml — template in Systemorph/Memex deployments/aks/example/) or
+    # (envs/<env>/secretproviderclass.yaml — template in envs/example/) or
     # `--set secrets.memex_portal.AzureFoundry__ApiKey=...`.
     AzureFoundry__ApiKey: ""
     # Ai__KeyProtection__MasterKey: intentionally UNSET — it is provided out-of-band, and overriding
@@ -417,7 +417,7 @@ config:
 # The in-cluster deployment PATCH (RBAC) works regardless; this is only needed to authenticate the
 # ACR tag-list call. See Doc/Architecture/ReleaseStrategy → "AKS prerequisites".
 #
-# The value is the `portalIdentityClientId` output of Systemorph/Memex infra/platform/main.bicep (modules/portal-identity.bicep
+# The value is the `portalIdentityClientId` output of infra/main.bicep (modules/portal-identity.bicep
 # provisions the shared portal UAMI + a federated credential per namespace). The SAME client id is
 # used for EVERY portal namespace — one shared UAMI, one AcrPull grant.
 # Inject it at `helm upgrade` time rather than committing it: put the real id in the git-ignored

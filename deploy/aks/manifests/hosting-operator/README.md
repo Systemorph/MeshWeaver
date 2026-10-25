@@ -165,7 +165,7 @@ been granted anything on the portal identity.
 Owner on the resource group (the operator identity itself deliberately cannot assign roles):
 
 ```bash
-# from Systemorph/Memex infra/platform/modules — parameters as your environment names them
+# from deploy/aks/infra/modules — parameters as your environment names them
 az deployment group create -g <resource-group> -f backups.bicep \
   -p oidcIssuerUrl=<AZ_OIDC_ISSUER> postgresServerId=<pg-server resource id> \
      portalIdentityId=<portal-identity resource id> \
