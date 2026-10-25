@@ -3,7 +3,6 @@ using System.Reactive.Linq;
 using System.Text.Json;
 using MeshWeaver.Reactive;
 using System.Reactive.Threading.Tasks;
-using Humanizer;
 using MeshWeaver.Application.Styles;
 using MeshWeaver.Data;
 using MeshWeaver.Domain;

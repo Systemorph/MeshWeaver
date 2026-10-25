@@ -12,10 +12,12 @@
     <ProjectGuid>{6f6deed4-65c1-4e88-bbea-489f56cd62de}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="HtmlAgilityPack" />
-    <PackageReference Include="Serilog.AspNetCore" />
-    <PackageReference Include="Serilog.Settings.Configuration" />
-    <PackageReference Include="Serilog.Sinks.File" />
+    <!-- The shared ASP.NET Core framework (WebApplication, HttpContext, Host/HostBuilder, …) that
+         every suite binding this library compiles against. It used to arrive only as a transitive
+         of Serilog.AspNetCore, which nothing here called; it is declared now that the Serilog
+         packages are gone, so consumers in this repo and in MeshWeaver.Plugins keep the same
+         surface. -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MeshWeaver.Fixture\MeshWeaver.Fixture.csproj" />
