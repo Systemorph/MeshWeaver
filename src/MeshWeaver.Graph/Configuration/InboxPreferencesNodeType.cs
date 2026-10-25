@@ -98,7 +98,11 @@ public static class InboxPreferencesNodeType
         // Untouched keys come from underneath, edited keys win: a checkbox written before the node was seeded leaves a
         // PARTIAL map ({done:true}, {unread:true}) and must not drop the other key. Underneath is the legacy global
         // choice (activities only) when the node still holds one, else the kind's default.
-        var below = kind == InboxStateKind.Activity && stored.States.Count > 0 ? stored.States : InboxStateKind.Defaults(kind);
+        // A legacy map listed what was TICKED, so a group it does not name was not ticked: it is completed to the whole
+        // vocabulary with absent = false, which keeps the same rows and makes the migrated map self-contained.
+        var below = kind == InboxStateKind.Activity && stored.States.Count > 0
+            ? InboxStateKind.Vocabulary(kind).ToImmutableDictionary(group => group, group => stored.States.TryGetValue(group, out var on) && on, StringComparer.Ordinal)
+            : InboxStateKind.Defaults(kind);
         return own.Count > 0 ? below.SetItems(own) : below;
     }
 

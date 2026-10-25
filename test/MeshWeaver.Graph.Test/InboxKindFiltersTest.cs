@@ -126,6 +126,17 @@ public class InboxKindFiltersTest
         Flat(InboxPreferencesNodeType.Completed(edited, InboxPreferencesNodeType.SeedForExisting(Sections()))!.ActivityStates).Should().Equal("done=True", "open=True");
     }
 
+    /// <summary>A legacy map naming only Done meant "Done only": the migrated map says so, and stays the same on the next read.</summary>
+    [Fact]
+    public void ALegacyMapNamingOnlyDone_MigratesToDoneOnly_AndIsStable()
+    {
+        var legacy = new InboxPreferences { States = ImmutableDictionary<string, bool>.Empty.Add("done", true) };
+        var once = InboxPreferencesNodeType.Effective(legacy);
+        Flat(once.ActivityStates).Should().Equal("done=True", "open=False");
+        once.States.Should().BeEmpty();
+        Flat(InboxPreferencesNodeType.Effective(once).ActivityStates).Should().Equal("done=True", "open=False", "the next read finds the same choice");
+    }
+
     /// <summary>A mail or chat box ticked before the node was seeded leaves a partial map; the untouched key keeps its default.</summary>
     [Fact]
     public void APartialMailOrChatMap_KeepsTheDefaultOfTheUntouchedKey()
