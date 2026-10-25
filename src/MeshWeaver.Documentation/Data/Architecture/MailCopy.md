@@ -74,17 +74,31 @@ appended — the old `{owner}/_MailCopy` with the slash replaced (`MailCopyNodeT
 
 ### Copies filed before 2026-10-25 are moved, not downloaded again
 
-Before the change the copies lived at `{owner}/_MailCopy/…`. Every sync first runs
-`IMailCopyStore.MoveLegacy(owner, key)`, which moves what is still there into the copy partition: the source
-with its generation, cursor and window (so the next sync resumes, and nothing is fetched again), then each
-copy — written at its new path, its attachment files copied (`IMailAttachmentStore.CopyLegacy`), its stored
-paths re-rooted (`MailCopyNodeTypes.Relocated`), and only then its legacy files (`DeleteLegacy`) and node
-deleted — and the legacy source last. Every step is an overwrite or a no-op when repeated, so a move that
-stops anywhere finishes on the next sync; a failure stops before the legacy files go. `Disable` moves first
-too, so a copy switched off while still at the legacy place cannot come back on the next sync.
+Before the change the copies lived at `{owner}/_MailCopy/…`. Every sync — and every switch-on and switch-off — first
+runs `IMailCopyStore.MoveLegacy(owner, key)`, which moves what is still there into the copy partition. 🚨 The move is
+FENCED, because replicas still running the previous image keep syncing the legacy place during a roll:
 
-It is the portal, not the database migration Job, that moves them: the Job does not mount the content store,
-so it could move the rows but never the files.
+1. **Fence.** The legacy source is read from its stream (the index can trail a cursor) and a generation-checked
+   commit at its owning hub takes its lease for this mover (`MoveLease`, 2 h). A sync of the legacy place, of either
+   image, then stands down; a lease that is held already refuses the move, and the next sync repeats it.
+2. **Hold the destination.** `{owner}_MailCopy/{key}` is created with the legacy generation and cursor but **not
+   backfilled** and leased to the mover, so nothing serves a half-moved copy (the inbox reads live meanwhile) and
+   nothing syncs it.
+3. **Move each copy** from complete listing frames only (an incomplete frame is a fault, never "empty"): written at
+   its new path, its attachment files copied (`IMailAttachmentStore.CopyLegacy`) and its stored paths re-rooted
+   (`MailCopyNodeTypes.Relocated`), and only then its legacy files (`DeleteLegacy`) and node deleted.
+4. **Finish only while still fenced.** The legacy source is deleted, then the destination released with its real
+   backfill state, so the next sync resumes from the cursor. A legacy source that vanished meanwhile was switched off
+   (by an old replica): what the move brought over is deleted again instead of turning the copy back on.
+
+Every step is an overwrite or a no-op when repeated, so a move that stops anywhere finishes on the next sync; a
+failure stops before any legacy file goes, and **a failed move fails the sync** — no provider work runs over a
+half-moved copy. A destination of ANOTHER generation (switched on anew) is not the move's: the moved copies are its
+leftovers, and its sweep removes them with their files. A partition called `{owner}_MailCopy` that exists and is
+NOT a copy partition (a Space, a home) is never written to: the switch fails closed.
+
+It is the portal, not the database migration Job, that moves them: the Job does not mount the content store, so it
+could move the rows but never the files.
 
 ## Layout of an account's copy
 

@@ -298,7 +298,12 @@ public sealed class MeshMailAttachmentStore(Func<IMessageHub?> hub, ILogger? log
                         .Select(file => legacy.GetContentBytes(file).Take(1)
                             .SelectMany(bytes => bytes is null
                                 ? Observable.Throw<string>(new InvalidOperationException($"The legacy attachment '{file}' of '{legacyCopyPath}' could not be read."))
-                                : m.Hub.SaveContentFile(copyPath).To(MailAttachments.Collection, file.TrimStart('/')).Post(bytes).Take(1)
+                                // 🚨 System is declared HERE, on the write itself: the bytes arrive from the I/O pool,
+                                // where the enclosing scope's identity is not guaranteed, and the builder captures the
+                                // identity when it posts.
+                                : m.Access.RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Hub
+                                        .SaveContentFile(copyPath).To(MailAttachments.Collection, file.TrimStart('/')).Post(bytes))
+                                    .Take(1)
                                     .Select(answer => answer.Success
                                         ? file
                                         : throw new InvalidOperationException($"The attachment could not be stored: {answer.Error}")))

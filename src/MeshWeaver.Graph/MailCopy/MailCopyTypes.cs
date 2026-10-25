@@ -339,12 +339,16 @@ public static class MailCopyNodeTypes
     public static string LegacySourcePath(string owner, string provider) => $"{LegacyNamespaceFor(owner)}/{provider}";
 
     /// <summary>
-    /// Whether <paramref name="owner"/> can own a copy: one user id — not empty, no <c>/</c>, and not itself
-    /// ending in <see cref="Segment"/>, whose copy partition would be named like another owner's. Pure.
+    /// Whether <paramref name="owner"/> can own a copy: one user id — not empty, no <c>/</c>, not itself ending in
+    /// <see cref="Segment"/> (the home partition of <c>jane_MailCopy</c> would be the copy partition of <c>jane</c>),
+    /// and short enough that <c>{owner}_MailCopy</c> is still a valid partition segment (63 UTF-8 bytes,
+    /// <see cref="PartitionDefinition.IsValidPartitionSegment"/>) — an owner whose copy partition could not exist
+    /// is refused at the switch, never half provisioned. Pure.
     /// </summary>
     public static bool IsValidOwner(string? owner)
         => !string.IsNullOrWhiteSpace(owner) && !owner.Contains('/')
-           && !owner.EndsWith(Segment, StringComparison.OrdinalIgnoreCase);
+           && !owner.EndsWith(Segment, StringComparison.OrdinalIgnoreCase)
+           && PartitionDefinition.IsValidPartitionSegment(owner + Segment);
 
     /// <summary>
     /// A copy's id: 128 bits of SHA-256 over the generation and the provider's message id, as 32
@@ -415,7 +419,8 @@ public static class MailCopyNodeTypes
     public static MeshNode BuildPartitionRoot(string owner) =>
         new(NamespaceFor(owner))
         {
-            Name = $"Mail copies of {owner}",
+            // The partition's own id: a stored name is read by every viewer, so it carries no language.
+            Name = NamespaceFor(owner),
             NodeType = PartitionNodeType,
             Icon = Icon,
             State = MeshNodeState.Active,

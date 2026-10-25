@@ -196,7 +196,10 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     [ImpersonationSurface]
     [MethodImpl(MethodImplOptions.NoInlining)]
     public IObservable<MailCopySource> Create(string owner, MailCopySource source)
+        // 🚨 A copy still at the legacy place is MOVED first: switched on again, it keeps its generation and cursor
+        // instead of getting a fresh source the move would then have to reconcile.
         => Gated(Assembly.GetCallingAssembly(), nameof(Create), owner, Permission.Update, () => EnsurePartition(owner)
+            .SelectMany(_ => MoveLegacyCore(owner, source.Provider))
             .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source))))
             .Select(_ => source)
             // Already there — switched on by another click or another replica: keep the first.
@@ -215,14 +218,19 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         // then spend its whole budget to say what this read says at once.
         => SourceCore(owner, provider).SelectMany(current => current is null || current.Generation != generation
             ? Observable.Return<MailCopySource?>(null)
-            : Mesh().SelectMany(m =>
+            : CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), generation, change));
+
+    // The generation-checked commit at the owning hub of the source node at PATH — the copy partition's, or the
+    // legacy one a move fences. The caller has established that the node exists (its stream never answers otherwise).
+    private IObservable<MailCopySource?> CommitAt(string owner, string path, string generation, Func<MailCopySource, MailCopySource?> change)
+        => Mesh().SelectMany(m =>
             {
                 // What the owner's (last) application of the change decided — the lambda may run again
                 // on a write conflict, so the last decision is the one that landed.
                 MailCopySource? applied = null;
                 return m.Access
                     .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Hub
-                        .GetMeshNodeStream(MailCopyNodeTypes.SourcePath(owner, provider))
+                        .GetMeshNodeStream(path)
                         // Applied at the owner to the node as it is THERE: a source switched off or
                         // rebuilt since the read above, or a lease taken by another sync, is left as it is.
                         .Update(node =>
@@ -234,7 +242,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     .Take(1)
                     .Timeout(CommitBudget)
                     .Select(_ => applied);
-            }));
+            });
 
     /// <summary>
     /// What a commit makes of the source <paramref name="node"/> as it is at the owning hub:
@@ -268,35 +276,114 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
     public IObservable<int> MoveLegacy(string owner, string provider)
         => Gated(Assembly.GetCallingAssembly(), nameof(MoveLegacy), owner, Permission.Update, () => MoveLegacyCore(owner, provider));
 
+    /// <summary>How long a move holds the legacy copy fenced before another replica may take it over.</summary>
+    public static readonly TimeSpan MoveLease = TimeSpan.FromHours(2);
+
+    // The lease holder of THIS store's moves — unique per instance, so a second mover (another replica, a
+    // concurrent Disable) is refused by the fence instead of racing this one.
+    private readonly string mover = $"move:{Guid.NewGuid():N}";
+
+    /// <summary>
+    /// The move of one legacy copy (<see cref="MoveLegacy"/>). 🚨 It is FENCED, because replicas still running the
+    /// previous image keep syncing the legacy place during a roll, and a Disable may race it:
+    /// <list type="number">
+    ///   <item><description>The legacy source is read from its STREAM (the index can trail a cursor) and then
+    ///   FENCED: a generation-checked commit at its owning hub takes its lease for this mover. A sync of the legacy
+    ///   place — of either image — then stands down, and another mover is refused. A lease held already refuses
+    ///   this move; the next sync repeats it.</description></item>
+    ///   <item><description>The destination source is created with the legacy generation and cursor but NOT
+    ///   backfilled and leased to this mover, so nothing serves or syncs a half-moved copy.</description></item>
+    ///   <item><description>The copies are moved, from complete listing frames only; then the legacy source is
+    ///   deleted — but only while this mover still holds its fence: a legacy source that vanished meanwhile was
+    ///   switched off, and what was moved is deleted again instead of turning the copy back on.</description></item>
+    ///   <item><description>Last, the destination is released with the legacy source's real backfill state, and the
+    ///   next sync resumes from its cursor.</description></item>
+    /// </list>
+    /// A destination of ANOTHER generation (the person switched a copy on anew) is not this move's: the moved copies
+    /// are its leftovers, and its own sweep removes them with their files.
+    /// </summary>
     private IObservable<int> MoveLegacyCore(string owner, string provider)
-        => LegacySource(owner, provider).SelectMany(legacy => legacy is null
+    {
+        var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
+        var sourcePath = MailCopyNodeTypes.SourcePath(owner, provider);
+        return LegacySource(owner, provider).SelectMany(legacy => legacy is null
             ? Observable.Return(0)
-            : EnsurePartition(owner)
-                // The source first, as it was — generation, cursor, window — so the moved copies stay current and
-                // the next sync resumes where the legacy one stopped. A lease it held is dropped: its holder was
-                // syncing the legacy place. Already there (an earlier, interrupted move): kept as it is.
-                .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, legacy with { LeaseHolder = null, LeaseUntil = null })))
-                    .Select(_ => 0)
-                    .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex) ? Observable.Return(0) : Observable.Throw<int>(ex)))
-                .SelectMany(_ => MovePasses(owner, provider, 1, 0))
-                .SelectMany(moved => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.LegacySourcePath(owner, provider))).Select(_ => moved))
+            : CommitAt(owner, legacyPath, legacy.Generation, Fenced)
+                .SelectMany(fenced => fenced is null
+                    ? Observable.Throw<int>(new InvalidOperationException(
+                        $"The legacy mail copy '{legacyPath}' is being synced or moved elsewhere; the next sync repeats the move."))
+                    : EnsurePartition(owner)
+                        .SelectMany(_ => Destination(owner, provider, fenced))
+                        .SelectMany(owns => MovePasses(owner, provider, 1, 0)
+                            .SelectMany(moved => StillFenced(owner, legacyPath, fenced.Generation)
+                                .SelectMany(still => still
+                                    ? Write(owner, m => m.Mesh.DeleteNode(legacyPath))
+                                        .SelectMany(_ => owns
+                                            ? CommitAt(owner, sourcePath, fenced.Generation, current => current.LeaseHolder == mover
+                                                ? current with { Backfilled = legacy.Backfilled, LeaseHolder = null, LeaseUntil = null }
+                                                : null).Select(_ => moved)
+                                            : Observable.Return(moved))
+                                    // Switched off (or taken over) while moving: what this move brought over goes again.
+                                    : owns
+                                        ? Observable.Defer(() => RotatedThenCleaned(owner, provider))
+                                            .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(sourcePath)))
+                                            .Select(_ => 0)
+                                        : Observable.Return(0)))))
                 .Do(moved => logger?.LogInformation(
                     "Mail copy: moved {Count} {Provider} copies of {Owner} into their own partition {Partition}",
                     moved, provider, owner, MailCopyNodeTypes.NamespaceFor(owner))));
+    }
 
-    // The legacy source, read as System: the person's home partition is theirs, but the move runs in the
-    // background with no viewer left (the same arrangement as every other write here).
+    // The fence: this mover's lease, taken only when no lease is held (or it is this mover's, or it lapsed). Pure.
+    private MailCopySource? Fenced(MailCopySource current)
+        => current.LeaseHolder is null || current.LeaseHolder == mover || current.LeaseUntil is not { } until || until <= DateTimeOffset.UtcNow
+            ? current with { LeaseHolder = mover, LeaseUntil = DateTimeOffset.UtcNow + MoveLease }
+            : null;
+
+    // Whether the legacy source still exists and still carries this mover's fence — read by a no-op commit at its
+    // owning hub, after an existence read (an absent node's stream never answers).
+    private IObservable<bool> StillFenced(string owner, string legacyPath, string generation)
+        => LegacyExists(owner, legacyPath).SelectMany(exists => exists
+            ? CommitAt(owner, legacyPath, generation, current => current.LeaseHolder == mover ? current : null).Select(applied => applied is not null)
+            : Observable.Return(false));
+
+    // The destination source of a move: created as the fenced legacy one, not backfilled and leased to this mover —
+    // or, when one of the SAME generation exists (an interrupted move), taken over the same way. Emits whether this
+    // move owns it; a destination of another generation is not this move's (false), and one held by another live
+    // mover refuses the move.
+    private IObservable<bool> Destination(string owner, string provider, MailCopySource fenced)
+        => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, fenced with { Backfilled = false })))
+            .Select(_ => true)
+            .Catch((Exception ex) => !MailCopyNodeTypes.IsAlreadyExists(ex)
+                ? Observable.Throw<bool>(ex)
+                : SourceCore(owner, provider).SelectMany(existing => existing is null || existing.Generation != fenced.Generation
+                    ? Observable.Return(false)
+                    : CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), fenced.Generation,
+                            current => Fenced(current) is { } taken ? taken with { Backfilled = false } : null)
+                        .SelectMany(taken => taken is null
+                            ? Observable.Throw<bool>(new InvalidOperationException(
+                                $"The mail copy '{MailCopyNodeTypes.SourcePath(owner, provider)}' is being moved elsewhere; the next sync repeats the move."))
+                            : Observable.Return(true))));
+
+    // The legacy source: FOUND through a complete listing frame (an incomplete one is a fault, never "none"), then
+    // READ from its stream, which the index can trail. As System: the move runs in the background with no viewer left.
     private IObservable<MailCopySource?> LegacySource(string owner, string provider)
+    {
+        var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
+        return LegacyExists(owner, legacyPath).SelectMany(exists => exists
+            ? Live(owner, legacyPath).SelectMany(node => Mesh().Select(m => node.ContentAs<MailCopySource>(m.Options, logger)))
+            : Observable.Return<MailCopySource?>(null));
+    }
+
+    private IObservable<bool> LegacyExists(string owner, string legacyPath)
         => Mesh().SelectMany(m => m.Access
             .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{MailCopyNodeTypes.LegacySourcePath(owner, provider)}", owner) with { Limit = 1 })
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{legacyPath}", owner) with { Limit = 1 })
                 .Take(1))
             .Take(1)
-            .Select(change => change.Items
-                .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
-                               && string.Equals(node.Path, MailCopyNodeTypes.LegacySourcePath(owner, provider), StringComparison.Ordinal))
-                .Select(node => node.ContentAs<MailCopySource>(m.Options, logger))
-                .FirstOrDefault(source => source is not null)));
+            .SelectMany(change => RejectIncompleteListing(change, nameof(MoveLegacy)))
+            .Select(change => change.Items.Any(node => string.Equals(node.NodeType, MailCopyNodeTypes.SourceNodeType, StringComparison.Ordinal)
+                                                  && string.Equals(node.Path, legacyPath, StringComparison.Ordinal))));
 
     private IObservable<int> MovePasses(string owner, string provider, int pass, int moved)
         => Mesh().SelectMany(m => m.Access
@@ -305,6 +392,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     $"namespace:{MailCopyNodeTypes.LegacySourcePath(owner, provider)} nodeType:{MailCopyNodeTypes.MessageNodeType} limit:{RemovePass}", owner) with { Limit = RemovePass })
                 .Take(1))
             .Take(1)
+            // 🚨 An empty page proves the legacy place empty only when every provider answered in full: the legacy
+            // source is deleted next, and with it whatever an incomplete frame hid.
+            .SelectMany(change => RejectIncompleteListing(change, nameof(MoveLegacy)))
             .Select(change => change.Items
                 .Where(node => string.Equals(node.NodeType, MailCopyNodeTypes.MessageNodeType, StringComparison.Ordinal)
                                && string.Equals(node.Namespace, MailCopyNodeTypes.LegacySourcePath(owner, provider), StringComparison.Ordinal))
@@ -372,10 +462,26 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 : providers.Select(p => p.EnsurePartitionProvisioned(partition)).Merge()
                     .DefaultIfEmpty(System.Reactive.Unit.Default).LastAsync();
             return provisioned
-                .SelectMany(_ => CreateIfAbsent(owner, PartitionOwnership.PartitionDefinitionNode(root, $"Mail copies of {owner}")))
+                .SelectMany(_ => ForeignRoot(m, owner, partition))
+                .SelectMany(_ => CreateIfAbsent(owner, PartitionOwnership.PartitionDefinitionNode(root, partition)))
                 .SelectMany(_ => CreateIfAbsent(owner, root))
                 .SelectMany(_ => CreateIfAbsent(owner, MailCopyNodeTypes.OwnerViewerGrant(owner)));
         });
+
+    // 🚨 Fails CLOSED when a partition of that name exists and is NOT a copy partition (a Space or a home called
+    // "jane_MailCopy"): its grants would expose the mail, and the owner's Viewer grant its content.
+    private IObservable<System.Reactive.Unit> ForeignRoot(Portal m, string owner, string partition)
+        => m.Access
+            .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{partition}") with { Limit = 1 })
+                .Take(1))
+            .Take(1)
+            .SelectMany(change => RejectIncompleteListing(change, nameof(EnsurePartition)))
+            .SelectMany(change => change.Items.FirstOrDefault(node => string.Equals(node.Path, partition, StringComparison.Ordinal)) is { } existing
+                                  && !string.Equals(existing.NodeType, MailCopyNodeTypes.PartitionNodeType, StringComparison.Ordinal)
+                ? Observable.Throw<System.Reactive.Unit>(new InvalidOperationException(
+                    $"'{partition}' exists and is not a mail copy partition (it is a {existing.NodeType}); the mail copy of '{owner}' is not written there."))
+                : Observable.Return(System.Reactive.Unit.Default));
 
     private IObservable<System.Reactive.Unit> CreateIfAbsent(string owner, MeshNode node)
         => Write(owner, m => m.Mesh.CreateNode(node))
