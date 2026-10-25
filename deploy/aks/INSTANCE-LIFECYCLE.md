@@ -21,7 +21,7 @@ So there are three principals:
 | `hosting-operator` (the Job's SA) | namespaces, releases, ingresses, and via Workload Identity the Azure control plane | the seconds a run takes |
 
 The mesh decides and orders; the Job executes. `manifests/hosting-operator/` has the RBAC,
-`operator/` has the image, and `infra/modules/backups.bicep` has the storage and the identity.
+`operator/` has the image, and `infra/platform/modules/backups.bicep` (Systemorph/Memex) has the storage and the identity.
 
 ## The lifecycle
 
@@ -64,7 +64,7 @@ reason — which is asserted in the plugin's tests.
 ```bash
 # 1. Storage + the operator identity.
 az deployment group create -g "$RG" \
-  --template-file infra/modules/backups.bicep \
+  --template-file infra/platform/modules/backups.bicep \
   --parameters location=swedencentral backupAccountName=<globally-unique> \
                oidcIssuerUrl="$(az aks show -g "$RG" -n "$CLUSTER" --query oidcIssuerProfile.issuerURL -o tsv)" \
                postgresServerId="$(az postgres flexible-server show -g "$RG" -n "$PG" --query id -o tsv)"

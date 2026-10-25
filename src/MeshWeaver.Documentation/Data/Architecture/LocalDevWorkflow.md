@@ -96,7 +96,7 @@ When you change code in `Memex.Portal.Distributed` (or any project it references
 
 ## Starting Aspire
 
-> The image-based AppHost (`deploy/aspire/Memex.Deploy.AppHost`, and any customer AppHost on the
+> The image-based AppHost (`src/Memex.Deploy.AppHost` (MeshWeaver.Plugins), and any customer AppHost on the
 > published `MeshWeaver.Aspire.Hosting.Memex` package) declares its instance as a **Deployment
 > record** — `builder.AddMemex("memex").WithImage(…).WithPluginRepo(…)…` — the same record the
 > Helm chart renders from and the portal binds at boot (`Deployment:Record`). `--record-out

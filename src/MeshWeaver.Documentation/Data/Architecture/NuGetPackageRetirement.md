@@ -26,7 +26,7 @@ unlisted on nuget.org.
 
 | Package | Project | What it is |
 |---|---|---|
-| `MeshWeaver.Aspire.Hosting.Memex` | `memex/aspire/Memex.Aspire.Hosting` (this repository) | The Aspire hosting integration. `builder.AddMemex()` wires Postgres (pgvector), the one-shot migration and the portal from published GHCR images, and publishes to Docker Compose, Kubernetes/Helm or Azure Container Apps. |
+| `MeshWeaver.Aspire.Hosting.Memex` | `src/Memex.Aspire.Hosting` (MeshWeaver.Plugins; moved from this repository's `memex/aspire`) | The Aspire hosting integration. `builder.AddMemex()` wires Postgres (pgvector), the one-shot migration and the portal from published GHCR images, and publishes to Docker Compose, Kubernetes/Helm or Azure Container Apps. |
 | `MeshWeaver.MemexTemplate` | `tools/MeshWeaver.MemexTemplate.Pack` (**MeshWeaver.Plugins**) | The `dotnet new` template pack that writes a portal solution. |
 
 Both survive for the same reason: **they are entry points, not platform bytes.** One writes the

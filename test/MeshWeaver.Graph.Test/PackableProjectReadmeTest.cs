@@ -13,19 +13,20 @@ namespace MeshWeaver.Graph.Test;
 /// <summary>
 /// What this repository still publishes to nuget.org, and the README every package needs.
 ///
-/// <para>Two assertions, one subject. <b>The set</b>: exactly two projects here pack —
-/// <c>memex/aspire/Memex.Aspire.Hosting</c> (<c>MeshWeaver.Aspire.Hosting.Memex</c>) and
+/// <para>Two assertions, one subject. <b>The set</b>: exactly one project here packs —
 /// <c>src/MeshWeaver.Cli</c> (<c>MeshWeaver.Cli</c>, policy <c>cli-thin-wrapper-own-version</c>). Everything
 /// else under the MeshWeaver prefix was retired on 2026-09-07 and the packages unlisted
-/// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the second survivor,
-/// <c>MeshWeaver.MemexTemplate</c>, lives in MeshWeaver.Plugins and is out of this tree's reach.
+/// (<c>Doc/Architecture/NuGetPackageRetirement</c>); the other two survivors,
+/// <c>MeshWeaver.Aspire.Hosting.Memex</c> (moved from <c>memex/aspire</c> with the core-slimming carve)
+/// and <c>MeshWeaver.MemexTemplate</c>, are packed in MeshWeaver.Plugins and are out of this tree's reach.
 /// <b>The README</b>: Directory.Build.props does <c>&lt;None Include="README.md" Pack="true"&gt;</c>
 /// for ALL projects and declares <c>PackageReadmeFile</c>, so a packable project without one does
 /// not merely ship a bare listing — <c>dotnet pack</c> FAILS it with <c>NU5019: File not found</c>.</para>
 ///
 /// <para>🚨 Both failures land at the worst possible moment. <c>dotnet build</c> does not pack, so
-/// CI is green, review is green, and the gap first appears when a <c>v*.*.*</c> tag runs
-/// <c>publish-packages.yml</c> — after the tag is public. That is exactly how v3.0.0-rc7 went out:
+/// CI is green, review is green, and the gap first appears when <c>publish-packages.yml</c>
+/// packs for a release — after the release is announced (until the Aspire integration moved to
+/// MeshWeaver.Plugins, a public <c>v*.*.*</c> tag triggered it). That is exactly how v3.0.0-rc7 went out:
 /// MeshWeaver.Speech.Contract was added without a README and the whole NuGet publish died at Pack.</para>
 ///
 /// <para>🚨 Why the SET is asserted and not just the READMEs. <c>IsPackable</c> now defaults to
@@ -38,12 +39,10 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 public class PackableProjectReadmeTest
 {
-    /// <summary>The projects in this repository that still produce a NuGet package: the Aspire
-    /// integration (release tags) and the <c>memex</c> CLI (its own version, released on demand —
-    /// policy <c>cli-thin-wrapper-own-version</c>).</summary>
+    /// <summary>The projects in this repository that still produce a NuGet package: the <c>memex</c>
+    /// CLI (its own version, released on demand — policy <c>cli-thin-wrapper-own-version</c>).</summary>
     private static readonly string[] ExpectedPackableProjects =
     [
-        Path.Combine("memex", "aspire", "Memex.Aspire.Hosting", "Memex.Aspire.Hosting.csproj"),
         Path.Combine("src", "MeshWeaver.Cli", "MeshWeaver.Cli.csproj"),
     ];
 
