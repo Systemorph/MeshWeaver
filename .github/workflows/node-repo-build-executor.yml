@@ -1,0 +1,121 @@
+name: Build executor — a standing build host, or GitHub Actions
+
+# ♻️ REUSABLE (workflow_call) — ONE job per run that answers WHO runs the run's heavy legs
+# (MeshWeaver.Plugins `Hosting/StandingBuildHosts` §7 H7; platform reference
+# Doc/Architecture/BuildHosts "Every repository on the hosts"). For a repository with no admission job
+# of its own (the satellites); MeshWeaver.Plugins asks the same question inside its `admission` job,
+# with the same script.
+#
+#   executor:
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-build-executor.yml@main
+#     permissions: { contents: read }
+#     secrets:
+#       build-webhook-secret: ${{ secrets.BUILD_WEBHOOK_SECRET }}
+#   compile-check-follow:                 # only when the host runs the stage
+#     needs: [executor]
+#     if: ${{ !cancelled() && needs.executor.outputs.executor == 'host' }}
+#     uses: Systemorph/MeshWeaver/.github/workflows/build-follow.yml@main
+#     permissions: { contents: read, id-token: write }
+#     with: { api-url: "${{ needs.executor.outputs.api-url }}", stage: compile-check }
+#   compile-check:                        # the REQUIRED context, unchanged by name
+#     needs: [executor, compile-check-follow]
+#     if: ${{ !cancelled() }}
+#     uses: Systemorph/MeshWeaver/.github/workflows/node-repo-compile-check.yml@main
+#     with:
+#       executor: ${{ needs.executor.outputs.executor || 'actions' }}
+#       host-verdict: ${{ needs.compile-check-follow.result }}
+#
+# 🚨 DORMANT UNTIL THE INSTANCE SAYS SO: `host` requires the repository to declare its stages
+# (`.github/build-stages.json`), the operations instance to answer `"executor":"host"` for it
+# (`GET /api/builds/queue?repo=`), and the signed `build-request` to be accepted and verified. Any
+# failure answers `actions` — today's behaviour — and says why (build-executor.py). The job itself
+# never fails on the instance's account; it fails only on a malformed input.
+#
+# 🛡️ NO SECRET IS REQUIRED TO RUN: without `build-webhook-secret` (a fork, Dependabot) the answer is
+# `actions`, said. Permissions: `contents: read` only — inside GitHub's restricted default, so a caller
+# that grants nothing still satisfies it (.github/lane-caller-grants.yml).
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: The build channel the run is queued on (default latest — the one that publishes).
+        required: false
+        type: string
+        default: latest
+      main-sha:
+        description: >-
+          Pull requests only: the base tip the heavy legs merge the head onto (policy
+          suites-test-fresh-merge). Sent as the request's base so the host merges onto the SAME main.
+          Empty = the host resolves the tip once, as the Actions legs would.
+        required: false
+        type: string
+        default: ''
+      change-mode:
+        description: The caller's change-set mode, carried on the request (informative).
+        required: false
+        type: string
+        default: ''
+      scripts-ref:
+        description: The ref of Systemorph/MeshWeaver whose build-executor.py runs (default main).
+        required: false
+        type: string
+        default: main
+    secrets:
+      build-webhook-secret:
+        description: The org's BUILD_WEBHOOK_SECRET — signs the build-request. Absent = actions, said.
+        required: false
+    outputs:
+      executor:
+        description: "`host` or `actions` — never empty once this job ran."
+        value: ${{ jobs.executor.outputs.executor }}
+      api-url:
+        description: The build API base the follow jobs read (https://<instance>/api/builds); empty with `actions` when none is configured.
+        value: ${{ jobs.executor.outputs.api-url }}
+
+jobs:
+  executor:
+    name: Who runs the heavy legs (build host or Actions)
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      executor: ${{ steps.decide.outputs.executor }}
+      api-url: ${{ steps.decide.outputs.api-url }}
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - name: The repository's stage declaration (head)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          sparse-checkout: .github/build-stages.json
+          sparse-checkout-cone-mode: false
+      - name: The executor script (self-test first)
+        env:
+          REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/mw-core-file" "$REF" .github/scripts/build-executor.py > "$RUNNER_TEMP/build-executor.py"
+          python3 "$RUNNER_TEMP/build-executor.py" --self-test
+      - name: Ask the operations instance (host or actions)
+        id: decide
+        env:
+          QUEUE_URL: ${{ vars.BUILD_WEBHOOK_URL }}
+          QUEUE_SECRET: ${{ secrets.build-webhook-secret }}
+          BUILD_API: ${{ vars.MW_BUILD_API }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+          PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+          BASE_REF: ${{ github.event.pull_request.base.ref || '' }}
+          MAIN_SHA: ${{ inputs.main-sha }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REQUESTED_BY: ${{ github.actor }}
+          CHANGE_MODE: ${{ inputs.change-mode }}
+          CHANNEL: ${{ inputs.channel }}
+        run: python3 "$RUNNER_TEMP/build-executor.py"
