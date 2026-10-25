@@ -350,7 +350,7 @@ public sealed class MeshServiceProvider :
             foreach (var registration in registry.All)
             {
                 registration.SingletonSlot = null;
-                registration.ClosedSingletons = ImmutableDictionary<Type, InstanceSlot>.Empty;
+                registration.ReleaseClosedSingletons();
             }
         return true;
     }
@@ -527,7 +527,7 @@ public sealed class MeshServiceProvider :
     private MeshServiceProvider SingletonHolder(ServiceRegistration registration, MeshServiceProvider owner) =>
         owner.IsContainerRoot && !ReferenceEquals(level, owner)
                               && !ReferenceEquals(registration.Identity, registration)
-                              && NamesACollectibleAssembly(registration.ServiceType)
+                              && registration.NamesACollectibleAssembly
             ? level
             : owner;
 
@@ -540,8 +540,8 @@ public sealed class MeshServiceProvider :
                 return registration.SingletonSlot ?? Interlocked.CompareExchange(ref registration.SingletonSlot, new InstanceSlot(), null)
                     ?? registration.SingletonSlot!;
             if (registration.Identity is ServiceRegistration open && ReferenceEquals(open.Registry, registry)
-                && !NamesACollectibleAssembly(id.Type))
-                return ImmutableInterlocked.GetOrAdd(ref open.ClosedSingletons, id.Type, _ => new InstanceSlot());
+                && !(registration.ServiceType == id.Type ? registration.NamesACollectibleAssembly : NamesACollectibleAssembly(id.Type)))
+                return ImmutableInterlocked.GetOrAdd(ref open.OpenState.Singletons, id.Type, _ => new InstanceSlot());
         }
         return SlotIn(registration, id);
     }

@@ -117,3 +117,29 @@ container directly, through an empty level, and with every registration on a lev
 
 See [The Portal Heap Is Hubs](../PortalHeapIsHubs) → *Per-hub DI and type metadata* for the 516-hub
 test-mesh measurement before and after the replacement.
+
+## Speed
+
+Measured against Autofac with the same stopwatch harness on both sides (MeshWeaver#7147):
+
+- **Per operation** it is 2–7× faster single-threaded (a root singleton resolved in a hub: 136 → 26 ns;
+  a transient built with the hub's dependencies: 358 → 148 ns; the hub's 18 `INodeValidator`s:
+  2.0 → 1.0 µs) and allocates nothing for a cached instance (656–808 B per resolve before).
+- **A hub's level** is built and disposed in ~1.5 µs (23 µs before) with 5 KB (60 KB); a hosted hub
+  with a data source, end to end, 227–368 µs against 380–556 µs.
+- **Concurrent resolves scale**: eight threads resolving from one hub run 5–16× faster than before,
+  where the old scope-wide lock serialised them.
+- **A closed open generic** (`ILogger<T>`, `IOptions<T>`) is closed ONCE per closed type: the open
+  registration caches each closure with its collectible check and its constructor plan, so a cached
+  resolve re-runs no `MakeGenericType` and allocates nothing — 220–225 ns and 256 B per resolve before,
+  49–52 ns and 0 B after, with a hub level's build and dispose unchanged (`MeshServiceProviderTest`).
+  The cache is instance-owned, on the open registration, and split by what it closes over: a closure
+  over a collectible type (a NodeType's compiled type, a module's) is keyed WEAKLY in a
+  `ConditionalWeakTable`, so it never pins its load context (`ACollectibleTypeIsNeverHeldByTheRootTest`;
+  a strong cache there turns it red); every other closure is held strongly, because its type lives as
+  long as the process anyway. 🚨 Not one weak table for both: measured, a weak table on the common
+  path added ~50% to a hub level's build and dispose (1.0 → 1.5 µs) — every garbage collection scans
+  its dependent handles.
+- **Test suites**: CI elapsed times of the hub-heavy suites are unchanged within the noise
+  (Messaging.Hub 518 s, SD 4 s over 15 runs), because they are bounded by waits, not resolves — except
+  Compiler.Pipeline.Test, 533 → 470 s (−6σ), all of it in the teardown gaps after compile-heavy classes.
