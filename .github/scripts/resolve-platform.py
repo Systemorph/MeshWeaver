@@ -2580,6 +2580,62 @@ def set_run(text: str | None) -> int | None:
     return int(m.group(2)) if m else None
 
 
+def _split_version(text: str | None) -> tuple[list[int], list[str]] | None:
+    """`(numeric core, pre-release identifiers)`, or None for a string that is no version — the
+    Python twin of `PlatformReleaseOrder.TrySplit` (build metadata dropped, 1-4 numeric parts)."""
+    value = (text or "").strip().split("+", 1)[0]
+    if not value:
+        return None
+    core, dash, pre = value.partition("-")
+    parts = core.split(".")
+    if not 1 <= len(parts) <= 4 or not all(p.isdigit() and p.isascii() for p in parts):
+        return None
+    return [int(p) for p in parts], (pre.split(".") if dash else [])
+
+
+def _build_ordinal(text: str | None) -> int | None:
+    """The CD run a version was published by, or None — `PlatformReleaseOrder.BuildOrdinal`: `-dev`
+    is 0, a `ci`/`edge` label followed by a number decides, else a SemVer-era patch above 0."""
+    split = _split_version(text)
+    if split is None:
+        return None
+    core, pre = split
+    if len(pre) == 1 and pre[0].lower() == "dev":
+        return 0
+    for label, number in zip(pre, pre[1:]):
+        if label.lower() in ("ci", "edge") and number.isdigit() and number.isascii():
+            return int(number)
+    if len(pre) > 1 or (len(pre) == 1 and pre[0].lower() != "edge") or len(core) != 3:
+        return None
+    if (core[0], core[1]) < SEMVER_ERA_START or core[2] <= 0:
+        return None
+    return core[2]
+
+
+def floor_admits(floor: str | None, version: str) -> bool:
+    """Whether a release FLOOR (`minMeshVersion`) admits `version` — `PlatformFloor.Evaluate` in
+    src/MeshWeaver.Plugin.Packaging/PlatformFloor.cs, of which only `Held` refuses. Two published
+    builds compare by run number; otherwise the NUMERIC cores decide, so a release floor such as
+    `3.1.0` admits `3.1.10412` and `4.0.0` does not. A comparison that cannot be made (an unreadable
+    side, a source build, a labelled floor on an equal core) is advisory and admits, exactly as the
+    installer does. Pure."""
+    if floor is None or not floor.strip():
+        return True
+    f, v = _split_version(floor), _split_version(version)
+    if f is None or v is None:
+        return True
+    fo, vo = _build_ordinal(floor), _build_ordinal(version)
+    if fo == 0 or vo == 0:
+        return True
+    if fo is not None and vo is not None:
+        return fo <= vo
+    width = max(len(f[0]), len(v[0]))
+    fc, vc = f[0] + [0] * (width - len(f[0])), v[0] + [0] * (width - len(v[0]))
+    if fc == vc:
+        return True  # equal cores: satisfied, or (a labelled floor) advisory — never held
+    return fc < vc
+
+
 class PackageBounds(NamedTuple):
     """A package's authored platform bounds, from `<Package>/index.json` `content`."""
     package: str
@@ -2608,15 +2664,26 @@ def read_package_bounds(root: str) -> list[PackageBounds]:
 
         def text(key: str) -> str | None:
             value = content.get(key)
-            return value.strip() if isinstance(value, str) and value.strip() else None
+            if value is None:
+                return None
+            if not isinstance(value, str):
+                # 🚨 A bound of the wrong JSON type is NOT "no bound": `"maxMeshVersion": 10400`
+                # read as absent would admit the package uncapped and drop it from the published
+                # cap set (and with it its deployment's retention record).
+                raise ResolutionError(
+                    f"{name}/index.json: `{key}` is a JSON {type(value).__name__}, not a string — "
+                    f"write it as a quoted platform version (e.g. \"{key}\": \"3.1.10400\"); a bound "
+                    "of the wrong type is never read as no bound.")
+            return value.strip() or None
         out.append(PackageBounds(name, text(FLOOR_FIELD), text(CAP_FIELD),
                                  text(CAP_REASON_FIELD), text(CAP_TRACKING_FIELD)))
     return out
 
 
-def highest_in_range(floor_run: int | None, cap_run: int, deployed: list[Deployed]) -> Deployed | None:
-    """The highest COMPLETE deployment (scaled to zero or not) at or above the floor and at or below the cap, or None."""
-    fits = [d for d in deployed if d.complete and d.run <= cap_run and (floor_run is None or d.run >= floor_run)]
+def highest_in_range(floor: str | None, cap_run: int, deployed: list[Deployed]) -> Deployed | None:
+    """The highest COMPLETE deployment (scaled to zero or not) the floor admits (`floor_admits`, release floors included) and
+    at or below the cap, or None."""
+    fits = [d for d in deployed if d.complete and d.run <= cap_run and floor_admits(floor, d.version)]
     return max(fits, key=lambda d: d.run) if fits else None
 
 
@@ -2646,11 +2713,10 @@ def cap_shape_errors(bounds: list[PackageBounds]) -> list[str]:
             errors.append(f"{where}: `{CAP_FIELD}` needs `{CAP_TRACKING_FIELD}` — the node path of the "
                           "item tracking the migration to `latest`.")
         if cap_run is not None and b.floor is not None:
-            floor_run = set_run(b.floor)
-            if floor_run is None:
-                errors.append(f"{where}: `{FLOOR_FIELD}: {b.floor}` is not a platform set, so the cap "
-                              f"`{b.cap}` cannot be ordered against it.")
-            elif cap_run < floor_run:
+            if _split_version(b.floor) is None:
+                errors.append(f"{where}: `{FLOOR_FIELD}: {b.floor}` is not a platform version, so the "
+                              f"cap `{b.cap}` cannot be ordered against it.")
+            elif not floor_admits(b.floor, b.cap):
                 errors.append(f"{where}: `{CAP_FIELD}: {b.cap}` is BELOW `{FLOOR_FIELD}: {b.floor}` — "
                               "no platform satisfies both.")
     return errors
@@ -2686,7 +2752,7 @@ def check_caps(bounds: list[PackageBounds], hosts: "HttpBuildHosts | None") -> l
     except ResolutionError as error:
         return errors + [str(error)]
     for b in binding:
-        if highest_in_range(set_run(b.floor), set_run(b.cap), deployed) is None:
+        if highest_in_range(b.floor, set_run(b.cap), deployed) is None:
             errors.append(
                 f"{b.package}/index.json: no COMPLETE build-server deployment lies in "
                 f"[{b.floor or 'no floor'}, {b.cap}] (retained: "
@@ -2710,10 +2776,9 @@ def partition_packages(bounds: list[PackageBounds], hosts: "HttpBuildHosts", lat
     deployed: list[Deployed] | None = None
     problems: list[str] = []
     for b in bounds:
-        floor_run = set_run(b.floor)
         cap_run = set_run(b.cap)
         if cap_run is None or cap_run >= latest_run:
-            if floor_run is not None and floor_run > latest_run:
+            if not floor_admits(b.floor, latest):
                 problems.append(f"{b.package}: its floor {b.floor} is above `latest` ({latest}) — it "
                                 "waits for a newer switch.")
                 continue
@@ -2721,7 +2786,7 @@ def partition_packages(bounds: list[PackageBounds], hosts: "HttpBuildHosts", lat
             continue
         if deployed is None:
             deployed = hosts.deployed()
-        fit = highest_in_range(floor_run, cap_run, deployed)
+        fit = highest_in_range(b.floor, cap_run, deployed)
         if fit is None:
             problems.append(f"{b.package}: no COMPLETE deployment in [{b.floor or 'no floor'}, {b.cap}] "
                             f"(retained: {retained_text(deployed)}).")
@@ -2760,13 +2825,71 @@ def check_caps_main(root: str, api: str, token: str) -> int:
     return 0
 
 
-def resolve_build_hosts(api: str, token: str, packages_root: str | None) -> tuple[str, dict[str, list[str]] | None]:
-    """`(latest set, partitions or None)` for `--from-build-hosts`. Raises ResolutionError (RED)."""
+def resolve_build_hosts(api: str, token: str, packages_root: str | None
+                        ) -> tuple[str, "HttpBuildHosts", list[PackageBounds] | None]:
+    """`(latest set, the build hosts, package bounds or None)` for `--from-build-hosts`, read BEFORE
+    any GitHub read so an unreadable answer or a malformed cap is RED first. The partitions are NOT
+    computed here: they are derived from the set the run actually TAKES (`build_hosts_rows`), which a
+    freeze can make different from `latest`. Raises ResolutionError (RED)."""
     hosts = HttpBuildHosts(api, token)
     latest = hosts.latest()
-    partitions = (partition_packages(read_package_bounds(packages_root), hosts, latest)
-                  if packages_root else None)
-    return latest, partitions
+    bounds = read_package_bounds(packages_root) if packages_root else None
+    if bounds is not None:
+        shape = cap_shape_errors(bounds)
+        if shape:
+            raise ResolutionError("the package caps are malformed:\n  " + "\n  ".join(shape))
+    return latest, hosts, bounds
+
+
+def build_hosts_rows(rows: dict[str, str], latest: str, hosts: "HttpBuildHosts",
+                     bounds: list[PackageBounds] | None) -> dict[str, str]:
+    """The build-hosts output keys over the rows of the set the run TOOK: `latest-deployment` is what
+    the alias names, and `partitions` is derived from `rows["set"]` — so under an incident freeze the
+    uncapped packages build on the FROZEN set the main `set` names, never on `latest` beside it.
+    Raises ResolutionError (RED) when a package has no fit against that set."""
+    out = dict(rows)
+    out["latest-deployment"] = latest
+    if bounds is not None:
+        partitions = partition_packages(bounds, hosts, rows["set"])
+        require_complete_deployment(partitions, rows["set"], latest, hosts)
+        out["partitions"] = json.dumps(partitions, sort_keys=True, separators=(",", ":"))
+    return out
+
+
+def require_complete_deployment(partitions: dict[str, list[str]], taken: str, latest: str,
+                                hosts: "HttpBuildHosts") -> None:
+    """RED unless every package put on the set the run TOOK has a retained COMPLETE build-server
+    deployment to build against. `latest` is already verified complete by `HttpBuildHosts.latest()`
+    and a capped package's fit is chosen among complete deployments, so only a set that differs
+    from `latest` — an incident freeze — needs this read: `choose()` proves the freeze's seal and
+    images, never that the build hosts carry it (#7199 review)."""
+    packages = partitions.get(taken)
+    if not packages or set_run(taken) == set_run(latest):
+        return
+    row = next((d for d in hosts.deployed() if d.run == set_run(taken)), None)
+    if row is not None and row.complete:
+        return
+    why = ("no retained deployment carries it" if row is None
+           else "its deployment is not complete in the record")
+    raise ResolutionError(
+        f"the set this run took ({taken}) has no build-server deployment to build "
+        f"{', '.join(packages)} against — {why} (retained: {retained_text(hosts.deployed())}). "
+        "A freeze names ONE set and may not substitute `latest` for it: request and test the "
+        "BuildHostDeploy of that sealed set first, then re-run.")
+
+
+def baseline_for_mode(baseline: dict[str, str] | None, build_hosts: bool,
+                      log: Callable[[str], None] = print) -> dict[str, str] | None:
+    """The baseline `refresh` may keep — NONE in build-host mode. `refresh` keeps a baseline when the
+    re-resolution fails or names an older set; with `--from-build-hosts` either would emit a `set`
+    that disagrees with `latest-deployment` and `partitions`, so this mode verifies and emits the
+    deployment it selected, or is RED. Pure apart from the log line."""
+    if baseline is None or not build_hosts:
+        return baseline
+    log(f"::notice title=Baseline not consulted in build-host mode::{BASELINE_ENV} names "
+        f"{baseline.get('set', baseline.get('run-number'))}; with --from-build-hosts the set is the "
+        "one the build hosts' `latest` names, verified this run, or the run is RED — never a kept baseline")
+    return None
 
 
 class _FakeBuildApi:
@@ -2976,6 +3099,95 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
         text = red(lambda: partition_packages([capped], built, built.latest()))
         check("a deployment below the floor is never taken for a capped package", "Capped" in text, text)
 
+    # ── release floors follow PlatformFloor.Evaluate (#7192 review): run numbers between two
+    #    published builds, numeric cores otherwise — consistently in validation, range and partition ──
+    check("a release floor 3.1.0 admits 3.1.10412; 4.0.0 does not; a run floor orders by run",
+          floor_admits("3.1.0", "3.1.10412") and not floor_admits("4.0.0", "3.1.10412")
+          and not floor_admits("3.1.10500", "3.1.10412") and floor_admits("3.0.0-ci.9000", "3.1.10400")
+          and floor_admits("3.0.0", "3.0.0-ci.7977") and not floor_admits("3.1.0", "3.0.0-ci.9999")
+          and floor_admits(None, "3.1.10412"))
+    check("a cap with a RELEASE floor (3.1.0) is well-formed — the floor is a version, not a set",
+          cap_shape_errors([ok._replace(floor="3.1.0")]) == [], cap_shape_errors([ok._replace(floor="3.1.0")]))
+    check("a release floor ABOVE the cap (4.0.0 over 3.1.10400) is RED",
+          any("BELOW" in e for e in cap_shape_errors([ok._replace(floor="4.0.0")])))
+    check("a floor that is no version at all is RED next to a cap",
+          any("not a platform version" in e for e in cap_shape_errors([ok._replace(floor="main")])))
+    with _FakeBuildApi({route: ready_latest}) as api:
+        built = HttpBuildHosts(api.url)
+        text = red(lambda: partition_packages([B("Next", "4.0.0", None, None, None)], built, built.latest()))
+        check("an uncapped package with release floor 4.0.0 is RED on latest 3.1.10412, never put on it",
+              "above `latest`" in text and "Next" in text, text)
+        parts = partition_packages([B("Line", "3.1.0", None, None, None)], built, built.latest())
+        check("NEGATIVE: an uncapped package with release floor 3.1.0 builds on latest 3.1.10412",
+              parts == {"3.1.10412": ["Line"]}, parts)
+    deployed_rows = [Deployed("3.1.10398", 10398, True), Deployed("3.0.0-ci.9000", 9000, True)]
+    fit = highest_in_range("3.1.0", 10400, deployed_rows)
+    check("the range honours a release floor: 3.1.0 admits 3.1.10398, never 3.0.0-ci.9000",
+          fit is not None and fit.version == "3.1.10398"
+          and highest_in_range("3.1.0", 9500, deployed_rows) is None, fit)
+
+    # ── a bound of the wrong JSON type is RED, never "no bound" (#7192 review) ──
+    with tempfile.TemporaryDirectory() as typed:
+        os.makedirs(os.path.join(typed, "Numeric"))
+        with open(os.path.join(typed, "Numeric", "index.json"), "w", encoding="utf-8") as handle:
+            json.dump({"id": "Numeric", "content": {CAP_FIELD: 10400}}, handle)
+        text = red(lambda: read_package_bounds(typed))
+        check("`maxMeshVersion: 10400` (a number) is RED naming the field and the type",
+              CAP_FIELD in text and "int" in text and "Numeric" in text, text)
+        with open(os.path.join(typed, "Numeric", "index.json"), "w", encoding="utf-8") as handle:
+            json.dump({"id": "Numeric", "content": {CAP_FIELD: None, FLOOR_FIELD: "  ", CAP_REASON_FIELD: ""}}, handle)
+        got = read_package_bounds(typed)
+        check("NEGATIVE: null, blank and empty bounds still read as absent",
+              got == [PackageBounds("Numeric", None, None, None, None)], got)
+
+    # ── a freeze in build-host mode: the partitions follow the set TAKEN (#7192 review, P1) ──
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10398", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        free = [B("Free", None, None, None, None)]
+        frozen = build_hosts_rows({"set": "3.1.10398", "run-number": "10398"}, built.latest(), built, free)
+        check("under a freeze to 3.1.10398 an uncapped package builds on the FROZEN set, not on latest",
+              json.loads(frozen["partitions"]) == {"3.1.10398": ["Free"]}
+              and frozen["latest-deployment"] == "3.1.10412" and frozen["set"] == "3.1.10398", frozen)
+        unfrozen = build_hosts_rows({"set": "3.1.10412", "run-number": "10412"}, built.latest(), built, free)
+        check("NEGATIVE CONTROL: without a freeze the set taken IS latest, and so are the partitions",
+              json.loads(unfrozen["partitions"]) == {"3.1.10412": ["Free"]}, unfrozen)
+        check("no --packages-root: no `partitions` key, `latest-deployment` still written",
+              "partitions" not in build_hosts_rows({"set": "3.1.10412"}, "3.1.10412", built, None))
+
+    # ── a freeze must name a retained COMPLETE deployment before packages build on it (#7199 review) ──
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10398", False))}) as api:
+        built = HttpBuildHosts(api.url)
+        free = [B("Free", None, None, None, None)]
+        text = red(lambda: build_hosts_rows({"set": "3.1.10398", "run-number": "10398"},
+                                            built.latest(), built, free))
+        check("under a freeze to a set whose deployment is NOT complete, the partition is RED naming it",
+              "3.1.10398" in text and "not complete" in text and "Free" in text, text)
+        text = red(lambda: build_hosts_rows({"set": "3.1.10390", "run-number": "10390"},
+                                            built.latest(), built, free))
+        check("under a freeze to a set no retained deployment carries, the partition is RED naming it",
+              "3.1.10390" in text and "no retained deployment" in text and "Free" in text, text)
+    with _FakeBuildApi({route: hosts("3.1.10412", ("3.1.10412", True), ("3.1.10398", True))}) as api:
+        built = HttpBuildHosts(api.url)
+        frozen = build_hosts_rows({"set": "3.1.10398", "run-number": "10398"}, built.latest(), built,
+                                  [B("Free", None, None, None, None)])
+        check("NEGATIVE CONTROL: a freeze to a retained COMPLETE deployment still partitions onto it",
+              json.loads(frozen["partitions"]) == {"3.1.10398": ["Free"]}, frozen)
+
+    # ── build-host mode keeps NO baseline (#7192 review, P1) ──
+    base = {"set": "3.1.10412", "run-number": "10412"}
+    quiet_log: list[str] = []
+
+    def failing() -> Chosen:
+        raise ResolutionError("the selected deployment's images are gone")
+    kept, _ = refresh(base, failing, log=quiet_log.append)
+    check("NEGATIVE CONTROL: refresh() keeps a baseline when the re-resolution fails — the hazard",
+          kept["set"] == "3.1.10412" and kept["override"] == "false", kept)
+    notes: list[str] = []
+    check("in build-host mode the baseline is not consulted (so a failed verification is RED) and says so",
+          baseline_for_mode(base, True, notes.append) is None and any("not consulted" in n for n in notes), notes)
+    check("NEGATIVE: outside build-host mode the baseline is kept for refresh()",
+          baseline_for_mode(base, False, notes.append) is base)
+
     # ── end to end: `latest` resolves through the freeze path — that set or RED ──
     sha_a, sha_b = "a" * 40, "b" * 40
     d1, d2 = "sha256:" + "1" * 64, "sha256:" + "2" * 64
@@ -2988,7 +3200,7 @@ def self_test_build_hosts() -> tuple[int, list[str]]:
     quiet: list[str] = []
     newest = choose(_fetch_for(runs, jobs), registry, DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE, log=quiet.append)
     with _FakeBuildApi({route: hosts("3.0.0-ci.8203", ("3.0.0-ci.8203", True))}) as api:
-        latest, _ = resolve_build_hosts(api.url, "", None)
+        latest, _, _ = resolve_build_hosts(api.url, "", None)
         took = choose(_fetch_for(runs, jobs), registry, DEFAULT_TESTER_IMAGE, DEFAULT_PORTAL_IMAGE,
                       freeze=latest, log=quiet.append, freeze_source="the build hosts' `latest` deployment")
     check("NEGATIVE CONTROL: without the mode the newest sealed set (8207) is taken", newest.run_number == 8207, newest)
@@ -5181,7 +5393,8 @@ def main() -> int:
     # unreadable answer is RED even where a baseline exists, so nothing downstream can turn it into
     # "keep what we had" or "take the newest sealed set" (DeployTestSwitchLatest §4).
     hosts_latest: str | None = None
-    hosts_partitions: dict[str, list[str]] | None = None
+    hosts_api: HttpBuildHosts | None = None
+    hosts_bounds: list[PackageBounds] | None = None
     if arguments.packages_root and not arguments.from_build_hosts:
         print("::error title=--packages-root needs --from-build-hosts::the per-package resolution "
               "reads the build-server deployments; pass --from-build-hosts <build API> as well")
@@ -5193,7 +5406,7 @@ def main() -> int:
                   "--passed-ceiling choose from the sealed-run listing. Pass one or the other.")
             return 1
         try:
-            hosts_latest, hosts_partitions = resolve_build_hosts(
+            hosts_latest, hosts_api, hosts_bounds = resolve_build_hosts(
                 arguments.from_build_hosts, os.environ.get(BUILD_API_TOKEN_ENV, ""),
                 arguments.packages_root or None)
         except ResolutionError as error:
@@ -5203,7 +5416,8 @@ def main() -> int:
         print(f"build hosts: `latest` names {hosts_latest}")
         if arguments.freeze:
             print(f"::notice title=Freeze wins over the build hosts::MW_PLATFORM_REF={arguments.freeze} "
-                  f"is an incident instruction; `latest` ({hosts_latest}) is not taken this run")
+                  f"is an incident instruction; `latest` ({hosts_latest}) is not taken this run"
+                  + ("; the package partitions are derived from the FROZEN set" if hosts_bounds is not None else ""))
 
     token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
     if not token:
@@ -5271,12 +5485,11 @@ def main() -> int:
                                               f"{arguments.from_build_hosts})"))
 
     def hosts_rows(rows: dict[str, str]) -> dict[str, str]:
-        """The build-hosts keys, written only in that mode (a consumer that adopts it reads them)."""
-        if hosts_latest is not None:
-            rows["latest-deployment"] = hosts_latest
-            if hosts_partitions is not None:
-                rows["partitions"] = json.dumps(hosts_partitions, sort_keys=True, separators=(",", ":"))
-        return rows
+        """The build-hosts keys, written only in that mode (a consumer that adopts it reads them),
+        derived from the set the run TOOK (a freeze included). Raises ResolutionError (RED)."""
+        if hosts_latest is None or hosts_api is None:
+            return rows
+        return build_hosts_rows(rows, hosts_latest, hosts_api, hosts_bounds)
     # 🚨 THE FLOOR BINDS EVERY PATH — read BEFORE the choice so a malformed declaration is a red
     # here and not a surprise after a successful resolution, and applied to whatever set was
     # chosen, by whatever route (newest sealed, ceiling, freeze, or a kept baseline).
@@ -5301,7 +5514,9 @@ def main() -> int:
         return 1
 
     try:
-        baseline = load_baseline(os.environ.get(BASELINE_ENV))
+        # 🚨 Build-host mode has NO baseline fallback: a kept baseline would emit a `set` that
+        # disagrees with `latest-deployment` and `partitions` (baseline_for_mode).
+        baseline = baseline_for_mode(load_baseline(os.environ.get(BASELINE_ENV)), hosts_latest is not None)
         if baseline is not None:
             # A consumer job checking the run's baseline for freshness (Education#320): never RED
             # on the re-resolution itself — the baseline is a valid answer.
@@ -5313,6 +5528,10 @@ def main() -> int:
             emit(hosts_rows(rows), title="Platform for this job")
             return 0
         chosen = choose_fn()
+        refused = below_floor(chosen.set_name, chosen.run_number)
+        if refused is not None:
+            return refused
+        chosen_rows = hosts_rows(output_rows(chosen, tester, portal, migration or None))
     except ResolutionError as error:
         text = str(error).replace("\n", "%0A")
         print(f"::error title=The released platform did not resolve::{text}")
@@ -5322,10 +5541,7 @@ def main() -> int:
                 handle.write("### ❌ The released platform did not resolve\n\n"
                              f"```\n{error}\n```\n")
         return 1
-    refused = below_floor(chosen.set_name, chosen.run_number)
-    if refused is not None:
-        return refused
-    emit(hosts_rows(output_rows(chosen, tester, portal, migration or None)))
+    emit(chosen_rows)
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
         # Always written (empty without the option) so a downstream job can pass it back as
