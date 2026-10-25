@@ -40,10 +40,8 @@
 # partition-root User node PRE-AUTH, on the ASP.NET request thread, before any hub turn exists to
 # park. Migrating it means reshaping the sign-in action around a subscription; worth doing, not
 # part of #3433.
-memex/Memex.Portal.Shared/Authentication/DevAuthController.cs	1
 #
 # UserRoleResolver.LoadDbRolesAsync — called from OnboardingMiddleware during authentication, i.e.
 # the same ASP.NET request pipeline. Its own remarks already treat the read as an availability
 # question with a classified outcome (IdentityReadOutcome.Unavailable), which is the #3433 lesson
 # applied — only the Task shape is left.
-memex/Memex.Portal.Shared/Authentication/UserRoleResolver.cs	1
