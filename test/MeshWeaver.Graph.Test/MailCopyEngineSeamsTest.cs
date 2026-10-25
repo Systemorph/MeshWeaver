@@ -279,6 +279,22 @@ public class MailCopyEngineSeamsTest(ITestOutputHelper output) : MonolithMeshTes
         MeshMailCopyStore.IsGone(new MeshNodeReadEndedWithDeleteException("u/other"), "u/_MailCopy/outlook/x").Should().BeFalse("another path says nothing about this one");
     }
 
+    [Fact(Timeout = 180_000)]
+    public async Task TheSource_IsReadFromItsStream_SoALaggingIndexNeverHidesThePendingGeneration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var rig = await Rig(ct);
+        rig.Feed.Messages["m1"] = Message("m1", "Hello", "Body", 1);
+        rig.Feed.Messages["m2"] = Message("m2", "Lunch", "Pizza", 2);
+        await Enable(rig, ct);
+        await InterruptedRebuild(rig, ct);
+
+        // The committed pending generation is visible immediately after the commit, with no wait for the index to catch up.
+        var read = await rig.Store.Source(rig.Owner, "outlook").Timeout(Bound).Await(ct);
+        read!.PendingGeneration.Should().NotBeNullOrEmpty();
+        read.PendingCursor.Should().Be("p1");
+    }
+
     // Marks the backfilled copy as made before the projection (so the next sync must rebuild it), then runs the sync
     // with a feed that pages and fails at the second page: the rebuild is left half-filled, as a crash would leave it.
     private async Task InterruptedRebuild(Rigging rig, CancellationToken ct)
