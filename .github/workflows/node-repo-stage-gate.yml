@@ -106,7 +106,9 @@ jobs:
     # the opt-out, where the review is not awaited); the event half recognises both names.
     name: "Stage gate: may the suites start"
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    timeout-minutes: 10
+    # 15 = the reads + the predicate's 5-minute API outage budget (MeshWeaver#7187): an outage is retried,
+    # then reported as INFRA (exit 3), and the stage advance's sweep re-runs the failed gate.
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: read

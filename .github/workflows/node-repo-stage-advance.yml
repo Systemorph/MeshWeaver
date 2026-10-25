@@ -67,8 +67,9 @@ jobs:
   advance:
     name: Start stage 2 when stage 1 is green
     runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
-    # 25 = the predicate's 20-minute bounded wait for an in-flight held run to finish + reads.
-    timeout-minutes: 25
+    # 30 = the predicate's 20-minute bounded wait for an in-flight held run to finish + its 5-minute API
+    # outage budget (MeshWeaver#7187 — an outage is retried, then INFRA, exit 3; the sweep retries) + reads.
+    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: read
