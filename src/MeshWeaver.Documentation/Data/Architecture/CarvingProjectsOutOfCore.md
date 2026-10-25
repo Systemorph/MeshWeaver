@@ -414,6 +414,54 @@ and the `.gitignore` re-include for `bin/`. Their release-channel writer is now 
 repositories (`"repo"` on a binding in `.github/release-channels.json`), which keeps
 `hosting-operator:main` protected. MeshWeaver.Plugins `Hosting/HostingOperator` is the manual.
 
+## Deployment material
+
+Core's CD keeps **BUILD + SEAL** of the product image set (portal, migration, plugin-test, control)
+and hands the sealed set over; **deploying** it is the public
+[MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) repository's, and the hosting
+operator's image is MeshWeaver.Plugins' (the section above). The test for each item: *does it
+produce or seal an image of the set, or prove the set is sound?* (stays) — or *does it put a sealed
+set somewhere, or watch where it runs?* (moves). Measured on `main` at `16b9902f03`.
+
+The hand-over is ONE `repository_dispatch` of type `platform-set-sealed` per CD run (`main-cd.yml`
+job `deploy-handover`), schema 1, defined and validated by MeshWeaver.Deploy's
+`.github/scripts/platform-set-dispatch.py`. It is sent with a meshweaver-cloud App token minted for
+MeshWeaver.Deploy alone. The platform deploy holds no credential that reaches MeshWeaver.Plugins,
+and `test-cd-steps.py` refuses an App token with no `repositories` or one that names Plugins.
+
+### `main-cd.yml`, job by job
+
+| job | class | where it goes |
+|---|---|---|
+| `preflight`, `gate` | build + seal | stays |
+| `portal-image`, `portal-image-mirror`, `image-closure-record`, `migration-image`, `plugin-test-image` | build + seal | stays |
+| `control-image`, `control-acceptance`, `control-promote` | build + seal (the control image and its acceptance) | stays |
+| `promote`, `published-modules`, `compat-images`, `satellite-compat-image`, `satellite-compat`, `platform-ladder-compat`, `arm` | seal (the set, its evidence, the arming) | stays |
+| `publish-bake`, `verify-images`, `delivery-verdict`, `alert-on-failure` | seal + its verdict | stays |
+| `notify-platform-update` | hand-over (the release event the mesh fans out) | stays: it is the platform's announcement, not a deployment |
+| `build-host-image`, `build-host-latest`, `build-host-report` | **deploy** | **moved** to MeshWeaver.Deploy `build-host.yml` (`image`, `handover`, `report`); replaced here by `deploy-handover` |
+| `control-first`, `control-lane-report` | **deploy** (rolls the control instance onto each accepted build) | **owed**: not moved yet. It is the next candidate for the same hand-over |
+
+### Files
+
+| core path | class | where it goes |
+|---|---|---|
+| `deploy/build-host/`, `.github/scripts/build-run.py`, `.github/scripts/build-host-announcement.py`, `.github/build-hosts.json`, `.github/workflows/build-host-stable.yml` | deploy | **moved** to MeshWeaver.Deploy (same paths) |
+| `deploy/aks/operator/` + its image lane | deploy (operator) | **moved** to MeshWeaver.Plugins `deploy/hosting-operator` (`hosting-operator.yml`, the ONE publisher of `hosting-operator:main`) |
+| `deploy/helm`, `deploy/helm-db`, `deploy/aks/{manifests,scripts,values.aks.yaml}`, `deploy/homebrew`, `chart-gate.yml`, `homebrew.yml`, `test-bundle-registry.py`, `scripts/check-config-key-coverage.py` | deploy (the chart and its tooling) | MeshWeaver.Deploy (seeded; later chart changes ported by a sync PR); the core delete half is a draft |
+| `deploy/aks/envs`, `deploy/aks/infra`, `deploy/aspire`, `memex/aspire/Memex.Aspire.Hosting` | deploy | delete half in flight (draft) |
+| `deploy/aca`, `deploy/compose`, `deploy/compose-ha`, `deploy/marketplace`, `memex-local.yml`, `control-always-latest.yml`, `prod-synthetic-probe.yml`, `combo-verify.yml` | deploy / operations | **owed**: no move opened yet |
+| `deploy/base-images`, `deploy/{node,python,pandas}-gate`, `deploy/{ocr,whisper,s1-extract}` and their image workflows, `edge-images.yml`, `dockerhub-mirror.yml`, `base-image-acr.yml` | build (images the product or its CI runs) | stays |
+| `build-follow.yml`, `build-host-publication.yml`, `build-follow.py`, `build-executor.py`, `build-artifacts-fetch.py`, `compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `ci-artifact-store.py` | build (the CI side of a host run; helpers the runner image READS at the set's commit) | stays |
+| `src/MeshWeaver.Deployment.Contract` (`BuildHostsBlock`, `BuildHostSetKeys`, `BuildHostRetention`, `CoreTestsDigest`) | contract | stays: the receivers in MeshWeaver.Plugins and the records compile against it |
+
+🚨 **The runner image is two repositories' bytes, like the operator's.** The runner is
+MeshWeaver.Deploy's; its helpers and `meshweaver-plugin-build` are core's, read at the SET'S own
+commit by Deploy's `stage-context.sh`, never vendored. The Dockerfile's `COPY` lines did not change.
+So a core change to a helper reaches the next set's runner, and a Deploy change to the runner reaches
+the next set too: `mw-build-host:<version>` is written ONCE per version, because the hosts are
+handed it by digest.
+
 ## Related
 
 - [Module Build Architecture](../ModuleBuildArchitecture) — the unified build every repo follows

@@ -3,9 +3,9 @@
 # The standing build hosts' chart half (templates/build-host/, Doc/Architecture/BuildHosts), checked
 # the only ways that can fail without a cluster:
 #
-#   1. the runner ships in ONE place — the mw-build-host image, which copies .github/scripts'
-#      build-run.py and compose-gate-host.sh (deploy/build-host/Dockerfile); the chart carries no
-#      copy, and the runner's self-test passes;
+#   1. the runner ships in ONE place — the mw-build-host image (MeshWeaver.Deploy's
+#      deploy/build-host/Dockerfile, built and self-tested there by build-host.yml); the chart
+#      carries no copy;
 #   2. the chart defaults render NO build-host object at all (buildHosts.enabled: false), so no
 #      estate changes until its record turns the hosts on;
 #   3. the fixture renders, per enabled channel, a Deployment with no `replicas` (KEDA owns it),
@@ -35,27 +35,14 @@ ok() { echo "✅ $1"; }
 command -v helm >/dev/null 2>&1 || { echo "::error::helm is not on PATH"; exit 1; }
 python3 -c "import yaml" >/dev/null 2>&1 || { echo "::error::python3 with PyYAML is required (pip install pyyaml)"; exit 1; }
 
-# 1. one implementation: the runner and the composer ship INSIDE the mw-build-host image, copied
-#    from .github/scripts by deploy/build-host/Dockerfile — the chart carries no copy of either.
-DOCKERFILE="$REPO/deploy/build-host/Dockerfile"
+# 1. one implementation: the runner and the composer ship INSIDE the mw-build-host image — the
+#    chart carries no copy of either. The image, its Dockerfile and the runner moved to
+#    MeshWeaver.Deploy (deploy/build-host/, .github/scripts/build-run.py), whose build-host.yml
+#    builds the image and runs both self-tests on every change.
 if [ -f "$CHART/files/build-run.py" ]; then
   report "deploy/helm/files/build-run.py exists — the chart must not carry a second copy of the runner; it ships in the mw-build-host image"
-fi
-if [ -f "$DOCKERFILE" ] \
-   && grep -q '^COPY .github/scripts/build-run.py .github/scripts/compose-gate-host.sh .github/scripts/sandbox-postgres.sh .github/scripts/module-build-key.py .github/scripts/ci-artifact-store.py /opt/build-host/$' "$DOCKERFILE" \
-   && grep -q '^COPY artifacts/plugin-build/ /opt/build-host/plugin-build/$' "$DOCKERFILE" \
-   && grep -q 'bubblewrap' "$DOCKERFILE" \
-   && grep -q 'sandbox-postgres.sh --self-test' "$DOCKERFILE" \
-   && grep -q 'build-run.py --self-test' "$DOCKERFILE" \
-   && ! grep -Eq '^FROM [^ ]*:latest' "$DOCKERFILE"; then
-  ok "deploy/build-host/Dockerfile ships .github/scripts' runner, composer, sandbox-postgres and module-build-key plus the plugin-build tool, installs bubblewrap, runs both self-tests, and pins no :latest"
 else
-  report "deploy/build-host/Dockerfile must COPY .github/scripts/{build-run.py,compose-gate-host.sh,sandbox-postgres.sh,module-build-key.py} and artifacts/plugin-build/ to /opt/build-host/, install bubblewrap, run both self-tests, and name no :latest base"
-fi
-if python3 "$REPO/.github/scripts/build-run.py" --self-test; then
-  ok "build-run.py passes its self-test"
-else
-  report "build-run.py fails its self-test"
+  ok "the chart carries no copy of the runner"
 fi
 
 WORK="$(mktemp -d)"

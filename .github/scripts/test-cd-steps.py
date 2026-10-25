@@ -1304,7 +1304,10 @@ def separation_problems(workflow_text: str) -> list[str]:
       1. calls NO module lane: no `node-repo-module-pack.yml`, `node-repo-publish-bake.yml` or
          `node-repo-module-publish.yml` (packing, baking or sealing a module is the module's own lane);
       2. reads NO MeshWeaver.Plugins verdict and holds no Plugins credential (`refs/core-candidate`,
-         `PLUGINS_TOKEN`, the content App) — what guards a platform roll is the platform verdict;
+         `PLUGINS_TOKEN`, the content App) — what guards a platform roll is the platform verdict.
+         The ONE App token it mints (`deploy-handover`, the hand-over to MeshWeaver.Deploy) names
+         `repositories` explicitly and never MeshWeaver.Plugins: a token with no `repositories`
+         reaches every repository the App is installed on, Plugins included;
       3. checks MeshWeaver.Plugins out ONLY in the jobs that build the portal HOST (it lives there);
       4. `arm` needs the ladder (`platform-ladder-compat`) and nothing module-shaped;
       5. `control-first` gives control the build from `control-promote`, and never needs `arm`;
@@ -1326,6 +1329,14 @@ def separation_problems(workflow_text: str) -> list[str]:
         for needle in ("refs/core-candidate", "core-candidate/", "PLUGINS_TOKEN", "DEPENDENT_DISPATCH_APP"):
             if needle in body:
                 problems.append(f"{name} reads `{needle}` — the platform deploy reads no MeshWeaver.Plugins verdict or credential")
+        for step in job.get("steps") or []:
+            if "create-github-app-token" not in str(step.get("uses", "")):
+                continue
+            repos = [r.strip() for r in str((step.get("with") or {}).get("repositories", "")).replace("\n", ",").split(",") if r.strip()]
+            if not repos:
+                problems.append(f"{name} mints an App token with no `repositories` — it reaches every repository the App is installed on, MeshWeaver.Plugins included")
+            elif any(r.split("/")[-1] == "MeshWeaver.Plugins" for r in repos):
+                problems.append(f"{name} mints an App token for MeshWeaver.Plugins — the platform deploy holds no Plugins credential")
         if "Systemorph/MeshWeaver.Plugins" in body and name not in host_builders:
             problems.append(f"{name} checks MeshWeaver.Plugins out — only the portal HOST resolver/builders may ({sorted(host_builders)})")
     arm = jobs.get("arm")
@@ -1577,6 +1588,18 @@ def main() -> int:
     no_ladder = workflow_text.replace(
         "    needs: [preflight, gate, promote, platform-ladder-compat]",
         "    needs: [preflight, gate, promote]", 1)
+    plugins_token = workflow_text.replace(
+        "          owner: Systemorph\n          repositories: MeshWeaver.Deploy\n",
+        "          owner: Systemorph\n          repositories: MeshWeaver.Deploy,MeshWeaver.Plugins\n", 1)
+    case("...and the guard catches the Deploy hand-over's token reaching MeshWeaver.Plugins",
+         plugins_token != workflow_text and any("mints an App token for MeshWeaver.Plugins" in p for p in separation_problems(plugins_token)),
+         "the mutation passed (or could not apply) with a Plugins-reaching App token in the platform deploy")
+    unscoped_token = workflow_text.replace(
+        "          owner: Systemorph\n          repositories: MeshWeaver.Deploy\n",
+        "          owner: Systemorph\n", 1)
+    case("...and the guard catches an App token minted with no `repositories` (every repository)",
+         unscoped_token != workflow_text and any("no `repositories`" in p for p in separation_problems(unscoped_token)),
+         "the mutation passed (or could not apply) with an unscoped App token in the platform deploy")
     case("...and the guard catches the arm losing the ladder half of its verdict",
          no_ladder != workflow_text and any("platform-ladder-compat" in p for p in separation_problems(no_ladder)),
          "the mutation passed (or could not apply) with an arm that no longer waits for the ladder")

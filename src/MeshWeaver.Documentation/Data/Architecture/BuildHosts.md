@@ -26,9 +26,9 @@ MeshWeaver.Plugins' `Hosting/Build`. See also [Release Channels](../ReleaseChann
 |---|---|---|
 | the follow lane | `.github/workflows/build-follow.yml` + `.github/scripts/build-follow.py` | one thin job per stage: streams the stage log into the Actions log, exits with the stage's verdict |
 | the publish-side fetch (H9) | `.github/workflows/build-host-publication.yml` + `.github/scripts/build-artifacts-fetch.py` | a host-executed run's modules, fetched by receipt and verified, staged for the unchanged module publish lane |
-| the host runner | `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (`deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
+| the host runner | MeshWeaver.Deploy `.github/scripts/build-run.py`, shipped in the `mw-build-host` image (MeshWeaver.Deploy `deploy/build-host/Dockerfile`) | refresh the plugins layer → claim → check out → run each declared stage in a fresh `bwrap` sandbox → promote trunk outputs → post progress events |
 | the chart | `deploy/helm/templates/build-host/` (`buildHosts.*`, gate `memex.buildHosts`) | per channel a Deployment + KEDA `ScaledObject`; one ServiceAccount, one NetworkPolicy |
-| the CD hand-over | `main-cd.yml` jobs `build-host-image`, `build-host-latest`; `.github/workflows/build-host-stable.yml`; `.github/scripts/build-host-announcement.py`, declared by `.github/build-hosts.json` | the runner image per set; in the run that arms a set, a signed event that moves `build-latest` to it; daily, `build-stable` to the main-passed ceiling |
+| the CD hand-over | `main-cd.yml` job `deploy-handover` (a `platform-set-sealed` dispatch); MeshWeaver.Deploy `build-host.yml` (jobs `image`, `handover`, `report`), `build-host-stable.yml`, `build-host-announcement.py`, declared by its `.github/build-hosts.json` | the runner image per set; on every hand-over, a signed event that moves `build-latest` to the newest armed set; daily, `build-stable` to the main-passed ceiling |
 
 ## 1. The follow lane
 
@@ -339,23 +339,35 @@ no ConfigMap. The cache is an **existing** RWX claim
 (`buildHosts.cacheClaimName`, default `build-cache`); the chart never creates or deletes it.
 
 `deploy/aks/scripts/test-build-hosts.sh` (Chart Gate) asserts the runner ships in ONE place (the
-Dockerfile copies `.github/scripts`' scripts, installs bubblewrap, runs the self-test, names no
-`:latest`; the chart has no copy), the defaults render nothing, the fixture renders the
+chart has no copy; the image and its self-tests are MeshWeaver.Deploy's `build-host.yml`), the defaults render nothing, the fixture renders the
 shape above for both channels, and the refusals hold; the fixture also runs through every portal
 invariant in `check-chart-invariants.sh`.
 
-## 4. Core's CD deploys the host
+## 4. MeshWeaver.Deploy deploys the host, on the platform's hand-over
 
-**The runner image.** `main-cd.yml` job `build-host-image` builds `deploy/build-host/Dockerfile`
-(the .NET 10 SDK, bash, python3, git, bubblewrap, and THIS commit's `build-run.py` +
-`compose-gate-host.sh`, whose self-test runs in the build) for linux/amd64 and pushes
-`mw-build-host:<version>` — the version every image of the set carries — for every published
-platform build. It is outside the promotion (the set is complete without it) and under
-`alert-on-failure`. Nothing names it by a moving tag: the hosts get it BY DIGEST with the rest of the
-set.
+Core's CD BUILDS and SEALS the product image set and nothing else (core slimming). The build-host
+deployment lives in [MeshWeaver.Deploy](https://github.com/Systemorph/MeshWeaver.Deploy) and is triggered by the platform: every
+`main-cd.yml` run ends with job `deploy-handover`, ONE `repository_dispatch` of type
+`platform-set-sealed` to MeshWeaver.Deploy carrying the set that run published and what `arm`
+decided (schema 1, defined and validated by Deploy's `.github/scripts/platform-set-dispatch.py`).
+The token is the meshweaver-cloud App's, minted for MeshWeaver.Deploy ALONE — the platform deploy
+holds no credential that reaches MeshWeaver.Plugins (`test-cd-steps.py`). The payload is a claim:
+Deploy proves every commit is on core's `main` and resolves every version in the registry before it
+builds or signs anything. A refused dispatch is red in core and paged by `alert-on-failure`;
+what Deploy then does reports on Deploy's own `build-host-latest` issue.
 
-**`build-latest` follows the armed set.** In the run that **arms** a set, job `build-host-latest`
-hands `build-latest` that set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
+**The runner image.** Deploy's `build-host.yml` job `image` builds its `deploy/build-host/Dockerfile`
+(the .NET 10 SDK, bash, python3, git, bubblewrap, Deploy's `build-run.py`, and the platform's
+`compose-gate-host.sh`, `sandbox-postgres.sh`, `module-build-key.py`, `ci-artifact-store.py` and
+`meshweaver-plugin-build` read at the SET'S own commit by `stage-context.sh`; both self-tests run in
+the build) for linux/amd64 and pushes `mw-build-host:<version>` — the version every image of the set
+carries — once per version, mirrored to the fleet registry. It is outside the platform's promotion
+(the set is complete without it). Nothing names it by a moving tag: the hosts get it BY DIGEST with
+the rest of the set. Every pull request there builds the image against core's `main` and runs every
+self-test (job `test`).
+
+**`build-latest` follows the armed set.** On every hand-over, Deploy's job `handover` (after
+`image`) hands `build-latest` the newest armed set (policy `build-hosts-follow-latest`, [Policy Not Prose](../PolicyNotProse)):
 it resolves the set's `mw-plugin-test`, `memex-portal-ai` and `mw-build-host` digests from the
 version tag (never a moving name), re-checks the set is still the newest armed one (never
 backwards), and POSTs a signed `build-host-update-available` event into the control plane's inbox
@@ -374,7 +386,7 @@ image through:
 
 **`build-stable` follows the main-passed ceiling — daily.** Until core's `stable` promoter exists,
 `stable` IS the newest sealed set MeshWeaver.Plugins' own `main` has passed on. Its own workflow,
-`.github/workflows/build-host-stable.yml` (daily `schedule`, 05:41 UTC; `stable` is refused on any
+MeshWeaver.Deploy's `.github/workflows/build-host-stable.yml` (daily `schedule`, 05:41 UTC; `stable` is refused on any
 other trigger), resolves that ceiling with `resolve-platform.py --no-registry --passed-on-main
 Systemorph/MeshWeaver.Plugins` through a fleet-reader App token, resolves the same three digests by
 the set's version, and sends the same event for channel `stable`. 🚨 It is deliberately NOT a job of
@@ -408,17 +420,17 @@ separate fields a stale hand-over whose version is refused could still land a di
 not change. As one leaf, a stale write conflicts as a whole and its retry is refused as older.
 `recordFields` is informative. 🚨 **Never `kubectl set image`, never a hand-edited Deployment.**
 
-**A no-op until declared, twice.** `.github/build-hosts.json` `enabled: false` (the shipped value)
+**A no-op until declared, twice.** MeshWeaver.Deploy's `.github/build-hosts.json` `enabled: false` (the shipped value)
 makes both jobs write one summary line and send nothing, using no credential; `stable` must also be
 listed in its `channels`. The receiver guards the same fact on the record. Turning the hosts on is
 two acts, in order: the record's `BuildHosts` block through its approval path, then
 `enabled: true` here.
 
-`build-host-image` and `build-host-latest` are outside `delivery-verdict` (the fleet's delivery does
-not depend on a build host) and outside `alert-on-failure` (whose `ci-failure` issue recovers on
-platform delivery, not on a build host): job `build-host-report` files or comments on the ONE open
-`build-host-latest` issue when either fails or is cancelled, and closes it only after a run that actually HANDED
-build-latest a set. `build-host-stable.yml` reports on its own `build-host` issue, the same way.
+Deploy's `image` and `handover` are outside core's `delivery-verdict` (the fleet's delivery does
+not depend on a build host): Deploy's job `report` files or comments on the ONE open
+`build-host-latest` issue in MeshWeaver.Deploy when either fails or is cancelled, and closes it only
+after a run that actually HANDED build-latest a set. `build-host-stable.yml` reports on its own
+`build-host` issue there, the same way.
 
 ## 5. Every repository on the hosts (H7) — dormant until the instance says so
 
