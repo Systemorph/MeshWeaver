@@ -1,0 +1,160 @@
+name: Node repo cap debt (reusable)
+
+# ♻️ REUSABLE (workflow_call) — a package capped below `latest` keeps its deployment, and owes a
+# migration that triage hears about every day (policy `package-mesh-version-cap`,
+# Doc/Architecture/DeployTestSwitchLatest §5-§6).
+#
+# A package may author `maxMeshVersion` next to `minMeshVersion` in `<Package>/index.json` (with
+# `capReason` and `capTracking`); its modules then build against the highest READY build-server
+# deployment inside its floor and cap instead of `latest`. Once a day this lane does two things, both
+# in `.github/scripts/cap-debt-triage.py` (self-tested at the start of every run):
+#
+#   1. PUBLISHES the repository's WHOLE cap set to the control inbox as ONE signed `build-caps` event
+#      (`{event, repo, sha, caps:[{package, floor, cap, version, deployed, reason}]}`). The control
+#      plane's intake keeps one `Hosting/BuildCaps/<package>` node per cap, written as System; the
+#      build hosts' retention reads them, fail-closed, so a capped package's deployment is never torn
+#      down under it. `version` is the highest READY deployed version in [floor, cap] (from
+#      `GET <build API>/hosts`); when none is deployed it is the version that must be, and the intake
+#      asks for that deployment. A package absent from the set is a REMOVED cap: its node is deleted,
+#      so its version can be torn down. That is why the set is sent even when it is empty.
+#   2. FILES ONE triage item per capped package — a submitted `Feedback/Feedback` node, "migrate
+#      <package> to latest" — over the control instance's MCP endpoint, as the lane's service user, in
+#      that user's own `<user>/Feedback`. The id is (repository, package, cap), so the next day refreshes
+#      it and never duplicates it; a removed cap's item is resolved.
+#
+# 🛡️ THIS LANE MAY NOT SKIP (AGENTS.md → "A gate NEVER tests its own inputs"). The first step
+# asserts every input and fails RED naming it; no step carries an input-shaped `if:` and none has
+# `continue-on-error`. A tree with no cap still runs: it publishes its empty set and resolves the
+# items of caps that are gone.
+#
+# CALLER (a satellite's own daily workflow; `contents: read` is all it needs):
+#
+#   on:
+#     schedule: [{ cron: "17 6 * * *" }]
+#     workflow_dispatch: {}
+#   jobs:
+#     cap-debt:
+#       permissions: { contents: read }
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-cap-debt.yml@main
+#       with:
+#         build-api: ${{ vars.MW_BUILD_API }}
+#         mesh-url: ${{ vars.MW_TRIAGE_URL }}
+#         triage-namespace: ${{ vars.MW_TRIAGE_NAMESPACE }}
+#         control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+#       secrets:
+#         triage-token: ${{ secrets.MW_TRIAGE_TOKEN }}
+#         control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+#         build-api-token: ${{ secrets.MW_BUILD_API_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      build-api:
+        description: The control instance's build API base (vars.MW_BUILD_API, https://<control>/api/builds) — `GET hosts` is read.
+        required: true
+        type: string
+      mesh-url:
+        description: The control instance's base URL (its MCP endpoint is <mesh-url>/mcp).
+        required: true
+        type: string
+      triage-namespace:
+        description: The service user's own feedback namespace, `<user>/Feedback` — `Feedback/<id>` itself refuses a create by design.
+        required: true
+        type: string
+      control-webhook-url:
+        description: The control portal's signed inbox — pass vars.CONTROL_WEBHOOK_URL (https://control.systemorph.com/api/hooks/Hosting/PlatformBuilds).
+        required: true
+        type: string
+      control-webhook-host:
+        description: The host control-webhook-url must point at; nothing is signed for any other.
+        required: false
+        type: string
+        default: control.systemorph.com
+      scripts-ref:
+        description: The Systemorph/MeshWeaver ref the scripts are fetched at; pin it beside the `uses:` sha.
+        required: false
+        type: string
+        default: main
+    secrets:
+      triage-token:
+        description: The service user's mesh API token on the control instance, holding Create + Update in triage-namespace.
+        required: true
+      control-webhook-secret:
+        description: secrets.CONTROL_WEBHOOK_SECRET — the org HMAC the control inbox verifies X-Hub-Signature-256 against.
+        required: true
+      build-api-token:
+        description: An optional bearer for `GET <build API>/hosts`; a refusal is RED naming it.
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-and-file:
+    name: "Every capped package is published for retention and carries ONE 'migrate to latest' item"
+    runs-on: ${{ vars.MW_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+      - name: Every input the caller must provision, or a red run naming what and where
+        env:
+          BUILD_API: ${{ inputs.build-api }}
+          MESH_URL: ${{ inputs.mesh-url }}
+          NAMESPACE: ${{ inputs.triage-namespace }}
+          WEBHOOK_URL: ${{ inputs.control-webhook-url }}
+          WEBHOOK_HOST: ${{ inputs.control-webhook-host }}
+          MW_TRIAGE_TOKEN: ${{ secrets.triage-token }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.control-webhook-secret }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "${BUILD_API:-}" ]              || missing+=("inputs.build-api            pass vars.MW_BUILD_API (https://<control instance>/api/builds)")
+          [ -n "${MESH_URL:-}" ]               || missing+=("inputs.mesh-url             pass vars.MW_TRIAGE_URL (https://<control instance>)")
+          [ -n "${NAMESPACE:-}" ]              || missing+=("inputs.triage-namespace     pass vars.MW_TRIAGE_NAMESPACE (the service user's <user>/Feedback)")
+          [ -n "${WEBHOOK_URL:-}" ]            || missing+=("inputs.control-webhook-url  pass vars.CONTROL_WEBHOOK_URL (the control inbox, …/api/hooks/Hosting/PlatformBuilds)")
+          [ -n "${WEBHOOK_HOST:-}" ]           || missing+=("inputs.control-webhook-host the host the inbox URL must name (default control.systemorph.com)")
+          [ -n "${MW_TRIAGE_TOKEN:-}" ]        || missing+=("secrets.triage-token        pass secrets.MW_TRIAGE_TOKEN (the service user's mesh API token on the control instance)")
+          [ -n "${CONTROL_WEBHOOK_SECRET:-}" ] || missing+=("secrets.control-webhook-secret pass secrets.CONTROL_WEBHOOK_SECRET (org secret)")
+          [ -n "${SCRIPTS_REF:-}" ]            || missing+=("inputs.scripts-ref          the Systemorph/MeshWeaver ref the scripts are fetched at (default main)")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::the cap-debt lane cannot run — provision the following in the CALLING repository, then re-run:"
+            for m in "${missing[@]}"; do echo "  • $m"; done
+            exit 1
+          fi
+      # The cap's AGE is read from history, so the checkout is full.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Fetch the resolver and the cap-debt script at the scripts ref
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/resolve-platform.py" > "$RUNNER_TEMP/resolve-platform.py" \
+            || { echo "::error::could not fetch .github/scripts/resolve-platform.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          "$RUNNER_TEMP/mw-core-file" "${SCRIPTS_REF}" ".github/scripts/cap-debt-triage.py" > "$RUNNER_TEMP/cap-debt-triage.py" \
+            || { echo "::error::could not fetch .github/scripts/cap-debt-triage.py at ${SCRIPTS_REF} from Systemorph/MeshWeaver"; exit 1; }
+          head -c 400 "$RUNNER_TEMP/cap-debt-triage.py" | grep -q "cap-debt-triage" || { echo "::error::the fetched cap-debt-triage.py does not look like the script"; exit 1; }
+      - name: "The publication and the filing can fail (self-test)"
+        env:
+          MW_RESOLVER: ${{ runner.temp }}/resolve-platform.py
+        run: python3 "$RUNNER_TEMP/cap-debt-triage.py" --self-test
+      - name: Publish the cap set to the control inbox; file or refresh one triage item per capped package
+        env:
+          BUILD_API: ${{ inputs.build-api }}
+          MESH_URL: ${{ inputs.mesh-url }}
+          NAMESPACE: ${{ inputs.triage-namespace }}
+          WEBHOOK_URL: ${{ inputs.control-webhook-url }}
+          WEBHOOK_HOST: ${{ inputs.control-webhook-host }}
+          MW_TRIAGE_TOKEN: ${{ secrets.triage-token }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.control-webhook-secret }}
+          MW_BUILD_API_TOKEN: ${{ secrets.build-api-token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          python3 "$RUNNER_TEMP/cap-debt-triage.py" --root . --resolver "$RUNNER_TEMP/resolve-platform.py" \
+            --repo "$REPO" --sha "$SHA" --build-api "$BUILD_API" --mesh-url "$MESH_URL" --namespace "$NAMESPACE" \
+            --control-webhook-url "$WEBHOOK_URL" --control-webhook-host "$WEBHOOK_HOST"
