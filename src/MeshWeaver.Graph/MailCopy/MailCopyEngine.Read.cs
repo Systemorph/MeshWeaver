@@ -69,12 +69,17 @@ public sealed partial class MailCopyEngine
     /// account, or the read fails or is slow (logged): the live read is always the fallback, never a refusal.
     /// </summary>
     public IObservable<MailMessageCopy?> StoredCopy(string owner, string messageId)
-        => ReadStore.Source(owner, Provider)
+    {
+        // 🚨 The caller is read ONCE, here, and restored around every later store call: those calls are composed
+        // when an upstream observable EMITS, under whatever identity it emitted under, and the stores judge the
+        // identity they are called with.
+        var who = Caller();
+        return ReadStore.Source(owner, Provider)
             .SelectMany(source => source is not { MailboxId: { } bound }
                 ? Observable.Return<MailMessageCopy?>(null)
                 : CurrentAccount(owner).SelectMany(id => id != bound
                     ? Observable.Return<MailMessageCopy?>(null)
-                    : ReadStore.Read(owner, Provider, source.Generation, messageId)))
+                    : AsCaller(who, () => ReadStore.Read(owner, Provider, source.Generation, messageId))))
             .Take(1)
             .Timeout(SourceReadBudget)
             .DefaultIfEmpty(null)
@@ -83,6 +88,17 @@ public sealed partial class MailCopyEngine
                 Log?.LogWarning(ex, "{Provider} copy: the stored copy of a message of {Owner} could not be read; reading it live", Provider, owner);
                 return Observable.Return<MailMessageCopy?>(null);
             });
+    }
+
+    // The identity of the code that CALLED a read — the request's, else the circuit's.
+    private AccessContext? Caller() => Access is null ? null : Access.Context ?? Access.CircuitContext;
+
+    // Calls a store as <paramref name="who"/> (restored, never elevated): the store reads the identity it is called with.
+    private IObservable<T> AsCaller<T>(AccessContext? who, Func<IObservable<T>> call)
+    {
+        using (Access?.SwitchAccessContext(who))
+            return call();
+    }
 
     /// <summary>
     /// The inbox as <paramref name="source"/>'s copy holds it: the newest (or oldest) <paramref name="top"/>
@@ -99,18 +115,22 @@ public sealed partial class MailCopyEngine
     {
         var wanted = Math.Clamp(top, 1, MaxTop);
         var terms = SearchTerms(search);
+        var who = Caller();
         bool Keeps(MailMessageCopy copy) => Matches(copy, terms) && (accept?.Invoke(copy) ?? true);
+        // The page size is clamped to what the store can answer: at least two (the cursor is inclusive, so a page of
+        // one is the boundary row again, for ever) and at most the store's own cap (a larger request is cut by the
+        // store and would read as the end).
         return Pages(owner, source.Generation, null, ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal),
-                ImmutableList<MailMessageCopy>.Empty, wanted, Keeps, oldestFirst, Math.Max(1, pageSize), 1)
-            .SelectMany(found => ReadStore.Source(owner, Provider).Select(now => now is { Backfilled: true } && now.Generation == source.Generation
+                ImmutableList<MailMessageCopy>.Empty, wanted, Keeps, oldestFirst, Math.Clamp(pageSize, 2, MeshMailCopyStore.MaxPage), 1, who)
+            .SelectMany(found => AsCaller(who, () => ReadStore.Source(owner, Provider)).Select(now => now is { Backfilled: true } && now.Generation == source.Generation
                 ? found
                 : throw new InvalidOperationException("The copy changed while it was read; reading live instead.")));
     }
 
     private IObservable<ImmutableList<MailMessageCopy>> Pages(
         string owner, string generation, long? from, ImmutableHashSet<string> seen, ImmutableList<MailMessageCopy> found,
-        int wanted, Func<MailMessageCopy, bool> keeps, bool oldestFirst, int pageSize, int page)
-        => ReadStore.ReadPage(owner, Provider, generation, from, pageSize, oldestFirst).SelectMany(copies =>
+        int wanted, Func<MailMessageCopy, bool> keeps, bool oldestFirst, int pageSize, int page, AccessContext? who)
+        => AsCaller(who, () => ReadStore.ReadPage(owner, Provider, generation, from, pageSize, oldestFirst)).SelectMany(copies =>
         {
             // The page boundary is inclusive (one instant may straddle it): drop what was seen.
             var fresh = copies.Where(copy => !seen.Contains(copy.MessageId)).ToImmutableList();
@@ -119,7 +139,7 @@ public sealed partial class MailCopyEngine
             return kept.Count >= wanted || exhausted || page >= MaxListPages
                 ? Observable.Return(kept)
                 : Pages(owner, generation, fresh[^1].OrderKey, seen.Union(fresh.Select(copy => copy.MessageId)),
-                    kept, wanted, keeps, oldestFirst, pageSize, page + 1);
+                    kept, wanted, keeps, oldestFirst, pageSize, page + 1, who);
         });
 
     /// <summary>The words of a search, lowercased; none for no search. Pure.</summary>
@@ -228,7 +248,8 @@ public sealed partial class MailCopyEngine
                             .Catch((Exception _) => Observable.Return(false))
                             .SelectMany(stillOn => stillOn
                                 ? Observable.Return(true)
-                                // Conditional at the owner: a tombstone at the Undo's own time replaces only what
-                                // the Undo wrote.
-                                : Tombstoned(owner, source.Generation, messageId, asked).Select(_ => false))));
+                                // The copy was switched off (or rebuilt) while the Undo waited on the provider: its
+                                // generation is obsolete, so it is removed whole — no tombstone is left standing
+                                // in a generation nobody reads.
+                                : Lost(owner, source).Select(_ => false))));
 }

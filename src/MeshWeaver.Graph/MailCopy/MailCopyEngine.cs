@@ -16,7 +16,15 @@ namespace MeshWeaver.Graph.MailCopy;
 /// <param name="Removed">The ids no longer in the mailbox's inbox.</param>
 /// <param name="Cursor">The provider's continuation (null: none to give — start over).</param>
 /// <param name="Done">Whether the feed reached the present (the backfill is complete).</param>
-public sealed record MailFeedStep(ImmutableList<MailMessageCopy> Changed, ImmutableList<string> Removed, string? Cursor, bool Done);
+public sealed record MailFeedStep(ImmutableList<MailMessageCopy> Changed, ImmutableList<string> Removed, string? Cursor, bool Done)
+{
+    /// <summary>
+    /// When the provider was ASKED for this step (UTC), if the feed knows — what the step's writes are dated with,
+    /// so a Delete or Undo the person asked for between the question and the writes is newer than the sync and
+    /// stays. Null: the engine dates the writes when it applies them.
+    /// </summary>
+    public DateTimeOffset? ReadAt { get; init; }
+}
 
 /// <summary>Raised by a feed when the provider refuses the stored cursor for good (expired history); the copy is rebuilt as a new generation.</summary>
 public sealed class MailFeedResyncRequiredException() : InvalidOperationException("The provider no longer accepts the stored sync cursor; the copy is rebuilt.");
@@ -358,7 +366,7 @@ public sealed partial class MailCopyEngine(
 
     private IObservable<int> Apply(string owner, MailCopySource source, MailFeedStep step, IMailAttachmentSource files)
     {
-        var at = time.GetUtcNow();
+        var at = step.ReadAt?.ToUniversalTime() ?? time.GetUtcNow();
         // (failures, the id of an event that lost to a newer local action). A write that fails is counted and the
         // others still run, so the commit that follows always covers the step's whole set of writes.
         IObservable<(int Failed, string? Refused)> Counted(string id, IObservable<bool> write) => write.Take(1)
