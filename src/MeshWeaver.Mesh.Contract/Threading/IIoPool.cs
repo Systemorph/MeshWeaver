@@ -107,7 +107,7 @@ public interface IIoPool
     /// <summary>
     /// Runs the SUBSCRIBE of a long-lived reactive leaf — a <c>MeshQuery</c> change-feed subscription —
     /// through the pool. The subscribe action opens the providers and emits the initial snapshot, which
-    /// can route → create a per-node hub (Autofac <c>BeginLifetimeScope</c>); that bounded, dangerous
+    /// can route → create a per-node hub (hub service level being begun); that bounded, dangerous
     /// window holds one pool slot and counts as in-flight, so teardown's <c>Drain()</c> gate-join WAITS
     /// for it before the owning service scope is disposed — no <c>BeginLifetimeScope</c> races the scope
     /// teardown, which is the endemic teardown-SIGSEGV. The resulting subscription lives on and is

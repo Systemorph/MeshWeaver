@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -62,7 +63,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void NoCommandInThisRepo_RollsTheMigrationAsADeployment()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // kubectl <verb> ... deployment/memex-migration-deployment  (or "deployment memex-…")
         var command = new Regex(
@@ -100,7 +101,7 @@ public class MigrationWorkloadModelGuard
     [Fact]
     public void NoDocument_TeachesThatACrashLoopingMigrationIsNormal()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
 
         // "benign"/"harmless"/"expected" within the same sentence as the crash loop.
         var excuse = new Regex(
@@ -176,13 +177,4 @@ public class MigrationWorkloadModelGuard
             ? Directory.EnumerateFiles(directory, "*.md", SearchOption.AllDirectories)
             : [];
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

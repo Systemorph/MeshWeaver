@@ -1,4 +1,3 @@
-using Autofac;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -25,7 +24,7 @@ public sealed class ACallersModuleScopeEndsWithTheGenerationTest
         var caller = root.CreateScope();
         var state = caller.ServiceProvider.GetRequiredService<CircuitBoundState>();
         state.Initialize();
-        var callerScope = caller.ServiceProvider.GetRequiredService<ILifetimeScope>();
+        var callerScope = MeshServiceProvider.From(caller.ServiceProvider)!;
 
         var dialog = ModuleServiceProvider.InCallerScope(module, callerScope).GetRequiredService<ModuleDialog>();
 
@@ -52,7 +51,7 @@ public sealed class ACallersModuleScopeEndsWithTheGenerationTest
         var caller = root.CreateScope();
         var state = caller.ServiceProvider.GetRequiredService<CircuitBoundState>();
         state.Initialize();
-        ModuleServiceProvider.InCallerScope((IServiceProvider)module, caller.ServiceProvider.GetRequiredService<ILifetimeScope>())
+        ModuleServiceProvider.InCallerScope((IServiceProvider)module, MeshServiceProvider.From(caller.ServiceProvider)!)
             .GetRequiredService<ModuleDialog>();
 
         state.Released.Should().Be(0);
@@ -61,7 +60,7 @@ public sealed class ACallersModuleScopeEndsWithTheGenerationTest
         state.Released.Should().Be(1, "the module scope a caller owns ends with the caller");
         using var next = root.CreateScope();
         next.ServiceProvider.GetRequiredService<CircuitBoundState>().Initialize();
-        ModuleServiceProvider.InCallerScope((IServiceProvider)module, next.ServiceProvider.GetRequiredService<ILifetimeScope>())
+        ModuleServiceProvider.InCallerScope((IServiceProvider)module, MeshServiceProvider.From(next.ServiceProvider)!)
             .GetRequiredService<ModuleDialog>().State
             .Should().BeSameAs(next.ServiceProvider.GetRequiredService<CircuitBoundState>(), "the generation serves the next caller");
     }

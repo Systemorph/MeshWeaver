@@ -186,10 +186,11 @@ public class NuGetPackageHostWinsTest(ITestOutputHelper output) : MonolithMeshTe
 
     /// <summary>
     /// The MaxBy half of the measurement needs no package at all: <c>Enumerable.MaxBy</c> against
-    /// the host set alone. System.Interactive's IMPLEMENTATION assembly (the one the host ships)
+    /// the host set alone. System.Interactive's IMPLEMENTATION assembly (which the host used to ship)
     /// keeps a binary-compatibility <c>EnumerableEx.MaxBy</c> in namespace <c>System.Linq</c> that
     /// its REFERENCE assembly hides from every net6+ compile — so in-mesh C# saw an ambiguity no
-    /// <c>src/</c> project can.
+    /// <c>src/</c> project can. The package is gone from the platform now; this keeps any host
+    /// assembly from bringing the ambiguity back.
     /// </summary>
     [Fact(Timeout = 120_000)]
     public void EnumerableMaxBy_CompilesAgainstTheHostSet()

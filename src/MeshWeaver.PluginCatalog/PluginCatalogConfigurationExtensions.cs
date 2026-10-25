@@ -40,6 +40,7 @@ public static class PluginCatalogConfigurationExtensions
             .AddMeshNodes(CreateInstalledPartitionPolicy())
             .AddMeshNodes(CreateRegistryCredentialNodeType())
             .AddMeshNodes(CreateSigningKeyNodeType())
+            .AddMeshNodes(CreateSealingKeyNodeType())
             .AddMeshNodes(CreateModuleDiscoveryNodeType())
             .AddMeshNodes(CreateDefaultInstallLedgerNodeType())
             .AddMeshNodes(CreateRegistryReconcileLedgerNodeType())
@@ -57,7 +58,7 @@ public static class PluginCatalogConfigurationExtensions
             // Infrastructure credential, never pickable content.
             .AddAutocompleteExcludedTypes(PluginRegistryCredentials.NodeType)
             // The registry's token signing key — infrastructure, never pickable content.
-            .AddAutocompleteExcludedTypes(SyncTokenSigningKeys.NodeType)
+            .AddAutocompleteExcludedTypes(SyncTokenSigningKeys.NodeType, SecretSealingKeys.NodeType)
             // Bookkeeping, never pickable content — same reason as the credential above.
             .AddAutocompleteExcludedTypes(InstanceAutoRegistrationService.LedgerNodeType)
             // The per-registry reconcile state (#2888) — bookkeeping, never pickable content.
@@ -118,6 +119,7 @@ public static class PluginCatalogConfigurationExtensions
                 // Mints (once, per registry) and rotates the key that signs short-lived sync access
                 // tokens. Mesh-scoped so its cache dies with the mesh, like the authenticator.
                 .AddSingleton<SyncTokenSigningKeyService>()
+                .AddSingleton<SecretSealingKeyService>()
                 // The SECOND issuer's key source (#2483): GitHub's OIDC JWKS, read once an hour and
                 // shared. Mesh-scoped for the same reason as everything above — a key set held in a
                 // static field would outlive the mesh and bleed across tests and deployments. A
@@ -371,6 +373,7 @@ public static class PluginCatalogConfigurationExtensions
             .WithType(typeof(PluginManifest), nameof(PluginManifest))
             .WithType(typeof(PluginRegistryCredential), nameof(PluginRegistryCredential))
             .WithType(typeof(SyncTokenSigningKey), nameof(SyncTokenSigningKey))
+            .WithType(typeof(SecretSealingKey), nameof(SecretSealingKey))
             .WithType(typeof(ModuleDiscovery), nameof(ModuleDiscovery))
             .WithType(typeof(DefaultInstallLedger), nameof(DefaultInstallLedger))
             .WithType(typeof(RegistryReconcileLedger), nameof(RegistryReconcileLedger))
@@ -518,6 +521,16 @@ public static class PluginCatalogConfigurationExtensions
     // credential for the same reasons: an Admin-partition secret whose partition access control is
     // the gate, enc:-protected at rest, and never content a user creates. ONE node per registry at a
     // FIXED path — that is what lets two replicas racing to mint it collide and resolve to one key.
+    // The control instance's secret-sealing key pair (public half in the clear, private half enc:-protected).
+    private static MeshNode CreateSealingKeyNodeType() => new(SecretSealingKeys.NodeType)
+    {
+        Name = "Secret Sealing Key",
+        IsSatelliteType = false,
+        ExcludeFromContext = new HashSet<string> { "search", "create", "content" },
+        HubConfiguration = config => config
+            .AddMeshDataSource(s => s.WithContentType<SecretSealingKey>()),
+    };
+
     private static MeshNode CreateSigningKeyNodeType() => new(SyncTokenSigningKeys.NodeType)
     {
         Name = "Sync Token Signing Key",

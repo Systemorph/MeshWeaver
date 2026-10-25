@@ -147,6 +147,23 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// Setting a key on the FULL-name registration of a type whose canonical (write) name is its short
+    /// name must not flip the canonical name back to the full name — the operation only sets a key.
+    /// </summary>
+    [Fact]
+    public void KeyingTheFullNameRegistration_KeepsTheShortWriteName()
+    {
+        var typeRegistry = MessageHubExtensions.CreateTypeRegistry();
+        typeRegistry.WithType(typeof(AliasedContent), typeof(AliasedContent).FullName!);
+        typeRegistry.WithType(typeof(AliasedContent), nameof(AliasedContent));
+
+        typeRegistry.WithKeyFunction(typeof(AliasedContent).FullName!, new KeyFunction(_ => "k", typeof(string)));
+
+        typeRegistry.TryGetCollectionName(typeof(AliasedContent), out var writeName).Should().BeTrue();
+        writeName.Should().Be(nameof(AliasedContent));
+    }
+
+    /// <summary>
     /// GitSync uses strict deserialization for authored node files. The polymorphic object
     /// converter must let an unknown nested member fail that read instead of recovering it as raw
     /// JSON and letting the import acknowledge a record this image cannot understand.
@@ -372,6 +389,33 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     }
 
     /// <summary>
+    /// A hub registry that binds a collectible type its parent already defines (shared definition), and
+    /// then keys it, holds the type STRONGLY — so it must hear the context unload itself. Without that,
+    /// unloading demotes only the parent's entries and the hub's keyed definition roots the assembly.
+    /// </summary>
+    [Fact]
+    public void SharedCollectibleType_KeyedOnTheHub_IsDemotedOnUnload_NotRootedByTheHub()
+    {
+        var context = new AssemblyLoadContext("shared-keyed-test", isCollectible: true);
+        var reloaded = context.LoadFromAssemblyPath(typeof(HubRegistryInheritsEquivalentDefinitionsTest.KeyedContent).Assembly.Location);
+        var collectibleType = reloaded.GetType(typeof(HubRegistryInheritsEquivalentDefinitionsTest.KeyedContent).FullName!)!;
+        collectibleType.Assembly.IsCollectible.Should().BeTrue("the fixture must reproduce the recompile shape");
+
+        var parent = MessageHubExtensions.CreateTypeRegistry().WithType(collectibleType, "SharedKeyed");
+        var hub = MessageHubExtensions.CreateTypeRegistry(parent).WithType(collectibleType, "SharedKeyed");
+        hub.WithKeyFunction("SharedKeyed", new KeyFunction(_ => "hub-key", typeof(string)));
+        StrongMapsHolding(hub, collectibleType).Should().NotBeEmpty("the precondition: the hub holds its keyed definition");
+
+        context.Unload();
+
+        StrongMapsHolding(hub, collectibleType).Should().BeEmpty(
+            "after Unloading fires the hub's keyed definition must be demoted to the weak shadow, "
+            + "or the hub roots the superseded load context");
+        hub.TryGetType("SharedKeyed", out var demoted).Should().BeTrue("a live user still resolves it");
+        demoted!.Type.Should().BeSameAs(collectibleType);
+    }
+
+    /// <summary>
     /// A registration arriving AFTER its context began unloading (a serializer touching a
     /// superseded type mid-supersession) must ALSO go to the weak shadow: the Unloading event
     /// has already fired and will never fire again, so a strong entry could never be evicted —
@@ -487,9 +531,13 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var impl = typeRegistry.GetType();
         var holding = new List<string>();
-        var typeByName = (System.Collections.IDictionary?)GetField("typeByName");
-        var aliasByName = (System.Collections.IDictionary?)GetField("aliasByName");
-        var nameByType = (System.Collections.IDictionary?)GetField("nameByType");
+        // The registry's own layer is one immutable snapshot (field `layer`) of three maps.
+        var layer = impl.GetField("layer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(typeRegistry);
+        layer.Should().NotBeNull("the test must track the registry's storage-field shape");
+        var typeByName = (System.Collections.IDictionary?)GetLayerMap("ByName");
+        var aliasByName = (System.Collections.IDictionary?)GetLayerMap("Aliases");
+        var nameByType = (System.Collections.IDictionary?)GetLayerMap("NameByType");
         // All three, not just the first: this helper reaches into private fields by name, so a
         // rename is the expected way it breaks. Asserting each one says WHICH field moved; the
         // null-forgiving dereference below would instead throw a NullReferenceException that
@@ -505,9 +553,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
             holding.Add("nameByType");
         return holding;
 
-        object? GetField(string fieldName) => impl
-            .GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?.GetValue(typeRegistry);
+        object? GetLayerMap(string propertyName) => layer!.GetType().GetProperty(propertyName)?.GetValue(layer);
 
         static Type? GetDefinitionType(object definition) =>
             (Type?)definition.GetType().GetProperty("Type")?.GetValue(definition);

@@ -4,6 +4,7 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -154,7 +155,7 @@ public class PlatformFileReaderGuard
                 RedirectStandardError = true,
                 UseShellExecute = false,
             };
-            psi.ArgumentList.Add(Path.Combine(FindRepoRoot(), ".github", "scripts", "mw-core-file.sh"));
+            psi.ArgumentList.Add(Path.Combine(RepoPaths.Root, ".github", "scripts", "mw-core-file.sh"));
             psi.ArgumentList.Add("--budget");
             psi.Environment["PATH"] = bin + Path.PathSeparator + Environment.GetEnvironmentVariable("PATH");
             psi.Environment.Remove("GH_TOKEN");
@@ -184,7 +185,7 @@ public class PlatformFileReaderGuard
             RedirectStandardError = true,
             UseShellExecute = false,
         };
-        psi.ArgumentList.Add(Path.Combine(FindRepoRoot(), ".github", "scripts", "mw-core-file.sh"));
+        psi.ArgumentList.Add(Path.Combine(RepoPaths.Root, ".github", "scripts", "mw-core-file.sh"));
         psi.ArgumentList.Add(gitRef);
         psi.ArgumentList.Add(path);
         psi.Environment["RUNNER_TEMP"] = runnerTemp;
@@ -215,14 +216,5 @@ public class PlatformFileReaderGuard
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, $"git {string.Join(' ', args)} failed: {stderr}");
         return stdout;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
     }
 }

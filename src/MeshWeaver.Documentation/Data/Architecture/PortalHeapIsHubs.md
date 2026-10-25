@@ -13,6 +13,11 @@ Icon: <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 
 
 # The Portal Heap Is Hubs
 
+> **History note (MeshWeaver#7145).** The per-hub DI rows measured on this page are those of Autofac,
+> the container then in use; it has since been removed and replaced by MeshWeaver's own
+> [MeshServiceProvider](../HubServiceLayers) — see *Per-hub DI and type metadata* for the measurement
+> after the replacement.
+
 A portal replica of the public instance grows ~215 MB/h, monotonically, through hundreds of full
 collections, and never returns to an earlier floor. This page is the heap-dump evidence for
 **what is actually in that memory**, taken read-only from a live production pod on
@@ -162,6 +167,288 @@ names stay per registry; a hub-level registry resolves `String` to the mesh regi
 definition. Resource/override/key-isolation tests for standalone definitions live in
 `TypeDefinitionMetadataTest`. This is a measured reduction of per-hub metadata, not a closure of
 the queue-starvation/OOM investigation (#5555, #1186).
+
+### Per-hub DI and type metadata
+
+The out-of-memory dump of the memex portal (MeshWeaver#7082, 2026-10-23) put a number on defect 3:
+of 12.3 GB of managed heap, 5.78 GiB were Autofac child-scope rows (12,060,761
+`ExternalComponentRegistration`, 50.8 M `MiddlewareDeclaration`) and 1.49 GiB were per-hub
+`TypeRegistry` rows (2.79 M `TypeDefinition`). The dump's own counters size the hub population:
+~101,600 `ConcurrentDictionary<String,TypeDefinition>` tables and ~303,000 registration-queue segments
+(three per scope) say **~100,000 hubs**, so a hub carried **~120 wrappers ≈ 58 KB of Autofac and
+~15 KB of type metadata** — not one copy of the whole parent registration set, but a
+per-hub constant multiplied by a very large population. (The ~4,700 per *grain activation* in the
+first reading is that constant times the ~40 hubs an activation hosts.)
+
+**Where the wrappers come from.** A hub's scope is `BeginLifetimeScope(configurationAction)`, and a
+scope with registrations of its own answers a service its parents provide by wrapping each parent
+registration of it in an `ExternalComponentRegistration` with a fresh resolve-pipeline builder — kept
+for the life of the hub. Most wrappers are what the hub genuinely resolves (its loggers, the mesh
+services, the per-hub `INodeValidator`/`IDataValidator` set), and those are what keep a parent-scoped
+service resolved in a hub bound to the HUB's own `IMessageHub` and overrides. **One group was pure
+waste:** Autofac runs its startable pass on every such scope (the scope's property bag falls back to
+the root's build options), asks the CHILD registry for `AutoActivate`, and every `RegisterInstance` —
+which is every `AddSingleton(instance)` of every module — provides `AutoActivate`. So every hub scope
+wrapped every instance registration of its ancestors, and started none of them: each was already
+activated in the scope that owns it. Measured in a test mesh: 26 of a node hub's 125 wrappers, 26 of a
+hosted child hub's 48; with 200 instance registrations at the root, a hosted hub held 221.
+
+**The first fix (MeshWeaver#7131, superseded by the replacement below).** `HubScopeStartables` set the hub scope's own build option to *ignore startable
+components* unless the hub's own service collection registers an `IStartable` — the only thing an
+`IServiceCollection` can produce that the pass would really start (an `AddSingleton(instance)` is
+auto-activated, but as an externally owned provided instance its activation does nothing). The decision
+is read from the descriptors before the scope is built: a first version that made it in a
+`Registered` handler closing over the scope's builder kept disposed hubs reachable
+(`StreamReleasesItsHubTest` caught it). Under 200 root instances a hosted hub now
+holds 15 wrappers, a child-plus-grandchild pair 4 (407 before) —
+`HubScopeDeclaresOnlyItsOwnServicesTest`, with the negative controls that a hub's own registration still
+overrides the parent's (directly, through a parent-scoped service built in the hub, and in enumeration
+order) and that a hub's own `IStartable` is still started.
+
+**Type definitions.** A hub's registry already chains to its parent's; the copies came from the hub's
+own `WithType` calls for types the mesh registry already held under the same name (a node hub: 344 own
+definitions of 427 resolvable). `TypeRegistry.WithType` now binds the parent's definition OBJECT in the hub's own maps, instead of
+building a copy, when it is exactly the one the hub would build — same type and name, no owning address, no description or icon
+override, no resource-backed display text, and a key the conventions decide (`[Key]`, `Id`,
+`SystemName`), because a registry's own key-function providers are consulted only after them. A type
+whose key would come from the hub's own providers keeps its own definition, as before
+(`HubRegistryInheritsEquivalentDefinitionsTest`). The binding stays LOCAL — the hub keeps its name and
+type entries, and only the definition is shared — because a registry the hub inherits from can change
+after the hub registered: a later `WithKeyFunction` on the parent, a module replacing the name's type
+while the mesh runs, or an intermediate hub binding the same name to another type must not change what
+this hub registered. For the same reason a closed generic (its name is synthesised locally before the
+parent is asked) is never shared, the parent chain must resolve the registered name and the full-name
+alias to the very same definition, and a hub that binds a collectible type, or keys one, listens to
+that context's unloading itself. Each remaining `TypeDefinition` also lost its seven
+per-instance key objects (two `Lazy`, two `LazyHelper`, two delegates, a closure); the key is now
+resolved from the builder on first use, and the two weak-shadow name maps are created on the first
+demotion only.
+
+**Superseded: the registry is now a parent-chained overlay** ([Type Registry Layers](../TypeRegistryLayers)).
+The local binding above still left two map entries per inherited type in every hub, and keyless types
+and closed generics were still copied. A hub's registry now holds ONLY what it adds to the chain or
+overrides in it, and an identical `WithType` stores nothing; parent changes therefore show through.
+Measured on 12 Markdown node hubs and their 69 `sync/` hubs: 5,751 own entries before (344 per node
+hub, 19 per `sync/` hub), 0 after.
+
+**Measured on a realistic population** (before the binding was made local; the hub's two map entries
+per shared type are back, the definition objects stay shared) — 99 activated Markdown node hubs with the standard data-source
+setup plus their hosted hubs, 516 `MessageHub`s, in one test mesh (`dumpheap -stat -live`):
+
+| | Before | After |
+|---|---:|---:|
+| Live heap | 158.4 MB | 133.9 MB |
+| Autofac rows | 31.9 MB (62 KB/hub) | 28.5 MB (55 KB/hub) |
+| TypeRegistry rows | 30.6 MB (59 KB/hub) | 11.7 MB (23 KB/hub) |
+| Retained per node-hub activation (`GC.GetTotalMemory`) | 2.49 MB | 2.04 MB |
+
+**What that did NOT close** — the remaining ~55 KB of Autofac per hub was the services a hub resolves,
+the price of an Autofac child scope per hub: the wrapper was how a parent-scoped service got the hub's
+own dependencies. Closing it took the redesign below.
+
+#### The replacement: a hub level holds only its own descriptors (MeshWeaver#7145)
+
+Autofac is removed. Every container — the mesh's root, each hub's level, each module generation's
+container — is MeshWeaver's own `MeshServiceProvider` ([Hub Service Layers](../HubServiceLayers)). A
+hub's level holds exactly the descriptors the hub declared, frozen, and a slot per instance it built;
+a parent's scoped or transient service resolved in the hub is built by the level with the hub's own
+dependencies, so nothing standing for a parent registration exists per hub. The startable pass, its
+workaround and the reflection-cache eviction went with Autofac.
+
+**Measured with one harness, on both sides** — 99 Markdown node hubs activated through
+`GetMeshNodeStream` in one Monolith test mesh, subscriptions held, three full collections, then a
+`--type Heap` dump of the test host (`dotnet-dump analyze … dumpheap -stat -live`); "before" is core
+at the merge base (Autofac, after #7131), "after" the replacement, everything else identical. This
+harness holds 608 `MessageHub`s on both sides (the 516 of the #7131 table above was a different
+harness, so compare columns within one table, not across the two):
+
+| | Before (Autofac, after #7131) | After (`MeshServiceProvider`) |
+|---|---:|---:|
+| Live heap | 150.2 MB | 119.0 MB |
+| DI-container rows | 27.1 MB (44.5 KB/hub) | 1.6 MB (2.7 KB/hub) |
+| Wrapper registrations (`ExternalComponentRegistration`) | 18,146 (≈30/hub) | 0 |
+| TypeRegistry rows | 12.6 MB (20.7 KB/hub) | 12.6 MB (20.7 KB/hub) |
+| Retained per node-hub activation (`GC.GetTotalMemory`) | 2.31 MB | 1.77 MB |
+
+The container rows that remain are the registrations themselves (one small object per descriptor, of
+the root and of every level, in a frozen lookup), the instance slots, and the activation plans —
+nothing grows with what a hub's PARENTS registered (`HubScopeDeclaresOnlyItsOwnServicesTest` pins
+zero parent registrations per hub). Not touched: defects 1 and 2, which set how many hubs there are,
+and the type-registry rows; the per-hub cost only multiplies them.
+
+**Owed after the roll:** a fresh production dump read with the governed `AnalyzeDump` (heap stats) on
+the control instance, against the #7082 OOM reading above — the per-hub container rows and the absence
+of `ExternalComponentRegistration` at production's hub population.
+
+### What a hub costs once the container is gone: the next candidates
+
+Replacing Autofac (MeshWeaver#7147) took the container from 44.5 KB to 2.7 KB per hub. This section
+answers the next question: **what is the remaining per-hub cost made of, and which part of it is
+duplicated in every hub when it could be shared?** It is an analysis. Nothing in it is fixed yet.
+
+**The harness.** The same one #7147 used, on its branch (`feat/7145-replace-autofac`, head
+`bc9e9f5c58`): 99 Markdown node hubs in one Monolith test mesh, activated through
+`GetMeshNodeStream` with their subscriptions held. One change: a `--type Heap` dump is taken both
+BEFORE and AFTER the activations, so the per-type difference is exactly what 99 activations retain.
+Measured 2026-10-25 on a host with 18 logical processors.
+
+| Reading | Value |
+|---|---:|
+| Retained per activation (`GC.GetTotalMemory`) | 1,777,500 B (#7147: 1.77 MB) |
+| Live heap before → after (`dumpheap -stat -live`) | 33.6 MB → 119.6 MB |
+| New `MessageHub`s | 594: 99 node hubs + 495 `sync/{id}` stream hubs (5 per node hub) |
+| Live bytes per activation, per hub | 868,567 B per activation = **144,761 B per hub** |
+
+The two totals disagree by 2× (176 MB against 86 MB), and why was not established. The breakdown
+below uses the live walk, because only that one has owners. The hub mix matches production: there,
+89.6 % of hubs were `sync/` stream hubs (*What is in it*, above); here they are 83 %. **So a cost
+that every hub carries is, in practice, mostly a cost that `sync/` hubs carry.**
+
+**How ownership was assigned.** A ClrMD walk gives every live object its breadth-first parent from
+the GC roots. Each object is then charged to its nearest ancestor that is not a collection, delegate,
+closure, Rx operator, array or other BCL internal. So the `Object[]` inside a `ConcurrentDictionary`
+inside a `TypeRegistry` is charged to `TypeRegistry`. The figures are the after-dump minus the
+before-dump, divided by the 594 new hubs:
+
+| Owner subsystem | Bytes per hub | Share |
+|---|---:|---:|
+| Type registry (`TypeRegistry`, `TypeDefinition`) | 44,550 | 30.8 % |
+| Messaging (hub object, handler rules, delivery pipeline, `HostedHubsCollection`, `MessageService`, storm breaker) | 37,657 | 26.0 % |
+| Serialization (the hub's `JsonSerializerOptions`, System.Text.Json metadata, the polymorphic resolver and converters) | 34,220 | 23.6 % |
+| Data (workspace, three synchronization streams per node, reducers, stream-cache entries) | 12,267 | 8.5 % |
+| Layout (area definitions, renderers) | 5,935 | 4.1 % |
+| Assembly type cache (`Type[]` per assembly, held through a `ConditionalWeakTable` keyed by the assembly) | 3,761 | 2.6 % |
+| DI (`MeshServiceProvider`, after #7147) | 3,755 | 2.6 % |
+| Other | 2,619 | 1.8 % |
+
+There is no `Microsoft.Extensions.Logging` row: a hub's loggers come from the root's factory and add
+nothing per hub. Rx subjects and operators come to about 3.5 KB per hub, spread over the owners above,
+and are real per-stream state. Orleans activation state is not in this harness (a Monolith), and no
+Orleans type is among the 30 largest rows of the #7082 production dump, the smallest of which is
+64.8 MB.
+
+#### One cost cuts across all of them: `ConcurrentDictionary` sized for the machine
+
+A census of every live `ConcurrentDictionary` (the dictionary, its `Tables`, its buckets, its lock
+array, its lock objects and its per-lock counts) found:
+
+- **29.6 dictionaries per hub, 60 % of them EMPTY**, holding 248 elements per hub in total.
+- **45,310 bytes of skeleton per hub, which is 31 % of the whole hub.**
+- **20.8 locks per dictionary.** The default concurrency level is `Environment.ProcessorCount`, and
+  every lock costs 36 bytes (an `object[]` slot, an `Object`, and an `int[]` slot). That is what the
+  bare `System.Object` row of this dump is: 629 objects per hub (15.1 KB), and 587 of them are lock
+  objects held from a dictionary's lock array.
+
+The largest groups per hub: two `String→TypeDefinition` maps (7.7 KB), 5.4 System.Text.Json
+`PolymorphicTypeResolver` caches (7.5 KB), and five empty `ConcurrentDictionary<string, byte>`
+warn-once sets (6.3 KB). After them come the four maps of `HostedHubsCollection` (hosted hubs, pending
+creations, joining, retiring) and the three callback maps of `MessageService`, about 1.3 KB each and
+empty on almost every hub, and the storm breaker's counter map. The warn-once sets are
+`MessageHub.foreignSenderReported`, `routerTrafficOriginReported`, `routerTrafficReported`,
+`ObjectPolymorphicConverter.warnedUnregisteredRead` and
+`PolymorphicTypeInfoResolver.warnedUnloadableAssemblies`, plus two `<Type, byte>` sets in the same
+resolver. **They exist to log something at most once, and on a healthy hub they never receive an
+entry.** A leaf hub hosts nothing, yet its `retiring`, `joining` and hosted-hub maps are all built.
+
+The production dump is consistent with this. It shows 6 GC heaps, so presumably 6 processors and 6
+locks per dictionary, and 9.79 M `System.Object` (235 MB), which is about 98 per hub over the
+~100,000 hubs.
+
+#### The candidates, ranked
+
+The bytes are measured in this harness (per hub, at 18 processors). The savings are ESTIMATES:
+"×600" is this harness's population, and "×100k" is the #7082 OOM population (~2,568 grain
+activations × ~40 hubs each). For the lock-bound row, both an 18-processor and a 6-processor figure
+are given.
+
+| # | Candidate | Measured per hub | Duplicated? | Fix shape | Est. saving per hub · ×600 · ×100k | Effort · risk |
+|---|---|---:|---|---|---|---|
+| 1 | **`ConcurrentDictionary` skeletons** (cross-cutting; overlaps rows 2–4) | 45.3 KB, 29.6 dicts, 60 % empty | Not duplicated, OVER-PROVISIONED: per-processor locks on maps a single-threaded hub writes, and maps that stay empty | (a) warn-once sets and leaf-only maps created lazily on first entry, or one mesh-scoped warn-once instance; (b) the rest `concurrencyLevel: 1` with a small capacity, or an immutable map where only the hub's own turn writes | ~31 KB (18 procs) / ~20 KB (6) · 18 / 12 MB · 3.1 / 2.0 GB | low per site, ~30 sites · low |
+| 2 | **Type registry** | 44.5 KB, 69 own `TypeDefinition`s | **Yes, three ways** (below) | Re-registering an equivalent type is a no-op. A keyless type shares the parent's definition when the registry adds no key provider of its own. The key cell is a field set once, not a `Lazy` with a closure, under two constraints the replacement must keep: the first key read does not change the definition's equality or hash, and concurrent first reads run the key provider exactly once (`ReadingTheKey_DoesNotChangeTheDefinitionsHash`, `ConcurrentFirstKeyReads_ResolveTheKeyFunctionOnce`) | ~16 KB · 10 MB · 1.6 GB | low–medium · low–medium |
+| 3 | **Serialization stack per hub** | 34.2 KB; 612 `JsonSerializerOptions` for 608 hubs; 5.4 polymorphic resolvers per hub | **Yes for `sync/` hubs**: they register a handful of stream types the host already resolves, and still build their own options, resolver and STJ metadata | A hub whose registry adds nothing the host does not resolve reuses the host's options. The general shape is options keyed by the registry's content | ~25 KB (83 % of hubs × ~30 KB) · 15 MB · 2.5 GB | high · high (wire format) |
+| 4 | **Handler rules and the delivery pipeline** | ~12.5 KB (40 `AsyncDelivery` delegates, 18 `DeliveryFilter`, 13 `MessageHandlerItem` per hub, plus closures) | Yes in shape: the same configuration lambdas build the same rules on every hub of a kind, each closing over its own hub | An immutable rule table per configuration, shared, with the hub passed in rather than captured | ~8 KB · 5 MB · 0.8 GB | high · medium |
+| 5 | **Loadable types per assembly** (`PolymorphicTypeInfoResolver.loadableTypesByAssembly`) | 3.7 KB (951 `RuntimeType[]` for 594 hubs) | **Yes**: an assembly's loadable types do not depend on the hub | One `ConditionalWeakTable<Assembly, Type[]>` instance per mesh, handed down from the root like `TypeDisplayMetadataCache` | ~3.7 KB · 2.2 MB · 370 MB | low · low |
+| 6 | **Layout area descriptions** | 2.9 KB average (17.7 KB per node hub): 3,396 description strings, **137 distinct** | **Yes**: `CreateLayoutAreaDefinition` reads the XML summary and the display attributes again per hub per area; only `Url` is per hub | The hub-independent part (description, title, group, order) cached per mesh by the view's `MethodInfo`; the hub adds only `Url` | ~2.9 KB · 1.7 MB · ≤290 MB | low · low |
+| — | Data: workspace and streams | 12.3 KB | No: genuine per-node state | Fewer hubs (defects 1 and 2 above), not sharing | — | — |
+| — | DI container | 3.8 KB | Done (#7147) | — | — | — |
+
+**The three ways the type registry still duplicates** (row 2):
+
+- **Two definitions per type per hub.** There are 1,215 `PingRequest` definitions for 608 hubs, and
+  1,217 for `Address`. Both copies are held through the registry's `String→TypeDefinition` maps. By
+  code reading: a second `WithType` of a name already registered skips the inherited path
+  (`typeByName.ContainsKey`), builds a new definition and overwrites `typeByName`. Meanwhile
+  `IndexFullNameAlias` uses `TryAdd` for a non-collectible type, so the alias map keeps the FIRST
+  definition. Which call registers the type twice was not established.
+- **Keyless types are never shared.** `IsEquivalentPlainDefinition` requires `HasConventionalKey`.
+  Request, response and event types such as `PingRequest`, `DisposeRequest` and `DataChangedEvent`
+  have no key, so the 16 types every hub registers are copied on every hub, `sync/` hubs included.
+  Over all hubs there are 42,363 definitions of 434 types. The 16 types on every hub account for
+  12,459 of them, and 239 node-hub types for 29,717 (about 300 per node hub).
+- **The key cell is four objects per definition**: a `Lazy<KeyFunction>`, its `LazyHelper`, a
+  `Func<KeyFunction>` and the closure, about 168 bytes of the ~272 a definition costs. That is about
+  11.7 KB per hub. Whatever replaces it keeps the two guarantees the `Lazy` gives today: the first
+  key read must not change the definition's equality or hash (a shared definition can sit in a hash
+  set while another hub reads its key), and concurrent first reads must run the key provider exactly
+  once. `HubRegistryInheritsEquivalentDefinitionsTest` pins both.
+
+**Correction to the #7082 reading:** `MeshWeaver.Messaging.AsyncDelivery` is a DELEGATE type: a
+handler rule (`public delegate IObservable<IMessageDelivery> AsyncDelivery(IMessageDelivery,
+CancellationToken)`, held in `MessageHub.rules`). It is not a queued message. The dump's 1,823,071
+instances are about 18 registered rules per hub, not 1.8 M messages waiting. They belong in row 4,
+not in a backlog count.
+
+**Recommended order.** First row 1, because it is the cheapest and touches every hub. Then row 2,
+because it is local to `TypeRegistry`, and #7131's tests (`HubRegistryInheritsEquivalentDefinitionsTest`,
+`TypeDisplayMetadataSharedAcrossHubsTest`) already pin the sharing semantics. Then row 3, the largest
+structural saving, because it removes most of the serialization line from 5 of every 6 hubs, though
+it needs a design for "this hub's registry adds nothing new". Rows 5 and 6 are small, safe and can
+ride along with row 2. The standalone estimates of rows 1–3 sum to ~72 KB of the 145 KB per hub, but they are
+**not additive**: row 1 counts the dictionary skeletons inside rows 2–4, and row 3 also counts
+serializer dictionaries that row 1 already shrinks or removes. The combined saving therefore lies
+between the largest single row (~31 KB) and that sum, and the incremental saving of each row after
+the ones before it was not calculated. These are estimates from these readings, not measurements;
+each fix re-runs this harness, before and after.
+
+#### Allocation churn: two sources the retained heap does not show
+
+**`Subject<MeshChangeEvent>+SubjectDisposable[]` re-copies** (0.65 GiB sampled). The cause:
+`InProcessMeshChangeFeed` holds ONE Rx `Subject<MeshChangeEvent>` per channel for the whole process,
+and every subscriber filters inside its own handler. An Rx `Subject` keeps its observers in a
+copy-on-write array, so every `Subscribe` and every `Dispose` allocates a new array of all N current
+observers. The dump counts the observers: 311 after the 99 activations against 14 before, so **three
+subscribers per node activation**. Those are one `Workspace` (104), one `JsonSynchronizationStream`
+(99), one auto-detaching operator subscription (100), plus 6 synced queries and the two mesh-level
+caches. At production's ~2,568 activations, that is ~7,700 observers and about 62 KB copied on every
+hub start and every hub stop. Every commit also invokes all N handlers. The fix shape: an OPT-IN
+exact-path channel inside the feed, an immutable map from path to its handlers, so that a
+subscription on it copies only its own path's handlers and an event reaches only its path's
+subscribers. It sits ALONGSIDE the existing global and kind-filtered subscriptions, which stay,
+because not every subscriber has one fixed path: a synced query's deletion fast-path
+(`SyncedQueryMeshNodes`) listens for deletions on every path, and a `Workspace` forwards changes
+for whichever mirrored owner paths it currently caches, not only its own hub's path. A workspace
+moving to the exact-path channel therefore has to register and unregister each mirrored path as
+its cache gains and drops it; anything that cannot name its paths up front stays on the global
+channel. The kind filter stays.
+
+**`CoffHeader`** (1.94 GiB sampled). `System.Reflection.PortableExecutable.CoffHeader` is allocated
+whenever a `PEReader` parses PE headers. The [allocation sampler](../WhichKindOfSilence) saw it in
+the first ticks after boot, while assembly loading and compilation run. By code reading, the
+repeated parses in the compile path are:
+
+- `CompileReferences.Choose` calls `AssemblyName.GetAssemblyName` on the host and the package file,
+  for every package assembly of every compile.
+- `CompileReferences.WithPackageAssemblies` creates a fresh `MetadataReference.CreateFromFile` per
+  package assembly per compile by default. Roslyn then re-reads that reference's metadata and cannot
+  reuse symbols across compilations.
+- The identity reads (`SameIdentity`, `ServedBuildIdentity`, `GeneratedInputIdentity`,
+  `NodeSetCompiler`) open their own `PEReader` per call.
+
+The fix shape: a mesh-scoped INSTANCE cache, never `static`, of the assembly name or MVID and of the
+`PortableExecutableReference`. It is keyed by path, length and last-write time, and passed to every
+`WithPackageAssemblies` caller. The kernel already passes its `GetOrCreateFromFile`. Which caller
+dominates is NOT established: the sampler records types, not stacks. The next reading is an
+allocation trace with stacks (`dotnet-trace` with `gc-verbose`) over one boot.
 
 ## Why the LIVE ones are never released
 
@@ -355,6 +642,9 @@ They are independent, and conflating them is how this stayed open.
    fit a 12 GiB ceiling with room to serve. Each child `ILifetimeScope` wraps 262 parent
    registrations in `ExternalComponentRegistration`, each with its own ~4-stage resolve pipeline.
    Fixing (1) and (2) alone leaves a portal whose working set is set by its DI cost per actor.
+   The share that was waste — every ancestor's instance registrations, wrapped by a startable pass
+   that started nothing, and a copy of every type definition the mesh already held — is removed;
+   what remains is measured in *Per-hub DI and type metadata* above.
 
 🚨 **None of the three is fixed by raising the memory limit, lowering the GC hard limit, recycling pods on a
 timer, or deleting pods by hand.** The pod-deletion stopgap has been applied at least four times

@@ -26,6 +26,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 WORKFLOW = ".github/workflows/node-repo-gate.yml"
 STEP_ID = "plan"
 FAILURES: list[str] = []
@@ -46,21 +49,10 @@ def ok(name: str, detail: str = "") -> None:
 
 
 def extract_step(root: Path, step_id: str) -> str:
-    import yaml
-
-    doc = yaml.safe_load((root / WORKFLOW).read_text(encoding="utf-8"))
-    for job in (doc.get("jobs") or {}).values():
-        for step in job.get("steps") or []:
-            if isinstance(step, dict) and step.get("id") == step_id:
-                body = step.get("run")
-                if not body:
-                    die(f"step id `{step_id}` in {WORKFLOW} has no `run:` — nothing to execute.")
-                if "${{" in body:
-                    die(f"step id `{step_id}`'s `run:` grew a ${{{{ }}}} expression this harness "
-                        "cannot supply — pass it through `env:` instead.")
-                return body
-    die(f"no step with id `{step_id}` in {WORKFLOW}. This harness EXTRACTS the lane's own shell by "
-        "id; a renamed or id-less step would leave it testing nothing.")
+    try:
+        return workflow_yaml.step_run(root / WORKFLOW, step_id)
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
     raise AssertionError("unreachable")
 
 

@@ -321,14 +321,15 @@
         },
         {
           "workflow": "hosting-operator.yml",
-          "job": "publish",
+          "repo": "Systemorph/MeshWeaver.Plugins",
+          "job": "operator",
           "repositories": [
             "hosting-operator"
           ],
           "registries": [
             "meshweaver.azurecr.io"
           ],
-          "state": "every merge that touches the operator image"
+          "state": "every merge there that touches the operator, and hourly when core's chart or drift scripts moved (the operator moved to MeshWeaver.Plugins)"
         }
       ]
     },
@@ -447,6 +448,30 @@
           "job": "publish",
           "repositories": [
             "whisper-swiss-german"
+          ],
+          "registries": [
+            "meshweaver.azurecr.io"
+          ],
+          "state": "every main build"
+        }
+      ],
+      "notation": "any",
+      "status": "written"
+    },
+    {
+      "id": "ocr-line",
+      "tag": "tesseract-5.5",
+      "edition": "service",
+      "meaning": "The Tesseract OCR service line tag (deploy/ocr), re-pushed by every main build of that image (the per-build tag is <line>-<sha>). A service image, never a self-update candidate.",
+      "platforms": [
+        "linux/amd64"
+      ],
+      "writers": [
+        {
+          "workflow": "ocr-image.yml",
+          "job": "publish",
+          "repositories": [
+            "ocr"
           ],
           "registries": [
             "meshweaver.azurecr.io"

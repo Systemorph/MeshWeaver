@@ -18,14 +18,14 @@ using Xunit;
 namespace MeshWeaver.Graph.Test;
 
 /// <summary>
-/// Plugins#2362: during mesh teardown, callbacks reached a DI resolve on a hub whose Autofac
+/// Plugins#2362: during mesh teardown, callbacks reached a DI resolve on a hub whose the DI container
 /// container was already disposed while the hub still read <c>IsShuttingDown == false</c>. This pins
 /// the invariant the gate relies on, for every hub kind a mesh holds — the mesh itself, a hosted
 /// child, a hosted grandchild, and a per-node hub the router minted: <b>by the first instant the
 /// container that roots them is disposed, every one of them is part of a shutdown</b>.
 ///
 /// <para>The instant is measured, not inferred. A <see cref="ContainerEndProbe"/> is a singleton of
-/// the fixture's ROOT provider resolved AFTER every hub was created, so Autofac — which disposes in
+/// the fixture's ROOT provider resolved AFTER every hub was created, so the DI container — which disposes in
 /// reverse creation order, and marks the scope disposed BEFORE it disposes anything — disposes it
 /// first: its <c>Dispose</c> runs at the earliest moment any resolve against the container throws.
 /// It records what each hub reads there.</para>

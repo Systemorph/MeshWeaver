@@ -4,7 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -79,26 +81,21 @@ public class StagedPipelineNeverSkipsTheSuitesOnTrunkGuard
 
     private static IReadOnlyDictionary<string, Job> Jobs()
     {
-        var path = Path.Combine(FindRepoRoot(), ".github", "workflows", "dotnet-test.yml");
-        var stream = new YamlStream();
-        using (var reader = new StringReader(File.ReadAllText(path)))
-            stream.Load(reader);
-        var root = (YamlMappingNode)stream.Documents[0].RootNode;
-        var jobs = (YamlMappingNode)root.Children[new YamlScalarNode("jobs")];
+        var path = Path.Combine(RepoPaths.Root, ".github", "workflows", "dotnet-test.yml");
+        var root = (JsonObject)TolerantYaml.Parse(File.ReadAllText(path))!;
+        var jobs = (JsonObject)root["jobs"]!;
         var result = new Dictionary<string, Job>(StringComparer.Ordinal);
-        foreach (var (key, value) in jobs.Children)
+        foreach (var (key, value) in jobs)
         {
-            var body = (YamlMappingNode)value;
-            var needs = body.Children.TryGetValue(new YamlScalarNode("needs"), out var n)
-                ? n switch
-                {
-                    YamlSequenceNode seq => seq.Children.Select(c => ((YamlScalarNode)c).Value ?? "").ToList(),
-                    YamlScalarNode s => new List<string> { s.Value ?? "" },
-                    _ => new List<string>(),
-                }
-                : new List<string>();
-            var cond = body.Children.TryGetValue(new YamlScalarNode("if"), out var i) ? ((YamlScalarNode)i).Value ?? "" : "";
-            result[((YamlScalarNode)key).Value ?? ""] = new Job(needs, cond);
+            var body = (JsonObject)value!;
+            var needs = body["needs"] switch
+            {
+                JsonArray seq => seq.Select(c => TolerantYaml.ScalarText(c) ?? "").ToList(),
+                JsonValue s => new List<string> { TolerantYaml.ScalarText(s) ?? "" },
+                _ => new List<string>(),
+            };
+            var cond = TolerantYaml.ScalarText(body["if"]) ?? "";
+            result[key] = new Job(needs, cond);
         }
         return result;
     }
@@ -115,14 +112,5 @@ public class StagedPipelineNeverSkipsTheSuitesOnTrunkGuard
                     frontier.Enqueue(name);
         }
         return found.ToList();
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-            ?? throw new InvalidOperationException("Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
     }
 }

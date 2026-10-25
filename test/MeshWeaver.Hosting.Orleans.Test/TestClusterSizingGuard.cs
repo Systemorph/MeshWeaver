@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -64,17 +65,12 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
 
     /// <summary>
     /// This project's own <c>.cs</c> files, located from the repo root the same way
-    /// <see cref="GrainActivationSiteRatchetGuard"/> does (walk up to <c>MeshWeaver.slnx</c>) — the
+    /// every repo guard does (<see cref="RepoPaths.Root"/>) — the
     /// resolution that is already proven to work from a CI shard's working directory.
     /// </summary>
     private static string[] SourceFiles()
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        if (dir is null)
-            throw new InvalidOperationException(
-                "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
+        var root = RepoPaths.Root;
 
         // Both homes of cluster-building code: this project's tests AND the machinery that moved to
         // test/MeshWeaver.Hosting.Orleans.TestBase (OrleansTestCluster and friends) so that suites in
@@ -82,8 +78,8 @@ public class TestClusterSizingGuard(ITestOutputHelper output)
         // directory would have let the builder itself drop the sizing without a red test.
         var homes = new[]
         {
-            Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.Test"),
-            Path.Combine(dir.FullName, "test", "MeshWeaver.Hosting.Orleans.TestBase"),
+            Path.Combine(root, "test", "MeshWeaver.Hosting.Orleans.Test"),
+            Path.Combine(root, "test", "MeshWeaver.Hosting.Orleans.TestBase"),
             // 🚨 MeshWeaver.AI.Orleans.TestBase used to sit here too; the AI rig left this repo
             // with the engine (#2276), so its cluster-sizing is guarded by the same test in
             // MeshWeaver.Plugins. A guard cannot police sources it cannot see — naming a directory

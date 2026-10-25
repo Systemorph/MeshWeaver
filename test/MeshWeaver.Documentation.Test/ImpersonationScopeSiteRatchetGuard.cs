@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -92,8 +93,12 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     /// lowering it by one both read "64 → 63", and taking either side alone would have left the
     /// budget one above the file and put the free slot back. The seed is EXACT against the file
     /// again (62).</para>
+    ///
+    /// <para>44, not 60: sixteen allowances in ten files left with Memex.Portal.Shared when it moved
+    /// to MeshWeaver.Plugins (core slimming). The sites moved with their code; they were not
+    /// converted.</para>
     /// </summary>
-    private const int TotalBudget = 61;
+    private const int TotalBudget = 44;
 
     /// <summary>Production roots. <c>test/</c> and <c>samples/</c> are deliberately out of scope —
     /// the leak there costs test isolation, not a user's permissions, and listing 21 more entries
@@ -136,7 +141,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewSiteOpensAnImpersonationScopeInsideObservableUsing()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root);
 
@@ -190,7 +195,7 @@ public class ImpersonationScopeSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheShapeItIsRatcheting()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
 
         Assert.True(found.Count > 0,

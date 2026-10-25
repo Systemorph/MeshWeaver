@@ -17,7 +17,7 @@ namespace MeshWeaver.Hosting.Test;
 ///
 /// <para>The store reads the SAME labels one layer down: <c>_releases/&lt;platform-version&gt;</c>,
 /// one marker per publication, named by exactly the string the tag carried. Three readers ranked
-/// them by SemVer — <see cref="SealedPublicationIndex.ReleasesOf"/> (identity → its newest
+/// them by SemVer — <see cref="SealedPublicationIndex.ReleasesOf(string, Microsoft.Extensions.Logging.ILogger)"/> (identity → its newest
 /// version), <c>ShippedPrebuiltBundles.FallbackPublishedBundlesOf</c> (which sealed publication a
 /// tolerant adoption takes) and <see cref="PrebuiltBundleStore.Plan"/> (which publications
 /// survive the sweep) — so a mislabelled marker did not merely mis-rank a listing: it placed an

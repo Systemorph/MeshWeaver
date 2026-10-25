@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -80,7 +81,7 @@ public class DispatchedBuildInputsInvariantGuard
     [Fact]
     public void NoCompilationStatusIsWrittenThroughAnExpressionThisGuardCannotRead()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var opaque = ScanSrc(root).Where(w => !IsReadable(w.Value)).ToList();
 
         Assert.True(opaque.Count == 0,
@@ -97,7 +98,7 @@ public class DispatchedBuildInputsInvariantGuard
     [Fact]
     public void ExactlyOnePlaceInSrcMayFlipAStatusToPending()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var doors = ScanSrc(root)
             .Where(w => Mentions(w.Value, "Pending"))
             .ToList();
@@ -119,7 +120,7 @@ public class DispatchedBuildInputsInvariantGuard
     [Fact]
     public void EveryTerminalCompilationStatusWrite_ClearsTheInFlightStamp()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var all = ScanSrc(root);
 
         var terminal = all
@@ -564,12 +565,4 @@ public class DispatchedBuildInputsInvariantGuard
 
     private static int LineOf(string text, int index) => text.AsSpan(0, index).Count('\n') + 1;
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "Could not locate the repository root (MeshWeaver.slnx).");
-        return dir!.FullName;
-    }
 }

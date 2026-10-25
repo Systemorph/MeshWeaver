@@ -668,4 +668,31 @@ public class BundleReaderTest
         return copy.ToArray();
     }
 
+    // ── review of #7121: a read of in-memory bundle bytes is one decompression PER ASSEMBLY, so a
+    //    pooled leaf hands it the pool's token rather than declaring it atomic ──
+
+    [Fact]
+    public void AModuleReadFromBytes_ObservesTheToken()
+    {
+        var bundle = WriteModuleBundle(
+            new { assemblyName = "MeshWeaver.Social", assemblies = new[] { "MeshWeaver.Social.dll", "Dep.dll" } },
+            ("MeshWeaver.Social.dll", "SOCIAL"u8.ToArray()), ("Dep.dll", "DEP"u8.ToArray()));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => BundleReader.ReadModule(bundle, cancelled.Token));
+        // The control: the same bytes with a live token yield the whole closure.
+        Assert.Equal(2, BundleReader.ReadModule(bundle, CancellationToken.None).Files.Count);
+    }
+
+    [Fact]
+    public void ANodeTypeBundleReadFromBytes_ObservesTheToken()
+    {
+        var bundle = WriteBundle(("ThreeBody/Physics/Source", "PHYSICS"u8.ToArray()));
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => BundleReader.Read(bundle, cancelled.Token));
+        Assert.Single(BundleReader.Read(bundle, CancellationToken.None).Assemblies);
+    }
 }

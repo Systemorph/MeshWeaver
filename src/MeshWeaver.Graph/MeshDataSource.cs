@@ -203,7 +203,7 @@ public static class MeshDataSourceExtensions
                                 // NAMELESS INTERMEDIATE that no caller owns. A plain Reduce builds a
                                 // new one per call and registers it for disposal on `primary`, the
                                 // data source's hub-lifetime stream — so every call permanently
-                                // added a `sync/{id}` sub-hub (its own Autofac scope, TypeRegistry
+                                // added a `sync/{id}` sub-hub (its own service scope, TypeRegistry
                                 // and JsonSerializerOptions, ~140 KB). This factory runs uncached on
                                 // every call that passes a `configuration`, i.e. once per inbound
                                 // SubscribeRequest, so an unsubscribe reaped the subscription's own
@@ -1301,7 +1301,7 @@ public static class MeshDataSourceExtensions
                 // 🚨 RELEASE FIRST, LOG SECOND — A DIAGNOSTIC MUST NEVER PREVENT THE CLEANUP IT
                 // DESCRIBES (#5064). Control reaches this method only when `meshHub.IsDisposing`
                 // is already true (the guard above returned otherwise), so this arm runs while the
-                // hub's Autofac LifetimeScope is being closed underneath it and the resolve below
+                // hub's service scope is being closed underneath it and the resolve below
                 // can throw `ObjectDisposedException: … this LifetimeScope … has already been
                 // disposed`. With the resolve ahead of the release, that throw propagated out of
                 // the Rx error handler and `lease.Dispose()` never ran — so the collectible
@@ -2519,21 +2519,20 @@ public record MeshDataSource : GenericUnpartitionedDataSource<MeshDataSource>, I
         if (staticNode != null)
         {
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts
-                .WithKey(n => n.Id)
-                .WithInitialData([staticNode]));
+            // No WithKey: MeshNode's [Key] Id is the convention, so the mesh's definition already keys
+            // it. Re-stating it bound a keyed MeshNode override on every node hub's type registry.
+            return WithType<MeshNode>(ts => ts.WithInitialData([staticNode]));
         }
 
         if (_persistenceCore == null)
         {
             _logger?.LogWarning("MeshDataSource: No persistence core, using basic MeshNode type source");
             Workspace.Hub.OpenGate(MeshNodeExtensions.MeshNodeInitGateName);
-            return WithType<MeshNode>(ts => ts.WithKey(n => n.Id));
+            return WithType<MeshNode>(ts => ts);
         }
 
         return WithTypeSource(typeof(MeshNode),
-                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath, ownStream)
-                    .WithKey(n => n.Id));
+                new MeshNodeTypeSource(Workspace, Id, _persistenceCore, _hubPath, ownStream));
         // Note: persistence ref is still passed because creates+deletes go
         // straight to disk (insta write); only updates ride the Sample(200ms)
         // queue → SaveMeshNodeRequest. See Doc/Architecture/AsynchronousCalls.md

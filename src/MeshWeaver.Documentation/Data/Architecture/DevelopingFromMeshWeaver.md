@@ -81,13 +81,13 @@ timeouts, no log-level fiddling to make it pass — the defect is fixed at the r
 Issues, pull requests, branches, and **live webhooks** are the data this loop acts on. A Space
 connects to a repository; issues sync into `{space}/_Issue/{number}` nodes; pull requests are read
 live (list, checks + reviews roll-up, comment, merge) and never replicated; a HMAC-verified webhook
-keeps issue nodes fresh. The reactive Octokit client that powers all of it runs every call through
+keeps issue nodes fresh. The GitHub REST client that powers all of it runs every call through
 the controlled I/O pool. Full reference: [Syncing a Space with GitHub](/Doc/Architecture/GitHubSync).
 
 ## What's here today, and the direction
 
 **Live today:** per-agent worktrees (`GitWorkingTreeService`), the `/code` and `/pull-request`
-skills, and the full GitHub issues/PRs/webhooks backend (reactive Octokit, merge/close/comment,
+skills, and the full GitHub issues/PRs/webhooks backend (a thin REST client, merge/close/comment,
 checks + reviews).
 
 **The direction** (not yet built): binding a thread to its worktree so picking a thread shows its

@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using MeshWeaver.Messaging;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -115,7 +116,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewSiteWritesAnUnkeyedActivityLogMessage()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = ScanUnkeyed(root);
 
@@ -169,7 +170,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoTargetTypedLogMessageConstructionHidesFromTheRatchet()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => (File: SourceScan.Relative(root, f), Count: TargetTypedIn(ReadOrEmpty(f))))
             .Where(x => x.Count > 0)
@@ -197,7 +198,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void EveryActivityKeyNamedInSourceIsInTheEnglishCatalog()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var used = ActivityKeysIn(root);
 
         Assert.True(used.Count > 0,
@@ -231,7 +232,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewVerbatimLocalizableTextIsIntroduced()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var budgets = new Dictionary<string, int>(StringComparer.Ordinal)
         {
             // The inner CreateNodeResponse.Error — the create handler's own words, verbatim
@@ -319,7 +320,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoActivityKeyInTheCatalogIsUnused()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var used = ActivityKeysIn(root);
 
         var orphans = LocalizationCatalog.Keys
@@ -348,7 +349,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void EveryNotificationKeyNamedInSourceIsInTheEnglishCatalog()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         // A projection, not an accumulator — the repository bans mutable collections in `test/` as
         // well as in `src/`, and this scan has no reason to be one.
         var named = SourceScan.SourceFiles(root, ScannedRoots)
@@ -442,7 +443,7 @@ public class UnkeyedActivityLogMessageRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsBothShapesItDiscriminates()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var (total, keyed) = ScanTotals(root);
 
         Assert.True(total > 0,

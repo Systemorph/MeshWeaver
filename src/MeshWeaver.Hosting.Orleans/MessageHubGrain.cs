@@ -922,14 +922,14 @@ public class MessageHubGrain(ILogger<MessageHubGrain> logger, IMessageHub meshHu
     /// here: <see cref="HubDisposingException.IsHubDisposal"/> covers the case where the hub
     /// announced its own disposal, and <see cref="HubDisposingException.IsDisposedContainer"/>
     /// the case a scope was closed underneath live work — an
-    /// <see cref="ObjectDisposedException"/> naming a disposed Autofac <c>LifetimeScope</c>, which
+    /// <see cref="ObjectDisposedException"/> naming a disposed service scope, which
     /// is exactly the signature #3243 was filed on. Both walk the exception CHAIN, because the
     /// fault reaches this arm wrapped.</para>
     /// </summary>
     /// <param name="ex">The activation fault; may be null.</param>
     /// <returns><c>true</c> when the fault is a teardown race.</returns>
     internal static bool IsActivationTeardownRace(Exception? ex) =>
-        HubDisposingException.IsHubDisposal(ex) || HubDisposingException.IsDisposedContainer(ex);
+        FaultClassifier.Classify(ex).IsTeardown;
 
     /// <summary>
     /// The level the activation-fault line is logged at — a TICKETING decision, not a verbosity

@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -65,8 +66,10 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     /// </summary>
     private static readonly string[] ScannedRoots = ["src", "memex", "tools", "samples", "clients"];
 
-    /// <summary>The seeded inventory's size for <see cref="NoNewAwaitOfAMeshRead"/>.</summary>
-    private const int AwaitedReadTotalBudget = 2;
+    /// <summary>The seeded inventory's size for <see cref="NoNewAwaitOfAMeshRead"/>. Zero: its
+    /// last two sites (DevAuthController, UserRoleResolver) left with Memex.Portal.Shared for
+    /// MeshWeaver.Plugins (core slimming), so every new await of a mesh read here is NEW.</summary>
+    private const int AwaitedReadTotalBudget = 0;
 
     /// <summary>The seeded inventory's size for <see cref="NoNewTaskShapedSeamInTheMeshContract"/>.</summary>
     private const int SeamTotalBudget = 5;
@@ -146,7 +149,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewAwaitOfAMeshRead()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(
             Path.Combine(root, "test", AwaitedReadAllowFile), AwaitedReadAllowFile);
         var found = ScanAwaitedReads(root);
@@ -203,7 +206,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewTaskShapedSeamInTheMeshContract()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(
             Path.Combine(root, "test", SeamAllowFile), SeamAllowFile);
         var found = ScanContractSeams(root);
@@ -331,14 +334,7 @@ public class HubReachableAsyncGuard(ITestOutputHelper output)
     [Fact]
     public void BothScannersFindTheInventoryTheyRatchet()
     {
-        var root = SourceScan.FindRepoRoot();
-
-        Assert.True(ScanAwaitedReads(root).Count > 0,
-            "The awaited-read scanner found NO site anywhere under "
-            + string.Join(", ", ScannedRoots) + ". Either every site was migrated — in which case "
-            + "empty " + AwaitedReadAllowFile + ", drop " + nameof(AwaitedReadTotalBudget)
-            + " to 0 and delete this half of the assertion — or the scanner is broken, which would "
-            + "make the ratchet pass on no evidence.");
+        var root = RepoPaths.Root;
 
         Assert.True(ScanContractSeams(root).Count > 0,
             "The mesh-contract seam scanner found NO Task-returning interface member under "

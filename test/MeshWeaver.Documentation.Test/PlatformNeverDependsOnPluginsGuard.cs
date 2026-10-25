@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -101,14 +102,9 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "cannot detect the missed-repo case), and `cross-repo-pair` resolves the "
                 + "`Pairs-with:` pull request a surface-removing change declares (#2689 — the "
                 + "deleting half must land LAST). Both mint a scoped App installation token and "
-                + "read; neither checks anything out. `dependent-suites` reads the verdict "
-                + "MeshWeaver.Plugins writes at refs/core-candidate/<key> after running its suites "
-                + "against this candidate — a fact about the candidate, never Plugins source — and, "
-                + "while it waits, the Actions METADATA of Plugins' core-candidate.yml runs (the "
-                + "queue census: this candidate's position and job states, never a log). Under "
-                + "policy `dependent-suites-affected-gate` it is REQUIRED: `Consolidate test results` "
-                + "needs it, so a sibling's state CAN block a core merge — by design, sized to what "
-                + "the diff reaches"),
+                + "read; neither checks anything out. Core asks no dependent to run its suites "
+                + "(policy `dependents-verify-on-their-side`, which superseded "
+                + "`dependent-suites-affected-gate`): a sibling's suites never decide a core merge"),
             new KeyValuePair<string, string>("shared-rules.yml",
                 "the scheduled half of the same shared-rule sweep, so a drift is caught in a week "
                 + "when nobody opens a pull request anywhere"),
@@ -118,6 +114,14 @@ public class PlatformNeverDependsOnPluginsGuard
                 + "scope over REST with a fleet-reader App token (Issues: read). It checks nothing out, "
                 + "runs on no pull request and gates no merge — its verdict is its own standing issue, "
                 + "about the fleet's issues, never a core build"),
+            new KeyValuePair<string, string>("build-host-stable.yml",
+                "the DAILY scheduled roll of the standing build host `build-stable` (Doc/Architecture/BuildHosts): "
+                + "until core's stable promoter exists, `stable` IS the newest sealed set MeshWeaver.Plugins' "
+                + "own main has passed on, read with resolve-platform.py --passed-on-main over REST with a "
+                + "fleet-reader App token (Actions + Checks: read). It checks nothing out, runs on no pull "
+                + "request, gates no merge and no platform roll — it decides only which set one build host "
+                + "runs. Deliberately NOT a job of main-cd.yml, which reads no Plugins verdict "
+                + "(policy `platform-module-deploy-separate`)"),
         ]);
 
     /// <summary>The repos this guard treats as "not the platform".</summary>
@@ -148,7 +152,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void ThePullRequestGate_ReachesIntoNoPluginRepository()
     {
-        var path = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir, PullRequestGate);
+        var path = Path.Combine(RepoPaths.Root, WorkflowDir, PullRequestGate);
         File.Exists(path).Should().BeTrue(
             $"{WorkflowDir}/{PullRequestGate} is the repo's pull-request gate — if it was renamed, "
             + "this guard is measuring nothing and the constant must be updated with it");
@@ -175,7 +179,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void OnlyTheImageLanes_ReachIntoAPluginRepository()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir);
+        var dir = Path.Combine(RepoPaths.Root, WorkflowDir);
         Directory.Exists(dir).Should().BeTrue($"{WorkflowDir} must exist for this guard to measure anything");
 
         var files = Directory.GetFiles(dir, "*.yml").OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
@@ -228,7 +232,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void OnlyLedgeredWorkflows_ReadASiblingThroughTheApi()
     {
-        var dir = Path.Combine(SourceScan.FindRepoRoot(), WorkflowDir);
+        var dir = Path.Combine(RepoPaths.Root, WorkflowDir);
         var files = Directory.GetFiles(dir, "*.yml").OrderBy(f => f, StringComparer.Ordinal).ToImmutableArray();
         files.Should().NotBeEmpty("an empty workflow directory would make this guard pass having read nothing");
 
@@ -319,7 +323,7 @@ public class PlatformNeverDependsOnPluginsGuard
     [Fact]
     public void NoCoreProject_BuildsFromAPluginCheckout()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var roots = new[] { "src", "test", "tools", "memex", "samples" }
             .Select(d => Path.Combine(root, d))
             .Where(Directory.Exists)

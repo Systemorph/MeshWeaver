@@ -193,9 +193,9 @@
     },
     "Systemorph/MeshWeaver.Deploy": {
       "role": "chart",
-      "reason": "The PUBLIC deployment reference: the platform chart, the db chart, the AKS overlay and manifests and memex-local left core for it (core slimming). Its `deploy/` tree carries the chart's own values files, memex-local's local values and the chart gate's fixtures (measured at the move: 42 files that match the overlay path filter), not an installation — `deploy/helm/values.yaml` declares `Hosting__Deployment: \"\"`, which yields no instance on AXIS 3. Named for the same reason core was: a repository whose tree carries overlay FILES and is absent from this table is exactly the silent one the table exists to refuse.",
-      "declaredAt": "2026-10-24",
-      "issue": "core slimming"
+      "reason": "The PUBLIC deployment reference that received this repository's deploy material (MeshWeaver.Deploy#1-#3, MeshWeaver#7158): the portal Helm chart (`deploy/helm`), the per-instance PostgreSQL chart (`deploy/helm-db`), an EXAMPLE AKS overlay with the cluster manifests and the chart / drift / observability tooling (`deploy/aks`), memex-local, and the chart guards. Its README states the scope: defaults, placeholders and example values only — an installation's own values live in its operator's private deployments repository, never there. Measured 2026-10-25 over its `main` tree (untruncated): the lane counts 45 files matching the overlay path filter — chart values, `values.*.example.yaml` and `deploy/aks/scripts/testdata/values.*.yaml` render fixtures — and NOT ONE declares an installation (`deploy/helm/values.yaml` sets no `Hosting__Deployment`; the example AKS overlay's host is `portal.example.com`), so it yields nothing on AXIS 3. Its chart defaults pin `ghcr.io/systemorph/memex-portal-ai:latest` and `memex-migration:latest` exactly as this repository's `deploy/helm/values.yaml` does, which the lane reports as `published by us` rather than as a running set. Named here for the same reason as `Systemorph/MeshWeaver`: a repository that contributes pin sites and is absent from the table is the silent one this table exists to refuse. The day it gains a real installation's overlay, that is a client or operator estate in a public repository and is itself the defect.",
+      "declaredAt": "2026-10-25",
+      "issue": "MeshWeaver#3438"
     }
   },
   "registries": {

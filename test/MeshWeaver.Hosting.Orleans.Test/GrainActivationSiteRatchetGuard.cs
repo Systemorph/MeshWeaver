@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Orleans.Test;
 
@@ -96,7 +97,7 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoNewSiteAsksOrleansForAGrain()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
         var failures = new List<string>();
 
@@ -145,7 +146,7 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerFindsTheSitesItIsRatcheting()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var found = Scan(root);
 
         Assert.True(found.Count > 0,
@@ -172,7 +173,7 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheOnlyUngatedDoorInTheRouterIsTheSeam()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var file = Path.Combine(root, "src", "MeshWeaver.Connection.Orleans", "OrleansRoutingService.cs");
         Assert.True(File.Exists(file), $"the router must exist for this check to mean anything: {file}");
 
@@ -287,13 +288,4 @@ public class GrainActivationSiteRatchetGuard(ITestOutputHelper output)
     private static string Relative(string root, string file) =>
         Path.GetRelativePath(root, file).Replace(Path.DirectorySeparatorChar, '/');
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

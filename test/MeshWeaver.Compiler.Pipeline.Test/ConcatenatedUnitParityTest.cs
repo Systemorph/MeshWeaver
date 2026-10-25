@@ -6,6 +6,7 @@ using System.Text.Json;
 using MeshWeaver.Compiler;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -63,23 +64,11 @@ public class ConcatenatedUnitParityTest : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private static string RepoRoot
-    {
-        get
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-                dir = dir.Parent;
-            Assert.NotNull(dir);
-            return dir!.FullName;
-        }
-    }
-
     private static string ScriptPath
     {
         get
         {
-            var script = Path.Combine(RepoRoot, ".github", "scripts", "compile-check.py");
+            var script = Path.Combine(RepoPaths.Root, ".github", "scripts", "compile-check.py");
             Assert.True(File.Exists(script),
                 $"{script} is missing — this test would compare the generator against nothing while "
                 + "the pre-push NodeType gate was unreachable. Follow the script if it moved.");

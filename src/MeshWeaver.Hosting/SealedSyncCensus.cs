@@ -12,7 +12,7 @@ namespace MeshWeaver.Hosting;
 /// <param name="PublishedRoot">The published bundle root, or <c>null</c> when this deployment
 /// consumes no CI bakes — a legitimate configuration, and a different sentence from "unmeasured".</param>
 /// <param name="Sealed">Every source directory under this identity, as
-/// <see cref="SealedPublicationIndex.ReadFor"/> read it.</param>
+/// <see cref="SealedPublicationIndex.ReadFor(string, string, Microsoft.Extensions.Logging.ILogger)"/> read it.</param>
 /// <param name="At">When the reading was taken.</param>
 public sealed record SealedPublicationReading(
     string Identity,

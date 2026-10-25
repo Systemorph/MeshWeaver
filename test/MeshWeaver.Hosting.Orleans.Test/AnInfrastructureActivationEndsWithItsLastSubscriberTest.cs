@@ -96,14 +96,29 @@ public class AnInfrastructureActivationEndsWithItsLastSubscriberTest(ITestOutput
         var path = (await CreateNodes(client, prefix, 1)).Single();
         await NoHubLive([path], "precondition: a cold address");
 
-        // A PERSON reads it — through the client process's cache, under the user's identity.
-        await client.GetWorkspace().GetMeshNodeStream(path).Where(n => n is not null).Take(1)
-            .Should().Within(TestTimeouts.Convergence).Emit($"TestUser reads {path}", ct);
+        // A PERSON opens a view of it from ANOTHER process, under the user's identity: the subscribe
+        // itself carries the person through the grain's delivery seam.
+        //
+        // 🚨 Not through that process's mesh-node cache. The cache subscribes as ITSELF
+        // (MeshNodeCacheIdentity), by design, so a cache read never marks the owner as person-used —
+        // the cache's own idle window is the reuse for that reader (Doc/Architecture/SyncHubPopulation
+        // §10.2). This fact used to read through the client's cache and passed only when the cache's
+        // later teardown happened to be stamped with this single-identity test host's standing
+        // identity before the owner's last lease dropped; a teardown stamped any other way retired
+        // the hub and turned main red (#6623 follow-up).
+        var access = ClientServices.GetRequiredService<AccessService>();
+        var person = new AccessContext { ObjectId = "TestUser", Name = "TestUser" };
+        ISynchronizationStream<System.Text.Json.JsonElement> stream;
+        using (access.SwitchAccessContext(person))
+            stream = client.GetWorkspace().GetRemoteStream<System.Text.Json.JsonElement, LayoutAreaReference>(
+                new Address(path), new LayoutAreaReference("Overview"));
+        await stream.Take(1)
+            .Should().Within(TestTimeouts.Convergence).Emit($"TestUser's view of {path} renders", ct);
         var hub = LiveHub(path);
-        hub.Should().NotBeNull("the person's read activated the hub");
+        hub.Should().NotBeNull("the person's subscribe activated the hub");
 
-        // Every mirror goes: the reader's, and the silo's own activation mirror.
-        await ReleaseWhenUnwatched(ClientServices.GetRequiredService<IMeshNodeStreamCache>(), path);
+        // Every stream ends: the person's view, and the silo's own activation mirror.
+        stream.Dispose();
         await ReleaseWhenUnwatched(SiloServices().GetRequiredService<IMeshNodeStreamCache>(), path);
 
         await hub!.DisposalCompleted.Take(1).Should().NotEmit(TimeSpan.FromSeconds(5),

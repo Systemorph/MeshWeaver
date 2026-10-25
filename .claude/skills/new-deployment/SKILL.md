@@ -89,7 +89,7 @@ Every one of these is a **prerequisite the Provision REFUSES without**, so do th
 ## 2. What the operator does — the Provision plan, in order
 
 Composed by `InstanceActionPlan.ProvisionSteps` (MeshWeaver.Plugins, in-mesh — it compiles in the
-portal, no CI type-checks it), run by `deploy/aks/operator/bin/run.sh` in a Job in `memex-ops`,
+portal, no CI type-checks it), run by `MeshWeaver.Plugins/deploy/hosting-operator/bin/run.sh` in a Job in `memex-ops`,
 fail-fast, the failing STEP named on the node:
 
 1. `az postgres flexible-server db create` — control plane, workload identity. (Memex#132 —

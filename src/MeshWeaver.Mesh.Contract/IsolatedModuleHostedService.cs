@@ -13,7 +13,7 @@ namespace MeshWeaver.Mesh;
 /// the <c>GlobalServiceConfigurations</c> invocation and the builder fold. But a module adding an
 /// <c>IHostedService</c> only registers a DESCRIPTOR there; nothing throws. The constructor runs
 /// later, when the generic host resolves <c>IHostedService[]</c> during startup — outside
-/// <c>InstallAssemblies</c> entirely — and Autofac resolves that array all-or-nothing. One
+/// <c>InstallAssemblies</c> entirely — and the DI container resolves that array all-or-nothing. One
 /// unsatisfiable constructor aborted the whole host.</para>
 ///
 /// <para>Measured on memex-cloud 2026-08-26: a landed <c>MeshWeaver.AI.OpenAI</c> built against a

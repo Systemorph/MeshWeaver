@@ -39,6 +39,9 @@ import tempfile
 from urllib.parse import urlsplit
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import workflow_yaml  # noqa: E402 — the ONE step extractor every harness shares
+
 WORKFLOW = ".github/workflows/main-cd.yml"
 MODULE_PACK_WORKFLOW = ".github/workflows/node-repo-module-pack.yml"
 AVAILABILITY = ".github/scripts/check-release-availability.sh"
@@ -307,36 +310,12 @@ exit 0
 
 
 def extract_step(root: Path, step_id: str) -> str:
-    import yaml
-
-    doc = yaml.safe_load((root / WORKFLOW).read_text())
-    # 🚨 ONE step per id, across EVERY job. Two steps sharing an id would hand this harness
-    # whichever it met first — silently, and the cases would then test a step the workflow does
-    # not run where the reader thinks it does.
-    owners = [name for name, job in (doc.get("jobs") or {}).items()
-              for step in (job.get("steps") or [])
-              if isinstance(step, dict) and step.get("id") == step_id]
-    if len(owners) > 1:
-        die(f"step id `{step_id}` appears in {len(owners)} steps of {WORKFLOW} (jobs: {', '.join(owners)}) — "
-            "the harness cannot tell which one it is testing. Give each step a distinct id.")
-    for job in (doc.get("jobs") or {}).values():
-        for step in job.get("steps") or []:
-            if isinstance(step, dict) and step.get("id") == step_id:
-                body = step.get("run")
-                if not body:
-                    die(f"step id `{step_id}` in {WORKFLOW} has no `run:` — nothing to execute.")
-                if "${{" in body:
-                    die(
-                        f"step id `{step_id}`'s `run:` now contains a ${{{{ }}}} expression, which "
-                        "this harness cannot supply. It is refusing to execute a body it would "
-                        "have to rewrite — pass the value through `env:` instead (every input it "
-                        "takes today already is)."
-                    )
-                return body
-    die(
-        f"no step with `id: {step_id}` in {WORKFLOW}. It was renamed, moved or deleted — and this "
-        "harness will not report a pass for a step it could not find. Re-point STEP_ID."
-    )
+    # 🚨 ONE step per id, across EVERY job — `workflow_yaml.step` refuses a duplicate, an absent
+    # step, an empty `run:` and any `${{ }}` the harness would have to supply.
+    try:
+        return workflow_yaml.step_run(root / WORKFLOW, step_id)
+    except workflow_yaml.WorkflowYamlError as e:
+        die(str(e))
 
 
 def die(msg: str):

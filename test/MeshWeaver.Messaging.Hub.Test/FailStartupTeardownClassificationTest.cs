@@ -103,6 +103,34 @@ public class FailStartupTeardownClassificationTest(ITestOutputHelper output) : H
         }
     }
 
+    /// <summary>
+    /// 🚨 Disagreement pinned (FaultClassifier consolidation): the old <c>IsTeardownDisposal</c>
+    /// walked <c>InnerException</c>, which for an <see cref="AggregateException"/> is branch 0 only.
+    /// A <c>Merge</c>/<c>WhenAll</c> that met a real error AND the teardown hands over an aggregate
+    /// whose order nobody controls, so the same teardown cancelled startup or faulted it depending on
+    /// arrival order. The teardown at index 1 must be seen exactly like the one at index 0.
+    /// </summary>
+    [Fact]
+    public void FailStartup_WithDisposalAtAggregateIndexOne_IsAlsoClassifiedAsCancellation()
+    {
+        TestContext.Current.CancellationToken.ThrowIfCancellationRequested();
+        var hub = CreateUnstartedHub(out var gate);
+        try
+        {
+            hub.FailStartup(new AggregateException(
+                new InvalidOperationException("a sibling subscription faulted first"),
+                new ObjectDisposedException(nameof(MessageHub), "Hub client/1 was disposed before the response arrived.")));
+
+            hub.Started.IsCanceled.Should().BeTrue(
+                "a teardown is a teardown at every aggregate index, not only at InnerExceptions[0]");
+            hub.Started.IsFaulted.Should().BeFalse();
+        }
+        finally
+        {
+            Release(gate);
+        }
+    }
+
     [Fact(Timeout = 30000)]
     public void FailStartup_WithRealError_StillFaultsStarted_ForDependentsToObserve()
     {

@@ -1,6 +1,7 @@
 using System.Text;
 using Xunit;
-using YamlDotNet.Serialization;
+using MeshWeaver.Yaml;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -29,6 +30,13 @@ namespace MeshWeaver.Documentation.Test;
 /// mesh at the same time: two readers, one artefact, opposite verdicts. This guard runs the REAL
 /// parser, which is the only reader whose answer matches the runtime's.</para>
 ///
+/// <para>🚨 <b>Since the platform reads front matter with its own TOLERANT reader</b>
+/// (<c>Doc/Architecture/TolerantYaml</c>), a value with an unquoted <c>": "</c> no longer kills the
+/// block at runtime. This guard still holds the tree to the STRICT grammar
+/// (<see cref="YamlParseOptions.StrictSpec"/>): these files are also read by strict YAML readers
+/// outside the platform (GitHub's renderer, plugin-repo tooling, editors), and a page that only the
+/// tolerant reader can read is a page those readers lose.</para>
+///
 /// <para>Scope, deliberately narrow: a file with no front matter at all is not a failure here (a
 /// doc page may legitimately carry none) — the rule is that a block which OPENS must parse.</para>
 /// </summary>
@@ -39,7 +47,7 @@ public class DocumentationFrontMatterGuard
     /// <summary>Every shipped doc markdown file that OPENS a front-matter block, as (path, front matter).</summary>
     private static (string Path, string FrontMatter)[] FrontMatterFiles()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var dir = Path.Combine(root, DataRoot);
         if (!Directory.Exists(dir))
             return [];
@@ -96,7 +104,12 @@ public class DocumentationFrontMatterGuard
 
             try
             {
-                new DeserializerBuilder().Build().Deserialize<Dictionary<string, object>>(frontMatter);
+                // Front matter binds to a record, so the root must be a MAPPING (or empty).
+                var root = TolerantYaml.Parse(frontMatter, YamlParseOptions.StrictSpec);
+                if (root is not null and not System.Text.Json.Nodes.JsonObject)
+                    offenders.AppendLine(
+                        $"  {path}: front matter parses, but its root is a {root.GetValueKind()} — "
+                        + "it must be a 'key: value' mapping, or nothing binds.");
             }
             catch (Exception ex)
             {
@@ -107,10 +120,9 @@ public class DocumentationFrontMatterGuard
         }
 
         Assert.True(offenders.Length == 0,
-            "These doc pages have front matter a YAML parser rejects. They still IMPORT — the "
-            + "MarkdownFileParser rescue recovers Name, Category, Icon, State and Order — but NOT "
-            + "Description, so the page ships with no summary on any card, TOC entry or search row, "
-            + "and nothing anywhere goes red:\n" + offenders
+            "These doc pages have front matter a STRICT YAML parser rejects. The platform's tolerant "
+            + "reader may still import them, but every strict reader outside it (GitHub, plugin-repo "
+            + "tooling, editors) loses the whole block:\n" + offenders
             + "\nUsually the fix is to QUOTE the scalar: an unquoted value containing ': ' makes the "
             + "line read as a nested mapping and kills the whole document. A long Description reads "
             + "best as a folded block scalar (Description: >-).");

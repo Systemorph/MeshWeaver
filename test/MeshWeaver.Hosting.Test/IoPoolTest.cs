@@ -116,9 +116,9 @@ public class IoPoolTest
     }
 
     // 🚨 PIN for the endemic teardown SIGSEGV (Hosting.Monolith.Test exit=139). Root cause: a
-    // MeshQuery straggler whose SUBSCRIBE (initial emission → route → CreateHub → Autofac
+    // MeshQuery straggler whose SUBSCRIBE (initial emission → route → CreateHub → the DI container
     // BeginLifetimeScope) ran on an UNTRACKED TaskPoolScheduler.Default, so teardown's drain never
-    // waited for it and the Autofac scope was disposed mid-construction → native use-after-free.
+    // waited for it and the service scope was disposed mid-construction → native use-after-free.
     // The fix routes the subscribe through IIoPool.SubscribeThroughPool, so it's TRACKED and Drain()
     // JOINS it. This test pins that guarantee DETERMINISTICALLY (no flaky ~50% CI repro): a subscribe
     // that is in-flight holds a slot, and Drain() BLOCKS until it releases — i.e. the scope can never
@@ -498,7 +498,7 @@ public class IoPoolTest
     // 🚨 REPRO for the #613 family: Drain()'s contract says "0 means the join is REAL: no pool
     // thread is still running when this returns", and every teardown orchestrator
     // (MonolithMeshTestBase, MeshTeardownExtensions, HubTestBase) trusts that return value before
-    // it disposes the Autofac scope and unloads the collectible node ALCs. But the join is
+    // it disposes the service scope and unloads the collectible node ALCs. But the join is
     // implemented by re-acquiring the SemaphoreSlim gate — and InvokeBlocking NEVER takes a gate
     // permit (it dispatches on the LimitedConcurrencyLevelTaskScheduler and only bumps _inFlight).
     // So for a blocking leaf the permits are free immediately, Drain returns 0, and teardown

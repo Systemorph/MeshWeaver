@@ -54,9 +54,9 @@ public record TypeDefinition : ITypeDefinition
         // the null until GetKey dereferenced it — a bare NullReferenceException at every
         // activation of a hub whose data source registered such a type, naming nothing
         // (Systemorph/MeshWeaver#6643). GetKey/GetKeyType now refuse it BY NAME.
-        Key = new(() => keyFunctionBuilder.GetKeyFunction(Type));
-        getKeyIsOverridden = new(() =>
-            GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition));
+        // Resolved on first use from the builder (see Key), exactly once.
+        keyCell = new(() => keyFunctionBuilder.GetKeyFunction(elementType));
+        keyFromBuilder = true;
 
         // 🚨 LAZY, and it must stay lazy — this is the FutuRe.Test teardown SIGSEGV (exit=139).
         // XmlDocs.Summary reflects into the type's assembly XML documentation. Constructing a
@@ -138,12 +138,12 @@ public record TypeDefinition : ITypeDefinition
     /// <exception cref="ArgumentNullException">Thrown when <paramref name="instance"/> is null.</exception>
     public virtual object GetKey(object instance)
     {
-        var key = Key.Value ?? throw NoKeyMapping();
+        var keyFunction = Key ?? throw NoKeyMapping();
         if (instance is null)
             throw new ArgumentNullException(nameof(instance),
                 $"Cannot compute the key of a null instance of type {Type.FullName} (collection '{CollectionName}'): "
                 + "the instance sequence handed to this collection contains a null element.");
-        return key.Function(instance)
+        return keyFunction.Function(instance)
                ?? throw new InvalidOperationException(
                    $"An instance of type {Type.FullName} (collection '{CollectionName}') has a null key. "
                    + "Every instance of a data-source collection needs a non-null key value.");
@@ -163,23 +163,55 @@ public record TypeDefinition : ITypeDefinition
     /// <returns>The key value, or <c>null</c> when the instance has none.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
     public virtual object? GetKeyOrNull(object instance) =>
-        getKeyIsOverridden.Value ? GetKey(instance) : (Key.Value ?? throw NoKeyMapping()).Function(instance);
+        GetKeyIsOverridden() ? GetKey(instance) : (Key ?? throw NoKeyMapping()).Function(instance);
 
-    // Whether the runtime type overrides GetKey(object). Per instance and lazy — a reflection read
-    // once, on first use, never on the hub-construction path (see the description note above).
-    private readonly Lazy<bool> getKeyIsOverridden;
+    // Whether the runtime type overrides GetKey(object). The exact type cannot, so only a subclass
+    // pays the reflection read — on use, never on the hub-construction path (see the description
+    // note above).
+    private bool GetKeyIsOverridden() =>
+        GetType() != typeof(TypeDefinition)
+        && GetType().GetMethod(nameof(GetKey), [typeof(object)])!.DeclaringType != typeof(TypeDefinition);
 
     /// <summary>
     /// Returns the CLR type of the key produced by the type's configured key function.
     /// </summary>
     /// <returns>The key's CLR type.</returns>
     /// <exception cref="InvalidOperationException">Thrown when no key mapping is defined for the type.</exception>
-    public Type GetKeyType() => (Key.Value ?? throw NoKeyMapping()).KeyType;
+    public Type GetKeyType() => (Key ?? throw NoKeyMapping()).KeyType;
 
     private InvalidOperationException NoKeyMapping() =>
         new($"No key mapping is defined for type {Type.FullName} (collection '{CollectionName}'). "
             + "A type served as a data-source collection needs a key: mark one property [Key], "
             + "name it Id or SystemName, or configure WithKey(...) on its type source.");
 
-    internal Lazy<KeyFunction?> Key { get; init; }
+    // The key function, resolved from the registry's builder on first use. A Lazy, and the field
+    // never changes after construction: (1) the record's synthesized Equals/GetHashCode read every
+    // instance field, so cache state that flipped on the first read would change a definition's
+    // hash while it sits in a hash set — the reference to this cell is stable instead; (2) the
+    // builder runs arbitrary key-function providers, so concurrent first readers must not run it
+    // twice and publish two different key functions — Lazy's ExecutionAndPublication runs it once.
+    private Lazy<KeyFunction?> keyCell;
+    // Whether keyCell resolves from a builder's conventions (false once an explicit key is fixed).
+    private bool keyFromBuilder;
+
+    /// <summary>The key function of this type, resolved from the registry's builder on first use.</summary>
+    internal KeyFunction? Key => keyCell.Value;
+
+    /// <summary>
+    /// True while this definition's key comes from the key-function CONVENTIONS of a registry's
+    /// builder rather than an explicit key function. A registry with key-function factories of its own
+    /// may then key an inherited, keyless definition differently (TypeRegistry.Localize).
+    /// </summary>
+    internal bool KeyFromBuilder => keyFromBuilder;
+
+    /// <summary>A copy of this definition whose key is <paramref name="keyFunction"/>.</summary>
+    /// <param name="keyFunction">The explicit key function.</param>
+    /// <returns>The copy.</returns>
+    internal TypeDefinition WithKey(KeyFunction keyFunction)
+    {
+        var copy = this with { };
+        copy.keyCell = new(keyFunction);
+        copy.keyFromBuilder = false;
+        return copy;
+    }
 }

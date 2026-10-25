@@ -212,11 +212,10 @@ public static class PackageSources
             }
             // The registry HOLDS the credential: resolve the GitHub App INSTALLATION token FRESH
             // before each fetch — the same machine identity GitSync's ResolveAuth uses (its 1h token
-            // is re-minted transparently). Passing token:"" (the old behavior) made
-            // OctokitGitHubRepoClient.Client("") throw ArgumentException on Octokit's empty
-            // Credentials, so any configured URL source 500'd the /api/plugins endpoint. When the App
-            // is unconfigured (or absent) the provider yields an empty token → anonymous access to a
-            // public repo (no throw, thanks to the Client("") anonymous fallback).
+            // is re-minted transparently). Passing token:"" once threw inside the old Octokit-based
+            // client (its empty Credentials), so any configured URL source 500'd the /api/plugins
+            // endpoint. When the App is unconfigured (or absent) the provider yields an empty token →
+            // anonymous access to a public repo (the REST client sends no Authorization header).
             //
             // 🚨 A source that DECLARED its own credential (PluginCatalog:Sources:N:TokenKey — a
             // vault-delivered token — or :InstallationOwner — the App installation on another
@@ -391,7 +390,11 @@ public static class PackageSources
     {
         var pool = hub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem)
                    ?? IoPool.Unbounded;
-        return (root, _, _, _) => pool.InvokeBlocking(_ =>
+        // The snapshot WALKS the tree (a listing, then one read per file), so the pool's token is
+        // checked per listed entry (before the sort drains the listing) and before each read: a drain
+        // at teardown stops it at the next file. A cancel faults the leaf; it never yields a
+        // partial snapshot.
+        return (root, _, _, _) => pool.InvokeBlocking(ct =>
         {
             if (!Directory.Exists(root))
             {
@@ -401,9 +404,15 @@ public static class PackageSources
 
             var files = new List<RepoFile>();
             var hash = new System.Text.StringBuilder();
-            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-                         .OrderBy(p => p, StringComparer.Ordinal))
+            var listed = new List<string>();
+            foreach (var path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
             {
+                ct.ThrowIfCancellationRequested();
+                listed.Add(path);
+            }
+            foreach (var path in listed.OrderBy(p => p, StringComparer.Ordinal))
+            {
+                ct.ThrowIfCancellationRequested();
                 var relative = Path.GetRelativePath(root, path).Replace('\\', '/');
                 // Skip dot-directories (.git, .github, …) — infrastructure, not repo content.
                 if (relative.Split('/').Any(seg => seg.StartsWith('.')))

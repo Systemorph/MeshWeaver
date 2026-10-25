@@ -4,8 +4,10 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -55,7 +57,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void ThePlatformDelivery_NeverWaitsOn_NorFailsFor_APluginsJob()
     {
-        var problems = Problems(File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow)));
+        var problems = Problems(File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow)));
         Assert.True(problems.Count == 0,
             "the PLATFORM delivery in main-cd.yml is coupled to a Plugins job again (policy "
             + "platform-backwards-compatibility — a platform roll never waits for a plugin seal):\n  "
@@ -66,7 +68,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void TheDetector_CatchesEveryCouplingShape()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
         Assert.Empty(Problems(text));
 
         // 1. a Plugins job as a DIRECT need of the verdict.
@@ -114,10 +116,12 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void TheArmingIsNeverAPlatformDeliveryLeg()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
-        var start = text.IndexOf("\n  delivery-verdict:", StringComparison.Ordinal);
-        Assert.True(start >= 0, "delivery-verdict is gone from main-cd.yml");
-        var m = Regex.Match(text[start..], @"\n    needs:\s*\[(?<n>[^\]]*)\]");
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
+        // Bounded to the job: an unbounded search from the key would read the NEXT job's `needs:`
+        // the moment delivery-verdict lost its own.
+        var job = WorkflowJobText.Block(text, "delivery-verdict");
+        Assert.True(job is not null, "delivery-verdict is gone from main-cd.yml");
+        var m = Regex.Match(job!, @"\n    needs:\s*\[(?<n>[^\]]*)\]");
         Assert.True(m.Success, "delivery-verdict has no `needs: [...]` list");
         var needs = m.Groups["n"].Value.Split(',').Select(n => n.Trim()).ToArray();
         Assert.Contains("promote", needs);
@@ -136,7 +140,7 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
     [Fact]
     public void NoShippedChartOrRecord_PinsAPlatformImage()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var problems = ShippedConfigFiles(root)
             .SelectMany(f => PinProblems(Path.GetRelativePath(root, f), File.ReadAllText(f)))
             .ToList();
@@ -291,49 +295,28 @@ public class PlatformDeliveryNeverWaitsOnPluginsGuard
 
     // ─────────────────────────────── YAML plumbing ───────────────────────────────
 
-    private static Dictionary<string, YamlMappingNode> Jobs(string text)
+    private static Dictionary<string, JsonObject> Jobs(string text)
     {
-        var yaml = new YamlStream();
-        yaml.Load(new StringReader(text));
-        var jobs = (YamlMappingNode)((YamlMappingNode)yaml.Documents[0].RootNode).Children[new YamlScalarNode("jobs")];
-        return jobs.Children.ToDictionary(kv => ((YamlScalarNode)kv.Key).Value!, kv => (YamlMappingNode)kv.Value, StringComparer.Ordinal);
+        var jobs = (JsonObject)TolerantYaml.Parse(text)!["jobs"]!;
+        return jobs.ToDictionary(kv => kv.Key, kv => (JsonObject)kv.Value!, StringComparer.Ordinal);
     }
 
-    private static List<string> NeedsOf(YamlMappingNode job)
+    private static List<string> NeedsOf(JsonObject job) => job["needs"] switch
     {
-        if (!job.Children.TryGetValue(new YamlScalarNode("needs"), out var n)) return [];
-        return n switch
-        {
-            YamlScalarNode s => [s.Value!],
-            YamlSequenceNode seq => seq.Children.OfType<YamlScalarNode>().Select(s => s.Value!).ToList(),
-            _ => [],
-        };
-    }
+        JsonValue s => [TolerantYaml.ScalarText(s)!],
+        JsonArray seq => seq.OfType<JsonValue>().Select(s => TolerantYaml.ScalarText(s)!).ToList(),
+        _ => [],
+    };
 
-    private static string? ScalarOf(YamlMappingNode job, string key) =>
-        job.Children.TryGetValue(new YamlScalarNode(key), out var v) ? (v as YamlScalarNode)?.Value : null;
+    private static string? ScalarOf(JsonObject job, string key) =>
+        job[key] is JsonValue v ? TolerantYaml.ScalarText(v) : null;
 
-    private static string Serialize(YamlNode node)
-    {
-        var doc = new YamlStream(new YamlDocument(node));
-        using var w = new StringWriter();
-        doc.Save(w, assignAnchors: false);
-        return w.ToString();
-    }
+    private static string Serialize(JsonNode node) => TolerantYaml.Serialize(node);
 
     private static string Mutate(string text, string from, string to)
     {
         Assert.True(text.Contains(from, StringComparison.Ordinal),
             $"negative control cannot apply — the anchor moved, so the control would pass having mutated nothing: `{from}`");
         return text.Replace(from, to, StringComparison.Ordinal);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

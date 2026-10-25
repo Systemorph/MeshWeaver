@@ -1391,6 +1391,7 @@ public static class ShippedPrebuiltBundles
         Action<string>? onMatched = null,
         AdoptionContext? context = null)
         => pool
+            // atomic-blocking-leaf: one zip open and one manifest entry read from one bundle file
             .InvokeBlocking(_ => Plugin.Packaging.BundleReader.ReadManifest(bundlePath))
             .SelectMany(manifest =>
             {
@@ -1563,8 +1564,10 @@ public static class ShippedPrebuiltBundles
                         }
 
                         return pool
-                            .InvokeBlocking(_ => Plugin.Packaging.BundleReader
-                                .ReadFile(bundlePath, deviating))
+                            // One decompressing read per selected assembly (DLL + PDB): the reader
+                            // checks the pool's token before each (review on #7121).
+                            .InvokeBlocking(ct => Plugin.Packaging.BundleReader
+                                .ReadFile(bundlePath, deviating, ct))
                             .SelectMany(payload => SeedPayloads(
                                 mesh, bundlePath, manifest.FrameworkMvid,
                                 payload.Assemblies, alreadyCurrent, logger, onCovered,

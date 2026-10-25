@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -63,7 +64,7 @@ public class ReleaseDeliveryChainGuard
     [Fact]
     public void TheDocumentedSubscriberSource_IsTheOneThatExists()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
 
         foreach (var file in new[] { Workflow, ContractDoc })
         {
@@ -92,7 +93,7 @@ public class ReleaseDeliveryChainGuard
     [Fact]
     public void TheSharedHmacIsProvisionedByTheSecretTemplate()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var template = File.ReadAllText(
             Path.Combine(root, SecretTemplate.Replace('/', Path.DirectorySeparatorChar)));
 

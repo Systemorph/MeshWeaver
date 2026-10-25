@@ -44,7 +44,7 @@ internal static class OrleansClusterDisposal
     // here is the SelectMany chain built in DisposeInBackground — whose lambdas close over the
     // TestCluster AND the Orleans client IHost. Nothing was ever removed from the bag, so every
     // cluster this assembly ever built was reachable from a static field until the process exited:
-    // ~90 test classes × one silo + client host each (Autofac container, grain catalog, serializer
+    // ~90 test classes × one silo + client host each (service container, grain catalog, serializer
     // codecs, mesh hubs, workspaces, seeded MeshNodes, collectible NodeType ALCs). "Dispose it in
     // the background" is supposed to mean the cluster goes away once its disposal finishes; storing
     // the drain meant it never did.
@@ -70,7 +70,7 @@ internal static class OrleansClusterDisposal
     /// disposes the Orleans CLIENT host through the generic <c>IHost.DisposeAsync()</c>, which only
     /// disposes the service provider and NEVER runs <c>StopAsync()</c>. So the client's connection
     /// message pump (<c>Orleans.Runtime.Messaging.Connection.ProcessIncoming</c>) keeps deserializing
-    /// in-flight messages while the client's Autofac container is torn down; <c>CodecProvider</c> then
+    /// in-flight messages while the client's service container is torn down; <c>CodecProvider</c> then
     /// lazily resolves a codec from the already-disposed <c>LifetimeScope</c> and throws
     /// <see cref="ObjectDisposedException"/>, which under CI load escapes unobserved and reds a
     /// 123/123-green shard. The silos are already graceful (<c>InProcessSiloHandle.DisposeAsync</c>

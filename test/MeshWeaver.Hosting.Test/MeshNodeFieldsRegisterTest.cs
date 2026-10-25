@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using MeshWeaver.Mesh;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -68,19 +69,10 @@ public class MeshNodeFieldsRegisterTest
 
     private static (string[] Members, string[] Retired) ReadRegister()
     {
-        var path = Path.Combine(FindRepoRoot(), ".github", "meshnode-fields.json");
+        var path = Path.Combine(RepoPaths.Root, ".github", "meshnode-fields.json");
         using var doc = JsonDocument.Parse(File.ReadAllText(path));
         var members = doc.RootElement.GetProperty("members").EnumerateArray().Select(e => e.GetString()!).ToArray();
         var retired = doc.RootElement.GetProperty("retired").EnumerateObject().Select(p => p.Name).ToArray();
         return (members, retired);
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "Could not locate the repository root (MeshWeaver.slnx).");
-        return dir!.FullName;
     }
 }

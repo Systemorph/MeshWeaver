@@ -1,7 +1,8 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
-using YamlDotNet.Serialization;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -113,13 +114,13 @@ public class WhatsNewEntryIntegrityTest
         if (end < 0)
             return null;
 
-        var parsed = new DeserializerBuilder().Build()
-            .Deserialize<Dictionary<string, object>>(normalized[4..end]);
+        // The SAME reader the runtime uses (MarkdownFileParser reads front matter with TolerantYaml).
+        var parsed = TolerantYaml.Parse(normalized[4..end]) as JsonObject;
         return parsed is null
             ? new Dictionary<string, string>(StringComparer.Ordinal)
             : parsed.ToDictionary(
                 kv => kv.Key,
-                kv => kv.Value?.ToString() ?? string.Empty,
+                kv => TolerantYaml.ScalarText(kv.Value) ?? string.Empty,
                 StringComparer.Ordinal);
     }
 

@@ -2,11 +2,14 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -31,7 +34,7 @@ public class CiRestBudgetGuard
     private static readonly Regex RestRead = new(@"repos/Systemorph/MeshWeaver/contents/", RegexOptions.Compiled);
 
     public static IEnumerable<object[]> Lanes() =>
-        Directory.GetFiles(Path.Combine(FindRepoRoot(), ".github", "workflows"), "node-repo-*.yml")
+        Directory.GetFiles(Path.Combine(RepoPaths.Root, ".github", "workflows"), "node-repo-*.yml")
             .Select(Path.GetFileName).OrderBy(n => n, StringComparer.Ordinal).Select(n => new object[] { n! });
 
     [Theory]
@@ -75,6 +78,81 @@ public class CiRestBudgetGuard
         Assert.Empty(JobsCallingTheReaderUninstalled(installed));
     }
 
+    /// <summary>A lane fetches core's scripts ONE FILE AT A TIME into <c>$RUNNER_TEMP</c>. A script
+    /// that imports the shared REST client (<c>import ghrest</c>, from beside itself) dies there with
+    /// <c>ModuleNotFoundError</c> unless the same step fetches <c>.github/scripts/ghrest.py</c> too.</summary>
+    [Theory]
+    [MemberData(nameof(Lanes))]
+    public void EveryFetchedScriptThatImportsTheSharedClient_IsFetchedWithIt(string lane)
+    {
+        var problems = FetchesMissingTheSharedClient(File.ReadAllText(LanePath(lane)), ImportsSharedClient);
+        Assert.True(problems.Count == 0,
+            $"{lane} fetches a script that does `import ghrest` without fetching .github/scripts/ghrest.py " +
+            "beside it in the same step — on the runner it fails with ModuleNotFoundError:\n  " +
+            string.Join("\n  ", problems));
+    }
+
+    /// <summary>Negative control: the detector fires on the uncovered shape (literal and loop form)
+    /// and stays silent when the client is fetched, or when the script does not import it.</summary>
+    [Fact]
+    public void TheSharedClientDetector_FiresOnTheShapeItExistsToCatch()
+    {
+        static bool Imports(string script) => script == "needs.py";
+        const string missing = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/needs.py\" > \"$T/needs.py\"\n";
+        const string loopMissing = "jobs:\n  a:\n    steps:\n      - run: |\n          for s in other.py needs.py; do\n            \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/${s}\" > \"$T/${s}\"\n          done\n";
+        const string covered = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/needs.py\" > \"$T/needs.py\"\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/ghrest.py\" > \"$T/ghrest.py\"\n";
+        const string unrelated = "jobs:\n  a:\n    steps:\n      - run: |\n          \"$RUNNER_TEMP/mw-core-file\" \"${REF}\" \".github/scripts/other.py\" > \"$T/other.py\"\n";
+        Assert.Single(FetchesMissingTheSharedClient(missing, Imports));
+        Assert.Single(FetchesMissingTheSharedClient(loopMissing, Imports));
+        Assert.Empty(FetchesMissingTheSharedClient(covered, Imports));
+        Assert.Empty(FetchesMissingTheSharedClient(unrelated, Imports));
+        // And the real predicate reads real sources: a migrated script imports the client, ghrest itself does not.
+        Assert.True(ImportsSharedClient("retry-known-transients.py"));
+        Assert.False(ImportsSharedClient("ghrest.py"));
+    }
+
+    private static readonly Regex FetchedScript = new(@"\.github/scripts/([A-Za-z0-9_.-]+\.py)\b", RegexOptions.Compiled);
+    private static readonly Regex FetchLoop = new(@"for\s+\w+\s+in\s+([^;\n]+);\s*do", RegexOptions.Compiled);
+    private static readonly Regex ImportLine = new(@"^import ghrest\b", RegexOptions.Compiled | RegexOptions.Multiline);
+
+    private static bool ImportsSharedClient(string script)
+    {
+        var path = Path.Combine(RepoPaths.Root, ".github", "scripts", script);
+        return File.Exists(path) && ImportLine.IsMatch(File.ReadAllText(path));
+    }
+
+    private static ImmutableList<string> FetchesMissingTheSharedClient(string yaml, Func<string, bool> imports)
+    {
+        var root = (JsonObject)TolerantYaml.Parse(yaml)!;
+        var problems = ImmutableList<string>.Empty;
+        if (root["jobs"] is not JsonObject jobs)
+            return problems;
+        foreach (var (name, jobNode) in jobs)
+        {
+            if (jobNode is not JsonObject job || job["steps"] is not JsonArray steps)
+                continue;
+            for (var i = 0; i < steps.Count; i++)
+            {
+                if (steps[i] is not JsonObject step) continue;
+                var run = Scalar(step, "run");
+                if (run is null || !run.Contains("mw-core-file", StringComparison.Ordinal)) continue;
+                var fetched = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+                foreach (var line in run.Split('\n').Where(l => l.Contains("mw-core-file", StringComparison.Ordinal)))
+                    foreach (Match m in FetchedScript.Matches(line))
+                        fetched = fetched.Add(m.Groups[1].Value);
+                if (run.Contains(".github/scripts/${", StringComparison.Ordinal))
+                    foreach (Match loop in FetchLoop.Matches(run))
+                        foreach (var token in loop.Groups[1].Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                            if (token.EndsWith(".py", StringComparison.Ordinal))
+                                fetched = fetched.Add(token);
+                if (fetched.Contains("ghrest.py")) continue;
+                foreach (var script in fetched.Where(imports).OrderBy(s => s, StringComparer.Ordinal))
+                    problems = problems.Add($"job `{name}` step {i + 1} ({Scalar(step, "name") ?? "unnamed"}): {script}");
+            }
+        }
+        return problems;
+    }
+
     private static List<string> RestReadsIn(string yaml) =>
         yaml.Split('\n').Select((line, i) => (line, i))
             .Where(x => !x.line.TrimStart().StartsWith('#') && RestRead.IsMatch(x.line))
@@ -82,22 +160,18 @@ public class CiRestBudgetGuard
 
     private static List<string> JobsCallingTheReaderUninstalled(string yaml)
     {
-        var stream = new YamlStream();
-        stream.Load(new StringReader(yaml));
-        var root = (YamlMappingNode)stream.Documents[0].RootNode;
+        var root = (JsonObject)TolerantYaml.Parse(yaml)!;
         var problems = new List<string>();
-        if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode jobs)
+        if (root["jobs"] is not JsonObject jobs)
             return problems;
-        foreach (var (name, jobNode) in jobs.Children)
+        foreach (var (name, jobNode) in jobs)
         {
-            if (jobNode is not YamlMappingNode job
-                || !job.Children.TryGetValue(new YamlScalarNode("steps"), out var stepsNode)
-                || stepsNode is not YamlSequenceNode steps)
+            if (jobNode is not JsonObject job || job["steps"] is not JsonArray steps)
                 continue;
             var installedAt = -1;
-            for (var i = 0; i < steps.Children.Count; i++)
+            for (var i = 0; i < steps.Count; i++)
             {
-                if (steps.Children[i] is not YamlMappingNode step) continue;
+                if (steps[i] is not JsonObject step) continue;
                 if (Scalar(step, "uses")?.StartsWith(ReaderAction, StringComparison.Ordinal) == true && installedAt < 0)
                     installedAt = i;
                 var run = Scalar(step, "run");
@@ -111,17 +185,9 @@ public class CiRestBudgetGuard
         return problems;
     }
 
-    private static string? Scalar(YamlMappingNode node, string key) =>
-        node.Children.TryGetValue(new YamlScalarNode(key), out var v) && v is YamlScalarNode s ? s.Value : null;
+    private static string? Scalar(JsonObject node, string key) =>
+        node[key] is JsonValue v ? TolerantYaml.ScalarText(v) : null;
 
-    private static string LanePath(string lane) => Path.Combine(FindRepoRoot(), ".github", "workflows", lane);
+    private static string LanePath(string lane) => Path.Combine(RepoPaths.Root, ".github", "workflows", lane);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

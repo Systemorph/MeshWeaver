@@ -14,11 +14,11 @@ namespace MeshWeaver.Hosting.Test;
 /// Systemorph/MeshWeaver#4913 and #4918. The missing input is GitHub's <c>state_reason</c>, and this
 /// file pins the one part of reading it that is easy to get wrong.</para>
 ///
-/// <para>🚨 <b>The trap this exists to keep closed.</b> Octokit models the field as
-/// <c>StringEnum&lt;ItemStateReason&gt;?</c> and its <c>ItemStateReason</c> has exactly three
-/// members — <c>Completed</c>, <c>NotPlanned</c>, <c>Reopened</c>. GitHub serves a fourth value,
-/// <c>duplicate</c>, which is the ONE value #2177 turns on. Reading it through <c>.Value</c> throws
-/// rather than answering, so the mapping goes through the raw token and a total parse.</para>
+/// <para>🚨 <b>The trap this exists to keep closed.</b> Octokit (which the REST client used to be
+/// built on) modelled the field as a three-member enum — <c>Completed</c>, <c>NotPlanned</c>,
+/// <c>Reopened</c> — whose <c>.Value</c> threw on anything else. GitHub serves a fourth value,
+/// <c>duplicate</c>, which is the ONE value #2177 turns on, so the mapping reads the raw wire
+/// token through a total parse; the REST client's wire model keeps the field a string.</para>
 /// </summary>
 public class ACloseCarriesItsReasonTest
 {
@@ -32,21 +32,6 @@ public class ACloseCarriesItsReasonTest
     {
         Assert.Equal(GitHubIssueStateReason.Duplicate, GitHubIssueStateReasons.Parse("duplicate"));
         Assert.Equal(GitHubIssueStateReason.Duplicate, GitHubIssueStateReasons.Parse("Duplicate"));
-    }
-
-    /// <summary>
-    /// 🚨 The negative control on the design choice, run against the vendor type itself so the
-    /// rationale in <see cref="GitHubIssueStateReason"/> cannot quietly become false: if a later
-    /// Octokit adds <c>Duplicate</c> this fails, and the comment saying "the vendor enum cannot hold
-    /// it" is the thing that needs updating.
-    /// </summary>
-    [Fact]
-    public void OctokitsOwnEnumStillCannotHoldDuplicate_WhichIsWhyTheRawTokenIsRead()
-    {
-        var asOctokitModelsIt = new Octokit.StringEnum<Octokit.ItemStateReason>("duplicate");
-
-        Assert.Equal("duplicate", asOctokitModelsIt.StringValue);
-        Assert.Throws<ArgumentException>(() => asOctokitModelsIt.Value);
     }
 
     /// <summary>

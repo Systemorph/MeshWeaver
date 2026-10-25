@@ -18,6 +18,10 @@ namespace MeshWeaver.Graph.Test;
 /// </summary>
 internal static class InboxPrefs
 {
+    /// <summary>Every activity state ticked — a person who wants decided approvals listed too.</summary>
+    public static InboxPreferences EveryState(InboxPreferences p)
+        => p with { ActivityStates = System.Collections.Immutable.ImmutableDictionary<string, bool>.Empty.Add("open", true).Add("done", true) };
+
     /// <summary>
     /// Creates the preferences node of <paramref name="owner"/> holding <c>change(new InboxPreferences())</c>, or — when
     /// it exists — applies <paramref name="change"/> to what it holds. As System: the test is not the person.

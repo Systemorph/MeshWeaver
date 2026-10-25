@@ -52,7 +52,7 @@ public sealed class HubDisposingException : ObjectDisposedException
 
     /// <summary>
     /// The same typed refusal, wrapping the fault that REVEALED the teardown — the
-    /// <see cref="ObjectDisposedException"/> Autofac threw when a long-lived subscription (a
+    /// <see cref="ObjectDisposedException"/> the DI container threw when a long-lived subscription (a
     /// permission fold, #2679) resolved from the hub's already-disposed scope. The probe-gated
     /// classifier (<c>ScopeTeardown</c>) recognises that fault as the hub going away and re-raises
     /// it in this shape so every downstream consumer classifies it as the benign teardown it is;
@@ -106,10 +106,20 @@ public sealed class HubDisposingException : ObjectDisposedException
     public static bool IsHubDisposal(Exception? exception)
         => ExceptionChain.Contains<HubDisposingException>(exception);
 
+    /// <summary>The object name of the <see cref="ObjectDisposedException"/> MeshWeaver's DI container
+    /// throws once a scope (or one of its parents) has ended — <c>MeshServiceProvider.DisposedObjectName</c>,
+    /// restated here because this assembly sits below the container; <c>DisposedContainerIsATeardownFactTest</c>
+    /// pins that a real disposed container's exception is recognised.</summary>
+    public const string DisposedContainerObjectName = "MeshWeaver.ServiceScope";
+
+    /// <summary>The phrase that exception's message carries — what a REASON string (an exception rendered
+    /// as text) is recognised by.</summary>
+    public const string DisposedContainerPhrase = "nested scopes cannot be begun from this service scope";
+
     /// <summary>
     /// True when <paramref name="exception"/> is (or wraps) the DI container's
-    /// "this scope is gone" — an <see cref="ObjectDisposedException"/> naming a disposed Autofac
-    /// <c>LifetimeScope</c>.
+    /// "this scope is gone" — an <see cref="ObjectDisposedException"/> for a disposed
+    /// <c>MeshServiceProvider</c> scope.
     ///
     /// <para>🚨 This is a TEARDOWN fact, not a fault of the work that hit it, and the distinction
     /// is the whole point: a hub whose scope has been closed cannot serve anything, so a delivery
@@ -119,14 +129,18 @@ public sealed class HubDisposingException : ObjectDisposedException
     /// each re-deriving it — <c>HubDisposingException</c> covers only the case where the hub
     /// announced its own disposal, and a scope closed underneath a live delivery never does.</para>
     ///
-    /// <para>Matched on the message rather than a type: the exception is raised by Autofac and
+    /// <para>Matched on the chain rather than the outer type: the exception is raised by the container and
     /// wrapped by whatever invoked it (reflection hands it over as
     /// <see cref="System.Reflection.TargetInvocationException"/>), so the chain — not the outer
     /// type — is what carries the fact.</para>
     /// </summary>
+    /// <param name="exception">The exception to classify; may be null.</param>
     public static bool IsDisposedContainer(Exception? exception)
-        => ExceptionChain.Contains(exception, static e =>
-            e is ObjectDisposedException
-            && ((e.Message?.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase) ?? false)
-                || (e.Message?.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase) ?? false)));
+        => FaultClassifier.IsDisposedContainer(exception);
+
+    /// <summary>As <see cref="IsDisposedContainer(Exception?)"/>, for a REASON string — an outcome that
+    /// carries the failure as text. Forwards to <see cref="FaultClassifier.IsDisposedContainerReason"/>.</summary>
+    /// <param name="reason">The reason text; may be null.</param>
+    public static bool IsDisposedContainerReason(string? reason)
+        => FaultClassifier.IsDisposedContainerReason(reason);
 }

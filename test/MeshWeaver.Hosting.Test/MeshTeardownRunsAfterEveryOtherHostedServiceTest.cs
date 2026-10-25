@@ -23,7 +23,7 @@ namespace MeshWeaver.Hosting.Test;
 /// late HTTP requests and live Blazor circuits re-entered the disposed root hub's delivery
 /// pipeline, re-created hosted hubs, and re-subscribed Orleans streams on a stopped silo. When
 /// the host then disposed the root container, all of it threw <c>ObjectDisposedException</c>
-/// from a disposed Autofac <c>LifetimeScope</c> (#1540/#1541/#1542/#1544/#1545/#1546/#1547/
+/// from a disposed service scope (#1540/#1541/#1542/#1544/#1545/#1546/#1547/
 /// #1548/#1560 — one root, eight filings).</para>
 ///
 /// <para><see cref="EarlyRegisteredProbe"/> stands in for the web host: it is registered BEFORE
@@ -72,7 +72,7 @@ public class MeshTeardownRunsAfterEveryOtherHostedServiceTest
         probe.MeshWasDisposingAtStop.Should().BeFalse(
             "a hosted service that stops LAST — Kestrel, and with it every in-flight HTTP request "
             + "and Blazor circuit — must still find a LIVE mesh; draining before it is what let "
-            + "late traffic re-enter a disposed hub and resolve from a dying Autofac scope");
+            + "late traffic re-enter a disposed hub and resolve from a dying service scope");
         probe.MeshRunLevelAtStop.Should().Be(MessageHubRunLevel.Started,
             "the mesh drain belongs in IHostedLifecycleService.StoppedAsync, which runs only after "
             + "EVERY hosted service's StopAsync has returned");

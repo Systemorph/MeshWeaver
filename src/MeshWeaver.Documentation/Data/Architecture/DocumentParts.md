@@ -133,7 +133,7 @@ part hubs:
   those hubs, for example `…/logs-ci-Systemorph-MeshWeaver-111819915277.log/_DocumentPart/005158`.
 - **The memory was held, not just allocated.** `[HEAPSTEP]` showed a live heap of 10–11.7 GiB for
   more than an hour.
-- **The allocations look like hub construction.** They were led by Autofac resolve-pipeline handlers
+- **The allocations look like hub construction.** They were led by the resolve-pipeline handlers of the DI container then in use (Autofac, since removed in MeshWeaver#7145)
   and `MiddlewareDeclaration`.
 
 MeshWeaver.Plugins#2979 replaced the per-part reads with one query. Its test seals a 7-part document
