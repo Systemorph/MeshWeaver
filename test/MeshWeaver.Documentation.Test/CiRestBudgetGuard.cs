@@ -7,7 +7,8 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
@@ -122,21 +123,17 @@ public class CiRestBudgetGuard
 
     private static ImmutableList<string> FetchesMissingTheSharedClient(string yaml, Func<string, bool> imports)
     {
-        var stream = new YamlStream();
-        stream.Load(new StringReader(yaml));
-        var root = (YamlMappingNode)stream.Documents[0].RootNode;
+        var root = (JsonObject)TolerantYaml.Parse(yaml)!;
         var problems = ImmutableList<string>.Empty;
-        if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode jobs)
+        if (root["jobs"] is not JsonObject jobs)
             return problems;
-        foreach (var (name, jobNode) in jobs.Children)
+        foreach (var (name, jobNode) in jobs)
         {
-            if (jobNode is not YamlMappingNode job
-                || !job.Children.TryGetValue(new YamlScalarNode("steps"), out var stepsNode)
-                || stepsNode is not YamlSequenceNode steps)
+            if (jobNode is not JsonObject job || job["steps"] is not JsonArray steps)
                 continue;
-            for (var i = 0; i < steps.Children.Count; i++)
+            for (var i = 0; i < steps.Count; i++)
             {
-                if (steps.Children[i] is not YamlMappingNode step) continue;
+                if (steps[i] is not JsonObject step) continue;
                 var run = Scalar(step, "run");
                 if (run is null || !run.Contains("mw-core-file", StringComparison.Ordinal)) continue;
                 var fetched = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
@@ -163,22 +160,18 @@ public class CiRestBudgetGuard
 
     private static List<string> JobsCallingTheReaderUninstalled(string yaml)
     {
-        var stream = new YamlStream();
-        stream.Load(new StringReader(yaml));
-        var root = (YamlMappingNode)stream.Documents[0].RootNode;
+        var root = (JsonObject)TolerantYaml.Parse(yaml)!;
         var problems = new List<string>();
-        if (!root.Children.TryGetValue(new YamlScalarNode("jobs"), out var jobsNode) || jobsNode is not YamlMappingNode jobs)
+        if (root["jobs"] is not JsonObject jobs)
             return problems;
-        foreach (var (name, jobNode) in jobs.Children)
+        foreach (var (name, jobNode) in jobs)
         {
-            if (jobNode is not YamlMappingNode job
-                || !job.Children.TryGetValue(new YamlScalarNode("steps"), out var stepsNode)
-                || stepsNode is not YamlSequenceNode steps)
+            if (jobNode is not JsonObject job || job["steps"] is not JsonArray steps)
                 continue;
             var installedAt = -1;
-            for (var i = 0; i < steps.Children.Count; i++)
+            for (var i = 0; i < steps.Count; i++)
             {
-                if (steps.Children[i] is not YamlMappingNode step) continue;
+                if (steps[i] is not JsonObject step) continue;
                 if (Scalar(step, "uses")?.StartsWith(ReaderAction, StringComparison.Ordinal) == true && installedAt < 0)
                     installedAt = i;
                 var run = Scalar(step, "run");
@@ -192,8 +185,8 @@ public class CiRestBudgetGuard
         return problems;
     }
 
-    private static string? Scalar(YamlMappingNode node, string key) =>
-        node.Children.TryGetValue(new YamlScalarNode(key), out var v) && v is YamlScalarNode s ? s.Value : null;
+    private static string? Scalar(JsonObject node, string key) =>
+        node[key] is JsonValue v ? TolerantYaml.ScalarText(v) : null;
 
     private static string LanePath(string lane) => Path.Combine(RepoPaths.Root, ".github", "workflows", lane);
 

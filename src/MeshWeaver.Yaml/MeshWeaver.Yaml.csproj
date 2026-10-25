@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The platform's own YAML reader/writer: YAML syntax, JSON semantics. No third-party
+       dependency — the text is parsed into a System.Text.Json JsonNode tree and bound with the
+       same tolerant rules the platform uses for JSON (Doc/Architecture/TolerantYaml). -->
+  <PropertyGroup>
+    <ProjectGuid>{246be173-019e-4812-afaa-72dcbca4511b}</ProjectGuid>
+  </PropertyGroup>
+</Project>
