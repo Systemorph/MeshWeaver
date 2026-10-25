@@ -167,6 +167,8 @@ jobs:
       id-token: write   # OIDC to Azure (the federated credential is scoped to main)
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
         with:
@@ -198,43 +200,78 @@ jobs:
       # IfNotPresent. A rerun or a dispatch on an already-published commit must never rebuild over it: the
       # apt layer and the build's file timestamps are not reproducible, so a second push would put different
       # bytes under the approved name, and nodes that cached the first build would keep serving it.
+      # Absence is CONFIRMED POSITIVELY — from the registry's own repository and tag listings — never
+      # inferred from a failed lookup: any listing that fails is a red run with its diagnostics, so a
+      # transient registry error can never read as "not published" and license a rebuild.
       - name: Is this commit already published?
         id: published
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
-          if digest=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv 2>/dev/null) \
-             && [ -n "$digest" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "$REPO:${LINE}-${short} is already published as $digest — not rebuilt, not re-pushed (write-once)"
+          tag="${LINE}-${short}"
+          repos=$(az acr repository list --name meshweaver -o tsv) \
+            || { echo "::error::could not list the registry's repositories — refusing to decide whether $REPO:$tag exists"; exit 1; }
+          exists=false
+          if printf '%s\n' "$repos" | grep -qx "$REPO"; then
+            tags=$(az acr repository show-tags --name meshweaver --repository "$REPO" -o tsv) \
+              || { echo "::error::could not list $REPO's tags — refusing to decide whether $tag exists"; exit 1; }
+            printf '%s\n' "$tags" | grep -qx "$tag" && exists=true
+          fi
+          echo "exists=$exists" >> "$GITHUB_OUTPUT"
+          if [ "$exists" = true ]; then
+            echo "$REPO:$tag is already published — not rebuilt, not re-pushed (write-once)"
           else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "$REPO:$tag is confirmed absent (repository and tag listings read) — building it"
           fi
       # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile).
       - name: Build
         if: steps.published.outputs.exists == 'false'
         run: |
           set -euo pipefail
-          short="${GITHUB_SHA::7}"
-          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${short}" -t "$ACR/$REPO:${LINE}" deploy/ollama
-      - name: Push ollama:<line>-<sha> and :<line>
+          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}" deploy/ollama
+      - name: Push ollama:<line>-<sha>
         if: steps.published.outputs.exists == 'false'
+        run: docker push "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}"
+      # The moving line follows the NEWEST publication only. It is moved by a registry-side retag of the
+      # already-published manifest (no rebuild, no re-upload), so a run whose line push was interrupted
+      # completes it on rerun — and a rerun of an OLDER commit never moves the line back over a newer one.
+      - name: Move :<line> onto this build (only if this is the newest publication)
+        id: line
         run: |
           set -euo pipefail
-          short="${GITHUB_SHA::7}"
-          docker push "$ACR/$REPO:${LINE}-${short}"
-          docker push "$ACR/$REPO:${LINE}"
+          git fetch --quiet origin main
+          newest=$(git log -1 --format=%H origin/main -- deploy/ollama .github/workflows/ollama-image.yml)
+          if [ "$newest" != "$GITHUB_SHA" ]; then
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_SHA is not the newest publication (main's is $newest) — the line stays where the newer run put it"
+            exit 0
+          fi
+          # The manifest is copied BYTE FOR BYTE over the registry API (GET by the immutable tag, PUT under
+          # the line with the same media type), so both tags name ONE digest. `buildx imagetools create`
+          # was rejected: it wraps a single-platform manifest in a new index, a different digest.
+          refresh=$(az acr login --name meshweaver --expose-token --output tsv --query accessToken)
+          bearer=$(curl -fsS -u "00000000-0000-0000-0000-000000000000:$refresh" \
+            "https://$ACR/oauth2/token?service=$ACR&scope=repository:$REPO:pull,push" | jq -r '.access_token // empty')
+          [ -n "$bearer" ] || { echo "::error::could not exchange the ACR token for push on $REPO"; exit 1; }
+          accept='application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json'
+          curl -fsS -H "Authorization: Bearer $bearer" -H "Accept: $accept" -D manifest.headers -o manifest.json \
+            "https://$ACR/v2/$REPO/manifests/${LINE}-${GITHUB_SHA::7}"
+          type=$(awk -F': ' 'tolower($1)=="content-type" { gsub("\r", "", $2); print $2 }' manifest.headers | tail -1)
+          [ -n "$type" ] || { echo "::error::the registry returned no Content-Type for $REPO:${LINE}-${GITHUB_SHA::7}"; exit 1; }
+          curl -fsS -X PUT -H "Authorization: Bearer $bearer" -H "Content-Type: $type" --data-binary @manifest.json \
+            "https://$ACR/v2/$REPO/manifests/${LINE}"
+          echo "moved=true" >> "$GITHUB_OUTPUT"
       - name: Verify the tags exist in the registry (read back, never the green tick)
         run: |
           set -euo pipefail
           short="${GITHUB_SHA::7}"
           immutable=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}-${short}" --query digest -o tsv)
-          moving=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}" --query digest -o tsv)
-          # A fresh push moves the line onto this build; a write-once skip leaves the line wherever the
-          # newest publish put it, so only the immutable tag is required then.
           [ -n "$immutable" ] || { echo "::error::$REPO:${LINE}-${short} is not in the registry"; exit 1; }
-          [ "${{ steps.published.outputs.exists }}" = "true" ] || [ "$immutable" = "$moving" ] \
-            || { echo "::error::$REPO:${LINE}-${short} (${immutable:-absent}) and :${LINE} (${moving:-absent}) do not name one pushed manifest"; exit 1; }
-          echo "published $ACR/$REPO:${LINE}-${short} = ${immutable} (+ :${LINE})"
+          if [ "${{ steps.line.outputs.moved }}" = "true" ]; then
+            moving=$(az acr manifest show-metadata --registry meshweaver --name "$REPO:${LINE}" --query digest -o tsv)
+            [ "$immutable" = "$moving" ] \
+              || { echo "::error::$REPO:${LINE}-${short} (${immutable}) and :${LINE} (${moving:-absent}) do not name one manifest"; exit 1; }
+          fi
+          echo "published $ACR/$REPO:${LINE}-${short} = ${immutable} (line moved: ${{ steps.line.outputs.moved }})"
           echo "### ollama published" >> "$GITHUB_STEP_SUMMARY"
           echo "\`$ACR/$REPO:${LINE}-${short}\` — \`${immutable}\`. An estate overlay names this immutable tag." >> "$GITHUB_STEP_SUMMARY"
