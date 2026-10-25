@@ -15,8 +15,25 @@ reason}]}`. The intake (MeshWeaver.Plugins `BuildCapIntake`) authorizes it by th
 writes `Hosting/BuildCaps/<package>` as System; the build hosts' retention reads those nodes, so
 the deployment a capped package builds on is never torn down under it. `version` is the highest
 COMPLETE deployed version (`complete: true`, scaled to zero or not) in [floor, cap] from `GET <build API>/hosts`; with none deployed it is the
-version that must be, and `deployed: false` lets the intake ask for that deployment. The set is
-sent even when EMPTY: a package missing from it is a removed cap, and its node is deleted.
+version that must be (`deployed: false`). The set is sent even when EMPTY: a package missing from
+it is a removed cap, and its node is deleted.
+
+THEN IT ASKS FOR WHAT IS MISSING (the deploy half). A capped package with NO complete deployed
+version in [floor, cap] gets one `build-host-deploy-requested` event per needed version, signed like
+the caps event, in the receiver's shape (MeshWeaver.Plugins `BuildHostDeploy`,
+`Hosting/StandingBuildHosts` §7b): `{event, deployment: "Deployments/<control>", version,
+testerDigest, portalDigest, runnerDigest, coreTestsDigest?, reason: "cap:<package>"}`. The digests are
+read from the registry by the set's version tag (`ACR_USERNAME` / `ACR_PASSWORD`, needed only then);
+`coreTestsDigest` is named exactly when the set has an `mw-core-tests` image. The 202 is the inbox
+ACCEPTING the request, never the deployment: the next run reads `GET /hosts` again, and the cap is
+admitted (`--check-caps`) only once the version is listed complete. A refusal (409 included) is RED
+naming the receiver's answer.
+
+`GET /hosts` is read through the resolver: a 503 (a partial listing refused fail closed) is an
+OUTAGE retried inside a bounded window, never an empty list — an empty list would request a
+deployment that exists and drop a package's retention. `caps` (the anonymous count) says how many
+caps hold a version; `cappedBy` (the names) is read only with the worker token
+(`MW_BUILD_WORKER_TOKEN`), and both are REPORTED against the published set, never trusted for it.
 
 WHERE IT FILES. Into bug triage, the way every agent and lane files a finding: a node of TYPE
 `Feedback/Feedback` (Doc/Architecture/IncidentalFindings), created over the control instance's MCP
@@ -40,7 +57,10 @@ is RED (closing from a partial listing would leave stale items open, silently).
   cap-debt-triage.py --root . --resolver <resolve-platform.py> --repo owner/name --sha <sha> \
       --build-api https://<control>/api/builds --mesh-url https://<control> --namespace <user>/Feedback \
       --control-webhook-url https://<control>/api/hooks/Hosting/PlatformBuilds
-  env: MW_TRIAGE_TOKEN (mesh), CONTROL_WEBHOOK_SECRET (inbox), MW_BUILD_API_TOKEN (optional)
+      [--deployment control]
+  env: MW_TRIAGE_TOKEN (mesh), CONTROL_WEBHOOK_SECRET (inbox), MW_BUILD_API_TOKEN (optional),
+       MW_BUILD_WORKER_TOKEN (optional: reads `cappedBy`), ACR_USERNAME / ACR_PASSWORD (only when a
+       capped package needs a deployment requested)
   cap-debt-triage.py --self-test
 """
 from __future__ import annotations
@@ -80,7 +100,8 @@ def load_resolver(path: str):
     # `floor_admits` marks a resolver whose `highest_in_range` takes the floor TEXT (release floors
     # such as `3.1.0` included); an older one took a run number and would misread it.
     for name in ("read_package_bounds", "HttpBuildHosts", "set_run", "highest_in_range", "floor_admits",
-                 "canonical_set_name", "ResolutionError"):
+                 "canonical_set_name", "ResolutionError", "deployable_version", "set_digests", "registry_resolver",
+                 "BUILD_API_OUTAGE_WINDOW_S"):
         if not hasattr(module, name):
             raise Red(f"the resolver at {path} predates the package caps (no `{name}`) — fetch it at a "
                       "scripts ref that carries Doc/Architecture/DeployTestSwitchLatest phase P5")
@@ -296,10 +317,12 @@ def validate_webhook_url(url: str, expected_host: str) -> str:
     return url.strip()
 
 
-def post_event(url: str, secret: str, body: str, say=print) -> None:
+def post_event(url: str, secret: str, body: str, say=print, what: str = "the build-caps event") -> None:
     """POST `body` signed `X-Hub-Signature-256: sha256=<HMAC>`; the inbox's verdict is judged three
     ways, as the ci-failure lane judges it: `verified` passes, `not-required` is RED (the receiver
-    never checked the secret), no verdict at all is a receiver that predates the field (warned)."""
+    never checked the secret), no verdict at all is a receiver that predates the field (warned).
+    Any non-2xx is RED carrying the receiver's own answer; a 409 is a REFUSAL of the request (the
+    version names another set, the record holds its retention bound), never "requested"."""
     import hashlib
     import hmac
     signature = "sha256=" + hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
@@ -309,8 +332,16 @@ def post_event(url: str, secret: str, body: str, say=print) -> None:
         with urllib.request.build_opener(_NoRedirect).open(request, timeout=HTTP_TIMEOUT_S) as resp:
             answer = resp.read().decode("utf-8", "replace")
     except urllib.error.HTTPError as error:
-        raise Red(f"the control inbox answered HTTP {error.code} to the build-caps event"
-                  + (f" — check {WEBHOOK_SECRET_ENV}" if error.code in (401, 403) else "")) from error
+        try:
+            said = error.read().decode("utf-8", "replace")[:300]
+        except Exception:  # noqa: BLE001 — the answer's body is evidence, not a requirement
+            said = ""
+        if error.code == 409:
+            raise Red(f"the control inbox REFUSED {what} (HTTP 409 — a conflict on the record, e.g. the version "
+                      f"already names another set or retention holds its bound): {said or '(no reason given)'}") from error
+        raise Red(f"the control inbox answered HTTP {error.code} to {what}"
+                  + (f" — check {WEBHOOK_SECRET_ENV}" if error.code in (401, 403) else "")
+                  + (f": {said}" if said else "")) from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise Red(f"the control inbox is unreachable ({type(error).__name__})") from error
     try:
@@ -318,15 +349,84 @@ def post_event(url: str, secret: str, body: str, say=print) -> None:
     except (ValueError, AttributeError):
         verdict = None
     if verdict == "not-required":
-        raise Red("the inbox ACCEPTED the build-caps event WITHOUT checking its signature (`not-required`) — "
+        raise Red(f"the inbox ACCEPTED {what} WITHOUT checking its signature (`not-required`) — "
                   "the receiving instance declares no secret for Hosting/PlatformBuilds; fix it there")
     if verdict != "verified":
         say("::warning::the inbox answered no signature verdict — a receiver that predates it; the event was delivered")
 
 
+DEPLOY_EVENT = "build-host-deploy-requested"
+REGISTRY_USER_ENV, REGISTRY_PASSWORD_ENV = "ACR_USERNAME", "ACR_PASSWORD"
+WORKER_TOKEN_ENV = "MW_BUILD_WORKER_TOKEN"
+DEFAULT_DEPLOYMENT = "control"
+PACKAGE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+DEPLOYMENT_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def deploy_requests(resolver, rows: list[dict], deployment: str, resolve) -> list[tuple[str, list[str], str]]:
+    """`[(version, packages, body)]` — ONE `build-host-deploy-requested` per version some capped
+    package needs and no complete deployment carries, its reason `cap:<first package>` (the others
+    named in the log). The body is the receiver's shape, key order the wire order, every field
+    validated; the digests are the set's own, by its version tag. Raises Red (nothing is sent)."""
+    name = (deployment or "").strip()
+    name = name[len("Deployments/"):] if name.startswith("Deployments/") else name
+    if not DEPLOYMENT_NAME.fullmatch(name):
+        raise Red(f"--deployment {deployment!r} is not a plain Hosting/Deployment record name")
+    wanted: dict[str, list[str]] = {}
+    for row in rows:
+        if row["deployed"]:
+            continue
+        if not PACKAGE_NAME.fullmatch(row["package"]):
+            raise Red(f"package {row['package']!r} cannot name a deploy reason (`cap:<package>`)")
+        try:
+            version = resolver.deployable_version(row["cap"])
+        except resolver.ResolutionError as error:
+            raise Red(f"{row['package']}: {error}") from error
+        wanted.setdefault(version, []).append(row["package"])
+    out = []
+    for version, packages in sorted(wanted.items()):
+        try:
+            digests = resolver.set_digests(resolve, version)
+        except resolver.ResolutionError as error:
+            raise Red(f"the deployment {', '.join(packages)} need(s) cannot be requested: {error}") from error
+        event = {"event": DEPLOY_EVENT, "deployment": f"Deployments/{name}", "version": version,
+                 "testerDigest": digests["testerDigest"], "portalDigest": digests["portalDigest"],
+                 "runnerDigest": digests["runnerDigest"]}
+        if "coreTestsDigest" in digests:
+            event["coreTestsDigest"] = digests["coreTestsDigest"]
+        event["reason"] = f"cap:{sorted(packages)[0]}"
+        out.append((version, sorted(packages), json.dumps(event, separators=(",", ":"))))
+    return out
+
+
+def retention_lines(rows: list[dict], deployed: list) -> list[str]:
+    """What `GET /hosts` says about each deployed cap's retention, read BEFORE today's publication
+    (so it reflects the previous one): the names with the worker token, the count without. A
+    mismatch is a WARNING — the intake applies a publication asynchronously — never the verdict. Pure."""
+    by_version = {d.version: d for d in deployed}
+    lines = []
+    for row in rows:
+        d = by_version.get(row["version"]) if row["deployed"] else None
+        if d is None:
+            continue
+        if d.capped_by is not None:
+            held = row["package"] in d.capped_by
+            lines.append(("" if held else "::warning::")
+                         + f"retention: build-{d.version} cappedBy {list(d.capped_by)} — "
+                         + ("holds " if held else "does NOT name ") + row["package"]
+                         + ("" if held else " yet (the intake applies today's publication asynchronously)"))
+        else:
+            lines.append(("" if d.caps else "::warning::") + f"retention: build-{d.version} is needed by {d.caps} "
+                         "package cap(s) (anonymous count; the names need the worker token)"
+                         + ("" if d.caps else " — none yet, the intake applies today's publication asynchronously"))
+    return lines
+
+
 def run(root: str, resolver_path: str, repo: str, build_api: str, mesh_url: str, namespace: str,
         token: str, build_token: str, say=print, sha: str = "", webhook_url: str = "",
-        webhook_secret: str = "", webhook_host: str = DEFAULT_WEBHOOK_HOST) -> int:
+        webhook_secret: str = "", webhook_host: str = DEFAULT_WEBHOOK_HOST, deployment: str = DEFAULT_DEPLOYMENT,
+        worker_token: str = "", registry_user: str = "", registry_password: str = "", resolve=None,
+        outage_window: float | None = None, outage_poll: float | None = None) -> int:
     resolver = load_resolver(resolver_path)
     try:
         bounds = resolver.read_package_bounds(root)
@@ -350,9 +450,15 @@ def run(root: str, resolver_path: str, repo: str, build_api: str, mesh_url: str,
     except resolver.ResolutionError as error:
         raise Red(f"--mesh-url: {error}") from error
     try:
-        hosts = resolver.HttpBuildHosts(build_api, build_token)
+        hosts = resolver.HttpBuildHosts(
+            build_api, build_token, worker_token=worker_token,
+            outage_window=resolver.BUILD_API_OUTAGE_WINDOW_S if outage_window is None else outage_window,
+            outage_poll=resolver.BUILD_API_OUTAGE_POLL_S if outage_poll is None else outage_poll)
         latest = hosts.latest()
         deployed = hosts.deployed()
+        if hosts.outages:
+            say(f"::notice::GET /hosts answered 503 {hosts.outages} time(s) (an outage: a partial listing refused) "
+                "before the listing was read")
     except resolver.ResolutionError as error:
         raise Red(str(error)) from error
     latest_run = resolver.set_run(latest)
@@ -364,6 +470,8 @@ def run(root: str, resolver_path: str, repo: str, build_api: str, mesh_url: str,
         say(f"  cap {row['package']} [{row['floor'] or 'no floor'}, {row['cap']}] → {row['version']}"
             + ("" if row["deployed"] else " (NOT deployed — the intake asks for it)"))
     say(f"published {len(rows)} cap(s) of {repo} to the control inbox (an absent package is removed there)")
+    for line in retention_lines(rows, deployed):
+        say("  " + line if not line.startswith("::") else line)
 
     # 2. The debt, filed for triage.
     items: dict[str, tuple[str, str]] = {}
@@ -377,6 +485,22 @@ def run(root: str, resolver_path: str, repo: str, build_api: str, mesh_url: str,
     file_items(Mesh(mesh_url, token), repo, namespace, items,
                datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), say)
     say(f"✓ {len(items)} cap item(s) filed or refreshed" if items else "✓ no package is capped — nothing owed")
+
+    # 3. The deployments no complete version provides, REQUESTED (after the retention and the debt
+    #    are recorded, so a refused request leaves both in place and is red on its own).
+    if any(not row["deployed"] for row in rows):
+        if resolve is None:
+            missing = [env for env, value in ((REGISTRY_USER_ENV, registry_user),
+                                              (REGISTRY_PASSWORD_ENV, registry_password)) if not value.strip()]
+            if missing:
+                raise Red(f"a capped package needs a deployment requested, and the set's digests are read from the "
+                          f"registry: missing {', '.join(missing)} — pass the registry credential to "
+                          "node-repo-cap-debt.yml (secrets registry-username / registry-password)")
+            resolve = resolver.registry_resolver(registry_user, registry_password)
+        for version, packages, event in deploy_requests(resolver, rows, deployment, resolve):
+            post_event(webhook_url, webhook_secret, event, say, what=f"the {DEPLOY_EVENT} event for {version}")
+            say(f"  requested build-{version} ({json.loads(event)['reason']}; needed by {', '.join(packages)}) — "
+                "ACCEPTED, not deployed: GET /hosts lists it once BuildHostDeploy ran, and the next run reads it")
     return 0
 
 
@@ -392,7 +516,8 @@ class _FakeControl:
     node store whose answers copy MeshOperations' wording."""
 
     def __init__(self, latest: str | None = "3.1.10412", versions: list[tuple[str, bool]] | None = None,
-                 refuse_create: bool = False, truncated: bool = False, inbox_verdict: str = "verified"):
+                 refuse_create: bool = False, truncated: bool = False, inbox_verdict: str = "verified",
+                 hosts_503: int = 0, deploy_status: int = 202, caps: dict | None = None):
         import hashlib
         import hmac
         import http.server
@@ -400,13 +525,19 @@ class _FakeControl:
         self.nodes: dict[str, dict] = {}
         self.calls: list[str] = []
         self.events: list[dict] = []
+        self.hosts_reads = 0
+        self.refused: list[dict] = []
         rows = versions if versions is not None else [("3.1.10412", True), ("3.1.10398", True)]
+        caps = caps or {}
         # `(version, complete)` in the shape `/hosts` serves (no `ready`); the decoy `ready: not
         # complete` proves the lane never reads `ready` — a complete version reads as scaled to zero.
         hosts_doc = {"aliases": {"latest": latest, "candidate": None, "previous": None},
                      "versions": [{"version": v, "deploymentName": "build-" + v.replace(".", "-"),
                                    "complete": c, "ready": not c, "maxReplicas": 2, "aliases": [],
-                                   "pinned": False, "pinnedBy": []} for v, c in rows]}
+                                   "pinned": 0, "caps": caps.get(v, (0, []))[0]} for v, c in rows]}
+        worker_doc = json.loads(json.dumps(hosts_doc))
+        for row in worker_doc["versions"]:  # `cappedBy` is served to the worker token only
+            row["cappedBy"] = caps.get(row["version"], (0, []))[1]
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -419,7 +550,11 @@ class _FakeControl:
 
             def do_GET(self):  # noqa: N802
                 if self.path.endswith("/api/builds/hosts") and latest is not None:
-                    return self._send(200, hosts_doc)
+                    fake.hosts_reads += 1
+                    if hosts_503 < 0 or fake.hosts_reads <= hosts_503:
+                        return self._send(503, {"error": "a deployment record could not be read"})
+                    worker = self.headers.get("Authorization") == "Bearer worker-tok"
+                    return self._send(200, worker_doc if worker else hosts_doc)
                 return self._send(404, {})
 
             def do_POST(self):  # noqa: N802
@@ -428,7 +563,11 @@ class _FakeControl:
                     want = "sha256=" + hmac.new(TEST_SECRET.encode(), raw, hashlib.sha256).hexdigest()
                     if not hmac.compare_digest(want, self.headers.get("X-Hub-Signature-256") or ""):
                         return self._send(401, {"signature": "invalid"})
-                    fake.events.append(json.loads(raw))
+                    event = json.loads(raw)
+                    if event.get("event") == DEPLOY_EVENT and deploy_status != 202:
+                        fake.refused.append(event)
+                        return self._send(deploy_status, {"error": "version 3.1.10400 already names another set"})
+                    fake.events.append(event)
                     return self._send(202, {"signature": inbox_verdict})
                 body = json.loads(raw)
                 if self.headers.get("Authorization") != "Bearer mesh-token":
@@ -515,11 +654,20 @@ def self_test() -> int:
     ns = "svc/Feedback"
     logs: list[str] = []
 
+    digests = {image: "sha256:" + c * 64 for image, c in (("mw-plugin-test", "1"), ("memex-portal-ai", "2"),
+                                                          ("mw-build-host", "3"), ("mw-core-tests", "4"))}
+
+    def registry(*absent: str):
+        def resolve(image: str, tag: str):
+            short = image.rsplit("/", 1)[-1]
+            return None if short in absent or not tag.startswith("3.1.") else digests.get(short)
+        return resolve
+
     def go(fake: _FakeControl, root: str, **over) -> str:
         args = dict(root=root, resolver_path=resolver_path, repo="Systemorph/Example",
                     build_api=fake.url + "/api/builds", mesh_url=fake.url, namespace=ns, token="mesh-token",
                     build_token="", say=logs.append, sha="c" * 40, webhook_url=fake.url + WEBHOOK_PATH,
-                    webhook_secret=TEST_SECRET)
+                    webhook_secret=TEST_SECRET, resolve=registry(), outage_window=0.3, outage_poll=0.02)
         args.update(over)
         try:
             run(**args)
@@ -528,7 +676,11 @@ def self_test() -> int:
         return ""
 
     def caps_of(fake: _FakeControl) -> list[dict]:
-        return fake.events[-1]["caps"] if fake.events else [{"missing": True}]
+        published = [e for e in fake.events if e.get("event") == BUILD_CAPS_EVENT]
+        return published[-1]["caps"] if published else [{"missing": True}]
+
+    def deploys(fake: _FakeControl) -> list[dict]:
+        return [e for e in fake.events if e.get("event") == DEPLOY_EVENT]
 
     with tempfile.TemporaryDirectory() as root:
         git(root, "init", "-q")
@@ -554,6 +706,8 @@ def self_test() -> int:
                                      "version": "3.1.10398", "deployed": True, "reason": "old Foo API"}]
                   and fake.events[-1]["event"] == BUILD_CAPS_EVENT and fake.events[-1]["repo"] == "Systemorph/Example",
                   fake.events)
+            check("NEGATIVE CONTROL: a cap WITH a complete deployment in range requests NO deployment",
+                  deploys(fake) == [], deploys(fake))
             check("a capped package files ONE Feedback/Feedback item, submitted (no status)",
                   red == "" and list(fake.nodes) == [path] and node.get("nodeType") == NODE_TYPE
                   and "status" not in node.get("content", {}), (red, fake.nodes))
@@ -561,6 +715,9 @@ def self_test() -> int:
                   all(s in message for s in ("Capped", "3.1.10400", "3.1.10412", "12 platform build(s)",
                                              "0 day(s)", "acme/Feedback/migrate-capped")), message)
             red = go(fake, root)
+            check("anonymously, retention is read as the CAPS COUNT (never names) and a zero is warned, not red",
+                  any("build-3.1.10398 is needed by 0 package cap(s)" in line and line.startswith("::warning::")
+                      for line in logs), logs[-6:])
             check("a second day refreshes the SAME item, never a duplicate",
                   red == "" and list(fake.nodes) == [path] and fake.calls.count("create") == 2
                   and "patch" in fake.calls, (red, fake.calls))
@@ -595,11 +752,90 @@ def self_test() -> int:
             shutil.rmtree(os.path.join(root, "Foo.Bar"))
             shutil.rmtree(os.path.join(root, "Foo-Bar"))
         package(root, "Capped", capped)
-        with _FakeControl(versions=[("3.1.10412", True), ("3.1.10399", False), ("3.1.10200", True)]) as fake:
-            go(fake, root)
+        no_fit = [("3.1.10412", True), ("3.1.10399", False), ("3.1.10200", True)]
+        with _FakeControl(versions=no_fit) as fake:
+            red = go(fake, root)
             check("a cap with no COMPLETE deployment in range (10399 incomplete, decoy `ready: true`) publishes the version it NEEDS (the cap) and "
                   "says it is not deployed", caps_of(fake) and caps_of(fake)[0]["version"] == "3.1.10400"
-                  and caps_of(fake)[0]["deployed"] is False, caps_of(fake))
+                  and caps_of(fake)[0].get("deployed") is False, caps_of(fake))
+            check("… and SENDS build-host-deploy-requested for it, signed, in the receiver's shape, reason cap:<package>",
+                  red == "" and deploys(fake) == [{"event": DEPLOY_EVENT, "deployment": "Deployments/control",
+                                                   "version": "3.1.10400", "testerDigest": digests["mw-plugin-test"],
+                                                   "portalDigest": digests["memex-portal-ai"],
+                                                   "runnerDigest": digests["mw-build-host"],
+                                                   "coreTestsDigest": digests["mw-core-tests"], "reason": "cap:Capped"}]
+                  and list(deploys(fake)[0]) == ["event", "deployment", "version", "testerDigest", "portalDigest",
+                                                 "runnerDigest", "coreTestsDigest", "reason"], (red, deploys(fake)))
+            check("… after the caps were published and the debt filed (a refused request leaves both in place)",
+                  [e["event"] for e in fake.events] == [BUILD_CAPS_EVENT, DEPLOY_EVENT] and len(fake.nodes) == 1,
+                  ([e["event"] for e in fake.events], list(fake.nodes)))
+            check("… and the log says the 202 is ACCEPTED, not deployed",
+                  any("ACCEPTED, not deployed" in line for line in logs), logs[-3:])
+        with _FakeControl(versions=no_fit) as fake:
+            go(fake, root, resolve=registry("mw-core-tests"))
+            check("a set with no core-tests image is requested WITHOUT coreTestsDigest (the set names none)",
+                  len(deploys(fake)) == 1 and "coreTestsDigest" not in deploys(fake)[0], deploys(fake))
+        package(root, "Twin", capped)
+        with _FakeControl(versions=no_fit) as fake:
+            red = go(fake, root)
+            check("two packages needing the SAME version send ONE request (reason: the first package)",
+                  red == "" and [d["reason"] for d in deploys(fake)] == ["cap:Capped"], (red, deploys(fake)))
+        shutil.rmtree(os.path.join(root, "Twin"))
+        with _FakeControl(versions=no_fit) as fake:
+            red = go(fake, root, deployment="Deployments/control")
+            check("a deployment given as its record path is kept", [d["deployment"] for d in deploys(fake)] == ["Deployments/control"]
+                  and red == "", (red, deploys(fake)))
+            red = go(fake, root, deployment="a/b")
+            check("a deployment that is not a record name is RED", "--deployment" in red, red)
+        with _FakeControl(versions=no_fit) as fake:
+            red = go(fake, root, resolve=None)
+            check("NEGATIVE: a needed request with no registry credential is RED naming both, and sends nothing",
+                  "ACR_USERNAME, ACR_PASSWORD" in red and deploys(fake) == [] and caps_of(fake)[0].get("deployed") is False,
+                  (red, deploys(fake)))
+        with _FakeControl() as fake:
+            red = go(fake, root, resolve=None)
+            check("… while a tree whose caps are all deployed needs NO registry credential",
+                  red == "" and deploys(fake) == [], red)
+        with _FakeControl(versions=no_fit) as fake:
+            red = go(fake, root, resolve=registry("mw-build-host"))
+            check("NEGATIVE: a set with no RUNNER image is RED naming it, and nothing is requested",
+                  "mw-build-host:3.1.10400 does not exist" in red and deploys(fake) == [], red)
+        with _FakeControl(versions=no_fit, deploy_status=409) as fake:
+            red = go(fake, root)
+            check("NEGATIVE: the inbox REFUSING the deploy request (409) is RED carrying the receiver's reason",
+                  "REFUSED the build-host-deploy-requested event for 3.1.10400 (HTTP 409" in red
+                  and "already names another set" in red and len(fake.refused) == 1, red)
+
+        # ── GET /hosts: a 503 is an OUTAGE, retried — never an empty listing ──
+        with _FakeControl(hosts_503=2) as fake:
+            red = go(fake, root)
+            check("a 503 from /hosts (a partial listing) is retried, then the run proceeds on the real listing",
+                  red == "" and fake.hosts_reads == 3 and caps_of(fake)[0].get("deployed") is True and deploys(fake) == [],
+                  (red, fake.hosts_reads, caps_of(fake)))
+        with _FakeControl(hosts_503=-1) as fake:
+            red = go(fake, root)
+            check("NEGATIVE CONTROL: a 503 that outlasts the window is RED naming the OUTAGE — nothing published, "
+                  "requested or filed (an empty listing would request a deployed version and drop retention)",
+                  "OUTAGE" in red and fake.events == [] and fake.nodes == {} and fake.hosts_reads > 1,
+                  (red, fake.hosts_reads, fake.events))
+
+        # ── retention, reported: names with the worker token, the count without ──
+        with _FakeControl(caps={"3.1.10398": (1, ["Capped"])}) as fake:
+            logs.clear()
+            red = go(fake, root, worker_token="worker-tok")
+            check("with the worker token, `cappedBy` is read and names the package holding its version",
+                  red == "" and any("cappedBy ['Capped'] — holds Capped" in line for line in logs), logs)
+        with _FakeControl(caps={"3.1.10398": (1, ["Capped"])}) as fake:
+            logs.clear()
+            red = go(fake, root)
+            check("NEGATIVE: anonymously the names are never read — only the count",
+                  red == "" and any("needed by 1 package cap(s)" in line for line in logs)
+                  and not any("cappedBy" in line for line in logs), logs)
+        with _FakeControl(caps={"3.1.10398": (1, [])}) as fake:
+            logs.clear()
+            red = go(fake, root, worker_token="worker-tok")
+            check("a worker listing that does not name the package is a WARNING (the intake is asynchronous), not red",
+                  red == "" and any(line.startswith("::warning::") and "does NOT name Capped" in line for line in logs), logs)
         with _FakeControl(latest=None) as fake:
             red = go(fake, root)
             check("an unreadable build API is RED, publishes and files nothing",
@@ -647,7 +883,10 @@ def self_test() -> int:
             print(f"  - {failure}")
         return 1
     print(f"✓ cap-debt-triage self-test: {total} cases — every capped package is published to the signed "
-          "inbox with the deployed version it builds on (or the one it needs), a moved cap is updated and a "
+          "inbox with the deployed version it builds on (or the one it needs), a version no complete deployment "
+          "provides is REQUESTED (build-host-deploy-requested, reason cap:<package>, the set's digests; a 409 "
+          "refusal and a missing runner are RED), a /hosts 503 is an outage retried and never an empty list, "
+          "retention is read as cappedBy with the worker token and as the caps count without, a moved cap is updated and a "
           "removed one dropped from the set, one submitted Feedback/Feedback item per capped package is "
           "refreshed (never duplicated) and resolved when the cap goes, and every missing or refused input "
           "is RED")
@@ -666,6 +905,8 @@ def main() -> int:
     parser.add_argument("--namespace", default="")
     parser.add_argument("--control-webhook-url", default="")
     parser.add_argument("--control-webhook-host", default=DEFAULT_WEBHOOK_HOST)
+    parser.add_argument("--deployment", default=DEFAULT_DEPLOYMENT,
+                        help="the control instance's Hosting/Deployment record (core .github/control-instance.json)")
     arguments = parser.parse_args()
     if arguments.self_test:
         return self_test()
@@ -675,7 +916,10 @@ def main() -> int:
                    os.environ.get("MW_BUILD_API_TOKEN", ""), sha=arguments.sha,
                    webhook_url=arguments.control_webhook_url,
                    webhook_secret=os.environ.get(WEBHOOK_SECRET_ENV, ""),
-                   webhook_host=arguments.control_webhook_host)
+                   webhook_host=arguments.control_webhook_host, deployment=arguments.deployment,
+                   worker_token=os.environ.get(WORKER_TOKEN_ENV, ""),
+                   registry_user=os.environ.get(REGISTRY_USER_ENV, ""),
+                   registry_password=os.environ.get(REGISTRY_PASSWORD_ENV, ""))
     except Red as error:
         print("::error title=Cap debt could not be published or filed::" + str(error).replace("\n", "%0A"))
         return 1
