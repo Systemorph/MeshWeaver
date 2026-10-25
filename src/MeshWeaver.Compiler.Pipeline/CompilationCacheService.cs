@@ -1462,7 +1462,7 @@ internal class CompilationCacheService(
     /// <inheritdoc />
     /// <remarks>
     /// The XML file name uses the "DynamicNode_" prefix to match the assembly name,
-    /// which is required for Namotion.Reflection to find the documentation at runtime.
+    /// which is where <c>XmlDocs</c> looks for it at runtime (<c>{AssemblyName}.xml</c> beside the dll).
     /// </remarks>
     public string GetXmlDocPath(string nodeName)
         => Path.Combine(_absoluteCacheDirectory, $"DynamicNode_{nodeName}.xml");

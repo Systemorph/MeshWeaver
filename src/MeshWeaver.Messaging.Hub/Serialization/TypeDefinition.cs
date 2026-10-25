@@ -65,7 +65,9 @@ public record TypeDefinition : ITypeDefinition
         // TypeRegistry.WithType → here). Compiled scope NodeTypes live in COLLECTIBLE ALCs, so when
         // one is unloading while another hub is being built, that read walks metadata for an
         // assembly whose image is going away and the process dies with SIGSEGV inside
-        // Namotion.Reflection (dump: ToXmlDocsContent → StringBuilder.ToString on the GC thread).
+        // Namotion.Reflection (dump: ToXmlDocsContent → StringBuilder.ToString on the GC thread). The
+        // third-party reader has since been replaced by XmlDocs' own (Doc/Architecture/XmlDocumentationReader);
+        // the read still reflects over the type, so it stays off the construction path.
         //
         // HostedHubsCollection.CloseCreation() does NOT cover this: it is a TEARDOWN guard, flipped
         // when the owning hub's disposal begins. The crash reproduces on a BUILD path

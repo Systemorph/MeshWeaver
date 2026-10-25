@@ -16,7 +16,6 @@ using MeshWeaver.Reflection;
 using MeshWeaver.ShortGuid;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
-using Namotion.Reflection;
 using System.Text.Json;
 
 namespace MeshWeaver.Layout;
