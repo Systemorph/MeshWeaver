@@ -42,6 +42,27 @@ public interface IContentUploadObserver
     /// nothing from a file needs no change.</para>
     /// </summary>
     void OnDeleted(string collectionPath, string filePath) { }
+
+    /// <summary>
+    /// Called ONCE after a bulk write into a content collection has committed — a collection→collection
+    /// import (<c>ImportContentRequest</c>), a repository/GitSync content mirror
+    /// (<c>SyncContentFilesRequest</c>, once for the whole sync even when the producer split it across
+    /// several deliveries), an <c>IFileContentProvider.SaveFileContent</c> write, or a new node picture.
+    /// <paramref name="filePaths"/> are the files the write put there, in the same shape as
+    /// <see cref="OnUploaded"/>: relative to the collection root, forward slashes, no leading slash.
+    ///
+    /// <para>🚨 <b>One call per write, never one per file.</b> These are the paths that re-send whole
+    /// trees: a boot re-import mirrors every content file of a repository again, so a reactor that
+    /// started one unit of work per file would turn every boot into the per-file burst
+    /// <c>Doc/Architecture/ContentRoute503</c> describes. A reactor receives the whole set and decides
+    /// for itself what changed — most of a boot re-import's files are byte-identical to what is
+    /// already there.</para>
+    ///
+    /// <para>Like the other callbacks it must return immediately and do its work off-band. The default
+    /// does nothing, so an observer that does not react to bulk writes needs no change — exactly as
+    /// before these paths announced anything.</para>
+    /// </summary>
+    void OnFilesWritten(string collectionPath, IReadOnlyList<string> filePaths) { }
 }
 
 /// <summary>
@@ -77,6 +98,39 @@ public static class ContentUploadObserverExtensions
                 logger?.LogWarning(ex,
                     "Content upload observer {Observer} threw for {Collection}/{File} (best-effort, ignored)",
                     observer.GetType().Name, collectionPath, filePath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Notifies every registered <see cref="IContentUploadObserver"/> ONCE that a bulk write put
+    /// <paramref name="filePaths"/> into <paramref name="collectionPath"/>
+    /// (<see cref="IContentUploadObserver.OnFilesWritten"/>). Nothing is raised for an empty set. A
+    /// throwing observer is logged at Warning and does not stop the others; the write has already
+    /// committed and is not undone.
+    /// </summary>
+    public static void RaiseContentFilesWritten(
+        this IMessageHub hub, string collectionPath, IReadOnlyList<string> filePaths)
+    {
+        ArgumentNullException.ThrowIfNull(hub);
+        ArgumentNullException.ThrowIfNull(filePaths);
+        if (string.IsNullOrEmpty(collectionPath) || filePaths.Count == 0)
+            return;
+
+        var logger = hub.ServiceProvider.GetService<ILoggerFactory>()
+            ?.CreateLogger("MeshWeaver.ContentCollections.Upload");
+
+        foreach (var observer in hub.ServiceProvider.GetServices<IContentUploadObserver>())
+        {
+            try
+            {
+                observer.OnFilesWritten(collectionPath, filePaths);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning(ex,
+                    "Content observer {Observer} threw on the {Count} file(s) written to {Collection}; what it derives from them may be stale",
+                    observer.GetType().Name, filePaths.Count, collectionPath);
             }
         }
     }
