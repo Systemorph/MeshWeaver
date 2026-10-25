@@ -223,15 +223,24 @@ jobs:
           else
             echo "$REPO:$tag is confirmed absent (repository and tag listings read) — building it"
           fi
-      # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile).
-      - name: Build
+      # The build pulls the pinned models and runs the capability + embedding smoke (deploy/ollama/Dockerfile),
+      # and BuildKit pushes the result straight to ACR with zstd level 1 (multi-threaded).
+      # 🚨 NOT `docker push`. Measured on the first main run (40218349194): `docker push` of the ~24 GB
+      # model layer ran 37 minutes without finishing and the job hit the 45-minute cap. docker gzips each
+      # layer in a single thread, and quantized weights do not compress anyway (whisper's 2 GB pushed at
+      # ~12 MB/s by the same path). zstd keeps the layer format every current containerd pulls.
+      # --provenance/--sbom off: one plain image manifest, as docker build gives the sibling images.
+      - name: Build and push ollama:<line>-<sha> (BuildKit, zstd)
         if: steps.published.outputs.exists == 'false'
         run: |
           set -euo pipefail
-          docker build --progress=plain -t "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}" deploy/ollama
-      - name: Push ollama:<line>-<sha>
-        if: steps.published.outputs.exists == 'false'
-        run: docker push "$ACR/$REPO:${LINE}-${GITHUB_SHA::7}"
+          docker buildx create --name ollama-push --driver docker-container --use
+          start=$(date +%s)
+          docker buildx build --progress=plain --provenance=false --sbom=false \
+            --output "type=image,name=$ACR/$REPO:${LINE}-${GITHUB_SHA::7},push=true,compression=zstd,compression-level=1,force-compression=true,oci-mediatypes=true" \
+            deploy/ollama
+          echo "built and pushed in $(( $(date +%s) - start ))s"
+          echo "### ollama build + push: $(( $(date +%s) - start ))s" >> "$GITHUB_STEP_SUMMARY"
       # The moving line follows the NEWEST publication only. It is moved by a registry-side retag of the
       # already-published manifest (no rebuild, no re-upload), so a run whose line push was interrupted
       # completes it on rerun — and a rerun of an OLDER commit never moves the line back over a newer one.
