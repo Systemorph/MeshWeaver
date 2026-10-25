@@ -1118,6 +1118,12 @@ buildHosts:
   # The shared RWX cache (git mirrors, NuGet, the content-addressed plugins layer and compile
   # outputs). An EXISTING claim — the chart never creates or deletes it.
   cacheClaimName: "build-cache"
+  # Create that claim here (opt-in; absent = the claim is made by something else). Both keys are
+  # REQUIRED with create: true — a ReadWriteMany class (every replica shares it) and a size.
+  cache:
+    create: false
+    storageClass: ""
+    size: ""
   # The images, by REPOSITORY; each channel names the DIGEST it runs (written by core's CD).
   testerRepository: ""            # e.g. cr.example.com/mw-plugin-test
   portalRepository: ""            # e.g. cr.example.com/memex-portal-ai

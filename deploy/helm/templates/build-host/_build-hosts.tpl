@@ -15,7 +15,8 @@ The refusals, and why each one exists:
   * a channel needs its platformVersion — `claim` stamps it on the run as the host's set;
   * the API URL must be https, or http to a cluster-local host (no dot, or *.svc / *.cluster.local)
     — the worker token rides on it;
-  * at least one channel must be enabled — an enabled block that renders no host is a typo.
+  * at least one channel must be enabled — an enabled block that renders no host is a typo;
+  * `cache.create` needs its storageClass and size — the chart never guesses a volume's tier or size.
 */ -}}
 {{- define "memex.buildHosts" -}}
 {{- $b := (.Values.buildHosts | default dict) -}}
@@ -47,6 +48,13 @@ The refusals, and why each one exists:
 {{- fail "buildHosts.bakeShares is not supported — a build host mounts NO bake share; publication is the publish lane's, on the aggregate check build" -}}
 {{- end -}}
 {{- $cache := required "buildHosts.cacheClaimName is required — the shared RWX build-cache claim" $b.cacheClaimName -}}
+{{- $cc := ($b.cache | default dict) -}}
+{{- $cacheCreate := dict "create" false -}}
+{{- if $cc.create -}}
+{{- $cacheCreate = dict "create" true
+      "storageClass" (required "buildHosts.cache.storageClass is required when buildHosts.cache.create — the build cache is shared by every replica, so it needs a ReadWriteMany class (e.g. azurefile-memex)" $cc.storageClass)
+      "size" (required "buildHosts.cache.size is required when buildHosts.cache.create — the chart will not guess a volume size" $cc.size) -}}
+{{- end -}}
 {{- if ($b.postgres | default dict).enabled -}}
 {{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
 {{- end -}}
@@ -111,7 +119,7 @@ The refusals, and why each one exists:
 {{- $wi := ($b.workloadIdentity | default dict) -}}
 {{- toYaml (dict "enabled" true "apiUrl" $api "tokenSecret" $tokName "tokenKey" $tokKey
       "workloadIdentityClientId" (trim ($wi.clientId | default ""))
-      "cacheClaim" $cache "imagePullSecret" ($b.imagePullSecret | default "")
+      "cacheClaim" $cache "cache" $cacheCreate "imagePullSecret" ($b.imagePullSecret | default "")
       "pluginsRegistry" ($b.pluginsRegistry | default "") "pluginsSource" ($b.pluginsSource | default "plugins")
       "orasImage" (required "buildHosts.orasImage is required" $b.orasImage)
       "nodeSelector" ($b.nodeSelector | default dict) "tolerations" ($b.tolerations | default list)

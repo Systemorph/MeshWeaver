@@ -222,6 +222,40 @@ else
   report "the build-host fixture does not render:"; sed 's/^/    /' "$WORK/hosts.err"
 fi
 
+# 3b. the cache claim (opt-in; absent from the fixture above)
+if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/values.build-hosts-cache.yaml" --namespace check \
+     > "$WORK/cache.yaml" 2> "$WORK/cache.err"; then
+  if python3 - "$WORK/cache.yaml" "$WORK/hosts.yaml" <<'PY'
+import sys, yaml
+docs = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d]
+plain = [d for d in yaml.safe_load_all(open(sys.argv[2])) if d]
+problems = []
+def find(ds, kind, name):
+    return next((d for d in ds if d["kind"] == kind and d["metadata"]["name"] == name), None)
+pvc = find(docs, "PersistentVolumeClaim", "build-cache")
+if not pvc:
+    problems.append("cache.create renders no build-cache claim")
+else:
+    spec = pvc["spec"]
+    if spec.get("accessModes") != ["ReadWriteMany"] or spec.get("storageClassName") != "azurefile-memex" \
+            or spec.get("resources", {}).get("requests", {}).get("storage") != "100Gi":
+        problems.append(f"the build-cache claim is not RWX on the stated class and size: {spec}")
+    if (pvc["metadata"].get("annotations") or {}).get("helm.sh/resource-policy") != "keep":
+        problems.append("the build-cache claim is not kept on uninstall (helm.sh/resource-policy: keep)")
+if find(plain, "PersistentVolumeClaim", "build-cache"):
+    problems.append("without cache.create the chart still renders the claim")
+if any(d["kind"] == "DaemonSet" for d in docs if (d.get("metadata", {}).get("labels") or {}).get("app.kubernetes.io/component", "").startswith("build-host")):
+    problems.append("the chart renders a node-level DaemonSet — node setup is the platform lane's, never an instance release's")
+if problems:
+    print("\n".join(problems)); sys.exit(1)
+PY
+  then ok "cache.create renders the kept RWX build-cache claim, and nothing without it; the chart renders no node-level DaemonSet"
+  else report "the cache claim renders a wrong shape (see above)"
+  fi
+else
+  report "the cache fixture does not render:"; sed 's/^/    /' "$WORK/cache.err"
+fi
+
 # 4. refusals
 for entry in \
   "values.build-hosts-tag-not-digest.yaml|must be a sha256:<64 hex> digest" \
@@ -230,7 +264,8 @@ for entry in \
   "values.build-hosts-postgres-sidecar.yaml|runs NO shared database" \
   "values.build-hosts-localhost-no-profile.yaml|names no profile" \
   "values.build-hosts-run-deadline-too-long.yaml|RUN budget" \
-  "values.build-hosts-run-deadline-zero.yaml|RUN budget"; do
+  "values.build-hosts-run-deadline-zero.yaml|RUN budget" \
+  "values.build-hosts-cache-no-class.yaml|buildHosts.cache.storageClass is required"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"

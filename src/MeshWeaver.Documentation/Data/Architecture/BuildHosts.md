@@ -335,8 +335,17 @@ sandbox). With `buildHosts.registry.url` the read-only `mwi_` instance key is mo
 `registry.instanceKeySecret` as a FILE at `/run/registry-key/key`.
 The gate host is composed into `/host/app` (the composer replaces its output directory; the
 emptyDir's mount point cannot be removed). The chart carries
-no ConfigMap. The cache is an **existing** RWX claim
-(`buildHosts.cacheClaimName`, default `build-cache`); the chart never creates or deletes it.
+no ConfigMap for the runner. The cache is the RWX claim `buildHosts.cacheClaimName` (default
+`build-cache`). The chart creates it only with `buildHosts.cache.create: true`, which requires both
+`storageClass` and `size`. A created claim is `helm.sh/resource-policy: keep`, so an uninstall
+leaves the cache, and the chart never deletes one.
+
+**The AppArmor profile** is NOT the chart's. A kernel with `apparmor_restrict_unprivileged_userns=1`
+denies bwrap's user namespace to every profile that does not grant `userns`. The profile that grants
+it (`mw-build-host`), and the DaemonSet that loads it onto the CI pools, are node-level platform
+setup. They are applied by the estate's CI-runners lane, never by an instance release; the operator
+that applies the chart has no write on DaemonSets, by design. The record names it through the
+existing `buildHosts.sandbox.appArmorProfile: Localhost` / `appArmorLocalhostProfile: mw-build-host`.
 
 `deploy/aks/scripts/test-build-hosts.sh` (Chart Gate) asserts the runner ships in ONE place (the
 Dockerfile copies `.github/scripts`' scripts, installs bubblewrap, runs the self-test, names no
@@ -520,8 +529,9 @@ whole workflow (the admission queues a new attempt).
   `kernel.apparmor_restrict_unprivileged_userns=1`, which strips an unconfined process's new user
   namespace of the capabilities to write its uid map. So the host fails closed as designed, and a
   node image on that kernel line needs either that sysctl at 0 on the build pool or an AppArmor
-  profile that grants `userns` to the build container (`buildHosts.sandbox.appArmorProfile`
-  `Localhost`) — a node-pool decision, not a chart default.
+  profile that grants `userns` to the build container. **Decided (maintainer, 2026-10-25): the
+  profile.** The estate's CI-runners lane loads it onto the CI pools and the record names it (§3). Whether a host on the
+  live CI pool then passes the startup probe is measured by the first probe, not assumed.
 - **Retention of pinned digests.** A host runs digests the record pins for as long as its channel
   stays on a set; the ACR purge counts newer builds, so a quiet `stable` channel's images must be
   protected the way other pinned digests are (`lock-pinned-digests.py`,
