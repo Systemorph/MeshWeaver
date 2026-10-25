@@ -52,7 +52,7 @@ public static class InboxPreferencesNodeType
     /// What a person who never chose gets, for the given <paramref name="sections"/>: the kinds a leg
     /// declares <see cref="InboxQueryLeg.DefaultKind"/> ticked (the open approvals, the important
     /// notifications) and every other kind unticked, every source at its <c>ShownByDefault</c>, and
-    /// only the open state group ticked. Pure.
+    /// each kind at its own state default (activities open only; mail and chats unread and read). Pure.
     /// </summary>
     /// <param name="sections">The resolved legs of the page.</param>
     public static InboxPreferences Defaults(IEnumerable<InboxSection> sections)
@@ -64,15 +64,46 @@ public static class InboxPreferencesNodeType
                 .ToImmutableDictionary(g => InboxRows.SourceKey(g.Key), g => g.Any(s => s.DefaultKind), StringComparer.Ordinal),
             Sources = list.GroupBy(s => s.Source, StringComparer.Ordinal)
                 .ToImmutableDictionary(g => InboxRows.SourceKey(g.Key), g => g.Any(s => s.ShownByDefault), StringComparer.Ordinal),
-            States = ImmutableDictionary<string, bool>.Empty.WithComparers(StringComparer.Ordinal)
-                .Add(InboxRows.OpenKey, true).Add(InboxRows.DoneKey, false),
+            ActivityStates = InboxStateKind.Defaults(InboxStateKind.Activity),
+            MailStates = InboxStateKind.Defaults(InboxStateKind.Mail),
+            ChatStates = InboxStateKind.Defaults(InboxStateKind.Chat),
         };
     }
 
     /// <summary>
+    /// <paramref name="stored"/> with every per-kind state filter resolved — what the page lists by. A filter
+    /// the node does not hold yet is the default of its kind, EXCEPT the activities filter of a node that still
+    /// holds the legacy global <see cref="InboxPreferences.States"/>: that choice (say <c>open</c> only) moves to
+    /// the activities filter and to nothing else, so it can never hide a mail. Pure.
+    /// </summary>
+    /// <param name="stored">What the node holds.</param>
+    public static InboxPreferences Effective(InboxPreferences stored)
+        => stored with
+        {
+            ActivityStates = StatesOf(stored, InboxStateKind.Activity),
+            MailStates = StatesOf(stored, InboxStateKind.Mail),
+            ChatStates = StatesOf(stored, InboxStateKind.Chat),
+            States = ImmutableDictionary<string, bool>.Empty,
+        };
+
+    /// <summary>The stored filter of <paramref name="kind"/>, else (activities only) the migrated legacy one, else the kind's default. Pure.</summary>
+    internal static ImmutableDictionary<string, bool> StatesOf(InboxPreferences stored, string kind)
+    {
+        var own = kind switch
+        {
+            InboxStateKind.Activity => stored.ActivityStates,
+            InboxStateKind.Mail => stored.MailStates,
+            _ => stored.ChatStates,
+        };
+        return own.Count > 0 ? own
+            : kind == InboxStateKind.Activity && stored.States.Count > 0 ? stored.States
+            : InboxStateKind.Defaults(kind);
+    }
+
+    /// <summary>
     /// <paramref name="current"/> with every kind and source it lacks added from <paramref name="expected"/> —
-    /// an entry the person already has (ticked or not) is never touched, and the state groups are a closed
-    /// set the person's own choice owns — or null when it lacks none. Pure: this is what makes the seeding
+    /// an entry the person already has (ticked or not) is never touched, and a per-kind state filter the node lacks is
+    /// migrated from the legacy global one (activities only) or defaulted — or null when it lacks none. Pure: this is what makes the seeding
     /// converge, because a second pass finds nothing missing.
     /// </summary>
     /// <param name="current">What is stored.</param>
@@ -81,10 +112,21 @@ public static class InboxPreferencesNodeType
     {
         var kinds = Merge(current.Kinds, expected.Kinds);
         var sources = Merge(current.Sources, expected.Sources);
-        return ReferenceEquals(kinds, current.Kinds) && ReferenceEquals(sources, current.Sources)
+        // The per-kind state filters a node written before they existed lacks: migrated (activities) or defaulted.
+        var migrated = MissingStates(current).Count > 0 ? Effective(current) : current;
+        return ReferenceEquals(kinds, current.Kinds) && ReferenceEquals(sources, current.Sources) && ReferenceEquals(migrated, current)
             ? null
-            : current with { Kinds = kinds, Sources = sources };
+            : migrated with { Kinds = kinds, Sources = sources };
     }
+
+    /// <summary>The per-kind state filters <paramref name="stored"/> does not hold yet (kind names), or the legacy global one still present. Pure.</summary>
+    internal static IReadOnlyList<string> MissingStates(InboxPreferences stored)
+        => [.. new[]
+        {
+            (InboxStateKind.Activity, stored.ActivityStates.Count == 0 || stored.States.Count > 0),
+            (InboxStateKind.Mail, stored.MailStates.Count == 0),
+            (InboxStateKind.Chat, stored.ChatStates.Count == 0),
+        }.Where(k => k.Item2).Select(k => k.Item1)];
 
     private static ImmutableDictionary<string, bool> Merge(ImmutableDictionary<string, bool> current, ImmutableDictionary<string, bool> expected)
     {
@@ -105,7 +147,9 @@ public static class InboxPreferencesNodeType
         return defaults with
         {
             Kinds = defaults.Kinds.ToImmutableDictionary(k => k.Key, _ => false, StringComparer.Ordinal),
-            States = ImmutableDictionary<string, bool>.Empty,
+            ActivityStates = ImmutableDictionary<string, bool>.Empty,
+            MailStates = ImmutableDictionary<string, bool>.Empty,
+            ChatStates = ImmutableDictionary<string, bool>.Empty,
         };
     }
 
