@@ -56,30 +56,55 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         return change.Items.FirstOrDefault(n => string.Equals(n.Path, path, StringComparison.Ordinal));
     }
 
+    // Whether the listing has the node, read as System — one query, composed at subscribe.
+    private IObservable<bool> IsListed(string path)
+        => Observable.Defer(() =>
+        {
+            using var _ = AsSystem();
+            return Mesh.ServiceProvider.GetRequiredService<IMeshService>()
+                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{path}") with { Limit = 1 })
+                .Take(1)
+                .Select(change => change.Items.Any(n => string.Equals(n.Path, path, StringComparison.Ordinal)));
+        });
+
+    // The listing re-read until it says WANT — one bounded wait over the whole condition, never a sleep loop.
+    private IObservable<bool> Until(string path, bool want)
+        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(-1L)
+            .Select(_ => IsListed(path))
+            .Concat()
+            .Where(listed => listed == want)
+            .Take(1)
+            .Timeout(Bound);
+
     // A node the test expects to EXIST: found through the listing (waiting while the index catches up), then read
     // from its stream — never a first query frame taken as the node's post-write state.
-    private async Task<MeshNode> Present(string path, CancellationToken ct)
-    {
-        var until = DateTimeOffset.UtcNow + Bound;
-        while (await Listed(path, ct) is null)
-        {
-            DateTimeOffset.UtcNow.Should().BeBefore(until, $"'{path}' should exist");
-            await Task.Delay(100, ct);
-        }
-        using var _ = AsSystem();
-        return await Mesh.GetMeshNodeStream(path).Take(1).Timeout(Bound).Await(ct);
-    }
+    private Task<MeshNode> Present(string path, CancellationToken ct)
+        => Until(path, want: true)
+            .SelectMany(_ => Observable.Defer(() =>
+            {
+                using var _ = AsSystem();
+                return Mesh.GetMeshNodeStream(path).Take(1);
+            }))
+            .Take(1)
+            .Timeout(Bound)
+            .Await(ct);
 
-    // A node the test expects to be GONE: waits until the listing no longer has it, within the bound.
-    private async Task Absent(string path, CancellationToken ct)
-    {
-        var until = DateTimeOffset.UtcNow + Bound;
-        while (await Listed(path, ct) is not null)
-        {
-            DateTimeOffset.UtcNow.Should().BeBefore(until, $"'{path}' should be gone");
-            await Task.Delay(100, ct);
-        }
-    }
+    // A node the test expects to be GONE: the listing re-read until it no longer has it, within the bound.
+    private Task Absent(string path, CancellationToken ct) => Until(path, want: false).Await(ct);
+
+    // A source node's content as its stream has it, re-read until PREDICATE holds, within the bound.
+    private Task<MailCopySource> SourceWhere(string path, Func<MailCopySource, bool> predicate, CancellationToken ct)
+        => Observable.Interval(TimeSpan.FromMilliseconds(100)).StartWith(-1L)
+            .Select(_ => Observable.Defer(() =>
+            {
+                using var _ = AsSystem();
+                return Mesh.GetMeshNodeStream(path).Take(1);
+            }).Select(node => node.ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!))
+            .Concat()
+            .Where(predicate)
+            .Take(1)
+            .Timeout(Bound)
+            .Await(ct);
 
     [Fact]
     public void TheCopyPaths_AreTheOwnersOwnPartition()
@@ -288,7 +313,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             move = store.MoveLegacy(owner, "outlook").Timeout(Bound).Await(ct);
         (await move).Should().Be(2);
 
-        var source = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
+        var source = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.Backfilled && s.LeaseHolder is null, ct);
         source.Generation.Should().Be("g1", "the moved copies stay current");
         source.Cursor.Should().Be(legacySource.Cursor, "the next sync resumes where the legacy one stopped — nothing is downloaded again");
         source.Backfilled.Should().BeTrue();
@@ -345,9 +370,9 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
         var held = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
         held.Backfilled.Should().BeFalse("a half-moved copy is never served from");
-        held.LeaseHolder.Should().BeNull("the failed attempt released its lease, so the next one need not wait it out");
-        (await Present(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!
-            .LeaseHolder.Should().BeNull("and its fence on the legacy copy");
+        await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);  // released for the next attempt
+        var legacyAfter = await SourceWhere(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);
+        legacyAfter.Backfilled.Should().BeFalse("a fenced legacy copy is never served from — readers of either image honor Backfilled");
 
         // The next attempt — files reachable again — finishes the move at once.
         var retry = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
@@ -399,7 +424,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             created = store.Create(owner, new MailCopySource { Provider = "outlook", Generation = "fresh-gen" }).Timeout(Bound).Await(ct);
 
         (await created).Generation.Should().Be("legacy-gen", "the legacy copy is moved before a fresh one could be created");
-        var source = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
+        var source = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.Backfilled && s.LeaseHolder is null, ct);
         source.Cursor.Should().Be("https://graph.example/delta?x=7");
         source.Backfilled.Should().BeTrue("released with the legacy copy's real state once moved");
         await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
@@ -510,12 +535,98 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
         outcomes.Should().Contain(n => n != null, "one attempt moves the copy");
         outcomes.Sum(n => n ?? 0).Should().Be(3, "each copy is moved by exactly one attempt");
         await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
-        var source = (await Present(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).ContentAs<MailCopySource>(Mesh.JsonSerializerOptions)!;
+        // Waited for, not read once: the release is a commit at the owning hub, and the stream here can trail it.
+        var source = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.Backfilled && s.LeaseHolder is null, ct);
         source.Backfilled.Should().BeTrue("released with the legacy copy's real state — never deleted as 'switched off' by a losing attempt");
         source.LeaseHolder.Should().BeNull();
         source.Cursor.Should().Be("https://graph.example/delta?x=3");
         foreach (var m in new[] { "m1", "m2", "m3" })
             await Present(MailCopyNodeTypes.CopyPath(owner, "outlook", "g1", m), ct);
+    }
+
+    /// <summary>
+    /// A move disposed after it took its fence — the sync's 30-minute bound, a caller that went away — sends no error
+    /// through any Catch; it still releases the leases IT took, so the next attempt need not wait out MoveLease.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AMoveDisposedAfterItsFence_ReleasesItsLeases()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var files = new RecordingAttachments { HangCopy = true };
+        var store = new MeshMailCopyStore(() => Mesh, attachments: files);
+        using (AsSystem())
+        {
+            var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            await mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            { NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active, Content = new MailCopySource { Provider = "outlook", Generation = "g1", Backfilled = true } }).Timeout(Bound).Await(ct);
+            await mesh.CreateNode(new MeshNode(MailCopyNodeTypes.IdFor("outlook", "g1", "m1"), MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+            {
+                NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                Content = new MailMessageCopy { Provider = "outlook", Generation = "g1", MessageId = "m1", HasAttachments = true },
+            }).Timeout(Bound).Await(ct);
+        }
+
+        IDisposable running;
+        using (Mesh.ServiceProvider.GetRequiredService<AccessService>().SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            running = store.MoveLegacy(owner, "outlook").Subscribe(_ => { }, _ => { });
+        // The attempt holds both leases and hangs in the file copy.
+        await SourceWhere(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), s => s.LeaseHolder is not null && !s.Backfilled, ct);
+        await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.LeaseHolder is not null && !s.Backfilled, ct);
+
+        running.Dispose();
+
+        await SourceWhere(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);
+        await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.LeaseHolder is null, ct);
+    }
+
+    /// <summary>
+    /// The move carries the source over UNCHANGED — generation, cursor, backfill, projection, account, window — so the
+    /// sync that follows it resumes: no rebuild, no new generation, and the moved copies are the ones it serves.
+    /// </summary>
+    [Fact(Timeout = 120_000)]
+    public async Task AMoveFollowedByASync_MintsNoNewGeneration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var owner = await SeedOwner(ct);
+        var store = new MeshMailCopyStore(() => Mesh, attachments: new RecordingAttachments());
+        var access = Mesh.ServiceProvider.GetRequiredService<AccessService>();
+        var feed = new OneAccountFeed();
+        var engine = new MailCopyEngine(feed, store, access: access);
+        var window = DateTimeOffset.UtcNow.AddDays(-90);
+        var legacy = new MailCopySource
+        {
+            Provider = "outlook", Generation = "g-legacy", Cursor = "https://graph.example/delta?x=9", Backfilled = true,
+            Projection = MailCopySource.CurrentProjection, MailboxId = "acct", WindowStart = window, EnabledAt = window.AddDays(90),
+        };
+        using (AsSystem())
+        {
+            var mesh = Mesh.ServiceProvider.GetRequiredService<IMeshService>();
+            await mesh.CreateNode(new MeshNode("outlook", MailCopyNodeTypes.LegacyNamespaceFor(owner))
+            { NodeType = MailCopyNodeTypes.SourceNodeType, State = MeshNodeState.Active, Content = legacy }).Timeout(Bound).Await(ct);
+            await mesh.CreateNode(new MeshNode(MailCopyNodeTypes.IdFor("outlook", "g-legacy", "m1"), MailCopyNodeTypes.LegacySourcePath(owner, "outlook"))
+            {
+                NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                Content = new MailMessageCopy { Provider = "outlook", Generation = "g-legacy", MessageId = "m1", Subject = "kept", ReceivedAt = DateTimeOffset.UtcNow, CopiedAt = DateTimeOffset.UtcNow },
+            }).Timeout(Bound).Await(ct);
+        }
+
+        Task<MailCopySource?> synced;
+        using (access.SwitchAccessContext(new AccessContext { ObjectId = owner, Name = owner }))
+            synced = engine.Sync(owner).DefaultIfEmpty(null).Timeout(Bound).Await(ct);
+        await synced;
+
+        // The stub feed takes no step, so the sync never reaches its own lease release; what counts is what it did NOT do.
+        var source = await SourceWhere(MailCopyNodeTypes.SourcePath(owner, "outlook"), s => s.Backfilled, ct);
+        source.Generation.Should().Be("g-legacy", "a moved copy is resumed, never rebuilt");
+        source.Cursor.Should().Be(legacy.Cursor);
+        source.Backfilled.Should().BeTrue();
+        source.Projection.Should().Be(legacy.Projection);
+        source.MailboxId.Should().Be("acct");
+        source.WindowStart.Should().Be(window);
+        source.EnabledAt.Should().Be(legacy.EnabledAt);
+        await Present(MailCopyNodeTypes.CopyPath(owner, "outlook", "g-legacy", "m1"), ct);
+        await Absent(MailCopyNodeTypes.LegacySourcePath(owner, "outlook"), ct);
     }
 
     private sealed class OneAccountFeed : IMailCopyFeed
@@ -530,6 +641,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
     private sealed class RecordingAttachments : IMailAttachmentStore
     {
         public bool FailCopy { get; init; }
+        public bool HangCopy { get; init; }
         private ImmutableList<string> calls = [];
         public IReadOnlyList<string> Calls => calls;
 
@@ -540,7 +652,9 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             => Observable.Return(Unit.Default);
 
         public IObservable<int> CopyLegacy(string owner, string legacyCopyPath, string copyPath)
-            => FailCopy
+            => HangCopy
+                ? Observable.Never<int>()
+                : FailCopy
                 ? Observable.Throw<int>(new InvalidOperationException("the file share is not reachable"))
                 : Observable.Defer(() =>
                 {

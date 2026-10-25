@@ -304,8 +304,14 @@ public static class MailCopyNodeTypes
     /// <summary>The name of a copy whose message has no subject.</summary>
     public const string NoSubject = "(no subject)";
 
-    /// <summary>The type's icon.</summary>
-    public const string Icon = "🗄️";
+    /// <summary>The icon of a copied message — the platform's shared node-type icon set (<c>/static/NodeTypeIcons</c>).</summary>
+    public const string Icon = "/static/NodeTypeIcons/mail.svg";
+
+    /// <summary>The icon of a copy SOURCE — one mailbox account kept in sync.</summary>
+    public const string SourceIcon = "/static/NodeTypeIcons/history.svg";
+
+    /// <summary>The icon of the owner's copy PARTITION — the archive the copies live in.</summary>
+    public const string PartitionIcon = "/static/NodeTypeIcons/box.svg";
 
     /// <summary>The owner's copy partition, <c>{owner}_MailCopy</c> — the path of its root node. Pure.</summary>
     public static string NamespaceFor(string owner) => $"{owner}{Segment}";
@@ -422,7 +428,7 @@ public static class MailCopyNodeTypes
             // The partition's own id: a stored name is read by every viewer, so it carries no language.
             Name = NamespaceFor(owner),
             NodeType = PartitionNodeType,
-            Icon = Icon,
+            Icon = PartitionIcon,
             State = MeshNodeState.Active,
             MainNode = NamespaceFor(owner),
         };
@@ -466,7 +472,7 @@ public static class MailCopyNodeTypes
         {
             Name = $"Copy of {source.Provider}",
             NodeType = SourceNodeType,
-            Icon = Icon,
+            Icon = SourceIcon,
             State = MeshNodeState.Active,
             Content = source,
         };
@@ -514,7 +520,7 @@ public static class MailCopyNodeTypes
         NodeType = MeshNode.NodeTypePath,
         Content = new NodeTypeDefinition { KeepsHistory = false },
         Name = "Mail copies",
-        Icon = Icon,
+        Icon = PartitionIcon,
         ExcludeFromContext = new HashSet<string> { "create" },
         HubConfiguration = config => config.AddDefaultLayoutAreas(),
     };
@@ -527,7 +533,7 @@ public static class MailCopyNodeTypes
         // snapshots are purged for a type that keeps none).
         Content = new NodeTypeDefinition { KeepsHistory = false },
         Name = "Mail copy",
-        Icon = Icon,
+        Icon = SourceIcon,
         IsSatelliteType = true,
         ExcludeFromContext = new HashSet<string> { "create" },
         HubConfiguration = config => config

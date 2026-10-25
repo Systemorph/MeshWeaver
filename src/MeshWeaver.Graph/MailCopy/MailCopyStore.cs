@@ -211,8 +211,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             .SelectMany(_ => Write(owner, m => m.Mesh.CreateNode(MailCopyNodeTypes.BuildSource(owner, source))))
             .Select(_ => source)
             // Already there — switched on by another click or another replica: keep the first.
+            // Read from its STREAM: the conflict just proved it exists, and the index can trail a move that made it.
             .Catch((Exception ex) => MailCopyNodeTypes.IsAlreadyExists(ex)
-                ? SourceCore(owner, source.Provider).Select(existing => existing ?? throw ex)
+                ? LiveSource(owner, MailCopyNodeTypes.SourcePath(owner, source.Provider)).Select(existing => existing ?? throw ex)
                 : Observable.Throw<MailCopySource>(ex)));
 
     /// <inheritdoc />
@@ -289,61 +290,81 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
 
     /// <summary>
     /// The move of one legacy copy (<see cref="MoveLegacy"/>). 🚨 It is FENCED, because replicas still running the
-    /// previous image keep syncing the legacy place during a roll, and a Disable, a switch-on or a second mover may race
-    /// it. Every ATTEMPT is its own lease holder (<c>move:{guid}</c>), so two overlapping moves — in one process or two —
-    /// never both pass the fence:
+    /// previous image keep syncing and SERVING the legacy place during a roll, and a Disable, a switch-on or a second
+    /// mover may race it. Every ATTEMPT is its own lease holder (<c>move:{guid}</c>), so two overlapping moves — in one
+    /// process or two — never both pass the fence:
     /// <list type="number">
     ///   <item><description>The legacy source is read from its STREAM (the index can trail a cursor) and then FENCED: a
-    ///   generation-checked commit at its owning hub takes its lease for this attempt. A sync of the legacy place — of
-    ///   either image — then stands down, and any other attempt is refused. A lease held already refuses this one; the
-    ///   next sync repeats it.</description></item>
+    ///   generation-checked commit at its owning hub takes its lease for this attempt AND marks it not backfilled. A
+    ///   sync of the legacy place — of either image — stands down on the lease, and a reader of either image reads the
+    ///   inbox live rather than serve a copy that is being drained (readers honor <c>Backfilled</c>, not the lease). A
+    ///   lease held already refuses this attempt; the next sync repeats it.</description></item>
     ///   <item><description>The destination source is created with the legacy generation and cursor but NOT backfilled
     ///   and leased to this attempt, so nothing serves or syncs a half-moved copy. One that exists is read from its
     ///   STREAM: of the same generation it is taken over the same way, of another it is not this move's.</description></item>
     ///   <item><description>The copies are moved, from complete listing frames only; then, while this attempt still holds
-    ///   its fence, the legacy source is deleted and the destination released with the real backfill state.</description></item>
-    ///   <item><description>When the fence is LOST, this attempt tells a takeover from a switch-off: a legacy source that
-    ///   still exists was taken over (stop, touch nothing); one that is gone was switched off — and only if the
-    ///   destination still carries THIS attempt's lease is it rotated and cleaned, in one generation-checked commit at
-    ///   its owning hub. A successor that took over and finished holds the destination, and nothing of it is touched.</description></item>
-    ///   <item><description>A failure releases this attempt's leases (legacy and destination) before it reaches the
-    ///   caller, so the next sync can repeat the move at once instead of waiting out <see cref="MoveLease"/>.</description></item>
+    ///   its fence, the legacy source is deleted — and only when that delete DID delete it is the destination released,
+    ///   with the backfill state the legacy source had before this attempt fenced it (a retry that only sees the fenced
+    ///   state releases it not backfilled, and the next sync completes the backfill from the cursor).</description></item>
+    ///   <item><description>When the fence is LOST — or the legacy source vanished before this attempt's delete — this
+    ///   attempt tells a takeover from a switch-off: a legacy source that still exists was taken over (stop, touch
+    ///   nothing); one that is gone was switched off, and only if the destination still carries THIS attempt's lease is
+    ///   it rotated and cleaned, in one generation-checked commit at its owning hub.</description></item>
+    ///   <item><description>However the attempt ends — an error, a timeout, the caller disposing it — it releases the
+    ///   leases IT took, on the nodes it took them on (never gated on what the index shows), so the next sync can repeat
+    ///   the move at once instead of waiting out <see cref="MoveLease"/>. After a success there is nothing left to
+    ///   release.</description></item>
     /// </list>
     /// </summary>
     private IObservable<int> MoveLegacyCore(string owner, string provider)
-    {
-        var attempt = $"move:{Guid.NewGuid():N}";
-        var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
-        var sourcePath = MailCopyNodeTypes.SourcePath(owner, provider);
-        return LegacySourceCore(owner, provider).SelectMany(legacy => legacy is null
-            ? Observable.Return(0)
-            : CommitAt(owner, legacyPath, legacy.Generation, current => Fenced(current, attempt))
-                .SelectMany(fenced => fenced is null
-                    ? Observable.Throw<int>(new InvalidOperationException(
-                        $"The legacy mail copy '{legacyPath}' is being synced or moved elsewhere; the next sync repeats the move."))
-                    : EnsurePartition(owner)
-                        .SelectMany(_ => Destination(owner, provider, fenced, attempt))
-                        .SelectMany(owns => MovePasses(owner, provider, 1, 0)
-                            .SelectMany(moved => Fence(owner, legacyPath, fenced.Generation, attempt)
-                                .SelectMany(fence => fence switch
-                                {
-                                    FenceState.Held => Write(owner, m => m.Mesh.DeleteNode(legacyPath))
-                                        .SelectMany(_ => owns
-                                            ? CommitAt(owner, sourcePath, fenced.Generation, current => current.LeaseHolder == attempt
-                                                ? current with { Backfilled = legacy.Backfilled, LeaseHolder = null, LeaseUntil = null }
-                                                : null).Select(_ => moved)
-                                            : Observable.Return(moved)),
-                                    // Taken over by another attempt after this one's lease lapsed: that one finishes.
-                                    FenceState.TakenOver => Observable.Throw<int>(new InvalidOperationException(
-                                        $"The move of '{legacyPath}' was taken over by another attempt; this one stops.")),
-                                    // Switched off while moving: what THIS attempt still holds goes again.
-                                    _ => owns ? SwitchedOffWhileMoving(owner, provider, fenced.Generation, attempt) : Observable.Return(0),
-                                })))
-                        .Catch((Exception ex) => Released(owner, legacyPath, sourcePath, fenced.Generation, attempt)
-                            .SelectMany(_ => Observable.Throw<int>(ex))))
+        => Observable.Defer(() =>
+        {
+            var attempt = $"move:{Guid.NewGuid():N}";
+            var legacyPath = MailCopyNodeTypes.LegacySourcePath(owner, provider);
+            var sourcePath = MailCopyNodeTypes.SourcePath(owner, provider);
+            // What this attempt holds, for the release: written once each as the attempt takes it.
+            var held = new MoveHold();
+            return LegacySourceCore(owner, provider).SelectMany(legacy => legacy is null
+                    ? Observable.Return(0)
+                    : CommitAt(owner, legacyPath, legacy.Generation, current => Fenced(current, attempt) is { } fenced ? fenced with { Backfilled = false } : null)
+                        .SelectMany(fenced =>
+                        {
+                            if (fenced is null)
+                                return Observable.Throw<int>(new InvalidOperationException(
+                                    $"The legacy mail copy '{legacyPath}' is being synced or moved elsewhere; the next sync repeats the move."));
+                            held.Legacy = fenced.Generation;
+                            return EnsurePartition(owner)
+                                .SelectMany(_ => Destination(owner, provider, fenced, attempt))
+                                .Do(owns => { if (owns) held.Destination = fenced.Generation; })
+                                .SelectMany(owns => MovePasses(owner, provider, 1, 0)
+                                    .SelectMany(moved => Fence(owner, legacyPath, fenced.Generation, attempt)
+                                        .SelectMany(fence => fence == FenceState.Held
+                                            ? Write(owner, m => m.Mesh.DeleteNode(legacyPath))
+                                                .Select(deleted => deleted is true)
+                                                .Do(deleted => { if (deleted) held.Legacy = null; })
+                                                // 🚨 Deleted by someone else between the fence check and this delete: an
+                                                // old-image switch-off — never release the destination over it.
+                                                .SelectMany(deleted => deleted ? Finished(owner, sourcePath, fenced.Generation, legacy.Backfilled, attempt, owns, held, moved)
+                                                    : Cancelled(owner, provider, fenced.Generation, attempt, owns, held))
+                                            : fence == FenceState.TakenOver
+                                                ? Observable.Throw<int>(new InvalidOperationException(
+                                                    $"The move of '{legacyPath}' was taken over by another attempt; this one stops."))
+                                                : Cancelled(owner, provider, fenced.Generation, attempt, owns, held))));
+                        }))
                 .Do(moved => logger?.LogInformation(
                     "Mail copy: moved {Count} {Provider} copies of {Owner} into their own partition {Partition}",
-                    moved, provider, owner, MailCopyNodeTypes.NamespaceFor(owner))));
+                    moved, provider, owner, MailCopyNodeTypes.NamespaceFor(owner)))
+                // Error, timeout or disposal alike: what this attempt still holds is released (fire and forget —
+                // the release is not the outcome, and it must run even when nobody listens any more).
+                .Finally(() => Release(owner, legacyPath, sourcePath, attempt, held));
+        });
+
+    // What one move attempt holds: the generation of the legacy source it fenced, and of the destination it took —
+    // each null once released by the attempt itself (deleted, or handed back).
+    private sealed class MoveHold
+    {
+        public string? Legacy { get; set; }
+        public string? Destination { get; set; }
     }
 
     // The fence: the attempt's lease, taken only when no lease is held (or it is this attempt's, or it lapsed). Pure.
@@ -363,33 +384,51 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                 .Select(applied => applied is not null ? FenceState.Held : FenceState.TakenOver)
             : Observable.Return(FenceState.Gone));
 
-    // A switch-off that happened while this attempt moved: the destination is rotated off — in ONE commit that applies
-    // only while it still carries this attempt's lease — and then cleaned and deleted. A destination this attempt no
-    // longer holds (a successor took over and finished) is left exactly as it is.
-    private IObservable<int> SwitchedOffWhileMoving(string owner, string provider, string generation, string attempt)
-        => CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), generation, current => current.LeaseHolder == attempt
-                ? RotatedForSwitchOff(current)
-                : null)
-            .SelectMany(rotated => rotated is null
-                ? Observable.Return(0)
-                : DisablePasses(owner, provider, 1, 0)
-                    .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider))))
-                    .Select(_ => 0));
+    // The legacy source is deleted: the destination is released with the legacy source's pre-fence backfill state.
+    private IObservable<int> Finished(string owner, string sourcePath, string generation, bool backfilled, string attempt, bool owns, MoveHold held, int moved)
+        => owns
+            ? CommitAt(owner, sourcePath, generation, current => current.LeaseHolder == attempt
+                    ? current with { Backfilled = backfilled, LeaseHolder = null, LeaseUntil = null }
+                    : null)
+                .Do(_ => held.Destination = null)
+                .Select(_ => moved)
+            : Observable.Return(moved);
 
-    // On a failure: this attempt's leases go — on the legacy source and on the destination — so the next sync repeats
-    // the move at once. Only a lease this attempt holds is touched; a release that cannot be made is not the error.
-    private IObservable<System.Reactive.Unit> Released(string owner, string legacyPath, string sourcePath, string generation, string attempt)
+    // Switched off while this attempt moved: the destination is rotated off — in ONE commit that applies only while it
+    // still carries this attempt's lease — and then cleaned and deleted. A destination this attempt no longer holds (a
+    // successor took over and finished) is left exactly as it is.
+    private IObservable<int> Cancelled(string owner, string provider, string generation, string attempt, bool owns, MoveHold held)
+        => !owns
+            ? Observable.Return(0)
+            : CommitAt(owner, MailCopyNodeTypes.SourcePath(owner, provider), generation, current => current.LeaseHolder == attempt
+                    ? RotatedForSwitchOff(current)
+                    : null)
+                .Do(rotated => { if (rotated is not null) held.Destination = null; })
+                .SelectMany(rotated => rotated is null
+                    ? Observable.Return(0)
+                    : DisablePasses(owner, provider, 1, 0)
+                        .SelectMany(_ => Write(owner, m => m.Mesh.DeleteNode(MailCopyNodeTypes.SourcePath(owner, provider))))
+                        .Select(_ => 0));
+
+    // Releases what the attempt still holds, through the node it took it on (each commit applies only while the lease
+    // is this attempt's). Fire and forget: a release that cannot be made is logged, and the lease lapses.
+    private void Release(string owner, string legacyPath, string sourcePath, string attempt, MoveHold held)
     {
         MailCopySource? Release(MailCopySource current) => current.LeaseHolder == attempt ? current with { LeaseHolder = null, LeaseUntil = null } : null;
-        return LegacyExists(owner, legacyPath)
-            .SelectMany(exists => exists ? CommitAt(owner, legacyPath, generation, Release).Select(_ => System.Reactive.Unit.Default) : Observable.Return(System.Reactive.Unit.Default))
-            .SelectMany(_ => SourceExists(owner, sourcePath))
-            .SelectMany(exists => exists ? CommitAt(owner, sourcePath, generation, Release).Select(_ => System.Reactive.Unit.Default) : Observable.Return(System.Reactive.Unit.Default))
-            .Catch((Exception ex) =>
+        var releases = new List<IObservable<MailCopySource?>>();
+        if (held.Legacy is { } legacyGeneration)
+            releases.Add(CommitAt(owner, legacyPath, legacyGeneration, Release));
+        if (held.Destination is { } destinationGeneration)
+            releases.Add(CommitAt(owner, sourcePath, destinationGeneration, Release));
+        if (releases.Count == 0)
+            return;
+        releases.Select(r => r.Catch((Exception ex) =>
             {
-                logger?.LogWarning(ex, "Mail copy: releasing the move leases of {Owner} failed; they lapse after {Lease}", owner, MoveLease);
-                return Observable.Return(System.Reactive.Unit.Default);
-            });
+                logger?.LogWarning(ex, "Mail copy: releasing a move lease of {Owner} failed; it lapses after {Lease}", owner, MoveLease);
+                return Observable.Return<MailCopySource?>(null);
+            }))
+            .Concat()
+            .Subscribe(_ => { }, _ => { });
     }
 
     // The destination source of a move: created as the fenced legacy one, not backfilled and leased to this attempt —
@@ -401,8 +440,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             .Select(_ => true)
             .Catch((Exception ex) => !MailCopyNodeTypes.IsAlreadyExists(ex)
                 ? Observable.Throw<bool>(ex)
-                : Live(owner, MailCopyNodeTypes.SourcePath(owner, provider))
-                    .SelectMany(node => Mesh().Select(m => node.ContentAs<MailCopySource>(m.Options, logger)))
+                : LiveSource(owner, MailCopyNodeTypes.SourcePath(owner, provider))
                     .SelectMany(existing => existing is null
                         ? Observable.Throw<bool>(new InvalidOperationException(
                             $"The mail copy '{MailCopyNodeTypes.SourcePath(owner, provider)}' exists but could not be read; the move stops."))
@@ -415,13 +453,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                                         $"The mail copy '{MailCopyNodeTypes.SourcePath(owner, provider)}' is being moved elsewhere; the next sync repeats the move."))
                                     : Observable.Return(true))));
 
-    private IObservable<bool> SourceExists(string owner, string sourcePath)
-        => Mesh().SelectMany(m => m.Access
-            .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
-                .Query<MeshNode>(MeshQueryRequest.FromQuery($"path:{sourcePath}", owner) with { Limit = 1 })
-                .Take(1))
-            .Take(1)
-            .Select(change => change.Items.Any(node => string.Equals(node.Path, sourcePath, StringComparison.Ordinal))));
+    // A source node known to EXIST (a create just said so), read from its stream rather than the index.
+    private IObservable<MailCopySource?> LiveSource(string owner, string path)
+        => Live(owner, path).SelectMany(node => Mesh().Select(m => node.ContentAs<MailCopySource>(m.Options, logger)));
 
     /// <inheritdoc />
     [ImpersonationSurface]
