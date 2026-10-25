@@ -95,11 +95,11 @@ public static class InboxPreferencesNodeType
             InboxStateKind.Mail => stored.MailStates,
             _ => stored.ChatStates,
         };
-        // The legacy global choice belongs to the activities filter. A key the person edited since (Done ticked before
-        // the migration was written) wins; a legacy key they did not touch is kept, so an edit never drops "open".
-        if (kind == InboxStateKind.Activity && stored.States.Count > 0)
-            return own.Count > 0 ? stored.States.SetItems(own) : stored.States;
-        return own.Count > 0 ? own : InboxStateKind.Defaults(kind);
+        // Untouched keys come from underneath, edited keys win: a checkbox written before the node was seeded leaves a
+        // PARTIAL map ({done:true}, {unread:true}) and must not drop the other key. Underneath is the legacy global
+        // choice (activities only) when the node still holds one, else the kind's default.
+        var below = kind == InboxStateKind.Activity && stored.States.Count > 0 ? stored.States : InboxStateKind.Defaults(kind);
+        return own.Count > 0 ? below.SetItems(own) : below;
     }
 
     /// <summary>

@@ -126,6 +126,21 @@ public class InboxKindFiltersTest
         Flat(InboxPreferencesNodeType.Completed(edited, InboxPreferencesNodeType.SeedForExisting(Sections()))!.ActivityStates).Should().Equal("done=True", "open=True");
     }
 
+    /// <summary>A mail or chat box ticked before the node was seeded leaves a partial map; the untouched key keeps its default.</summary>
+    [Fact]
+    public void APartialMailOrChatMap_KeepsTheDefaultOfTheUntouchedKey()
+    {
+        var edited = new InboxPreferences
+        {
+            MailStates = ImmutableDictionary<string, bool>.Empty.Add("unread", false),
+            ChatStates = ImmutableDictionary<string, bool>.Empty.Add("read", false),
+        };
+        var effective = InboxPreferencesNodeType.Effective(edited);
+        Flat(effective.MailStates).Should().Equal("read=True", "unread=False");
+        Flat(effective.ChatStates).Should().Equal("read=False", "unread=True");
+        InboxPreferencesNodeType.MissingStates(edited).Should().Equal("activity");
+    }
+
     /// <summary>The stored node is migrated once: the legacy choice moves to the activities field, the other kinds get their defaults, and a second pass finds nothing to do.</summary>
     [Fact]
     public void TheStoredNode_IsMigratedOnce_AndConverges()
