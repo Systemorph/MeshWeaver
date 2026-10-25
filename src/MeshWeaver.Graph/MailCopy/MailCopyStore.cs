@@ -347,7 +347,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                             fencedGeneration = fenced.Generation;
                             var fresh = Fresh(fenced) with { LeaseHolder = attempt, LeaseUntil = DateTimeOffset.UtcNow + RetireLease };
                             var sourcePath = MailCopyNodeTypes.SourcePath(owner, provider);
-                            return RetirePasses(owner, provider, 1)
+                            return RetirePasses(owner, provider, 1, fenced.Generation, attempt)
                                 // 🚨 Still THIS attempt's fence on THIS generation, confirmed at the owning hub by a real
                                 // write (a lease renewal): a legacy source an old-image replica replaced (switched off
                                 // and on anew) or another attempt took over is not deleted, and nothing is switched on.
@@ -514,7 +514,26 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
 
     // Every legacy copy, a pass at a time, the switch-off way: its attachment files and index first, then its node.
     // 🚨 From complete listing frames only — the legacy source is deleted next, and with it whatever a frame hid.
-    private IObservable<int> RetirePasses(string owner, string provider, int pass)
+    // 🚨 Each pass first CONFIRMS the fence at the owning hub (a lease renewal on the fenced generation): a legacy source
+    // an old-image replica replaced (switched off and on anew) stops the retirement before any of the replacement's
+    // copies is deleted; one gone meanwhile ends the passes (the confirmation after them sees it and switches nothing on).
+    private IObservable<int> RetirePasses(string owner, string provider, int pass, string generation, string attempt)
+        => LegacyExists(owner, MailCopyNodeTypes.LegacySourcePath(owner, provider))
+            .SelectMany(exists => !exists
+                ? Observable.Return(true)
+                : CommitAt(owner, MailCopyNodeTypes.LegacySourcePath(owner, provider), generation, current => current.LeaseHolder == attempt
+                        ? current with { LeaseUntil = DateTimeOffset.UtcNow + RetireLease }
+                        : null)
+                    .Select(still => still is not null)
+                    .Catch((Exception ex) => IsGone(ex, MailCopyNodeTypes.LegacySourcePath(owner, provider))
+                        ? Observable.Return(true)
+                        : Observable.Throw<bool>(ex)))
+            .SelectMany(held => !held
+                ? Observable.Throw<int>(new InvalidOperationException(
+                    $"The legacy mail copy '{MailCopyNodeTypes.LegacySourcePath(owner, provider)}' was replaced or taken over while it was retired; the next sync repeats the retirement."))
+                : RetirePass(owner, provider, pass, generation, attempt));
+
+    private IObservable<int> RetirePass(string owner, string provider, int pass, string generation, string attempt)
         => Mesh().SelectMany(m => m.Access
             .RunAsSystemFor(governedBy: null, onBehalfOf: owner, () => m.Mesh
                 .Query<MeshNode>(MeshQueryRequest.FromQuery(
@@ -532,7 +551,7 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
                     // 🚨 At the pass limit with copies left the retirement FAILS and the legacy source stays, so the next
                     // sync repeats it — it never deletes the legacy source over copies whose files were not removed.
                     .SelectMany(_ => pass < MaxRemovePasses
-                        ? RetirePasses(owner, provider, pass + 1)
+                        ? RetirePasses(owner, provider, pass + 1, generation, attempt)
                         : Observable.Throw<int>(new InvalidOperationException(
                             "The legacy copies were not all removed within the pass limit; the legacy source is kept so the retirement can be repeated.")))));
 

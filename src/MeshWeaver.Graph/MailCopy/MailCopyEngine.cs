@@ -249,7 +249,11 @@ public sealed partial class MailCopyEngine(
     // partition), and a retirement that fails FAILS the sync — no provider work runs while legacy mail remains. The
     // next sync repeats it. The fresh copy holds no copies yet, so the sweep that follows has nothing to misjudge.
     private IObservable<MailCopySource?> SyncCore(string owner)
-        => copies.RetireLegacy(owner, Provider).SelectMany(_ => SyncSource(owner));
+        // A sync that RETIRED a legacy copy stops there: its sweep would judge a destination's copies against a source
+        // the index may not show yet. The next sync — the keeper's, or the next inbox read's — runs normally.
+        => copies.RetireLegacy(owner, Provider).SelectMany(retired => retired
+            ? Observable.Return<MailCopySource?>(null)
+            : SyncSource(owner));
 
     private IObservable<MailCopySource?> SyncSource(string owner)
         => copies.Source(owner, Provider).Take(1).Timeout(ReadBudget).SelectMany(source => source is null

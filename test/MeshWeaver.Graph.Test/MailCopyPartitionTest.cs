@@ -493,10 +493,17 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             OnDelete = () => Observable.Defer(() =>
             {
                 using var _ = AsSystem();
+                // ...and it downloads a message of the new generation at once.
                 return Mesh.GetMeshNodeStream(legacyPath).Update(node => node with
                 {
                     Content = new MailCopySource { Provider = "outlook", Generation = "g2", MailboxId = "other" },
-                }).Take(1);
+                }).Take(1)
+                    .SelectMany(_ => Mesh.ServiceProvider.GetRequiredService<IMeshService>().CreateNode(
+                        new MeshNode(MailCopyNodeTypes.IdFor("outlook", "g2", "n1"), legacyPath)
+                        {
+                            NodeType = MailCopyNodeTypes.MessageNodeType, State = MeshNodeState.Active,
+                            Content = new MailMessageCopy { Provider = "outlook", Generation = "g2", MessageId = "n1", HasAttachments = true },
+                        }));
             }).Select(_ => Unit.Default),
         };
         var store = new MeshMailCopyStore(() => Mesh, attachments: files);
@@ -507,6 +514,7 @@ public class MailCopyPartitionTest(ITestOutputHelper output) : MonolithMeshTestB
             .Should().BeOfType<InvalidOperationException>("the source this attempt fenced was replaced");
 
         (await SourceWhere(legacyPath, _ => true, ct)).Generation.Should().Be("g2", "the replacing source is not deleted");
+        await Present(LegacyCopyPath(owner, "g2", "n1"), ct);   // nor its copies — the next pass confirmed the fence first
         (await Listed(MailCopyNodeTypes.SourcePath(owner, "outlook"), ct)).Should().BeNull("nothing is switched on from the stale source");
     }
 
