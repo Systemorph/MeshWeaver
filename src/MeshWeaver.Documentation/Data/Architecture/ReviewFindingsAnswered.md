@@ -433,6 +433,65 @@ goes red; delete the headline and the refusal case goes red.
 other reviewer's word as "reviewed, nothing found"; the `review-waived` label stays the escape. See
 [Reviewed, nothing found](#reviewed-nothing-found--the-only-evidence-that-counts).
 
+### 🚨 An API outage is not a verdict — a fourth red, and nobody's to fix
+
+A read that GitHub **refused for capacity** says nothing about the pull request. Until #7187 it was
+reported as the ordinary red — *"cannot read the review of #N, so it cannot say it was answered"* —
+and **nothing re-evaluated it**: the `refresh` follows only a GREEN verdict, and the degradation
+listener only the internal reviewer's check run. Measured on 2026-10-25, when the repository's shared
+installation budget (5,000 REST calls an hour, shared by every workflow of the repository) ran out:
+
+| pull request | run | what it said | every thread answered? | cleared by |
+|---|---|---|---|---|
+| #7173 | 40187547005 attempt 1, 11:07:30Z | `GET …/pulls/7173 failed (1): gh: API rate limit exceeded for installation … (HTTP 403)` | yes | a person's re-run at 11:47Z (attempt 2 at 11:17Z hit the same limit) |
+| #7182 | 40197206860, 13:21:22Z | the same 403, on a `pull_request_review` run | — | — |
+| Plugins #4195 | the request lane, 12:44Z | the same 403 — so the review was never requested | — | — |
+
+Sessions papered over it with hand re-runs and a polling script. The fix is at the root, in the one
+adapter every mode of `check-review-answered.py` goes through (the verdict, the refresh, the
+review-on-change request, the stage gate and the stage advance, the arm gates):
+
+1. **Classified.** A failed `gh api` call whose text names a rate limit (403/429 *"API rate limit
+   exceeded"*), a secondary limit, an `HTTP 5xx` or a dropped connection is an **outage**
+   (`classify_api_failure`). A plain 403 (*"Resource not accessible by integration"*, *"cannot be
+   retried"*) and a 404 are answers and stay ordinary failures.
+2. **Retried, by its own clock.** A primary limit waits for its own reset, read off `GET /rate_limit`
+   (which does not count against the limit it reports); a secondary limit backs off from 60 s, a 5xx
+   from 10 s (`outage_delay`). The budget is per run, `MW_API_OUTAGE_WAIT_MINUTES` (5 in every lane),
+   and every lane's `timeout-minutes` carries it.
+3. **Never swallowed into a verdict.** Past the budget the adapter raises `ApiOutage`, which is
+   deliberately **not** a `ReadError`: three readers catch `ReadError` and degrade (`read_diff_carry`
+   and `read_carry` to *"the head owes a fresh review"*, `read_required_contexts` to an empty list), so
+   an outage in the middle of a read would otherwise have become a finding. The script exits **3**
+   with `outcome=api-outage` on `$GITHUB_OUTPUT` and says, in the annotation title, *"API outage — no
+   verdict was taken"*.
+4. **Retried later, automatically.** Each review-answered job then fails a marker step named exactly
+   `API outage: no verdict was taken (retried automatically)` (`OUTAGE_STEP_NAME`; the core self-test
+   asserts both workflows carry it). `review-answered-retry.yml` → `node-repo-review-answered-retry.yml`
+   hears the run complete, re-runs it **only** when that step failed — a verdict red is never touched —
+   waiting first for the primary limit to reset (up to 35 minutes), and stops, RED and named, at
+   the third outage attempt. The in-run budget, the listener's wait and the re-run's own budget
+   together cover the hour a primary limit can last, so ONE listener pass suffices for a primary
+   limit. Whether GitHub raises `workflow_run` again for a run the workflow token re-ran was **not
+   measured**; nothing depends on it, and the attempt bound holds if it does. The review-on-change lane and the stage advance
+   need no listener: their 15-minute `schedule` sweeps re-judge every open pull request, and the
+   advance re-runs a stage gate that failed for any reason once stage 1 is green.
+
+**The wait no longer spends the budget it then runs out of.** The review wait (above) re-ran the
+whole read every 30 s — 7–10 calls a poll, ~30 polls, in two jobs per event in core — up to ~600 calls
+of the shared hourly budget for one push whose review was slow. It now probes the only two inputs that
+can end it — the reviews and the head's `internal-review` check runs (`review_wait_fingerprint`, two
+calls) — and takes the full read again only when one changed, and once more at the deadline, so the
+verdict is still taken on a fresh, complete read. How much of the 2026-10-25 exhaustion this lane
+caused was **not** measured; the arithmetic bounds its share, it does not prove it.
+
+Every half has a negative control in the self-test, run against a fake `gh`: revert the
+classification and nine outage cases go red (the #7173 case reads `rc=1`, not `3`); make `ApiOutage`
+a `ReadError` and the carry reader turns the outage into *"the head owes a review"*; skip an
+in-flight read run again and the #7198 case posts nothing; restore the full re-read and the wait case
+counts 30 full reads instead of 2; let the listener treat any red as an outage and it re-runs a
+verdict.
+
 ## The waiver
 
 A pull request the reviewer cannot review — a quota refusal, an outage, a change with no reviewable
@@ -1186,8 +1245,14 @@ at all. For that run `rerun-failed-jobs` answers `403 This workflow run cannot b
 then and went red on exactly that. The stage advance below keeps `rerun-failed-jobs`, because its held
 run is a full test run whose green jobs must not be repeated, and it never revives a cancelled run. The decision is the pure function `refresh_action`,
 covered by the script's `--self-test`. It re-runs that run only if it has **completed**, is **not
-`success`**, and **started before** this GREEN verdict was taken. A run that is in flight, already
-green, or started after the verdict is left alone, and the job prints why. That makes it idempotent
+`success`**, and **started before** this GREEN verdict was taken. A run that is already green, or
+started after the verdict, is left alone, and the job prints why. 🚨 **A run that is still in flight
+is WAITED FOR, never skipped** (#7187): a run reads `in_progress` until its LAST job ends, and the
+job whose check-run branch protection reads may already have finished — red, on a read taken before
+this verdict's state — while the lane job of the same run is still going (on #7198, run 40194864793's
+gate job completed at 13:00:58Z and the run was still `in_progress` when the refresh looked at
+13:01:31Z). The old rule, *"it reads live state itself"*, left exactly that red standing. The refresh
+now polls the run (every 30 s, up to 30 minutes — the job's cap is 45) and judges what it left. That makes it idempotent
 per (head sha, answered state), with no loop and no polling: the re-run is itself a `pull_request`
 run, which never refreshes, and a re-run made with the workflow token raises no new event. Covered
 the same way: a pull request that went RED because answers were missing goes green when a later

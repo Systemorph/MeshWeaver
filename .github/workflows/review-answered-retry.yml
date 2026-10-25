@@ -1,0 +1,29 @@
+# Re-run a `Review answered` run whose red was an API OUTAGE (MeshWeaver#7187) — core's caller of
+# node-repo-review-answered-retry.yml, which carries the why, the decision and the bounds.
+#
+# A `workflow_run` run executes on the DEFAULT branch: it judges the completed run through REST only
+# and checks out nothing of the pull request, so it is safe on a fork's run too (a fork's run lists no
+# pull request, and the lane prints that a maintainer re-runs it).
+name: Review answered (outage retry)
+
+on:
+  workflow_run:
+    workflows: ["Review answered"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+# No concurrency group, on purpose: every completed attempt gets its own listener (a shared group would
+# keep one pending run and EVICT the rest — WorkflowRunTriggerBranchFilterGuard), and a listener that
+# finds the run already re-run says so (`retry_outage_action`, `lost_rerun_race`). No `branches:`
+# filter either: the runs it judges are pull-request runs, on every branch.
+jobs:
+  retry:
+    uses: ./.github/workflows/node-repo-review-answered-retry.yml
+    permissions:
+      actions: write
+      contents: read
+    with:
+      scripts-ref: ${{ github.sha }}
