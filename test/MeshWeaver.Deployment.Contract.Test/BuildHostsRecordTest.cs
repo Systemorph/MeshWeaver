@@ -100,6 +100,8 @@ public class BuildHostsRecordTest
         Assert.Equal("3.1.10388", reread.BuildHosts.Channels["stable"].PlatformVersion);
     }
 
+    // The AUTHORED block states which channels run (and their ceilings); the SET each runs is the
+    // record's mesh-owned BuildHostSets, written by CD.
     private static DeploymentContent WithHosts(bool enabled, string? latest, string? stable) => new()
     {
         Host = "control.example.com",
@@ -107,10 +109,37 @@ public class BuildHostsRecordTest
         {
             Enabled = enabled,
             Channels = ImmutableSortedDictionary<string, BuildHostChannel>.Empty
-                .Add(BuildHostsBlock.LatestChannel, new BuildHostChannel { PlatformVersion = latest, TesterDigest = Tester, PortalDigest = Portal, RunnerDigest = Runner })
-                .Add(BuildHostsBlock.StableChannel, new BuildHostChannel { PlatformVersion = stable }),
+                .Add(BuildHostsBlock.LatestChannel, new BuildHostChannel())
+                .Add(BuildHostsBlock.StableChannel, new BuildHostChannel()),
         },
+        BuildHostSets = ImmutableSortedDictionary<string, BuildHostChannel>.Empty
+            .Add(BuildHostsBlock.LatestChannel, new BuildHostChannel { PlatformVersion = latest, TesterDigest = Tester, PortalDigest = Portal, RunnerDigest = Runner })
+            .Add(BuildHostsBlock.StableChannel, new BuildHostChannel { PlatformVersion = stable }),
     };
+
+    [Fact]
+    public void TheBarrier_ReadsTheMeshOwnedSet_NeverAnAuthoredChannelsSetFields()
+    {
+        var authoredOnly = new DeploymentContent
+        {
+            Host = "control.example.com",
+            BuildHosts = new BuildHostsBlock
+            {
+                Enabled = true,
+                Channels = ImmutableSortedDictionary<string, BuildHostChannel>.Empty
+                    .Add(BuildHostsBlock.LatestChannel, new BuildHostChannel { PlatformVersion = "3.1.10412" }),
+            },
+        };
+        Assert.Empty(BarrierKeys(DeploymentPortalConfig.PortalConfig(authoredOnly)));
+        var setForAnUnrunChannel = authoredOnly with
+        {
+            BuildHostSets = ImmutableSortedDictionary<string, BuildHostChannel>.Empty
+                .Add(BuildHostsBlock.StableChannel, new BuildHostChannel { PlatformVersion = "3.1.10388" }),
+        };
+        Assert.Empty(BarrierKeys(DeploymentPortalConfig.PortalConfig(setForAnUnrunChannel)));
+        Assert.Equal("3.1.10388", setForAnUnrunChannel.BuildHostSet("stable")?.PlatformVersion);
+        Assert.Null(authoredOnly.BuildHostSet("latest"));
+    }
 
     private static string[] BarrierKeys(IDictionary<string, string> config) =>
         config.Keys.Where(k => k.StartsWith("Hosting__Builds__Channels__", StringComparison.Ordinal)).ToArray();

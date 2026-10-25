@@ -482,4 +482,58 @@ public class NodeTypeOperationalContentTest
             [TypeNode(churned)], versioned: false, CamelCase);
         Assert.Equal(fresh, afterChurn);
     }
+
+    // ── The deployment record's CD-owned build-host sets (Doc/Architecture/BuildHosts) ──────────
+
+    private static MeshNode DeploymentNode(object? content) =>
+        new("control", "Deployments") { NodeType = NodeTypeOperationalContent.DeploymentNodeType, Name = "control", Content = content };
+
+    private const string Authored = """{"host":"control.example.com","buildHosts":{"enabled":true,"channels":{"latest":{"maxReplicas":2}}}}""";
+    private const string WithSets = """{"host":"control.example.com","buildHosts":{"enabled":true,"channels":{"latest":{"maxReplicas":2}}},"buildHostSets":{"latest":{"platformVersion":"3.1.10500"}}}""";
+
+    [Fact]
+    public void ADeploymentExport_NeverNamesABuild()
+    {
+        var exported = NodeTypeOperationalContent.StripOperational(DeploymentNode(Parse(WithSets)), CamelCase);
+        var json = JsonSerializer.Serialize(exported.Content, CamelCase);
+        Assert.DoesNotContain("buildHostSets", json);
+        Assert.DoesNotContain("3.1.10500", json);
+        Assert.Contains("maxReplicas", json);
+    }
+
+    [Fact]
+    public void ADeploymentImport_KeepsTheLiveSets_WhateverTheFileSays()
+    {
+        var live = DeploymentNode(Parse(WithSets));
+        // An authored change that carries NO sets keeps the live ones …
+        var kept = NodeTypeOperationalContent.PreserveLiveOperational(DeploymentNode(Parse(Authored.Replace("\"maxReplicas\":2", "\"maxReplicas\":4"))), live, CamelCase);
+        var keptJson = JsonSerializer.Serialize(kept.Content, CamelCase);
+        Assert.Contains("3.1.10500", keptJson);
+        Assert.Contains("\"maxReplicas\":4", keptJson);
+        // … and a file that FORGES an older set cannot roll the host back.
+        var forged = NodeTypeOperationalContent.PreserveLiveOperational(
+            DeploymentNode(Parse(WithSets.Replace("3.1.10500", "3.1.10100"))), live, CamelCase);
+        var forgedJson = JsonSerializer.Serialize(forged.Content, CamelCase);
+        Assert.Contains("3.1.10500", forgedJson);
+        Assert.DoesNotContain("3.1.10100", forgedJson);
+    }
+
+    [Fact]
+    public void ADeploymentCreate_StartsWithoutSets()
+    {
+        var created = NodeTypeOperationalContent.PreserveLiveOperational(DeploymentNode(Parse(WithSets)), null, CamelCase);
+        Assert.DoesNotContain("buildHostSets", JsonSerializer.Serialize(created.Content, CamelCase));
+    }
+
+    [Fact]
+    public void OtherNodeTypes_AreUntouched_AndADeploymentKeepsItsOtherMembers()
+    {
+        var other = new MeshNode("x", "Docs") { NodeType = "Markdown", Content = Parse("""{"buildHostSets":{"a":1},"compilationStatus":"Ok"}""") };
+        Assert.Same(other, NodeTypeOperationalContent.StripOperational(other, CamelCase));
+        Assert.False(NodeTypeOperationalContent.HasOperationalMembers(other));
+        Assert.True(NodeTypeOperationalContent.HasOperationalMembers(DeploymentNode(Parse(Authored))));
+        // A NodeType member name means nothing on a deployment record: only buildHostSets is mesh-owned there.
+        var deployment = DeploymentNode(Parse("""{"host":"h","compilationStatus":"Ok"}"""));
+        Assert.Contains("compilationStatus", JsonSerializer.Serialize(NodeTypeOperationalContent.StripOperational(deployment, CamelCase).Content, CamelCase));
+    }
 }
