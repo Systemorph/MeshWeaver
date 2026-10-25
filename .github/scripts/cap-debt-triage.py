@@ -14,7 +14,7 @@ ci-failure lane's mechanism): `{event, repo, sha, caps:[{package, floor, cap, ve
 reason}]}`. The intake (MeshWeaver.Plugins `BuildCapIntake`) authorizes it by that signature and
 writes `Hosting/BuildCaps/<package>` as System; the build hosts' retention reads those nodes, so
 the deployment a capped package builds on is never torn down under it. `version` is the highest
-READY deployed version in [floor, cap] from `GET <build API>/hosts`; with none deployed it is the
+COMPLETE deployed version (`complete: true`, scaled to zero or not) in [floor, cap] from `GET <build API>/hosts`; with none deployed it is the
 version that must be, and `deployed: false` lets the intake ask for that deployment. The set is
 sent even when EMPTY: a package missing from it is a removed cap, and its node is deleted.
 
@@ -264,7 +264,7 @@ DEFAULT_WEBHOOK_HOST = "control.systemorph.com"
 def cap_rows(resolver, capped: list, deployed: list) -> list[dict]:
     """One row per capped package for the `build-caps` event — the content of its
     `Hosting/BuildCaps/<package>` node on control (retention reads them as `capVersions`).
-    `version` is the highest READY deployed version inside [floor, cap]; when none is deployed it is
+    `version` is the highest COMPLETE deployed version inside [floor, cap]; when none is deployed it is
     the version that must BE deployed (the cap itself: a cap names a sealed set), and `deployed` says
     which, so the intake can ask for that deployment (BuildHostDeploy, reason `cap:<package>`). Pure."""
     rows = []
@@ -401,8 +401,12 @@ class _FakeControl:
         self.calls: list[str] = []
         self.events: list[dict] = []
         rows = versions if versions is not None else [("3.1.10412", True), ("3.1.10398", True)]
-        hosts_doc = {"aliases": {"latest": latest, "previous": None},
-                     "versions": [{"version": v, "ready": r, "maxReplicas": 2, "pinnedBy": []} for v, r in rows]}
+        # `(version, complete)` in the shape `/hosts` serves (no `ready`); the decoy `ready: not
+        # complete` proves the lane never reads `ready` — a complete version reads as scaled to zero.
+        hosts_doc = {"aliases": {"latest": latest, "candidate": None, "previous": None},
+                     "versions": [{"version": v, "deploymentName": "build-" + v.replace(".", "-"),
+                                   "complete": c, "ready": not c, "maxReplicas": 2, "aliases": [],
+                                   "pinned": False, "pinnedBy": []} for v, c in rows]}
         fake = self
 
         class Handler(http.server.BaseHTTPRequestHandler):
@@ -545,7 +549,7 @@ def self_test() -> int:
             path = f"{ns}/{item_id('Systemorph/Example', 'Capped', '3.1.10400')}"
             node = fake.nodes.get(path, {})
             message = node.get("content", {}).get("message", "")
-            check("PUBLISH: a capped package is published with the highest READY deployed version in range",
+            check("PUBLISH: a capped package is published with the highest COMPLETE deployed version in range (scaled to zero)",
                   caps_of(fake) == [{"package": "Capped", "floor": "3.1.10300", "cap": "3.1.10400",
                                      "version": "3.1.10398", "deployed": True, "reason": "old Foo API"}]
                   and fake.events[-1]["event"] == BUILD_CAPS_EVENT and fake.events[-1]["repo"] == "Systemorph/Example",
@@ -593,7 +597,7 @@ def self_test() -> int:
         package(root, "Capped", capped)
         with _FakeControl(versions=[("3.1.10412", True), ("3.1.10399", False), ("3.1.10200", True)]) as fake:
             go(fake, root)
-            check("a cap with no READY deployment in range publishes the version it NEEDS (the cap) and "
+            check("a cap with no COMPLETE deployment in range (10399 incomplete, decoy `ready: true`) publishes the version it NEEDS (the cap) and "
                   "says it is not deployed", caps_of(fake) and caps_of(fake)[0]["version"] == "3.1.10400"
                   and caps_of(fake)[0]["deployed"] is False, caps_of(fake))
         with _FakeControl(latest=None) as fake:

@@ -1,10 +1,6 @@
 using System;
-using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 using MeshWeaver.Hosting;
 using Xunit;
-using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Hosting.Test;
 
@@ -32,61 +28,11 @@ namespace MeshWeaver.Hosting.Test;
 /// copied string: renaming the config key moves the guard's subject with it instead of leaving a
 /// check that passes having verified nothing.</para>
 ///
-/// <para>See Doc/Architecture/PrebuiltBundleRetention.</para>
+/// <para>The CHART fact (<c>DeletionIsNeverArmedByOmission</c>) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.
+/// See Doc/Architecture/PrebuiltBundleRetention.</para>
 /// </summary>
 public class PrebuiltBundleRetentionArmingGuard
 {
-    /// <summary>The config key as it lands in the rendered ConfigMap (<c>:</c> ⇒ <c>__</c>).</summary>
-    private static string EnvKey =>
-        PrebuiltBundleRetentionExtensions.DeleteConfigKey.Replace(":", "__", StringComparison.Ordinal);
-
-    [Fact]
-    public void DeletionIsNeverArmedByOmission()
-    {
-        var root = RepoPaths.Root;
-        var configMap = File.ReadAllText(
-            Path.Combine(root, "deploy", "helm", "templates", "memex-portal", "config.yaml"));
-
-        // Read the shipped default rather than assuming it — if the code default is ever flipped to
-        // false, the invariant is satisfied at the source and this guard says so instead of
-        // demanding a chart line that would then be redundant.
-        if (!PrebuiltBundleRetention.Default.Delete)
-            return;
-
-        // 🚨 BOUND, not merely mentioned. The template's explanatory `{{- /* ... */}}` comment
-        // blocks open with the very key they describe, and no '#'-stripping removes them — so a
-        // check satisfied by prose is not a check. Requiring the value binding is a shape a comment
-        // cannot accidentally have.
-        var binding = new Regex(
-            @"^\s*" + Regex.Escape(EnvKey) + @"\s*:\s*""\{\{(?<expr>.*?)\}\}""\s*$",
-            RegexOptions.Multiline);
-        var match = binding.Match(configMap);
-
-        Assert.True(match.Success,
-            $"PrebuiltBundleRetention.Delete defaults to TRUE in code, so {EnvKey} MUST be bound in "
-            + "deploy/helm/templates/memex-portal/config.yaml — otherwise every instance that mounts "
-            + "PreWarm__PrebuiltBundleRoot sweeps with deletion ARMED and the knob that would disarm "
-            + "it reaches no container (the configmap enumerates keys explicitly; a values file or a "
-            + "Deployment record's extraPortalConfig setting it is silently dropped). Add:\n"
-            + $"  {EnvKey}: \"{{{{ .Values.config.memex_portal.{EnvKey} | default \"false\" }}}}\"");
-
-        Assert.Contains("default \"false\"", match.Groups["expr"].Value, StringComparison.Ordinal);
-
-        // The chart's own default is the fleet's report-only setting; values.yaml states it so the
-        // deployed surface stays reviewable, and so EveryPreWarmKeyInValues_IsTemplatedInTheConfigMap
-        // keeps the two halves tied together.
-        var values = File.ReadAllLines(Path.Combine(root, "deploy", "helm", "values.yaml"))
-            .Select(l => l.Trim())
-            .Where(l => !l.StartsWith('#'))
-            .FirstOrDefault(l => l.StartsWith(EnvKey + ":", StringComparison.Ordinal));
-
-        Assert.True(values is not null,
-            $"deploy/helm/values.yaml must declare {EnvKey} under config.memex_portal — the chart "
-            + "default is what makes the fleet report-only, and an undeclared key makes that "
-            + "invisible to anyone reading the values file.");
-        Assert.Contains("\"false\"", values!, StringComparison.Ordinal);
-    }
-
     /// <summary>
     /// The report NAMES ITS DENOMINATOR, so a sweep that examined nothing cannot read as a sweep
     /// that found nothing. This is the same distinction the rest of the fleet gets wrong: "0

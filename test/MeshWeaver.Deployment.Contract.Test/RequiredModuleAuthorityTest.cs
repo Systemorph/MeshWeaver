@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
-using System.Text.RegularExpressions;
 using MeshWeaver.Deployment;
 using Xunit;
-using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Deployment.Contract.Test;
 
@@ -21,6 +19,10 @@ namespace MeshWeaver.Deployment.Contract.Test;
 /// <c>Modules:RequiredIsAuthoritative</c> — which no index merge can touch. This suite pins the
 /// rendering; <c>ConfiguredModuleActivationTest</c> in MeshWeaver.Compiler.Pipeline.Test pins what
 /// the reading does with it, over a real two-provider configuration.</para>
+///
+/// <para>The one fact that read the CHART (<c>TheDeclaredCeilingIsTheOneTheChartRenders</c> —
+/// <see cref="DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot"/> against the template's
+/// rendered range) moved to MeshWeaver.Deploy (test/MeshWeaver.Deploy.ChartGuards/), with the deployment chart it reads — the platform repository carries no deployment knowledge.</para>
 /// </summary>
 public class RequiredModuleAuthorityTest
 {
@@ -42,34 +44,6 @@ public class RequiredModuleAuthorityTest
     {
         Assert.Equal("Modules:RequiredIsAuthoritative", DeploymentPortalConfig.RequiredIsAuthoritativeKey);
         Assert.StartsWith(DeploymentPortalConfig.ModulesSection + ":", DeploymentPortalConfig.RequiredIsAuthoritativeKey, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// 🚨 The chart's <c>Modules__Required__N</c> block names every key LITERALLY, so it has a
-    /// hand-written ceiling; a slot above it reaches no container in Kubernetes. That was merely
-    /// wrong while the entries were a by-index overlay (the image's entry stood); under the
-    /// authority claim it means the module is NOT REQUIRED AT ALL. So the number the contract
-    /// reports problems against has to be the number the template actually renders — read from the
-    /// template, not restated.
-    /// </summary>
-    [Fact]
-    public void TheDeclaredCeilingIsTheOneTheChartRenders()
-    {
-        var root = RepoPaths.TryFindRoot();
-        Assert.SkipWhen(root is null, "repository tree not reachable from the test bin — the chart is read from it");
-        var chart = Path.Combine(root!, "deploy", "helm", "templates", "memex-portal", "config.yaml");
-        Assert.True(File.Exists(chart), $"the portal ConfigMap template is not at {chart}");
-
-        var rendered = Regex.Matches(File.ReadAllText(chart), @"^\s*Modules__Required__(\d+):", RegexOptions.Multiline)
-            .Select(m => int.Parse(m.Groups[1].Value))
-            .Distinct()
-            .Order()
-            .ToArray();
-
-        Assert.True(rendered.Length > 0, "the chart renders no Modules__Required__N key at all");
-        Assert.Equal(0, rendered[0]);
-        Assert.Equal(Enumerable.Range(0, rendered[^1] + 1), rendered);
-        Assert.Equal(DeploymentPortalConfig.MaxChartRenderedRequiredModuleSlot, rendered[^1]);
     }
 
     [Fact]
