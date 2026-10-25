@@ -274,6 +274,9 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
         LeaseUntil = null,
         Cursor = null,
         Backfilled = false,
+        // A rebuild in flight is abandoned: its copies go with the switch-off's own pass.
+        PendingGeneration = null,
+        PendingCursor = null,
     };
 
     private IObservable<int> DisablePasses(string owner, string provider, int pass, int removed)
@@ -561,7 +564,11 @@ public sealed class MeshMailCopyStore(Func<IMessageHub?> hub, ILogger? logger = 
             Indexed(owner, MailCopyNodeTypes.CopyPath(owner, provider, generation, messageId))
                 .SelectMany(found => found is null
                     ? Observable.Return<MailMessageCopy?>(null)
-                    : Live(owner, found.Path).Select(live => Copies([live], provider, generation, m.Options).FirstOrDefault()))));
+                    : Live(owner, found.Path).Select(live => Copies([live], provider, generation, m.Options).FirstOrDefault())
+                        // Deleted between the index answer and the stream (a retired generation, a removal): gone, not a failure.
+                        .Catch((Exception ex) => ex is DeliveryFailureException
+                            ? Observable.Return<MailMessageCopy?>(null)
+                            : Observable.Throw<MailMessageCopy?>(ex)))));
 
     /// <inheritdoc />
     [ImpersonationSurface]

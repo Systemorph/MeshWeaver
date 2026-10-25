@@ -236,7 +236,7 @@ public sealed partial class MailCopyEngine(
             ? Sweep(owner).Select(_ => (MailCopySource?)null)
             : Acquire(owner, source).SelectMany(leased => leased is null
                 ? Observable.Return<MailCopySource?>(null)
-                : (MailCopyNodeTypes.IsValidGeneration(leased.Generation) && leased.Projection >= MailCopySource.CurrentProjection
+                : (!NeedsRebuild(leased)
                     ? Observable.Return<MailCopySource?>(leased)
                     : Rebuild(owner, leased))
                     .SelectMany(valid => valid is null
@@ -253,10 +253,28 @@ public sealed partial class MailCopyEngine(
                 ? current with { LeaseHolder = holder, LeaseUntil = time.GetUtcNow() + LeaseTime }
                 : null);
 
-    private Func<MailCopySource, MailCopySource?> UnderLease(Func<MailCopySource, MailCopySource> change)
-        => current => current.LeaseHolder == holder
-            ? change(current) with { LeaseHolder = holder, LeaseUntil = time.GetUtcNow() + LeaseTime }
+    private Func<MailCopySource, MailCopySource?> UnderLease(Func<MailCopySource, MailCopySource?> change)
+        => current => current.LeaseHolder == holder && change(current) is { } next
+            ? next with { LeaseHolder = holder, LeaseUntil = time.GetUtcNow() + LeaseTime }
             : null;
+
+    /// <summary>
+    /// Whether the stored source must be rebuilt before it syncs: its generation is unusable, or its projection is
+    /// older than this build's — and no rebuild is already filling a pending generation (that one is RESUMED, never
+    /// restarted: a crash mid-rebuild must not mint another). Pure.
+    /// </summary>
+    internal static bool NeedsRebuild(MailCopySource source)
+        => !MailCopyNodeTypes.IsValidGeneration(source.Generation)
+           || (source.PendingGeneration is { } pending && !MailCopyNodeTypes.IsValidGeneration(pending))
+           || (source.Projection < MailCopySource.CurrentProjection && source.PendingGeneration is null);
+
+    // The generation and cursor the next feed step works on: the pending rebuild's while one is filling, else the served copy's.
+    private static (string Generation, string? Cursor, bool Pending) Lane(MailCopySource source)
+        => source.PendingGeneration is { } pending ? (pending, source.PendingCursor, true) : (source.Generation, source.Cursor, false);
+
+    // Whether generation is one the stored source still means to keep (served or filling).
+    private static bool IsLive(MailCopySource? current, string generation)
+        => current is not null && (current.Generation == generation || current.PendingGeneration == generation);
 
     private IObservable<MailCopySource?> Release(string owner, string? error)
         => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
@@ -281,16 +299,43 @@ public sealed partial class MailCopyEngine(
     // copy is rebuilt from it, never served under the first one's label.
     private IObservable<MailCopySource?> Bind(string owner, MailCopySource source)
         => feed.AccountId(owner).Take(1).Timeout(ReadBudget).SelectMany(id =>
-            source.MailboxId == id
+            // 🚨 An account the feed cannot name right now (an empty id: a token that is no readable JWT, a host without the
+            // Executive Assistant) is UNKNOWN, not "another account": it never rebuilds a healthy copy. Reads still
+            // serve only for an id that equals the bound one (ServesFromCopy), so an unknown account reads live.
+            string.IsNullOrEmpty(id) || source.MailboxId == id
                 ? Observable.Return<MailCopySource?>(source)
                 : source.MailboxId is null
                     ? copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with { MailboxId = id }))
-                    : Rebuild(owner, source, id));
+                    // The one rebuild that must NOT keep serving: another account's mail is never shown under this one's label.
+                    : Rebuild(owner, source, id, accountChanged: true));
 
-    private IObservable<MailCopySource?> Rebuild(string owner, MailCopySource source, string? mailboxId = null)
+    /// <summary>
+    /// A rebuild. 🚨 <b>Alongside, never instead</b>: a copy that is already served (<see cref="MailCopySource.Backfilled"/>)
+    /// and rebuilt for a projection upgrade or a refused cursor mints a PENDING generation and leaves the served one
+    /// untouched — readers keep answering from it while the new one backfills; the flip and the old generation's removal
+    /// happen once the backfill is done (<see cref="Advance"/>). A pending rebuild that is itself restarted (its cursor
+    /// refused) replaces the pending generation and removes the abandoned one.
+    /// The exceptions rebuild IN PLACE: a copy that was never served (nothing to keep serving) and an account change
+    /// (<paramref name="accountChanged"/>: the old account's mail must not be served under the new one) — the generation
+    /// rotates at once, the copy reads live meanwhile, and both the old and any pending generation are removed.
+    /// </summary>
+    private IObservable<MailCopySource?> Rebuild(string owner, MailCopySource source, string? mailboxId = null, bool accountChanged = false)
     {
         var generation = MailCopyNodeTypes.NewGeneration();
-        logger?.LogInformation("{Provider} copy: rebuilding {Owner}'s copy as generation {Generation}", Provider, owner, generation);
+        var alongside = !accountChanged && source.Backfilled && MailCopyNodeTypes.IsValidGeneration(source.Generation);
+        logger?.LogInformation("{Provider} copy: rebuilding {Owner}'s copy as generation {Generation} ({Mode})", Provider, owner, generation,
+            alongside ? "alongside the served one" : "in place");
+        if (alongside)
+            return copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with
+                {
+                    PendingGeneration = generation,
+                    PendingCursor = null,
+                    LastSyncAt = time.GetUtcNow(),
+                    LastError = null,
+                }))
+                .SelectMany(rebuilt => rebuilt is null
+                    ? Observable.Return<MailCopySource?>(null)
+                    : RemoveIfValid(owner, source.PendingGeneration).Select(_ => (MailCopySource?)rebuilt));
         return copies.Commit(owner, Provider, source.Generation, UnderLease(current => current with
             {
                 Generation = generation,
@@ -298,6 +343,8 @@ public sealed partial class MailCopyEngine(
                 MailboxId = mailboxId ?? current.MailboxId,
                 Cursor = null,
                 Backfilled = false,
+                PendingGeneration = null,
+                PendingCursor = null,
                 LastSyncAt = time.GetUtcNow(),
                 LastError = null,
             }))
@@ -305,63 +352,125 @@ public sealed partial class MailCopyEngine(
                 ? Observable.Return<MailCopySource?>(null)
                 : (MailCopyNodeTypes.IsValidGeneration(source.Generation)
                     ? copies.RemoveGeneration(owner, Provider, source.Generation)
-                    : Sweep(owner)).Select(_ => (MailCopySource?)rebuilt));
+                    : Sweep(owner))
+                    .SelectMany(_ => RemoveIfValid(owner, source.PendingGeneration))
+                    .Select(_ => (MailCopySource?)rebuilt));
+    }
+
+    // Removes every copy of a generation the stored source has dropped; nothing for none or a malformed id.
+    private IObservable<int> RemoveIfValid(string owner, string? generation)
+        => generation is not null && MailCopyNodeTypes.IsValidGeneration(generation)
+            ? copies.RemoveGeneration(owner, Provider, generation)
+            : Observable.Return(0);
+
+    /// <summary>
+    /// What a feed step makes of the stored source in <paramref name="lane"/>: the cursor moved (and the backfill marked
+    /// done when the feed reached the present). A step of a PENDING rebuild moves <see cref="MailCopySource.PendingCursor"/>
+    /// only — and on the last step FLIPS the source to the new generation in this one commit. Null when the pending
+    /// generation is no longer the stored one (another rebuild replaced it): nothing is written. Pure.
+    /// </summary>
+    internal static MailCopySource? Advance(MailCopySource current, (string Generation, string? Cursor, bool Pending) lane, MailFeedStep step, DateTimeOffset now)
+    {
+        if (!lane.Pending)
+            return current with
+            {
+                Cursor = step.Cursor,
+                Backfilled = current.Backfilled || step.Done,
+                LastSyncAt = now,
+                LastError = null,
+            };
+        if (current.PendingGeneration != lane.Generation)
+            return null;
+        return step.Done
+            ? current with
+            {
+                Generation = lane.Generation,
+                Projection = MailCopySource.CurrentProjection,
+                Cursor = step.Cursor,
+                Backfilled = true,
+                PendingGeneration = null,
+                PendingCursor = null,
+                LastSyncAt = now,
+                LastError = null,
+            }
+            : current with { PendingCursor = step.Cursor, LastSyncAt = now, LastError = null };
     }
 
     // Removes the copies a late write left behind — of generations PROVEN obsolete. Emits how many. 🚨 Private:
     // it deletes through the System-backed store, so it runs only inside the checked Sync / Kick.
     private IObservable<int> Sweep(string owner)
         => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null)
-            .SelectMany(before => copies.List(owner, Provider, MeshMailCopyStore.MaxPage, before?.Generation))
+            // While a rebuild fills a pending generation the sweep stands down: its copies are not leftovers, and the
+            // store can except only one generation from a listing. The next sync after the flip sweeps.
+            .SelectMany(before => before?.PendingGeneration is not null
+                ? Observable.Return(ImmutableList<MailMessageCopy>.Empty)
+                : copies.List(owner, Provider, MeshMailCopyStore.MaxPage, before?.Generation))
             .SelectMany(listed => listed.Count == 0
                 ? Observable.Return(0)
                 : copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current =>
                 {
-                    var obsolete = listed.Where(copy => current is null || copy.Generation != current.Generation).ToList();
+                    var obsolete = listed.Where(copy => !IsLive(current, copy.Generation)).ToList();
                     return obsolete.Count == 0
                         ? Observable.Return(0)
                         : obsolete.Select(copy => copies.Remove(owner, Provider, copy.Generation, copy.MessageId)).MergeBounded(4).Count();
                 }));
 
     private IObservable<MailCopySource?> Step(string owner, MailCopySource source, int step, IMailAttachmentSource files)
-        => feed.Step(owner, source.Cursor, source.WindowStart).Take(1)
+    {
+        // The step works on the lane of the pending rebuild when one is filling, else on the served copy's.
+        var lane = Lane(source);
+        var target = source with { Generation = lane.Generation };
+        return feed.Step(owner, lane.Cursor, source.WindowStart).Take(1)
             .SelectMany(feedStep => copies.Commit(owner, Provider, source.Generation, UnderLease(current => current))
                 .SelectMany(renewed => renewed is null
-                    ? Lost(owner, source).Select(_ => (Committed: (MailCopySource?)null, Feed: (MailFeedStep?)null))
-                    : Apply(owner, source, feedStep, files).SelectMany(failures => failures > 0
+                    ? Lost(owner, lane.Generation).Select(_ => (Committed: (MailCopySource?)null, Feed: (MailFeedStep?)null))
+                    : Apply(owner, target, feedStep, files).SelectMany(failures => failures > 0
                         ? Observable.Throw<(MailCopySource? Committed, MailFeedStep? Feed)>(new InvalidOperationException(
                             $"{failures} of this step's copy writes failed; the step is repeated"))
-                        : CommitOrClean(owner, source, UnderLease(current => current with
-                        {
-                            Cursor = feedStep.Cursor,
-                            Backfilled = current.Backfilled || feedStep.Done,
-                            LastSyncAt = time.GetUtcNow(),
-                            LastError = null,
-                        })).Select(committed => (Committed: committed, Feed: (MailFeedStep?)feedStep)))))
+                        : CommitOrClean(owner, source, lane.Generation, UnderLease(current => Advance(current, lane, feedStep, time.GetUtcNow())))
+                            // The flip happened in that commit: the served generation's copies (their files and index first)
+                            // are retired only now, after the new one is the source's. A failed retire is logged and left to
+                            // the next sync's sweep — the flip itself stands.
+                            .SelectMany(committed => committed is not null && lane.Pending && committed.Generation == lane.Generation
+                                ? RetireServed(owner, source.Generation).Select(_ => committed)
+                                : Observable.Return(committed))
+                            .Select(committed => (Committed: committed, Feed: (MailFeedStep?)feedStep)))))
             .Catch((Exception ex) => ex is MailFeedResyncRequiredException && step < MaxStepsPerSync
                 ? Rebuild(owner, source).Select(rebuilt => (Committed: rebuilt, Feed: (MailFeedStep?)null))
                 : Failed(owner, source, ex))
             .SelectMany(result => result.Committed is { } committed
-                                  && (result.Feed is null || !result.Feed.Done && committed.Cursor is not null)
+                                  && (result.Feed is null || !result.Feed.Done && Lane(committed).Cursor is not null)
                                   && step < MaxStepsPerSync
                 ? Step(owner, committed, step + 1, files)
                 : Observable.Return(result.Committed));
+    }
+
+    private IObservable<int> RetireServed(string owner, string generation)
+        => (MailCopyNodeTypes.IsValidGeneration(generation) ? copies.RemoveGeneration(owner, Provider, generation) : Sweep(owner))
+            .Catch((Exception ex) =>
+            {
+                logger?.LogWarning(ex, "{Provider} copy: the retired generation of {Owner} could not be removed; the next sync sweeps it", Provider, owner);
+                return Observable.Return(0);
+            });
 
     private IObservable<(MailCopySource? Committed, MailFeedStep? Feed)> Failed(string owner, MailCopySource source, Exception ex)
-        => CommitOrClean(owner, source, UnderLease(current => current with { LastError = ex.Message, LastSyncAt = time.GetUtcNow() }))
+        => CommitOrClean(owner, source, Lane(source).Generation, UnderLease(current => current with { LastError = ex.Message, LastSyncAt = time.GetUtcNow() }))
             .Catch((Exception _) => Observable.Return<MailCopySource?>(null))
             .SelectMany(_ => Observable.Throw<(MailCopySource? Committed, MailFeedStep? Feed)>(ex));
 
-    private IObservable<MailCopySource?> CommitOrClean(string owner, MailCopySource started, Func<MailCopySource, MailCopySource?> change)
+    // A commit against the served generation (the source's identity); when it is refused, what this sync wrote for
+    // `written` — the lane's generation — is removed unless the stored source still means to keep it.
+    private IObservable<MailCopySource?> CommitOrClean(string owner, MailCopySource started, string written, Func<MailCopySource, MailCopySource?> change)
         => copies.Commit(owner, Provider, started.Generation, change)
             .SelectMany(committed => committed is not null
                 ? Observable.Return<MailCopySource?>(committed)
-                : Lost(owner, started).Select(_ => (MailCopySource?)null));
+                : Lost(owner, written).Select(_ => (MailCopySource?)null));
 
-    // The lease was lost or the copy switched off meanwhile: what this sync wrote is removed by ITS generation.
-    private IObservable<int> Lost(string owner, MailCopySource source)
-        => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current => current is null || current.Generation != source.Generation
-            ? copies.RemoveGeneration(owner, Provider, source.Generation)
+    // The lease was lost or the copy switched off meanwhile: what this sync wrote is removed by ITS generation — unless
+    // the stored source still names it (served, or the rebuild filling beside the served one).
+    private IObservable<int> Lost(string owner, string generation)
+        => copies.Source(owner, Provider).Take(1).DefaultIfEmpty(null).SelectMany(current => !IsLive(current, generation)
+            ? copies.RemoveGeneration(owner, Provider, generation)
             : Observable.Return(0));
 
     private IObservable<int> Apply(string owner, MailCopySource source, MailFeedStep step, IMailAttachmentSource files)

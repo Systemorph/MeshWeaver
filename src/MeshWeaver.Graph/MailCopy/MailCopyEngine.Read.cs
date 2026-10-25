@@ -253,5 +253,5 @@ public sealed partial class MailCopyEngine
                                 // The copy was switched off (or rebuilt) while the Undo waited on the provider: its
                                 // generation is obsolete, so it is removed whole — no tombstone is left standing
                                 // in a generation nobody reads.
-                                : Lost(owner, source).Select(_ => false))));
+                                : Lost(owner, source.Generation).Select(_ => false))));
 }

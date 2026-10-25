@@ -134,3 +134,30 @@ The engine's background paths declare System on the owner's behalf; the public s
 ## Listing the copies that are on
 
 `IMailCopyStore.SourceKeys(owner)` lists the keys of the owner's persisted copies whether or not their account is still connected, so a copy whose account is gone can still be shown and deleted. `IMailCopyStore.EnabledSources()` lists every copy that is on across owners (platform scope, refused to in-mesh code); it is what a keeper reads after a restart to resume them. Both are default interface members that answer none, so a store that cannot list changes nothing.
+
+## Rebuilding: alongside, never instead
+
+A copy is rebuilt when its projection is older than the build's, when the provider refuses the stored cursor, or
+when the connected mailbox is another account. What is served meanwhile depends on which:
+
+- **Projection upgrade and refused cursor (a copy that is already `Backfilled`) build ALONGSIDE.** The engine mints
+  `MailCopySource.PendingGeneration` and backfills it from `PendingCursor`; `Generation`, `Cursor` and `Backfilled`
+  are untouched, so `ServesFromCopy`, `ReadInbox` and `StoredCopy` keep answering from the old generation for the
+  whole backfill (90 days of mail). Only the step that reaches the present **flips** the source in ONE commit
+  (`Generation` := pending, `Cursor` := the feed's, pending cleared), and only then are the old generation's copies
+  removed — attachment files and index first, through the store's existing delete path. A failed retire is logged and
+  left to the next sync's sweep; the flip stands. While the old generation is frozen it receives no delta steps; the
+  person's own Delete and Undo keep acting on it, and the delta of the new generation reports whatever changed at the
+  provider.
+- **A crash or failure mid-rebuild RESUMES the pending generation** from `PendingCursor` on the next sync; it never
+  mints another. A refused cursor on the pending generation itself replaces it (the abandoned one is removed).
+  The leftovers sweep stands down while a pending generation exists (its copies are not leftovers); the next sync
+  after the flip sweeps.
+- **A mailbox-account change rebuilds IN PLACE.** The old account's mail must never be shown under the new one, so the
+  generation rotates at once, `Backfilled` is false, the copy is not served (the inbox reads live) and the old and any
+  pending generation are removed. Readers are never failed: a copy that disappears between the index answer and the
+  node read (`DeliveryFailureException`) reads as absent. A copy that was never served is rebuilt in place too.
+- **An account the feed cannot name right now** (an empty id) is *unknown*, not *another account*: it never rebuilds a
+  healthy copy, and it is not served (reads need an id equal to the bound one).
+- **Switching off** (`Disable`) is unchanged: the generation rotates (and any pending one is dropped from the source),
+  every copy of every generation under the source is deleted with its files, then the source.

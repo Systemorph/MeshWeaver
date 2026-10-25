@@ -78,6 +78,7 @@ public class MailCopyContractTest(ITestOutputHelper output) : MonolithMeshTestBa
 
         (source.Provider, source.Generation, source.MailboxId, source.Backfilled).Should().Be(("outlook", "g1", "tid/oid", true));
         source.Projection.Should().Be(0, "0 is a copy made before attachments");
+        (source.PendingGeneration, source.PendingCursor).Should().Be(((string?)null, (string?)null), "a source stored before the alongside rebuild has none pending");
     }
 
     [Fact(Timeout = 120_000)]
