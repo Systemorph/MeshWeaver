@@ -9,20 +9,26 @@ after the seed is one more edit somebody must port by hand, and nothing reports 
 
 So the paths Deploy#1 copied are FROZEN here: a pull request may DELETE them (that is how they leave,
 MeshWeaver#7127) and may do nothing else to them. A file the diff adds, modifies, retypes, copies or
-renames INTO a frozen path is refused, naming the file and where the chart lives now.
+renames INTO a frozen path is refused, naming the file and where the chart lives now. A frozen
+DIRECTORY matches its own path as well as everything below it, so replacing it with a symlink (its
+files deleted, the directory path added) is refused too.
 
 Deliberately NOT frozen, although they sit beside the chart: `.github/scripts/build-run.py` and
 `deploy/build-host/**`. main-cd builds the build-host runner image from them in this repository;
 the Deploy chart's own gate reads them from a declared checkout of this repository.
+
+The listing is read NUL-delimited (`-z`): in its default output git C-quotes a path holding a
+non-ASCII byte, a quote or a control character, and a quoted path would match no frozen prefix.
 
 Renames are read as delete + add (`--no-renames`), so moving a frozen file OUT of a frozen path is
 a deletion (allowed) plus an addition elsewhere (not this gate's business), and moving a file INTO
 one is an addition (refused).
 
 Usage:
-  check-chart-freeze.py --base <sha>            diff <sha>..HEAD in this checkout
-  check-chart-freeze.py --name-status <file>    read `git diff --name-status --no-renames` output
-  check-chart-freeze.py --self-test             prove the gate can fail and can pass
+  check-chart-freeze.py --base <sha>          diff <sha>..HEAD in this checkout
+  check-chart-freeze.py --diff-file <file>    read a saved NUL-delimited name-status diff
+                                              (`git diff -z --name-status --no-renames`)
+  check-chart-freeze.py --self-test           prove the gate can fail and can pass
 """
 from __future__ import annotations
 
@@ -32,7 +38,7 @@ import sys
 
 HOME = "Systemorph/MeshWeaver.Deploy"
 
-# Exactly what Deploy#1 copied. A trailing slash is a directory prefix; anything else is one file.
+# Exactly what Deploy#1 copied. A trailing slash is a directory; anything else is one file.
 FROZEN = (
     "deploy/helm/",
     "deploy/helm-db/",
@@ -52,33 +58,44 @@ EXEMPT = (
     "deploy/build-host/",
 )
 
+# The status letters `git diff --name-status` prints (C and R do not occur with --no-renames).
+KNOWN_STATUS = set("ADMTUXBCR")
+
 
 def _matches(path: str, prefixes: tuple[str, ...]) -> bool:
-    return any(path.startswith(p) if p.endswith("/") else path == p for p in prefixes)
+    """A trailing slash names a directory: the directory path ITSELF matches as well as everything
+    below it, so a frozen directory replaced by a symlink is an addition at the frozen location."""
+    return any((path.startswith(p) or path == p[:-1]) if p.endswith("/") else path == p
+               for p in prefixes)
 
 
 def is_frozen(path: str) -> bool:
     return _matches(path, FROZEN) and not _matches(path, EXEMPT)
 
 
-def violations(name_status: str) -> list[tuple[str, str]]:
-    """Every (status, path) in `git diff --name-status --no-renames` output that touches a frozen
-    path with anything but a deletion. An unparseable line is itself a violation: a line this gate
-    cannot read is a change it did not check."""
+def violations(listing: str) -> list[tuple[str, str]]:
+    """Every (status, path) in a NUL-delimited name-status listing that touches a frozen path with
+    anything but a deletion. The listing is a flat sequence of fields: status, path, status, path, …
+    A field this gate cannot read — an unknown status, or a status with no path after it — is itself
+    a violation: a change it could not read is a change it did not check."""
     out: list[tuple[str, str]] = []
-    for raw in name_status.splitlines():
-        line = raw.rstrip("\n")
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        if len(parts) < 2 or not parts[0]:
-            out.append(("?", line))
-            continue
-        status = parts[0][0]
-        # With --no-renames there are no R/C pairs, but read every path a line names anyway.
-        for path in parts[1:]:
-            if is_frozen(path) and status != "D":
-                out.append((status, path))
+    fields = listing.split("\0")
+    if fields and fields[-1] == "":
+        fields.pop()
+    i = 0
+    while i < len(fields):
+        status = fields[i]
+        if not status or status[0] not in KNOWN_STATUS or i + 1 >= len(fields):
+            # Past an unreadable field the status/path pairing is lost, so nothing after it can be
+            # read either: one violation names where reading stopped.
+            out.append(("?", status))
+            break
+        # A C or R entry carries two paths; --no-renames should never produce one, but read both.
+        width = 3 if status[0] in "CR" else 2
+        for path in fields[i + 1:i + width]:
+            if is_frozen(path) and status[0] != "D":
+                out.append((status[0], path))
+        i += width
     return out
 
 
@@ -96,38 +113,53 @@ def report(found: list[tuple[str, str]]) -> int:
 
 def diff_against(base: str) -> str:
     return subprocess.run(
-        ["git", "diff", "--name-status", "--no-renames", base, "HEAD"],
-        check=True, capture_output=True, text=True).stdout
+        ["git", "diff", "-z", "--name-status", "--no-renames", base, "HEAD"],
+        check=True, capture_output=True, text=True, encoding="utf-8").stdout
+
+
+def _z(lines: str) -> str:
+    """A readable fixture (`S<TAB>path` per line) as the NUL-delimited listing git emits."""
+    return "".join(f"{s}\0{p}\0" for s, p in (ln.split("\t", 1) for ln in lines.splitlines()))
 
 
 def self_test() -> int:
     cases = [
-        # (name, name-status text, expected violation count)
+        # (name, NUL-delimited listing, expected violation count)
         ("a modified chart template is refused",
-         "M\tdeploy/helm/templates/memex-portal/config.yaml\n", 1),
+         _z("M\tdeploy/helm/templates/memex-portal/config.yaml"), 1),
         ("an added chart file is refused",
-         "A\tdeploy/helm/templates/build-host/new.yaml\n", 1),
+         _z("A\tdeploy/helm/templates/build-host/new.yaml"), 1),
         ("a modified frozen single file is refused",
-         "M\t.github/workflows/chart-gate.yml\n", 1),
+         _z("M\t.github/workflows/chart-gate.yml"), 1),
         ("a retyped frozen file is refused",
-         "T\tdeploy/homebrew/bin/memex-local\n", 1),
+         _z("T\tdeploy/homebrew/bin/memex-local"), 1),
+        ("a non-ASCII file name added to the chart is refused (read unquoted through -z)",
+         _z("A\tdeploy/helm/templates/café.yaml"), 1),
+        ("a frozen directory replaced by a symlink is refused (its files D, the directory A)",
+         _z("D\tdeploy/helm/Chart.yaml\nD\tdeploy/helm/values.yaml\nA\tdeploy/helm"), 1),
         ("a deletion of every frozen kind is allowed (the #7127 shape)",
-         "D\tdeploy/helm/values.yaml\nD\tdeploy/helm-db/Chart.yaml\nD\tdeploy/aks/values.aks.yaml\n"
-         "D\tdeploy/aks/manifests/hosting-operator/operator-rbac.yaml\n"
-         "D\tdeploy/aks/scripts/check-chart-invariants.sh\nD\tdeploy/homebrew/README.md\n"
-         "D\t.github/workflows/homebrew.yml\nD\t.github/workflows/chart-gate.yml\n"
-         "D\tscripts/check-config-key-coverage.py\nD\t.github/scripts/test-bundle-registry.py\n", 0),
+         _z("D\tdeploy/helm/values.yaml\nD\tdeploy/helm-db/Chart.yaml\nD\tdeploy/aks/values.aks.yaml\n"
+            "D\tdeploy/aks/manifests/hosting-operator/operator-rbac.yaml\n"
+            "D\tdeploy/aks/scripts/check-chart-invariants.sh\nD\tdeploy/homebrew/README.md\n"
+            "D\t.github/workflows/homebrew.yml\nD\t.github/workflows/chart-gate.yml\n"
+            "D\tscripts/check-config-key-coverage.py\nD\t.github/scripts/test-bundle-registry.py"), 0),
         ("the build-host runner and Dockerfile stay editable",
-         "M\t.github/scripts/build-run.py\nM\tdeploy/build-host/Dockerfile\n", 0),
+         _z("M\t.github/scripts/build-run.py\nM\tdeploy/build-host/Dockerfile"), 0),
         ("unrelated paths are not this gate's business",
-         "M\tsrc/MeshWeaver.Hosting/NodeTypeBakeGate.cs\nA\tdeploy/ocr/Dockerfile\n"
-         "M\tdeploy/aks/INSTANCE-LIFECYCLE.md\nM\t.github/scripts/lock-pinned-digests.py\n", 0),
+         _z("M\tsrc/MeshWeaver.Hosting/NodeTypeBakeGate.cs\nA\tdeploy/ocr/Dockerfile\n"
+            "M\tdeploy/aks/INSTANCE-LIFECYCLE.md\nM\t.github/scripts/lock-pinned-digests.py"), 0),
         ("a prefix lookalike is not frozen",
-         "M\tdeploy/helmfile.yaml\nM\tdeploy/aks/values.aks.yaml.bak\n", 0),
+         _z("M\tdeploy/helmfile.yaml\nM\tdeploy/aks/values.aks.yaml.bak\nA\tdeploy/helm-other"), 0),
         ("a mixed diff counts only the non-deletions",
-         "D\tdeploy/helm/Chart.yaml\nM\tdeploy/helm/values.yaml\nA\tdeploy/aks/scripts/x.sh\n", 2),
-        ("an unparseable line is a violation, never a silent pass",
-         "garbage-without-a-tab\n", 1),
+         _z("D\tdeploy/helm/Chart.yaml\nM\tdeploy/helm/values.yaml\nA\tdeploy/aks/scripts/x.sh"), 2),
+        ("a rename INTO a frozen path is refused (both paths read)",
+         "R100\0docs/x.yaml\0deploy/helm/x.yaml\0", 1),
+        ("an unknown status is a violation, never a silent pass",
+         "Q\0deploy/helm/values.yaml\0", 1),
+        ("a status with no path is a violation, never a silent pass",
+         "M\0", 1),
+        ("an empty listing is no change",
+         "", 0),
     ]
     failed = 0
     for name, text, expected in cases:
@@ -149,7 +181,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--base", help="diff this commit against HEAD")
-    g.add_argument("--name-status", help="a file holding `git diff --name-status --no-renames` output")
+    g.add_argument("--diff-file", dest="name_status",
+                   help="a file holding a saved NUL-delimited name-status diff (see Usage)")
     g.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     if args.self_test:
