@@ -205,7 +205,6 @@ WEIGHTS=$(cat <<'EOF'
 500 MeshWeaver.Compiler.Pipeline.Test 3
 2 MeshWeaver.ContentCollections.Indexing.Test
 2 MeshWeaver.Markdown.Collaboration.Test
-2 MeshWeaver.Portal.E2E.Test
 1 MeshWeaver.Data.TestDomain
 1 MeshWeaver.Testing.Xunit.Test
 1 MeshWeaver.Testing.Xunit
