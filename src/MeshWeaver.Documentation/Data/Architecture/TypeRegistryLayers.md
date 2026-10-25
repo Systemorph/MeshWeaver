@@ -39,7 +39,23 @@ to the chain, or when it is genuinely different: another name for the type, or a
 - the chain already registers the type under that name, and the name resolves to that definition;
 - the name is the type's full name, the chain registers the type under another name, and the full name
   already resolves to it (every bound definition indexes its full-name alias);
-- a closed generic under the name the chain synthesises for it.
+- a closed generic under the name the chain synthesises for it — unless a derived-type search can reach
+  it (a supertype other than `object` and its own `IEquatable`, e.g. `Box<int> : Shape`). The
+  polymorphic resolver discovers subtypes of a base only by enumerating `Types`, so such a closure is
+  held by the first layer that registers it. Every name lookup (`GetTypeDefinition(string)`,
+  `GetKeyFunction(string)`, `WithKeyFunction`) falls back to the bracket parse for a closure no layer
+  holds, and the parse splits arguments at bracket depth zero, so nested generic names round-trip.
+
+**A key factory is an override of the layer that registered it.** A keyless definition resolved from
+above is keyed by the nearest layer, between the asking registry and the owner, whose own
+`WithKeyFunctionProvider` keys the type, and the keyed definition is bound in THAT layer. The answer is
+the same whichever registry is asked first. A type whose load context any layer of the chain already saw
+unloading is bound into the weak shadow instead, never strongly.
+
+**The discriminator is the asking registry's name.** The polymorphic resolver writes a derived type
+under the name the resolving registry serialises it with (`TryGetCollectionName`), never under the
+enumeration key. The merged view yields the parent's entry first, so a hub that renamed an inherited
+subtype would otherwise emit the parent's name through a base or an interface.
 
 An override is stored in the hub's own layer and wins there. The parent and the hub's siblings never
 see it.

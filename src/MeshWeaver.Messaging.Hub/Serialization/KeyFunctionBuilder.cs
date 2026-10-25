@@ -61,6 +61,9 @@ public class KeyFunctionBuilder
     /// <summary>Whether factories were registered on this builder itself.</summary>
     internal bool HasOwnFactories => !Volatile.Read(ref ownFactories).IsEmpty;
 
+    /// <summary>Whether factories were registered on this builder or on any builder it chains to.</summary>
+    internal bool HasFactoriesInChain => HasOwnFactories || parent?.HasFactoriesInChain == true;
+
     /// <summary>
     /// Whether the conventions alone decide the key of <paramref name="type"/>: the first single-property
     /// convention any property matches is matched by exactly one property, or no such convention matches

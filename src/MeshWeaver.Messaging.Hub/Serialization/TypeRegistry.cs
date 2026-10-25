@@ -257,21 +257,56 @@ internal class TypeRegistry : ITypeRegistry
 
     /// <summary>
     /// A definition resolved through the parent, as THIS registry serves it. It is the parent's very
-    /// object — unless key-function factories were registered on this registry itself and they key a
-    /// type the parent's conventions and factories leave keyless. That is a genuine override (another
-    /// key), so it is bound in the own layer. A cold path: no registry in core registers factories.
+    /// object — unless a registry between this one and the layer that OWNS the definition registered
+    /// key-function factories that key a type the owner's conventions and factories leave keyless. That
+    /// is a genuine override (another key), and it belongs to the layer whose factory decides it: the
+    /// nearest such layer to this registry, exactly the precedence <see cref="KeyFunctionBuilder"/>
+    /// applies. Binding it THERE makes the answer independent of which registry is asked first — a leaf
+    /// read sees the middle layer's key whether or not the middle was ever queried itself. A cold path:
+    /// no registry in core registers factories, and the walk is skipped unless one in the chain did.
     /// </summary>
     private ITypeDefinition? Localize(ITypeDefinition? definition)
     {
         if (definition is not TypeDefinition inherited
-            || !keyFunctionBuilder.HasOwnFactories
+            || !keyFunctionBuilder.HasFactoriesInChain
             || !inherited.KeyFromBuilder
-            || ReferenceEquals(OwnByName(inherited.CollectionName, canonicalOnly: true), inherited)
-            || inherited.DisplayMetadata.HasConventionalKey
             || inherited.Key is not null
-            || keyFunctionBuilder.GetOwnFactoryKey(inherited.Type) is not { } ownKey)
+            || inherited.DisplayMetadata.HasConventionalKey)
             return definition;
-        var keyed = inherited.WithKey(ownKey);
+        for (var registry = this; registry is not null; registry = registry.parentLayer)
+        {
+            // The owning layer reached: no layer below it keys the type differently.
+            if (ReferenceEquals(registry.OwnByName(inherited.CollectionName, canonicalOnly: true), inherited)
+                || ReferenceEquals(registry.OwnByType(inherited.Type, out _), inherited))
+                return definition;
+            if (registry.keyFunctionBuilder.HasOwnFactories
+                && registry.keyFunctionBuilder.GetOwnFactoryKey(inherited.Type) is { } ownKey)
+                return registry.BindKeyedOverride(inherited, ownKey);
+        }
+        return definition;
+    }
+
+    /// <summary>
+    /// Binds <paramref name="inherited"/> keyed by <paramref name="key"/> into THIS layer. A type whose
+    /// load context has already begun unloading — seen by this registry or by any ancestor, which may
+    /// have demoted it before this layer first resolved it — goes to the weak shadow instead: the
+    /// context's <c>Unloading</c> will never fire again, so a strong entry would root the superseded
+    /// assembly for the registry's lifetime.
+    /// </summary>
+    private TypeDefinition BindKeyedOverride(TypeDefinition inherited, KeyFunction key)
+    {
+        if (IsUnloadingContext(inherited.Type))
+        {
+            if (GetDemoted(inherited.Type) is { Key: not null } demoted)
+                return demoted;
+            var shadowed = inherited.WithKey(key);
+            Demote(shadowed.CollectionName, shadowed, alias: false);
+            var fullName = FullNameOf(shadowed.Type);
+            if (fullName != shadowed.CollectionName)
+                Demote(fullName, shadowed, alias: true);
+            return shadowed;
+        }
+        var keyed = inherited.WithKey(key);
         Mutate(l => l.ByName.TryGetValue(keyed.CollectionName, out var held) && held.Type == keyed.Type && !held.KeyFromBuilder
             ? null
             : l.Bind(keyed.Type, keyed.CollectionName, keyed));
@@ -339,9 +374,13 @@ internal class TypeRegistry : ITypeRegistry
             && ChainByName(typeName)?.Type == type)
             return this;
         // A closed generic under the name the chain synthesises for it from its parts: the chain
-        // already answers it both ways (by type through the synthesis, by name through the bracket
-        // parse), so there is nothing to hold.
-        if (existing is null && SynthesizedName(type) == typeName)
+        // already answers it by type (the synthesis) and by name (the bracket parse, which every name
+        // lookup falls back to — GetTypeDefinition, GetKeyFunction, WithKeyFunction), so there is
+        // nothing to hold. 🚨 EXCEPT when a derived-type search can reach it: the polymorphic resolver
+        // discovers subtypes of a base only by enumerating `Types`, so a closure with a supertype it
+        // could be serialised through (`Box<int> : Shape`) is held by the first layer that registers it
+        // — descendants re-registering it find it through the chain and store nothing.
+        if (existing is null && SynthesizedName(type) == typeName && !IsReachableByDerivedTypeSearch(type))
             return this;
         if (existing is not null && registeredName == typeName)
         {
@@ -411,6 +450,23 @@ internal class TypeRegistry : ITypeRegistry
         return $"{definitionName}[{string.Join(',', names)}]";
     }
 
+    /// <summary>
+    /// Whether a derived-type search of the polymorphic resolver can find <paramref name="type"/>: it has
+    /// a supertype other than <see cref="object"/> / <see cref="ValueType"/> and other than the
+    /// <c>IEquatable</c> of itself every record implements. The resolver configures polymorphism for a
+    /// declared type that is never <see cref="object"/> (<c>ShouldConfigurePolymorphism</c>), so a type
+    /// without such a supertype is never searched for — only written through the open <c>object</c>
+    /// door, whose discriminator is synthesised from the chain.
+    /// </summary>
+    private static bool IsReachableByDerivedTypeSearch(Type type)
+    {
+        for (var baseType = type.BaseType; baseType is not null; baseType = baseType.BaseType)
+            if (baseType != typeof(object) && baseType != typeof(ValueType))
+                return true;
+        var selfEquatable = typeof(IEquatable<>).MakeGenericType(type);
+        return type.GetInterfaces().Any(i => i != selfEquatable);
+    }
+
     public ITypeRegistry WithTypes(params IEnumerable<KeyValuePair<string, Type>> types)
         => types.Aggregate((ITypeRegistry)this, (i, kvp) => i.WithType(kvp.Value, kvp.Key));
 
@@ -452,7 +508,7 @@ internal class TypeRegistry : ITypeRegistry
 
     public ITypeDefinition WithKeyFunction(string collection, KeyFunction keyFunction)
     {
-        if (ChainByName(collection) is not TypeDefinition typeDefinition)
+        if ((ChainByName(collection) ?? SynthesizedDefinition(collection)) is not TypeDefinition typeDefinition)
             throw new ArgumentException($"Type {collection} not found");
         // An explicit key is an override: the keyed definition is this registry's own, the parent's
         // definition is untouched.
@@ -483,8 +539,17 @@ internal class TypeRegistry : ITypeRegistry
     {
         if (Localize(ChainByName(collection, canonicalOnly: true)) is { } definition)
             return definition is TypeDefinition own ? own.Key : ForeignRoot()?.GetKeyFunction(collection);
-        return null;
+        // A closed generic no layer holds is keyed by its synthesised name too (see WithType).
+        return SynthesizedDefinition(collection) is { } synthesized ? GetKeyFunction(synthesized.Type) : null;
     }
+
+    /// <summary>
+    /// The definition the bracket parse yields for a closed-generic <paramref name="name"/> no layer
+    /// holds (<see cref="TryGetType"/>), or null for any other name. What lets every name lookup serve a
+    /// closed generic the chain synthesises instead of storing.
+    /// </summary>
+    private ITypeDefinition? SynthesizedDefinition(string name) =>
+        name.EndsWith(']') && name.Contains('[') && TryGetType(name, out var definition) ? definition : null;
 
     public KeyFunction? GetKeyFunction(Type type)
     {
@@ -544,11 +609,9 @@ internal class TypeRegistry : ITypeRegistry
             if (baseType == null)
                 return false;
 
-            var genericArgs = name.Substring(
-                    name.IndexOf('[') + 1,
-                    name.Length - name.IndexOf('[') - 2
-                )
-                .Split(',');
+            var genericArgs = SplitTopLevelArguments(name.Substring(
+                name.IndexOf('[') + 1,
+                name.Length - name.IndexOf('[') - 2));
             var genericTypeArgs = new Type[genericArgs.Length];
 
             for (var i = 0; i < genericArgs.Length; i++)
@@ -575,6 +638,36 @@ internal class TypeRegistry : ITypeRegistry
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// Splits a generic argument list at the commas at bracket depth zero only, so a nested generic
+    /// argument (<c>ValueTuple`2[Int32,ValueTuple`2[Int32,Int32]]</c>) stays one argument and the names
+    /// <see cref="FormatType"/> synthesises round-trip.
+    /// </summary>
+    private static string[] SplitTopLevelArguments(string arguments)
+    {
+        var parts = ImmutableArray.CreateBuilder<string>();
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            switch (arguments[i])
+            {
+                case '[':
+                    depth++;
+                    break;
+                case ']':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    parts.Add(arguments[start..i]);
+                    start = i + 1;
+                    break;
+            }
+        }
+        parts.Add(arguments[start..]);
+        return parts.ToArray();
     }
 
     public Type? GetType(string name) => TryGetType(name, out var td) && td != null ? td.Type : null;
@@ -625,7 +718,8 @@ internal class TypeRegistry : ITypeRegistry
         return BindNew(type, created.CollectionName, created);
     }
 
-    public ITypeDefinition? GetTypeDefinition(string typeName) => Localize(ChainByName(typeName));
+    public ITypeDefinition? GetTypeDefinition(string typeName) =>
+        Localize(ChainByName(typeName)) ?? SynthesizedDefinition(typeName);
 
     public string FormatType(Type mainType)
     {
@@ -680,10 +774,20 @@ internal class TypeRegistry : ITypeRegistry
     private readonly ConditionalWeakTable<AssemblyLoadContext, object> unloadingContexts = new();
 
     /// <summary>Whether the type's collectible load context has already begun unloading.</summary>
+    /// <remarks>
+    /// Read along the WHOLE chain: only a registry that held a type from the context heard its
+    /// <c>Unloading</c>, and a descendant first binding a type from it afterwards (a keyed override, a
+    /// rename) must see that the event is already gone, or it binds a strong entry nothing will evict.
+    /// </remarks>
     private bool IsUnloadingContext(Type type)
-        => type.Assembly.IsCollectible
-           && AssemblyLoadContext.GetLoadContext(type.Assembly) is { } context
-           && unloadingContexts.TryGetValue(context, out _);
+    {
+        if (!type.Assembly.IsCollectible || AssemblyLoadContext.GetLoadContext(type.Assembly) is not { } context)
+            return false;
+        for (var registry = this; registry is not null; registry = registry.parentLayer)
+            if (registry.unloadingContexts.TryGetValue(context, out _))
+                return true;
+        return false;
+    }
 
     /// <summary>Places one entry into the weak shadow (see the field docs).</summary>
     private void Demote(string name, TypeDefinition definition, bool alias)
