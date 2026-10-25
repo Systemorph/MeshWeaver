@@ -1,0 +1,168 @@
+using System.Reflection;
+using MeshWeaver.Messaging;
+using MeshWeaver.Messaging.Serialization;
+using Xunit;
+
+namespace MeshWeaver.Graph.Test;
+
+/// <summary>
+/// The platform's own XML-documentation reader (<see cref="XmlDocs"/>), which replaced the
+/// third-party Namotion.Reflection reader. The expected texts in the parity facts were produced by
+/// Namotion's <c>GetXmlDocsSummary</c> on these exact members before the package was removed, so a
+/// change in rendering (whitespace, <c>&lt;see&gt;</c>, <c>&lt;paramref&gt;</c>, <c>&lt;c&gt;</c>,
+/// record <c>&lt;param&gt;</c> fallback, <c>&lt;inheritdoc/&gt;</c>) is caught here.
+/// A full-assembly comparison over six platform assemblies (72,373 types and members) agreed on
+/// every member where Namotion produced text, except where Namotion's ID was wrong — see
+/// <c>Doc/Architecture/XmlDocumentationReader</c>.
+/// </summary>
+public sealed class XmlDocsTest
+{
+    private const BindingFlags Any = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static;
+
+    [Fact]
+    public void AMethodSummary_RendersLikeNamotion()
+        => XmlDocs.Summary(typeof(ObjectPolymorphicConverter).GetMethod(nameof(ObjectPolymorphicConverter.CanConvert))!)
+            .Should().Be("Determines whether this converter applies. It only handles the open object\ntype; concrete types are handled by their own type info.");
+
+    [Fact]
+    public void ASeeCref_RendersAsItsLastNameSegment()
+        // <see cref="F:...WellKnownUsers.System"/> → "System"; <c>…</c> renders as its text.
+        => XmlDocs.Summary(typeof(AccessService).GetField("SystemObjectId", Any)!)
+            .Should().Be("The identity the platform writes as (WellKnownUsers.System; Messaging.Hub sits below\nMesh.Contract, so the value is mirrored here once).");
+
+    [Fact]
+    public void APositionalRecordProperty_FallsBackToTheTypesParam()
+    {
+        // ExceptionCallback has no <summary> of its own: the record documents it as <param>, and a
+        // <paramref name="Action"/> inside renders as the name.
+        XmlDocs.Summary(typeof(ExecutionRequest).GetProperty(nameof(ExecutionRequest.ExceptionCallback))!)
+            .Should().Be("Invoked with the exception when Action faults, giving the poster a chance to handle the failure.");
+
+        // A PRIVATE NESTED record: the nested type's ID joins with '.', and the continuation line
+        // keeps its indentation because only the FIRST line's indentation is stripped.
+        var teardown = typeof(MessageHub).GetNestedType("TeardownCause", Any)!;
+        XmlDocs.Summary(teardown.GetProperty("Reason", Any)!)
+            .Should().Be("WHY. For a cascade this is the ORIGINATING cause, passed to children\n            unchanged so the chain names the event that started it however deep the tree is.");
+        XmlDocs.Summary(teardown).Should().StartWith("🚨 The ONE claim on this hub's teardown cause — FIRST CAUSE WINS, atomically.\n");
+    }
+
+    [Fact]
+    public void AConstructedGenericType_ReadsItsDefinitionsDocs()
+        // <typeparamref name="T"/> renders as nothing (Namotion did the same: "of type .").
+        => XmlDocs.Summary(typeof(MessageDelivery<string>))
+            .Should().Be("Strongly-typed delivery envelope carrying a payload of type .\nConcrete implementation of the abstract MessageDelivery base.");
+
+    [Fact]
+    public void ANestedGenericType_AndACrefToAGenericMethod()
+        => XmlDocs.Summary(typeof(BoundedMergeExtensions).GetNestedType("BoundedMerge`1", Any)!)
+            .Should().Be("One subscription of MergeBounded``1.");
+
+    [Fact]
+    public void AConstructor()
+        => XmlDocs.Summary(typeof(AccessService).GetConstructor([typeof(Microsoft.Extensions.Logging.ILoggerFactory)])!)
+            .Should().Be("Creates an access service that logs context transitions and leak\ndiagnostics through the MeshWeaver.AccessContext category.");
+
+    [Fact]
+    public void AnInheritDoc_ResolvesFromTheInterface()
+    {
+        var property = XmlDocs.Summary(typeof(MessageHub).GetProperty(nameof(MessageHub.ShuttingDown))!);
+        property.Should().StartWith("IsShuttingDown as a SOURCE: fires Unit exactly once — at the\nFIRST instant this hub becomes part of a shutdown — then completes.");
+        property.Should().Be(XmlDocs.Summary(typeof(IMessageHub).GetProperty(nameof(IMessageHub.ShuttingDown))!));
+
+        var method = XmlDocs.Summary(typeof(MeshWeaver.Mesh.Completion.AddressCatalogAutocompleteProvider).GetMethod("GetItems")!);
+        method.Should().StartWith("Gets autocomplete suggestions from this provider as a progressive snapshot stream. Each\nemission is the provider's current best IReadOnlyCollection`1, sorted by\nPriority descending;");
+    }
+
+    /// <summary>
+    /// Where Namotion's documentation ID was wrong it read NOTHING (or a different overload); the
+    /// compiler-exact ID reads the member's own docs. <b>Should fail if</b> generic-method arity,
+    /// by-ref parameters or an <c>&lt;inheritdoc cref&gt;</c> on a field stop resolving.
+    /// </summary>
+    [Fact]
+    public void WhereNamotionsIdWasWrong_TheMembersOwnDocsAreRead()
+    {
+        // Generic method: Namotion dropped the ``1 arity and matched the NON-generic overload.
+        var generic = typeof(MeshWeaver.Mesh.Services.IMeshService).GetMethods()
+            .Single(m => m is { Name: "Query", IsGenericMethodDefinition: true });
+        var nonGeneric = typeof(MeshWeaver.Mesh.Services.IMeshService).GetMethods()
+            .Single(m => m is { Name: "Query", IsGenericMethodDefinition: false });
+        XmlDocs.DocumentationId(generic).Should().Be("M:MeshWeaver.Mesh.Services.IMeshService.Query``1(MeshWeaver.Mesh.Services.MeshQueryRequest)");
+        XmlDocs.Summary(generic).Should().NotBeNullOrEmpty().And.NotBe(XmlDocs.Summary(nonGeneric));
+
+        // By-ref parameter: Namotion spelled it "System.Type&" and found nothing.
+        var byRef = typeof(MeshWeaver.Mesh.Services.IMeshContentTypeRegistry).GetMethod("TryResolveByDiscriminator")!;
+        XmlDocs.DocumentationId(byRef).Should().Be("M:MeshWeaver.Mesh.Services.IMeshContentTypeRegistry.TryResolveByDiscriminator(System.String,System.Type@)");
+        XmlDocs.Summary(byRef).Should().NotBeNullOrEmpty();
+
+        // <inheritdoc cref="NodeTypeNotRegisteredKey"/> on a private const.
+        var extensions = typeof(MeshWeaver.Mesh.MeshNode).Assembly.GetType("MeshWeaver.Mesh.MeshExtensions")!;
+        var inheriting = XmlDocs.Summary(extensions.GetField("ValidationFailedKey", Any)!);
+        inheriting.Should().NotBeNullOrEmpty();
+        inheriting.Should().Be(XmlDocs.Summary(extensions.GetField("NodeTypeNotRegisteredKey", Any)!));
+    }
+
+    [Fact]
+    public void AnUndocumentedOrUnaddressableMember_ReadsEmpty()
+    {
+        XmlDocs.Summary(typeof(XmlDocsTest)).Should().BeEmpty("the test assembly ships no XML documentation");
+        XmlDocs.Summary(typeof(List<>).GetGenericArguments()[0]).Should().BeEmpty("a generic parameter has no documentation ID");
+        XmlDocs.Summary(typeof(int[])).Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData(nameof(IdSubjects.Plain), "M:MeshWeaver.Graph.Test.IdSubjects.Plain")]
+    [InlineData(nameof(IdSubjects.Shapes), "M:MeshWeaver.Graph.Test.IdSubjects.Shapes(System.Int32@,System.String@,System.Int32@,System.String[],System.Int32[0:,0:],System.Nullable{System.Int32},System.Collections.Generic.Dictionary{System.String,System.Collections.Generic.List{System.Int32}})")]
+    [InlineData(nameof(IdSubjects.Generic), "M:MeshWeaver.Graph.Test.IdSubjects.Generic``2(``0,System.Collections.Generic.List{``1},``0[])")]
+    public void DocumentationIds_FollowTheCompilersEncoding(string method, string expected)
+        => XmlDocs.DocumentationId(typeof(IdSubjects).GetMethod(method)!).Should().Be(expected);
+
+    [Fact]
+    public void DocumentationIds_ForTypesAndMembersOfEveryKind()
+    {
+        XmlDocs.DocumentationId(typeof(IdSubjects)).Should().Be("T:MeshWeaver.Graph.Test.IdSubjects");
+        XmlDocs.DocumentationId(typeof(IdSubjects.Outer<>.Inner<>)).Should().Be("T:MeshWeaver.Graph.Test.IdSubjects.Outer`1.Inner`1");
+        XmlDocs.DocumentationId(typeof(IdSubjects.Outer<int>.Inner<string>)).Should().Be("T:MeshWeaver.Graph.Test.IdSubjects.Outer`1.Inner`1");
+        XmlDocs.DocumentationId(typeof(IdSubjects.Outer<int>.Inner<string>).GetMethod("Take")!)
+            .Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.Outer`1.Inner`1.Take(`0,`1,MeshWeaver.Graph.Test.IdSubjects.Outer{`0}.Inner{`1})");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetConstructor(Type.EmptyTypes)!).Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.#ctor");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetConstructor([typeof(int)])!).Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.#ctor(System.Int32)");
+        XmlDocs.DocumentationId(typeof(IdSubjects).TypeInitializer!).Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.#cctor");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetProperty("Item")!).Should().Be("P:MeshWeaver.Graph.Test.IdSubjects.Item(System.String,System.Int32)");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetProperty(nameof(IdSubjects.Name))!).Should().Be("P:MeshWeaver.Graph.Test.IdSubjects.Name");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetField(nameof(IdSubjects.Counter))!).Should().Be("F:MeshWeaver.Graph.Test.IdSubjects.Counter");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetEvent(nameof(IdSubjects.Changed))!).Should().Be("E:MeshWeaver.Graph.Test.IdSubjects.Changed");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetMethod("op_Implicit")!).Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.op_Implicit(MeshWeaver.Graph.Test.IdSubjects)~System.Int32");
+        XmlDocs.DocumentationId(typeof(IdSubjects).GetMethod("System.IDisposable.Dispose", Any)!).Should().Be("M:MeshWeaver.Graph.Test.IdSubjects.System#IDisposable#Dispose");
+    }
+}
+
+#pragma warning disable CS0067, CS0649 // members exist only to be addressed by reflection
+/// <summary>Members of every shape a documentation ID encodes.</summary>
+public sealed class IdSubjects : IDisposable
+{
+    static IdSubjects() { }
+    public IdSubjects() { }
+    public IdSubjects(int seed) => Counter = seed;
+
+    public int Counter;
+    public string Name { get; set; } = "";
+    public event EventHandler? Changed;
+    public int this[string key, int index] => index;
+
+    public void Plain() { }
+    public void Shapes(ref int a, out string b, in int c, string[] d, int[,] e, int? f,
+        Dictionary<string, List<int>> g) => b = "";
+    public void Generic<TKey, TValue>(TKey key, List<TValue> values, TKey[] keys) { }
+
+    public static implicit operator int(IdSubjects subject) => subject.Counter;
+    void IDisposable.Dispose() { }
+
+    public sealed class Outer<T>
+    {
+        public sealed class Inner<U>
+        {
+            public void Take(T outer, U inner, Inner<U> self) { }
+        }
+    }
+}
+#pragma warning restore CS0067, CS0649

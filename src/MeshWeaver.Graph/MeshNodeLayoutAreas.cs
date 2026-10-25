@@ -19,7 +19,6 @@ using MeshWeaver.Mesh.Services;
 using MeshWeaver.Messaging;
 using MeshWeaver.Utils;
 using Microsoft.Extensions.DependencyInjection;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Graph;
 
@@ -2433,7 +2432,7 @@ public static class MeshNodeLayoutAreas
         {
             TransformSchemaNode = (ctx, node) =>
             {
-                // Add documentation from XML docs using Namotion.Reflection
+                // Add documentation from XML docs (XmlDocs)
                 if (ctx.TypeInfo.Type == type)
                 {
                     // Add title for the main type

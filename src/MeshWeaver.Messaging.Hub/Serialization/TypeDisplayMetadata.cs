@@ -3,7 +3,6 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using MeshWeaver.Domain;
 using MeshWeaver.Utils;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Messaging.Serialization;
 

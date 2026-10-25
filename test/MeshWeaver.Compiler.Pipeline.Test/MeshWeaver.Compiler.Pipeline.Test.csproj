@@ -13,7 +13,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Reactive.Testing" />
-    <PackageReference Include="Namotion.Reflection" />
     <PackageReference Include="NSubstitute" />
   </ItemGroup>
 

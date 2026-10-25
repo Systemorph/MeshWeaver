@@ -7,7 +7,6 @@ using MeshWeaver.Domain;
 using MeshWeaver.Layout.Composition;
 using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 

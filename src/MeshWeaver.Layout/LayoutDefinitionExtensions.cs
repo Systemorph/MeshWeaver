@@ -4,7 +4,6 @@ using System.Reactive.Linq;
 using System.Reflection;
 using MeshWeaver.Data;
 using MeshWeaver.Layout.Composition;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Layout;
 

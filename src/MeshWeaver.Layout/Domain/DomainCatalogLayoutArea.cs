@@ -5,7 +5,6 @@ using MeshWeaver.Layout.Composition;
 using MeshWeaver.Layout.DataGrid;
 using MeshWeaver.Messaging.Serialization;
 using MeshWeaver.ShortGuid;
-using Namotion.Reflection;
 
 namespace MeshWeaver.Layout.Domain;
 
