@@ -531,9 +531,13 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
     {
         var impl = typeRegistry.GetType();
         var holding = new List<string>();
-        var typeByName = (System.Collections.IDictionary?)GetField("typeByName");
-        var aliasByName = (System.Collections.IDictionary?)GetField("aliasByName");
-        var nameByType = (System.Collections.IDictionary?)GetField("nameByType");
+        // The registry's own layer is one immutable snapshot (field `layer`) of three maps.
+        var layer = impl.GetField("layer", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            ?.GetValue(typeRegistry);
+        layer.Should().NotBeNull("the test must track the registry's storage-field shape");
+        var typeByName = (System.Collections.IDictionary?)GetLayerMap("ByName");
+        var aliasByName = (System.Collections.IDictionary?)GetLayerMap("Aliases");
+        var nameByType = (System.Collections.IDictionary?)GetLayerMap("NameByType");
         // All three, not just the first: this helper reaches into private fields by name, so a
         // rename is the expected way it breaks. Asserting each one says WHICH field moved; the
         // null-forgiving dereference below would instead throw a NullReferenceException that
@@ -549,9 +553,7 @@ public class TypeRegistryTest(ITestOutputHelper output) : HubTestBase(output)
             holding.Add("nameByType");
         return holding;
 
-        object? GetField(string fieldName) => impl
-            .GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?.GetValue(typeRegistry);
+        object? GetLayerMap(string propertyName) => layer!.GetType().GetProperty(propertyName)?.GetValue(layer);
 
         static Type? GetDefinitionType(object definition) =>
             (Type?)definition.GetType().GetProperty("Type")?.GetValue(definition);

@@ -1,0 +1,3 @@
+Vendored from https://github.com/yaml/yaml-test-suite, tag data-2022-01-17 (the generated "data" release).
+Per case only in.yaml, in.json, error and === (renamed "name") are kept. MIT licence: see LICENSE.
+Read by YamlTestSuiteConformanceTest; see Doc/Architecture/TolerantYaml for the results and the reasoned exceptions.

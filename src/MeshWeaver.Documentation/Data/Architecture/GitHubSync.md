@@ -674,7 +674,7 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    Note the transport split this enables: bulk push/fetch goes over the **git protocol**
    (`GitProtocolRepoClient`), because the REST path cost one request *per file* and a single
    large-repo sync exhausted the App installation's hourly rate budget. Refs, PRs and issues
-   stay on the Octokit REST client.
+   stay on the GitHub REST client (see "The GitHub REST transport" below).
 
    **Installation tokens live one hour, and the cache refreshes at subscription time.**
    `GitHubAppTokenService.GetInstallationToken()` returns a *deferred* observable: every
@@ -706,8 +706,8 @@ Server configuration for GitHub Sync — the first two are required, the rest op
    Why the distinction has to be carried by a TYPE rather than a message: a consumer may
    legitimately degrade to an anonymous fetch when no token can be minted — the Store's
    package feed does, because a public source must keep working — and the *next* thing that
-   happens is GitHub refusing the private repositories, which Octokit reports as
-   `AuthorizationException: Bad credentials`. That sentence is about a credential that was
+   happens is GitHub refusing the private repositories, which the REST client reports as
+   `GitHubAuthorizationException: Bad credentials`. That sentence is about a credential that was
    presented and judged. Read against a credential that was never issued it sends the reader
    to the installation's repository permissions, which are fine, and away from the private key
    or the installation, which are not (#4736 — four days of identical five-minute reports).
@@ -717,9 +717,9 @@ Server configuration for GitHub Sync — the first two are required, the rest op
 
    Two things that follow, and neither is obvious from a log:
 
-   - **An empty token means anonymous, not "a bad token".** `OctokitGitHubRepoClient.Client`
-     builds a credential-free client for an empty string (Octokit's `new Credentials("")`
-     throws), so an anonymous read of a *private* repository answers **404**. A **401** on a
+   - **An empty token means anonymous, not "a bad token".** The REST client sends no
+     `Authorization` header at all for an empty string, so an anonymous read of a *private*
+     repository answers **404**. A **401** on a
      private source therefore means a token was presented — the mint succeeded and the
      credential is the problem. The empty-token downgrade cannot produce a 401.
    - **The Store's own degradation is not in this repository.** `StoreManifestSource.Token()`
@@ -730,6 +730,71 @@ Server configuration for GitHub Sync — the first two are required, the rest op
 
 All GitHub HTTP and serialization run through the controlled I/O pool — see
 [ControlledIoPooling.md](/Doc/Architecture/ControlledIoPooling).
+
+### The GitHub REST transport
+
+Everything that is not bulk git transfer — repository lookup and creation, refs, the Git Data
+calls of the REST push path, compare, issues, pull requests, reviews and check runs — goes
+through `OctokitGitHubRepoClient` over `GitHubRestApi`: one `HttpClient`, System.Text.Json with
+GitHub's snake_case names, and wire records holding exactly the fields the client reads or
+writes. It replaced Octokit / Octokit.Reactive in the code (the bare Octokit package reference stays for one cycle — see "Removing the transitional Octokit reference" below); the type kept its name because
+satellite repositories construct it, resolve it from DI and call `ParseRepoUrl` by it.
+
+What the transport guarantees, because callers depend on it:
+
+| Concern | Behaviour |
+|---|---|
+| Headers | `User-Agent: MeshWeaver`, `Accept: application/vnd.github+json`, `X-GitHub-Api-Version: 2022-11-28`, `Authorization: token <token>`; **no** `Authorization` for an empty token (anonymous). |
+| Redirects | Followed by the transport, up to four hops: the method is kept (a 303 becomes a body-less GET) and the credential is sent only to the configured API origin — scheme, host AND port compared, decided per request — so a redirect to `http://`, to another port or to another host, and an absolute pagination `Link` naming another host, all go without it. `HttpClient`'s own redirect following strips `Authorization` on every hop — a renamed private repository (GitHub answers its old name with a 301) would read as 404 — so the default client is built with `AllowAutoRedirect = false`, and DI constructs the client explicitly rather than letting a container inject an `HttpClient`. |
+| Pagination | Listings (issues, pull requests, comments, reviews, check runs) request `per_page=100` and follow `Link: rel="next"` to the last page. Compare is one response, which is what the 300-file cap reasoning needs. |
+| Branch lookup | `GET git/ref/heads/{branch}` — the exact-match endpoint. The plural `git/refs/…` Octokit called answers an array when the name is only a prefix of other branches. |
+| Errors | A non-success status is a `GitHubApiException` carrying the status and GitHub's own `message`. A transport fault stays the `HttpRequestException` `HttpClient` threw. |
+
+| Status | Exception |
+|---|---|
+| 401 | `GitHubAuthorizationException` |
+| 403 | `GitHubRateLimitExceededException` when `x-ratelimit-remaining: 0` or the message names a rate limit; otherwise `GitHubForbiddenException` |
+| 404 | `GitHubNotFoundException` |
+| 422 | `GitHubValidationException` (with the raw `errors` array) |
+| 429 | `GitHubRateLimitExceededException` |
+| anything else (409 "Git Repository is empty.", 405 not mergeable, 5xx) | `GitHubApiException` with the status |
+
+🚨 `GitHubApiException` deliberately does **not** derive from `HttpRequestException`: generic
+classifiers treat that type as a transport fault worth retrying, and a GitHub 404 or 422 is an
+answer, not a network failure — Octokit's exceptions never reached those classifiers either.
+Classify by `StatusCode` or by the derived type, never by message text. The request shape of
+every endpoint and every row of the mapping are pinned by `GitHubRestTransportTest`
+(`MeshWeaver.Hosting.Test`) against a recorded-answer HTTP handler.
+
+#### Removing the transitional Octokit reference
+
+No core code uses Octokit, yet `MeshWeaver.GitSync.csproj` still carries
+`<PackageReference Include="Octokit" />`, and `Directory.Packages.props` still pins it. That is
+deliberate, for one cycle, so the platform image keeps carrying `Octokit.dll`:
+
+- **Already-deployed module bundles bind the image's copy.** MeshWeaver.Plugins' Observability
+  module (`LogIncidentFiler.IsNotFound`) names `Octokit.ApiException`. It reached Octokit only
+  through the `MeshWeaver.GitSync` project reference, and a bundle's closure does not follow
+  `MeshWeaver.*` references ([Module Closure Accounting](../ModuleClosureAccounting)), so its
+  bundle does not carry the DLL. 🚨 **The [module link gate](../ModulePlatformLinkGate) would not
+  hold a roll for it.** A referenced assembly that neither the platform nor the bundle carries is
+  reported as unchecked, not refused (`ModulePlatformLink` → `UncheckedAssemblies`). Package
+  verdicts are advisory for a platform roll anyway (policy
+  `platform-rolls-independently-of-packages`). An image without Octokit would therefore roll and
+  then throw `FileNotFoundException` inside that module.
+- **MeshWeaver.Plugins compiles against Octokit transitively** until it is ported to
+  `GitHubApiException` (MeshWeaver.Plugins#4206).
+
+One transitional internal overload rides with the reference: `OctokitGitHubRepoClient.IsMissingOrEmptyRepo(Octokit.ApiException)` serves Plugins' `EmptyRepoToleranceTest` (an `InternalsVisibleTo` caller) until #4206 ports it.
+
+**Remove the reference, the overload and the `PackageVersion` line in one core PR, and only when BOTH hold:**
+
+1. MeshWeaver.Plugins#4206 has merged, so nothing in Plugins names an Octokit type, and
+2. the Observability bundle has been rebuilt from that code, against a platform set built after
+   #4206 merged, and is the generation the instances have adopted.
+
+Before removing it, re-check every satellite for Octokit type names (a repository-wide search for
+`Octokit`). A satellite that names one needs the same port first.
 
 ---
 

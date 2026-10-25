@@ -1,4 +1,5 @@
-﻿using System.ComponentModel.DataAnnotations;
+﻿using System.Collections.Immutable;
+using System.ComponentModel.DataAnnotations;
 using System.Linq.Expressions;
 using System.Reflection;
 using MeshWeaver.Domain;
@@ -10,14 +11,19 @@ namespace MeshWeaver.Messaging.Serialization;
 /// <summary>
 /// Builds a <see cref="KeyFunction"/> that extracts an entity's identity from a type.
 /// Applies an ordered set of factories — a property marked with [Key], then a property
-/// named "id", then one named "systemname" — and supports registering additional
-/// factories. Used to derive the "$id" key when serializing entities across the mesh.
+/// named "id", then one named "systemname", then the tuple of the [Dimension] properties — and
+/// supports registering additional factories. Used to derive the "$id" key when serializing
+/// entities across the mesh.
+///
+/// <para>A registry's builder chains to its parent registry's: the conventions are the same for every
+/// builder, and an additional factory registered on a builder applies to the definitions of that
+/// builder and of every builder below it — never above. So a definition the parent built is the one
+/// a child would build, unless the child registered factories of its own.</para>
 /// </summary>
 public class KeyFunctionBuilder
 {
-    // The CONVENTIONS, in order: a property marked [Key], then one named "id", then one named
-    // "systemname" (both case-insensitive). Immutable and identical for every builder, so a registry
-    // can tell — from the CLR type alone — whether they decide a type's key (HasConventionalKey).
+    // The single-property CONVENTIONS, in order: a property marked [Key], then one named "id", then one
+    // named "systemname" (both case-insensitive). Immutable and identical for every builder.
     private static readonly Func<PropertyInfo, bool>[] Conventions =
     [
         p => p.HasAttribute<KeyAttribute>(),
@@ -26,19 +32,43 @@ public class KeyFunctionBuilder
     ];
 
     // One factory per convention, built once (declared after Conventions: static initializers run
-    // in textual order). Immutable; every builder starts from them.
+    // in textual order), then the dimension tuple. Immutable; every builder starts from them.
+    //
+    // The dimension tuple is a convention, not a factory a DataContext adds: it depends on the CLR type
+    // alone, so it is the same in every hub. Registered per DataContext it made every data hub's builder
+    // differ from its parent's, so no data hub could resolve a definition through its parent.
     private static readonly Func<Type, KeyFunction?>[] ConventionFactories =
-        Conventions.Select(convention => (Func<Type, KeyFunction?>)(type =>
-            GetFromProperty(type, type.GetProperties().SingleOrDefault(convention)))).ToArray();
+    [
+        .. Conventions.Select(convention => (Func<Type, KeyFunction?>)(type =>
+            GetFromProperty(type, type.GetProperties().SingleOrDefault(convention)))),
+        type => GetFromProperties(type, type.GetProperties().Where(p => p.HasAttribute<DimensionAttribute>()).ToArray()),
+    ];
 
-    private readonly List<Func<Type, KeyFunction?>> factories = [.. ConventionFactories];
+    private readonly KeyFunctionBuilder? parent;
+
+    // The factories registered on THIS builder, after the conventions. Replaced, never mutated.
+    private ImmutableList<Func<Type, KeyFunction?>> ownFactories = ImmutableList<Func<Type, KeyFunction?>>.Empty;
+
+    /// <summary>Creates a builder with the conventions only.</summary>
+    public KeyFunctionBuilder()
+    {
+    }
+
+    /// <summary>Creates a builder that consults <paramref name="parent"/>'s factories after its own.</summary>
+    /// <param name="parent">The parent registry's builder, or null.</param>
+    internal KeyFunctionBuilder(KeyFunctionBuilder? parent) => this.parent = parent;
+
+    /// <summary>Whether factories were registered on this builder itself.</summary>
+    internal bool HasOwnFactories => !Volatile.Read(ref ownFactories).IsEmpty;
+
+    /// <summary>Whether factories were registered on this builder or on any builder it chains to.</summary>
+    internal bool HasFactoriesInChain => HasOwnFactories || parent?.HasFactoriesInChain == true;
 
     /// <summary>
-    /// Whether the built-in conventions alone decide the key of <paramref name="type"/>: the first
-    /// convention any property matches is matched by exactly one property. Then every builder yields
-    /// the same key function for the type whatever factories it was given on top — those are only
-    /// consulted after the conventions — so two registries' definitions of the type are equivalent.
-    /// False when no convention matches, or when the first one that matches is ambiguous.
+    /// Whether the conventions alone decide the key of <paramref name="type"/>: the first single-property
+    /// convention any property matches is matched by exactly one property, or no such convention matches
+    /// and the type has [Dimension] properties. Then every builder yields the same key function for the
+    /// type, whatever factories it was given on top.
     /// </summary>
     /// <param name="type">The CLR type.</param>
     /// <returns>True when the conventions decide the key.</returns>
@@ -51,8 +81,16 @@ public class KeyFunctionBuilder
             if (matches > 0)
                 return matches == 1;
         }
-        return false;
+        return properties.Any(p => p.HasAttribute<DimensionAttribute>());
     }
+
+    /// <summary>The key from the factories registered on this builder itself, ignoring the parent's.</summary>
+    /// <param name="type">The CLR type.</param>
+    /// <returns>The key function, or null.</returns>
+    internal KeyFunction? GetOwnFactoryKey(Type type) =>
+        Volatile.Read(ref ownFactories).Select(f => f(type)).FirstOrDefault(f => f != null);
+
+    private KeyFunction? GetFactoryKey(Type type) => GetOwnFactoryKey(type) ?? parent?.GetFactoryKey(type);
 
     /// <summary>
     /// Builds a <see cref="KeyFunction"/> whose key is a tuple of the supplied properties
@@ -131,7 +169,8 @@ public class KeyFunctionBuilder
     /// <param name="elementType">The type whose key function is requested.</param>
     /// <returns>The first matching <see cref="KeyFunction"/>, or <c>null</c> if none applies.</returns>
     public KeyFunction? GetKeyFunction(Type elementType) =>
-        factories.Select(f => f(elementType)).FirstOrDefault(f => f != null);
+        ConventionFactories.Select(f => f(elementType)).FirstOrDefault(f => f != null)
+        ?? GetFactoryKey(elementType);
 
     /// <summary>
     /// Registers an additional key-function factory, appended after the built-in factories
@@ -139,6 +178,6 @@ public class KeyFunctionBuilder
     /// </summary>
     /// <param name="factory">A factory mapping a type to a <see cref="KeyFunction"/> (or <c>null</c> if it does not apply).</param>
     public void WithKeyFunction(Func<Type, KeyFunction?> factory)
-        => factories.Add(factory);
+        => ImmutableInterlocked.Update(ref ownFactories, list => list.Add(factory));
 
 }

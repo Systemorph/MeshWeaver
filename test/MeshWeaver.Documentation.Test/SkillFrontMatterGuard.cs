@@ -1,6 +1,7 @@
 using System.Text;
 using Xunit;
-using YamlDotNet.Serialization;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
@@ -21,6 +22,11 @@ namespace MeshWeaver.Documentation.Test;
 ///   <item>a bare <c> #</c> opens a comment, silently TRUNCATING the value at that point — this one
 ///     parses cleanly, so nothing anywhere complains.</item>
 /// </list>
+///
+/// <para>🚨 The parser runs in STRICT mode (<see cref="YamlParseOptions.StrictSpec"/>): these files
+/// are read by the coding harnesses, whose YAML readers follow the grammar, so the platform's own
+/// tolerance for a <c>": "</c> inside a value must not make this guard go green over a skill the
+/// harness would drop.</para>
 ///
 /// <para>The guard runs the real parser rather than pattern-matching the two known shapes, so a
 /// third way of breaking the document is caught the first time rather than after it ships. Quoting
@@ -94,8 +100,7 @@ public class SkillFrontMatterGuard
 
             try
             {
-                var parsed = new DeserializerBuilder().Build()
-                    .Deserialize<Dictionary<string, object>>(frontMatter);
+                var parsed = TolerantYaml.Parse(frontMatter, YamlParseOptions.StrictSpec) as JsonObject;
                 if (parsed is null || !parsed.ContainsKey("name"))
                     offenders.AppendLine($"  {path}: front matter parsed but has no 'name'.");
             }

@@ -7,8 +7,9 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using Xunit;
-using YamlDotNet.Core;
-using YamlDotNet.RepresentationModel;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using MeshWeaver.Yaml;
 using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
@@ -95,7 +96,7 @@ public class AutomationSwitchesReachTheConfigMapGuard
                 $"a record setting {key}: false must reach the pod — without a template line the "
                 + "ConfigMap omits it and the automation keeps running on its code default (ON)");
             data[key].Value.Should().Be("false", $"{key} must carry the record's value verbatim");
-            data[key].Style.Should().Be(ScalarStyle.DoubleQuoted,
+            data[key].IsString.Should().BeTrue(
                 $"{key} must render as a quoted string — ConfigMap data values are strings");
         }
     }
@@ -138,20 +139,26 @@ public class AutomationSwitchesReachTheConfigMapGuard
                 + "apply — rendering \"<nil>\" or \"\" would break the boolean binding");
     }
 
+    /// <summary>
+    /// One rendered ConfigMap value: its text as written, and whether YAML reads it as a STRING —
+    /// i.e. it was quoted (an unquoted <c>false</c> or <c>3</c> reads as a boolean or a number).
+    /// </summary>
+    internal sealed record ConfigMapValue(string? Value, bool IsString);
+
     /// <summary>Renders the portal ConfigMap with <paramref name="overlay"/> and returns its <c>data</c>; fails the test when helm refuses.</summary>
-    internal static Dictionary<string, YamlScalarNode> RenderConfigMapData(string? overlay)
+    internal static Dictionary<string, ConfigMapValue> RenderConfigMapData(string? overlay)
     {
         var (exitCode, stdout, stderr) = RenderConfigMap(overlay);
         exitCode.Should().Be(0, $"helm template must render the chart. stderr: {stderr}");
 
-        var yaml = new YamlStream();
-        yaml.Load(new StringReader(stdout));
-        yaml.Documents.Should().HaveCount(1, "--show-only renders exactly the portal ConfigMap");
-        var root = (YamlMappingNode)yaml.Documents[0].RootNode;
-        var data = (YamlMappingNode)root.Children[new YamlScalarNode("data")];
-        return data.Children.ToDictionary(
-            kv => ((YamlScalarNode)kv.Key).Value!,
-            kv => (YamlScalarNode)kv.Value,
+        var documents = TolerantYaml.ParseAll(stdout);
+        documents.Should().HaveCount(1, "--show-only renders exactly the portal ConfigMap");
+        var data = (JsonObject)documents[0]!["data"]!;
+        return data.ToDictionary(
+            kv => kv.Key,
+            kv => new ConfigMapValue(
+                TolerantYaml.ScalarText(kv.Value),
+                kv.Value?.GetValueKind() == JsonValueKind.String),
             StringComparer.Ordinal);
     }
 
