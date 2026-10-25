@@ -111,3 +111,22 @@ on the writer's node-stream mirror. The owner's three-way merge refuses a field 
 owner's value moved since the mirror's base, which is what makes the lease safe across replicas; a field the
 predicate only READS (a generation, a version, `Removed`) is not checked by the owner. Closing that needs an
 owner-side precondition on a cross-hub update, which the platform does not have yet.
+
+## What a provider adds beyond the sync
+
+A provider supplies an `IMailCopyFeed` (its account, its incremental changes, its attachments) and the engine does
+the rest. Three more things come from the engine, so the provider only maps copies to its own rows:
+
+- **Reading back.** `ServesFromCopy(owner)` answers the source once the backfill is done and only for the account
+  connected now (otherwise null, and the inbox reads live); `ReadInbox` pages the copy newest first and matches a
+  search against subject, sender, preview and body *before* it applies the bound; `StoredCopy` opens one message.
+- **Following the person's own Delete and Undo.** `FollowMove(owner, id, removed, askedAt)`: a Delete tombstones
+  the copy unless something newer already happened to it; an Undo asks the feed to read the message again
+  (`Reread`) and writes it back, inside the window only, stamped with when the person asked.
+- **Settling an event that lost.** When the sync's write is refused because a newer local action landed first, a feed
+  that can `Reread` lets the engine ask the mailbox for the message's present state and settle on it with a
+  compare-and-set on the revision (up to `MaxReconcileAttempts`); a feed that cannot has the event dropped.
+
+The engine's background paths declare System on the owner's behalf; the public surfaces (`Enable`, `Kick`, `Sync`,
+`ServesFromCopy`, `FollowMove`) are judged as the CODE that calls them by the in-mesh impersonation guard.
+
