@@ -323,7 +323,7 @@ are given.
 | # | Candidate | Measured per hub | Duplicated? | Fix shape | Est. saving per hub · ×600 · ×100k | Effort · risk |
 |---|---|---:|---|---|---|---|
 | 1 | **`ConcurrentDictionary` skeletons** (cross-cutting; overlaps rows 2–4) | 45.3 KB, 29.6 dicts, 60 % empty | Not duplicated, OVER-PROVISIONED: per-processor locks on maps a single-threaded hub writes, and maps that stay empty | (a) warn-once sets and leaf-only maps created lazily on first entry, or one mesh-scoped warn-once instance; (b) the rest `concurrencyLevel: 1` with a small capacity, or an immutable map where only the hub's own turn writes | ~31 KB (18 procs) / ~20 KB (6) · 18 / 12 MB · 3.1 / 2.0 GB | low per site, ~30 sites · low |
-| 2 | **Type registry** | 44.5 KB, 69 own `TypeDefinition`s | **Yes, three ways** (below) | Re-registering an equivalent type is a no-op. A keyless type shares the parent's definition when the registry adds no key provider of its own. The key cell is a field set once, not a `Lazy` with a closure | ~16 KB · 10 MB · 1.6 GB | low–medium · low–medium |
+| 2 | **Type registry** | 44.5 KB, 69 own `TypeDefinition`s | **Yes, three ways** (below) | Re-registering an equivalent type is a no-op. A keyless type shares the parent's definition when the registry adds no key provider of its own. The key cell is a field set once, not a `Lazy` with a closure, under two constraints the replacement must keep: the first key read does not change the definition's equality or hash, and concurrent first reads run the key provider exactly once (`ReadingTheKey_DoesNotChangeTheDefinitionsHash`, `ConcurrentFirstKeyReads_ResolveTheKeyFunctionOnce`) | ~16 KB · 10 MB · 1.6 GB | low–medium · low–medium |
 | 3 | **Serialization stack per hub** | 34.2 KB; 612 `JsonSerializerOptions` for 608 hubs; 5.4 polymorphic resolvers per hub | **Yes for `sync/` hubs**: they register a handful of stream types the host already resolves, and still build their own options, resolver and STJ metadata | A hub whose registry adds nothing the host does not resolve reuses the host's options. The general shape is options keyed by the registry's content | ~25 KB (83 % of hubs × ~30 KB) · 15 MB · 2.5 GB | high · high (wire format) |
 | 4 | **Handler rules and the delivery pipeline** | ~12.5 KB (40 `AsyncDelivery` delegates, 18 `DeliveryFilter`, 13 `MessageHandlerItem` per hub, plus closures) | Yes in shape: the same configuration lambdas build the same rules on every hub of a kind, each closing over its own hub | An immutable rule table per configuration, shared, with the hub passed in rather than captured | ~8 KB · 5 MB · 0.8 GB | high · medium |
 | 5 | **Loadable types per assembly** (`PolymorphicTypeInfoResolver.loadableTypesByAssembly`) | 3.7 KB (951 `RuntimeType[]` for 594 hubs) | **Yes**: an assembly's loadable types do not depend on the hub | One `ConditionalWeakTable<Assembly, Type[]>` instance per mesh, handed down from the root like `TypeDisplayMetadataCache` | ~3.7 KB · 2.2 MB · 370 MB | low · low |
@@ -346,7 +346,10 @@ are given.
   12,459 of them, and 239 node-hub types for 29,717 (about 300 per node hub).
 - **The key cell is four objects per definition**: a `Lazy<KeyFunction>`, its `LazyHelper`, a
   `Func<KeyFunction>` and the closure, about 168 bytes of the ~272 a definition costs. That is about
-  11.7 KB per hub.
+  11.7 KB per hub. Whatever replaces it keeps the two guarantees the `Lazy` gives today: the first
+  key read must not change the definition's equality or hash (a shared definition can sit in a hash
+  set while another hub reads its key), and concurrent first reads must run the key provider exactly
+  once. `HubRegistryInheritsEquivalentDefinitionsTest` pins both.
 
 **Correction to the #7082 reading:** `MeshWeaver.Messaging.AsyncDelivery` is a DELEGATE type: a
 handler rule (`public delegate IObservable<IMessageDelivery> AsyncDelivery(IMessageDelivery,
@@ -359,8 +362,12 @@ because it is local to `TypeRegistry`, and #7131's tests (`HubRegistryInheritsEq
 `TypeDisplayMetadataSharedAcrossHubsTest`) already pin the sharing semantics. Then row 3, the largest
 structural saving, because it removes most of the serialization line from 5 of every 6 hubs, though
 it needs a design for "this hub's registry adds nothing new". Rows 5 and 6 are small, safe and can
-ride along with row 2. Together rows 1–3 come to an estimated ~70 KB of the 145 KB per hub. That is
-an estimate from these readings, not a measurement; each fix re-runs this harness, before and after.
+ride along with row 2. The standalone estimates of rows 1–3 sum to ~72 KB of the 145 KB per hub, but they are
+**not additive**: row 1 counts the dictionary skeletons inside rows 2–4, and row 3 also counts
+serializer dictionaries that row 1 already shrinks or removes. The combined saving therefore lies
+between the largest single row (~31 KB) and that sum, and the incremental saving of each row after
+the ones before it was not calculated. These are estimates from these readings, not measurements;
+each fix re-runs this harness, before and after.
 
 #### Allocation churn: two sources the retained heap does not show
 
@@ -372,9 +379,16 @@ observers. The dump counts the observers: 311 after the 99 activations against 1
 subscribers per node activation**. Those are one `Workspace` (104), one `JsonSynchronizationStream`
 (99), one auto-detaching operator subscription (100), plus 6 synced queries and the two mesh-level
 caches. At production's ~2,568 activations, that is ~7,700 observers and about 62 KB copied on every
-hub start and every hub stop. Every commit also invokes all N handlers. The fix shape: fan out by
-path inside the feed, an immutable map from path to its handlers, so that a subscription copies only
-its own path's handlers and an event reaches only its path's subscribers. The kind filter stays.
+hub start and every hub stop. Every commit also invokes all N handlers. The fix shape: an OPT-IN
+exact-path channel inside the feed, an immutable map from path to its handlers, so that a
+subscription on it copies only its own path's handlers and an event reaches only its path's
+subscribers. It sits ALONGSIDE the existing global and kind-filtered subscriptions, which stay,
+because not every subscriber has one fixed path: a synced query's deletion fast-path
+(`SyncedQueryMeshNodes`) listens for deletions on every path, and a `Workspace` forwards changes
+for whichever mirrored owner paths it currently caches, not only its own hub's path. A workspace
+moving to the exact-path channel therefore has to register and unregister each mirrored path as
+its cache gains and drops it; anything that cannot name its paths up front stays on the global
+channel. The kind filter stays.
 
 **`CoffHeader`** (1.94 GiB sampled). `System.Reflection.PortableExecutable.CoffHeader` is allocated
 whenever a `PEReader` parses PE headers. The [allocation sampler](../WhichKindOfSilence) saw it in
