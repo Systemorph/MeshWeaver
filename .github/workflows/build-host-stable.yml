@@ -1,0 +1,211 @@
+name: Build host — build-stable follows the main-passed ceiling
+
+# 🔥 STANDING BUILD HOSTS — `build-stable` (Doc/Architecture/BuildHosts; MeshWeaver.Plugins
+# Hosting/StandingBuildHosts §2: "`build-stable` is rolled … until core's promoter exists: by the
+# daily full run, to the main-passed ceiling"). Until core's `stable` promoter exists, `stable` IS
+# the newest sealed set MeshWeaver.Plugins' own `main` has passed on (`resolve-platform.py
+# --passed-on-main`). Once a day that set is handed to build-stable exactly as `main-cd.yml`'s
+# `build-host-latest` hands the armed set to build-latest: a signed `build-host-update-available`
+# for channel `stable` through the control plane's inbox; the receiver never moves a channel
+# backwards and changes nothing unless the record's BuildHosts.Enabled is already true.
+#
+# 🚨 WHY THIS IS NOT A JOB OF main-cd.yml: the platform deploy reads no MeshWeaver.Plugins verdict
+# (policy `platform-module-deploy-separate`, held by test-cd-steps.py's separation guard), and the
+# main-passed ceiling IS a Plugins verdict. Here it decides only which set a build host runs, and
+# gates no platform roll.
+#
+# 🚨 A NO-OP UNTIL DECLARED: `.github/build-hosts.json` must say `enabled: true` AND list `stable` in
+# `channels`. Until then the job writes one summary line and uses no credential.
+
+on:
+  schedule:
+    - cron: "41 5 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-host-stable
+  cancel-in-progress: false
+
+jobs:
+  build-host-stable:
+    name: "Build host: hand the main-passed ceiling to build-stable (daily, record path)"
+    # The daily schedule only — `stable` is refused on any other trigger (build-host-announcement.py).
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      enabled: ${{ steps.build_host_stable.outputs.enabled }}
+      handed: ${{ steps.post.outputs.handed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/scripts
+            .github/control-instance.json
+            .github/build-hosts.json
+          sparse-checkout-cone-mode: false
+      - name: "The announcement can say no (self-test)"
+        run: python3 .github/scripts/build-host-announcement.py --self-test
+      - name: "Does this estate run build-stable?"
+        id: build_host_stable
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/build-host-announcement.py decide --channel stable --trigger "$GITHUB_EVENT_NAME" \
+            | tee -a "$GITHUB_OUTPUT"
+      - name: Not declared — say so and send nothing
+        if: steps.build_host_stable.outputs.enabled != 'true'
+        env:
+          WHY: ${{ steps.build_host_stable.outputs.why }}
+        run: |
+          echo "- build-stable: $WHY" >> "$GITHUB_STEP_SUMMARY"
+      # A gate never tests its own inputs: once build-stable is DECLARED, every credential it uses is
+      # asserted here and a missing one is RED, naming it — never a step that quietly does nothing.
+      - name: Assert the inputs exist (only once build-stable is declared)
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        env:
+          FLEET_READER_APP_ID: ${{ secrets.FLEET_READER_APP_ID }}
+          FLEET_READER_APP_PRIVATE_KEY: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          CONTROL_WEBHOOK_SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          CONTROL_WEBHOOK_URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+          missing=()
+          [ -n "$FLEET_READER_APP_ID" ]          || missing+=("secrets.FLEET_READER_APP_ID — the read-only fleet-reader App (needs Actions: read + Checks: read on MeshWeaver.Plugins)")
+          [ -n "$FLEET_READER_APP_PRIVATE_KEY" ] || missing+=("secrets.FLEET_READER_APP_PRIVATE_KEY")
+          [ -n "$AZURE_CLIENT_ID" ]              || missing+=("secrets.AZURE_CLIENT_ID — the OIDC identity that reads ACR")
+          [ -n "$CONTROL_WEBHOOK_SECRET" ]       || missing+=("secrets.CONTROL_WEBHOOK_SECRET — the control plane inbox's HMAC key")
+          [ -n "$CONTROL_WEBHOOK_URL" ]          || missing+=("vars.CONTROL_WEBHOOK_URL — the control plane's Hosting/PlatformBuilds inbox")
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::build-stable is declared but its inputs are missing:"; printf '  • %s\n' "${missing[@]}"; exit 1
+          fi
+      - name: A read token for MeshWeaver.Plugins' main runs (fleet-reader App)
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        id: reader
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.FLEET_READER_APP_ID }}
+          private-key: ${{ secrets.FLEET_READER_APP_PRIVATE_KEY }}
+          owner: Systemorph
+          repositories: MeshWeaver,MeshWeaver.Plugins
+          # What --passed-on-main reads: the repository's main runs, their jobs and annotations. A
+          # token request the App cannot satisfy fails HERE, naming the permission.
+          permission-actions: read
+          permission-checks: read
+      - name: "The main-passed ceiling (resolve-platform.py --passed-on-main)"
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        id: ceiling
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/resolve-platform.py --no-registry --passed-on-main Systemorph/MeshWeaver.Plugins \
+            || { echo "::error::the main-passed ceiling could not be read — the fleet-reader token needs Actions: read and Checks: read on MeshWeaver.Plugins (its main runs and their annotations). build-stable was NOT handed a set."; exit 1; }
+      - name: Ensure Azure CLI
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        run: command -v az >/dev/null || curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+      - name: Azure login (OIDC)
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: "Sign and POST build-host-update-available for build-stable"
+        if: steps.build_host_stable.outputs.enabled == 'true'
+        id: post
+        env:
+          URL: ${{ vars.CONTROL_WEBHOOK_URL }}
+          SECRET: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+          DEPLOYMENT: ${{ steps.build_host_stable.outputs.deployment }}
+          V_SET: ${{ steps.ceiling.outputs.set }}
+          CORE_SHA: ${{ steps.ceiling.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          case "$URL" in
+            https://*/api/hooks/Hosting/PlatformBuilds) ;;
+            *) echo "::error::vars.CONTROL_WEBHOOK_URL is not an https URL of a Hosting/PlatformBuilds inbox — refusing to sign anything to it"; exit 1 ;;
+          esac
+          [ -n "${V_SET:-}" ] || { echo "::error::the ceiling named no set — refusing to hand build-stable nothing"; exit 1; }
+          bash .github/scripts/acr-login.sh
+          resolve() {
+            local d
+            if d=$(docker buildx imagetools inspect "meshweaver.azurecr.io/$1:$V_SET" --format '{{json .Manifest.Digest}}'); then
+              printf '%s' "$d" | tr -d '"'
+            fi
+          }
+          TESTER_DIGEST=$(resolve mw-plugin-test)
+          PORTAL_DIGEST=$(resolve memex-portal-ai)
+          RUNNER_DIGEST=$(resolve mw-build-host)
+          BODY=$(python3 .github/scripts/build-host-announcement.py body --deployment "$DEPLOYMENT" --channel stable \
+            --version "$V_SET" --tester-image meshweaver.azurecr.io/mw-plugin-test --tester-digest "$TESTER_DIGEST" \
+            --portal-image meshweaver.azurecr.io/memex-portal-ai --portal-digest "$PORTAL_DIGEST" \
+            --runner-image meshweaver.azurecr.io/mw-build-host --runner-digest "$RUNNER_DIGEST" \
+            --core-sha "$CORE_SHA" --instance "$RUN_URL")
+          SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | sed 's/^.*= /sha256=/')
+          code=$(curl -sS -o "$RUNNER_TEMP/build-host-resp" -w '%{http_code}' --connect-timeout 10 --max-time 60 \
+            -X POST "$URL" -H 'Content-Type: application/json' \
+            -H "X-Hub-Signature-256: $SIG" --data "$BODY") || code=000
+          echo "POST $URL -> $code"; cat "$RUNNER_TEMP/build-host-resp" || true
+          verdict=$(tr -d '\n' < "$RUNNER_TEMP/build-host-resp" 2>/dev/null | sed -n 's/.*"signature"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+          case "$code" in
+            2*)
+              [ "$verdict" = verified ] || { echo "::error::the inbox stored the build-host event but did not VERIFY its signature (signature: '${verdict:-<none>}') — build-stable would not move"; exit 1; }
+              echo "- build-stable handed the main-passed ceiling \`$V_SET\` for record \`$DEPLOYMENT\`: STORED and signature-verified (HTTP $code). Not yet a roll — the record change is" >> "$GITHUB_STEP_SUMMARY"
+              echo "handed=true" >> "$GITHUB_OUTPUT"
+              ;;
+            000) echo "::error::could not reach the control plane's inbox — build-stable was NOT handed $V_SET"; exit 1 ;;
+            401) echo "::error::the inbox REFUSED the signature (HTTP 401) — build-stable was NOT handed $V_SET"; exit 1 ;;
+            *)   echo "::error::the inbox refused the build-host event (HTTP $code) — build-stable was NOT handed $V_SET"; exit 1 ;;
+          esac
+  # The REPORT is its own job (if: always()): a step inside the 15-minute job it monitors dies with
+  # that job on a timeout, and `failure()` excludes a cancellation. This job reads the operation's
+  # RESULT and its `handed` output: a failed or cancelled roll files (or comments on) the one open
+  # `build-host` issue; only an ENABLED, completed hand-over clears it (a disabled no-op is not a
+  # recovery — nothing was handed over). REST only: `gh issue …` is GraphQL, and a spent secondary
+  # quota must never swallow the one durable alert this scheduled run exists to file.
+  build-host-stable-report:
+    name: "Build host: report the build-stable roll (its own alert)"
+    needs: [build-host-stable]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - name: File, comment or close the build-host alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RESULT: ${{ needs.build-host-stable.result }}
+          ENABLED: ${{ needs.build-host-stable.outputs.enabled }}
+          HANDED: ${{ needs.build-host-stable.outputs.handed }}
+        run: |
+          set -euo pipefail
+          open=$(gh api "repos/$GITHUB_REPOSITORY/issues?labels=build-host&state=open&per_page=10" --jq '.[].number')
+          if [ "$RESULT" != success ] && [ "$RESULT" != skipped ] || { [ "$ENABLED" = true ] && [ "$HANDED" != true ]; }; then
+            body="build-stable's daily roll did not complete: [run ${GITHUB_RUN_ID}](${RUN_URL}) — result \`${RESULT}\`, handed \`${HANDED:-false}\`. The host keeps running its previous set; read the job's ::error:: line, or its timeout/cancellation (Doc/Architecture/BuildHosts)."
+            first=$(printf '%s\n' "$open" | head -n 1)
+            if [ -n "$first" ]; then
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$first/comments" -f body="$body" >/dev/null
+            else
+              gh label create build-host --repo "$GITHUB_REPOSITORY" --description "A standing build host's hand-over failed" \
+                --color D93F0B --force || echo "::warning::could not ensure the build-host label (continuing)"
+              url=$(gh api -X POST "repos/$GITHUB_REPOSITORY/issues" -f title="build-stable roll failed: run ${GITHUB_RUN_ID}" \
+                -f body="$body" -f 'labels[]=build-host' --jq .html_url)
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/${url##*/}/labels" -f 'labels[]=bug' -f 'labels[]=sev:M' >/dev/null \
+                || echo "::warning::could not stamp bug + sev:M on ${url} — the issue-taxonomy lane will name it"
+            fi
+            exit 0
+          fi
+          if [ "$ENABLED" = true ] && [ "$HANDED" = true ]; then
+            for n in $open; do
+              gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$n/comments" -f body="Recovered: build-stable was handed its set by [run ${GITHUB_RUN_ID}](${RUN_URL})." >/dev/null
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/$n" -f state=closed -f state_reason=completed >/dev/null
+            done
+          fi
