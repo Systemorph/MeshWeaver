@@ -197,7 +197,6 @@ number of failed calls.
 | control behind the newest build (`control-always-latest.yml`) | `control-lag` | `bug` `sev:M` |
 | the issue-text name scan could not check (`issue-text-names.yml`) | `issue-text-names-sentinel` | `bug` `sev:M` |
 | core main breaks a satellite's pin (`node-repo-platform-canary.yml`) | the caller's | `bug` `sev:M` |
-| the platform-pin bump lane is dead (`node-repo-platform-ref-bump.yml`) | `platform-pin-bump-failure` | `bug` `sev:M` |
 | the issue-taxonomy check did not pass (`issue-taxonomy.yml`) | `issue-taxonomy-sentinel` | `bug` `sev:M` |
 
 **And it is measured independently.** `.github/workflows/issue-taxonomy.yml` runs daily and goes RED

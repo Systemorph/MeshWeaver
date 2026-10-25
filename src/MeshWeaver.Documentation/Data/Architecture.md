@@ -228,6 +228,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Who Owns a Partition's Access Shape](PartitionAccessOwnership)
 - [Partition Ownership Resolution](PartitionOwnershipResolution) — the four create-path checks that ask whether a NodeType owns its partition, what one resolution costs for a type declared in mesh content, which of them share ONE view and which deliberately keeps its own, and how a nested instance of such a type is refused from the definition's durable row without activating the type's hub
 - [Protected Segments on a Public Partition](ProtectedSegmentsOnAPublicPartition) — a partition that is public except for one inbox cannot be expressed with `PublicRead`: the C# evaluator and the SQL projection resolve a deeper deny under it differently, so the segment reads by exact path and is absent from every listing. The grant shape both folds agree on, why a read cap is a blackout rather than a gate, and why the boot heal may never retire a deny it could not have written
+- [Secret Sealing](SecretSealing) — how an installation hands a secret to its control instance as ciphertext only: an ECDH P-256 + HKDF-SHA256 + AES-256-GCM envelope sealed to the control instance's published key, bound to the deployment and object, hostile input refused before decoding, and rotation that keeps every outgoing key for its own window
 - [Secure Development Framework](SecureDevelopmentFramework) — how production and development are separated when the platform is delivered into a client's own environment: a ringfenced client estate, a narrow interface, a consultant environment that never touches production data, and who approves what
 - [OWASP ZAP Scan — 3.0.0 (6 September 2026)](SecurityScan_3_0_0)
 - [OWASP ZAP Scan — Every Release](SecurityScanning)
@@ -261,6 +262,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Python Code Nodes](PythonCodeNodes)
 - [Script Execution — Try It](ScriptExecutionDemo)
 - [Sending Email](SendingEmail)
+- [The Opt-In Mail Copy](MailCopy) — the provider-neutral copy of a mailbox that lives in core: stored shapes, engine, attachment rules, and the per-installation, per-account switch
 
 ### UI
 
@@ -330,6 +332,7 @@ Each theme starts with its introductory page, followed by related architecture t
 - [The Build Process — compile and test as a dependency cascade](BuildProcess)
 - [What a Pull Request Rebuilds](BuildScopeNarrowing)
 - [The Build Server](BuildServer)
+- [Build Hosts](BuildHosts) — one warm host per release channel (`build-latest`, `build-stable`): the follow lane that streams a stage's log into the Actions log, the host runner, the build-host chart, and how core's CD hands build-latest each set it arms
 - [The Compile Program — State of Record](CompileProgramStateOfRecord)
 - [Content-Type Registration](ContentTypeRegistration)
 - [Import-Side Content Degradation](ImportSideContentDegradation) — the OTHER half: content degraded at IMPORT rather than at read. The `/health` `content-types` census cannot see it, because an import-degraded node holds a plain `MarkdownContent` whose `$type` resolves perfectly on every replica
@@ -405,6 +408,7 @@ Each theme starts with its introductory page, followed by related architecture t
 ### Reliability & wedges
 
 - **Start here:** [Error Propagation & Wedges](ErrorPropagationAndWedges) — drive wedges to 0
+- [Fault Classification](FaultClassification) — one classifier answers why work ended in an exception (cooperative cancel, timeout, scope or hub teardown, a transient fault of the transport, store or network, or a real fault); every older predicate is a forwarder onto it
 - [Which Kind of Silence](WhichKindOfSilence) — a quiet log has four causes with four owners; the liveness heartbeat that separates them, and the CPU sample and page snapshot that agreed with the wrong one
 - [Action-Block Wedge Prevention](ActionBlockWedgePrevention)
 - [Riding Out a ShuttingDown Address](RidingOutAShuttingDownAddress) — the one transient NACK, and the two axes a ride-out must bound separately
@@ -440,13 +444,14 @@ Each theme starts with its introductory page, followed by related architecture t
 - [Guards and Unknown States](GuardsAndUnknownStates)
 - [Mesh Admission](MeshAdmission)
 - [The Bake Gate Only Stalls a Roll](TheBakeGateOnlyStallsARoll) — a type that never built was read as a regression, a refused pod could not record the failure, and a restarted pod of the serving image refused itself until nothing served; a regression now needs a working build from another, older image, and an image that has served here never refuses itself
-- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on an Autofac `LifetimeScope` looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
+- [Disposed Scopes and Dying Hubs — one symptom, five roots](DisposedScopeAndDyingHubs) — every `ObjectDisposedException` on a disposed service scope looks identical in a log and comes from one of five unrelated roots; the discriminators, which are fixed, and the swept inventory of deferred resolve sites
 - [Enumerating from a Survivor](EnumeratingFromASurvivor) — a recycle derived its work THROUGH the hub it was tearing down, so only the synchronous prologue ran while that hub was whole and every asynchronous leg after it resolved from a closed scope; the cascade recycled 0 addresses while reading as its own success. Hoisting the resolve — the correction for this family — does NOT fix it when the service is scoped PER HUB, which is the companion clause to R3
 - [A Stale Index Row Confirms Itself](AStaleIndexRowConfirmsItself) — a torn-down partition leaves index rows behind, and the listing that would disprove one is answered by the same index, so absence is unaskable rather than merely unproven; the storage providers are the only independent witness, the answer is worth nothing unless it is asked BEFORE the work, and fail-open is the only safe direction
 - [Mesh Lifecycle — Build Up & Tear Down](MeshLifecycle)
 - [Address String Form](AddressStringForm) — an address has ONE string form, `host~path`, and it round-trips; `ToString()` rendered `path~host`, so a pod-hub key parsed back reversed with no error
 - [Ordered Route Channels — the FIFO Key Is (Destination, Stream)](OrderedRouteChannels) — a stream-routed address is a multiplexer, so keying the router's ordering FIFO on the destination serialised a whole process's data-sync traffic into one lane with one in-flight cross-silo grain call; 62 of 64 dispatch slots queued behind one cache hub for 1.5 h while the peer pod's local lane read as load, and the identity that separates the streams was already stamped on the envelope
 - [Pod-Hub Delivery — the Transport Swap and its Roll Plan](PodHubDeliveryRollPlan)
+- [Hub Service Layers](HubServiceLayers) — MeshWeaver's own DI container, `MeshServiceProvider`: a hub level holds only its own descriptors and the instances it built; a parent's scoped service resolved in a hub gets the hub's dependencies; module types answered by a registration source; per-instance locks, no process-static cache (replaced Autofac, MeshWeaver#7145)
 - [The Portal Heap Is Hubs](PortalHeapIsHubs)
 - [Per-Process Infrastructure Hubs](PerProcessInfrastructureHubs) — a hub that exists once per process is addressed `portal/{role}-{meshId}`, under a type the router carries to that process; why the activity-tracking hub left `activity/_tracking`
 - [SignalR Mesh Participant — joining the mesh over a WebSocket](SignalRMeshParticipant)
@@ -533,11 +538,12 @@ Each theme starts with its introductory page, followed by related architecture t
 - [NuGet Package Retirement](NuGetPackageRetirement) — two packages survive (the Aspire integration and the `dotnet new` template) and the other forty-three are unlisted; what unlisting does and does not break, the derived retirement sweep, and the ground rule that startup dependencies become Aspire options rather than new packages
 - [Repository Dependency Direction](RepositoryDependencyDirection) — the platform never depends on a plugin repo; the inventory of every edge that still does
 - [The Cross-Repo Pair Gate](CrossRepoPairGate) — a removal here reds a plugin repo's trunk hours later; the deleting half lands LAST; and the REQUIRED dependent-suites verdict runs the Plugins suites a diff can reach against the candidate (a measured break merges only when declared)
-- [One Promotion Gate](OnePromotionGate) — the one PR-side wait is the affected-only Plugins verdict (policy `dependent-suites-affected-gate`); always build the newest green core with the newest Plugins, and arm the fleet on the platform verdict (the arming mechanics: cursor, completion marker, resume, base)
+- [One Promotion Gate](OnePromotionGate) — a core merge waits on no other repository (policy `dependents-verify-on-their-side`); always build the newest green core with the newest Plugins, and arm the fleet on the platform verdict (the arming mechanics: cursor, completion marker, resume, base)
 - [Platform and Module Deploy](PlatformAndModuleDeploy) — two separate deliveries: every platform build goes to control first and the fleet only after control runs it; modules publish and auto-update on their own lanes; the alarm that keeps control on the latest build; what was measured and removed
 - [Paired Change Sets](PairedChangeSets) — pair a core and a Plugins pull request so the two are built and tested together before either merges
 - [Platform Script Resolution](PlatformScriptResolution) — a repo runs the platform's gate scripts, never a copy; the local runner must resolve the ref the LANE resolves, which is per-script, so a loader copied from another repo refuses on every call (one repo demands one lane sha, another pins four and the pin gate calls that consistent)
 - [The CI REST Budget](CiRestBudget) — every REST call a satellite's CI makes with `github.token` spends one per-repository budget (1,000/hour); the lanes' per-file script fetches were the largest consumer, so they read core over git now, the stage-advance listener stopped answering every reply twice, and each job prints the budget it has left
+- [The Shared GitHub REST Client](SharedGitHubRestClient) — the CI scripts read GitHub through one module, `ghrest.py`, which keeps the bearer token on GitHub's origin when an artifact or log read redirects to signed storage (stock urllib forwards it, measured); which scripts carried the leaking shape, why `resolve-platform.py` keeps its own client, and how a one-file-at-a-time lane carries the module along
 - [A Stale Run Listing Is Not a Broken Main](StaleRunListingRefusals) — GitHub serves the platform resolver a weeks-old page of workflow runs, per call and with no error (three measured); why only one of the two listings can be checked, why neither retries, and the refusal wording that sent two readers at a `main` that was fine
 - [Keeping the Platform Source Pin Current](PlatformRefBumpLane) — a satellite pins WHICH core commit its `src/` compiles against, the image set had a mover and the source ref had none, and a bump PR opened with `GITHUB_TOKEN` is a PR no CI ever runs
 - [Transitional Allow Entries](TransitionalAllowEntries) — an allow entry is written for ONE merge and expires with it by mechanism; the instruction that was ignored once cost every C#-touching PR in the fleet ~40 minutes of red

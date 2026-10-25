@@ -282,7 +282,7 @@ public sealed class ModuleLiveUpdater : IDisposable
                 if ((dependent.Contributions?.LiveUpdateBlockers() ?? UnrecordedContributions) is { IsEmpty: false } blocked)
                     return Observable.Return(Refused(Restart(name, old.Location, target, $"its dependent {dependent.Name}", blocked)));
 
-            return pool.InvokeBlocking(_ => LoadAndCommit(name, old, target))
+            return pool.InvokeBlocking(ct => LoadAndCommit(name, old, target, ct))
                 .SelectMany(plan => plan.Outcome is { } refused
                     ? Observable.Return(Refused(refused))
                     : HandOver(plan).Select(_ => new Prepared(null, name, plan))
@@ -313,9 +313,16 @@ public sealed class ModuleLiveUpdater : IDisposable
 
     /// <summary>Steps 1–3, on the file-system pool: load, materialise, refuse or commit — the module
     /// and its dependents together, all rolled back on any failure.</summary>
-    private SwapPlan LoadAndCommit(string name, ModuleGeneration old, string target)
+    /// <remarks>
+    /// 🚨 <paramref name="ct"/> is the pool's token. Until <c>CommitAll</c> nothing staged is current,
+    /// so every step before it is a safe place to stop: a cancel there discards what was staged
+    /// (exactly what a refusal does) and throws <see cref="OperationCanceledException"/>, and N keeps
+    /// serving. The commit itself is one step and is never cut; once it has run the swap is finished.
+    /// </remarks>
+    private SwapPlan LoadAndCommit(string name, ModuleGeneration old, string target, CancellationToken ct)
     {
         var refused = new SwapPlan(null, [], [], old.Location, target);
+        ct.ThrowIfCancellationRequested();
 
         // The SAME link probe boot runs before a load (MeshBuilder.TryLoad), fail-CLOSED: MayLoad is
         // true for Linkable alone, so a probe that could not be made is never read as one that
@@ -332,6 +339,7 @@ public sealed class ModuleLiveUpdater : IDisposable
         // could still fail, and the rollback then unloaded a generation requests had been routed to,
         // bypassing the quiescence wait. Nothing staged is ever routed to, so a refusal at any step
         // unloads with nothing to wait for.
+        ct.ThrowIfCancellationRequested();
         var stage = new ModuleSwapStage();
         ModuleGeneration fresh;
         try
@@ -343,6 +351,11 @@ public sealed class ModuleLiveUpdater : IDisposable
             return refused with { Outcome = Fail(name, old.Location, target, $"N+1 did not load: {ex.GetType().Name}: {ex.Message}") };
         }
 
+        if (ct.IsCancellationRequested)
+        {
+            contexts.Discard(fresh);
+            ct.ThrowIfCancellationRequested();
+        }
         ModuleContributions contributions;
         try
         {
@@ -380,6 +393,7 @@ public sealed class ModuleLiveUpdater : IDisposable
             // binds the module's STAGED new generation: the only way a bound type identity can move.
             foreach (var dependent in dependents)
             {
+                ct.ThrowIfCancellationRequested();
                 var reloaded = contexts.LoadStaged(dependent.Location, stage);
                 stage.Add(reloaded);
                 var reloadedContributions = ModuleContributions.Of(reloaded.Assembly, configuration);
@@ -389,6 +403,13 @@ public sealed class ModuleLiveUpdater : IDisposable
                 serving = serving.Add(reloaded);
                 retiring = retiring.Add(dependent);
             }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The pool's cancel, not a dependent that failed to re-bind: discard the stage, as a
+            // refusal does, and end the swap as cancelled.
+            contexts.DiscardStaged(stage);
+            throw;
         }
         catch (Exception ex)
         {
@@ -405,6 +426,12 @@ public sealed class ModuleLiveUpdater : IDisposable
         // nothing else (#6432). One that throws refuses the swap: nothing was made current, N keeps
         // serving, and the staged generations are unloaded with their partly-built containers.
         foreach (var generation in serving)
+        {
+            if (ct.IsCancellationRequested)
+            {
+                contexts.DiscardStaged(stage);
+                ct.ThrowIfCancellationRequested();
+            }
             if (contexts.BuildBeforePublish(generation) is { } notBuilt)
             {
                 contexts.DiscardStaged(stage);
@@ -414,7 +441,14 @@ public sealed class ModuleLiveUpdater : IDisposable
                         $"{generation.Name}'s shared instances could not be built before the swap commits: {notBuilt}"),
                 };
             }
+        }
 
+        // The last place the swap can stop with nothing current.
+        if (ct.IsCancellationRequested)
+        {
+            contexts.DiscardStaged(stage);
+            ct.ThrowIfCancellationRequested();
+        }
         // The swap commits as ONE step: every reader of the generations sees all of N+1 or none of it.
         contexts.CommitAll(stage);
         return new SwapPlan(null, retiring, serving, old.Location, target);

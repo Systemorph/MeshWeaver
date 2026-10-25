@@ -393,8 +393,8 @@ function of the filter and the legs.
 > symbol and a switch. "N item(s) needing you are hidden by the source filter" is one quiet line with a Show all
 > action that clears Only and switches every source on.
 >
-> Kinds, states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
-> (`kinds/{key}`, `states/{key}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
+> Kinds, per-kind states, sources and "Show ignorable" are CHECKBOXES bound to the person's own `InboxPreferences` node
+> (`kinds/{key}`, `activityStates/{group}`, `mailStates/{group}`, `chatStates/{group}`, `sources/{key}`, `showIgnorable` — see "What the inbox shows by default" below), the
 > tags a bound list of `InboxTagItem`: the union of the ticked kinds or tags is listed, and none ticked lists all. A **State**
 > column (`InboxState`, read from the node's own status or implied by the leg that found it) badges each row:
 > Awaiting decision / Approved / Rejected / Expired for approvals, Requested / Running / Done / Failed / Cancelled
@@ -541,7 +541,7 @@ and ratifies, and the request leaves the inbox once its type files it away.
 
 *"Default only open approvals and important notifications … let's configure the category filter on the left freely."*
 The filters that persist are one node per person, `InboxPreferences` at `{user}/_Settings/Inbox` (the shape of
-the notification settings): `kinds`, `sources`, `states` (each `{key: bool}`), `account` and `showIgnorable`. The
+the notification settings): `kinds`, `sources`, `activityStates`, `mailStates`, `chatStates` (each `{key: bool}`), `account` and `showIgnorable`. The
 checkboxes are bound **directly to that node** (`LayoutAreaReference.GetMeshNodeDataContext`, per-field writes
 through the node stream — [DataBinding](/Doc/GUI/DataBinding)): there is no `/data` copy and no save subscription,
 so a tick is one write, the next open of the inbox finds it, and a change from another device re-feeds the grid
@@ -552,7 +552,26 @@ A person who never chose gets the node on first open, seeded with `InboxPreferen
 
 - **Kinds** — ticked: those whose legs say `InboxQueryLeg.DefaultKind` (Approvals and Notifications); every other
   kind is one tick away. Kinds and sources now **both** apply (a ticked kind used to replace the source switches).
-- **States** — only *Open*: an approval awaiting a decision, never one already decided, refused or retired as stale; *Done* is one tick away.
+- **States are per kind, never one shared list** (owner, 2026-10-25: *"emails should not count as Done — filters must be type specific"*; *"must be separate filters"*). Each kind owns its vocabulary, its stored field and its default:
+
+  | Kind (`InboxStateKind`) | Filter field | Groups | Default |
+  |---|---|---|---|
+  | Approvals and activities (`activity`) | `activityStates` | Open / Done | Open only: an approval awaiting a decision, never one already decided, refused or retired as stale |
+  | Mail (`mail`: Outlook, Gmail, copy-served alike) | `mailStates` | Unread / Read | both — a read mail is still listed and is never "done" |
+  | Conversations (`chat`: Teams, WhatsApp, iMessage, portal threads) | `chatStates` | Unread / Read | both |
+  | Notifications (`notification`) | none | important / ignorable (*Show ignorable*) | important only |
+
+  A leg declares its kind with `InboxQueryLeg.StateKind`; left empty, the kind its category implies applies
+  (`InboxStateKind.Resolve`: `Mail`, `Conversations`, `Notifications`, else activity), so a provider filing under those
+  categories is right without saying so, and a new provider with its own vocabulary names the kind it wants. The side panel
+  shows one group per kind, only while that kind is connected and enabled (ticked, or no kind ticked). A row answers only to the filter of ITS kind: a
+  read mail is not hidden by an activities filter that shows open items only, and ticking Done on activities touches no mail.
+  The triage buckets of mail (reply / act / working-on / waiting / fyi …) are the tag list and remain the primary
+  grouping beside these filters.
+- **Migration.** The retired global `states` choice maps to `activityStates` ONLY and is emptied once moved; `mailStates`
+  and `chatStates` start at their defaults. `InboxPreferencesNodeType.Effective` applies this on read and `Completed` writes it once
+  into the stored node (idempotent — a second pass finds nothing missing). Until 2026-10-25 the single global filter grouped a read
+  mail as *done* and hid it, so an owner with the old default saw an empty mail inbox and none of its triage buckets.
 - **Important notifications only.** A notification is `important` when it is a platform/system event and
   `ignorable` otherwise (`InboxRows.NotificationImportance`; a triage's own judgement wins), so the quiet ones stay
   out until *Show ignorable* is ticked, and the notice above the grid counts what it hides.

@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -76,7 +77,7 @@ public class NoConflictMarkersGuard
     [Fact]
     public void NoTrackedFileCarriesAnUnresolvedConflictMarker()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var tracked = TrackedFiles(root);
 
         // The guard's own input, asserted against a path that MUST exist rather than a count that
@@ -192,14 +193,5 @@ public class NoConflictMarkersGuard
             .Select(l => l.Trim())
             .Where(l => l.Length > 0)
             .ToList();
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (no .github directory found)");
-        return dir!.FullName;
     }
 }

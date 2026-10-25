@@ -374,7 +374,7 @@ pool-queued Rx subscribe** — `DisposalCompleted` covers the action blocks,
 cleanup. The item ran whenever the pool reached it. Measured on MeshWeaver.Plugins run
 `34222933802` (2026-09-08): all 11 disposed-scope stragglers captured across three suites
 were `MeshNodeStreamCache.GetQueryRaw`'s `Defer` resolving `cacheHub.GetWorkspace()` from an
-Autofac scope the mesh had already closed, the FutuRe pair 4 ms after `DISPOSE_DONE`
+service scope the mesh had already closed, the FutuRe pair 4 ms after `DISPOSE_DONE`
 ([the chain walk](/Doc/Architecture/DebuggingNativeCrashes)).
 
 **The rule.** A connection is owned by the object whose services the chain resolves, and
@@ -509,9 +509,9 @@ arm proving it was registered) and, at a converted site,
 Disposal is reactive and bounded, but it is not instantaneous — and **background
 producers don't observe the action block.** A `FileSystemWatcher`, a remote sync
 subscription, or a timer can fire a write *while the hub is tearing down*, after the
-Autofac `LifetimeScope` (the hub's `ServiceProvider`) has already been disposed. That
+the hub's service scope (its `ServiceProvider`) has already been disposed. That
 write used to crash the process: it reached `stream.Update` → `CaptureCallerAccessContext`
-→ `hub.ServiceProvider.GetService<AccessService>()` on a disposed scope → Autofac throws
+→ `hub.ServiceProvider.GetService<AccessService>()` on a disposed scope → the DI container throws
 `ObjectDisposedException` synchronously on the **producer's threadpool thread**, with no
 observer → xUnit `[FATAL ERROR]` / a prod `Catastrophic`. Three layers make this safe, in
 order of how early they stop the work:

@@ -1,6 +1,3 @@
-using System.Reflection;
-using Autofac;
-using Autofac.Core.Lifetime;
 using MeshWeaver.Fixture;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
@@ -13,17 +10,19 @@ namespace MeshWeaver.Graph.Test;
 /// built, and that module service needing a caller-scoped root service while IT is built, must both
 /// complete.</b>
 ///
-/// <para>Autofac builds a scope's shared instances under that scope's one shared-instance lock. The module
+/// <para>The container this replaced built a scope's shared instances under that scope's ONE lock. The module
 /// scope a caller owns is a scope of the MODULE container, and its root resolutions are made in the
-/// caller's own scope, so the two locks were taken in both orders: caller then module scope (a root service
-/// of the caller reaching the module), module scope then caller (the module service taking a root service
-/// of the caller not built yet). The fix gives the module scope its caller's lock — one lock owner — so
-/// the second build waits before it holds anything.</para>
+/// caller's own scope, so the two locks were taken in both orders and the two first builds deadlocked
+/// (until the module scope borrowed its caller's lock). <see cref="MeshServiceProvider"/> builds each shared
+/// instance under that instance's own lock: the module side waits only for the one instance it needs and
+/// the caller side holds, and the caller side for the one the module side holds — no lock covers both, so
+/// the overlap completes.</para>
 ///
 /// <para>Real containers, nothing mocked: a root built as the mesh builds it, a module container built by
 /// <see cref="ModuleServiceProvider"/>, and one caller scope. Each construction is held where it owns its
-/// lock until the other has arrived (or the meeting bound passes), so the two orders overlap whenever the
-/// locks allow it. The negative control is the same module scope with its own lock back — it deadlocks.</para>
+/// lock until the other has arrived (or the meeting bound passes); the test asserts the two constructions
+/// really were inside their builds AT THE SAME TIME — the interleaving that deadlocked under a scope-wide
+/// lock — so a pass cannot come from the two simply running one after the other.</para>
 /// </summary>
 public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
 {
@@ -35,7 +34,7 @@ public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
     {
         var mesh = new Mesh();
         using var caller = mesh.Root.CreateScope();
-        var callerScope = caller.ServiceProvider.GetRequiredService<ILifetimeScope>();
+        var callerScope = MeshServiceProvider.From(caller.ServiceProvider)!;
         mesh.Gate.Arm();
         var callerSide = new Worker("caller-scoped-root-service-reaches-the-module",
             () => caller.ServiceProvider.GetRequiredService<CallerNeedsModule>());
@@ -53,48 +52,14 @@ public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
             moduleSide.Join(JoinBound).Should().BeTrue("the module side then reads the instance the caller side built");
             callerSide.Fault.Should().BeNull();
             moduleSide.Fault.Should().BeNull();
+            mesh.Gate.Overlapped.Should().BeTrue(
+                "the module side entered its build while the caller side was still inside its own — the interleaving "
+                + "a scope-wide lock deadlocked on; without it this test would prove nothing");
             var built = ModuleServiceProvider.InCallerScope(mesh.Module, callerScope).GetRequiredService<ModuleNeedsCaller>();
             caller.ServiceProvider.GetRequiredService<CallerNeedsModule>().Module.Should().BeSameAs(built,
                 "both sides see the caller's one instance of the module's scoped service");
             built.Other.Should().BeSameAs(caller.ServiceProvider.GetRequiredService<OtherCallerService>(),
                 "its root dependency is the caller's own instance");
-        }
-        finally
-        {
-            callerSide.Abandon();
-            moduleSide.Abandon();
-        }
-    }
-
-    /// <summary>
-    /// The negative control: the SAME caller-owned module scope with its own lock back — the shape before
-    /// the fix — and the same two constructions in the same forced order. They deadlock, so the test above
-    /// can tell a deadlock from a pass.
-    /// </summary>
-    [Fact]
-    public void TheSameShape_WithTheModuleScopesOwnLock_Deadlocks()
-    {
-        var mesh = new Mesh();
-        var caller = mesh.Root.CreateScope();
-        var callerScope = caller.ServiceProvider.GetRequiredService<ILifetimeScope>();
-        var moduleScope = ModuleServiceProvider.InCallerScope(mesh.Module, callerScope).GetRequiredService<ILifetimeScope>();
-        typeof(LifetimeScope).GetField("_synchRoot", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .SetValue(moduleScope, new object());
-        mesh.Gate.Arm();
-        var callerSide = new Worker("caller-scoped-root-service-reaches-the-module",
-            () => caller.ServiceProvider.GetRequiredService<CallerNeedsModule>());
-        var moduleSide = new Worker("module-scoped-service-needs-the-caller",
-            () => ModuleServiceProvider.InCallerScope(mesh.Module, callerScope).GetRequiredService<ModuleNeedsCaller>());
-        try
-        {
-            callerSide.Start();
-            SpinWait.SpinUntil(() => mesh.Gate.CallerEntered, TestTimeouts.Convergence).Should().BeTrue();
-            moduleSide.Start();
-            SpinWait.SpinUntil(() => mesh.Gate.ModuleEntered, TestTimeouts.Convergence)
-                .Should().BeTrue("with two locks both constructions are inside their own lock at once");
-
-            callerSide.Join(JoinBound).Should().BeFalse("the caller's lock is held while the module scope's is awaited");
-            moduleSide.Join(TimeSpan.Zero).Should().BeFalse("the module scope's lock is held while the caller's is awaited");
         }
         finally
         {
@@ -122,7 +87,7 @@ public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
                 {
                     gate.CallerHolds();
                     return new CallerNeedsModule(ModuleServiceProvider
-                        .InCallerScope(holder.Module!, sp.GetRequiredService<ILifetimeScope>())
+                        .InCallerScope(holder.Module!, MeshServiceProvider.From(sp)!)
                         .GetRequiredService<ModuleNeedsCaller>());
                 })
                 .CreateMeshWeaverServiceProvider();
@@ -164,22 +129,30 @@ public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
         private int armed;
         private int callerEntered;
         private int moduleEntered;
+        private int overlapped;
 
         public bool CallerEntered => Volatile.Read(ref callerEntered) == 1;
         public bool ModuleEntered => Volatile.Read(ref moduleEntered) == 1;
 
+        /// <summary>Whether the caller side, inside its build, saw the module side inside its own.</summary>
+        public bool Overlapped => Volatile.Read(ref overlapped) == 1;
+
         public void Arm() => Volatile.Write(ref armed, 1);
 
-        public void CallerHolds() => MeetAt(ref callerEntered, () => ModuleEntered);
+        public void CallerHolds()
+        {
+            if (MeetAt(ref callerEntered, () => ModuleEntered))
+                Volatile.Write(ref overlapped, 1);
+        }
 
         public void ModuleHolds() => MeetAt(ref moduleEntered, () => CallerEntered);
 
-        private void MeetAt(ref int entered, Func<bool> other)
+        private bool MeetAt(ref int entered, Func<bool> other)
         {
             if (Volatile.Read(ref armed) == 0)
-                return;
+                return false;
             Volatile.Write(ref entered, 1);
-            SpinWait.SpinUntil(other, Meet);
+            return SpinWait.SpinUntil(other, Meet);
         }
     }
 
@@ -211,8 +184,8 @@ public sealed class CallerAndModuleScopedServicesBuildInOneLockTest
 
         public bool Join(TimeSpan bound) => thread.Join(bound);
 
-        /// <summary>A thread parked in <c>Monitor.Enter</c> is released by an interrupt, so a deadlock —
-        /// the negative control's, or a regression's — ends with the test instead of outliving it.</summary>
+        /// <summary>A thread parked in <c>Monitor.Enter</c> is released by an interrupt, so a deadlock — a
+        /// regression's — ends with the test instead of outliving it.</summary>
         public void Abandon()
         {
             if (thread.IsAlive)

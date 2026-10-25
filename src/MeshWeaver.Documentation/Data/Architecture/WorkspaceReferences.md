@@ -234,7 +234,7 @@ Each level can register a `PatchFunction` for write-back. Write-back travels the
 ### 🚨 An intermediate reduce is `ReduceShared`, never `Reduce`
 
 **Every level of that chain is a hub.** `WorkspaceStreams.CreateReducedStream` constructs a
-`SynchronizationStream`, which constructs a hosted `sync/{id}` sub-hub with its own Autofac lifetime
+`SynchronizationStream`, which constructs a hosted `sync/{id}` sub-hub with its own DI container lifetime
 scope, `TypeRegistry` and `JsonSerializerOptions` — about 140 KB — and then registers the child for
 disposal **on its parent**. So a reduce is neither free nor garbage-collectable: when the parent is a
 data source's primary `EntityStore` stream, whose lifetime is the hub's, every call to `Reduce` mints

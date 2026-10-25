@@ -259,13 +259,28 @@ public static class ModuleSetStore
     /// replica proposed, naming the winner. Never a reason to distrust the index.</param>
     public static ModuleSetIndex Read(
         string baseDirectory, Action<string>? onCorrupt, Action<string>? onNotice)
+        => ReadObservingToken(baseDirectory, onCorrupt, onNotice, CancellationToken.None);
+
+    /// <summary>
+    /// <see cref="Read(string, Action{string}?, Action{string}?)"/> from a pooled leaf:
+    /// <paramref name="cancellationToken"/> (the pool's) is checked before the listing, per listed
+    /// record while the listing is collected, and before each record it opens. A cancel propagates as
+    /// <see cref="OperationCanceledException"/> — never reported through <paramref name="onCorrupt"/>.
+    /// A DISTINCT name, so the bare <c>Read</c> <c>cref</c>s stay unambiguous.
+    /// </summary>
+    internal static ModuleSetIndex ReadObservingToken(
+        string baseDirectory, Action<string>? onCorrupt, Action<string>? onNotice,
+        CancellationToken cancellationToken)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var directory = SetsDirectory(baseDirectory);
         string[] files;
         try
         {
             files = Directory.Exists(directory)
-                ? [.. Directory.EnumerateFiles(directory, "*.json").OrderBy(f => f, StringComparer.Ordinal)]
+                ? [.. Directory.EnumerateFiles(directory, "*.json")
+                    .Select(f => { cancellationToken.ThrowIfCancellationRequested(); return f; })
+                    .OrderBy(f => f, StringComparer.Ordinal)]
                 : [];
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -313,19 +328,19 @@ public static class ModuleSetStore
             if (!read.Add(sequence) || !proposalFiles.TryGetValue(sequence, out var atSequence))
                 return;
             foreach (var file in atSequence)
-                if (TryRead<ModuleSet>(file, onCorrupt) is { } set && set.Generations is not null)
+                if (TryReadObservingToken<ModuleSet>(file, onCorrupt, cancellationToken) is { } set && set.Generations is not null)
                     Add(proposals, sequence, WithCaseInsensitiveGenerations(set));
         }
         // A hand-placed or foreign-named record keeps the old contract: read, then indexed by content.
         foreach (var file in unnamedProposals)
-            if (TryRead<ModuleSet>(file, onCorrupt) is { } set && set.Generations is not null)
+            if (TryReadObservingToken<ModuleSet>(file, onCorrupt, cancellationToken) is { } set && set.Generations is not null)
             {
                 Add(proposals, set.Sequence, WithCaseInsensitiveGenerations(set));
                 read.Add(set.Sequence);
             }
         var unnamedAdopted = new Dictionary<string, ModuleSetAdoption>(StringComparer.Ordinal);
         foreach (var file in unnamedAdoptions)
-            if (TryRead<ModuleSetAdoption>(file, onCorrupt) is { } foreign)
+            if (TryReadObservingToken<ModuleSetAdoption>(file, onCorrupt, cancellationToken) is { } foreign)
                 unnamedAdopted.TryAdd(Key(foreign.Sequence, foreign.Id), foreign with
                 {
                     Generations = foreign.Generations?.WithComparers(StringComparer.OrdinalIgnoreCase),
@@ -369,7 +384,7 @@ public static class ModuleSetStore
             var candidate = unnamedAdopted.GetValueOrDefault(Key(winner.Sequence, winner.Id));
             if (candidate is null
                 && adoptionFiles.TryGetValue(ShortKey(winner.Sequence, ShortId(winner.Id)), out var adoptionFile)
-                && TryRead<ModuleSetAdoption>(adoptionFile, onCorrupt) is { } readAdoption
+                && TryReadObservingToken<ModuleSetAdoption>(adoptionFile, onCorrupt, cancellationToken) is { } readAdoption
                 && string.Equals(readAdoption.Id, winner.Id, StringComparison.Ordinal))
                 candidate = readAdoption with
                 {
@@ -779,6 +794,15 @@ public static class ModuleSetStore
     /// legal file name.</summary>
     private static string ShortId(string id) =>
         string.IsNullOrEmpty(id) ? "empty" : id[..Math.Min(16, id.Length)];
+
+    /// <summary>The token check sits OUTSIDE <see cref="TryRead{T}"/>'s corruption catch, so a
+    /// cancel is never reported as an unreadable record.</summary>
+    private static T? TryReadObservingToken<T>(string file, Action<string>? onCorrupt, CancellationToken cancellationToken)
+        where T : class
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return TryRead<T>(file, onCorrupt);
+    }
 
     private static T? TryRead<T>(string file, Action<string>? onCorrupt) where T : class
     {

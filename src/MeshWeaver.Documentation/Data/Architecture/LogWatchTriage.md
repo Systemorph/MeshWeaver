@@ -1130,7 +1130,7 @@ each produced a steady ticket stream:
 |---|---|---|
 | **Cooperative cancellation** — the caller went away, a partition cleanup cascaded, the host is shutting down, the I/O pool drained | Nothing failed and nothing was written. `MeshWeaver.Mesh.CreateNode` logged 491 of these in three days (#2152); `MeshWeaver.Mesh.MeshNode` logged `[DeleteNode] unexpected … partial-deleted=0` (#2182) — a counter that says the node was never touched. | `CancellationClassifier.IsCooperativeCancellation` |
 | **A client that disconnected mid-stream** | gRPC finalises the request and answers the next write with `InvalidOperationException("Can't write the message because the request is complete.")`; the client is already gone (#2138 / #2139). | `MeshGrpcService.WritePumpAsync` |
-| **Hosted-hub creation that raced pod teardown** | A hub activates while its pod is stopping and the Autofac scope dies UNDER the build (`LifetimeScope.ThrowDisposedException`). Nothing failed, nothing was written, and the next access re-activates the node on a live host (#3243). | `HostedHubsCollection.CreateHub` → `HostedHubOutcome.HostShuttingDown` |
+| **Hosted-hub creation that raced pod teardown** | A hub activates while its pod is stopping and the service scope dies UNDER the build (an `ObjectDisposedException` from the closed scope). Nothing failed, nothing was written, and the next access re-activates the node on a live host (#3243). | `HostedHubsCollection.CreateHub` → `HostedHubOutcome.HostShuttingDown` |
 
 🚨 **The rule is narrow on purpose, and the exceptions to it are the point:**
 

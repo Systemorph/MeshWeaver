@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -49,7 +50,7 @@ public class PackableProjectReadmeTest
     [Fact]
     public void ExactlyTheDeclaredProjectsPack_AndEachCarriesAReadme()
     {
-        var root = FindRepositoryRoot();
+        var root = RepoPaths.TryFindRoot();
         Assert.SkipWhen(root is null,
             "repository tree not reachable from the test bin — this convention check runs in-repo only");
 
@@ -162,17 +163,5 @@ public class PackableProjectReadmeTest
         }
 
         return true;
-    }
-
-    private static string? FindRepositoryRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null)
-        {
-            if (File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-                return dir.FullName;
-            dir = dir.Parent;
-        }
-        return null;
     }
 }

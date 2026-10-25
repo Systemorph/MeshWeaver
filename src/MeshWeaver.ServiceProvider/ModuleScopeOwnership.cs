@@ -1,11 +1,6 @@
 #nullable enable
 using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
-using Autofac;
-using Autofac.Core;
-using Autofac.Core.Activators.Delegate;
-using Autofac.Core.Lifetime;
-using Autofac.Core.Resolving.Pipeline;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -43,19 +38,19 @@ public sealed class ModuleInstanceOwners
     /// <param name="owner">The scope that disposes it, or null when no scope a caller can see does (the
     /// module's generation owns it).</param>
     /// <param name="ownerName">How the owner is named in a report.</param>
-    public void Record(object instance, ILifetimeScope? owner, string ownerName)
+    public void Record(object instance, MeshServiceProvider? owner, string ownerName)
     {
         ArgumentNullException.ThrowIfNull(instance);
         // FIRST record wins: the container that BUILT the instance records it before any factory that
         // later returns the same object can (the build completes inside that factory's resolve). A factory
         // re-recording it would take over its owner and hide the very disposal this registry exists to name
         // (review of #7027).
-        owners.TryAdd(instance, new Owner(owner is null ? null : new WeakReference<ILifetimeScope>(owner), ownerName));
+        owners.TryAdd(instance, new Owner(owner is null ? null : new WeakReference<MeshServiceProvider>(owner), ownerName));
     }
 
     /// <summary>Whether <paramref name="instance"/> is a module-owned instance that
     /// <paramref name="scope"/> does not own; <paramref name="ownerName"/> names the owner when it is.</summary>
-    internal bool IsOwnedByAnotherThan(object instance, ILifetimeScope scope, out string ownerName)
+    internal bool IsOwnedByAnotherThan(object instance, MeshServiceProvider scope, out string ownerName)
     {
         ownerName = "";
         if (!owners.TryGetValue(instance, out var owner))
@@ -73,7 +68,7 @@ public sealed class ModuleInstanceOwners
     /// <summary>Whether <paramref name="key"/> was reported already.</summary>
     internal bool Reported(string key) => Volatile.Read(ref reported).Contains(key);
 
-    private sealed record Owner(WeakReference<ILifetimeScope>? Scope, string Name);
+    private sealed record Owner(WeakReference<MeshServiceProvider>? Scope, string Name);
 }
 
 /// <summary>
@@ -91,49 +86,44 @@ public static class ModuleScopeOwnership
     /// <summary>The stable prefix of every ownership diagnostic — what a log query matches.</summary>
     public const string Marker = "[ModuleScopeOwnership]";
 
-    /// <summary>
-    /// MeshWeaver#6588: watches every registration <paramref name="builder"/> makes that hands out a
-    /// FACTORY's result owned by the resolving scope. When such a factory returns an instance a module
-    /// owns (<see cref="ModuleInstanceOwners"/>), the resolving scope will dispose it when it ends — under
-    /// the owner — and the diagnostic is written as that scope begins to end. Reflection-activated and
-    /// provided-instance registrations build or hold their own instance, so they cannot transfer
-    /// ownership and are not watched; neither is a registration that is externally owned.
-    /// </summary>
-    /// <param name="builder">A container builder of a MeshWeaver container or scope.</param>
-    /// <param name="owners">The mesh's registry — captured here, never resolved during a resolve.</param>
-    internal static void WatchOwnershipTransfers(ContainerBuilder builder, ModuleInstanceOwners owners) =>
-        builder.ComponentRegistryBuilder.Registered += (_, e) =>
-        {
-            var registration = e.ComponentRegistration;
-            if (registration.Ownership != InstanceOwnership.OwnedByLifetimeScope
-                || registration.Activator is not DelegateActivator)
-                return;
-            registration.PipelineBuilding += (_, pipeline) =>
-                pipeline.Use(PipelinePhase.Activation, MiddlewareInsertionMode.StartOfPhase, (context, next) =>
-                {
-                    next(context);
-                    if (context.NewInstanceActivated && context.Instance is { } instance
-                        && instance is IDisposable or IAsyncDisposable)
-                        CheckTransfer(owners, context, instance);
-                });
-        };
+    internal static ILogger LoggerFrom(ILoggerFactory? factory) =>
+        factory?.CreateLogger(Category) ?? NullLogger.Instance;
+}
 
-    private static void CheckTransfer(ModuleInstanceOwners owners, ResolveRequestContext context, object instance)
+/// <summary>
+/// MeshWeaver#6588: watches every registration of a level that hands out a FACTORY's result owned by the
+/// resolving scope. When such a factory returns an instance a module owns (<see cref="ModuleInstanceOwners"/>),
+/// the resolving scope will dispose it when it ends — under the owner — and the diagnostic is written as that
+/// scope begins to end. Reflection-activated and provided-instance registrations build or hold their own
+/// instance, so they cannot transfer ownership and are not watched; neither is a registration that is
+/// externally owned.
+/// </summary>
+/// <param name="owners">The mesh's registry — captured here, never resolved during a resolve.</param>
+internal sealed class OwnershipTransferObserver(ModuleInstanceOwners owners) : IActivationObserver
+{
+    public void Activating(in Activation activation)
     {
-        var scope = context.ActivationScope;
+    }
+
+    public void Activated(in Activation activation, object instance)
+    {
+        var registration = activation.Registration;
+        if (registration.IsExternallyOwned || !registration.IsFactory || instance is not (IDisposable or IAsyncDisposable))
+            return;
+        var scope = activation.ActivationScope;
         if (!owners.IsOwnedByAnotherThan(instance, scope, out var ownerName))
             return;
         // Claimed when the scope ENDS, by registration alone (review of #7027): claimed at resolve, the first
         // scope to RESOLVE took the report and a scope ending before it disposed the instance silently; keyed
         // by the owner too, every caller tag was a new key — repeated lines and a key retained per circuit.
         // Once reported, later activations subscribe nothing, so a live defect costs no handler per circuit.
-        var key = $"6588|{context.Registration.Id}";
+        var key = $"6588|{RuntimeHelpers.GetHashCode(registration.Identity)}|{registration.ServiceType.FullName}";
         if (owners.Reported(key))
             return;
-        var service = context.Service.Description;
+        var service = registration.ServiceType.FullName;
         var instanceType = instance.GetType().FullName;
         var scopeTag = scope.Tag;
-        scope.CurrentScopeEnding += (_, _) =>
+        scope.Ending += (_, _) =>
         {
             if (owners.FirstReport(key))
                 owners.Logger.LogWarning(
@@ -141,12 +131,9 @@ public static class ModuleScopeOwnership
                     + "a registration owned by the resolving scope returned a module-owned instance, so a scope that "
                     + "does not own it disposes it under its owner and every other user of it (MeshWeaver#6588). "
                     + "Reported once per registration.",
-                    Marker, scopeTag, service, instanceType, ownerName);
+                    ModuleScopeOwnership.Marker, scopeTag, service, instanceType, ownerName);
         };
     }
-
-    internal static ILogger LoggerFrom(ILoggerFactory? factory) =>
-        factory?.CreateLogger(Category) ?? NullLogger.Instance;
 }
 
 /// <summary>
@@ -155,69 +142,64 @@ public static class ModuleScopeOwnership
 /// SCOPED instance that no caller owns, or one served to a caller that does not own it. Held by the
 /// container as an instance, never static; its entries are weak.
 /// </summary>
-internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwners? owners)
+internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwners? owners) : IActivationObserver
 {
     private readonly ConditionalWeakTable<object, ScopedOwner> scoped = new();
     private ImmutableHashSet<string> reported = ImmutableHashSet<string>.Empty;
 
-    /// <summary>Watches every shared registration of the module container <paramref name="builder"/>
-    /// builds, except the container's own infrastructure.</summary>
-    public void Watch(ContainerBuilder builder) =>
-        builder.ComponentRegistryBuilder.Registered += (_, e) =>
-        {
-            var registration = e.ComponentRegistration;
-            if (registration.Sharing != InstanceSharing.Shared
-                || registration.Ownership != InstanceOwnership.OwnedByLifetimeScope
-                || IsInfrastructure(registration.Activator.LimitType))
-                return;
-            registration.PipelineBuilding += (_, pipeline) =>
-                pipeline.Use(PipelinePhase.Activation, MiddlewareInsertionMode.StartOfPhase, (context, next) =>
-                {
-                    // Reported as the activation is ATTEMPTED (review of #7027): the defect's throwing shape —
-                    // DialogService over an uninitialised NavigationManager — never returns an instance.
-                    ReportIfBuiltForNoCaller(context.Registration, context.Service, context.ActivationScope);
-                    next(context);
-                    if (context.NewInstanceActivated && context.Instance is { } instance)
-                        Built(context.Registration, instance, context.ActivationScope);
-                });
-        };
+    private static bool Watched(ServiceRegistration registration) =>
+        (registration.IsSingleton || registration.IsScoped)
+        && !registration.IsExternallyOwned
+        && !IsInfrastructure(registration.ImplementationType ?? registration.ServiceType);
+
+    // Reported as the activation is ATTEMPTED (review of #7027): the defect's throwing shape —
+    // DialogService over an uninitialised NavigationManager — never returns an instance.
+    public void Activating(in Activation activation)
+    {
+        if (Watched(activation.Registration))
+            ReportIfBuiltForNoCaller(activation.Registration, activation.ServiceType, activation.ActivationScope);
+    }
+
+    public void Activated(in Activation activation, object instance)
+    {
+        if (Watched(activation.Registration))
+            Built(activation.Registration, instance, activation.ActivationScope);
+    }
 
     // The defect's own shape: a SCOPED registration built in the module container's ROOT scope is one
     // instance per generation, shared by every circuit, request and hub, and built against no caller.
-    private void ReportIfBuiltForNoCaller(IComponentRegistration registration, Service service, ILifetimeScope scope)
+    private void ReportIfBuiltForNoCaller(ServiceRegistration registration, Type service, MeshServiceProvider scope)
     {
-        if (registration.Lifetime is not CurrentScopeLifetime
-            || scope is not ISharingLifetimeScope sharing || !ReferenceEquals(sharing.RootLifetimeScope, sharing)
+        if (!registration.IsScoped
+            || !scope.IsContainerRoot
             || ModuleServiceProvider.CallerOfModuleScope(scope) is not null
-            || !FirstReport($"root|{registration.Id}"))
+            || !FirstReport($"root|{RuntimeHelpers.GetHashCode(registration.Identity)}|{service.FullName}"))
             return;
         logger.LogWarning(
             "{Marker} Module scoped service {Service} ({Implementation}) is being built in the module container's "
             + "root scope, which no caller owns — every circuit, request and hub resolving it there shares one "
             + "instance, built against no caller's NavigationManager or IJSRuntime (MeshWeaver#6584). "
             + "Reported once per registration.",
-            ModuleScopeOwnership.Marker, service.Description, registration.Activator.LimitType.FullName);
+            ModuleScopeOwnership.Marker, service.FullName, (registration.ImplementationType ?? service).FullName);
     }
 
-    private static bool IsInfrastructure(Type type) =>
-        type.Assembly == typeof(ModuleScopeDiagnostics).Assembly
-        || type.Assembly.GetName().Name?.StartsWith("Autofac", StringComparison.Ordinal) == true;
+    private static bool IsInfrastructure(Type type) => type.Assembly == typeof(ModuleScopeDiagnostics).Assembly;
 
-    private void Built(IComponentRegistration registration, object instance, ILifetimeScope scope)
+    private void Built(ServiceRegistration registration, object instance, MeshServiceProvider scope)
     {
         var caller = ModuleServiceProvider.CallerOfModuleScope(scope);
         if (instance is IDisposable or IAsyncDisposable)
             owners?.Record(instance, scope, caller is null ? $"module scope '{scope.Tag}'" : $"the module scope owned by '{caller.Tag}'");
-        if (registration.Lifetime is not CurrentScopeLifetime)
+        if (!registration.IsScoped)
             return;
         // FIRST record wins (review of #7027): a scoped factory answering one shared object to callers A then
         // B must keep A as the owner, so B being served it is reported rather than silently re-owned.
-        scoped.TryAdd(instance, new ScopedOwner(caller is null ? null : new WeakReference<ILifetimeScope>(caller), caller?.Tag?.ToString()));
+        scoped.TryAdd(instance, new ScopedOwner(caller is null ? null : new WeakReference<MeshServiceProvider>(caller), caller?.Tag?.ToString()));
     }
 
     /// <summary>Reports <paramref name="instance"/>, a module's scoped instance, when it is handed to
     /// <paramref name="caller"/> although another caller (or none) owns the module scope it was built in.</summary>
-    public void ServedTo(object instance, ILifetimeScope caller)
+    public void ServedTo(object instance, MeshServiceProvider caller)
     {
         if (!scoped.TryGetValue(instance, out var owner))
             return;
@@ -234,5 +216,5 @@ internal sealed class ModuleScopeDiagnostics(ILogger logger, ModuleInstanceOwner
 
     private bool FirstReport(string key) => ImmutableInterlocked.Update(ref reported, set => set.Add(key));
 
-    private sealed record ScopedOwner(WeakReference<ILifetimeScope>? Caller, string? Tag);
+    private sealed record ScopedOwner(WeakReference<MeshServiceProvider>? Caller, string? Tag);
 }

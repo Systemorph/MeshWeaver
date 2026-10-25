@@ -191,7 +191,7 @@ public class ContentRoute503DiscriminatorGuard(ITestOutputHelper output) : HubTe
     /// </summary>
     private static string WhatFromTheCallSite()
     {
-        var file = Path.Combine(SourceScan.FindRepoRoot(), CallSitePath.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(RepoPaths.Root, CallSitePath.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(file),
             $"🚨 {CallSitePath} is gone — this guard's subject moved and the guard did not. "
             + "Point it at the call site that now issues the collection-config read, or delete "
@@ -220,7 +220,7 @@ public class ContentRoute503DiscriminatorGuard(ITestOutputHelper output) : HubTe
 
     private static string ReadPage()
     {
-        var file = Path.Combine(SourceScan.FindRepoRoot(), PagePath.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(RepoPaths.Root, PagePath.Replace('/', Path.DirectorySeparatorChar));
         Assert.True(File.Exists(file),
             $"🚨 {PagePath} is gone. This guard exists to keep that page's instruction executable; "
             + "if the page moved, move the guard with it.");

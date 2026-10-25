@@ -63,7 +63,7 @@ public class DeadStreamSafetyTest(ITestOutputHelper output) : HubTestBase(output
         // 🚨 ARRANGE BEFORE THE HOST GOES DOWN, so the act is only the constructor this test is
         // about. `new ReduceManager<Empty>(host)` RESOLVES from the host's container, and a hub's
         // lifetime scope is closed once its disposal completes — so building it inside the Action
-        // threw Autofac's `ObjectDisposedException` from the ARRANGE, before the constructor ran at
+        // threw the container's `ObjectDisposedException` from the ARRANGE, before the constructor ran at
         // all, and the test reported it as the constructor refusing with the wrong exception type.
         // It only ever passed because nothing used to close that scope.
         var reduceManager = new ReduceManager<Empty>(host);

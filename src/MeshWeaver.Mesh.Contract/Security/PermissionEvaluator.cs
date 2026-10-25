@@ -146,7 +146,7 @@ internal static class PermissionEvaluator
         // AccessAssignment change — see Doc/Architecture/PermissionApi), while the hub's DI scope
         // is not: a hub deactivating, an area disposing or a pod rolling disposes that scope while
         // the fold is still subscribed, and a GetRequiredService inside the SelectMany below (the
-        // recursive Public leg, GetRole) then threw Autofac's ObjectDisposedException straight
+        // recursive Public leg, GetRole) then threw the container's ObjectDisposedException straight
         // into the subscriber's render chain on the very next emission. Every dependency travels
         // in `services` from here on — the Public leg and GetRole included — so a subscribed fold
         // never touches the scope again.

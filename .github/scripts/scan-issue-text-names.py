@@ -66,6 +66,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ghrest  # noqa: E402 — the shared GitHub REST client beside this file
+
 NAMESPACE = "Governance/NameChecks"
 NODE_TYPE = "Governance/NameCheck"
 CONTENT_TYPE = "NameCheckContent"
@@ -250,36 +253,19 @@ def verdict(answers: list[dict]) -> tuple[int, str]:
 
 # ── GitHub (REST) ────────────────────────────────────────────────────────────────────────────
 
-def _next_link(header: str | None) -> str | None:
-    for part in (header or "").split(","):
-        m = re.search(r'<([^>]+)>\s*;\s*rel="next"', part)
-        if m:
-            return m.group(1)
-    return None
-
-
 def gh_list(path: str, token: str) -> list[dict]:
-    """Every page of a REST listing, or NotChecked — a partial listing would read as 'nothing there'."""
-    url = f"{GITHUB_API}/{path}"
-    items: list[dict] = []
-    for _ in range(MAX_PAGES):
-        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}",
-                                                   "Accept": "application/vnd.github+json",
-                                                   "X-GitHub-Api-Version": "2022-11-28",
-                                                   "User-Agent": "scan-issue-text-names"})
-        try:
-            with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
-                page = json.loads(resp.read().decode("utf-8"))
-                nxt = _next_link(resp.headers.get("Link"))
-        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
-            raise NotChecked(f"GitHub listing {path.split('?')[0]} could not be read ({type(exc).__name__})") from exc
-        if not isinstance(page, list):
-            raise NotChecked(f"GitHub listing {path.split('?')[0]} did not answer a list")
-        items.extend(page)
-        if not nxt:
-            return items
-        url = nxt
-    raise NotChecked(f"GitHub listing {path.split('?')[0]} has more than {MAX_PAGES} pages — refused, never truncated")
+    """Every page of a REST listing, or NotChecked — a partial listing would read as 'nothing there'.
+    Read through ghrest, so a redirect off GitHub's origin never carries the token."""
+    try:
+        return ghrest.paginate(path, token, max_pages=MAX_PAGES, api=GITHUB_API,
+                               timeout=HTTP_TIMEOUT_S, user_agent="scan-issue-text-names")
+    except ghrest.NotAList as exc:
+        raise NotChecked(f"GitHub listing {path.split('?')[0]} did not answer a list") from exc
+    except ghrest.PageLimitExceeded as exc:
+        raise NotChecked(f"GitHub listing {path.split('?')[0]} has more than {MAX_PAGES} pages — "
+                         "refused, never truncated") from exc
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise NotChecked(f"GitHub listing {path.split('?')[0]} could not be read ({type(exc).__name__})") from exc
 
 
 def collect(repo: str, since: str, token: str, lister=gh_list) -> list[dict]:
@@ -333,7 +319,9 @@ class Mesh:
         for attempt in range(1, HTTP_ATTEMPTS + 1):
             req = urllib.request.Request(self.endpoint, data=data, headers=self._headers(), method="POST")
             try:
-                with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
+                # ghrest.urlopen: a 301/302/303 off the check endpoint's origin is followed WITHOUT
+                # the mesh token (stock urllib re-sends it to wherever `Location` points).
+                with ghrest.urlopen(req, timeout=HTTP_TIMEOUT_S) as resp:
                     sid = resp.headers.get("Mcp-Session-Id")
                     if sid:
                         self.session_id = sid

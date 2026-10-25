@@ -1,4 +1,3 @@
-using Autofac;
 using MeshWeaver.ServiceProvider;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
@@ -85,8 +84,8 @@ public sealed class AnotherModulesScopedServiceIsTheCallersTest
         return state;
     }
 
-    private static ILifetimeScope CallerOf(IServiceScope scope) =>
-        scope.ServiceProvider.GetRequiredService<ILifetimeScope>();
+    private static MeshServiceProvider CallerOf(IServiceScope scope) =>
+        MeshServiceProvider.From(scope.ServiceProvider)!;
 
     /// <summary>Module B's scoped service over circuit state, released when its scope ends.</summary>
     private sealed class ModuleBDialog : IDisposable

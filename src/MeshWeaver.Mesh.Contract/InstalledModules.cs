@@ -29,14 +29,14 @@ namespace MeshWeaver.Mesh;
 /// registration is fixed once the container is built; the module set is not. A held module withdrawn
 /// AFTER the container was built left a registration that could only answer by throwing, and every
 /// enumeration — the boot pre-warm sweep's included — faulted on it, so one broken module refused
-/// readiness for the whole pod. An Autofac registration source would have been container-specific: a
+/// readiness for the whole pod. A registration source would have been container-specific: a
 /// host that builds with <c>BuildServiceProvider()</c> ignores sources. This registry is ordinary
 /// state owned by the mesh, and the enumerable registration that serves it is an ordinary factory, so
 /// both container kinds answer the same set.</para>
 ///
 /// <para><b>The incompatible set</b> (MeshWeaver#6557). The <see cref="IncompatibleModule"/> records — the declared ones plus every module withdrawn at
 /// boot — are answered here too (<see cref="Incompatible"/>), so a host built with plain MS DI lists a
-/// withdrawal exactly as the Autofac host does. Every read first resolves the module registry, whose
+/// withdrawal exactly as the MeshWeaver host does. Every read first resolves the module registry, whose
 /// first resolve runs the boot publication on a host that has not run it yet
 /// (<see cref="ModuleContexts.PublishOnce"/>): the set is never read from a registry that has not
 /// decided which modules it publishes.</para>

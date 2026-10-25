@@ -55,7 +55,7 @@ BINDING_FIELDS = ("workflow", "job", "repositories")
 THIS_REPO = "Systemorph/MeshWeaver"
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # A label must look like a tag and must NEVER be SELECTABLE as a version. The self-updater
-# (memex/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs) keeps every tag matching
+# (MeshWeaver.Plugins src/Memex.Portal.Shared/SelfUpdate/VersionSelect.cs) keeps every tag matching
 # `PlatformVersionTag` = ^\d+\.\d+\.\d+([-+].*)?$ EXCEPT one ending in `-latest` (`MovingPointer`), so
 # a label of that dotted shape with any other suffix (`3.1.0-mac`) would be rolled to as if it were
 # a build. Both regexes are mirrored here; VersionSelectTest pins the C# side.

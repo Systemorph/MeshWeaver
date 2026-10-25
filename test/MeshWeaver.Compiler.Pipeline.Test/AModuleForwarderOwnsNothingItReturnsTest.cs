@@ -1,4 +1,3 @@
-using Autofac;
 using MeshWeaver.Hosting;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
@@ -205,7 +204,7 @@ public sealed class AModuleForwarderOwnsNothingItReturnsOnAGenericHostTest
 /// <summary>
 /// A <see cref="NotOwnedServiceDescriptor"/> is registered at ITS OWN POSITION — which registration of a
 /// service is the default, and the order of an <c>IEnumerable</c> of it, are exactly the collection's —
-/// and its instance is never disposed by the scope that resolved it. Real Autofac containers.
+/// and its instance is never disposed by the scope that resolved it. Real service containers.
 /// </summary>
 public sealed class ANotOwnedForwarderKeepsItsPositionTest
 {
@@ -256,7 +255,7 @@ public sealed class ANotOwnedForwarderKeepsItsPositionTest
 
         owned.Disposed.Should().BeGreaterThan(0, "the control: an ordinary factory registration IS owned by the scope");
         forwarded.Disposed.Should().Be(0, "a forwarder's instance belongs to whoever built it");
-        provider.GetService<ILifetimeScope>().Should().NotBeNull("an Autofac container, as every mesh root is");
+        MeshServiceProvider.From(provider).Should().NotBeNull("an service container, as every mesh root is");
     }
 
     /// <summary>

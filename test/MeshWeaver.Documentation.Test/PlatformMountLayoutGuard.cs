@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -81,7 +82,7 @@ public class PlatformMountLayoutGuard
     [Fact]
     public void TheVerdictStep_TakesTheDirectoryTheProbeResolved_AndDoesNotRecomputeIt()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         var verdict = StepBody(text, "id: platform");
         Assert.Contains("MOUNT_DIR: ${{ steps.platform-mount.outputs.dir }}", verdict, StringComparison.Ordinal);
         Assert.Contains("dir=\"$MOUNT_DIR\"", verdict, StringComparison.Ordinal);
@@ -153,7 +154,7 @@ public class PlatformMountLayoutGuard
 
     private static string ProbeBody()
     {
-        var text = File.ReadAllText(Path.Combine(FindRepoRoot(), Lane));
+        var text = File.ReadAllText(Path.Combine(RepoPaths.Root, Lane));
         var run = RunBlock(StepBody(text, "id: platform-mount"));
         Assert.True(run.Length > 0, $"{Lane}: the `platform-mount` step must have a `run:` block");
         return run;
@@ -263,12 +264,4 @@ public class PlatformMountLayoutGuard
 
     private sealed record ProbeResult(string Stdout, IReadOnlyDictionary<string, string> Outputs);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        Assert.True(dir is not null, "could not locate the repository root (MeshWeaver.slnx) above the test bin");
-        return dir!.FullName;
-    }
 }

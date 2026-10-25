@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using MeshWeaver.Graph.Configuration;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -83,7 +84,7 @@ public class ShippedNodeTypeSourceResolutionTest
     [Fact]
     public void NoShippedNodeTypeNamesAContentTypeItsSourcesCannotProvide()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var framework = FrameworkTypeNames(root);
 
         var offenders = new List<string>();
@@ -128,35 +129,20 @@ public class ShippedNodeTypeSourceResolutionTest
     [Fact]
     public void TheScansAreNotVacuous()
     {
-        var root = FindRepoRoot();
+        var root = RepoPaths.Root;
         var framework = FrameworkTypeNames(root);
         var nodeTypes = EnumerateShippedNodeTypes(root).ToList();
 
         Assert.True(framework.Count > 500,
             $"expected the framework type scan to find the src/ tree's types; found {framework.Count}");
-        Assert.True(nodeTypes.Count > 10,
+        // A NON-VACUITY floor on the scan, not an inventory: it catches a walk that silently matches
+        // (almost) nothing. It tracks the shipped set and drops when content legitimately leaves —
+        // the product demos (ACME, FutuRe, Northwind, PensionFund) leaving took it down to 9.
+        // Lowering it in step with a deliberate removal is maintenance; lowering it to silence a
+        // scan that broke is the opposite.
+        Assert.True(nodeTypes.Count >= 5,
             $"expected to find the shipped NodeType files; found {nodeTypes.Count}");
         Assert.Contains(nodeTypes, n => n.ContentTypes.Count > 0);
-
-        // 🚨 The `sources` path must be EXERCISED, not merely present. Northwind/Product is the
-        // shipped NodeType that declares one (its dimension records live in a sibling node's
-        // Source/, #1786), so it is the witness that a declared `sources` list still gets checked
-        // — if it silently dropped out again, this fails instead of the coverage vanishing.
-        var withSources = nodeTypes.SingleOrDefault(
-            n => n.RelativePath.EndsWith("Northwind/Product.json", StringComparison.Ordinal));
-        Assert.True(withSources.RelativePath is not null,
-            "Northwind/Product declares a `sources` list and must still be ENUMERATED — a NodeType "
-            + "that declares sources used to be skipped, and a skipped check is indistinguishable "
-            + "from a passed one.");
-        Assert.True(withSources.SourceRoots.Count >= 2,
-            $"expected Northwind/Product's `sources` entries to resolve to its own Source/ folder "
-            + $"plus the shared dimension records; resolved {withSources.SourceRoots.Count} root(s)");
-        var acrossRoots = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var r in withSources.SourceRoots)
-            acrossRoots.UnionWith(TypeNamesDeclaredIn(r));
-        Assert.Contains("ProductContent", acrossRoots);   // its own Source/
-        Assert.Contains("Supplier", acrossRoots);         // an `@`-shorthand entry, resolved
-        Assert.Contains("Category", acrossRoots);
 
         // A framework content type must resolve …
         Assert.Contains("MarkdownContent", framework);
@@ -169,6 +155,75 @@ public class ShippedNodeTypeSourceResolutionTest
         // or the invariant above would wave through exactly the #1786 shape.
         Assert.DoesNotContain("LineOfBusiness", framework);
         Assert.DoesNotContain("TransactionMapping", framework);
+    }
+
+    /// <summary>
+    /// 🚨 The <c>sources</c> path must be EXERCISED, not merely present. A NodeType that declares a
+    /// <c>sources</c> list used to be skipped, and a skipped check is indistinguishable from a passed
+    /// one — so the resolver has to be seen resolving both authored shapes: the node's own
+    /// <c>namespace:Source scope:subtree</c> folder and an <c>[name=]@Some/Node/Path</c> shorthand
+    /// into a SIBLING node's Source/.
+    ///
+    /// <para>The shipped witness was <c>Northwind/Product</c> (its dimension records live in a
+    /// sibling node's Source/, #1786). That demo moved to MeshWeaver.Plugins' test/samples tree with
+    /// the other product demos, and no NodeType core still ships declares <c>sources</c>, so the
+    /// witness is now a fixture of exactly that shape, run through the SAME enumerator the invariant
+    /// uses. A shipped NodeType that declares <c>sources</c> again is covered by the invariant
+    /// directly.</para>
+    /// </summary>
+    [Fact]
+    public void ADeclaredSourcesListIsResolvedNotSkipped()
+    {
+        var fixture = Directory.CreateTempSubdirectory("sources-witness-");
+        try
+        {
+            var data = Path.Combine(fixture.FullName, "Data");
+            WriteFile(data, "Demo/Product.json", """
+                {
+                  "id": "Product",
+                  "namespace": "Demo",
+                  "path": "Demo/Product",
+                  "nodeType": "NodeType",
+                  "content": {
+                    "$type": "NodeTypeDefinition",
+                    "configuration": "config => config.WithContentType<ProductContent>()",
+                    "sources": [
+                      "namespace:Source scope:subtree",
+                      "shared=@Demo/Catalog/Source/Supplier",
+                      "shared=@Demo/Catalog/Source/Category"
+                    ]
+                  }
+                }
+                """);
+            WriteFile(data, "Demo/Product/Source/ProductContent.cs",
+                "public record ProductContent(string Supplier, string Category);");
+            WriteFile(data, "Demo/Catalog/Source/Supplier.cs", "public record Supplier(string Id);");
+            WriteFile(data, "Demo/Catalog/Source/Category.cs", "public record Category(string Id);");
+
+            var withSources = Assert.Single(EnumerateShippedNodeTypes(fixture.FullName));
+            Assert.Equal("Data/Demo/Product.json", withSources.RelativePath);
+            Assert.Empty(withSources.UnresolvedSources);
+            Assert.True(withSources.SourceRoots.Count >= 3,
+                "expected the `sources` entries to resolve to the node's own Source/ folder plus the "
+                + $"two shared dimension records; resolved {withSources.SourceRoots.Count} root(s)");
+            var acrossRoots = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var r in withSources.SourceRoots)
+                acrossRoots.UnionWith(TypeNamesDeclaredIn(r));
+            Assert.Contains("ProductContent", acrossRoots);   // its own Source/
+            Assert.Contains("Supplier", acrossRoots);         // an `@`-shorthand entry, resolved
+            Assert.Contains("Category", acrossRoots);
+        }
+        finally
+        {
+            fixture.Delete(recursive: true);
+        }
+    }
+
+    private static void WriteFile(string root, string relative, string text)
+    {
+        var path = Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, text);
     }
 
     // ── the scans ────────────────────────────────────────────────────────────────────────
@@ -444,13 +499,4 @@ public class ShippedNodeTypeSourceResolutionTest
         || directoryName.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
         || directoryName.Equals("artifacts", StringComparison.OrdinalIgnoreCase);
 
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "MeshWeaver.slnx")))
-            dir = dir.Parent;
-        return dir?.FullName
-               ?? throw new InvalidOperationException(
-                   "Could not locate the repo root (MeshWeaver.slnx) from " + AppContext.BaseDirectory);
-    }
 }

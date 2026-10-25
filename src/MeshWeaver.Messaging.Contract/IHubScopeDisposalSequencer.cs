@@ -3,7 +3,7 @@ namespace MeshWeaver.Messaging;
 /// <summary>
 /// Sequences the closing of a hosted hub's OWN lifetime scope against the mesh's teardown drains.
 ///
-/// <para>A hosted hub owns the Autofac scope it was built in, and <c>HostedHubsCollection</c> closes
+/// <para>A hosted hub owns the service scope it was built in, and <c>HostedHubsCollection</c> closes
 /// that scope once the hub's <c>DisposalCompleted</c> fires. That signal covers only the hub's action
 /// block and message round-trips — NOT the offloaded I/O the hub issued on the mesh's
 /// <c>IIoPool</c>s, nor the async cleanup it enqueued, nor the synced-query pipelines still
@@ -20,7 +20,7 @@ namespace MeshWeaver.Messaging;
 /// <para>The mesh layer knows the drain order; this assembly does not. So the collection hands the
 /// close to this sequencer, resolved from the owning hub's provider, and the mesh registers the
 /// implementation that closes NOW while the mesh is live (a recycle must free its scope promptly —
-/// an Autofac parent tracks every child scope until it is closed) and defers to the terminal
+/// an unclosed scope keeps everything it built) and defers to the terminal
 /// teardown signal while the mesh is tearing down — the same phase rule
 /// <c>MeshDataSource.UnloadNodeAssemblyContexts</c> follows for the collectible ALCs. A mesh with
 /// no implementation registered (bare messaging-only hubs) keeps the historical inline close.</para>

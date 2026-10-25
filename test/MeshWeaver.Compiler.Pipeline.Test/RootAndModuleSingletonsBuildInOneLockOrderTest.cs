@@ -9,16 +9,19 @@ namespace MeshWeaver.Graph.Test;
 /// MeshWeaver#6542 — <b>a root singleton that reaches a module's service while it is built, and a
 /// module singleton that needs a root singleton while it is built, must both complete.</b>
 ///
-/// <para>Autofac holds a scope's shared-instance lock for the whole build of a shared instance, and that
-/// lock covers every shared instance in the scope. A root singleton whose construction resolves a
-/// module's service takes the root's lock, then the module container's. A module singleton whose
+/// <para>The container this replaced held a scope's shared-instance lock for the whole build of a shared
+/// instance, and that lock covered every shared instance in the scope. A root singleton whose construction
+/// resolves a module's service took the root's lock, then the module container's. A module singleton whose
 /// construction resolves a root singleton (through <c>ModuleFallbackSource</c>) took the module
 /// container's lock, then the root's. Two first-time builds overlapping in those orders deadlocked —
-/// the #6432 shape across the container boundary, reproduced while reading that incident's dump.</para>
+/// the #6432 shape across the container boundary, reproduced while reading that incident's dump.
+/// <see cref="MeshServiceProvider"/> locks each shared instance on its own, so the two orders only wait
+/// for each other where one really needs the other's instance; this test keeps pinning that they
+/// complete.</para>
 ///
 /// <para>The fix is <b>built before published</b>: every shared instance of a module container is
-/// built (<see cref="ModuleServiceProvider.BuildRootReachableSingletons(IServiceProvider, IServiceProvider, Func{Autofac.Core.Service, bool})"/>) before the container can be reached
-/// from the root, so the root only ever reads a module's built instances — answered without any lock.</para>
+/// built (<see cref="ModuleServiceProvider.BuildRootReachableSingletons(IServiceProvider, IServiceProvider, Func{Type, object?, bool})"/>) before the container can be reached
+/// from the root, so the root only ever reads a module's built instances.</para>
 ///
 /// <para>The containers are real and nothing is mocked: a root built as the mesh builds it, and a
 /// module container built by <see cref="ModuleServiceProvider"/>. Each construction is held where it
@@ -74,12 +77,17 @@ public sealed class RootAndModuleSingletonsBuildInOneLockOrderTest
     }
 
     /// <summary>
-    /// The negative control: the same two constructions in the same forced order, against the SAME
-    /// module container published WITHOUT building its shared instances first — the lifecycle before
-    /// the fix. They deadlock, so the test above can tell a deadlock from a pass.
+    /// The shape that DEADLOCKED under the container this replaced — the same two constructions in the
+    /// same forced order, against the SAME module container published WITHOUT building its shared
+    /// instances first — now completes: <see cref="MeshServiceProvider"/> locks each shared instance on
+    /// its own, so the root's build waits only for the module's one instance it needs, which takes only a
+    /// root singleton the root's build does not hold. On the scope-wide lock (core main before #7145) this
+    /// very arrangement asserted the deadlock; that assertion was the negative control of the fix, and
+    /// the fix now lies one layer down. Both constructions are asserted to have been inside their builds
+    /// at once, so a pass cannot come from the two simply running one after the other.
     /// </summary>
     [Fact]
-    public void TheSameShape_PublishedBeforeItsSingletonsAreBuilt_Deadlocks()
+    public void TheShapeThatDeadlockedOnAScopeWideLock_PublishedBeforeItsSingletonsAreBuilt_Completes()
     {
         var mesh = new Mesh(ordered: false);
         mesh.Gate.Arm();
@@ -93,11 +101,13 @@ public sealed class RootAndModuleSingletonsBuildInOneLockOrderTest
             SpinWait.SpinUntil(() => mesh.Gate.RootEntered, TestTimeouts.Convergence).Should().BeTrue();
             moduleSide.Start();
             SpinWait.SpinUntil(() => mesh.Gate.ModuleEntered, TestTimeouts.Convergence)
-                .Should().BeTrue("without the ordering both constructions are inside their own lock at once");
+                .Should().BeTrue("without the ordering both constructions are inside their builds at once — the overlap");
 
-            rootSide.Join(JoinBound).Should().BeFalse("the root lock is held while the module's lock is awaited");
-            mesh.ModuleSingletonsBuilt.Should().Be(0, "the module's singleton was never built — its construction is parked");
-            moduleSide.Join(TimeSpan.Zero).Should().BeFalse("the module's lock is held while the root lock is awaited");
+            rootSide.Join(JoinBound).Should().BeTrue("no lock covers both instances, so the root's build completes");
+            moduleSide.Join(JoinBound).Should().BeTrue("and so does the module's");
+            rootSide.Fault.Should().BeNull();
+            moduleSide.Fault.Should().BeNull();
+            mesh.ModuleSingletonsBuilt.Should().Be(1, "the module's singleton was built once, for both sides");
         }
         finally
         {
@@ -147,7 +157,7 @@ public sealed class RootAndModuleSingletonsBuildInOneLockOrderTest
             if (ordered)
                 // Built before published — as ModuleServices.BuildBeforePublish does at boot and before
                 // a swap commits. The gate is not armed yet: this build meets nobody.
-                ModuleServiceProvider.BuildRootReachableSingletons(Module, Root, _ => true);
+                ModuleServiceProvider.BuildRootReachableSingletons(Module, Root, (_, _) => true);
             // Published: from here on the root can reach the module.
             moduleHolder.Module = Module;
         }

@@ -225,8 +225,8 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
     /// <summary>
     /// MeshWeaver#6847 review — the readiness scan holds the generation's LEASES while it reads the
     /// container. The race, made deterministic with a controlled switch: the module container's
-    /// <see cref="Autofac.ILifetimeScope.ResolveOperationBeginning"/> fires when the scan reads that
-    /// container, and the armed action RETIRES the generation right there — the step a concurrent live
+    /// registry-read seam fires when the scan reads that container's registrations, and the armed action
+    /// RETIRES the generation right there — the step a concurrent live
     /// swap takes. Under the scan's lease the retirement removes the generation from the current set
     /// but DEFERS its services' disposal to the scan's release, so the scan completes on a live container
     /// (no <see cref="ObjectDisposedException"/>, no transient Unhealthy) and the disposal follows.
@@ -238,12 +238,12 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         var generation = HeldGeneration(Module);
         var services = generation.Services!;
         services.ForwarderLayout.Should().NotBeEmpty("the arrangement: the module forwards platform services, so the scan reads its container");
-        var container = Contexts.ModuleScope(Module)!.GetRequiredService<Autofac.ILifetimeScope>();
+        var container = MeshWeaver.ServiceProvider.MeshServiceProvider.From(Contexts.ModuleScope(Module))!;
         var scanThread = Environment.CurrentManagedThreadId;
         var armed = 1;
         bool? disposedWhenRetired = null;
         Exception? retireFault = null;
-        EventHandler<Autofac.Core.Resolving.ResolveOperationBeginningEventArgs> fire = (_, _) =>
+        Action fire = () =>
         {
             // Only the scan's own read on this thread, and only once: nothing else the mesh resolves
             // from this container concurrently can trip the switch.
@@ -252,7 +252,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
             Contexts.Retire(generation, Budget).Subscribe(_ => { }, ex => retireFault = ex);
             disposedWhenRetired = services.IsDisposed;
         };
-        container.ResolveOperationBeginning += fire;
+        container.RegistryRead += fire;
         ImmutableList<ModuleForwarderGap> gaps;
         try
         {
@@ -260,7 +260,7 @@ public sealed class ModuleRootServicesSwapTest : MonolithMeshTestBase
         }
         finally
         {
-            container.ResolveOperationBeginning -= fire;
+            container.RegistryRead -= fire;
         }
 
         Volatile.Read(ref armed).Should().Be(0, "the switch must have fired inside the scan, or this test checked nothing");

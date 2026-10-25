@@ -24,7 +24,7 @@ namespace MeshWeaver.GitSync;
 /// documented <see cref="StaticRepoImporter"/> pipeline.
 ///
 /// <para>🚨 Reactive end-to-end (no <c>async</c>/<c>await</c>/<c>Task</c> in any
-/// signature). Every blocking/async leaf — Octokit calls and the OAuth HTTP — runs
+/// signature). Every blocking/async leaf — GitHub REST calls and the OAuth HTTP — runs
 /// inside <see cref="IIoPool"/> per <c>Doc/Architecture/ControlledIoPooling.md</c>.
 /// File-format parse/serialize is pure in-memory CPU and runs synchronously (no pool).</para>
 /// </summary>

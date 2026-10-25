@@ -209,11 +209,16 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// instance leg — the token is identity, the admin-owned node is authority — and it is why the
     /// repository claim is re-compared against the record the path routed to.</para>
     ///
-    /// <para><b>The NODE is read on every request — only the JWKS is cached.</b> That is what makes
-    /// a <see cref="BuildPrincipalActions.Revoke"/> take effect at once instead of when a verdict
-    /// cache expires. The instance leg caches its verdict for a minute because an install polls; a
-    /// build asks a handful of times per run, so there is nothing to buy and a revocation window to
-    /// lose.</para>
+    /// <para><b>The NODE is read on every request, from its OWNER — only the JWKS is cached.</b>
+    /// That is what makes a <see cref="BuildPrincipalActions.Revoke"/> take effect from the moment it
+    /// commits. A verdict cache would hold a revoked principal until it expired, and so would the
+    /// process-wide mirror the instance leg reads: it advances on the owner's commit ECHO, which the
+    /// revoke's acknowledgement does not wait for, so a request between the two was authenticated on
+    /// the pre-revoke record (a full-run failure of
+    /// <c>BuildPrincipalAuthenticationTest.ARevokedPrincipal_StopsAuthenticatingAtOnce</c>; on another
+    /// replica the window is as long as the cross-process feed is late). A build asks a handful of
+    /// times per run, so the owner round-trip costs nothing that matters and closes the window. See
+    /// <see cref="ReadBuildPrincipal"/>.</para>
     ///
     /// <para>🚨 <b>Three outcomes, not two.</b> A key set that cannot be read is
     /// <see cref="InstanceAuthResult.Unavailable"/> — a retryable 503, never "unknown token" and
@@ -321,10 +326,15 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
             return Observable.Return(InstanceAuthResult.Resolved(null));
 
         var accessService = hub.ServiceProvider.GetService<AccessService>();
+        // Whether a missing node would fall back to DECLARED trust. When it would, "absent" is itself
+        // an admission, so it is asked of the owner too — see ReadBuildPrincipal.
+        var declaredFallback = BuildPrincipalConfiguration
+            .Declared(hub.ServiceProvider.GetService<IConfiguration>())
+            .Find(claims.Repository) is not null;
         // One sealed System scope around the read, for the same reason as Resolve above: this IS
         // the step that turns an anonymous HTTP caller into a known principal, so there is no
         // identity to read with yet — and nothing downstream may inherit System.
-        return accessService.RunAsSystem(() => Read(path)
+        return accessService.RunAsSystem(() => ReadBuildPrincipal(path, declaredFallback)
             .Select(read =>
             {
                 if (Unavailable(read, path, "GitHub build-principal resolution") is { } unavailable)
@@ -530,6 +540,90 @@ public sealed class InstanceRegistryAuthenticator(IMessageHub hub, ILogger<Insta
     /// </summary>
     private IObservable<NodeReadOutcome> Read(string path) =>
         ReadOverride is { } test ? test(path) : ReadLive(path);
+
+    /// <summary>
+    /// The build-principal read: the OWNER's answer, never this process's mirror.
+    ///
+    /// <para>🚨 <b>A mirror is the wrong instrument for a revocation.</b> <see cref="ReadLive"/>
+    /// reads content off the process-wide mirror, which advances when the owner's commit echo
+    /// arrives. The write that revokes a principal is acknowledged on the owner's verdict and does
+    /// not wait for that echo — so between the acknowledgement and the echo, a mirror read hands back
+    /// the ACTIVE principal and a revoked build authenticates. Held deterministically in
+    /// <c>BuildPrincipalAuthenticationTest.ARevokedPrincipal_IsRefused_WhileThisProcesssMirrorStillCarriesTheGrant</c>.
+    /// The owner applies writes in order and has applied the revoke before acknowledging it, so a
+    /// read it answers afterwards carries the revoke, on every replica.</para>
+    ///
+    /// <para><b>Existence</b> still comes from the parent's live listing, so a token from a
+    /// repository nobody trusts never opens a point read on a path that does not exist. The listing
+    /// is consulted only where its lag is harmless: a stale "present" ends at the owner, which
+    /// answers absent; a stale "absent" refuses. The one case where "absent" ADMITS is a repository
+    /// the deployment DECLARES — a node there overrides the declaration, a revoking node included — so
+    /// for <paramref name="declaredFallback"/> the owner is asked directly. That set is the
+    /// deployment's own configuration, so it cannot be widened by a caller.</para>
+    ///
+    /// <para>Every non-verdict — a listing or an owner that does not answer within
+    /// <see cref="ReadBudget"/>, or a fault — is <see cref="NodeReadStatus.Unavailable"/>: a
+    /// retryable 503, never an admission and never "unknown token".</para>
+    /// </summary>
+    /// <param name="path">The principal's node path.</param>
+    /// <param name="declaredFallback">Whether configuration declares this repository, i.e. whether
+    /// an absent node would admit.</param>
+    private IObservable<NodeReadOutcome> ReadBuildPrincipal(string path, bool declaredFallback)
+    {
+        if (ReadOverride is { } test)
+            return test(path);
+        var accessService = hub.ServiceProvider.GetService<AccessService>();
+        return accessService.RunAsSystem(() =>
+        {
+            var parent = ParentPath(path);
+            var listing = parent is null || declaredFallback
+                ? null
+                : hub.GetQuery($"instance-key-listing:{parent}", $"path:{parent} scope:children select:path");
+            // Its own System scope at ITS subscribe: it subscribes inside the listing's continuation,
+            // where the ambient identity is whatever thread delivered that frame.
+            return OwnerRead(listing,
+                () => accessService.RunAsSystem(() =>
+                    hub.GetMeshNodeOutcome(path, ReadBudget, ReadTimeoutBehavior.EmitNull)),
+                path, ReadBudget);
+        });
+    }
+
+    /// <summary>
+    /// Folds an optional live listing and an OWNER read into one <see cref="NodeReadOutcome"/>: no
+    /// listing, or a listing that shows <paramref name="path"/>, asks the owner; a listing without it
+    /// is <see cref="NodeReadStatus.Absent"/>. No answer within <paramref name="budget"/>, or a
+    /// fault, is <see cref="NodeReadStatus.Unavailable"/>. Static so the composition is pinned without
+    /// a mesh.
+    /// </summary>
+    /// <param name="listing">The parent's live children listing, or null to ask the owner directly.</param>
+    /// <param name="owner">The owner's one-shot read of the path.</param>
+    /// <param name="path">The exact node path.</param>
+    /// <param name="budget">How long the whole read may take.</param>
+    internal static IObservable<NodeReadOutcome> OwnerRead(
+        IObservable<IEnumerable<MeshNode>>? listing,
+        Func<IObservable<NodeReadOutcome>> owner,
+        string path,
+        TimeSpan budget)
+    {
+        var read = listing is null
+            ? Observable.Defer(owner)
+            : listing
+                .Take(1)
+                .SelectMany(nodes =>
+                    // Ordinal, as in FirstFrame: a case-insensitive match would let a DIFFERENT node
+                    // open the point read on a path that does not exist.
+                    nodes.Any(node => string.Equals(node.Path, path, StringComparison.Ordinal))
+                        ? owner()
+                        : Observable.Return(NodeReadOutcome.Absent));
+
+        return read
+            .Take(1)
+            .Timeout(budget)
+            .Catch((TimeoutException elapsed) => Observable.Return(NodeReadOutcome.Unavailable(new TimeoutException(
+                $"The owner read of '{path}' produced no answer within {budget.TotalSeconds:F0}s. This is "
+                + "NOT 'node not found' — the build is answered retryable.", elapsed))))
+            .Catch((Exception ex) => Observable.Return(NodeReadOutcome.Unavailable(ex)));
+    }
 
     /// <summary>
     /// The live read (#3119): listing for EXISTENCE, mirror for CONTENT — the canonical composition

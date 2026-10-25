@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -17,7 +18,7 @@ namespace MeshWeaver.Documentation.Test;
 /// sync streams unregister and the registrants run AFTERWARDS, on other threads. A harness that
 /// disposes and proceeds is running concurrently with all of that, and the very next thing it does
 /// is always one of the three that live teardown cannot survive: dispose the service scope (a
-/// continuation resolves from a dead Autofac scope), unload a collectible node ALC (a live thread
+/// continuation resolves from a dead service scope), unload a collectible node ALC (a live thread
 /// dereferences freed metadata — a native use-after-unload <b>SIGSEGV</b>), or return to xUnit so the
 /// next test class starts on top of the previous one's teardown.</para>
 ///
@@ -134,7 +135,7 @@ public class HubDisposalJoinRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void NoHarnessDisposesAHubWithoutJoiningItsTeardown()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var allowed = SourceScan.ReadAllowFile(Path.Combine(root, "test", AllowFileName), AllowFileName);
         var found = Scan(root, out var bare);
 
@@ -229,7 +230,7 @@ public class HubDisposalJoinRatchetGuard(ITestOutputHelper output)
     [Fact]
     public void TheScannerStillSeesTheHarnessSurface()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var harnessFiles = SourceScan.SourceFiles(root, ScannedRoots)
             .Select(f => SourceScan.Relative(root, f))
             .Where(IsHarnessFile)

@@ -286,7 +286,7 @@ public sealed record SyncedQueryMeshNodes : VirtualTypeSource<MeshNode>
     {
         // Single IMeshQueryCore — the unsecured query surface. Has no
         // SecurityService dependency, so SecurityService can consume a
-        // synced query (`nodeType:AccessAssignment`) without an Autofac
+        // synced query (`nodeType:AccessAssignment`) without a DI container
         // cycle. Static-node providers are surfaced as a sibling
         // IMeshQueryProvider (StaticNodeQueryProvider) and merged at the
         // top-level MeshQuery, so a single Query returns persistence

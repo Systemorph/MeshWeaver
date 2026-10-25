@@ -192,7 +192,7 @@ over a starved child reads `drainsAwaitingScheduler=1` directly. Pinned by
 That makes the verdict honest; it does not end the stall. The owner of M1-by-starvation is whatever
 floods the pool, and in #5799/#5820 the `[HEAPSTEP]` lines of the same minute name per-hub
 construction metadata as the heaviest allocation (`Entry[System.String][]`,
-`Func<JsonDerivedType,bool>`, Autofac `IResolvePipelineBuilder` handlers) — the per-hub metadata
+`Func<JsonDerivedType,bool>`, the resolve-pipeline handlers of the DI container then in use — Autofac, since removed in MeshWeaver#7145) — the per-hub metadata
 multiplication tracked on #5555.
 
 ### What Orleans makes of M1

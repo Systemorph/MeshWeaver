@@ -72,9 +72,6 @@
     <PackageVersion Include="Aspire.Hosting.Azure.KeyVault" Version="13.4.6" />
     <PackageVersion Include="Aspire.Hosting.Orleans" Version="13.4.6" />
     <PackageVersion Include="Aspire.Npgsql" Version="13.4.6" />
-    <!-- Pinned: Autofac.Extensions.DI 11.0.0 breaks TryAddEnumerable with factory delegates -->
-    <PackageVersion Include="Autofac" Version="9.3.4" />
-    <PackageVersion Include="Autofac.Extensions.DependencyInjection" Version="11.0.2" />
     <PackageVersion Include="Azure.Core" Version="1.60.0" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Provisioning.Storage" Version="1.1.2" />
@@ -87,15 +84,18 @@
     <PackageVersion Include="Radzen.Blazor" Version="10.3.2" />
     <PackageVersion Include="DocSharp.Markdown" Version="0.21.0" />
     <PackageVersion Include="ClosedXML" Version="0.105.1" />
-    <PackageVersion Include="CSharpVitamins.ShortGuid" Version="2.0.0" />
     <PackageVersion Include="CsvHelper" Version="33.1.0" />
     <PackageVersion Include="DocumentFormat.OpenXml" Version="3.5.1" />
+    <!-- ExcelDataReader (MIT, no dependencies on net8.0+) reads .xls (BIFF2-8), .xlsx and .xlsm row by
+         row for the content-indexing text extractor (MeshWeaver.Plugins#3826). Pinned here because a
+         satellite declares no PackageVersion of its own. -->
+    <PackageVersion Include="ExcelDataReader" Version="3.9.0" />
     <PackageVersion Include="Grpc.AspNetCore" Version="2.80.0" />
     <PackageVersion Include="Grpc.AspNetCore.Web" Version="2.80.0" />
     <PackageVersion Include="Grpc.Net.Client" Version="2.80.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
-    <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Graph and
-         MeshWeaver.AI. It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
+    <!-- Humanizer.Core (MIT) backs the `DateTime.Humanize()` calls in MeshWeaver.Plugins
+         (MeshWeaver.AI, and MeshWeaver.Graph.Views through core's MeshWeaver.Graph reference). It used to arrive ONLY as an accidental transitive of JsonPointer.Net,
          which is the single reason those `using Humanizer;` lines compiled; Roslyn's own
          Humanizer.Core 2.14.1 tops out at net6.0 and contributes NO compile assets on net10.0.
          Removing json-everything (#1231) exposed that, so the dependency is now declared where
@@ -273,7 +273,6 @@
     <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.19.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.19.0" />
     <PackageVersion Include="OpenTelemetry.Instrumentation.Runtime" Version="1.19.0" />
-    <PackageVersion Include="System.Interactive" Version="7.0.1" />
     <!-- The memex test container package (src/MeshWeaver.Testcontainers): a real memex from the
          platform build as a test substrate, the way Testcontainers.PostgreSql gives a test a real
          Postgres. Same version as the test tree pins. -->
@@ -350,15 +349,17 @@
     <PackageVersion Include="Microsoft.AspNetCore.Components.Web" Version="10.0.10" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
     <PackageVersion Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
-    <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="xunit.v3" Version="4.0.2" />
     <PackageVersion Include="xunit.v3.assert" Version="4.0.2" />
     <PackageVersion Include="xunit.v3.extensibility.core" Version="4.0.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="4.0.1" />
     <PackageVersion Include="xunit.v3.runner.console" Version="4.0.2" />
     <PackageVersion Include="NSubstitute" Version="6.2.0" />
+    <!-- TRANSITIONAL: no core code uses Octokit (the GitHub REST client is a plain HttpClient,
+         Doc/Architecture/GitHubSync → "The GitHub REST transport"). MeshWeaver.GitSync still
+         references it so the image keeps carrying Octokit.dll for one cycle; see that csproj and
+         the doc's "Removing the transitional Octokit reference" for when this line goes. -->
     <PackageVersion Include="Octokit" Version="14.0.0" />
-    <PackageVersion Include="Octokit.Reactive" Version="14.0.0" />
   </ItemGroup>
 
   <ItemGroup>

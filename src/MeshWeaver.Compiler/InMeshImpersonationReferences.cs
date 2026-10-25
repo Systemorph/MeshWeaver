@@ -52,6 +52,13 @@ public static class InMeshImpersonationReferences
     /// <summary>The System identity's id, as a literal in source.</summary>
     public const string SystemLiteral = "system-security";
 
+    // Every member of IMailCopyStore / IMailAttachmentStore: each runs as System on the owner's behalf.
+    private static readonly string[] MailCopyStoreMembers =
+        ["Source", "Create", "Commit", "Disable", "Upsert", "WriteIfNewer", "ReplaceIfNewer", "Revision",
+         "WriteIfUnchanged", "SetAttachments", "Remove", "RemoveGeneration", "List", "Read", "ReadPage", "SourceKeys", "EnabledSources", "RetireLegacy", "LegacySource"];
+
+    private static readonly string[] MailAttachmentStoreMembers = ["Save", "DeleteAll", "DeleteLegacy"];
+
     /// <summary>
     /// Members whose mere reference is reported, keyed by <c>Namespace.TypeName</c> (no arity).
     /// Immutable constant lookup.
@@ -83,6 +90,20 @@ public static class InMeshImpersonationReferences
             ["MeshWeaver.Mesh.Services.MeshQueryRequest"] = ["AsSystem", "ForViewer"],
             ["MeshWeaver.ContentCollections.ContentImportBuilder"] = ["ImpersonateAsSystem"],
             ["MeshWeaver.ContentCollections.SyncContentFilesBuilder"] = ["ImpersonateAsSystem"],
+            // The mail copy's stores write and read as System on the owner's behalf (Doc/Architecture/MailCopy).
+            // Their runtime check judges the immediate caller, which a method group handed to a platform
+            // callback replaces — so both the interfaces and the concrete stores are reported here.
+            ["MeshWeaver.Graph.MailCopy.IMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Graph.MailCopy.MeshMailCopyStore"] = MailCopyStoreMembers,
+            ["MeshWeaver.Graph.MailCopy.IMailAttachmentStore"] = MailAttachmentStoreMembers,
+            ["MeshWeaver.Graph.MailCopy.MeshMailAttachmentStore"] = MailAttachmentStoreMembers,
+            // Enable starts the System backfill, so every public road to it is a surface: the engine, the
+            // per-account copy and the switch over the providers.
+            ["MeshWeaver.Graph.MailCopy.MailCopyEngine"] = ["Kick", "Sync", "Enable", "ServesFromCopy", "FollowMove"],
+            ["MeshWeaver.Graph.MailCopy.IMailAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.MailFeedAccountCopy"] = ["KickAll", "Enable"],
+            ["MeshWeaver.Graph.MailCopy.IMailCopySwitch"] = ["Enable"],
+            ["MeshWeaver.Graph.MailCopy.MailCopySwitch"] = ["Enable"],
         }.ToImmutableDictionary(p => p.Key, p => p.Value.ToImmutableHashSet(StringComparer.Ordinal), StringComparer.Ordinal);
 
     /// <summary>Members reported only when WRITTEN (an assignment, an object or <c>with</c> initializer).</summary>

@@ -638,7 +638,7 @@ public sealed class PendingModuleActivationRebootCheck : IInstanceRebootCheck
         var pool = meshHub.ServiceProvider.GetService<IoPoolRegistry>()?.Get(IoPoolNames.FileSystem);
         var read = pool is null
             ? Observable.Defer(() => Observable.Return(activations.Read()))
-            : pool.InvokeBlocking(_ => activations.Read());
+            : pool.InvokeBlocking(ct => activations.Read(ct));
         return read.Select(report => Judge(Name, report));
     }
 

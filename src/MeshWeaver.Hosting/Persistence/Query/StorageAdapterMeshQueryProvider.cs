@@ -73,7 +73,7 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
 
     public StorageAdapterMeshQueryProvider(
         IStorageAdapter persistence,
-        // 🚨 NO SecurityService here — that parameter created the Autofac
+        // 🚨 NO SecurityService here — that parameter created the DI container
         // cycle SecurityService → SyncedQueryMeshNodes → IMeshQueryCore →
         // StorageAdapterMeshQueryProvider → SecurityService. Per-node read
         // filtering on the secured IMeshQueryProvider surface goes through
@@ -967,8 +967,13 @@ internal class StorageAdapterMeshQueryProvider : IMeshQueryProvider, IMeshQueryC
     /// the following ten seconds. Before the FileSystem pool became drainable those same stragglers
     /// ran unsupervised on the unbounded pool instead — the issue #613 teardown-crash shape — so this
     /// is the same defect seen from the other side, and terminating the walk is what closes it.
+    ///
+    /// <para>🚨 A cancellation raised to express a TIMEOUT is not teardown: it is a read that did not
+    /// answer in time — a genuine per-path read fault, dropped and recorded like any other. Treating
+    /// it as teardown ended the whole walk on one slow read. The verdict is
+    /// <see cref="FaultClassifier"/>'s <see cref="FaultClassification.IsCancellation"/>.</para>
     /// </summary>
-    private static bool IsTeardownCancellation(Exception ex) => ex is OperationCanceledException;
+    internal static bool IsTeardownCancellation(Exception ex) => FaultClassifier.Classify(ex).IsCancellation;
 
     /// <summary>
     /// Records, for ONE query run, that this provider answered over reads it could not complete —

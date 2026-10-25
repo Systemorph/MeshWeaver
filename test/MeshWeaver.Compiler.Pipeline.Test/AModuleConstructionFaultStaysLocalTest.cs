@@ -1,5 +1,4 @@
 using System.Reactive.Linq;
-using Autofac;
 using MeshWeaver.Hosting.Monolith.TestBase;
 using MeshWeaver.Mesh;
 using MeshWeaver.Mesh.Security;
@@ -9,6 +8,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Graph.Test;
 
@@ -133,9 +133,9 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
     public void AFailingScope_FollowedByAHealthyScope_ServesTheHealthyScope()
     {
         var index = Index<IMeshQueryProvider>();
-        var lifetime = Mesh.ServiceProvider.GetRequiredService<ILifetimeScope>();
-        using var failing = lifetime.BeginLifetimeScope();
-        using var healthy = lifetime.BeginLifetimeScope();
+        var lifetime = MeshServiceProvider.From(Mesh.ServiceProvider)!;
+        using var failing = lifetime.BeginScope();
+        using var healthy = lifetime.BeginScope();
 
         FailConstruction(ProviderType, Constructions(ProviderType) + 1);
         var failed = Contexts.TryLeaseModuleService(Module, index, failing, typeof(IMeshQueryProvider));
@@ -148,7 +148,7 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
         Held().Services!.Unservable.Should().BeEmpty("nothing about this generation was recorded");
 
         // The caller's own scope ending is the caller's fault and propagates — never "absent".
-        var ended = lifetime.BeginLifetimeScope();
+        var ended = lifetime.BeginScope();
         ended.Dispose();
         var disposal = Record.Exception(() => Contexts.TryLeaseModuleService(Module, index, ended, typeof(IMeshQueryProvider)));
         disposal.Should().NotBeNull("a lease asked for by a caller whose scope has ended is that caller's fault");
@@ -167,7 +167,7 @@ public sealed class AModuleConstructionFaultStaysLocalTest(ITestOutputHelper out
     {
         var ct = TestContext.Current.CancellationToken;
         var index = Index<IMeshQueryProvider>();
-        using var healthy = Mesh.ServiceProvider.GetRequiredService<ILifetimeScope>().BeginLifetimeScope();
+        using var healthy = MeshServiceProvider.From(Mesh.ServiceProvider)!.BeginScope();
         FailWithOwnDisposal(ProviderType);
 
         FailConstruction(ProviderType, Constructions(ProviderType) + 1);

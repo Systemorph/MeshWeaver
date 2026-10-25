@@ -5,8 +5,7 @@ namespace MeshWeaver.Hosting.Orleans.Test;
 /// <summary>
 /// Suppresses a benign in-process Orleans <c>TestCluster</c> shutdown race.
 ///
-/// <para>When a test class's <c>TestCluster</c> is disposed, the silo's Autofac
-/// DI container (<c>LifetimeScope</c>) is torn down while the silo's network
+/// <para>When a test class's <c>TestCluster</c> is disposed, the silo's DI container (its service scope) is torn down while the silo's network
 /// <c>Orleans.Runtime.Messaging.Connection</c> is still draining in-flight
 /// <c>Memory</c>-stream messages on a ThreadPool task. Deserializing those
 /// (<c>MemoryMessageBodySerializerFactory.GetOrCreateSerializer</c> /
@@ -33,16 +32,13 @@ internal static class OrleansShutdownRaceSuppressor
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             var inners = e.Exception?.Flatten().InnerExceptions;
-            if (inners is { Count: > 0 } && inners.All(IsDisposedLifetimeScope))
+            if (inners is { Count: > 0 } && inners.All(IsDisposedServiceScope))
                 e.SetObserved();
         };
     }
 
-    private static bool IsDisposedLifetimeScope(Exception ex)
-    {
-        var msg = ex.Message ?? string.Empty;
-        return (ex is ObjectDisposedException
-                && msg.Contains("LifetimeScope", StringComparison.OrdinalIgnoreCase))
-               || msg.Contains("nested lifetimes cannot be created", StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsDisposedServiceScope(Exception ex) =>
+        // Every branch, through wrappers — a wrapper over a disposed scope beside a real defect is not
+        // the shutdown race.
+        MeshWeaver.Messaging.FaultClassifier.EveryBranchIsDisposedContainer(ex);
 }

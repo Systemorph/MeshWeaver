@@ -51,7 +51,7 @@ public static class IoPoolNames
     /// MeshQuery change-feed subscribe leaves (<see cref="IIoPool.SubscribeThroughPool{T}"/>). Exists
     /// so the query SUBSCRIBE — which opens providers + emits the initial snapshot and can route →
     /// create a per-node hub — is TRACKED and DRAINABLE at teardown (the endemic teardown SIGSEGV was a
-    /// query straggler creating a hub on the disposing Autofac scope). Generous cap: it's a drain hook,
+    /// query straggler creating a hub on the disposing service scope). Generous cap: it's a drain hook,
     /// not a throttle (the slot is held only for the bounded subscribe window).
     /// </summary>
     public const string Query = "Query";
@@ -62,7 +62,7 @@ public static class IoPoolNames
     /// hub's action block to stay query-in-render-safe, and runs the synchronous render body
     /// (including menu renderers that resolve services and touch collectible NodeType ALC types) — is
     /// TRACKED and DRAINABLE at teardown. Without it the render straggler executes on a bare
-    /// ThreadPool thread after the Autofac scope is disposed and the NodeType ALC unloaded → the
+    /// ThreadPool thread after the service scope is disposed and the NodeType ALC unloaded → the
     /// endemic teardown SIGSEGV (FutuRe.Test exit=139). Generous cap: it's a drain hook, not a
     /// throttle (the slot is held only for the bounded subscribe window).
     /// </summary>

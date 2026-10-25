@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -48,7 +49,7 @@ public class NoReplaceMoveRatchetGuard
     [Fact]
     public void NoProductionCodePublishesWithFileMoveWithoutOverwrite()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var offenders = SourceScan.SourceFiles(root, ScannedRoots)
             .SelectMany(f => Sites(SourceScan.Relative(root, f), File.ReadAllText(f)))
             .Where(s => !string.Equals(s.File, PrimitiveFile, StringComparison.Ordinal))
@@ -74,7 +75,7 @@ public class NoReplaceMoveRatchetGuard
     [Fact]
     public void ThePrimitiveIsStillWhereTheExemptionSaysItIs()
     {
-        var root = SourceScan.FindRepoRoot();
+        var root = RepoPaths.Root;
         var file = Path.Combine(root, PrimitiveFile);
 
         Assert.True(File.Exists(file),

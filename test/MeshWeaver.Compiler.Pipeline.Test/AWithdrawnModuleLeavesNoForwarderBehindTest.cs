@@ -7,11 +7,11 @@ namespace MeshWeaver.Graph.Test;
 
 /// <summary>
 /// MeshWeaver#6557, the two residual gaps of <see cref="AWithdrawnModuleIsAbsentFromTheSweepTest"/>'s class,
-/// each pinned on BOTH host kinds (the Autofac root every portal builds, and a plain MS DI
+/// each pinned on BOTH host kinds (the root container every portal builds, and a plain MS DI
 /// <c>BuildServiceProvider()</c> host):
 /// <list type="number">
 /// <item><b>A withdrawal is reported on every host.</b> The <see cref="IncompatibleModule"/> record of a
-/// module withdrawn at boot reached consumers only through an Autofac registration source, and a plain MS
+/// module withdrawn at boot reached consumers only through a registration source, and a plain MS
 /// DI host never ran the publication that withdraws a failing module at all.</item>
 /// <item><b>No forwarder of a withdrawn module is enumerated.</b> A held module that registers further
 /// <see cref="InstalledModuleAssembly"/> instances itself (MeshWeaver.Testing's xunit closure) was served
@@ -52,7 +52,7 @@ internal static class WithdrawnModuleReads
     }
 }
 
-/// <summary>The Autofac host: a withdrawn module that ships a reference is reported, and its reference is
+/// <summary>The the DI container host: a withdrawn module that ships a reference is reported, and its reference is
 /// absent rather than a forwarder that throws.</summary>
 public sealed class AWithdrawnModuleLeavesNoForwarderBehindTest(ITestOutputHelper output)
     : ModuleSingletonsBuiltAtBootTestBase(output)
@@ -64,7 +64,7 @@ public sealed class AWithdrawnModuleLeavesNoForwarderBehindTest(ITestOutputHelpe
     protected override bool ShipsReferences => true;
 
     [Fact]
-    public void OnTheAutofacHost_TheShippedReferenceIsAbsent_AndTheWithdrawalIsReported()
+    public void OnTheMeshWeaverHost_TheShippedReferenceIsAbsent_AndTheWithdrawalIsReported()
     {
         Contexts.Current(Module).Should().BeNull("the precondition: the module was withdrawn at boot");
         WithdrawnModuleReads.CollectEverything();
@@ -79,7 +79,7 @@ public sealed class AWithdrawnModuleLeavesNoForwarderBehindTest(ITestOutputHelpe
     }
 }
 
-/// <summary>The negative control on the Autofac host: published, the module's shipped reference IS installed.</summary>
+/// <summary>The negative control on the DI container host: published, the module's shipped reference IS installed.</summary>
 public sealed class APublishedModuleListsTheReferenceItShipsTest(ITestOutputHelper output)
     : ModuleSingletonsBuiltAtBootTestBase(output)
 {
@@ -90,7 +90,7 @@ public sealed class APublishedModuleListsTheReferenceItShipsTest(ITestOutputHelp
     protected override bool ShipsReferences => true;
 
     [Fact]
-    public void OnTheAutofacHost_TheShippedReferenceIsInstalled()
+    public void OnTheMeshWeaverHost_TheShippedReferenceIsInstalled()
     {
         Contexts.Current(Module).Should().NotBeNull();
         WithdrawnModuleReads.Installed(Mesh.ServiceProvider, ShippedReferenceName)
@@ -114,7 +114,7 @@ public sealed class AWithdrawnModuleOnAPlainMsDiHostTest
         // The report is read FIRST, before anything else resolves the module registry: the host must
         // withdraw and report on its own, with nobody calling a hook for it.
         WithdrawnModuleReads.Incompatible(provider, Module)
-            .Should().ContainSingle("a plain MS DI host reports a withdrawal exactly as the Autofac host does")
+            .Should().ContainSingle("a plain MS DI host reports a withdrawal exactly as the MeshWeaver host does")
             .Which.Error.Should().Contain("could not be built before it was published");
         provider.GetRequiredService<ModuleContexts>().Current(Module)
             .Should().BeNull("the host withdrew the module whose shared instances could not be built");

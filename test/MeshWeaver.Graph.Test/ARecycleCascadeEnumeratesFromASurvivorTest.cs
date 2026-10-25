@@ -31,10 +31,10 @@ namespace MeshWeaver.Graph.Test;
 /// derived "while this hub is still whole". That holds for the derivation's SYNCHRONOUS prologue and
 /// for nothing after it: every enumeration leg is a cross-hub query, the legs run sequentially
 /// (<c>Concat</c>), and by the time the second one subscribes the definition hub has finished
-/// disposing and <c>HostedHubsCollection.CloseScopeWhenDisposed</c> has closed its Autofac lifetime
+/// disposing and <c>HostedHubsCollection.CloseScopeWhenDisposed</c> has closed its DI container lifetime
 /// scope. The leg then resolves <c>AccessService</c> out of that scope
 /// (<c>MeshService.StampViewer</c> → <c>CaptureContext</c>) and
-/// <c>AutofacServiceProvider.GetService</c> throws.</para>
+/// <c>the hub's service provider's GetService</c> throws.</para>
 ///
 /// <para><b>The cure.</b> <see cref="NodeTypeRecycleCascade.DependencyNetwork"/> enumerates through
 /// the mesh's READ-issuing hub (<c>MeshExtensions.ReadIssuingHub</c>), which is hosted by the mesh
@@ -119,7 +119,7 @@ public class ARecycleCascadeEnumeratesFromASurvivorTest(ITestOutputHelper output
 
         result.Incomplete.Should().BeEmpty(
             "the enumeration must not depend on the DYING hub's DI scope — before the fix every "
-            + "leg threw ObjectDisposedException out of AutofacServiceProvider.GetService and the "
+            + "leg threw ObjectDisposedException out of the hub's service provider's GetService and the "
             + "recycle reached 0 of its instance hubs while reporting a recycle had happened (#5099)");
         result.Addresses.Should().Contain(InstancePath,
             "and the instance really has to be in the answer — a complete-but-empty network is the "

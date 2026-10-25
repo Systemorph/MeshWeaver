@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using Xunit;
+using MeshWeaver.Fixture;
 
 namespace MeshWeaver.Documentation.Test;
 
@@ -33,13 +34,13 @@ public class PlatformReleaseNotifyGuard
     /// <summary>The workflow's steps, comments stripped — a guard must judge what RUNS, never the
     /// prose explaining it.</summary>
     private static string Body() => string.Join("\n",
-        File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow))
+        File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow))
             .Split('\n')
             .Where(l => !l.TrimStart().StartsWith('#')));
 
     /// <summary>The workflow verbatim, comments included — for the few assertions that are ABOUT
     /// the prose (a rationale that must stay attached to the code it explains).</summary>
-    private static string Verbatim() => File.ReadAllText(Path.Combine(FindRepoRoot(), Workflow));
+    private static string Verbatim() => File.ReadAllText(Path.Combine(RepoPaths.Root, Workflow));
 
     /// <summary>
     /// 🚨 A gate NEVER tests its own inputs. `preflight` must assert both halves of the release
@@ -50,7 +51,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void PreflightAssertsBothHalvesOfTheReleaseEventCredential()
     {
-        var preflight = JobBlock(Body(), "preflight:");
+        var preflight = JobBlock(Body(), "preflight");
 
         Assert.Contains("PLATFORM_WEBHOOK_URL", preflight, StringComparison.Ordinal);
         Assert.Contains("PLATFORM_WEBHOOK_SECRET", preflight, StringComparison.Ordinal);
@@ -77,7 +78,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void NotifyDependsOnPreflight_AndCarriesNoInputShapedCondition()
     {
-        var notify = JobBlock(Body(), "notify-platform-update:");
+        var notify = JobBlock(Body(), "notify-platform-update");
 
         Assert.Contains("needs: [preflight", notify, StringComparison.Ordinal);
         Assert.DoesNotContain("continue-on-error", notify, StringComparison.Ordinal);
@@ -138,7 +139,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void TheSignatureVerdictIsItsOwnStep_AndItsMisconfigurationBranchEndsTheJob()
     {
-        var notify = JobBlock(Body(), "notify-platform-update:");
+        var notify = JobBlock(Body(), "notify-platform-update");
 
         var post = StepBlock(notify, "Sign and POST the build fact");
         Assert.DoesNotContain("::warning", post, StringComparison.Ordinal);
@@ -179,7 +180,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void AFailedReleaseEventIsAlerted()
     {
-        var alert = JobBlock(Body(), "alert-on-failure:");
+        var alert = JobBlock(Body(), "alert-on-failure");
         var needs = alert.Split('\n').First(l => l.TrimStart().StartsWith("needs:", StringComparison.Ordinal));
 
         Assert.Contains("preflight", needs, StringComparison.Ordinal);
@@ -202,14 +203,15 @@ public class PlatformReleaseNotifyGuard
     /// was silent because the broadcaster had NO CALLER, not because a mesh hop is unreliable. Two
     /// emitters for one event is the cross-repo coupling the rule forbids.</para>
     ///
-    /// <para>ONE ledgered exception, and it is not a release event (policy
-    /// <c>dependent-suites-affected-gate</c>, Doc/Architecture/CrossRepoPairGate): <see cref="DispatchLedger"/>.
-    /// Core's pull-request/merge-queue gate asks MeshWeaver.Plugins to run its suites against the
-    /// CANDIDATE commit (<c>core-candidate-suites</c>) and waits for the verdict — a TEST REQUEST
-    /// about an unmerged commit, which memex cannot carry because nothing has been published. The
-    /// release wave stays memex's, and every other sender is still a regression.</para>
+    /// <para>There is NO ledgered exception. The one there was — <c>dotnet-test.yml</c> asking
+    /// MeshWeaver.Plugins to run its suites against a core CANDIDATE (<c>core-candidate-suites</c>,
+    /// policy <c>dependent-suites-affected-gate</c>) — was removed with that policy: it held a core
+    /// runner for up to 45 minutes polling another repository. Under policy
+    /// <c>dependents-verify-on-their-side</c> a dependent verifies a new SEALED core set on its own
+    /// side. The deploy side does not replace that check: arming judges platform evidence only and the
+    /// combo verdict is advisory (policy <c>platform-rolls-independently-of-packages</c>).</para>
     ///
-    /// <para>Otherwise there is no ledger. The reusable lanes core hosts for the satellites
+    /// <para>The reusable lanes core hosts for the satellites
     /// (<c>node-repo-publish-bake.yml</c>, <c>node-repo-tag-modules.yml</c>) used to send
     /// <c>meshweaver-upstream-published</c> / <c>meshweaver-modules-published</c> in the calling
     /// satellite's context — CI-to-CI coupling by another name; since 2026-09-03 a lane ENDS by
@@ -220,7 +222,7 @@ public class PlatformReleaseNotifyGuard
     [Fact]
     public void CoreDispatchesToNoRepository()
     {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
+        var workflows = Path.Combine(RepoPaths.Root, ".github", "workflows");
 
         // The withdrawn leg, by name — the shape most likely to be re-added from memory.
         Assert.False(File.Exists(Path.Combine(workflows, "notify-dependents.yml")),
@@ -229,7 +231,7 @@ public class PlatformReleaseNotifyGuard
 
         var senders = Directory.EnumerateFiles(workflows, "*.yml")
             .Select(f => (Name: Path.GetFileName(f), Sends: SendsARepositoryDispatch(f)))
-            .Where(x => x.Sends && !DispatchLedger.ContainsKey(x.Name))
+            .Where(x => x.Sends)
             .Select(x => x.Name)
             .OrderBy(n => n, StringComparer.Ordinal)
             .ToArray();
@@ -248,7 +250,7 @@ public class PlatformReleaseNotifyGuard
         Assert.DoesNotContain("uses: ./.github/workflows/notify-dependents.yml", body, StringComparison.Ordinal);
         Assert.DoesNotContain("BAKE_SUBSCRIBER_REPOS", body, StringComparison.Ordinal);
         Assert.DoesNotContain("DEPENDENT_DISPATCH_TOKEN", body, StringComparison.Ordinal);
-        var legs = SectionAfter(JobBlock(body, "delivery-verdict:"), "LEGS: >-");
+        var legs = SectionAfter(JobBlock(body, "delivery-verdict"), "LEGS: >-");
         Assert.DoesNotContain("notify-dependents=", legs, StringComparison.Ordinal);
         // 🚨 Under policy `one-promotion-gate` the release event follows `arm`, which
         // arms the fleet only for a promoted set whose platform verdict is green (its ladder, and
@@ -256,54 +258,7 @@ public class PlatformReleaseNotifyGuard
         // often in a later run — so it is NOT a leg of the platform delivery verdict any more. It
         // is still alerted (AFailedReleaseEventIsAlerted), and it must still follow the arming.
         Assert.DoesNotContain("notify-platform-update=", legs, StringComparison.Ordinal);
-        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update:"), StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// The ONE permitted sender: <c>dotnet-test.yml</c> asks MeshWeaver.Plugins to test a core
-    /// CANDIDATE — REQUIRED under policy <c>dependent-suites-affected-gate</c> (one POST line, at most two requests: Plugins' default branch, and a declared counterpart's head). The promotion
-    /// gate's verdict (main-cd <c>arm</c>) is requested by MeshWeaver.Plugins' own poller, so
-    /// main-cd sends nothing and stays off this ledger. Keyed by file, and every sending line in that
-    /// file is held to the one event type and the one target by
-    /// <see cref="TheLedgeredSender_SendsOnlyTheCandidateTestRequest"/>.
-    /// </summary>
-    private static readonly System.Collections.Immutable.ImmutableDictionary<string, string> DispatchLedger =
-        System.Collections.Immutable.ImmutableDictionary.CreateRange(StringComparer.Ordinal,
-        [
-            new System.Collections.Generic.KeyValuePair<string, string>("dotnet-test.yml",
-                "`dependent-suites-dispatch` sends `core-candidate-suites` to MeshWeaver.Plugins so its "
-                + "suites run against the candidate core commit before it lands (#2689; #5635/#5647/#5655 "
-                + "each turned Plugins' main red through a behaviour change no core gate could see)"),
-        ]);
-
-    /// <summary>
-    /// 🚨 The ledger entry is NOT a licence to dispatch anything from <c>dotnet-test.yml</c>. Every
-    /// sending line there must name the one event type and the one target — a second event, or a
-    /// dispatch to another repository, would be a new coupling hiding behind an old entry.
-    /// And the entry must still MATCH: a ledger line whose sender vanished is a detector that
-    /// stopped seeing its subject.
-    /// </summary>
-    [Fact]
-    public void TheLedgeredSender_SendsOnlyTheCandidateTestRequest()
-    {
-        var workflows = Path.Combine(FindRepoRoot(), ".github", "workflows");
-        foreach (var (file, _) in DispatchLedger)
-        {
-            var lines = File.ReadAllLines(Path.Combine(workflows, file))
-                .Where(l => !l.TrimStart().StartsWith('#')).ToArray();
-            Assert.True(SendsARepositoryDispatch(lines),
-                $"{file} is ledgered as a dispatch sender but sends nothing any more — delete the ledger entry in the same change.");
-            // EXACTLY one of each: a second POST — even to the same target with the same event —
-            // would start a duplicate candidate run racing on the same verdict ref.
-            var posts = lines.Where(l => l.Contains("/dispatches", StringComparison.Ordinal)).ToArray();
-            Assert.True(posts.Length == 1, $"{file} must send exactly ONE dispatch; found {posts.Length}:\n  " + string.Join("\n  ", posts));
-            Assert.Contains("repos/Systemorph/MeshWeaver.Plugins/dispatches", posts[0], StringComparison.Ordinal);
-            var events = lines.Where(l => l.Contains("event_type", StringComparison.Ordinal)).ToArray();
-            Assert.True(events.Length == 1, $"{file} must build exactly ONE event_type payload; found {events.Length}");
-            Assert.Contains("event_type: \"core-candidate-suites\"", events[0], StringComparison.Ordinal);
-            Assert.DoesNotContain("repository-dispatch@", string.Join("\n", lines), StringComparison.Ordinal);
-            Assert.DoesNotContain("createDispatchEvent", string.Join("\n", lines), StringComparison.Ordinal);
-        }
+        Assert.Contains("needs: [preflight, arm]", JobBlock(body, "notify-platform-update"), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -352,25 +307,23 @@ public class PlatformReleaseNotifyGuard
         return next < 0 ? body[start..] : body[start..next];
     }
 
-    /// <summary>Everything from a job's key to the next job key at the same indent.</summary>
+    /// <summary>One job's block, by its WHOLE key (<see cref="WorkflowJobText.Block"/>).</summary>
     private static string JobBlock(string body, string jobKey)
     {
-        var start = body.IndexOf("\n  " + jobKey, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
+        var block = WorkflowJobText.Block(body, jobKey);
+        Assert.True(block is not null, $"job '{jobKey}' is gone from {Workflow} — it has been removed or "
                                 + "renamed, which no other check would catch.");
-        var next = NextAtIndent(body, start + jobKey.Length + 3, "\n  ");
-        return next < 0 ? body[start..] : body[start..next];
+        return block!;
     }
 
-    /// <summary>Everything from a step's name to the next step boundary at the same indent, so an
-    /// assertion about one step cannot be satisfied by another.</summary>
+    /// <summary>The step whose name carries <paramref name="stepName"/>, bounded by the next step and
+    /// by the end of its job, so an assertion about one step cannot be satisfied by another.</summary>
     private static string StepBlock(string body, string stepName)
     {
-        var start = body.IndexOf(stepName, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"step '{stepName}' is gone from {Workflow} — the delivery leg it "
+        var step = WorkflowJobText.Step(body, stepName);
+        Assert.True(step is not null, $"step '{stepName}' is gone from {Workflow} — the delivery leg it "
                                 + "belongs to has been removed or renamed.");
-        var next = body.IndexOf("\n      - name:", start + stepName.Length, StringComparison.Ordinal);
-        return next < 0 ? body[start..] : body[start..next];
+        return step!;
     }
 
     /// <summary>The next line whose indent is exactly <paramref name="prefix"/> followed by a
@@ -397,14 +350,5 @@ public class PlatformReleaseNotifyGuard
              i = haystack.IndexOf(needle, i + needle.Length, StringComparison.Ordinal))
             n++;
         return n;
-    }
-
-    private static string FindRepoRoot()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, ".github")))
-            dir = dir.Parent;
-        Assert.NotNull(dir);
-        return dir!.FullName;
     }
 }

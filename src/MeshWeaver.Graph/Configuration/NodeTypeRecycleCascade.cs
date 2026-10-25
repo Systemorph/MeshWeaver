@@ -260,7 +260,7 @@ public static class NodeTypeRecycleCascade
         // subscribe AFTER the scope is gone, and each service they reach for then
         // (AccessService via MeshService.StampViewer, the IoPoolRegistry behind MeshQuery's
         // subscribe pool, JsonSerializerOptions) throws ObjectDisposedException out of
-        // AutofacServiceProvider.GetService. The leg is reported INCOMPLETE, the cascade recycles
+        // the hub's service provider's GetService. The leg is reported INCOMPLETE, the cascade recycles
         // nothing, and the instance hubs it exists to reach go on serving the assembly they were
         // born with — silently, which is the one outcome nobody re-checks.
         //

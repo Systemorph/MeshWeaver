@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reactive.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -26,8 +27,8 @@ namespace MeshWeaver.GitSync;
 /// <see cref="GitHubAppTokenMintException"/></b> (only a cancellation passes as itself). A caller
 /// therefore never has to read a message to know it is looking at a credential that was NEVER
 /// OBTAINED rather than one GitHub REJECTED — the two look identical once a mint failure has
-/// degraded to an anonymous fetch and surfaced, one layer later, as Octokit's
-/// <c>AuthorizationException: Bad credentials</c> (#4736).</para>
+/// degraded to an anonymous fetch and surfaced, one layer later, as a
+/// <see cref="GitHubAuthorizationException"/>: <c>Bad credentials</c> (#4736).</para>
 /// </summary>
 public sealed class GitHubAppTokenService
 {
@@ -223,10 +224,88 @@ public sealed class GitHubAppTokenService
         // or let it through, never half. A caller degrading to an anonymous fetch (the Store's
         // package feed does, so a public source keeps working) must be able to say WHICH failure it
         // is degrading over, and the only thing that survives every layer between here and its log
-        // is the TYPE. Without it the degraded fetch is reported one layer later as Octokit's
+        // is the TYPE. Without it the degraded fetch is reported one layer later as GitHub's
         // "Bad credentials", and a mint that never happened reads as a credential GitHub rejected
         // (#4736). Cancellation is deliberately NOT translated: a cancelled mint is not a failed one.
         .Catch((Exception exception) => Observable.Throw<string>(AsMintFailure(exception)));
+    }
+
+    /// <summary>
+    /// A token NARROWED to <paramref name="repositories"/> and <paramref name="permissions"/>
+    /// (<c>POST /app/installations/{id}/access_tokens</c> with <c>repositories</c> + <c>permissions</c>)
+    /// — the credential handed to something that must reach ONE repository read-only and nothing else,
+    /// such as a standing build host's checkout (Doc/Architecture/BuildHosts: <c>{"contents":"read"}</c>
+    /// for the claimed run's repository).
+    ///
+    /// <para>🚨 NEVER CACHED. Every call mints its own token: a scoped token is not the installation's
+    /// token, and sharing one across scopes would hand a caller a repository or a permission it did not
+    /// ask for. The installation is resolved exactly as <see cref="GetInstallationToken(string?)"/>
+    /// resolves it, and every fault is a <see cref="GitHubAppTokenMintException"/>. GitHub refuses a
+    /// scope wider than the installation's grant (422), which surfaces as
+    /// <see cref="GitHubAppTokenMintStage.TokenExchange"/> — never as a wider token.</para>
+    /// </summary>
+    /// <param name="installationOwner">The account the installation lives on, or null/blank for the
+    /// instance's own installation.</param>
+    /// <param name="repositories">Bare repository NAMES on that account (no owner, no slash); at least one.</param>
+    /// <param name="permissions">GitHub App permission → <c>read</c> | <c>write</c>; at least one.</param>
+    public IObservable<string> GetScopedInstallationToken(
+        string? installationOwner, IReadOnlyList<string> repositories, IReadOnlyDictionary<string, string> permissions)
+    {
+        var owner = (installationOwner ?? "").Trim();
+        TokenScope scope;
+        try
+        {
+            scope = TokenScope.Of(repositories, permissions);
+        }
+        catch (ArgumentException exception)
+        {
+            return Observable.Throw<string>(exception);
+        }
+        var notConfigured = GitSyncRefusal.Of("gitsync.app.notConfigured");
+        return WhenReady.SelectMany(_ => Observable.Defer(() =>
+            {
+                var app = Effective();
+                if (!app.IsConfigured)
+                {
+                    var missing = new GitHubAppTokenMintException(
+                        GitHubAppTokenMintStage.NotConfigured, notConfigured.Render(null));
+                    missing.Data[GitSyncRefusalException.DataKey] = notConfigured;
+                    return Observable.Throw<string>(missing);
+                }
+                return Http.Run(ct => FetchInstallationTokenAsync(app, owner, scope, ct))
+                    .Select(minted => minted.Token.Token);
+            }))
+            .Catch((Exception exception) => Observable.Throw<string>(AsMintFailure(exception)));
+    }
+
+    /// <summary>The validated scope of a narrowed token: bare repository names and read/write permissions.</summary>
+    private sealed record TokenScope(ImmutableArray<string> Repositories, ImmutableSortedDictionary<string, string> Permissions)
+    {
+        public static TokenScope Of(IReadOnlyList<string> repositories, IReadOnlyDictionary<string, string> permissions)
+        {
+            ArgumentNullException.ThrowIfNull(repositories);
+            ArgumentNullException.ThrowIfNull(permissions);
+            var repos = repositories.Select(r => (r ?? "").Trim()).ToImmutableArray();
+            if (repos.Length == 0)
+                throw new ArgumentException("A scoped token names at least one repository.", nameof(repositories));
+            foreach (var r in repos)
+                if (r.Length == 0 || r.Contains('/') || r.Any(char.IsWhiteSpace))
+                    throw new ArgumentException($"'{r}' is not a bare repository name (no owner, no slash).", nameof(repositories));
+            if (permissions.Count == 0)
+                throw new ArgumentException("A scoped token names at least one permission.", nameof(permissions));
+            var perms = ImmutableSortedDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+            foreach (var (name, level) in permissions)
+            {
+                if (string.IsNullOrWhiteSpace(name))
+                    throw new ArgumentException("A permission name is blank.", nameof(permissions));
+                if (level is not ("read" or "write"))
+                    throw new ArgumentException($"Permission '{name}' must be 'read' or 'write' (got '{level}').", nameof(permissions));
+                perms[name.Trim()] = level;
+            }
+            return new TokenScope(repos.Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray(), perms.ToImmutable());
+        }
+
+        public string Body() => JsonSerializer.Serialize(new { repositories = Repositories, permissions = Permissions });
     }
 
     /// <summary>
@@ -303,7 +382,7 @@ public sealed class GitHubAppTokenService
     }
 
     private IObservable<MintedInstallation> CreateFetch(GitHubAppOptions app, string owner) =>
-        Http.Run(ct => FetchInstallationTokenAsync(app, owner, ct))
+        Http.Run(ct => FetchInstallationTokenAsync(app, owner, scope: null, ct))
             .Catch((Exception ex) => Observable.Throw<MintedInstallation>(AsMintFailure(ex)));
 
     // A short, non-reversible tag of the key, so the cache key never holds the PEM itself.
@@ -313,7 +392,7 @@ public sealed class GitHubAppTokenService
     // ── HTTP leaves (run inside the I/O pool) ────────────────────────────────
 
     private async Task<MintedInstallation> FetchInstallationTokenAsync(
-        GitHubAppOptions options, string owner, CancellationToken ct)
+        GitHubAppOptions options, string owner, TokenScope? scope, CancellationToken ct)
     {
         string jwt;
         try
@@ -347,6 +426,8 @@ public sealed class GitHubAppTokenService
             $"{options.ApiBaseUrl.TrimEnd('/')}/app/installations/{installationId}/access_tokens");
         req.Headers.Accept.ParseAdd("application/vnd.github+json");
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", jwt);
+        if (scope is not null)
+            req.Content = new StringContent(scope.Body(), Encoding.UTF8, "application/json");
         using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
         var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         if (!resp.IsSuccessStatusCode)
@@ -369,8 +450,10 @@ public sealed class GitHubAppTokenService
             ? dto
             : now().AddMinutes(50);   // GitHub's documented lifetime is 1h
         logger?.LogInformation(
-            "Minted GitHub App installation token (installation {Id}{Owner}, expires {Exp})",
-            installationId, owner.Length > 0 ? $" on '{owner}'" : "", expiresAt);
+            "Minted GitHub App installation token (installation {Id}{Owner}{Scope}, expires {Exp})",
+            installationId, owner.Length > 0 ? $" on '{owner}'" : "",
+            scope is null ? "" : $", scoped to {string.Join(",", scope.Repositories)} [{string.Join(",", scope.Permissions.Select(p => p.Key + ":" + p.Value))}]",
+            expiresAt);
         return new MintedInstallation(new InstallationToken(token, expiresAt), installation);
     }
 

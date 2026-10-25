@@ -7,7 +7,6 @@ using System.Reactive.Linq;
 using System.Reactive.Subjects;
 using System.Text.Json;
 using System.Threading.Tasks;
-using Autofac;
 using MeshWeaver.Data;
 using MeshWeaver.Fixture;
 using MeshWeaver.Layout.Client;
@@ -16,6 +15,7 @@ using MeshWeaver.Messaging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Xunit;
+using MeshWeaver.ServiceProvider;
 
 namespace MeshWeaver.Layout.Test;
 
@@ -29,7 +29,7 @@ namespace MeshWeaver.Layout.Test;
 /// fail: MeshWeaver.Layout.Composition.LayoutAreaHost[0]
 ///       Rendering failed for area Overview
 ///       System.ObjectDisposedException: Instances cannot be resolved … from this LifetimeScope …
-///          at Autofac.Core.Lifetime.LifetimeScope.ThrowDisposedException()
+///          at MeshWeaver.ServiceProvider.MeshServiceProvider.ThrowIfDisposed()
 ///          at MeshWeaver.Mesh.Security.PermissionEvaluator.GetEffectivePermissions(…) :line 126
 /// fail: MeshWeaver.Layout.Composition.LayoutAreaHost[0]
 ///       Failed to render the error placeholder for area Overview
@@ -40,7 +40,7 @@ namespace MeshWeaver.Layout.Test;
 ///
 /// <para><b>Why it was mis-reported.</b> <c>AreaErrorClassifier.IsHubDisposalRace</c> matched only
 /// the TYPED <see cref="HubDisposingException"/> (#2255). The DI-scope shape of the same race —
-/// Autofac's bare <see cref="ObjectDisposedException"/> from a service resolved on the host's
+/// the container's bare <see cref="ObjectDisposedException"/> from a service resolved on the host's
 /// already-disposed scope — looked like an ordinary defect, so the render logged it at Error (the
 /// level the red-log filer turns into an incident) and then tried to LOCALISE a placeholder through
 /// the very scope that was gone, faulting a second time. The user got neither the area nor a
@@ -54,13 +54,13 @@ namespace MeshWeaver.Layout.Test;
 /// activation renders the real content.</para>
 ///
 /// <para><b>How the race is pinned, deterministically.</b> The parked view generator is resumed
-/// from Autofac's own <see cref="ILifetimeScope.CurrentScopeEnding"/> event on the host hub's
-/// scope. Autofac's <c>Disposable.Dispose()</c> sets the disposed flag FIRST — from that instant
+/// from the container's own <see cref="MeshServiceProvider.CurrentScopeEnding"/> event on the host hub's
+/// scope. the container's <c>Disposable.Dispose()</c> sets the disposed flag FIRST — from that instant
 /// every resolve throws — and <c>LifetimeScope.Dispose(true)</c> then raises this event BEFORE its
 /// disposer reaches a single tracked instance or child scope. So the generator resumes
 /// synchronously on the disposing thread, strictly inside the incident window: the scope is dead,
 /// and the stream, its sub-hub and the hub instance are all still alive and subscribed. It then
-/// resolves from that scope and throws the real Autofac fault into the real render chain. No
+/// resolves from that scope and throws the real container fault into the real render chain. No
 /// sleeps, no fake exception.</para>
 ///
 /// <para>🚨 A sentinel <see cref="IDisposable"/> tracked in the scope (the #2444 shape) is a
@@ -104,7 +104,7 @@ public class ScopeTeardownRenderTest : HubTestBase
                         {
                             // The scope's disposed flag is set, the hub's Dispose has not run: this
                             // is the resolution the permission fold performed in production, and it
-                            // throws Autofac's ObjectDisposedException into the render chain.
+                            // throws the container's ObjectDisposedException into the render chain.
                             host.Hub.ServiceProvider.GetRequiredService<IMessageHub>();
                             return (UiControl?)null;
                         });
@@ -145,14 +145,14 @@ public class ScopeTeardownRenderTest : HubTestBase
         await generatorInvoked.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
         await frames.FirstAsync().Timeout(TimeSpan.FromSeconds(10)).Await();
 
-        // The window, from Autofac itself: CurrentScopeEnding is raised inside Dispose(true), after
+        // The window, from the DI container itself: CurrentScopeEnding is raised inside Dispose(true), after
         // the disposed flag is set and before the disposer reaches anything. Resuming the parked
         // generator from here puts its resolve exactly where the incident's was.
-        host.ServiceProvider.GetRequiredService<ILifetimeScope>().CurrentScopeEnding +=
+        MeshServiceProvider.From(host.ServiceProvider)!.Ending +=
             (_, _) => scopeDisposing.OnNext(Unit.Default);
 
         // Out-of-band scope teardown of the HOST hub — no hub.Dispose(), no CloseCreation cascade.
-        // Disposing the hub's AutofacServiceProvider disposes the underlying lifetime scope: flag,
+        // Disposing the hub's service provider disposes the underlying lifetime scope: flag,
         // then the event above (the generator resumes, faults, and the render classifies it while
         // every subscription is still live), then the sweep over the stream's sub-hub and the
         // tracked host hub instance.
@@ -202,7 +202,7 @@ public class ScopeTeardownRenderTest : HubTestBase
                 + "lifecycle, classified at Debug like the typed HubDisposingException race (#2255); at "
                 + "Error the red-log filer files an incident for it, which is how #2679 was opened");
             classified.Exception.Should().BeOfType<ObjectDisposedException>(
-                "the fault that arrived is Autofac's own — the bare shape the type-only classifier missed");
+                "the fault that arrived is the container's own — the bare shape the type-only classifier missed");
         }
 
         if (neverRendered is not null)
@@ -227,8 +227,7 @@ public class ScopeTeardownRenderTest : HubTestBase
     public void TheProbeGatedClassifier_OnlyMatchesADisposedScope()
     {
         var disposedScope = new ObjectDisposedException(
-            "Instances cannot be resolved and nested lifetimes cannot be created from this "
-            + "LifetimeScope as it (or one of its parent scopes) has already been disposed.");
+            MeshServiceProvider.DisposedMessage);
 
         AreaErrorClassifier.IsHubDisposalRace(disposedScope, () => true).Should().BeTrue(
             "an ObjectDisposedException while the host's own scope is gone IS the teardown race");

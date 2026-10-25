@@ -12,7 +12,10 @@ mkdir -p "$STAGE"
 # Cornerstone is NOT here any more: it moved to MeshWeaver.Plugins as a Store package when
 # MeshWeaver.Maps left the content surface — its RiskMap view binds MapControl, so the content
 # had to travel with the module. Its suites moved with it and run there.
-for name in ACME Northwind FutuRe PensionFund MathDemo PythonDemo Systemorph; do
+# ACME, Northwind, FutuRe and PensionFund are NOT here any more either: they are product demos, not
+# framework samples, and moved to MeshWeaver.Plugins' test/samples/Graph with the suites that load
+# them (Doc/Architecture/CarvingProjectsOutOfCore -> "The product demo samples").
+for name in MathDemo PythonDemo Systemorph; do
   if [ ! -d "$SRC/$name" ]; then echo "::error::samples gate: expected tree '$name' is missing"; exit 1; fi
   mkdir -p "$STAGE/$name"
   cp -R "$SRC/$name/." "$STAGE/$name/"
