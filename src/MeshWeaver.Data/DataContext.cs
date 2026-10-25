@@ -47,13 +47,11 @@ public sealed record DataContext : IDisposable
         Workspace = workspace;
         ReduceManager = Hub.CreateReduceManager();
 
+        // The [Dimension]-tuple key is a convention of every registry's KeyFunctionBuilder, not a
+        // provider added here: added per DataContext, it made each data hub's key functions differ from
+        // its parent's, so the hub could resolve no definition through the parent's registry
+        // (Doc/Architecture/TypeRegistryLayers).
         TypeRegistry = Hub.ServiceProvider.GetRequiredService<ITypeRegistry>();
-        TypeRegistry.WithKeyFunctionProvider(type =>
-            KeyFunctionBuilder.GetFromProperties(
-                type,
-                type.GetProperties().Where(x => x.HasAttribute<DimensionAttribute>()).ToArray()
-            ) ?? null
-        );
     }
 
     private readonly ILogger<DataContext> logger;
