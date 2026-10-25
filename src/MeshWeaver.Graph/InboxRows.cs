@@ -49,6 +49,12 @@ public sealed record InboxSection(string Band, string Source, int Order, string 
 
     /// <summary>Whether the kind is ticked for a viewer who never chose (<see cref="InboxQueryLeg.DefaultKind"/>).</summary>
     public bool DefaultKind { get; init; }
+
+    /// <summary>
+    /// The state filter the leg's rows belong to (<see cref="InboxQueryLeg.StateKind"/>, else implied by
+    /// <see cref="Category"/>) — an <see cref="InboxStateKind"/> constant. Never empty once read through <see cref="InboxRows.StateKindOf"/>.
+    /// </summary>
+    public string StateKind { get; init; } = string.Empty;
 }
 
 /// <summary>
@@ -141,6 +147,9 @@ public sealed record InboxRow
 
     /// <summary>The side-menu category the row is filed under (<see cref="InboxSection.Category"/>).</summary>
     public string Category { get; init; } = string.Empty;
+
+    /// <summary>The state filter the row answers to (<see cref="InboxSection.StateKind"/>): activity, mail, chat or notification.</summary>
+    public string StateKind { get; init; } = string.Empty;
 
     /// <summary>
     /// The node the row is ABOUT, when the row only announces it — the <c>targetNodePath</c> of an
@@ -285,10 +294,24 @@ public sealed record InboxFilter
     public bool ShowIgnorable { get; init; }
 
     /// <summary>
-    /// The state groups ticked, by <see cref="InboxRows.OpenKey"/> / <see cref="InboxRows.DoneKey"/>.
-    /// A row in any ticked group is listed; none ticked means all.
+    /// The approvals / activities filter — <c>open</c> / <c>done</c> ticked. A row of that kind in any ticked
+    /// group is listed; none ticked means all. Owned by the activity kind alone: it never narrows mail or chats.
     /// </summary>
-    public ImmutableDictionary<string, bool> States { get; init; } = ImmutableDictionary<string, bool>.Empty;
+    public ImmutableDictionary<string, bool> ActivityStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>
+    /// The retired global state filter. Kept as a forwarder so code compiled against it keeps working: it IS the
+    /// activities filter (<see cref="ActivityStates"/>) and never narrows mail or chats.
+    /// </summary>
+    [Obsolete("The state filter is per kind: use ActivityStates, MailStates or ChatStates. This forwards to ActivityStates.")]
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ImmutableDictionary<string, bool> States { get => ActivityStates; init => ActivityStates = value; }
+
+    /// <summary>The mail filter — <c>unread</c> / <c>read</c> ticked; none ticked means all.</summary>
+    public ImmutableDictionary<string, bool> MailStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
+
+    /// <summary>The chat filter (Teams, WhatsApp, iMessage, portal conversations) — <c>unread</c> / <c>read</c> ticked; none ticked means all.</summary>
+    public ImmutableDictionary<string, bool> ChatStates { get; init; } = ImmutableDictionary<string, bool>.Empty;
 }
 
 /// <summary>One tag checkbox of the side menu.</summary>
@@ -373,7 +396,9 @@ public static class InboxRows
         => string.Join('\n', new[] { filter.Search, filter.Order, filter.Category, filter.Only, filter.Account, filter.Tag, filter.ShowIgnorable ? "ignorable" : "" }
             .Concat(filter.Sources.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"{s.Key}={s.Value}"))
             .Concat(filter.Kinds.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"kind:{s.Key}={s.Value}"))
-            .Concat(filter.States.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"state:{s.Key}={s.Value}"))
+            .Concat(filter.ActivityStates.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"activity:{s.Key}={s.Value}"))
+            .Concat(filter.MailStates.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"mail:{s.Key}={s.Value}"))
+            .Concat(filter.ChatStates.OrderBy(s => s.Key, StringComparer.Ordinal).Select(s => $"chat:{s.Key}={s.Value}"))
             .Concat(filter.TagKeys.Order(StringComparer.Ordinal).Select(t => "tagkey:" + t)));
 
     /// <summary>
@@ -462,6 +487,7 @@ public static class InboxRows
             BlockedReason = blockedReason ?? string.Empty,
             SourceIcon = section.SourceIcon,
             Category = section.Category.Length > 0 ? section.Category : section.Source,
+            StateKind = StateKindOf(section),
             Importance = StringOf(content, "importance")?.Trim().ToLowerInvariant() is { Length: > 0 } judged
                 ? judged
                 : NotificationImportance(section.Source, content),
@@ -769,9 +795,8 @@ public static class InboxRows
             : rows.Where(row => (kinds.Count == 0 || kinds.Contains(SourceKey(row.Category)))
                                 && Shown(row, filter) && AccountShown(row, filter));
         var tags = ActiveTags(filter);
-        var states = TickedStates(filter);
         return shown.Where(row => InRange(row.Stamp, before, after))
-            .Where(row => states.Count == 0 || states.Contains(StateGroupOf(row.State)))
+            .Where(row => StateShown(row, filter))
             .Where(row => tags.Count == 0 ? filter.ShowIgnorable || !IsIgnorable(row) : tags.Any(tag => HasTag(row, tag)))
             .OrderByDescending(r => r.Stamp, StringComparer.Ordinal)
             .ThenBy(r => r.Path, StringComparer.Ordinal)
@@ -784,10 +809,10 @@ public static class InboxRows
         => [.. filter.Kinds.Where(kind => kind.Value).Select(kind => kind.Key)];
 
     /// <summary>The side-menu key of the open group — items still waiting on a decision, a start, an end or a read.</summary>
-    public const string OpenKey = "open";
+    public const string OpenKey = InboxStateGroup.Open;
 
     /// <summary>The side-menu key of the done group — items decided, finished, failed, cancelled, or with nothing left to do.</summary>
-    public const string DoneKey = "done";
+    public const string DoneKey = InboxStateGroup.Done;
 
     /// <summary>
     /// The group a state belongs to: <see cref="OpenKey"/> for awaiting, requested, running and unread;
@@ -807,10 +832,53 @@ public static class InboxRows
         => string.Equals(row.SourceId, InboxQueries.ApprovalsSource, StringComparison.Ordinal)
            && string.Equals(row.State, InboxState.Awaiting, StringComparison.Ordinal);
 
-    /// <summary>The state groups ticked (<see cref="OpenKey"/>, <see cref="DoneKey"/>); empty when none is (all are listed). Pure.</summary>
+    /// <summary>
+    /// The state kind of <paramref name="section"/>: the one it carries, else the one its category implies
+    /// (<see cref="InboxStateKind.Resolve"/>) — so a section built without one still lands in the right filter. Pure.
+    /// </summary>
+    /// <param name="section">The leg.</param>
+    public static string StateKindOf(InboxSection section)
+        => InboxStateKind.Resolve(section.StateKind, section.Category.Length > 0 ? section.Category : section.Source);
+
+    /// <summary>The filter's ticked groups for <paramref name="stateKind"/>; empty when none is ticked or the kind has no filter. Pure.</summary>
     /// <param name="filter">The filter.</param>
-    internal static ImmutableHashSet<string> TickedStates(InboxFilter filter)
-        => [.. filter.States.Where(state => state.Value).Select(state => state.Key)];
+    /// <param name="stateKind">An <see cref="InboxStateKind"/> constant.</param>
+    internal static ImmutableHashSet<string> TickedStates(InboxFilter filter, string stateKind)
+        => [.. (stateKind switch
+            {
+                InboxStateKind.Activity => filter.ActivityStates,
+                InboxStateKind.Mail => filter.MailStates,
+                InboxStateKind.Chat => filter.ChatStates,
+                _ => ImmutableDictionary<string, bool>.Empty,
+            }).Where(state => state.Value).Select(state => state.Key)];
+
+    /// <summary>
+    /// The state group of <paramref name="row"/> in ITS kind's vocabulary: <c>open</c> / <c>done</c> for an activity or
+    /// approval, <c>unread</c> / <c>read</c> for mail and chats; empty for a kind with no state filter. Pure.
+    /// </summary>
+    /// <param name="row">The row.</param>
+    internal static string StateGroupOfRow(InboxRow row)
+        => row.StateKind switch
+        {
+            InboxStateKind.Activity => StateGroupOf(row.State),
+            InboxStateKind.Mail or InboxStateKind.Chat
+                => row.Unread || string.Equals(row.State, InboxState.Unread, StringComparison.Ordinal) ? InboxStateGroup.Unread : InboxStateGroup.Read,
+            _ => string.Empty,
+        };
+
+    /// <summary>
+    /// Whether the filter of <paramref name="row"/>'s OWN kind lets it through. The other kinds' filters are
+    /// not consulted: a read mail is not hidden by an activities filter that shows open items only. A row with
+    /// no kind (built by hand) is judged as an activity. Pure.
+    /// </summary>
+    /// <param name="row">The row.</param>
+    /// <param name="filter">The filter.</param>
+    internal static bool StateShown(InboxRow row, InboxFilter filter)
+    {
+        var kind = row.StateKind.Length > 0 ? row.StateKind : InboxStateKind.Activity;
+        var ticked = TickedStates(filter, kind);
+        return ticked.Count == 0 || ticked.Contains(StateGroupOfRow(row with { StateKind = kind }));
+    }
 
     /// <summary>The tags asked for: the ticked ones, plus the legacy single <see cref="InboxFilter.Tag"/>; empty for all. Pure.</summary>
     /// <param name="filter">The filter.</param>
