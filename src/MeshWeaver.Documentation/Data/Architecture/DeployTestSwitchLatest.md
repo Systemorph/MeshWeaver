@@ -38,7 +38,7 @@ green, switch `latest` to it. A set is available to modules only once `latest` p
 | fact | where |
 |---|---|
 | Build hosts are merged and switched off in core's CD | `.github/build-hosts.json:3` (`"enabled": false`) |
-| The chart renders nothing by default | `deploy/helm/values.yaml:1108-1109` (`buildHosts.enabled: false`) |
+| The chart renders nothing by default | MeshWeaver.Deploy `deploy/helm/values.yaml:1113-1114` (`buildHosts.enabled: false`); the build-host chart lives there, core's is frozen (`BuildHosts.md` §3) |
 | The control record declares no hosts | Memex `mesh/Deployments/control.json` holds no `buildHosts` block |
 | The host model is per CHANNEL (`latest`, `stable`), never per version | `src/MeshWeaver.Deployment.Contract/BuildHosts.cs:25-41`; MeshWeaver.Plugins `Hosting/StandingBuildHosts.md:52-69` |
 | A channel's set is one mesh-owned token per channel, and it never moves backwards | `BuildHosts.cs:90-101`; MeshWeaver.Plugins `Hosting/Deployment/Source/BuildHostUpdates.cs:105-136` |
@@ -164,7 +164,9 @@ cap allows**.
   on the build API (`GET /api/builds/hosts`, the §2a shape: `aliases.latest` plus `versions[]`).
   It is no longer "the newest sealed main-cd run". `resolve-platform.py` (core-owned, fetched by
   every satellite at core `main`) gains `--from-build-hosts <api>`, which resolves the alias to
-  its set and takes the digests from the record, not from a tag lookup. A missing or unreadable
+  its set and takes the digests from the record, not from a tag lookup. 🚨 The §2a shape as
+  implemented carries NO digests and no set token, so P3 adds each version's set token to its
+  `versions[]` entry; until it does, P5 has nothing record-backed to read and stays inert. A missing or unreadable
   alias, or one naming a version that is not `complete`, is a RED job naming what was looked for. It never falls back to "newest sealed",
   because that set may be untested (resolve-platform.py's own rule: *"never a fallback to a moving
   tag nobody named"*).
@@ -300,8 +302,8 @@ retention gap `BuildHosts.md` §6 lists for `mw-build-host` and the hosts' diges
 |---|---|---|---|
 | P0 | core | this design, the owner's answers (§10) and the two register rows | no |
 | P1 | core | contract: init-only additions to `BuildHostsBlock` (`Retention`, the per-version default), the `v/` and `alias/` key forms, `Package.MaxMeshVersion` + `CapReason` + `CapTracking`, and the cap validator in `node-repo-validate.yml` | no |
-| P2 | core | chart: render one Deployment and one ScaledObject per `v/` entry (with `minReplicaCount: 1` while the entry is `warming`, §2), plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
-| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts`, the retention computation. **Follow-up (plugins-e6): the switch accepts a SET of runs.** e6's switch receiver checks a single `run` today; it must take every run the event names (or a parent that lists them), re-read each, and refuse when any is not `Succeeded` or did not record the candidate version (§2 step 4) | no |
+| P2 | MeshWeaver.Deploy | chart (it owns the build-host chart; core's is frozen, `BuildHosts.md` §3): render one Deployment and one ScaledObject per `v/` entry (with `minReplicaCount: 1` while the entry is `warming`, §2), plus the alias label, with `test-build-hosts.sh` fixtures for 0, 1 and 3 versions | no |
+| P3 | MeshWeaver.Plugins | the receiver and the operator: the three events → `BuildHostDeploy` / `BuildHostSwitch` / `BuildHostTeardown`, the version-keyed claim and queue, the stage-log endpoint answering by recorded version, `GET /api/builds/hosts` with each version's set token (§4), the retention computation. **Follow-up (plugins-e6): the switch accepts a SET of runs.** e6's switch receiver checks a single `run` today; it must take every run the event names (or a parent that lists them), re-read each, and refuse when any is not `Succeeded` or did not record the candidate version (§2 step 4) | no |
 | P4 | core | `main-cd.yml`: replace `build-host-latest` with `build-host-deploy` → `build-host-test` → `build-host-switch` + `build-host-report`, a core `.github/build-stages.json`, the follow lane's `version` input (§4), and the `mw-core-tests` image as the set's fifth digest (D3). `build-host-test` submits ONE pinned run per shard and owns the COMBINED verdict over the shard runs and the dependents' gate runs; the switch event names all of them or their parent (§2 steps 3–4) | no |
 | P5 | core | `resolve-platform.py --from-build-hosts`, including per-package resolution under a cap, IMPLEMENTED and self-tested but INERT: no consumer passes the flag, so Plugins and the satellites stay on today's newest-sealed path | no |
 | P6 | MeshWeaver.Plugins + core | the daily cap-debt job (control), the capped-run publish path (D2), the retention of the previous `latest` and the backwards rollback switch (D4), and the `lock-pinned-digests.py` reading of `buildHostSets` (core) | no |
