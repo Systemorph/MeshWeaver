@@ -632,6 +632,16 @@ public record DeploymentContent
     public BuildHostChannel? BuildHostSet(string channel) =>
         BuildHostSets is { } sets && sets.TryGetValue(channel, out var token) ? BuildHostChannel.FromSetToken(token) : null;
 
+    /// <summary>The set of the VERSIONED deployment alias <paramref name="alias"/> names (<c>alias/&lt;name&gt;</c> →
+    /// <c>v/&lt;version&gt;</c>), or null when the alias is absent or names no deployed version
+    /// (Doc/Architecture/DeployTestSwitchLatest §3).</summary>
+    public BuildHostChannel? BuildHostAliasSet(string alias) =>
+        BuildHostSetKeys.AliasTarget(BuildHostSets, alias) is { } version ? BuildHostVersionSet(version) : null;
+
+    /// <summary>The set of versioned deployment <paramref name="version"/>, or null.</summary>
+    public BuildHostChannel? BuildHostVersionSet(string version) =>
+        BuildHostSets is { } sets && sets.TryGetValue(BuildHostSetKeys.Version(version), out var token) ? BuildHostChannel.FromSetToken(token) : null;
+
     /// <summary>OpenTelemetry export.</summary>
     [Description("Telemetry")]
     public TelemetrySpec? Telemetry { get; init; }
