@@ -243,4 +243,47 @@ public class ASnapshotFanOutNeverHoldsALockWhileItsConsumerRunsTest(ITestOutputH
             "the early provider's first answer (progressive: the late one is still silent), then its newer "
             + "answer queued by the other thread, then the late provider's empty answer — in that order");
     }
+
+    /// <summary>A provider whose leg factory THROWS while the fan-out is subscribing must not leave the
+    /// providers subscribed before it running: the fault reaches the consumer and the earlier
+    /// provider's subscription is disposed with the failed fan-out (review of #7149).</summary>
+    [Theory]
+    [InlineData("query")]
+    [InlineData("autocomplete")]
+    public void ALegFactoryThatThrows_FailsTheFanOut_AndReleasesTheProvidersAlreadySubscribed(string surface)
+    {
+        var early = new Subject<IReadOnlyCollection<QueryResult>>();
+        var mesh = new MeshQuery([new SnapshotProvider("early", early), new ThrowingProvider("broken")], Mesh);
+        var source = surface == "query"
+            ? mesh.Query(new MeshQueryRequest { Query = "*alpha* scope:descendants partitions:all", UserId = "reader" })
+            : mesh.Autocomplete("", "alpha");
+
+        Exception? fault = null;
+        using var subscription = source.Subscribe(_ => { }, ex => Volatile.Write(ref fault, ex));
+
+        SpinWait.SpinUntil(() => Volatile.Read(ref fault) is not null, DeliveryBound)
+            .Should().BeTrue("a provider that cannot build its leg fails the fan-out");
+        Volatile.Read(ref fault).Should().BeOfType<InvalidOperationException>();
+        SpinWait.SpinUntil(() => !early.HasObservers, DeliveryBound).Should().BeTrue(
+            "the provider subscribed before the throwing one must be released with the failed fan-out — "
+            + "the leg factory ran inside the subscription's setup, so its throw left the setup before the "
+            + "composite holding the earlier subscription was ever returned for disposal");
+    }
+
+    private sealed class ThrowingProvider(string name) : IMeshQueryProvider
+    {
+        public string Name => name;
+        public bool Matches(IReadOnlyList<string> queryNamespaces) => true;
+        public IObservable<QueryResultChange<T>> Query<T>(MeshQueryRequest request, JsonSerializerOptions options)
+            => Observable.Never<QueryResultChange<T>>();
+        public IObservable<IReadOnlyCollection<QueryResult>> Query(MeshQueryRequest request, JsonSerializerOptions options)
+            => throw new InvalidOperationException("leg factory fault");
+        public IObservable<IReadOnlyCollection<QueryResult>> Autocomplete(
+            string basePath, string prefix, JsonSerializerOptions options,
+            AutocompleteMode mode = AutocompleteMode.RelevanceFirst, int limit = 10,
+            string? contextPath = null, string? context = null)
+            => throw new InvalidOperationException("leg factory fault");
+        public IObservable<T?> Select<T>(string path, string property, JsonSerializerOptions options)
+            => Observable.Return<T?>(default);
+    }
 }

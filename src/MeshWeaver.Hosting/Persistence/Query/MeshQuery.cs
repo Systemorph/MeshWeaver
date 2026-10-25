@@ -524,7 +524,10 @@ public partial class MeshQuery : IMeshQueryCore
                 });
             }
             var subscription = new System.Reactive.Disposables.CompositeDisposable(
-                matched.Select((p, i) => leg(p)
+                // Deferred: a leg factory that THROWS must reach the leg's error handler, not escape this
+                // setup — escaping, it would leave the providers already subscribed running, their
+                // subscriptions held by a composite that is never returned for disposal (review of #7149).
+                matched.Select((p, i) => Observable.Defer(() => leg(p))
                     .Select(rows => new ProviderAnswer(true, rows))
                     .DefaultIfEmpty(new ProviderAnswer(true, empty))
                     .Do(_ => probe.MarkSeen(i))
