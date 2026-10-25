@@ -245,7 +245,9 @@ public sealed partial class MailCopyEngine
                             .Timeout(SourceReadBudget)
                             .Select(now => now is not null && now.Generation == source.Generation)
                             .DefaultIfEmpty(false)
-                            .Catch((Exception _) => Observable.Return(false))
+                            // A re-check that cannot be read proves nothing: keep what the Undo wrote (a generation
+                            // dropped later removes it whole) rather than clean up on a guess.
+                            .Catch((Exception _) => Observable.Return(true))
                             .SelectMany(stillOn => stillOn
                                 ? Observable.Return(true)
                                 // The copy was switched off (or rebuilt) while the Undo waited on the provider: its
