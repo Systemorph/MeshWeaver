@@ -32,13 +32,32 @@ name: Build follow — stream a standing build host's stage log
 # credential: the endpoint verifies it against GitHub's JWKS and answers only for the repository and
 # sha its claims name. No secret is read here, so the lane runs identically on a fork's PR.
 #
-# 🛡️ NO SKIP-TRAPDOOR: no `continue-on-error:`, no input-shaped `if:`. A missing api-url is RED,
+# 🛡️ NO SKIP-TRAPDOOR: no `continue-on-error:`, no input-shaped JOB `if:` — the job always runs; with
+# `executor: actions` it is a no-op success that says so and reports `followed=false` (never a
+# skipped job, whose skip GitHub would propagate to every `success()` job downstream). A missing api-url is RED,
 # named; a timeout is RED; an unreadable endpoint is RED; only the stage's own `succeeded` is green
 # (build-follow.py, whose --self-test runs first and must pass).
 
 on:
   workflow_call:
+    outputs:
+      followed:
+        description: >-
+          `true` when this job FOLLOWED a host's stage (executor `host`) and the stage's verdict is
+          this job's result; `false` when it was a no-op (executor `actions`) — then its `success`
+          judged nothing, and a consumer must take the verdict from the Actions legs instead.
+        value: ${{ jobs.follow.outputs.followed }}
     inputs:
+      executor:
+        description: >-
+          Who runs the stage (the caller's admission answer, build-executor.py): `host` (the default —
+          follow it) or `actions`. With `actions` this job is a NO-OP SUCCESS with `followed=false`, so
+          it is never SKIPPED: a skipped follow job would skip every job downstream that still reads
+          `success()` (GitHub propagates a skipped ancestor — actions/runner#2205), on the path where
+          nothing runs on a host at all (review of MeshWeaver.SocialMedia#254). Any other value is RED.
+        required: false
+        type: string
+        default: host
       api-url:
         description: The operations instance's build API base, e.g. https://control.example.com/api/builds.
         required: true
@@ -99,13 +118,32 @@ jobs:
     permissions:
       contents: read
       id-token: write      # the run's OIDC token is the bearer the build API verifies
+    outputs:
+      followed: ${{ steps.executor.outputs.followed }}
     steps:
+      - name: Who runs ${{ inputs.stage }} (host, or a no-op on Actions)
+        id: executor
+        env:
+          EXECUTOR: ${{ inputs.executor }}
+          STAGE: ${{ inputs.stage }}
+        run: |
+          case "$EXECUTOR" in
+            host) echo "followed=true" >> "$GITHUB_OUTPUT" ;;
+            actions)
+              echo "followed=false" >> "$GITHUB_OUTPUT"
+              echo "$STAGE runs on GitHub Actions in this run — nothing to follow (a no-op; its verdict is the Actions legs')"
+              echo "- 🏗️ \`$STAGE\`: runs on Actions — nothing followed" >> "$GITHUB_STEP_SUMMARY" ;;
+            *) echo "::error title=Build follow::executor '$EXECUTOR' is neither 'host' nor 'actions' — refusing to guess"; exit 1 ;;
+          esac
       # The platform files this job reads come over git, not REST (Doc/Architecture/CiRestBudget).
       - uses: Systemorph/MeshWeaver/.github/actions/core-file@main
+        if: steps.executor.outputs.followed == 'true'
       - uses: actions/setup-python@v7
+        if: steps.executor.outputs.followed == 'true'
         with:
           python-version: "3.12"
       - name: Fetch build-follow.py at the lane's scripts ref
+        if: steps.executor.outputs.followed == 'true'
         env:
           SCRIPTS_REF: ${{ inputs.scripts-ref }}
         run: |
@@ -114,8 +152,10 @@ jobs:
           "$RUNNER_TEMP/mw-core-file" "$SCRIPTS_REF" ".github/scripts/build-follow.py" > "$RUNNER_TEMP/build-follow.py"
           [ -s "$RUNNER_TEMP/build-follow.py" ] || { echo "::error::fetched an EMPTY build-follow.py at $SCRIPTS_REF"; exit 1; }
       - name: The follower can say no (self-test)
+        if: steps.executor.outputs.followed == 'true'
         run: python3 "$RUNNER_TEMP/build-follow.py" --self-test
       - name: Follow ${{ inputs.stage }} on build-${{ inputs.channel }}
+        if: steps.executor.outputs.followed == 'true'
         env:
           API_URL: ${{ inputs.api-url }}
           STAGE: ${{ inputs.stage }}
