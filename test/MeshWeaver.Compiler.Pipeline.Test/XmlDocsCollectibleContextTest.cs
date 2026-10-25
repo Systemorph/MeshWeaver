@@ -105,7 +105,7 @@ internal static class XmlDocsFixtureAssembly
         Directory.CreateDirectory(directory);
         var assemblyName = "DynamicNode_" + node;
         var compilation = CSharpCompilation.Create(assemblyName,
-            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(documentationMode: DocumentationMode.Diagnose))],
+            [CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Preview, DocumentationMode.Diagnose))],
             PlatformReferences.Platform(), new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, allowUnsafe: true));
         var dllPath = Path.Combine(directory, node + ".dll");
         using (var dll = File.Create(dllPath))

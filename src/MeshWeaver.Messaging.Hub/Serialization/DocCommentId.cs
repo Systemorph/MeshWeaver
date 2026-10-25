@@ -67,7 +67,7 @@ internal static class DocCommentId
                 if (method.IsGenericMethodDefinition)
                     id.Append("``").Append(method.GetGenericArguments().Length);
                 AppendParameters(id, method.GetParameters());
-                if (method is MethodInfo { Name: "op_Implicit" or "op_Explicit" } conversion)
+                if (method is MethodInfo { Name: "op_Implicit" or "op_Explicit" or "op_CheckedExplicit" } conversion)
                     id.Append('~').Append(TypeName(conversion.ReturnType));
                 return id.ToString();
             case PropertyInfo property:

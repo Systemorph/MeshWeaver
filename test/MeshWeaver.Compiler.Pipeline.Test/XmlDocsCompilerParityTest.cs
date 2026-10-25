@@ -146,6 +146,117 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
             public static T First<T>(this IEnumerable<T> source) where T : class => null!;
         }
 
+        /// <summary>Every operator name the compiler emits.</summary>
+        public struct Num
+        {
+            /// <summary>Value.</summary>
+            public int V;
+            /// <summary>op_UnaryPlus.</summary>
+            public static Num operator +(Num a) => a;
+            /// <summary>op_UnaryNegation.</summary>
+            public static Num operator -(Num a) => a;
+            /// <summary>op_CheckedUnaryNegation.</summary>
+            public static Num operator checked -(Num a) => a;
+            /// <summary>op_LogicalNot.</summary>
+            public static Num operator !(Num a) => a;
+            /// <summary>op_OnesComplement.</summary>
+            public static Num operator ~(Num a) => a;
+            /// <summary>op_Increment.</summary>
+            public static Num operator ++(Num a) => a;
+            /// <summary>op_CheckedIncrement.</summary>
+            public static Num operator checked ++(Num a) => a;
+            /// <summary>op_Decrement.</summary>
+            public static Num operator --(Num a) => a;
+            /// <summary>op_CheckedDecrement.</summary>
+            public static Num operator checked --(Num a) => a;
+            /// <summary>op_True.</summary>
+            public static bool operator true(Num a) => true;
+            /// <summary>op_False.</summary>
+            public static bool operator false(Num a) => false;
+            /// <summary>op_Addition.</summary>
+            public static Num operator +(Num a, Num b) => a;
+            /// <summary>op_CheckedAddition.</summary>
+            public static Num operator checked +(Num a, Num b) => a;
+            /// <summary>op_Subtraction.</summary>
+            public static Num operator -(Num a, Num b) => a;
+            /// <summary>op_CheckedSubtraction.</summary>
+            public static Num operator checked -(Num a, Num b) => a;
+            /// <summary>op_Multiply.</summary>
+            public static Num operator *(Num a, Num b) => a;
+            /// <summary>op_CheckedMultiply.</summary>
+            public static Num operator checked *(Num a, Num b) => a;
+            /// <summary>op_Division.</summary>
+            public static Num operator /(Num a, Num b) => a;
+            /// <summary>op_CheckedDivision.</summary>
+            public static Num operator checked /(Num a, Num b) => a;
+            /// <summary>op_Modulus.</summary>
+            public static Num operator %(Num a, Num b) => a;
+            /// <summary>op_BitwiseAnd.</summary>
+            public static Num operator &(Num a, Num b) => a;
+            /// <summary>op_BitwiseOr.</summary>
+            public static Num operator |(Num a, Num b) => a;
+            /// <summary>op_ExclusiveOr.</summary>
+            public static Num operator ^(Num a, Num b) => a;
+            /// <summary>op_LeftShift.</summary>
+            public static Num operator <<(Num a, int b) => a;
+            /// <summary>op_RightShift.</summary>
+            public static Num operator >>(Num a, int b) => a;
+            /// <summary>op_UnsignedRightShift.</summary>
+            public static Num operator >>>(Num a, int b) => a;
+            /// <summary>op_Equality.</summary>
+            public static bool operator ==(Num a, Num b) => true;
+            /// <summary>op_Inequality.</summary>
+            public static bool operator !=(Num a, Num b) => false;
+            /// <summary>op_LessThan.</summary>
+            public static bool operator <(Num a, Num b) => true;
+            /// <summary>op_GreaterThan.</summary>
+            public static bool operator >(Num a, Num b) => false;
+            /// <summary>op_LessThanOrEqual.</summary>
+            public static bool operator <=(Num a, Num b) => true;
+            /// <summary>op_GreaterThanOrEqual.</summary>
+            public static bool operator >=(Num a, Num b) => false;
+            /// <summary>op_Implicit.</summary>
+            public static implicit operator int(Num a) => a.V;
+            /// <summary>op_Explicit.</summary>
+            public static explicit operator long(Num a) => a.V;
+            /// <summary>op_CheckedExplicit.</summary>
+            public static explicit operator checked long(Num a) => a.V;
+            /// <summary>op_AdditionAssignment (C# 14).</summary>
+            public void operator +=(Num b) { }
+            /// <summary>op_CheckedAdditionAssignment (C# 14).</summary>
+            public void operator checked +=(Num b) { }
+            /// <summary>op_SubtractionAssignment (C# 14).</summary>
+            public void operator -=(Num b) { }
+            /// <summary>op_MultiplicationAssignment (C# 14).</summary>
+            public void operator *=(Num b) { }
+            /// <summary>op_DivisionAssignment (C# 14).</summary>
+            public void operator /=(Num b) { }
+            /// <summary>op_ModulusAssignment (C# 14).</summary>
+            public void operator %=(Num b) { }
+            /// <summary>op_BitwiseAndAssignment (C# 14).</summary>
+            public void operator &=(Num b) { }
+            /// <summary>op_BitwiseOrAssignment (C# 14).</summary>
+            public void operator |=(Num b) { }
+            /// <summary>op_ExclusiveOrAssignment (C# 14).</summary>
+            public void operator ^=(Num b) { }
+            /// <summary>op_LeftShiftAssignment (C# 14).</summary>
+            public void operator <<=(int b) { }
+            /// <summary>op_RightShiftAssignment (C# 14).</summary>
+            public void operator >>=(int b) { }
+            /// <summary>op_UnsignedRightShiftAssignment (C# 14).</summary>
+            public void operator >>>=(int b) { }
+            /// <summary>op_IncrementAssignment (C# 14).</summary>
+            public void operator ++() { }
+            /// <summary>op_CheckedIncrementAssignment (C# 14).</summary>
+            public void operator checked ++() { }
+            /// <summary>op_DecrementAssignment (C# 14).</summary>
+            public void operator --() { }
+            /// <summary>Equals.</summary>
+            public override bool Equals(object? o) => false;
+            /// <summary>GetHashCode.</summary>
+            public override int GetHashCode() => 0;
+        }
+
         /// <summary>A positional record.</summary>
         /// <param name="Name">The record's name.</param>
         public sealed record Person(string Name);
@@ -234,6 +345,44 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
             public string Name => "";
         }
 
+        public interface IShape
+        {
+            /// <summary>IShape area.</summary>
+            double Area();
+            /// <summary>IShape name.</summary>
+            string Name { get; }
+            /// <summary>IShape changed.</summary>
+            event System.EventHandler Changed;
+        }
+
+        public class Shape : IShape
+        {
+            /// <inheritdoc/>
+            public double Area() => 0;
+            /// <inheritdoc/>
+            public string Name => "";
+            /// <inheritdoc/>
+            public event System.EventHandler? Changed { add { } remove { } }
+            /// <summary>Shape own.</summary>
+            public int Own => 0;
+        }
+
+        public sealed class Square : Shape { }
+
+        public class GShape<T> : IShape
+        {
+            /// <inheritdoc/>
+            public double Area() => 0;
+            /// <inheritdoc/>
+            public string Name => "";
+            /// <inheritdoc/>
+            public event System.EventHandler? Changed { add { } remove { } }
+            /// <summary>GShape own.</summary>
+            public T? Own => default;
+        }
+
+        public sealed class IntShape : GShape<int> { }
+
         /// <summary>A record.</summary>
         /// <param name="Label">The record's label.</param>
         public sealed record Tagged(string Label);
@@ -272,10 +421,58 @@ public sealed class XmlDocsCompilerParityTest : IDisposable
     }
 
     /// <summary>
+    /// Every member read through every route — the declaring type, a SUBCLASS (another
+    /// <see cref="MemberInfo.ReflectedType"/>), the open definition, a constructed type, a subclass of a
+    /// constructed type, and the interface — for both a summary row and an <c>&lt;inheritdoc/&gt;</c>
+    /// row. <b>Should fail if</b> any member comparison uses reference equality: the subclass routes lose
+    /// their interface-map entries and the inherited rows read empty (what DataModelLayoutArea enumerates).
+    /// </summary>
+    [Theory]
+    [InlineData("Inheritance.Shape", "Shape own.")]
+    [InlineData("Inheritance.Square", "Shape own.")]
+    [InlineData("Inheritance.GShape`1", "GShape own.")]
+    [InlineData("Inheritance.GShape`1[int]", "GShape own.")]
+    [InlineData("Inheritance.IntShape", "GShape own.")]
+    [InlineData("Inheritance.IShape", null)]
+    public void EveryRoute_ReadsBothSummaryAndInheritDoc(string route, string? own)
+    {
+        var assembly = Compile("Inheritance", Inheritance, out _);
+        var type = route.EndsWith("[int]", StringComparison.Ordinal)
+            ? assembly.GetType(route[..^5])!.MakeGenericType(typeof(int))
+            : assembly.GetType(route)!;
+        docs.Summary(type.GetMethod("Area")!).Should().Be("IShape area.");
+        docs.Summary(type.GetProperty("Name")!).Should().Be("IShape name.");
+        docs.Summary(type.GetEvent("Changed")!).Should().Be("IShape changed.");
+        if (own is not null)
+            docs.Summary(type.GetProperty("Own")!).Should().Be(own);
+    }
+
+    /// <summary>
+    /// <b>Should fail if</b> inheritance resolution revisits ancestors: a 24-deep chain of
+    /// <c>&lt;inheritdoc/&gt;</c> overrides that resolves to NOTHING took ~16.6M lookups when every
+    /// ancestor of every ancestor was resolved. Memoized, it is one visit per member.
+    /// </summary>
+    [Fact]
+    public void ADeepUnresolvedInheritDocChain_ResolvesInBoundedTime()
+    {
+        var source = new System.Text.StringBuilder("namespace Deep;\npublic class C0 { /// <inheritdoc/>\n public virtual void M() { } }\n");
+        for (var k = 1; k < 24; k++)
+            source.Append($"public class C{k} : C{k - 1} {{ /// <inheritdoc/>\n public override void M() {{ }} }}\n");
+        var assembly = Compile("Deep", source.ToString(), out var documented);
+        documented.Should().Contain("M:Deep.C23.M", "CONTROL — every override carries <inheritdoc/>");
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        docs.Summary(assembly.GetType("Deep.C23")!.GetMethod("M")!).Should().BeEmpty();
+        clock.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(2), "the unresolved chain is walked once, not exponentially");
+    }
+
+    /// <summary>
     /// <b>Should fail if</b> any ID shape — nested and generic types, arrays (single, multi-dimensional,
     /// jagged), pointers, by-ref / out / in, nullable, tuples, dynamic, params, generic methods, nested
     /// generic arguments, operators, conversion operators, indexers, constructors, static constructors,
-    /// events, fields, constants, enum members, delegates, explicit implementations (multi-argument
+    /// events, fields, constants, enum members, delegates, every operator name (checked operators,
+    /// <c>op_UnsignedRightShift</c>, conversion operators with their <c>~ReturnType</c>, and the C# 14
+    /// instance compound-assignment operators), explicit implementations (multi-argument
     /// generic and BCL interfaces included), extension methods, records — is encoded differently from the
     /// compiler. Every ID the compiler wrote must be produced by reflection over the same assembly.
     /// </summary>

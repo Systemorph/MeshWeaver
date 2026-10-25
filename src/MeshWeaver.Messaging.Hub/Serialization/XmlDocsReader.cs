@@ -40,8 +40,9 @@ namespace MeshWeaver.Messaging.Serialization;
 /// </summary>
 public sealed class XmlDocsReader
 {
-    // Bound on <inheritdoc/> chains, so a cycle in hand-written crefs cannot recurse forever.
-    private const int MaxInheritDepth = 16;
+    // Stack-safety bound on how many distinct members one lookup may hold open at once. Cycles are
+    // cut by the in-progress set below, so this only limits pathologically deep legitimate chains.
+    private const int MaxInheritDepth = 64;
 
     private const BindingFlags Declared = BindingFlags.DeclaredOnly | BindingFlags.Public | BindingFlags.NonPublic
                                           | BindingFlags.Instance | BindingFlags.Static;
@@ -52,7 +53,7 @@ public sealed class XmlDocsReader
     /// <param name="type">The type; a constructed generic type reads its definition's docs.</param>
     /// <returns>The rendered summary text.</returns>
     public string Summary(Type type)
-        => FindSummary(type, 0) ?? string.Empty;
+        => new Resolution(this).Find(type) ?? string.Empty;
 
     /// <summary>
     /// The <c>&lt;summary&gt;</c> text of a member (property, field, method, constructor, event or
@@ -63,62 +64,145 @@ public sealed class XmlDocsReader
     /// <param name="member">The member.</param>
     /// <returns>The rendered summary text.</returns>
     public string Summary(MemberInfo member)
-        => FindSummary(member, 0) ?? string.Empty;
+        => new Resolution(this).Find(member) ?? string.Empty;
 
     private XmlDocFile File(Assembly assembly)
         => files.GetValue(assembly, static a => XmlDocFile.Load(a));
 
     private static Assembly AssemblyOf(MemberInfo member) => member is Type type ? type.Assembly : member.Module.Assembly;
 
-    private XmlMemberDoc? Lookup(MemberInfo member)
-        => DocCommentId.For(member) is { } id ? File(AssemblyOf(member)).Members.GetValueOrDefault(id) : null;
-
     /// <summary>
-    /// The summary of <paramref name="member"/>: its own, else what its <c>&lt;inheritdoc/&gt;</c>
-    /// resolves to, else (a property) its declaring type's <c>&lt;param&gt;</c> of the same name.
-    /// Every path, crefs and inheritance included, re-enters here, so the depth bound and the
-    /// record fallback apply at every hop.
+    /// A member's METADATA identity: its module and token, a constructed generic method taken as its
+    /// definition. Two <see cref="MemberInfo"/>s for the same metadata member compare unequal by
+    /// reference or <c>Equals</c> when they were reached differently — through a subclass (another
+    /// <see cref="MemberInfo.ReflectedType"/>), a constructed type, or an interface map — so EVERY member
+    /// comparison in this reader goes through this key.
     /// </summary>
-    private string? FindSummary(MemberInfo member, int depth)
+    private static (Module Module, int Token) Identity(MemberInfo member)
     {
-        if (depth > MaxInheritDepth)
-            return null;
-        // A constructed generic method is documented, implements and overrides as its generic
-        // definition: interface maps and base signatures name the definition.
         if (member is MethodInfo { IsConstructedGenericMethod: true } constructed)
             member = constructed.GetGenericMethodDefinition();
-
-        var summary = Lookup(member) switch
-        {
-            null => null,
-            { Summary: { } own } => own,
-            { InheritDoc: false } => null,
-            { InheritDocCref: { } cref } => FindByCref(member, cref, depth + 1),
-            _ => FindInherited(member, depth + 1),
-        };
-        if (string.IsNullOrEmpty(summary)
-            && member is PropertyInfo { DeclaringType: { } declaringType } property
-            && Lookup(declaringType) is { } typeDoc
-            && typeDoc.Params.TryGetValue(property.Name, out var recordParam))
-            return recordParam;
-        return summary;
+        return (member.Module, member.MetadataToken);
     }
 
-    /// <summary>An <c>&lt;inheritdoc/&gt;</c> with no <c>cref</c>: the base class first, then interfaces.</summary>
-    private string? FindInherited(MemberInfo member, int depth)
+    /// <summary>
+    /// One summary lookup. Memoizes every member it resolves (keyed by assembly and documentation ID)
+    /// and every base-chain walk, so <c>&lt;inheritdoc/&gt;</c> resolution costs one visit per distinct
+    /// member however the chain branches; a member already open on the stack (a cycle) resolves to
+    /// nothing. Instance-local and discarded with the lookup — the shared state stays the immutable
+    /// per-assembly snapshots.
+    /// </summary>
+    private sealed class Resolution(XmlDocsReader reader)
     {
-        foreach (var candidate in InheritanceCandidates(member))
-            if (FindSummary(candidate, depth) is { } summary)
-                return summary;
+        private ImmutableDictionary<(Assembly, string), string?> resolved = ImmutableDictionary<(Assembly, string), string?>.Empty;
+        private ImmutableHashSet<(Assembly, string)> open = ImmutableHashSet<(Assembly, string)>.Empty;
+
+        /// <summary>
+        /// The summary of <paramref name="member"/>: its own, else what its <c>&lt;inheritdoc/&gt;</c>
+        /// resolves to, else (a property) its declaring type's <c>&lt;param&gt;</c> of the same name.
+        /// Every path — crefs, base classes, interfaces — re-enters here.
+        /// </summary>
+        public string? Find(MemberInfo member)
+        {
+            // A constructed generic method is documented, implements and overrides as its definition.
+            if (member is MethodInfo { IsConstructedGenericMethod: true } constructed)
+                member = constructed.GetGenericMethodDefinition();
+            if (DocCommentId.For(member) is not { } id)
+                return null;
+            return Memoized((AssemblyOf(member), id), () => Compute(member));
+        }
+
+        private string? Memoized((Assembly, string) key, Func<string?> compute)
+        {
+            if (resolved.TryGetValue(key, out var known))
+                return known;
+            if (open.Contains(key) || open.Count >= MaxInheritDepth)
+                return null;
+            open = open.Add(key);
+            var result = compute();
+            open = open.Remove(key);
+            resolved = resolved.SetItem(key, result);
+            return result;
+        }
+
+        private string? Compute(MemberInfo member)
+        {
+            var doc = DocCommentId.For(member) is { } id ? reader.File(AssemblyOf(member)).Members.GetValueOrDefault(id) : null;
+            var summary = doc switch
+            {
+                null => null,
+                { Summary: { } own } => own,
+                { InheritDoc: false } => null,
+                { InheritDocCref: { } cref } => FindByCref(member, cref),
+                _ => FindInherited(member),
+            };
+            if (string.IsNullOrEmpty(summary)
+                && member is PropertyInfo { DeclaringType: { } declaringType } property
+                && DocCommentId.For(declaringType) is { } typeId
+                && reader.File(AssemblyOf(declaringType)).Members.GetValueOrDefault(typeId) is { } typeDoc
+                && typeDoc.Params.TryGetValue(property.Name, out var recordParam))
+                return recordParam;
+            return summary;
+        }
+
+        /// <summary>An <c>&lt;inheritdoc/&gt;</c> with no <c>cref</c>: the base class chain first, then interfaces.</summary>
+        private string? FindInherited(MemberInfo member)
+        {
+            if (FromBase(member) is { } fromBase)
+                return fromBase;
+            foreach (var candidate in InterfaceCandidates(member))
+                if (Find(candidate) is { } summary)
+                    return summary;
+            return null;
+        }
+
+        /// <summary>
+        /// The nearest base member's summary, or — when it has none — ITS nearest base's, and so on.
+        /// Memoized per member, so a chain of N undocumented overrides is walked once, not N² times
+        /// (or exponentially, as resolving every ancestor of every ancestor was).
+        /// </summary>
+        private string? FromBase(MemberInfo member)
+        {
+            if (NearestBase(member) is not { } nearest || DocCommentId.For(nearest) is not { } id)
+                return null;
+            return Memoized((AssemblyOf(nearest), "base:" + id), () => Find(nearest) ?? FromBase(nearest));
+        }
+
+        /// <summary>
+        /// An <c>&lt;inheritdoc cref="..."/&gt;</c>: the referenced member is resolved and read like any
+        /// other, so its own <c>&lt;inheritdoc/&gt;</c> continues in ITS declaring type's context. A cref
+        /// reflection cannot resolve falls back to the documented text under that ID.
+        /// </summary>
+        private string? FindByCref(MemberInfo member, string cref)
+        {
+            var assemblies = CrefAssemblies(member, cref).ToImmutableArray();
+            if (ResolveCref(cref, assemblies) is { } target)
+                return Find(target);
+            foreach (var assembly in assemblies)
+                if (reader.File(assembly).Members.GetValueOrDefault(cref) is { } doc)
+                    return doc.Summary;
+            return null;
+        }
+    }
+
+    /// <summary>The nearest base type, or the nearest base-class member with the same name and signature.</summary>
+    private static MemberInfo? NearestBase(MemberInfo member)
+    {
+        if (member is Type type)
+            return type.BaseType;
+        if (member.DeclaringType is not { } declaring)
+            return null;
+        for (var b = declaring.BaseType; b is not null; b = b.BaseType)
+            foreach (var m in b.GetMember(member.Name, member.MemberType, Declared))
+                if (SameSignature(m, member))
+                    return m;
         return null;
     }
 
-    private static IEnumerable<MemberInfo> InheritanceCandidates(MemberInfo member)
+    private static IEnumerable<MemberInfo> InterfaceCandidates(MemberInfo member)
     {
         if (member is Type type)
         {
-            for (var b = type.BaseType; b is not null; b = b.BaseType)
-                yield return b;
             foreach (var i in type.GetInterfaces())
                 yield return i;
             yield break;
@@ -126,11 +210,6 @@ public sealed class XmlDocsReader
 
         if (member.DeclaringType is not { } declaring)
             yield break;
-
-        for (var b = declaring.BaseType; b is not null; b = b.BaseType)
-            foreach (var m in b.GetMember(member.Name, member.MemberType, Declared))
-                if (SameSignature(m, member))
-                    yield return m;
 
         foreach (var i in declaring.GetInterfaces())
         {
@@ -153,7 +232,11 @@ public sealed class XmlDocsReader
         }
     }
 
-    /// <summary>The members of <c>map.InterfaceType</c> that <paramref name="member"/> implements.</summary>
+    /// <summary>
+    /// The members of <c>map.InterfaceType</c> that <paramref name="member"/> implements, matched by
+    /// <see cref="Identity"/> — never by reference — so a member read through a subclass or a
+    /// constructed type still finds its map entry.
+    /// </summary>
     private static IEnumerable<MemberInfo> MappedInterfaceMembers(MemberInfo member, InterfaceMapping map)
     {
         var accessors = member switch
@@ -163,12 +246,14 @@ public sealed class XmlDocsReader
             EventInfo @event => new[] { @event.AddMethod, @event.RemoveMethod }.OfType<MethodInfo>().ToArray(),
             _ => Array.Empty<MethodInfo>(),
         };
-        var interfaceMethods = ImmutableHashSet<MethodInfo>.Empty;
+        var accessorIds = accessors.Select(Identity).ToImmutableHashSet();
+        var interfaceMethods = ImmutableList<MethodInfo>.Empty;
         for (var k = 0; k < map.TargetMethods.Length; k++)
-            if (accessors.Contains(map.TargetMethods[k]))
+            if (accessorIds.Contains(Identity(map.TargetMethods[k])))
                 interfaceMethods = interfaceMethods.Add(map.InterfaceMethods[k]);
         if (interfaceMethods.IsEmpty)
             yield break;
+        var interfaceIds = interfaceMethods.Select(Identity).ToImmutableHashSet();
 
         switch (member)
         {
@@ -178,13 +263,12 @@ public sealed class XmlDocsReader
                 break;
             case PropertyInfo:
                 foreach (var p in map.InterfaceType.GetProperties(Declared))
-                    if (p.GetAccessors(nonPublic: true).Any(interfaceMethods.Contains))
+                    if (p.GetAccessors(nonPublic: true).Any(a => interfaceIds.Contains(Identity(a))))
                         yield return p;
                 break;
             case EventInfo:
                 foreach (var e in map.InterfaceType.GetEvents(Declared))
-                    if ((e.AddMethod is { } add && interfaceMethods.Contains(add))
-                        || (e.RemoveMethod is { } remove && interfaceMethods.Contains(remove)))
+                    if (new[] { e.AddMethod, e.RemoveMethod }.OfType<MethodInfo>().Any(a => interfaceIds.Contains(Identity(a))))
                         yield return e;
                 break;
         }
@@ -278,25 +362,6 @@ public sealed class XmlDocsReader
             if (DocCommentId.TypeName(pa[k].ParameterType) != DocCommentId.TypeName(pb[k].ParameterType))
                 return false;
         return true;
-    }
-
-    /// <summary>
-    /// An <c>&lt;inheritdoc cref="..."/&gt;</c>. The referenced member is resolved and read like any
-    /// other member — so its own <c>&lt;inheritdoc/&gt;</c>, with or without a cref, continues in ITS
-    /// declaring type's context, under the same depth bound. A cref whose member cannot be resolved
-    /// by reflection falls back to the documented text under that ID.
-    /// </summary>
-    private string? FindByCref(MemberInfo member, string cref, int depth)
-    {
-        if (depth > MaxInheritDepth)
-            return null;
-        var assemblies = CrefAssemblies(member, cref).ToImmutableArray();
-        if (ResolveCref(cref, assemblies) is { } target)
-            return FindSummary(target, depth);
-        foreach (var assembly in assemblies)
-            if (File(assembly).Members.GetValueOrDefault(cref) is { } doc)
-                return doc.Summary;
-        return null;
     }
 
     private static MemberInfo? ResolveCref(string cref, ImmutableArray<Assembly> assemblies)

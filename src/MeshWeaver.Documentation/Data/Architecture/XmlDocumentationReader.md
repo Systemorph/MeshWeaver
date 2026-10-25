@@ -91,7 +91,7 @@ nothing. The first line's indentation is removed from every line.
 compiler itself: it compiles a fixture covering every member shape with XML documentation and
 requires every ID Roslyn wrote to be produced by reflection over the same assembly. They follow the compiler — nested types joined with `.`, a generic type's arity,
 a method's arity, type and method generic parameters, constructed generics in braces, arrays,
-by-ref, `#ctor`/`#cctor`, `~ReturnType` on conversion operators, `#` for an explicit
+by-ref, `#ctor`/`#cctor`, `~ReturnType` on conversion operators (`op_Implicit`, `op_Explicit`, `op_CheckedExplicit`), `#` for an explicit
 implementation's dots, index parameters for an indexer:
 
 ```text
@@ -117,9 +117,14 @@ continues in its declaring type's context. Through an interface map when the dec
 `GetInterfaceMap` answers too. Only a type the runtime refuses a map for falls back to a name match,
 restricted to EXACTLY the interface an explicit implementation's qualifier names (`IFoo` is not
 `IFoo<int>`, `Outer<T>.IA` is not `Outer<T>.IB`). Signatures compare generic arity
-as well as parameters (`M()` is not `M<T>()`), and every hop — crefs included — counts against one
-depth bound, so a cref cycle reads empty instead of overflowing the stack
-(`XmlDocsInheritDocTest`, `XmlDocsCompilerParityTest`). Namotion only handled the immediate base and matched by name alone, so an
+as well as parameters (`M()` is not `M<T>()`). Members are compared by METADATA identity (module and
+token, a constructed generic method as its definition), never by reference: the same member reached
+through a subclass, a constructed type or an interface map is a different `MemberInfo` object. Each
+lookup memoizes every member and base-chain walk it resolves, so a chain of undocumented
+`<inheritdoc/>` overrides is visited once per member rather than exponentially, and a member already
+open on the stack (a cref cycle) reads empty instead of overflowing it
+(`XmlDocsInheritDocTest`, `XmlDocsCompilerParityTest`, which also reads every inherited member through
+the declaring type, a subclass, the open definition, a constructed type and the interface). Namotion only handled the immediate base and matched by name alone, so an
 overloaded base member made it read nothing.
 
 ## Parity evidence
