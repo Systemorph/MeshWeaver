@@ -68,10 +68,10 @@ on:
         default: latest
       timeout-minutes:
         description: >-
-          How long to wait for the RUN to be terminal before failing RED. At most 43: the job is
-          hard-cut at 45 minutes, and the follower must reach its own verdict first. The host's run
-          deadline (buildHosts.runDeadlineSeconds, at most 2400 s) plus a claim's queue and the host's
-          start-up (3 min) fits inside it — the end-to-end budget is one set of numbers.
+          How long to wait for the RUN to be terminal. At most 43: the job is hard-cut at 45 minutes,
+          and the follower must reach its own verdict first. A run may be longer (its budget is the
+          host's, up to 720 min): at the window's end a stage whose verdict is in exits with it, with a
+          warning that the stage's Check Run is the authority; a stage still pending is RED.
         required: false
         type: number
         default: 43

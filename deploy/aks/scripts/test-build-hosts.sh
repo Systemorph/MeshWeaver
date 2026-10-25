@@ -126,8 +126,8 @@ for ch, (tester, portal, runner, mx, pv) in want.items():
         problems.append(f"{ch}: BUILD_TOKEN is an environment variable — the worker token must be a mounted file")
     if env.get("BUILD_TOKEN_FILE", {}).get("value") != "/run/build-worker/token":
         problems.append(f"{ch}: BUILD_TOKEN_FILE is not /run/build-worker/token")
-    if pod.get("terminationGracePeriodSeconds") != 2100 or env.get("MW_BUILD_RUN_DEADLINE_SECONDS", {}).get("value") != "2100":
-        problems.append(f"{ch}: terminationGracePeriodSeconds / the run deadline are not the same 2100 s (the default inside the end-to-end budget)")
+    if pod.get("terminationGracePeriodSeconds") != 7200 or env.get("MW_BUILD_RUN_DEADLINE_SECONDS", {}).get("value") != "7200":
+        problems.append(f"{ch}: terminationGracePeriodSeconds / the run deadline are not the same 7200 s (the default run budget)")
     if build.get("securityContext", {}).get("seccompProfile", {}) != {"type": "Unconfined"}:
         problems.append(f"{ch}: the stated sandbox seccomp profile did not render: {build.get('securityContext')}")
     if build.get("securityContext", {}).get("appArmorProfile", {}) != {"type": "Localhost", "localhostProfile": "build-host-userns"}:
@@ -229,7 +229,7 @@ for entry in \
   "values.build-hosts-registry-credential.yaml|a build host holds NO registry credential" \
   "values.build-hosts-postgres-sidecar.yaml|runs NO shared database" \
   "values.build-hosts-localhost-no-profile.yaml|names no profile" \
-  "values.build-hosts-run-deadline-too-long.yaml|END-TO-END budget"; do
+  "values.build-hosts-run-deadline-too-long.yaml|RUN budget"; do
   f="${entry%%|*}"; phrase="${entry#*|}"
   if helm template r "$CHART" -f "$CHART/values.yaml" -f "$TD/$f" > "$WORK/refusal.yaml" 2> "$WORK/refusal.err"; then
     report "refusal $f RENDERED — the chart must refuse it"

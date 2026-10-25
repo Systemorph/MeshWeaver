@@ -65,11 +65,15 @@ prints the lines inside a `::group::`, and exits with the stage's verdict. The r
 - **only `succeeded` is green.** Failed, `not-run` (the run ended before the stage started),
   cancelled, skipped and any state the follower does not know are RED, named. A skipped or
   never-run stage is not a passed one.
-- **a timeout is RED** (`timeout-minutes`, default and maximum 43 — the job is hard-cut at 45). No
-  verdict in time means the run is not judged. 🚨 **The end-to-end budget is ONE set of numbers**:
-  a host's run deadline (`buildHosts.runDeadlineSeconds`, default 2100 s, refused above 2400 s) plus
-  up to 3 minutes of a claim's queue and the host's start-up fits the follower's 43 minutes, inside
-  the fleet's 45-minute job cap — so a run the host permits always reaches its verdict in time.
+- **a timeout is RED** (`timeout-minutes`, default and maximum 43 — the job is hard-cut at 45). A
+  stage still pending when the window ends is not judged. 🚨 **The follow window bounds a JOB, not a
+  RUN.** A run's budget is the host's (below — up to 720 min), because a repository's stages run
+  sequentially and may sum past one job (MeshWeaver.Plugins declares compile-check 40 + gate 45 =
+  85 min). So when the window ends with the follower's stage's verdict already IN but the run not
+  terminal, the follower exits with that verdict and a warning that the stage's **Check Run** is the
+  authority (a later restart of the stage changes the Check Run, not the finished job). A repository
+  whose single stage can outlast the window requires the instance's `build/<stage>` Check Runs
+  instead of the follow job's context.
 - **an unreadable endpoint is RED, naming why**: 403 at once (the token's repository or run does not
   match the build), 401 after one token refresh, 404 after a five-minute grace (the run may not be registered
   yet), transport errors and 5xx after six consecutive failures.
@@ -165,8 +169,20 @@ follower given the aggregate's name is refused rather than matched to a stage. A
    A stage may declare `needs` — `plugins`, `outputs`, `nuget` — the shared-cache entries it reads.
    Stages run in declaration order, fail-fast: after a failed stage the rest are finished `failed`
    with "not run". When the claim names `stages`, only those run, and a claimed stage the repository
-   does not declare is RED; so is a repository that declares none. A run past
-   `MW_BUILD_RUN_DEADLINE_SECONDS` finishes its remaining stages `failed`.
+   does not declare is RED; so is a repository that declares none. A PROBE whose claim carries
+   `requestedStages` (empty = every declared stage) runs and plans EXACTLY those; one the
+   repository does not declare is RED.
+
+   **The run budget.** A stage's `timeoutMinutes` is a PER-STAGE CAP. The run's deadline is the
+   host's `MW_BUILD_RUN_DEADLINE_SECONDS` (`buildHosts.runDeadlineSeconds`, default 7200 s, refused
+   outside [600, 43200]) and must COVER the declared stages: the default fits MeshWeaver.Plugins'
+   40 + 45 minutes with room for checkout, merge and hand-over. The run's effective budget is the
+   smaller of that deadline and the selected stages' summed caps + 10 minutes, and the plan
+   DECLARES it as `"budgetMinutes": <10..720>` — the instance sets the attempt's deadline to claim
+   time + budget + 15 min. Each stage runs for at most min(its cap, the budget left). When the sum
+   of the caps exceeds the deadline the run still starts (stages usually finish well inside their
+   caps); the stages the deadline does not reach finish `failed` with "not run — the run deadline
+   passed" — red, never skipped.
 5. **Every stage runs in an ENFORCED SANDBOX — a child process is not one.** PR code is untrusted
    and the host is long-lived, so each stage is `bwrap --die-with-parent --new-session
    --unshare-user --unshare-pid --unshare-ipc --unshare-uts --clearenv` with a fresh `/proc`, the
@@ -279,7 +295,7 @@ tag, no enabled channel.
 Per enabled channel (`buildHosts.latest`, `buildHosts.stable`):
 
 - a **Deployment** `build-host-<c>` with no `replicas` (KEDA owns it), surge-first rolling update,
-  `terminationGracePeriodSeconds` = `buildHosts.runDeadlineSeconds` (default 3600, also the
+  `terminationGracePeriodSeconds` = `buildHosts.runDeadlineSeconds` (default 7200, also the
   runner's run deadline) so a replaced or scaled-in replica finishes its run, the `cibuild`
   nodeSelector and tolerations, run as the runner image's unprivileged user (1654, `fsGroup`
   1654), and the composition of Build service §1.4 without a Docker daemon: init containers copy

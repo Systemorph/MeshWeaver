@@ -1,11 +1,11 @@
-# A run deadline beyond the end-to-end budget — refused (a follower would time out before the run's verdict).
+# A run deadline beyond the contract's run budget (budgetMinutes <= 720) — refused.
 buildHosts:
   enabled: true
   apiUrl: "http://memex-portal-service:8080/api/builds"
   runnerRepository: "cr.example.com/mw-build-host"
   testerRepository: "cr.example.com/mw-plugin-test"
   portalRepository: "cr.example.com/memex-portal-ai"
-  runDeadlineSeconds: 3600
+  runDeadlineSeconds: 50000
   latest:
     enabled: true
     platformVersion: "3.1.10412"

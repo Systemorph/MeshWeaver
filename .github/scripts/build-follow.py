@@ -39,7 +39,10 @@ THE RULES, each of which is a way this step could otherwise read green on no evi
   * the RUN decides when the follow ends, not the stage: while `runTerminal` is false the follower
     keeps polling even after its stage's verdict (the run can restart the stage — a lost host, a
     re-queue — and the restart is printed), and at `runTerminal` it exits with the stage's FINAL
-    `state` (`succeeded` → 0, anything else → 1).
+    `state` (`succeeded` → 0, anything else → 1). If the follow WINDOW (--timeout-minutes, inside the
+    45-minute job cap) ends first with the stage's verdict already in, it exits with that verdict and
+    a warning that the stage's Check Run is the authority — a run may be longer than one job (its
+    budget is the host's, up to 720 min); a stage still pending at the window's end is RED.
   * workflow commands from the log are passed through ONLY for `::error`, `::warning` and
     `::notice` (an annotation on the PR's Files tab), RE-COMPOSED from validated parts. Every other
     command-shaped physical line — `::add-mask::`, `::stop-commands::`, `::group::`, `##[…]`, after
@@ -211,6 +214,15 @@ def follow(*, api_url: str, repo: str, sha: str, stage: str, channel: str, timeo
     try:
         while True:
             if clock() > deadline:
+                if state and state not in PENDING:
+                    # The follower's window (inside the 45-minute job cap) ended with the stage's
+                    # verdict IN but the run still going (a later stage, or a run longer than the
+                    # window). Exit with that verdict, and say the Check Run is the authority: a
+                    # later restart of this stage changes it there, not here.
+                    out(f"::warning title=Run still going::the follow window ({timeout_minutes:g} min) ended with "
+                        f"{stage} {state} while the run is not terminal — exiting with that verdict; the "
+                        f"stage's Check Run on the commit is the authority if the run restarts it")
+                    break
                 raise Failure(
                     f"no verdict for {stage} within {timeout_minutes:g} minutes (last state "
                     f"{state or 'none'}) — the run is NOT judged green; read the run node on the "
@@ -492,8 +504,13 @@ def self_test() -> int:
           code == 1 and err and "failed" in err and any("Stage restarted" in o for o in out), (code, err, out))
     code, err, _, _ = _run([_rpage([], 0, "not-run", "failed", True)])
     check("run/not-run at a terminal run is red", code == 1 and err and "did NOT RUN" in err, (code, err))
-    code, err, _, _ = _run([_rpage([], 0, "succeeded", "running", False)], timeout=1.0)
-    check("run/a run that never turns terminal is a timeout, not a green", code == 1 and err and "no verdict" in err, (code, err))
+    code, err, out, _ = _run([_rpage([], 0, "succeeded", "running", False)] * 200, timeout=1.0)
+    check("run/window ends with the stage's verdict in: exit with it, and warn the Check Run is the authority",
+          code == 0 and any("Run still going" in o for o in out), (code, err, out))
+    code, err, _, _ = _run([_rpage([], 0, "failed", "running", False)] * 200, timeout=1.0)
+    check("run/window ends with the stage failed: red", code == 1 and err and "failed" in err, (code, err))
+    code, err, _, _ = _run([_rpage([], 0, "running", "running", False)], timeout=1.0)
+    check("run/window ends with the stage still pending: a timeout, not a green", code == 1 and err and "no verdict" in err, (code, err))
 
     # 2. A skipped gap is LOUD, with the count.
     code, err, out, _ = _run([_page([(2050, "late line")], 2050, "running", skipped=48),

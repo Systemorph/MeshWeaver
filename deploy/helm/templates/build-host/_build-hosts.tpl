@@ -50,9 +50,9 @@ The refusals, and why each one exists:
 {{- if ($b.postgres | default dict).enabled -}}
 {{- fail "buildHosts.postgres is not supported — a build host runs NO shared database; a stage that needs PostgreSQL starts a disposable one inside its own sandbox (sandbox-postgres.sh)" -}}
 {{- end -}}
-{{- $runDeadline := int ($b.runDeadlineSeconds | default 2100) -}}
-{{- if or (lt $runDeadline 60) (gt $runDeadline 2400) -}}
-{{- fail (printf "buildHosts.runDeadlineSeconds %d must be within [60, 2400] — the END-TO-END budget: a follow job waits at most 43 minutes for its run to be terminal (inside the 45-minute job cap), and 3 of them are a claim's queue and the host's start-up" $runDeadline) -}}
+{{- $runDeadline := int ($b.runDeadlineSeconds | default 7200) -}}
+{{- if or (lt $runDeadline 600) (gt $runDeadline 43200) -}}
+{{- fail (printf "buildHosts.runDeadlineSeconds %d must be within [600, 43200] — the RUN budget (the contract's budgetMinutes is 10..720), which must cover the stages a repository declares (they run sequentially)" $runDeadline) -}}
 {{- end -}}
 {{- $sb := ($b.sandbox | default dict) -}}
 {{- $sandbox := dict "seccompProfile" ($sb.seccompProfile | default "") "seccompLocalhostProfile" ($sb.seccompLocalhostProfile | default "")

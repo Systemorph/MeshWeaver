@@ -518,14 +518,33 @@ def events_path(repo: str, sha: str, stage: str) -> str:
     return f"/{urllib.parse.quote(repo, safe='')}/{sha}/stages/{urllib.parse.quote(stage, safe='')}/events"
 
 
-# THE END-TO-END BUDGET, one set of numbers for host and follower: a follow job is hard-cut at 45
-# minutes and waits for its run to be TERMINAL, at most FOLLOW_TIMEOUT_MINUTES (43). Of that, up to
-# QUEUE_STARTUP_SECONDS (3 min) is a claim's queue wait and the host's start-up, so a run may last at
-# most MAX_RUN_DEADLINE (40 min) — the chart and the runner both refuse more. Default 35 min.
-FOLLOW_TIMEOUT_MINUTES = 43
-QUEUE_STARTUP_SECONDS = 180
-MAX_RUN_DEADLINE = FOLLOW_TIMEOUT_MINUTES * 60 - QUEUE_STARTUP_SECONDS
-DEFAULT_RUN_DEADLINE = 2100
+# THE RUN BUDGET. A run's deadline is the HOST's (MW_BUILD_RUN_DEADLINE_SECONDS, default 120 min,
+# at most 720 — the contract's `budgetMinutes` range): it must cover the stages a repository
+# declares, which run SEQUENTIALLY (MeshWeaver.Plugins: compile-check 40 + gate 45 = 85 min). Each
+# stage's `timeoutMinutes` is a PER-STAGE CAP inside it. The run's EFFECTIVE budget is the smaller of
+# the deadline and the sum of the selected stages' caps (+ RUN_MARGIN_SECONDS for checkout, merge and
+# hand-over); it is DECLARED in the plan (`budgetMinutes`, so the instance's attempt deadline is
+# claim time + budget + 15 min). When the sum exceeds the deadline the run still starts — stages
+# often finish well inside their caps — and the stages the deadline does not reach are finished
+# `failed` with "not run — the run deadline passed": red, never skipped.
+# The 45-minute GitHub job cap bounds a FOLLOW job, not a run: a follower that reaches its window
+# with its stage's verdict in exits with that verdict (build-follow.py); a run longer than a
+# follower's window is judged on the instance's live Check Runs.
+MIN_RUN_DEADLINE = 600
+MAX_RUN_DEADLINE = 720 * 60
+DEFAULT_RUN_DEADLINE = 7200
+RUN_MARGIN_SECONDS = 600
+
+
+def run_budget_seconds(stages: list[dict], deadline: float) -> int:
+    """The run's effective budget: the selected stages' summed caps + a margin, never past the deadline."""
+    total = sum(float(st.get("timeoutMinutes", DEFAULT_STAGE_TIMEOUT_MINUTES)) * 60 for st in stages) + RUN_MARGIN_SECONDS
+    return int(min(deadline, total))
+
+
+def budget_minutes(seconds: float) -> int:
+    """`budgetMinutes` for the plan: whole minutes, rounded UP, within the contract's 10..720."""
+    return max(10, min(720, int(-(-seconds // 60))))
 
 HEARTBEAT_SECONDS = 45     # < 60: the instance's lease lasts 10 min past the host's last batch
 
@@ -1367,10 +1386,9 @@ class Host:
             missing.append("MW_BUILD_PLATFORM_VERSION (the set this host runs)")
         if not self.identity:
             missing.append("MW_BUILD_FRAMEWORK_IDENTITY or a readable MW_BUILD_IDENTITY_FILE")
-        if not (0 < self.run_deadline <= MAX_RUN_DEADLINE):
-            missing.append(f"MW_BUILD_RUN_DEADLINE_SECONDS within (0, {MAX_RUN_DEADLINE}] — the END-TO-END budget: "
-                           f"the run deadline plus queue and start-up must fit the follow job's "
-                           f"{FOLLOW_TIMEOUT_MINUTES}-minute verdict window inside its 45-minute cap")
+        if not (MIN_RUN_DEADLINE <= self.run_deadline <= MAX_RUN_DEADLINE):
+            missing.append(f"MW_BUILD_RUN_DEADLINE_SECONDS within [{MIN_RUN_DEADLINE}, {MAX_RUN_DEADLINE}] — the RUN budget "
+                           f"(the contract's budgetMinutes is 10..720), which must cover the stages a repository declares")
         if missing:
             raise Refusal("the host cannot start — provide: " + "; ".join(missing))
 
@@ -1614,8 +1632,12 @@ class Host:
                 probe = claim.get("isProbe") is True or str(claim.get("kind") or "").lower() == "probe"
                 if not trunk and not probe:
                     merge_base = self.merge_onto_base(repo, checkout_dir, claim.get("mergeBaseSha"), token)
-                stages = select_stages(load_stages(os.path.join(checkout_dir, ".github", "build-stages.json")),
-                                       claim.get("stages"))
+                declared = load_stages(os.path.join(checkout_dir, ".github", "build-stages.json"))
+                stages = select_stages(declared, claim.get("stages"))
+                if probe and claim.get("requestedStages"):
+                    # A PROBE runs EXACTLY the stages it asked for (`requestedStages`; empty = every
+                    # declared stage) and plans only those; one the repository does not declare is red.
+                    stages = select_stages(declared, claim.get("requestedStages"))
             except Refusal as r:
                 sink = self._sink_for(repo, sha, last_stage)
                 sink.add([{"kind": "line", "text": f"run refused before any stage: {r}"},
@@ -1625,7 +1647,10 @@ class Host:
             # The PLAN, host-emitted and never a child's: the instance refuses a host-run success
             # unless every planned stage reported success.
             plan = self._sink_for(repo, sha, stages[0]["name"])
-            plan_event = {"kind": "plan", "stages": [st["name"] for st in stages]}
+            # The run's declared execution budget: the instance sets the attempt's deadline to claim
+            # time + budget + 15 min. The host enforces the same number (`budget`, below).
+            budget = run_budget_seconds(stages, self.run_deadline - (self.clock() - started))
+            plan_event = {"kind": "plan", "stages": [st["name"] for st in stages], "budgetMinutes": budget_minutes(budget)}
             if merge_base:
                 plan_event["mergeBase"] = merge_base
             plan.add([plan_event])
@@ -1652,12 +1677,13 @@ class Host:
             }
             failed_at = None
             why = ""
+            run_end = self.clock() + budget
             for st in stages:
                 last_stage = st["name"]
                 sink = self._sink_for(repo, sha, st["name"])
-                remaining = self.run_deadline - (self.clock() - started)
+                remaining = run_end - self.clock()
                 if failed_at is None and remaining <= 0:
-                    failed_at, why = st["name"], f"the run deadline ({self.run_deadline:g} s) passed"
+                    failed_at, why = st["name"], f"the run deadline ({budget} s) passed"
                 if failed_at is not None:
                     sink.add([{"kind": "stage-finished", "state": "failed",
                                "summary": f"not run — {why or 'stage ' + failed_at + ' failed first'}"}])
@@ -2804,7 +2830,17 @@ def self_test() -> int:
         hp.run(claim)
         kinds = [e for _, evs in posted for e in evs if e["kind"] == "plan"]
         check("plan/one plan, naming every stage the host will run (and, for a PR run, its merge base)",
-              kinds == [{"kind": "plan", "stages": ["a", "b"], "mergeBase": "e" * 40}], kinds)
+              [{k: v for k, v in p_.items() if k != "budgetMinutes"} for p_ in kinds]
+              == [{"kind": "plan", "stages": ["a", "b"], "mergeBase": "e" * 40}], kinds)
+        # the declared budget: the stages' caps + margin, within the deadline, in whole minutes 10..720
+        check("budget/the plan declares budgetMinutes", kinds and kinds[0].get("budgetMinutes") == budget_minutes(
+            run_budget_seconds([{"timeoutMinutes": 45}, {"timeoutMinutes": 45}], hp.run_deadline)), kinds)
+        check("budget/two 40+45-minute stages fit the default deadline",
+              run_budget_seconds([{"timeoutMinutes": 40}, {"timeoutMinutes": 45}], DEFAULT_RUN_DEADLINE) == 85 * 60 + RUN_MARGIN_SECONDS)
+        check("budget/capped by the deadline", run_budget_seconds([{"timeoutMinutes": 45}] * 4, 2100) == 2100)
+        check("budget/2100 s declares 35 minutes", budget_minutes(2100) == 35)
+        check("budget/minutes round up and stay in 10..720",
+              budget_minutes(61) == 10 and budget_minutes(661) == 12 and budget_minutes(10 ** 6) == 720)
         firsts = [k for _, _, ks in seen_seq for k in ks if k != "line"]
         check("plan/the plan precedes every stage verdict", firsts and firsts[0] == "plan", firsts)
         per_stage: dict = {}
@@ -2990,14 +3026,31 @@ def self_test() -> int:
         hmt.run(dict(claim, isTrunk=False, mergeBaseSha=None))
         pl = [e for _, es in posted for e in es if e["kind"] == "plan"]
         check("merge/the stages run are the MERGED tree's declaration", pl and pl[0]["stages"] == ["merged"], pl)
-        # the end-to-end budget
-        check("budget/run deadline + queue/start-up fits the follower's window",
-              MAX_RUN_DEADLINE + QUEUE_STARTUP_SECONDS <= FOLLOW_TIMEOUT_MINUTES * 60 < 45 * 60 and DEFAULT_RUN_DEADLINE <= MAX_RUN_DEADLINE)
-        try:
-            host(_FakeApi({}), env=dict(env, MW_BUILD_RUN_DEADLINE_SECONDS="3600")).preflight()
-            check("budget/a run deadline beyond the window is refused", False, "started")
-        except Refusal as e:
-            check("budget/the refusal names the budget", "END-TO-END" in str(e), e)
+        # the run budget
+        check("budget/the default deadline covers the declared stages and stays in range",
+              MIN_RUN_DEADLINE <= DEFAULT_RUN_DEADLINE <= MAX_RUN_DEADLINE)
+        for bad_deadline in ("60", str(721 * 60)):
+            try:
+                host(_FakeApi({}), env=dict(env, MW_BUILD_RUN_DEADLINE_SECONDS=bad_deadline)).preflight()
+                check(f"budget/a run deadline of {bad_deadline} s is refused", False, "started")
+            except Refusal as e:
+                check("budget/the refusal names the RUN budget", "RUN budget" in str(e), e)
+        # a probe runs EXACTLY its requestedStages and plans only those
+        posted.clear()
+        hrq = host(api_ev(), env=env_s, checkout=checkout_with({"stages": [
+            {"name": "a", "kind": "build", "command": f"echo a >> {tmp}/rq"}, {"name": "b", "kind": "test", "command": f"echo b >> {tmp}/rq"}]}))
+        hrq.run(dict(claim, isProbe=True, probe="p-9", requestedStages=["b"]))
+        pl = [e for _, es in posted for e in es if e["kind"] == "plan"]
+        check("probe/requestedStages: only those stages are planned", pl and pl[0]["stages"] == ["b"], pl)
+        check("probe/requestedStages: only those stages run", open(os.path.join(tmp, "rq")).read().split() == ["b"])
+        posted.clear()
+        hrq.run(dict(claim, isProbe=True, probe="p-9", requestedStages=[]))
+        pl = [e for _, es in posted for e in es if e["kind"] == "plan"]
+        check("probe/empty requestedStages = every declared stage", pl and pl[0]["stages"] == ["a", "b"], pl)
+        posted.clear()
+        hrq.run(dict(claim, isProbe=True, probe="p-9", requestedStages=["nope"]))
+        rf = [e for _, es in posted for e in es if e["kind"] == "run-finished"]
+        check("probe/a requested stage the repository does not declare is red", rf and rf[0]["succeeded"] is False, rf)
         plan_from_child = OutputParser("/w", "x").feed('::mw-event::{"kind":"plan","stages":["x"]}')
         check("plan/a child cannot emit the plan", plan_from_child and "refused" in plan_from_child[0]["text"], plan_from_child)
     finally:
