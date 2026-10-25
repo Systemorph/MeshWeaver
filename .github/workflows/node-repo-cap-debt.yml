@@ -27,7 +27,8 @@ name: Node repo cap debt (reusable)
 # `continue-on-error`. A tree with no cap still runs: it publishes its empty set and resolves the
 # items of caps that are gone.
 #
-# CALLER (a satellite's own daily workflow; `contents: read` is all it needs):
+# CALLER (a satellite's own daily workflow; the cap-debt job needs `contents: read` alone, the two
+# reporter jobs the ledger lane's `contents: read, issues: write, actions: read`):
 #
 #   on:
 #     schedule: [{ cron: "17 6 * * *" }]
@@ -45,6 +46,45 @@ name: Node repo cap debt (reusable)
 #         triage-token: ${{ secrets.MW_TRIAGE_TOKEN }}
 #         control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
 #         build-api-token: ${{ secrets.MW_BUILD_API_TOKEN }}
+#     # 🚨 A DAILY lane's red is red in an EMPTY ROOM: a failed preflight, `/hosts`, publication or
+#     # MCP call leaves only a failed scheduled run while the retention and debt records silently
+#     # stop being refreshed. So the caller ALSO wires the fleet's result-aware reporter — the
+#     # ci-failure ledger lane, under its OWN label — on BOTH outcomes: a red opens (or appends to)
+#     # ONE `cap-debt-red` issue and tells the control inbox; the next green closes it.
+#     cap-debt-red:
+#       needs: [cap-debt]
+#       if: github.event_name != 'pull_request' && failure()
+#       permissions: {contents: read, issues: write, actions: read}
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#       with:
+#         outcome: failure
+#         label: cap-debt-red
+#         issue-title: "cap-debt-red: the daily cap-debt lane is red"
+#         run: ${{ github.run_id }}
+#         run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+#         sha: ${{ github.sha }}
+#         event: ${{ github.event_name }}
+#         control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+#       secrets:
+#         github-token: ${{ secrets.GITHUB_TOKEN }}
+#         control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
+#     cap-debt-green:
+#       needs: [cap-debt]
+#       if: github.event_name != 'pull_request' && success()
+#       permissions: {contents: read, issues: write, actions: read}
+#       uses: Systemorph/MeshWeaver/.github/workflows/node-repo-ci-failure.yml@main
+#       with:
+#         outcome: success
+#         label: cap-debt-red
+#         issue-title: "cap-debt-red: the daily cap-debt lane is red"
+#         run: ${{ github.run_id }}
+#         run-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+#         sha: ${{ github.sha }}
+#         event: ${{ github.event_name }}
+#         control-webhook-url: ${{ vars.CONTROL_WEBHOOK_URL }}
+#       secrets:
+#         github-token: ${{ secrets.GITHUB_TOKEN }}
+#         control-webhook-secret: ${{ secrets.CONTROL_WEBHOOK_SECRET }}
 
 on:
   workflow_call:
